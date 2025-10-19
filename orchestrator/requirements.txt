@@ -1,0 +1,8 @@
+fastapi==0.115.0
+uvicorn[standard]==0.30.6
+psycopg[binary]==3.2.3
+python-dateutil==2.9.0.post0
+dateparser==1.2.0
+rapidfuzz==3.9.6
+pydantic==2.9.2
+requests==2.32.3
