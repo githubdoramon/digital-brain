@@ -6,7 +6,13 @@ CREATE EXTENSION IF NOT EXISTS btree_gin;
 CREATE TABLE IF NOT EXISTS contacts (
   contact_id TEXT PRIMARY KEY,         -- e.g., 'contact:monica#123'
   display_name TEXT NOT NULL,
-  aliases TEXT[] DEFAULT '{}'::TEXT[]
+  aliases TEXT[] DEFAULT '{}'::TEXT[],
+  birthday DATE,
+  emails TEXT[] DEFAULT '{}'::TEXT[],
+  phones TEXT[] DEFAULT '{}'::TEXT[],
+  links TEXT[] DEFAULT '{}'::TEXT[],
+  tags TEXT[] DEFAULT '{}'::TEXT[],
+  relationship TEXT CHECK (relationship IN ('Wife', 'Daughter', 'Brother', 'Mother', 'Coworker', 'Friend'))
 );
 
 -- Places (canonical venue rows)

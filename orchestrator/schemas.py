@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from datetime import datetime
-from typing import Any, Dict, List, Optional
+from datetime import date, datetime
+from typing import Any, Dict, List, Optional, Literal
 
 from pydantic import BaseModel
 
@@ -10,6 +10,12 @@ class ContactIn(BaseModel):
     contact_id: str
     display_name: str
     aliases: Optional[List[str]] = []
+    birthday: Optional[date] = None
+    emails: Optional[List[str]] = []
+    phones: Optional[List[str]] = []
+    links: Optional[List[str]] = []
+    tags: Optional[List[str]] = []
+    relationship: Optional[Literal["Wife", "Daughter", "Brother", "Mother", "Coworker", "Friend"]] = None
 
 
 class PlaceIn(BaseModel):

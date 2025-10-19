@@ -25,12 +25,28 @@ def wait_for_api():
     print("✗ API not ready after 60 seconds")
     return False
 
-def ingest_contact(contact_id, display_name, aliases=None):
+def ingest_contact(
+    contact_id,
+    display_name,
+    aliases=None,
+    birthday=None,
+    emails=None,
+    phones=None,
+    links=None,
+    tags=None,
+    relationship=None,
+):
     """Add a contact to the database"""
     data = {
         "contact_id": contact_id,
         "display_name": display_name,
-        "aliases": aliases or []
+        "aliases": aliases or [],
+        "birthday": birthday,
+        "emails": emails or [],
+        "phones": phones or [],
+        "links": links or [],
+        "tags": tags or [],
+        "relationship": relationship,
     }
     resp = requests.post(f"{API_BASE}/ingest/contact", json=data)
     print(f"  Added contact: {display_name} ({contact_id})")
@@ -71,10 +87,50 @@ def seed_all():
     
     # Add contacts
     print("📇 Adding contacts...")
-    ingest_contact("contact:alice#001", "Alice Chen", ["Alice", "Alice C.", "A. Chen"])
-    ingest_contact("contact:bob#002", "Bob Martinez", ["Bob", "Roberto", "Bob M."])
-    ingest_contact("contact:carol#003", "Carol Singh", ["Carol", "C. Singh"])
-    ingest_contact("contact:dave#004", "Dave Johnson", ["Dave", "David", "DJ"])
+    ingest_contact(
+        "contact:alice#001",
+        "Alice Chen",
+        ["Alice", "Alice C.", "A. Chen"],
+        birthday="1990-04-15",
+        emails=["alice@example.com", "alice.work@example.com"],
+        phones=["+1-415-555-0101"],
+        links=["https://www.linkedin.com/in/alicechen"],
+        tags=["product", "runner"],
+        relationship="Coworker",
+    )
+    ingest_contact(
+        "contact:bob#002",
+        "Bob Martinez",
+        ["Bob", "Roberto", "Bob M."],
+        birthday="1988-09-30",
+        emails=["bob@example.com"],
+        phones=["+1-415-555-0202"],
+        links=["https://github.com/bmartinez"],
+        tags=["engineering", "travel"],
+        relationship="Friend",
+    )
+    ingest_contact(
+        "contact:carol#003",
+        "Carol Singh",
+        ["Carol", "C. Singh"],
+        birthday="1992-01-08",
+        emails=["carol@example.com"],
+        phones=["+1-415-555-0303"],
+        links=["https://carolsingh.com"],
+        tags=["analytics", "consulting"],
+        relationship="Coworker",
+    )
+    ingest_contact(
+        "contact:dave#004",
+        "Dave Johnson",
+        ["Dave", "David", "DJ"],
+        birthday="1985-06-22",
+        emails=["dave@example.com"],
+        phones=["+1-415-555-0404"],
+        links=["https://www.strava.com/athletes/davej"],
+        tags=["engineering", "fitness"],
+        relationship="Friend",
+    )
     
     # Add places
     print("\n📍 Adding places...")

@@ -16,13 +16,39 @@ def ingest_contact(contact) -> None:
     with get_conn() as conn, conn.cursor() as cur:
         cur.execute(
             """
-            INSERT INTO contacts (contact_id, display_name, aliases)
-            VALUES (%s, %s, %s)
+            INSERT INTO contacts (
+              contact_id,
+              display_name,
+              aliases,
+              birthday,
+              emails,
+              phones,
+              links,
+              tags,
+              relationship
+            )
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT (contact_id) DO UPDATE
               SET display_name = EXCLUDED.display_name,
-                  aliases = EXCLUDED.aliases
+                  aliases = EXCLUDED.aliases,
+                  birthday = EXCLUDED.birthday,
+                  emails = EXCLUDED.emails,
+                  phones = EXCLUDED.phones,
+                  links = EXCLUDED.links,
+                  tags = EXCLUDED.tags,
+                  relationship = EXCLUDED.relationship
             """,
-            (contact.contact_id, contact.display_name, contact.aliases or []),
+            (
+                contact.contact_id,
+                contact.display_name,
+                contact.aliases or [],
+                contact.birthday,
+                contact.emails or [],
+                contact.phones or [],
+                contact.links or [],
+                contact.tags or [],
+                contact.relationship,
+            ),
         )
         conn.commit()
 
