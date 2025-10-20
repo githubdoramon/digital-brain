@@ -34,6 +34,7 @@ class EventIn(BaseModel):
     place_id: Optional[str] = None
     people: Optional[List[str]] = []
     tags: Optional[List[str]] = []
+    types: Optional[List[str]] = []
     what_text: Optional[str] = ""
     raw: Optional[Dict[str, Any]] = {}
 

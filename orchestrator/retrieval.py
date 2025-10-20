@@ -68,18 +68,57 @@ def ingest_place(place) -> None:
         conn.commit()
 
 
+__all__ = ["normalize_event_types"]
+
+
+EVENT_TYPE_CHOICES = {
+    "generic",
+    "meeting",
+    "communication",
+    "task",
+    "creation",
+    "consumption",
+    "travel",
+    "personal",
+    "system",
+    "financial",
+    "observation",
+    "interaction",
+    "education",
+    "celebration",
+    "purchase",
+    "health",
+}
+
+
+def normalize_event_types(types: Optional[Sequence[str]]) -> List[str]:
+    """Convert the provided event types into canonical, unique values."""
+    if not types:
+        return ["generic"]
+    normalized: List[str] = []
+    for value in types:
+        if not isinstance(value, str):
+            continue
+        cleaned = value.strip().lower()
+        if cleaned in EVENT_TYPE_CHOICES and cleaned not in normalized:
+            normalized.append(cleaned)
+    return normalized or ["generic"]
+
+
 def ingest_event(event) -> None:
     emb = embed_text(event.what_text or "")
+    types = normalize_event_types(event.types)
     with get_conn() as conn, conn.cursor() as cur:
         cur.execute(
             """
-            INSERT INTO events (id, ts, place_id, people, tags, what_text, raw, what_embed)
-            VALUES (%s,%s,%s,%s,%s,%s,%s,%s)
+            INSERT INTO events (id, ts, place_id, people, tags, types, what_text, raw, what_embed)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)
             ON CONFLICT (id) DO UPDATE
               SET ts=EXCLUDED.ts,
                   place_id=EXCLUDED.place_id,
                   people=EXCLUDED.people,
                   tags=EXCLUDED.tags,
+                  types=EXCLUDED.types,
                   what_text=EXCLUDED.what_text,
                   raw=EXCLUDED.raw,
                   what_embed=EXCLUDED.what_embed
@@ -90,6 +129,7 @@ def ingest_event(event) -> None:
                 event.place_id,
                 event.people or [],
                 event.tags or [],
+                types,
                 event.what_text or "",
                 json.dumps(event.raw or {}),
                 emb,
@@ -102,6 +142,11 @@ def ingest_event(event) -> None:
 def resolve_query(text: str, need_contacts: bool = True, need_places: bool = True) -> Dict[str, Any]:
     q = (text or "").strip()
     people = resolve_entities(q, "contacts", "contact_id", "display_name", "aliases") if need_contacts else []
+    if need_contacts:
+        rel_filters = infer_relationship_filters(q)
+        if rel_filters:
+            rel_ids = fetch_contacts_by_relationship(rel_filters)
+            people = list({*people, *rel_ids})
     places = resolve_entities(q, "places", "place_id", "name") if need_places else []
     span = parse_timespan_text(q)
     return {
@@ -151,6 +196,62 @@ def resolve_entities(
     return list(out_ids)
 
 
+FAMILY_RELATIONSHIPS = {
+    "Mother",
+    "Father",
+    "Brother",
+    "Sister",
+    "Daughter",
+    "Son",
+    "Wife",
+    "Husband",
+}
+
+RELATIONSHIP_KEYWORDS: Dict[str, List[str]] = {
+    "Mother": ["mother", "mom", "mum", "mommy"],
+    "Father": ["father", "dad", "daddy"],
+    "Brother": ["brother", "bro"],
+    "Sister": ["sister", "sis"],
+    "Daughter": ["daughter"],
+    "Son": ["son"],
+    "Wife": ["wife", "spouse"],
+    "Husband": ["husband", "spouse"],
+    "Friend": ["friend"],
+    "Coworker": ["coworker", "colleague", "workmate"],
+}
+
+
+def infer_relationship_filters(text: str) -> List[str]:
+    if not text:
+        return []
+    lower = text.lower()
+    matches: List[str] = []
+    if "family" in lower:
+        matches.extend(FAMILY_RELATIONSHIPS)
+    for relationship, keywords in RELATIONSHIP_KEYWORDS.items():
+        for kw in keywords:
+            if kw in lower:
+                matches.append(relationship)
+                break
+    return list(dict.fromkeys(matches))
+
+
+def fetch_contacts_by_relationship(relationships: Sequence[str]) -> List[str]:
+    if not relationships:
+        return []
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT contact_id
+            FROM contacts
+            WHERE relationship = ANY(%s)
+            """,
+            (list(relationships),),
+        )
+        rows = cur.fetchall()
+    return [row["contact_id"] for row in rows]
+
+
 # --------------------------- Search helpers ---------------------------
 def search_memories(
     query: str,
@@ -195,6 +296,7 @@ def search_memories(
             },
             "people": r["people"],
             "tags": r["tags"],
+            "types": r.get("types", []),
             "snippet": make_snippet(r["what_text"]),
         }
         for r in rows
@@ -276,6 +378,7 @@ def get_events(ids: List[str]) -> List[Dict[str, Any]]:
             "ts": r["ts"].isoformat(),
             "people": r["people"],
             "tags": r["tags"],
+            "types": r.get("types", []),
             "what_text": r["what_text"],
             "place": {
                 "place_id": r["place_id"],

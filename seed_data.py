@@ -66,7 +66,7 @@ def ingest_place(place_id, name, city=None, country=None, lat=None, lon=None):
     print(f"  Added place: {name} ({place_id})")
     return resp.json()
 
-def ingest_event(event_id, ts, what_text, place_id=None, people=None, tags=None):
+def ingest_event(event_id, ts, what_text, place_id=None, people=None, tags=None, types=None):
     """Add an event to the database"""
     data = {
         "id": event_id,
@@ -75,6 +75,7 @@ def ingest_event(event_id, ts, what_text, place_id=None, people=None, tags=None)
         "place_id": place_id,
         "people": people or [],
         "tags": tags or [],
+        "types": types or ["generic"],
         "raw": {"source": "seed_script"}
     }
     resp = requests.post(f"{API_BASE}/ingest/event", json=data)
@@ -129,7 +130,7 @@ def seed_all():
         phones=["+1-415-555-0404"],
         links=["https://www.strava.com/athletes/davej"],
         tags=["engineering", "fitness"],
-        relationship="Friend",
+        relationship="Brother",
     )
     
     # Add places
@@ -151,7 +152,8 @@ def seed_all():
         "Had breakfast with Alice and Bob at the downtown café. Discussed the new product roadmap and decided to focus on mobile features next quarter.",
         place_id="plc_cafe_downtown",
         people=["contact:alice#001", "contact:bob#002"],
-        tags=["work", "planning", "breakfast"]
+        tags=["work", "planning", "breakfast"],
+        types=["meeting", "communication"]
     )
     
     ingest_event(
@@ -160,7 +162,8 @@ def seed_all():
         "Team meeting at the main office. Carol presented the Q4 metrics. Revenue is up 23% year over year. Celebrated with cake.",
         place_id="plc_office_main",
         people=["contact:alice#001", "contact:bob#002", "contact:carol#003", "contact:dave#004"],
-        tags=["work", "meeting", "metrics"]
+        tags=["work", "meeting", "metrics"],
+        types=["meeting", "celebration"]
     )
     
     ingest_event(
@@ -169,7 +172,8 @@ def seed_all():
         "Morning jog with Dave at Golden Gate Park. Beautiful weather. Talked about his new side project building a mobile app for runners.",
         place_id="plc_park_golden_gate",
         people=["contact:dave#004"],
-        tags=["exercise", "social", "outdoors"]
+        tags=["exercise", "social", "outdoors"],
+        types=["health", "personal"]
     )
     
     ingest_event(
@@ -178,7 +182,8 @@ def seed_all():
         "Lunch with Bob at the sushi place. He recommended the omakase - it was incredible! We also discussed his upcoming trip to Japan.",
         place_id="plc_restaurant_sushi",
         people=["contact:bob#002"],
-        tags=["food", "lunch", "social"]
+        tags=["food", "lunch", "social"],
+        types=["interaction", "communication"]
     )
     
     ingest_event(
@@ -187,7 +192,8 @@ def seed_all():
         "Coffee chat with Alice about the engineering challenges in the authentication system. She suggested using OAuth2 with PKCE flow.",
         place_id="plc_cafe_downtown",
         people=["contact:alice#001"],
-        tags=["work", "technical", "coffee"]
+        tags=["work", "technical", "coffee"],
+        types=["communication", "meeting"]
     )
     
     ingest_event(
@@ -196,7 +202,8 @@ def seed_all():
         "Gym session in the morning. Did a full body workout focusing on compound exercises. Feeling stronger!",
         place_id="plc_gym_fitness",
         people=[],
-        tags=["exercise", "fitness", "personal"]
+        tags=["exercise", "fitness", "personal"],
+        types=["health", "personal"]
     )
     
     ingest_event(
@@ -205,7 +212,8 @@ def seed_all():
         "Dinner with Carol at the sushi place. She's thinking about starting a consulting business. We brainstormed potential niches and pricing strategies.",
         place_id="plc_restaurant_sushi",
         people=["contact:carol#003"],
-        tags=["social", "dinner", "business"]
+        tags=["social", "dinner", "business"],
+        types=["communication", "interaction"]
     )
     
     ingest_event(
@@ -214,7 +222,8 @@ def seed_all():
         "All-hands meeting at the office. CEO announced the new vision for 2026. Focus on AI integration and international expansion to Europe and Asia.",
         place_id="plc_office_main",
         people=["contact:alice#001", "contact:bob#002", "contact:carol#003", "contact:dave#004"],
-        tags=["work", "meeting", "strategy"]
+        tags=["work", "meeting", "strategy"],
+        types=["meeting", "communication"]
     )
     
     print("\n✅ Database seeded successfully!")

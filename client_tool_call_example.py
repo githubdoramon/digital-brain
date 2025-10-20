@@ -22,8 +22,8 @@ def ask(question: str, limit: int = 3) -> Dict[str, Any]:
 
 def main() -> None:
     questions = [
-        "Where and when did I discuss the product roadmap? And with whom?",
-        "How many contacts do I have?",
+        "Which of my contacts do you think are closer to me? From a relationship perspective, not location",
+        "Show all contacts and their relationships"
     ]
     for q in questions:
         print("=" * 80)

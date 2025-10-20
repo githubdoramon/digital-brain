@@ -33,10 +33,31 @@ CREATE TABLE IF NOT EXISTS events (
   place_id TEXT REFERENCES places(place_id),
   people TEXT[] DEFAULT '{}'::TEXT[],
   tags TEXT[] DEFAULT '{}'::TEXT[],
+  types TEXT[] DEFAULT ARRAY['generic']::TEXT[],
   what_text TEXT,
   raw JSONB DEFAULT '{}'::JSONB,
   what_embed VECTOR(768),              -- 768 for nomic-embed-text, 1536 for OpenAI text-embedding-3-*
-  what_tsv tsvector
+  what_tsv tsvector,
+  CHECK (
+    types <@ ARRAY[
+      'generic',
+      'meeting',
+      'communication',
+      'task',
+      'creation',
+      'consumption',
+      'travel',
+      'personal',
+      'system',
+      'financial',
+      'observation',
+      'interaction',
+      'education',
+      'celebration',
+      'purchase',
+      'health'
+    ]::TEXT[]
+  )
 );
 
 -- FTS trigger to keep what_tsv updated
