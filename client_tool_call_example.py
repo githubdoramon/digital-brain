@@ -22,7 +22,7 @@ def ask(question: str, limit: int = 3) -> Dict[str, Any]:
 
 def main() -> None:
     questions = [
-        "Which of my contacts do you think are closer to me? From a relationship perspective, not location",
+        "Which of my contacts do you think are closer to me? From a relationship perspective, not location. Give me their names.",
         "Show all contacts and their relationships"
     ]
     for q in questions:

@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import json
 import os
-from typing import Any, Dict, List
+import re
+from typing import Any, Dict, List, Set
 
 import requests
 
@@ -10,8 +11,12 @@ import retrieval
 import sql_tools
 
 OLLAMA_HOST = os.getenv("OLLAMA_HOST", "http://localhost:11434")
-OLLAMA_CHAT_MODEL = os.getenv("OLLAMA_CHAT_MODEL", "llama3.1:8b-instruct-q8_0")
+OLLAMA_CHAT_MODEL = os.getenv("OLLAMA_CHAT_MODEL", "qwen2.5:32b-instruct")
 OLLAMA_TIMEOUT = int(os.getenv("OLLAMA_TIMEOUT", "60"))
+
+_SCHEMA_HINT_CACHE: str | None = None
+_SCHEMA_SNAPSHOT: Dict[str, Any] | None = None
+
 
 TOOLS: List[Dict[str, Any]] = [
     {
@@ -170,7 +175,7 @@ def answer_question(question: str, search_limit: int = 3) -> Dict[str, Any]:
     messages: List[Dict[str, Any]] = _build_messages(question, search_limit)
 
     while True:
-        print("[agent] sending messages ->", json.dumps(messages[-2:], ensure_ascii=False, indent=2))
+        print("[agent] sending messages ->", json.dumps(messages[-4:], ensure_ascii=False, indent=2))
         response = _ollama_chat(messages)
         message = response.get("message") or {}
         print("[agent] received message ->", json.dumps(message, ensure_ascii=False, indent=2))
@@ -211,15 +216,27 @@ def _build_messages(question: str, search_limit: int) -> List[Dict[str, str]]:
         "You are a personal memory assistant. "
         "Use the available tools to gather accurate context before answering. "
         "Do not fabricate events; if no relevant memories exist, say so. "
-        f"When searching, prefer returning at most {search_limit} highly relevant results."
+        f"When searching, prefer returning at most {search_limit} highly relevant results, unless the user is requesting full data."
     )
-    return [
-        {"role": "system", "content": system_prompt},
-        {
-            "role": "user",
-            "content": question.strip(),
-        },
-    ]
+    protocol_prompt = "Tool protocol: when a question references stored memories, contacts, places, timelines, or relationships, " \
+        "first refresh the schema with describe_schema, then plan any execute_sql queries needed to retrieve facts. " \
+        "Cross-check every table or column in a planned SQL statement against the schema snapshot; never invent new tables. " \
+        "Use resolve_query when entity or time extraction helps craft structured constraints. " \
+        "For relationship closeness questions, first review `contacts.relationship` values (family > friend > coworker > other). " \
+        "Do not stop after describing a plan—actually call the necessary tools, inspect their outputs, and base your final answer on that evidence. " \
+        "If a SQL attempt fails validation, revise and retry until you either succeed or can explain why the data cannot be retrieved. " \
+        "Only respond after you have gathered sufficient evidence from the tools, and cite how you derived the answer. " \
+        "If you are not 100% sure, still respond to the original question, but state your uncertainty instead of declining outright."
+
+    messages: List[Dict[str, str]] = [{"role": "system", "content": system_prompt}]
+
+    schema_hint = _load_schema_hint()
+    if schema_hint:
+        messages.append({"role": "system", "content": schema_hint})
+
+    messages.append({"role": "system", "content": protocol_prompt})
+    messages.append({"role": "user", "content": question.strip()})
+    return messages
 
 
 def _ollama_chat(messages: List[Dict[str, Any]]) -> Dict[str, Any]:
@@ -303,11 +320,137 @@ def _handle_tool_call(
             limit = int(limit_arg) if limit_arg is not None else 200
         except (TypeError, ValueError):
             limit = 200
+        unknown_tables = _find_unknown_tables(query)
+        if unknown_tables:
+            print(f"[agent] rejecting execute_sql due to unknown tables: {unknown_tables}")
+            return {
+                "error": {
+                    "message": "Unknown tables referenced in SQL.",
+                    "unknown_tables": sorted(unknown_tables),
+                    "available_tables": sorted(_get_schema_snapshot().keys()),
+                }
+            }
         print(f"[agent] calling execute_sql(limit={limit}) -> {query!r}")
         result = sql_tools.execute_sql(query, limit=limit)
         return _normalize_sql_result(result)
 
     raise RuntimeError(f"Unsupported tool requested: {name}")
+
+
+def _load_schema_hint() -> str:
+    global _SCHEMA_HINT_CACHE
+    if _SCHEMA_HINT_CACHE is not None:
+        return _SCHEMA_HINT_CACHE
+
+    snapshot = _get_schema_snapshot()
+    if not snapshot:
+        _SCHEMA_HINT_CACHE = ""
+        return ""
+
+    try:
+        relationship_examples = _fetch_relationship_examples()
+    except Exception:
+        relationship_examples = []
+
+    lines: List[str] = [
+        "Database schema snapshot (read-only):",
+    ]
+    for table_name in sorted(snapshot):
+        columns = snapshot[table_name].get("columns") or []
+        column_bits: List[str] = []
+        for col in columns:
+            name = col.get("name")
+            dtype = col.get("type")
+            if name and dtype:
+                column_bits.append(f"{name} ({dtype})")
+            elif name:
+                column_bits.append(name)
+        if len(column_bits) > 6:
+            summary = ", ".join(column_bits[:6]) + ", ..."
+        else:
+            summary = ", ".join(column_bits)
+        lines.append(f"- {table_name}: {summary}")
+        if table_name == "contacts" and relationship_examples:
+            lines.append(
+                "  Distinct relationships observed: "
+                + ", ".join(sorted(relationship_examples))
+            )
+    lines.append("Use describe_schema for full details and execute_sql to pull rows.")
+
+    hint = "\n".join(lines)
+    _SCHEMA_HINT_CACHE = hint
+    return hint
+
+
+def _get_schema_snapshot() -> Dict[str, Any]:
+    global _SCHEMA_SNAPSHOT
+    if _SCHEMA_SNAPSHOT is not None:
+        return _SCHEMA_SNAPSHOT
+
+    try:
+        schema_snapshot = sql_tools.describe_schema()
+    except Exception:
+        _SCHEMA_SNAPSHOT = {}
+        return {}
+
+    tables = schema_snapshot.get("tables") or {}
+    # Normalize keys to their original case but allow later lookups to lowercase
+    _SCHEMA_SNAPSHOT = tables
+    return tables
+
+
+def _find_unknown_tables(query: str) -> Set[str]:
+    snapshot = _get_schema_snapshot()
+    if not snapshot:
+        return set()
+    known_tables = {name.lower() for name in snapshot.keys()}
+    referenced = _extract_table_names(query)
+    return {table for table in referenced if table not in known_tables}
+
+
+_TABLE_REF_REGEX = re.compile(r"\b(?:from|join|into)\s+([a-zA-Z_][\w.]*)", re.IGNORECASE)
+
+
+def _extract_table_names(query: str) -> Set[str]:
+    tables: Set[str] = set()
+    if not query:
+        return tables
+    for match in _TABLE_REF_REGEX.findall(query):
+        candidate = match.strip()
+        if not candidate:
+            continue
+        # Strip aliasing or quoting remnants
+        candidate = candidate.strip('"')
+        if " " in candidate:
+            candidate = candidate.split(" ")[0]
+        if "," in candidate:
+            candidate = candidate.split(",")[0]
+        if "." in candidate:
+            candidate = candidate.split(".")[-1]
+        lowered = candidate.lower()
+        if lowered and lowered not in {"select", "from", "join", "unnest"}:
+            tables.add(lowered)
+    return tables
+
+
+def _fetch_relationship_examples() -> List[str]:
+    try:
+        from db import get_conn
+    except Exception:
+        return []
+
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT DISTINCT relationship
+            FROM contacts
+            WHERE relationship IS NOT NULL
+            ORDER BY relationship
+            LIMIT 12
+            """
+        )
+        rows = cur.fetchall()
+    return [row[0] for row in rows if row and row[0]]
 
 
 def _finalize_bundle(

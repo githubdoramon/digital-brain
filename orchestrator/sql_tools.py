@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from typing import Any, Dict, List, Sequence
 
 from psycopg.rows import dict_row
@@ -17,6 +18,34 @@ _READ_ONLY_FORBIDDEN = {
     "revoke",
     "truncate",
 }
+
+_INCOMPLETE_PATTERNS = [
+    re.compile(pattern, re.IGNORECASE | re.DOTALL)
+    for pattern in [
+        r"\bwhere\s*$",
+        r"\band\s*$",
+        r"\bor\s*$",
+        r"\bon\s*$",
+        r"\bjoin\s*$",
+        r"\bin\s*$",
+        r"\blike\s*$",
+        r"\bbetween\s*$",
+        r"=\s*$",
+        r">\s*$",
+        r"<\s*$",
+        r"!=\s*$",
+        r">=\s*$",
+        r"<=\s*$",
+        r"\bis\s*$",
+        r"\bis\s+not\s*$",
+        r",\s*$",
+    ]
+]
+
+_AGGREGATE_UNCLOSED_PATTERNS = [
+    re.compile(rf"\b{name}\s*\([^\)]*$", re.IGNORECASE | re.DOTALL)
+    for name in ["count", "sum", "avg", "min", "max"]
+]
 
 
 def describe_schema() -> Dict[str, Any]:
@@ -78,4 +107,10 @@ def _ensure_read_only(query: str) -> str:
     for forbidden in _READ_ONLY_FORBIDDEN:
         if forbidden in lowered:
             raise ValueError(f"Found forbidden statement '{forbidden}' in query")
+    for pattern in _INCOMPLETE_PATTERNS:
+        if pattern.search(cleaned):
+            raise ValueError("SQL query appears incomplete or ends with a dangling clause")
+    for pattern in _AGGREGATE_UNCLOSED_PATTERNS:
+        if pattern.search(cleaned):
+            raise ValueError("SQL query appears to contain an unterminated aggregate function call")
     return cleaned
