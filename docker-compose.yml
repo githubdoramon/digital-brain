@@ -2,32 +2,49 @@ services:
   db:
     image: pgvector/pgvector:pg16
     container_name: memdb
-    environment:
-      POSTGRES_USER: ${POSTGRES_USER}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-      POSTGRES_DB: ${POSTGRES_DB}
+    env_file:
+      - ./backend/.env
     ports:
       - "5432:5432"
     volumes:
-      - ./db/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+      - ./backend/db/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      test: ["CMD-SHELL", "pg_isready -U memuser -d memdb"]
       interval: 5s
       timeout: 3s
       retries: 30
 
   orchestrator:
-    build: ./orchestrator
+    image: digital-brain
+    build:
+      context: ./backend/orchestrator
+      dockerfile: Dockerfile
     container_name: mem-orchestrator
     depends_on:
       db:
         condition: service_healthy
+    env_file:
+      - ./backend/.env
     environment:
-      DB_DSN: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
-      OLLAMA_HOST: ${OLLAMA_HOST}
-      OLLAMA_EMBED_MODEL: ${OLLAMA_EMBED_MODEL}
+      DB_DSN: postgresql://memuser:mempass@db:5432/memdb
       TZ: UTC
     extra_hosts:
       - "host.docker.internal:host-gateway"
     ports:
       - "8000:8000"
+
+  frontend:
+    build:
+      context: ./frontend/web
+      dockerfile: Dockerfile
+    container_name: mem-frontend
+    depends_on:
+      orchestrator:
+        condition: service_started
+    working_dir: /app
+    command: npm run dev -- --hostname 0.0.0.0
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./frontend/web:/app
+      - /app/node_modules

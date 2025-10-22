@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
 import llm
 import retrieval
@@ -8,6 +9,15 @@ from db import get_conn
 from schemas import AskIn, AskOut, ContactIn, EventIn, GetIn, PlaceIn, ResolveIn, SearchIn
 
 api = FastAPI(title="Personal Memory Orchestrator", version="0.3")
+
+# Configure CORS to allow requests from the frontend
+api.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:3000"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 @api.on_event("startup")

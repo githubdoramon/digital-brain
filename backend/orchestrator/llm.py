@@ -14,6 +14,8 @@ OLLAMA_HOST = os.getenv("OLLAMA_HOST", "http://localhost:11434")
 OLLAMA_CHAT_MODEL = os.getenv("OLLAMA_CHAT_MODEL", "qwen2.5:32b-instruct")
 OLLAMA_TIMEOUT = int(os.getenv("OLLAMA_TIMEOUT", "60"))
 
+print(f"Using Ollama model: {OLLAMA_CHAT_MODEL}")
+
 _SCHEMA_HINT_CACHE: str | None = None
 _SCHEMA_SNAPSHOT: Dict[str, Any] | None = None
 
