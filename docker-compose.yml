@@ -37,15 +37,26 @@ services:
         condition: service_started
     env_file:
       - ./backend/.env
-    environment:
-      DB_DSN: postgresql://memuser:mempass@db:5432/memdb
-      QDRANT_HOST: qdrant
-      QDRANT_PORT: 6333
-      TZ: UTC
     extra_hosts:
       - "host.docker.internal:host-gateway"
     ports:
       - "8000:8000"
+
+  removed_service:
+    build:
+      context: ./backend/removed_service
+      dockerfile: Dockerfile
+    container_name: mem-removed-service
+    depends_on:
+      db:
+        condition: service_healthy
+    env_file:
+      - ./backend/.env
+    ports:
+      - "7001:7001"
+    volumes:
+      - ./backend/removed_service/models:/app/models
+      - ./backend/removed_service/dataset:/app/dataset
 
   frontend:
     build:
