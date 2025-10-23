@@ -30,6 +30,34 @@ The script will:
 
 Backend API base URL (default): `http://localhost:8000`
 
+### Memory Layer (Mem0)
+
+The backend now includes **Mem0**, an intelligent memory layer that enables the system to remember conversations and user preferences across sessions.
+
+**Key Features:**
+- Persistent conversation memory via Qdrant vector database
+- User preference learning
+- Context-aware responses
+- 26% higher accuracy than traditional approaches
+- 90% token cost savings
+- Web UI for memory management at `http://localhost:6333/dashboard`
+
+**Frontend Integration:**
+- Session-based conversations
+- Visual memory indicators (🧠 badge)
+- Toggle to view memory details
+- User-specific memory isolation
+
+**Documentation:**
+- `backend/MEM0_INTEGRATION.md` - Complete usage guide
+- `backend/MEM0_UPDATES.md` - Frontend & storage details
+
+**Testing:** Run the integration test:
+```bash
+cd backend
+python test_mem0_integration.py
+```
+
 ## Frontend
 
 The Next.js app resides in `frontend/web`.

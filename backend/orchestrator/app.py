@@ -76,5 +76,10 @@ def get_events(payload: GetIn):
 # --------------------------- Ask endpoint (LLM-powered) ---------------------------
 @api.post("/ask", response_model=AskOut)
 def ask(payload: AskIn):
-    bundle = llm.answer_question(payload.question, search_limit=payload.limit or 3)
+    bundle = llm.answer_question(
+        payload.question, 
+        search_limit=payload.limit or 3,
+        user_id=payload.user_id or "default_user",
+        session_id=payload.session_id
+    )
     return AskOut(**bundle)

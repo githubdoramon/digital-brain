@@ -3,9 +3,10 @@ from __future__ import annotations
 import json
 import os
 import re
-from typing import Any, Dict, List, Set
+from typing import Any, Dict, List, Set, Optional
 
 import requests
+from mem0 import Memory
 
 import retrieval
 import sql_tools
@@ -13,8 +14,55 @@ import sql_tools
 OLLAMA_HOST = os.getenv("OLLAMA_HOST", "http://localhost:11434")
 OLLAMA_CHAT_MODEL = os.getenv("OLLAMA_CHAT_MODEL", "qwen2.5:32b-instruct")
 OLLAMA_TIMEOUT = int(os.getenv("OLLAMA_TIMEOUT", "60"))
+QDRANT_HOST = os.getenv("QDRANT_HOST", "localhost")
+QDRANT_PORT = int(os.getenv("QDRANT_PORT", "6333"))
 
 print(f"Using Ollama model: {OLLAMA_CHAT_MODEL}")
+print(f"Using Qdrant at {QDRANT_HOST}:{QDRANT_PORT}")
+
+# Mem0 configuration for conversation memory with persistent Qdrant storage
+MEM0_CONFIG = {
+    "llm": {
+        "provider": "ollama",
+        "config": {
+            "model": OLLAMA_CHAT_MODEL,
+            "ollama_base_url": OLLAMA_HOST,
+        }
+    },
+    "embedder": {
+        "provider": "ollama",
+        "config": {
+            "model": "nomic-embed-text:latest",
+            "ollama_base_url": OLLAMA_HOST,
+            "embedding_dims": 768,  # nomic-embed-text outputs 768-dimensional vectors
+        }
+    },
+    "vector_store": {
+        "provider": "qdrant",
+        "config": {
+            "host": QDRANT_HOST,
+            "port": QDRANT_PORT,
+            "collection_name": "digital_brain_interaction_memories",
+            "embedding_model_dims": 768,  # nomic-embed-text outputs 768-dimensional vectors
+        }
+    },
+    "version": "v1.1"
+}
+
+# Initialize Mem0 memory instance
+_memory_instance: Optional[Memory] = None
+
+def get_memory() -> Memory:
+    """Get or create the Mem0 memory instance."""
+    global _memory_instance
+    if _memory_instance is None:
+        try:
+            _memory_instance = Memory.from_config(MEM0_CONFIG)
+            print("[mem0] Memory instance initialized successfully")
+        except Exception as e:
+            print(f"[mem0] Warning: Failed to initialize Mem0: {e}")
+            print("[mem0] Continuing without memory layer")
+    return _memory_instance
 
 _SCHEMA_HINT_CACHE: str | None = None
 _SCHEMA_SNAPSHOT: Dict[str, Any] | None = None
@@ -172,9 +220,44 @@ class AgentState:
             self.detailed_events = []
 
 
-def answer_question(question: str, search_limit: int = 3) -> Dict[str, Any]:
+def answer_question(
+    question: str, 
+    search_limit: int = 3,
+    user_id: str = "default_user",
+    session_id: Optional[str] = None
+) -> Dict[str, Any]:
     state = AgentState()
-    messages: List[Dict[str, Any]] = _build_messages(question, search_limit)
+    
+    # Retrieve relevant memories from Mem0
+    memories_used = []
+    memory = get_memory()
+    if memory:
+        try:
+            print(f"[mem0] Retrieving memories for user_id={user_id}")
+            response = memory.search(question, user_id=user_id, limit=5)
+            
+            # Mem0 returns {"results": [{"id": ..., "memory": "...", ...}, ...]}
+            if isinstance(response, dict) and "results" in response:
+                results = response["results"]
+                if isinstance(results, list):
+                    for result in results:
+                        if isinstance(result, dict) and "memory" in result:
+                            memories_used.append(result["memory"])
+                    
+                    if memories_used:
+                        print(f"[mem0] Found {len(memories_used)} relevant memories")
+                    else:
+                        print("[mem0] No memories found for this query")
+                else:
+                    print(f"[mem0] Unexpected results format: {type(results)}")
+            else:
+                print(f"[mem0] Unexpected response format: {type(response)}")
+        except Exception as e:
+            print(f"[mem0] Error retrieving memories: {e}")
+            import traceback
+            traceback.print_exc()
+    
+    messages: List[Dict[str, Any]] = _build_messages(question, search_limit, memories_used)
 
     while True:
         print("[agent] sending messages ->", json.dumps(messages[-4:], ensure_ascii=False, indent=2))
@@ -208,12 +291,22 @@ def answer_question(question: str, search_limit: int = 3) -> Dict[str, Any]:
             raise RuntimeError(f"Unexpected Ollama response: {response}")
 
         messages.append(message)
-        bundle = _finalize_bundle(question, content, state, search_limit)
+        bundle = _finalize_bundle(question, content, state, search_limit, session_id, memories_used)
+        
+        # Store this interaction in Mem0
+        if memory:
+            try:
+                conversation_text = f"User asked: {question}\nAssistant answered: {content}"
+                memory.add(conversation_text, user_id=user_id, metadata={"session_id": session_id} if session_id else {})
+                print(f"[mem0] Stored conversation in memory for user_id={user_id}")
+            except Exception as e:
+                print(f"[mem0] Error storing memory: {e}")
+        
         print("[agent] final bundle ->", json.dumps(bundle, ensure_ascii=False, indent=2))
         return bundle
 
 
-def _build_messages(question: str, search_limit: int) -> List[Dict[str, str]]:
+def _build_messages(question: str, search_limit: int, memories_used: List[str] = None) -> List[Dict[str, str]]:
     system_prompt = (
         "You are a personal memory assistant. "
         "Use the available tools to gather accurate context before answering. "
@@ -235,6 +328,12 @@ def _build_messages(question: str, search_limit: int) -> List[Dict[str, str]]:
     schema_hint = _load_schema_hint()
     if schema_hint:
         messages.append({"role": "system", "content": schema_hint})
+
+    # Add memories from previous conversations if available
+    if memories_used:
+        memory_context = "Relevant context from previous conversations:\n" + "\n".join(f"- {mem}" for mem in memories_used)
+        messages.append({"role": "system", "content": memory_context})
+        print(f"[mem0] Added {len(memories_used)} memories to context")
 
     messages.append({"role": "system", "content": protocol_prompt})
     messages.append({"role": "user", "content": question.strip()})
@@ -460,6 +559,8 @@ def _finalize_bundle(
     answer: str,
     state: AgentState,
     search_limit: int,
+    session_id: Optional[str] = None,
+    memories_used: List[str] = None,
 ) -> Dict[str, Any]:
     if not state.resolution or not state.search_results:
         fallback = retrieval.run_pipeline(question, search_limit=search_limit)
@@ -481,6 +582,8 @@ def _finalize_bundle(
         "resolution": state.resolution or {},
         "search_results": state.search_results,
         "detailed_events": state.detailed_events,
+        "session_id": session_id,
+        "memories_used": memories_used or [],
     }
 
 

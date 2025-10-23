@@ -61,6 +61,8 @@ class GetIn(BaseModel):
 class AskIn(BaseModel):
     question: str
     limit: Optional[int] = 3
+    session_id: Optional[str] = None
+    user_id: Optional[str] = "default_user"
 
 
 class AskOut(BaseModel):
@@ -69,3 +71,5 @@ class AskOut(BaseModel):
     resolution: Dict[str, Any]
     search_results: List[Dict[str, Any]]
     detailed_events: List[Dict[str, Any]]
+    session_id: Optional[str] = None
+    memories_used: Optional[List[str]] = []

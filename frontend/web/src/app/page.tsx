@@ -7,14 +7,22 @@ type Message = {
   role: "user" | "assistant";
   content: string;
   timestamp: Date;
+  memories?: string[];
 };
 
 const API_BASE = process.env.BACKEND_API_BASE ?? "http://localhost:8000";
+
+// Generate a unique session ID for this chat session
+function generateSessionId(): string {
+  return `session_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+}
 
 export default function Home() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
+  const [sessionId] = useState(() => generateSessionId());
+  const [showMemories, setShowMemories] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   const scrollToBottom = () => {
@@ -48,6 +56,8 @@ export default function Home() {
         body: JSON.stringify({
           question: userMessage.content,
           limit: 5,
+          session_id: sessionId,
+          user_id: "web_user", // Could be made dynamic with auth
         }),
       });
 
@@ -61,6 +71,7 @@ export default function Home() {
         role: "assistant",
         content: data.answer || "I couldn't generate a response.",
         timestamp: new Date(),
+        memories: data.memories_used || [],
       };
 
       setMessages((prev) => [...prev, assistantMessage]);
@@ -102,14 +113,36 @@ export default function Home() {
           style={{
             padding: "20px 24px",
             borderBottom: "1px solid #e2e2e2",
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "center",
           }}
         >
-          <h2 style={{ fontSize: "1.25rem", fontWeight: 600 }}>
-            Chat with your Digital Brain
-          </h2>
-          <p style={{ fontSize: "0.875rem", color: "#666", marginTop: "4px" }}>
-            Ask about your memories, contacts, meetings, and more
-          </p>
+          <div>
+            <h2 style={{ fontSize: "1.25rem", fontWeight: 600 }}>
+              Chat with your Digital Brain
+            </h2>
+            <p style={{ fontSize: "0.875rem", color: "#666", marginTop: "4px" }}>
+              Ask about your memories, contacts, meetings, and more
+            </p>
+          </div>
+          <button
+            onClick={() => setShowMemories(!showMemories)}
+            style={{
+              padding: "8px 12px",
+              background: showMemories ? "#0b6bcb" : "#f5f5f5",
+              color: showMemories ? "#fff" : "#666",
+              border: "1px solid #d0d0d0",
+              borderRadius: "6px",
+              fontSize: "0.8rem",
+              cursor: "pointer",
+              whiteSpace: "nowrap",
+              transition: "all 0.2s",
+            }}
+            title={showMemories ? "Hide memory details" : "Show memory details"}
+          >
+            {showMemories ? "🧠 Memories On" : "🧠 Memories Off"}
+          </button>
         </div>
 
         {/* Messages Area */}
@@ -173,13 +206,58 @@ export default function Home() {
                   marginTop: "4px",
                   paddingLeft: message.role === "user" ? "0" : "8px",
                   paddingRight: message.role === "user" ? "8px" : "0",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "8px",
                 }}
               >
-                {message.timestamp.toLocaleTimeString([], {
-                  hour: "2-digit",
-                  minute: "2-digit",
-                })}
+                <span>
+                  {message.timestamp.toLocaleTimeString([], {
+                    hour: "2-digit",
+                    minute: "2-digit",
+                  })}
+                </span>
+                {message.memories && message.memories.length > 0 && (
+                  <span
+                    title={`Used ${message.memories.length} memories from previous conversations`}
+                    style={{
+                      background: "#e0f2fe",
+                      color: "#0369a1",
+                      padding: "2px 6px",
+                      borderRadius: "4px",
+                      fontSize: "0.7rem",
+                      fontWeight: 500,
+                    }}
+                  >
+                    🧠 {message.memories.length} memories
+                  </span>
+                )}
               </div>
+              {message.memories && message.memories.length > 0 && showMemories && (
+                <div
+                  style={{
+                    maxWidth: "80%",
+                    marginTop: "8px",
+                    padding: "8px 12px",
+                    background: "#f0f9ff",
+                    border: "1px solid #bae6fd",
+                    borderRadius: "8px",
+                    fontSize: "0.8rem",
+                    color: "#0c4a6e",
+                  }}
+                >
+                  <div style={{ fontWeight: 600, marginBottom: "4px" }}>
+                    Memories used:
+                  </div>
+                  <ul style={{ margin: 0, paddingLeft: "20px" }}>
+                    {message.memories.map((mem, i) => (
+                      <li key={i} style={{ marginBottom: "2px" }}>
+                        {mem}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
             </div>
           ))}
 
