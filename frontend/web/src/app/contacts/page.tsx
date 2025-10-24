@@ -22,6 +22,7 @@ type Status =
 const API_BASE = process.env.BACKEND_API_BASE ?? "http://localhost:8000";
 
 const RELATIONSHIP_OPTIONS = [
+  "Myself",
   "Wife",
   "Daughter",
   "Brother",

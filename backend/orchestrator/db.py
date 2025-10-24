@@ -7,13 +7,20 @@ from typing import Iterator, List
 import psycopg
 from psycopg.rows import dict_row
 
-DB_DSN = os.getenv("DB_DSN")
+# Construct DB connection string from environment variables
+POSTGRES_USER = os.getenv("POSTGRES_USER")
+POSTGRES_PASSWORD = os.getenv("POSTGRES_PASSWORD")
+POSTGRES_DB = os.getenv("POSTGRES_DB")
+POSTGRES_HOST = os.getenv("POSTGRES_HOST")
+POSTGRES_PORT = os.getenv("POSTGRES_PORT")
+
+DB_DSN = f"postgresql://{POSTGRES_USER}:{POSTGRES_PASSWORD}@{POSTGRES_HOST}:{POSTGRES_PORT}/{POSTGRES_DB}"
 
 
 @contextmanager
 def get_conn() -> Iterator[psycopg.Connection]:
-    if not DB_DSN:
-        raise RuntimeError("DB_DSN environment variable is not set")
+    if not POSTGRES_PASSWORD:
+        raise RuntimeError("POSTGRES_PASSWORD environment variable is not set")
     conn = psycopg.connect(DB_DSN, row_factory=dict_row)
     try:
         yield conn

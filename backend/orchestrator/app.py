@@ -13,7 +13,7 @@ from schemas import AskIn, AskOut, ContactIn, EventIn, GetIn, PlaceIn, ResolveIn
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Startup: Ensure we can connect at startup; this raises early if DB_DSN is misconfigured.
+    # Startup: Ensure we can connect at startup; this raises early if DB connection is misconfigured.
     with get_conn():
         pass
     yield

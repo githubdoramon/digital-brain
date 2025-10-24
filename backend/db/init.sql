@@ -12,7 +12,7 @@ CREATE TABLE IF NOT EXISTS contacts (
   phones TEXT[] DEFAULT '{}'::TEXT[],
   links TEXT[] DEFAULT '{}'::TEXT[],
   tags TEXT[] DEFAULT '{}'::TEXT[],
-  relationship TEXT CHECK (relationship IN ('Wife', 'Daughter', 'Brother', 'Mother', 'Coworker', 'Friend'))
+  relationship TEXT CHECK (relationship IN ('Myself', 'Wife', 'Daughter', 'Brother', 'Mother', 'Coworker', 'Friend'))
 );
 
 -- Places (canonical venue rows)

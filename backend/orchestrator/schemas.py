@@ -15,7 +15,7 @@ class ContactIn(BaseModel):
     phones: Optional[List[str]] = []
     links: Optional[List[str]] = []
     tags: Optional[List[str]] = []
-    relationship: Optional[Literal["Wife", "Daughter", "Brother", "Mother", "Coworker", "Friend"]] = None
+    relationship: Optional[Literal["Myself", "Wife", "Daughter", "Brother", "Mother", "Coworker", "Friend"]] = None
 
 
 class PlaceIn(BaseModel):
