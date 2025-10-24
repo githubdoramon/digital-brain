@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
 import llm
@@ -31,6 +31,27 @@ def check_database_connection() -> None:
 @api.post("/ingest/contact")
 def ingest_contact(c: ContactIn):
     retrieval.ingest_contact(c)
+    return {"ok": True}
+
+
+@api.get("/contacts")
+def list_contacts():
+    return {"contacts": retrieval.list_contacts()}
+
+
+@api.get("/contacts/{contact_id}")
+def get_contact(contact_id: str):
+    contact = retrieval.get_contact(contact_id)
+    if contact is None:
+        raise HTTPException(status_code=404, detail="Contact not found")
+    return contact
+
+
+@api.delete("/contacts/{contact_id}")
+def delete_contact(contact_id: str):
+    deleted = retrieval.delete_contact(contact_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Contact not found")
     return {"ok": True}
 
 

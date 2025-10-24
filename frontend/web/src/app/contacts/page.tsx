@@ -1,0 +1,805 @@
+'use client';
+
+import { FormEvent, useEffect, useState } from "react";
+
+type Contact = {
+  contact_id: string;
+  display_name: string;
+  aliases: string[];
+  birthday: string | null;
+  emails: string[];
+  phones: string[];
+  links: string[];
+  tags: string[];
+  relationship: string | null;
+};
+
+type Status =
+  | { kind: "idle" }
+  | { kind: "success"; message: string }
+  | { kind: "error"; message: string };
+
+const API_BASE = process.env.BACKEND_API_BASE ?? "http://localhost:8000";
+
+const RELATIONSHIP_OPTIONS = [
+  "Wife",
+  "Daughter",
+  "Brother",
+  "Mother",
+  "Coworker",
+  "Friend",
+] as const;
+
+function parseList(value: string): string[] {
+  return value
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function formatList(items: string[]): string {
+  return items.join(", ");
+}
+
+export default function ContactsPage() {
+  const [contacts, setContacts] = useState<Contact[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [status, setStatus] = useState<Status>({ kind: "idle" });
+  const [isSubmitting, setSubmitting] = useState(false);
+  
+  // Modal state
+  const [showModal, setShowModal] = useState(false);
+  const [editingContact, setEditingContact] = useState<Contact | null>(null);
+  const [formState, setFormState] = useState<{
+    contact_id: string;
+    display_name: string;
+    aliases: string;
+    birthday: string;
+    emails: string;
+    phones: string;
+    links: string;
+    tags: string;
+    relationship: string;
+  }>({
+    contact_id: "",
+    display_name: "",
+    aliases: "",
+    birthday: "",
+    emails: "",
+    phones: "",
+    links: "",
+    tags: "",
+    relationship: "",
+  });
+
+  // Load contacts on mount
+  useEffect(() => {
+    loadContacts();
+  }, []);
+
+  async function loadContacts() {
+    setIsLoading(true);
+    try {
+      const response = await fetch(`${API_BASE}/contacts`);
+      if (!response.ok) {
+        throw new Error("Failed to load contacts");
+      }
+      const data = await response.json();
+      setContacts(data.contacts || []);
+    } catch (error) {
+      setStatus({
+        kind: "error",
+        message: error instanceof Error ? error.message : "Failed to load contacts",
+      });
+    } finally {
+      setIsLoading(false);
+    }
+  }
+
+  function openAddModal() {
+    setEditingContact(null);
+    setFormState({
+      contact_id: `contact-${Date.now()}`,
+      display_name: "",
+      aliases: "",
+      birthday: "",
+      emails: "",
+      phones: "",
+      links: "",
+      tags: "",
+      relationship: "",
+    });
+    setShowModal(true);
+    setStatus({ kind: "idle" });
+  }
+
+  function openEditModal(contact: Contact) {
+    setEditingContact(contact);
+    setFormState({
+      contact_id: contact.contact_id,
+      display_name: contact.display_name,
+      aliases: formatList(contact.aliases),
+      birthday: contact.birthday || "",
+      emails: formatList(contact.emails),
+      phones: formatList(contact.phones),
+      links: formatList(contact.links),
+      tags: formatList(contact.tags),
+      relationship: contact.relationship || "",
+    });
+    setShowModal(true);
+    setStatus({ kind: "idle" });
+  }
+
+  function closeModal() {
+    setShowModal(false);
+    setEditingContact(null);
+  }
+
+  const handleChange = (field: string) =>
+    (event: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
+      setFormState((prev) => ({ ...prev, [field]: event.target.value }));
+    };
+
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setSubmitting(true);
+    setStatus({ kind: "idle" });
+
+    const payload = {
+      contact_id: formState.contact_id.trim() || `contact-${Date.now()}`,
+      display_name: formState.display_name.trim(),
+      aliases: parseList(formState.aliases),
+      birthday: formState.birthday || null,
+      emails: parseList(formState.emails),
+      phones: parseList(formState.phones),
+      links: parseList(formState.links),
+      tags: parseList(formState.tags),
+      relationship: formState.relationship || null,
+    };
+
+    try {
+      const response = await fetch(`${API_BASE}/ingest/contact`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(payload),
+      });
+
+      if (!response.ok) {
+        const error = await response.json().catch(() => ({}));
+        throw new Error(error.detail || "Failed to save contact");
+      }
+
+      setStatus({
+        kind: "success",
+        message: editingContact
+          ? `Contact ${payload.display_name} updated successfully`
+          : `Contact ${payload.display_name} created successfully`,
+      });
+      
+      // Reload contacts and close modal
+      await loadContacts();
+      setTimeout(() => {
+        closeModal();
+      }, 1000);
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : "Unexpected error occurred";
+      setStatus({ kind: "error", message });
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  async function handleDelete(contact: Contact) {
+    if (!confirm(`Are you sure you want to delete ${contact.display_name}?`)) {
+      return;
+    }
+
+    try {
+      const response = await fetch(`${API_BASE}/contacts/${contact.contact_id}`, {
+        method: "DELETE",
+      });
+
+      if (!response.ok) {
+        throw new Error("Failed to delete contact");
+      }
+
+      setStatus({
+        kind: "success",
+        message: `Contact ${contact.display_name} deleted successfully`,
+      });
+      
+      // Reload contacts
+      await loadContacts();
+      
+      // Clear status after 3 seconds
+      setTimeout(() => {
+        setStatus({ kind: "idle" });
+      }, 3000);
+    } catch (error) {
+      setStatus({
+        kind: "error",
+        message: error instanceof Error ? error.message : "Failed to delete contact",
+      });
+    }
+  }
+
+  return (
+    <section style={{ display: "grid", gap: "24px" }}>
+      <div style={{ display: "grid", gap: "8px" }}>
+        <h1 style={{ fontSize: "2rem", fontWeight: 600 }}>Contacts</h1>
+        <p style={{ color: "#555" }}>
+          Manage your personal contacts. Add, edit, or remove people from your
+          digital brain.
+        </p>
+      </div>
+
+      {/* Status Messages */}
+      {status.kind === "error" && (
+        <div
+          role="alert"
+          style={{
+            background: "#fee2e2",
+            border: "1px solid #fca5a5",
+            color: "#991b1b",
+            borderRadius: "8px",
+            padding: "12px 16px",
+          }}
+        >
+          {status.message}
+        </div>
+      )}
+      {status.kind === "success" && (
+        <div
+          role="status"
+          style={{
+            background: "#dcfce7",
+            border: "1px solid #86efac",
+            color: "#166534",
+            borderRadius: "8px",
+            padding: "12px 16px",
+          }}
+        >
+          {status.message}
+        </div>
+      )}
+
+      {/* Add Contact Button */}
+      <div>
+        <button
+          onClick={openAddModal}
+          style={{
+            background: "#0b6bcb",
+            color: "#fff",
+            border: "none",
+            borderRadius: "8px",
+            padding: "12px 24px",
+            fontWeight: 600,
+            cursor: "pointer",
+            fontSize: "0.95rem",
+          }}
+        >
+          + Add New Contact
+        </button>
+      </div>
+
+      {/* Contacts List */}
+      <div
+        style={{
+          border: "1px solid #e2e2e2",
+          borderRadius: "12px",
+          background: "#fff",
+          boxShadow: "0 4px 12px rgba(15, 23, 42, 0.04)",
+          overflow: "hidden",
+        }}
+      >
+        {isLoading ? (
+          <div style={{ padding: "48px", textAlign: "center", color: "#666" }}>
+            Loading contacts...
+          </div>
+        ) : contacts.length === 0 ? (
+          <div
+            style={{
+              padding: "48px",
+              textAlign: "center",
+              color: "#999",
+              display: "flex",
+              flexDirection: "column",
+              alignItems: "center",
+              gap: "12px",
+            }}
+          >
+            <div style={{ fontSize: "2.5rem" }}>👥</div>
+            <p>No contacts yet</p>
+            <p style={{ fontSize: "0.85rem", color: "#aaa" }}>
+              Click "Add New Contact" to get started
+            </p>
+          </div>
+        ) : (
+          <div style={{ overflowX: "auto" }}>
+            <table
+              style={{
+                width: "100%",
+                borderCollapse: "collapse",
+              }}
+            >
+              <thead>
+                <tr style={{ background: "#f5f5f5", borderBottom: "2px solid #e2e2e2" }}>
+                  <th
+                    style={{
+                      padding: "16px 20px",
+                      textAlign: "left",
+                      fontWeight: 600,
+                      fontSize: "0.9rem",
+                    }}
+                  >
+                    Name
+                  </th>
+                  <th
+                    style={{
+                      padding: "16px 20px",
+                      textAlign: "left",
+                      fontWeight: 600,
+                      fontSize: "0.9rem",
+                    }}
+                  >
+                    Relationship
+                  </th>
+                  <th
+                    style={{
+                      padding: "16px 20px",
+                      textAlign: "left",
+                      fontWeight: 600,
+                      fontSize: "0.9rem",
+                    }}
+                  >
+                    Email
+                  </th>
+                  <th
+                    style={{
+                      padding: "16px 20px",
+                      textAlign: "left",
+                      fontWeight: 600,
+                      fontSize: "0.9rem",
+                    }}
+                  >
+                    Phone
+                  </th>
+                  <th
+                    style={{
+                      padding: "16px 20px",
+                      textAlign: "left",
+                      fontWeight: 600,
+                      fontSize: "0.9rem",
+                    }}
+                  >
+                    Tags
+                  </th>
+                  <th
+                    style={{
+                      padding: "16px 20px",
+                      textAlign: "right",
+                      fontWeight: 600,
+                      fontSize: "0.9rem",
+                    }}
+                  >
+                    Actions
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                {contacts.map((contact, index) => (
+                  <tr
+                    key={contact.contact_id}
+                    style={{
+                      borderBottom: index < contacts.length - 1 ? "1px solid #e2e2e2" : "none",
+                      transition: "background 0.2s",
+                    }}
+                    onMouseEnter={(e) => {
+                      e.currentTarget.style.background = "#f9fafb";
+                    }}
+                    onMouseLeave={(e) => {
+                      e.currentTarget.style.background = "transparent";
+                    }}
+                  >
+                    <td style={{ padding: "16px 20px" }}>
+                      <div style={{ fontWeight: 600 }}>{contact.display_name}</div>
+                      {contact.aliases.length > 0 && (
+                        <div style={{ fontSize: "0.8rem", color: "#666", marginTop: "2px" }}>
+                          {contact.aliases.join(", ")}
+                        </div>
+                      )}
+                    </td>
+                    <td style={{ padding: "16px 20px", color: "#555" }}>
+                      {contact.relationship && (
+                        <span
+                          style={{
+                            background: "#e0f2fe",
+                            color: "#0369a1",
+                            padding: "4px 8px",
+                            borderRadius: "4px",
+                            fontSize: "0.8rem",
+                            fontWeight: 500,
+                          }}
+                        >
+                          {contact.relationship}
+                        </span>
+                      )}
+                    </td>
+                    <td style={{ padding: "16px 20px", color: "#555", fontSize: "0.9rem" }}>
+                      {contact.emails[0] || "-"}
+                    </td>
+                    <td style={{ padding: "16px 20px", color: "#555", fontSize: "0.9rem" }}>
+                      {contact.phones[0] || "-"}
+                    </td>
+                    <td style={{ padding: "16px 20px", color: "#555", fontSize: "0.85rem" }}>
+                      {contact.tags.length > 0
+                        ? contact.tags.slice(0, 2).join(", ") +
+                          (contact.tags.length > 2 ? "..." : "")
+                        : "-"}
+                    </td>
+                    <td
+                      style={{
+                        padding: "16px 20px",
+                        textAlign: "right",
+                        display: "flex",
+                        gap: "8px",
+                        justifyContent: "flex-end",
+                      }}
+                    >
+                      <button
+                        onClick={() => openEditModal(contact)}
+                        style={{
+                          background: "#f5f5f5",
+                          color: "#444",
+                          border: "1px solid #d0d0d0",
+                          borderRadius: "6px",
+                          padding: "6px 12px",
+                          fontSize: "0.85rem",
+                          cursor: "pointer",
+                          fontWeight: 500,
+                        }}
+                      >
+                        Edit
+                      </button>
+                      <button
+                        onClick={() => handleDelete(contact)}
+                        style={{
+                          background: "#fee2e2",
+                          color: "#991b1b",
+                          border: "1px solid #fca5a5",
+                          borderRadius: "6px",
+                          padding: "6px 12px",
+                          fontSize: "0.85rem",
+                          cursor: "pointer",
+                          fontWeight: 500,
+                        }}
+                      >
+                        Delete
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
+      {/* Modal */}
+      {showModal && (
+        <div
+          style={{
+            position: "fixed",
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            background: "rgba(0, 0, 0, 0.5)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            zIndex: 1000,
+            padding: "20px",
+          }}
+          onClick={(e) => {
+            if (e.target === e.currentTarget) {
+              closeModal();
+            }
+          }}
+        >
+          <div
+            style={{
+              background: "#fff",
+              borderRadius: "12px",
+              maxWidth: "600px",
+              width: "100%",
+              maxHeight: "90vh",
+              overflow: "auto",
+              boxShadow: "0 20px 60px rgba(0, 0, 0, 0.3)",
+            }}
+          >
+            <form onSubmit={handleSubmit}>
+              {/* Modal Header */}
+              <div
+                style={{
+                  padding: "24px",
+                  borderBottom: "1px solid #e2e2e2",
+                  display: "flex",
+                  justifyContent: "space-between",
+                  alignItems: "center",
+                }}
+              >
+                <h2 style={{ fontSize: "1.5rem", fontWeight: 600, margin: 0 }}>
+                  {editingContact ? "Edit Contact" : "Add New Contact"}
+                </h2>
+                <button
+                  type="button"
+                  onClick={closeModal}
+                  style={{
+                    background: "transparent",
+                    border: "none",
+                    fontSize: "1.5rem",
+                    cursor: "pointer",
+                    color: "#666",
+                    padding: "0",
+                    width: "32px",
+                    height: "32px",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                  }}
+                >
+                  ×
+                </button>
+              </div>
+
+              {/* Modal Body */}
+              <div style={{ padding: "24px", display: "grid", gap: "16px" }}>
+                <label style={{ display: "grid", gap: "6px" }}>
+                  <span style={{ fontWeight: 600, fontSize: "0.9rem" }}>
+                    Contact ID <span style={{ color: "#e11d48" }}>*</span>
+                  </span>
+                  <input
+                    type="text"
+                    required
+                    value={formState.contact_id}
+                    onChange={handleChange("contact_id")}
+                    disabled={!!editingContact}
+                    style={{
+                      border: "1px solid #d0d0d0",
+                      borderRadius: "8px",
+                      padding: "10px 12px",
+                      fontSize: "0.95rem",
+                      background: editingContact ? "#f5f5f5" : "#fff",
+                    }}
+                  />
+                  <span style={{ fontSize: "0.8rem", color: "#666" }}>
+                    Unique identifier (e.g., contact:alice#001)
+                  </span>
+                </label>
+
+                <label style={{ display: "grid", gap: "6px" }}>
+                  <span style={{ fontWeight: 600, fontSize: "0.9rem" }}>
+                    Display Name <span style={{ color: "#e11d48" }}>*</span>
+                  </span>
+                  <input
+                    type="text"
+                    required
+                    value={formState.display_name}
+                    onChange={handleChange("display_name")}
+                    placeholder="John Doe"
+                    style={{
+                      border: "1px solid #d0d0d0",
+                      borderRadius: "8px",
+                      padding: "10px 12px",
+                      fontSize: "0.95rem",
+                    }}
+                  />
+                </label>
+
+                <label style={{ display: "grid", gap: "6px" }}>
+                  <span style={{ fontWeight: 600, fontSize: "0.9rem" }}>Relationship</span>
+                  <select
+                    value={formState.relationship}
+                    onChange={handleChange("relationship")}
+                    style={{
+                      border: "1px solid #d0d0d0",
+                      borderRadius: "8px",
+                      padding: "10px 12px",
+                      fontSize: "0.95rem",
+                    }}
+                  >
+                    <option value="">-- Select --</option>
+                    {RELATIONSHIP_OPTIONS.map((rel) => (
+                      <option key={rel} value={rel}>
+                        {rel}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+
+                <label style={{ display: "grid", gap: "6px" }}>
+                  <span style={{ fontWeight: 600, fontSize: "0.9rem" }}>Birthday</span>
+                  <input
+                    type="date"
+                    value={formState.birthday}
+                    onChange={handleChange("birthday")}
+                    style={{
+                      border: "1px solid #d0d0d0",
+                      borderRadius: "8px",
+                      padding: "10px 12px",
+                      fontSize: "0.95rem",
+                    }}
+                  />
+                </label>
+
+                <label style={{ display: "grid", gap: "6px" }}>
+                  <span style={{ fontWeight: 600, fontSize: "0.9rem" }}>Aliases</span>
+                  <input
+                    type="text"
+                    value={formState.aliases}
+                    onChange={handleChange("aliases")}
+                    placeholder="Johnny, JD (comma-separated)"
+                    style={{
+                      border: "1px solid #d0d0d0",
+                      borderRadius: "8px",
+                      padding: "10px 12px",
+                      fontSize: "0.95rem",
+                    }}
+                  />
+                </label>
+
+                <label style={{ display: "grid", gap: "6px" }}>
+                  <span style={{ fontWeight: 600, fontSize: "0.9rem" }}>Emails</span>
+                  <input
+                    type="text"
+                    value={formState.emails}
+                    onChange={handleChange("emails")}
+                    placeholder="john@example.com, jdoe@company.com (comma-separated)"
+                    style={{
+                      border: "1px solid #d0d0d0",
+                      borderRadius: "8px",
+                      padding: "10px 12px",
+                      fontSize: "0.95rem",
+                    }}
+                  />
+                </label>
+
+                <label style={{ display: "grid", gap: "6px" }}>
+                  <span style={{ fontWeight: 600, fontSize: "0.9rem" }}>Phones</span>
+                  <input
+                    type="text"
+                    value={formState.phones}
+                    onChange={handleChange("phones")}
+                    placeholder="+1234567890, +0987654321 (comma-separated)"
+                    style={{
+                      border: "1px solid #d0d0d0",
+                      borderRadius: "8px",
+                      padding: "10px 12px",
+                      fontSize: "0.95rem",
+                    }}
+                  />
+                </label>
+
+                <label style={{ display: "grid", gap: "6px" }}>
+                  <span style={{ fontWeight: 600, fontSize: "0.9rem" }}>Links</span>
+                  <input
+                    type="text"
+                    value={formState.links}
+                    onChange={handleChange("links")}
+                    placeholder="https://linkedin.com/in/johndoe (comma-separated)"
+                    style={{
+                      border: "1px solid #d0d0d0",
+                      borderRadius: "8px",
+                      padding: "10px 12px",
+                      fontSize: "0.95rem",
+                    }}
+                  />
+                </label>
+
+                <label style={{ display: "grid", gap: "6px" }}>
+                  <span style={{ fontWeight: 600, fontSize: "0.9rem" }}>Tags</span>
+                  <input
+                    type="text"
+                    value={formState.tags}
+                    onChange={handleChange("tags")}
+                    placeholder="work, family, important (comma-separated)"
+                    style={{
+                      border: "1px solid #d0d0d0",
+                      borderRadius: "8px",
+                      padding: "10px 12px",
+                      fontSize: "0.95rem",
+                    }}
+                  />
+                </label>
+
+                {status.kind === "error" && (
+                  <div
+                    role="alert"
+                    style={{
+                      background: "#fee2e2",
+                      border: "1px solid #fca5a5",
+                      color: "#991b1b",
+                      borderRadius: "8px",
+                      padding: "12px 16px",
+                      fontSize: "0.9rem",
+                    }}
+                  >
+                    {status.message}
+                  </div>
+                )}
+                {status.kind === "success" && (
+                  <div
+                    role="status"
+                    style={{
+                      background: "#dcfce7",
+                      border: "1px solid #86efac",
+                      color: "#166534",
+                      borderRadius: "8px",
+                      padding: "12px 16px",
+                      fontSize: "0.9rem",
+                    }}
+                  >
+                    {status.message}
+                  </div>
+                )}
+              </div>
+
+              {/* Modal Footer */}
+              <div
+                style={{
+                  padding: "24px",
+                  borderTop: "1px solid #e2e2e2",
+                  display: "flex",
+                  gap: "12px",
+                  justifyContent: "flex-end",
+                }}
+              >
+                <button
+                  type="button"
+                  onClick={closeModal}
+                  disabled={isSubmitting}
+                  style={{
+                    background: "transparent",
+                    color: "#444",
+                    border: "1px solid #cbd5e1",
+                    borderRadius: "8px",
+                    padding: "10px 20px",
+                    cursor: "pointer",
+                    fontWeight: 500,
+                  }}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={isSubmitting}
+                  style={{
+                    background: "#0b6bcb",
+                    color: "#fff",
+                    border: "none",
+                    borderRadius: "8px",
+                    padding: "10px 20px",
+                    fontWeight: 600,
+                    cursor: "pointer",
+                    opacity: isSubmitting ? 0.7 : 1,
+                  }}
+                >
+                  {isSubmitting
+                    ? "Saving..."
+                    : editingContact
+                    ? "Update Contact"
+                    : "Add Contact"}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+    </section>
+  );
+}
+

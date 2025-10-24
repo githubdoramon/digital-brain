@@ -22,7 +22,7 @@ export default function Home() {
   const [input, setInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [sessionId] = useState(() => generateSessionId());
-  const [showMemories, setShowMemories] = useState(false);
+  const [showMemories, setShowMemories] = useState(true);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   const scrollToBottom = () => {
@@ -348,6 +348,14 @@ export default function Home() {
           Quick Links
         </h2>
         <ul style={{ listStyle: "disc", paddingInlineStart: "20px", color: "#444" }}>
+          <li>
+            Manage your personal contacts through the
+            {" "}
+            <Link href="/contacts" style={{ color: "#0b6bcb" }}>
+              Contacts page
+            </Link>
+            .
+          </li>
           <li>
             Import new meeting transcripts through the
             {" "}

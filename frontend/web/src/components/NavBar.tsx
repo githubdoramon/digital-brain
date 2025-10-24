@@ -46,6 +46,14 @@ export function NavBar() {
             Home
           </Link>
           <Link
+            href="/contacts"
+            style={{
+              color: "#444",
+            }}
+          >
+            Contacts
+          </Link>
+          <Link
             href="/meetings"
             style={{
               color: "#444",

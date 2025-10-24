@@ -53,6 +53,72 @@ def ingest_contact(contact) -> None:
         conn.commit()
 
 
+def list_contacts() -> List[Dict[str, Any]]:
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT contact_id, display_name, aliases, birthday, emails, phones, links, tags, relationship
+            FROM contacts
+            ORDER BY display_name
+            """
+        )
+        rows = cur.fetchall()
+        contacts = []
+        for row in rows:
+            contacts.append({
+                "contact_id": row["contact_id"],
+                "display_name": row["display_name"],
+                "aliases": row["aliases"] or [],
+                "birthday": row["birthday"].isoformat() if row["birthday"] else None,
+                "emails": row["emails"] or [],
+                "phones": row["phones"] or [],
+                "links": row["links"] or [],
+                "tags": row["tags"] or [],
+                "relationship": row["relationship"],
+            })
+        return contacts
+
+
+def get_contact(contact_id: str) -> Optional[Dict[str, Any]]:
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT contact_id, display_name, aliases, birthday, emails, phones, links, tags, relationship
+            FROM contacts
+            WHERE contact_id = %s
+            """,
+            (contact_id,)
+        )
+        row = cur.fetchone()
+        if not row:
+            return None
+        return {
+            "contact_id": row["contact_id"],
+            "display_name": row["display_name"],
+            "aliases": row["aliases"] or [],
+            "birthday": row["birthday"].isoformat() if row["birthday"] else None,
+            "emails": row["emails"] or [],
+            "phones": row["phones"] or [],
+            "links": row["links"] or [],
+            "tags": row["tags"] or [],
+            "relationship": row["relationship"],
+        }
+
+
+def delete_contact(contact_id: str) -> bool:
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            DELETE FROM contacts
+            WHERE contact_id = %s
+            """,
+            (contact_id,)
+        )
+        deleted = cur.rowcount > 0
+        conn.commit()
+        return deleted
+
+
 def ingest_place(place) -> None:
     with get_conn() as conn, conn.cursor() as cur:
         cur.execute(

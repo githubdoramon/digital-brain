@@ -11,13 +11,27 @@ from mem0 import Memory
 import retrieval
 import sql_tools
 
-OLLAMA_HOST = os.getenv("OLLAMA_HOST", "http://localhost:11434")
-OLLAMA_CHAT_MODEL = os.getenv("OLLAMA_CHAT_MODEL", "qwen2.5:32b-instruct")
-OLLAMA_TIMEOUT = int(os.getenv("OLLAMA_TIMEOUT", "60"))
-QDRANT_HOST = os.getenv("QDRANT_HOST", "localhost")
-QDRANT_PORT = int(os.getenv("QDRANT_PORT", "6333"))
+OLLAMA_HOST = os.getenv("OLLAMA_HOST")
+OLLAMA_CHAT_MODEL = os.getenv("OLLAMA_CHAT_MODEL")
+OLLAMA_EMBED_MODEL = os.getenv("OLLAMA_EMBED_MODEL")
+OLLAMA_TIMEOUT = int(os.getenv("OLLAMA_TIMEOUT", "60"))  # Keep default for timeout
+QDRANT_HOST = os.getenv("QDRANT_HOST")
+QDRANT_PORT = int(os.getenv("QDRANT_PORT")) if os.getenv("QDRANT_PORT") else None
 
-print(f"Using Ollama model: {OLLAMA_CHAT_MODEL}")
+# Validate required configuration
+if not OLLAMA_HOST:
+    raise RuntimeError("OLLAMA_HOST environment variable is required")
+if not OLLAMA_CHAT_MODEL:
+    raise RuntimeError("OLLAMA_CHAT_MODEL environment variable is required")
+if not OLLAMA_EMBED_MODEL:
+    raise RuntimeError("OLLAMA_EMBED_MODEL environment variable is required")
+if not QDRANT_HOST:
+    raise RuntimeError("QDRANT_HOST environment variable is required")
+if not QDRANT_PORT:
+    raise RuntimeError("QDRANT_PORT environment variable is required")
+
+print(f"Using Ollama chat model: {OLLAMA_CHAT_MODEL}")
+print(f"Using Ollama embed model: {OLLAMA_EMBED_MODEL}")
 print(f"Using Qdrant at {QDRANT_HOST}:{QDRANT_PORT}")
 
 # Mem0 configuration for conversation memory with persistent Qdrant storage
@@ -32,7 +46,7 @@ MEM0_CONFIG = {
     "embedder": {
         "provider": "ollama",
         "config": {
-            "model": "nomic-embed-text:latest",
+            "model": OLLAMA_EMBED_MODEL,
             "ollama_base_url": OLLAMA_HOST,
             "embedding_dims": 768,  # nomic-embed-text outputs 768-dimensional vectors
         }
@@ -294,13 +308,15 @@ def answer_question(
         bundle = _finalize_bundle(question, content, state, search_limit, session_id, memories_used)
         
         # Store this interaction in Mem0
+        # Store both the question and answer separately so mem0 can extract facts from each
         if memory:
             try:
-                conversation_text = f"User asked: {question}\nAssistant answered: {content}"
-                memory.add(conversation_text, user_id=user_id, metadata={"session_id": session_id} if session_id else {})
-                print(f"[mem0] Stored conversation in memory for user_id={user_id}")
+                result = memory.add(messages, user_id=user_id, metadata={"session_id": session_id} if session_id else {}, infer=False)
+                print(f"[mem0] Stored answer in memory for user_id={user_id}, result: {result}")
             except Exception as e:
                 print(f"[mem0] Error storing memory: {e}")
+                import traceback
+                traceback.print_exc()
         
         print("[agent] final bundle ->", json.dumps(bundle, ensure_ascii=False, indent=2))
         return bundle
