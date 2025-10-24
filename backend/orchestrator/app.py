@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -8,7 +10,17 @@ import retrieval
 from db import get_conn
 from schemas import AskIn, AskOut, ContactIn, EventIn, GetIn, PlaceIn, ResolveIn, SearchIn
 
-api = FastAPI(title="Personal Memory Orchestrator", version="0.3")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup: Ensure we can connect at startup; this raises early if DB_DSN is misconfigured.
+    with get_conn():
+        pass
+    yield
+    # Shutdown: Add any cleanup here if needed
+
+
+api = FastAPI(title="Personal Memory Orchestrator", version="0.3", lifespan=lifespan)
 
 # Configure CORS to allow requests from the frontend
 api.add_middleware(
@@ -18,13 +30,6 @@ api.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-
-@api.on_event("startup")
-def check_database_connection() -> None:
-    # Ensure we can connect at startup; this raises early if DB_DSN is misconfigured.
-    with get_conn():
-        pass
 
 
 # --------------------------- Ingest endpoints ---------------------------
@@ -96,8 +101,8 @@ def get_events(payload: GetIn):
 
 # --------------------------- Ask endpoint (LLM-powered) ---------------------------
 @api.post("/ask", response_model=AskOut)
-def ask(payload: AskIn):
-    bundle = llm.answer_question(
+async def ask(payload: AskIn):
+    bundle = await llm.answer_question(
         payload.question, 
         search_limit=payload.limit or 3,
         user_id=payload.user_id or "default_user",

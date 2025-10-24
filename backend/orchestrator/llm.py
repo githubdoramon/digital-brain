@@ -1,12 +1,14 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import re
 from typing import Any, Dict, List, Set, Optional
+from collections import defaultdict
 
 import requests
-from mem0 import Memory
+from mem0 import AsyncMemory
 
 import retrieval
 import sql_tools
@@ -63,20 +65,23 @@ MEM0_CONFIG = {
     "version": "v1.1"
 }
 
-# Initialize Mem0 memory instance
-_memory_instance: Optional[Memory] = None
+# Initialize Mem0 async memory instance
+_memory_instance: Optional[AsyncMemory] = None
 
-def get_memory() -> Memory:
-    """Get or create the Mem0 memory instance."""
+async def get_memory() -> Optional[AsyncMemory]:
+    """Get or create the Mem0 async memory instance."""
     global _memory_instance
     if _memory_instance is None:
         try:
-            _memory_instance = Memory.from_config(MEM0_CONFIG)
-            print("[mem0] Memory instance initialized successfully")
+            _memory_instance = await AsyncMemory.from_config(MEM0_CONFIG)
+            print("[mem0] AsyncMemory instance initialized successfully")
         except Exception as e:
             print(f"[mem0] Warning: Failed to initialize Mem0: {e}")
             print("[mem0] Continuing without memory layer")
     return _memory_instance
+
+# In-memory session storage: {session_id: [{"role": "user|assistant", "content": "..."}]}
+_session_store: Dict[str, List[Dict[str, str]]] = defaultdict(list)
 
 _SCHEMA_HINT_CACHE: str | None = None
 _SCHEMA_SNAPSHOT: Dict[str, Any] | None = None
@@ -234,7 +239,7 @@ class AgentState:
             self.detailed_events = []
 
 
-def answer_question(
+async def answer_question(
     question: str, 
     search_limit: int = 3,
     user_id: str = "default_user",
@@ -242,13 +247,19 @@ def answer_question(
 ) -> Dict[str, Any]:
     state = AgentState()
     
-    # Retrieve relevant memories from Mem0
+    # Get conversation history from session store
+    conversation_history = []
+    if session_id:
+        conversation_history = _session_store.get(session_id, [])
+        print(f"[session] Retrieved {len(conversation_history)} messages from session {session_id}")
+    
+    # Retrieve relevant long-term memories from Mem0 (await this)
     memories_used = []
-    memory = get_memory()
+    memory = await get_memory()
     if memory:
         try:
-            print(f"[mem0] Retrieving memories for user_id={user_id}")
-            response = memory.search(question, user_id=user_id, limit=5)
+            print(f"[mem0] Retrieving long-term memories for user_id={user_id}")
+            response = await memory.search(question, user_id=user_id, limit=5)
             
             # Mem0 returns {"results": [{"id": ..., "memory": "...", ...}, ...]}
             if isinstance(response, dict) and "results" in response:
@@ -259,9 +270,9 @@ def answer_question(
                             memories_used.append(result["memory"])
                     
                     if memories_used:
-                        print(f"[mem0] Found {len(memories_used)} relevant memories")
+                        print(f"[mem0] Found {len(memories_used)} relevant long-term memories")
                     else:
-                        print("[mem0] No memories found for this query")
+                        print("[mem0] No long-term memories found for this query")
                 else:
                     print(f"[mem0] Unexpected results format: {type(results)}")
             else:
@@ -271,7 +282,7 @@ def answer_question(
             import traceback
             traceback.print_exc()
     
-    messages: List[Dict[str, Any]] = _build_messages(question, search_limit, memories_used)
+    messages: List[Dict[str, Any]] = _build_messages(question, search_limit, memories_used, conversation_history)
 
     while True:
         print("[agent] sending messages ->", json.dumps(messages[-4:], ensure_ascii=False, indent=2))
@@ -305,24 +316,61 @@ def answer_question(
             raise RuntimeError(f"Unexpected Ollama response: {response}")
 
         messages.append(message)
+        
+        # Update session store with this Q&A pair
+        if session_id:
+            _session_store[session_id].append({"role": "user", "content": question})
+            _session_store[session_id].append({"role": "assistant", "content": content})
+            print(f"[session] Stored Q&A in session {session_id}, total messages: {len(_session_store[session_id])}")
+        
         bundle = _finalize_bundle(question, content, state, search_limit, session_id, memories_used)
         
-        # Store this interaction in Mem0
-        # Store both the question and answer separately so mem0 can extract facts from each
+        # Store the last Q&A pair in mem0 for long-term memory extraction (fire and forget)
+        # Let mem0 decide what's worth remembering
         if memory:
-            try:
-                result = memory.add(messages, user_id=user_id, metadata={"session_id": session_id} if session_id else {}, infer=False)
-                print(f"[mem0] Stored answer in memory for user_id={user_id}, result: {result}")
-            except Exception as e:
-                print(f"[mem0] Error storing memory: {e}")
-                import traceback
-                traceback.print_exc()
+            # Fire and forget - don't await, let it run in background
+            asyncio.create_task(_store_memory_async(memory, question, content, user_id, session_id))
         
         print("[agent] final bundle ->", json.dumps(bundle, ensure_ascii=False, indent=2))
         return bundle
 
 
-def _build_messages(question: str, search_limit: int, memories_used: List[str] = None) -> List[Dict[str, str]]:
+async def _store_memory_async(
+    memory: AsyncMemory,
+    question: str,
+    content: str,
+    user_id: str,
+    session_id: Optional[str]
+) -> None:
+    """Store memory in background without blocking the response."""
+    try:
+        from datetime import datetime, timezone
+        timestamp = datetime.now(timezone.utc).isoformat()
+        
+        # Pass just the last Q&A pair to mem0, let it extract insights
+        last_exchange = [
+            {"role": "user", "content": question},
+            {"role": "assistant", "content": content}
+        ]
+        
+        result = await memory.add(
+            last_exchange,
+            user_id=user_id,
+            metadata={"session_id": session_id, "timestamp": timestamp},
+        )
+        print(f"[mem0] Stored Q&A pair for long-term memory extraction, result: {result}")
+    except Exception as e:
+        print(f"[mem0] Error storing in long-term memory: {e}")
+        import traceback
+        traceback.print_exc()
+
+
+def _build_messages(
+    question: str, 
+    search_limit: int, 
+    memories_used: List[str] = None,
+    conversation_history: List[Dict[str, str]] = None
+) -> List[Dict[str, str]]:
     system_prompt = (
         "You are a personal memory assistant. "
         "Use the available tools to gather accurate context before answering. "
@@ -345,13 +393,20 @@ def _build_messages(question: str, search_limit: int, memories_used: List[str] =
     if schema_hint:
         messages.append({"role": "system", "content": schema_hint})
 
-    # Add memories from previous conversations if available
+    # Add long-term memories from previous interactions if available
     if memories_used:
-        memory_context = "Relevant context from previous conversations:\n" + "\n".join(f"- {mem}" for mem in memories_used)
+        memory_context = "Relevant long-term knowledge about the user:\n" + "\n".join(f"- {mem}" for mem in memories_used)
         messages.append({"role": "system", "content": memory_context})
-        print(f"[mem0] Added {len(memories_used)} memories to context")
+        print(f"[mem0] Added {len(memories_used)} long-term memories to context")
 
     messages.append({"role": "system", "content": protocol_prompt})
+    
+    # Add conversation history (short-term session memory)
+    if conversation_history:
+        for msg in conversation_history:
+            messages.append({"role": msg["role"], "content": msg["content"]})
+        print(f"[session] Added {len(conversation_history)} messages from session history")
+    
     messages.append({"role": "user", "content": question.strip()})
     return messages
 
@@ -575,7 +630,7 @@ def _finalize_bundle(
     answer: str,
     state: AgentState,
     search_limit: int,
-    session_id: Optional[str] = None,
+    session_id: Optional[str],
     memories_used: List[str] = None,
 ) -> Dict[str, Any]:
     if not state.resolution or not state.search_results:

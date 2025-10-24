@@ -23,7 +23,7 @@ def ask(
         question: The question to ask
         limit: Maximum number of search results to return
         user_id: Optional user ID for personalized memory (default: "default_user")
-        session_id: Optional session ID for conversation tracking
+        session_id: Optional session ID for conversation tracking (backend manages history)
     
     Returns:
         Response dict with answer, memories_used, and other context
@@ -59,34 +59,75 @@ def main() -> None:
         bundle = ask(q)
         print("\n🤖 Answer:\n" + bundle["answer"])
     
-    # Example 2: Conversation with memory
+    # Example 2: Multi-turn conversation with session memory
     print("\n\n" + "="*80)
-    print("EXAMPLE 2: Conversation with Memory")
+    print("EXAMPLE 2: Multi-turn Conversation with Session Context")
     print("="*80)
-    print("(This demonstrates how the system remembers context across questions)")
+    print("(Backend manages conversation history via session_id)")
     
     session = "demo_session_001"
     user = "demo_user"
     
     # First question - establish context
     print("\n" + "-"*80)
-    q1 = "I prefer detailed explanations with examples"
+    q1 = "Hello! I want to ask some questions about my memories."
     print(f"❓ Question: {q1}")
     bundle1 = ask(q1, user_id=user, session_id=session)
     print(f"\n🤖 Answer:\n{bundle1['answer']}")
     
-    # Second question - should remember the preference
+    # Second question - backend remembers context via session_id
     print("\n" + "-"*80)
-    q2 = "How does the database schema work?"
+    q2 = "Who are my closest contacts?"
     print(f"❓ Question: {q2}")
     bundle2 = ask(q2, user_id=user, session_id=session)
     print(f"\n🤖 Answer:\n{bundle2['answer']}")
     
-    memories = bundle2.get('memories_used', [])
+    # Third question - full conversation context maintained by backend
+    print("\n" + "-"*80)
+    q3 = "From those people you just mentioned, who did I meet most recently?"
+    print(f"❓ Question: {q3}")
+    bundle3 = ask(q3, user_id=user, session_id=session)
+    print(f"\n🤖 Answer:\n{bundle3['answer']}")
+    
+    # Show long-term memories that were used
+    memories = bundle3.get('memories_used', [])
     if memories:
-        print(f"\n📝 Memories Used ({len(memories)}):")
+        print(f"\n🧠 Long-term Memories Used ({len(memories)}):")
         for i, mem in enumerate(memories, 1):
             print(f"  {i}. {mem}")
+    
+    # Example 3: Long-term memory across sessions
+    print("\n\n" + "="*80)
+    print("EXAMPLE 3: Long-term Memory Across Sessions")
+    print("="*80)
+    print("(New session - no short-term context, but long-term memories persist)")
+    
+    # New session with same user
+    new_session = "demo_session_002"
+    
+    print("\n" + "-"*80)
+    q4 = "I prefer vegetarian restaurants"
+    print(f"❓ Question: {q4}")
+    bundle4 = ask(q4, user_id=user, session_id=new_session)
+    print(f"\n🤖 Answer:\n{bundle4['answer']}")
+    print("\n💡 mem0 will extract and store relevant facts for long-term memory")
+    
+    # Later, in another new session
+    print("\n" + "-"*80)
+    print("(Later, in a completely new session...)")
+    another_session = "demo_session_003"
+    
+    q5 = "Recommend a restaurant for dinner"
+    print(f"❓ Question: {q5}")
+    bundle5 = ask(q5, user_id=user, session_id=another_session)
+    print(f"\n🤖 Answer:\n{bundle5['answer']}")
+    
+    memories = bundle5.get('memories_used', [])
+    if memories:
+        print(f"\n🧠 Retrieved Long-term Memories:")
+        for i, mem in enumerate(memories, 1):
+            print(f"  {i}. {mem}")
+        print("\n✨ Notice how the system remembered your vegetarian preference!")
     
     # Uncomment to see full response details
     # print("\n📊 Debug bundle:")
