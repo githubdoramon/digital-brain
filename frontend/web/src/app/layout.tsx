@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import "./globals.css";
 import { NavBar } from "@/components/NavBar";
+import { Providers } from "@/components/Providers";
 
 const MAIN_MAX_WIDTH = 960;
 
@@ -23,16 +24,18 @@ export default function RootLayout({
           fontFamily: "Inter, system-ui, -apple-system, BlinkMacSystemFont, sans-serif",
         }}
       >
-        <NavBar />
-        <main
-          style={{
-            maxWidth: `${MAIN_MAX_WIDTH}px`,
-            margin: "0 auto",
-            padding: "24px",
-          }}
-        >
-          {children}
-        </main>
+        <Providers>
+          <NavBar />
+          <main
+            style={{
+              maxWidth: `${MAIN_MAX_WIDTH}px`,
+              margin: "0 auto",
+              padding: "24px",
+            }}
+          >
+            {children}
+          </main>
+        </Providers>
       </body>
     </html>
   );

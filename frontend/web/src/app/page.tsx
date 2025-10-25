@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { FormEvent, useState, useRef, useEffect } from "react";
+import { useSession } from "next-auth/react";
 
 type Message = {
   role: "user" | "assistant";
@@ -18,6 +19,7 @@ function generateSessionId(): string {
 }
 
 export default function Home() {
+  const { data: session } = useSession();
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
@@ -57,7 +59,7 @@ export default function Home() {
           question: userMessage.content,
           limit: 5,
           session_id: sessionId,
-          user_id: "web_user", // Could be made dynamic with auth
+          user_id: session?.user?.email || "anonymous",
         }),
       });
 
@@ -90,7 +92,9 @@ export default function Home() {
   return (
     <section style={{ display: "grid", gap: "16px" }}>
       <div>
-        <h1 style={{ fontSize: "2rem", fontWeight: 600 }}>Welcome</h1>
+        <h1 style={{ fontSize: "2rem", fontWeight: 600 }}>
+          Welcome{session?.user?.name ? `, ${session.user.name.split(' ')[0]}` : ''}!
+        </h1>
         <p style={{ color: "#555", marginTop: "8px" }}>
           Ask questions about your personal memories and get AI-powered insights.
         </p>

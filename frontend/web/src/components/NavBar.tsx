@@ -1,6 +1,11 @@
 import Link from "next/link";
+import { getServerSession } from "next-auth/next";
+import { authOptions } from "@/app/api/auth/[...nextauth]/route";
+import Image from "next/image";
 
-export function NavBar() {
+export async function NavBar() {
+  const session = await getServerSession(authOptions);
+  
   return (
     <header
       style={{
@@ -29,39 +34,77 @@ export function NavBar() {
         >
           Digital Brain
         </Link>
-        <nav
-          aria-label="Primary"
-          style={{
-            display: "flex",
-            gap: "16px",
-            fontSize: "0.95rem",
-          }}
-        >
-          <Link
-            href="/"
+        <div style={{ display: "flex", alignItems: "center", gap: "24px" }}>
+          <nav
+            aria-label="Primary"
             style={{
-              color: "#444",
+              display: "flex",
+              gap: "16px",
+              fontSize: "0.95rem",
             }}
           >
-            Home
-          </Link>
-          <Link
-            href="/contacts"
-            style={{
-              color: "#444",
-            }}
-          >
-            Contacts
-          </Link>
-          <Link
-            href="/meetings"
-            style={{
-              color: "#444",
-            }}
-          >
-            Meetings
-          </Link>
-        </nav>
+            <Link
+              href="/"
+              style={{
+                color: "#444",
+              }}
+            >
+              Home
+            </Link>
+            <Link
+              href="/contacts"
+              style={{
+                color: "#444",
+              }}
+            >
+              Contacts
+            </Link>
+            <Link
+              href="/meetings"
+              style={{
+                color: "#444",
+              }}
+            >
+              Meetings
+            </Link>
+          </nav>
+          
+          {session?.user && (
+            <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                {session.user.image && (
+                  <Image
+                    src={session.user.image}
+                    alt={session.user.name || "User"}
+                    width={32}
+                    height={32}
+                    style={{ borderRadius: "50%" }}
+                  />
+                )}
+                <span style={{ fontSize: "0.9rem", color: "#666" }}>
+                  {session.user.name}
+                </span>
+              </div>
+              <Link
+                href="/api/auth/signout"
+                style={{
+                  padding: "6px 12px",
+                  background: "#fff",
+                  color: "#666",
+                  border: "1px solid #d0d0d0",
+                  borderRadius: "6px",
+                  fontSize: "0.85rem",
+                  cursor: "pointer",
+                  whiteSpace: "nowrap",
+                  textDecoration: "none",
+                  display: "inline-block",
+                }}
+              >
+                Sign Out
+              </Link>
+            </div>
+          )}
+        </div>
       </div>
     </header>
   );
