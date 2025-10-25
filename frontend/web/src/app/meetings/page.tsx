@@ -1,6 +1,7 @@
 'use client';
 
 import { FormEvent, useMemo, useState } from "react";
+import { api } from "@/lib/api";
 
 type Status =
   | { kind: "idle" }
@@ -14,8 +15,6 @@ type EventPayload = {
   people: string;
   tags: string;
 };
-
-const API_BASE = process.env.BACKEND_API_BASE ?? "http://localhost:8000";
 
 function toLocalDateTimeInput(date: Date) {
   const pad = (value: number) => value.toString().padStart(2, "0");
@@ -74,18 +73,7 @@ export default function MeetingsPage() {
     };
 
     try {
-      const response = await fetch(`${API_BASE}/ingest/event`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify(payload),
-      });
-
-      if (!response.ok) {
-        const error = await response.json().catch(() => ({}));
-        throw new Error(error.detail || "Failed to ingest meeting");
-      }
+      await api.post("/ingest/event", payload);
 
       setStatus({
         kind: "success",

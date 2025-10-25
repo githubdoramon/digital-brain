@@ -66,13 +66,10 @@ services:
     depends_on:
       orchestrator:
         condition: service_started
-    working_dir: /app
-    command: npm run dev -- --hostname 0.0.0.0
+    env_file:
+      - ./frontend/web/.env
     ports:
       - "3000:3000"
-    volumes:
-      - ./frontend/web:/app
-      - /app/node_modules
 
 volumes:
   postgres-data:

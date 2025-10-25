@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { FormEvent, useState, useRef, useEffect } from "react";
 import { useSession } from "next-auth/react";
+import { api } from "@/lib/api";
 
 type Message = {
   role: "user" | "assistant";
@@ -10,8 +11,6 @@ type Message = {
   timestamp: Date;
   memories?: string[];
 };
-
-const API_BASE = process.env.BACKEND_API_BASE ?? "http://localhost:8000";
 
 // Generate a unique session ID for this chat session
 function generateSessionId(): string {
@@ -50,25 +49,12 @@ export default function Home() {
     setIsLoading(true);
 
     try {
-      const response = await fetch(`${API_BASE}/ask`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          question: userMessage.content,
-          limit: 5,
-          session_id: sessionId,
-          user_id: session?.user?.email || "anonymous",
-        }),
+      const data = await api.post("/ask", {
+        question: userMessage.content,
+        limit: 5,
+        session_id: sessionId,
+        user_id: session?.user?.email || "anonymous",
       });
-
-      if (!response.ok) {
-        const error = await response.json().catch(() => ({}));
-        throw new Error(error.detail || "Failed to get response");
-      }
-
-      const data = await response.json();
       const assistantMessage: Message = {
         role: "assistant",
         content: data.answer || "I couldn't generate a response.",

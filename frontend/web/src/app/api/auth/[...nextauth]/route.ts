@@ -38,25 +38,26 @@ export const authOptions: NextAuthOptions = {
   callbacks: {
     async signIn({ user }): Promise<boolean> {
       const userEmail = user.email;
-      
-      // Log user email for allowlist configuration
-      console.log(`Auth: ${userEmail} | ${user.name}`);
-      
-      // If no allowlist configured, allow all users
-      if (!allowedUsers) return true;
-      
+        
       // Check if user is in allowlist
-      if (userEmail && allowedUsers.has(userEmail)) {
+      if (userEmail && allowedUsers && allowedUsers.has(userEmail)) {
         return true;
       }
       
-      console.log(`Access denied: ${userEmail}`);
       return false;
     },
     async session({ session, token }) {
+      // Add the ID token to the session so frontend can use it
+      if (token.idToken) {
+        session.idToken = token.idToken as string;
+      }
       return session;
     },
-    async jwt({ token, user }) {
+    async jwt({ token, user, account }) {
+      // Store the Google ID token when user first signs in
+      if (account?.id_token) {
+        token.idToken = account.id_token;
+      }
       if (user) {
         token.id = user.id;
       }

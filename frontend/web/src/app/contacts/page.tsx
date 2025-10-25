@@ -1,6 +1,7 @@
 'use client';
 
 import { FormEvent, useEffect, useState } from "react";
+import { api } from "@/lib/api";
 
 type Contact = {
   contact_id: string;
@@ -18,8 +19,6 @@ type Status =
   | { kind: "idle" }
   | { kind: "success"; message: string }
   | { kind: "error"; message: string };
-
-const API_BASE = process.env.BACKEND_API_BASE ?? "http://localhost:8000";
 
 const RELATIONSHIP_OPTIONS = [
   "Myself",
@@ -81,11 +80,7 @@ export default function ContactsPage() {
   async function loadContacts() {
     setIsLoading(true);
     try {
-      const response = await fetch(`${API_BASE}/contacts`);
-      if (!response.ok) {
-        throw new Error("Failed to load contacts");
-      }
-      const data = await response.json();
+      const data = await api.get<{ contacts: Contact[] }>("/contacts");
       setContacts(data.contacts || []);
     } catch (error) {
       setStatus({
@@ -159,18 +154,7 @@ export default function ContactsPage() {
     };
 
     try {
-      const response = await fetch(`${API_BASE}/ingest/contact`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify(payload),
-      });
-
-      if (!response.ok) {
-        const error = await response.json().catch(() => ({}));
-        throw new Error(error.detail || "Failed to save contact");
-      }
+      await api.post("/ingest/contact", payload);
 
       setStatus({
         kind: "success",
@@ -199,13 +183,7 @@ export default function ContactsPage() {
     }
 
     try {
-      const response = await fetch(`${API_BASE}/contacts/${contact.contact_id}`, {
-        method: "DELETE",
-      });
-
-      if (!response.ok) {
-        throw new Error("Failed to delete contact");
-      }
+      await api.delete(`/contacts/${contact.contact_id}`);
 
       setStatus({
         kind: "success",
