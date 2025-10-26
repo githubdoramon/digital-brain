@@ -1,14 +1,57 @@
 from __future__ import annotations
 
 import json
+
+from collections import defaultdict
 from datetime import datetime, timedelta
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 from dateparser.search import search_dates
 from rapidfuzz import process, fuzz
 
 from db import fetch_events, get_conn
 from embeddings import embed_text
+
+
+def _upsert_contact_relationships(cur, contact_id: str, relationships: Sequence[Any]) -> None:
+    if not relationships:
+        return
+
+    for rel in relationships:
+        relationship_id = getattr(rel, "relationship_id", None) or getattr(rel, "id", None) or f"rel_{contact_id}_{getattr(rel, 'to_contact_id', '')}"
+        from_id = getattr(rel, "from_contact_id", contact_id)
+        to_id = getattr(rel, "to_contact_id", None)
+        relationship_type = getattr(rel, "relationship_type", None) or getattr(rel, "type", None)
+        reciprocal_type = getattr(rel, "reciprocal_type", None)
+
+        if not to_id or not relationship_type:
+            continue
+
+        cur.execute(
+            """
+            INSERT INTO contact_relationships (
+              relationship_id,
+              from_contact_id,
+              to_contact_id,
+              relationship_type,
+              reciprocal_type
+            )
+            VALUES (%s, %s, %s, %s, %s)
+            ON CONFLICT (relationship_id) DO UPDATE
+              SET from_contact_id = EXCLUDED.from_contact_id,
+                  to_contact_id = EXCLUDED.to_contact_id,
+                  relationship_type = EXCLUDED.relationship_type,
+                  reciprocal_type = EXCLUDED.reciprocal_type,
+                  updated_at = NOW()
+            """,
+            (
+                relationship_id,
+                from_id,
+                to_id,
+                relationship_type,
+                reciprocal_type,
+            ),
+        )
 
 
 # --------------------------- Ingestion helpers ---------------------------
@@ -24,10 +67,9 @@ def ingest_contact(contact) -> None:
               emails,
               phones,
               links,
-              tags,
-              relationship
+              tags
             )
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT (contact_id) DO UPDATE
               SET display_name = EXCLUDED.display_name,
                   aliases = EXCLUDED.aliases,
@@ -35,8 +77,7 @@ def ingest_contact(contact) -> None:
                   emails = EXCLUDED.emails,
                   phones = EXCLUDED.phones,
                   links = EXCLUDED.links,
-                  tags = EXCLUDED.tags,
-                  relationship = EXCLUDED.relationship
+                  tags = EXCLUDED.tags
             """,
             (
                 contact.contact_id,
@@ -47,9 +88,9 @@ def ingest_contact(contact) -> None:
                 contact.phones or [],
                 contact.links or [],
                 contact.tags or [],
-                contact.relationship,
             ),
         )
+        _upsert_contact_relationships(cur, contact.contact_id, getattr(contact, "relationships", []) or [])
         conn.commit()
 
 
@@ -57,16 +98,18 @@ def list_contacts() -> List[Dict[str, Any]]:
     with get_conn() as conn, conn.cursor() as cur:
         cur.execute(
             """
-            SELECT contact_id, display_name, aliases, birthday, emails, phones, links, tags, relationship
+            SELECT contact_id, display_name, aliases, birthday, emails, phones, links, tags
             FROM contacts
             ORDER BY display_name
             """
         )
         rows = cur.fetchall()
-        contacts = []
+        relationships_map = _collect_contact_relationships()
+        contacts: List[Dict[str, Any]] = []
         for row in rows:
+            contact_id = row["contact_id"]
             contacts.append({
-                "contact_id": row["contact_id"],
+                "contact_id": contact_id,
                 "display_name": row["display_name"],
                 "aliases": row["aliases"] or [],
                 "birthday": row["birthday"].isoformat() if row["birthday"] else None,
@@ -74,7 +117,7 @@ def list_contacts() -> List[Dict[str, Any]]:
                 "phones": row["phones"] or [],
                 "links": row["links"] or [],
                 "tags": row["tags"] or [],
-                "relationship": row["relationship"],
+                "relationships": relationships_map.get(contact_id, []),
             })
         return contacts
 
@@ -83,7 +126,7 @@ def get_contact(contact_id: str) -> Optional[Dict[str, Any]]:
     with get_conn() as conn, conn.cursor() as cur:
         cur.execute(
             """
-            SELECT contact_id, display_name, aliases, birthday, emails, phones, links, tags, relationship
+            SELECT contact_id, display_name, aliases, birthday, emails, phones, links, tags
             FROM contacts
             WHERE contact_id = %s
             """,
@@ -92,6 +135,7 @@ def get_contact(contact_id: str) -> Optional[Dict[str, Any]]:
         row = cur.fetchone()
         if not row:
             return None
+        relationships_map = _collect_contact_relationships([contact_id])
         return {
             "contact_id": row["contact_id"],
             "display_name": row["display_name"],
@@ -101,7 +145,38 @@ def get_contact(contact_id: str) -> Optional[Dict[str, Any]]:
             "phones": row["phones"] or [],
             "links": row["links"] or [],
             "tags": row["tags"] or [],
-            "relationship": row["relationship"],
+            "relationships": relationships_map.get(contact_id, []),
+        }
+
+
+def get_contact_by_email(email: str) -> Optional[Dict[str, Any]]:
+    if not email:
+        return None
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT contact_id, display_name, aliases, birthday, emails, phones, links, tags
+            FROM contacts
+            WHERE %s = ANY(emails)
+            LIMIT 1
+            """,
+            (email,),
+        )
+        row = cur.fetchone()
+        if not row:
+            return None
+        contact_id = row["contact_id"]
+        relationships_map = _collect_contact_relationships([contact_id])
+        return {
+            "contact_id": contact_id,
+            "display_name": row["display_name"],
+            "aliases": row["aliases"] or [],
+            "birthday": row["birthday"].isoformat() if row["birthday"] else None,
+            "emails": row["emails"] or [],
+            "phones": row["phones"] or [],
+            "links": row["links"] or [],
+            "tags": row["tags"] or [],
+            "relationships": relationships_map.get(contact_id, []),
         }
 
 
@@ -117,6 +192,315 @@ def delete_contact(contact_id: str) -> bool:
         deleted = cur.rowcount > 0
         conn.commit()
         return deleted
+
+
+def upsert_contact_relationship(rel) -> None:
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO contact_relationships (
+              relationship_id,
+              from_contact_id,
+              to_contact_id,
+              relationship_type,
+              reciprocal_type
+            )
+            VALUES (%s, %s, %s, %s, %s)
+            ON CONFLICT (relationship_id) DO UPDATE
+              SET from_contact_id = EXCLUDED.from_contact_id,
+                  to_contact_id = EXCLUDED.to_contact_id,
+                  relationship_type = EXCLUDED.relationship_type,
+                  reciprocal_type = EXCLUDED.reciprocal_type,
+                  updated_at = NOW()
+            """,
+            (
+                rel.relationship_id,
+                rel.from_contact_id,
+                rel.to_contact_id,
+                rel.relationship_type,
+                rel.reciprocal_type,
+            ),
+        )
+        conn.commit()
+
+
+def list_contact_relationships(contact_id: str) -> List[Dict[str, Any]]:
+    relationships_map = _collect_contact_relationships([contact_id])
+    return relationships_map.get(contact_id, [])
+
+
+def delete_contact_relationship(relationship_id: str) -> bool:
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            DELETE FROM contact_relationships
+            WHERE relationship_id = %s
+            """,
+            (relationship_id,),
+        )
+        deleted = cur.rowcount > 0
+        conn.commit()
+        return deleted
+
+
+def _collect_contact_relationships(contact_ids: Optional[Iterable[str]] = None) -> Dict[str, List[Dict[str, Any]]]:
+    conditions = []
+    params: List[Any] = []
+    if contact_ids:
+        contact_list = list(contact_ids)
+        if contact_list:
+            conditions.append("from_contact_id = ANY(%s)")
+            conditions.append("to_contact_id = ANY(%s)")
+            params.extend([contact_list, contact_list])
+        else:
+            return {}
+
+    where_clause = ""
+    if conditions:
+        where_clause = "WHERE " + " OR ".join(conditions)
+
+    query = f"""
+        SELECT
+          relationship_id,
+          from_contact_id,
+          to_contact_id,
+          relationship_type,
+          reciprocal_type,
+          created_at,
+          updated_at
+        FROM contact_relationships
+        {where_clause}
+        ORDER BY created_at ASC
+    """
+
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(query, tuple(params))
+        rows = cur.fetchall()
+
+    relationships_map: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
+    for row in rows:
+        created_at = row["created_at"].isoformat() if row["created_at"] else None
+        updated_at = row["updated_at"].isoformat() if row["updated_at"] else None
+
+        relationships_map[row["from_contact_id"]].append(
+            {
+                "relationship_id": row["relationship_id"],
+                "contact_id": row["to_contact_id"],
+                "type": row["relationship_type"],
+                "other_type": row["reciprocal_type"],
+                "direction": "outgoing",
+                "created_at": created_at,
+                "updated_at": updated_at,
+            }
+        )
+
+        inverse_type = row["reciprocal_type"] or row["relationship_type"]
+        relationships_map[row["to_contact_id"]].append(
+            {
+                "relationship_id": row["relationship_id"],
+                "contact_id": row["from_contact_id"],
+                "type": inverse_type,
+                "other_type": row["relationship_type"],
+                "direction": "incoming",
+                "created_at": created_at,
+                "updated_at": updated_at,
+            }
+        )
+
+    return dict(relationships_map)
+
+
+def ingest_todo(todo) -> None:
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO todos (
+              todo_id,
+              description,
+              status,
+              due_date
+            )
+            VALUES (%s, %s, %s, %s)
+            ON CONFLICT (todo_id) DO UPDATE
+              SET description = EXCLUDED.description,
+                  status = EXCLUDED.status,
+                  due_date = EXCLUDED.due_date,
+                  updated_at = NOW()
+            """,
+            (
+                todo.todo_id,
+                todo.description,
+                (todo.status or "pending").strip() or "pending",
+                todo.due_date,
+            ),
+        )
+
+        _replace_todo_links(
+            cur,
+            todo.todo_id,
+            todo.contact_ids or [],
+            todo.event_ids or [],
+            todo.place_ids or [],
+        )
+
+        conn.commit()
+
+
+def list_todos() -> List[Dict[str, Any]]:
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT todo_id, description, status, due_date, created_at, updated_at
+            FROM todos
+            ORDER BY
+              CASE WHEN due_date IS NULL THEN 1 ELSE 0 END,
+              due_date ASC NULLS LAST,
+              created_at DESC
+            """
+        )
+        rows = cur.fetchall()
+
+        todo_ids = [row["todo_id"] for row in rows]
+        link_map = _collect_todo_links(conn, todo_ids)
+
+        todos: List[Dict[str, Any]] = []
+        for row in rows:
+            todo_id = row["todo_id"]
+            links = link_map.get(todo_id, {})
+            todos.append(
+                {
+                    "todo_id": todo_id,
+                    "description": row["description"],
+                    "status": row["status"],
+                    "due_date": row["due_date"].isoformat() if row["due_date"] else None,
+                    "created_at": row["created_at"].isoformat() if row["created_at"] else None,
+                    "updated_at": row["updated_at"].isoformat() if row["updated_at"] else None,
+                    "contacts": links.get("contacts", []),
+                    "events": links.get("events", []),
+                    "places": links.get("places", []),
+                }
+            )
+        return todos
+
+
+def get_todo(todo_id: str) -> Optional[Dict[str, Any]]:
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT todo_id, description, status, due_date, created_at, updated_at
+            FROM todos
+            WHERE todo_id = %s
+            """,
+            (todo_id,),
+        )
+        row = cur.fetchone()
+        if not row:
+            return None
+
+        link_map = _collect_todo_links(conn, [todo_id])
+        links = link_map.get(todo_id, {})
+
+        return {
+            "todo_id": row["todo_id"],
+            "description": row["description"],
+            "status": row["status"],
+            "due_date": row["due_date"].isoformat() if row["due_date"] else None,
+            "created_at": row["created_at"].isoformat() if row["created_at"] else None,
+            "updated_at": row["updated_at"].isoformat() if row["updated_at"] else None,
+            "contacts": links.get("contacts", []),
+            "events": links.get("events", []),
+            "places": links.get("places", []),
+        }
+
+
+def delete_todo(todo_id: str) -> bool:
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            DELETE FROM todos
+            WHERE todo_id = %s
+            """,
+            (todo_id,),
+        )
+        deleted = cur.rowcount > 0
+        conn.commit()
+        return deleted
+
+
+def _replace_todo_links(
+    cur,
+    todo_id: str,
+    contact_ids: Sequence[str],
+    event_ids: Sequence[str],
+    place_ids: Sequence[str],
+) -> None:
+    cur.execute("DELETE FROM todo_contacts WHERE todo_id = %s", (todo_id,))
+    cur.execute("DELETE FROM todo_events WHERE todo_id = %s", (todo_id,))
+    cur.execute("DELETE FROM todo_places WHERE todo_id = %s", (todo_id,))
+
+    for contact_id in contact_ids:
+        if contact_id:
+            cur.execute(
+                "INSERT INTO todo_contacts (todo_id, contact_id) VALUES (%s, %s)",
+                (todo_id, contact_id),
+            )
+
+    for event_id in event_ids:
+        if event_id:
+            cur.execute(
+                "INSERT INTO todo_events (todo_id, event_id) VALUES (%s, %s)",
+                (todo_id, event_id),
+            )
+
+    for place_id in place_ids:
+        if place_id:
+            cur.execute(
+                "INSERT INTO todo_places (todo_id, place_id) VALUES (%s, %s)",
+                (todo_id, place_id),
+            )
+
+
+def _collect_todo_links(conn, todo_ids: Sequence[str]) -> Dict[str, Dict[str, List[str]]]:
+    if not todo_ids:
+        return {}
+
+    link_map: Dict[str, Dict[str, List[str]]] = {todo_id: {"contacts": [], "events": [], "places": []} for todo_id in todo_ids}
+
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT todo_id, contact_id
+            FROM todo_contacts
+            WHERE todo_id = ANY(%s)
+            """,
+            (list(todo_ids),),
+        )
+        for row in cur.fetchall():
+            link_map.setdefault(row["todo_id"], {"contacts": [], "events": [], "places": []})["contacts"].append(row["contact_id"])
+
+        cur.execute(
+            """
+            SELECT todo_id, event_id
+            FROM todo_events
+            WHERE todo_id = ANY(%s)
+            """,
+            (list(todo_ids),),
+        )
+        for row in cur.fetchall():
+            link_map.setdefault(row["todo_id"], {"contacts": [], "events": [], "places": []})["events"].append(row["event_id"])
+
+        cur.execute(
+            """
+            SELECT todo_id, place_id
+            FROM todo_places
+            WHERE todo_id = ANY(%s)
+            """,
+            (list(todo_ids),),
+        )
+        for row in cur.fetchall():
+            link_map.setdefault(row["todo_id"], {"contacts": [], "events": [], "places": []})["places"].append(row["place_id"])
+
+    return link_map
 
 
 def ingest_place(place) -> None:
@@ -208,11 +592,6 @@ def ingest_event(event) -> None:
 def resolve_query(text: str, need_contacts: bool = True, need_places: bool = True) -> Dict[str, Any]:
     q = (text or "").strip()
     people = resolve_entities(q, "contacts", "contact_id", "display_name", "aliases") if need_contacts else []
-    if need_contacts:
-        rel_filters = infer_relationship_filters(q)
-        if rel_filters:
-            rel_ids = fetch_contacts_by_relationship(rel_filters)
-            people = list({*people, *rel_ids})
     places = resolve_entities(q, "places", "place_id", "name") if need_places else []
     span = parse_timespan_text(q)
     return {
@@ -260,62 +639,6 @@ def resolve_entities(
     matches = process.extract(q, labels, scorer=fuzz.WRatio, limit=limit)
     out_ids = {choices[idx][0] for label, score, idx in matches if score >= 85}
     return list(out_ids)
-
-
-FAMILY_RELATIONSHIPS = {
-    "Mother",
-    "Father",
-    "Brother",
-    "Sister",
-    "Daughter",
-    "Son",
-    "Wife",
-    "Husband",
-}
-
-RELATIONSHIP_KEYWORDS: Dict[str, List[str]] = {
-    "Mother": ["mother", "mom", "mum", "mommy"],
-    "Father": ["father", "dad", "daddy"],
-    "Brother": ["brother", "bro"],
-    "Sister": ["sister", "sis"],
-    "Daughter": ["daughter"],
-    "Son": ["son"],
-    "Wife": ["wife", "spouse"],
-    "Husband": ["husband", "spouse"],
-    "Friend": ["friend"],
-    "Coworker": ["coworker", "colleague", "workmate"],
-}
-
-
-def infer_relationship_filters(text: str) -> List[str]:
-    if not text:
-        return []
-    lower = text.lower()
-    matches: List[str] = []
-    if "family" in lower:
-        matches.extend(FAMILY_RELATIONSHIPS)
-    for relationship, keywords in RELATIONSHIP_KEYWORDS.items():
-        for kw in keywords:
-            if kw in lower:
-                matches.append(relationship)
-                break
-    return list(dict.fromkeys(matches))
-
-
-def fetch_contacts_by_relationship(relationships: Sequence[str]) -> List[str]:
-    if not relationships:
-        return []
-    with get_conn() as conn, conn.cursor() as cur:
-        cur.execute(
-            """
-            SELECT contact_id
-            FROM contacts
-            WHERE relationship = ANY(%s)
-            """,
-            (list(relationships),),
-        )
-        rows = cur.fetchall()
-    return [row["contact_id"] for row in rows]
 
 
 # --------------------------- Search helpers ---------------------------

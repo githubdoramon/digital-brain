@@ -10,7 +10,7 @@ services:
       - ./backend/db/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
       - postgres-data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U memuser -d memdb"]
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
       interval: 5s
       timeout: 3s
       retries: 30
@@ -25,10 +25,12 @@ services:
       - qdrant-data:/qdrant/storage
 
   orchestrator:
-    image: digital-brain
+    image: appcalipse/digital-brain-orchestrator
     build:
       context: ./backend/orchestrator
       dockerfile: Dockerfile
+      platforms:
+        - "linux/amd64"
     container_name: mem-orchestrator
     depends_on:
       db:
@@ -42,21 +44,21 @@ services:
     ports:
       - "8000:8000"
 
-  removed_service:
-    build:
-      context: ./backend/removed_service
-      dockerfile: Dockerfile
-    container_name: mem-removed-service
-    depends_on:
-      db:
-        condition: service_healthy
-    env_file:
-      - ./backend/.env
-    ports:
-      - "7001:7001"
-    volumes:
-      - ./backend/removed_service/models:/app/models
-      - ./backend/removed_service/dataset:/app/dataset
+  # removed_service:
+  #   build:
+  #     context: ./backend/removed_service
+  #     dockerfile: Dockerfile
+  #   container_name: mem-removed-service
+  #   depends_on:
+  #     db:
+  #       condition: service_healthy
+  #   env_file:
+  #     - ./backend/.env
+  #   ports:
+  #     - "7001:7001"
+  #   volumes:
+  #     - ./backend/removed_service/models:/app/models
+  #     - ./backend/removed_service/dataset:/app/dataset
 
   frontend:
     build:

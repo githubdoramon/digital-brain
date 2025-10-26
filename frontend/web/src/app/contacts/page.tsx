@@ -1,6 +1,6 @@
 'use client';
 
-import { FormEvent, useEffect, useState } from "react";
+import { FormEvent, useEffect, useMemo, useState } from "react";
 import { api } from "@/lib/api";
 
 type Contact = {
@@ -12,23 +12,30 @@ type Contact = {
   phones: string[];
   links: string[];
   tags: string[];
-  relationship: string | null;
+  relationships: ContactRelationship[];
+};
+
+type ContactRelationship = {
+  relationship_id: string;
+  contact_id: string;
+  type: string;
+  other_type: string | null;
+  direction: "incoming" | "outgoing";
+  created_at: string | null;
+  updated_at: string | null;
+};
+
+type RelationshipDraft = {
+  relationship_id: string;
+  contact_id: string;
+  type: string;
+  reciprocal_type: string;
 };
 
 type Status =
   | { kind: "idle" }
   | { kind: "success"; message: string }
   | { kind: "error"; message: string };
-
-const RELATIONSHIP_OPTIONS = [
-  "Myself",
-  "Wife",
-  "Daughter",
-  "Brother",
-  "Mother",
-  "Coworker",
-  "Friend",
-] as const;
 
 function parseList(value: string): string[] {
   return value
@@ -39,6 +46,29 @@ function parseList(value: string): string[] {
 
 function formatList(items: string[]): string {
   return items.join(", ");
+}
+
+const RELATIONSHIP_SUGGESTIONS = [
+  "Spouse",
+  "Partner",
+  "Husband",
+  "Wife",
+  "Parent",
+  "Child",
+  "Sibling",
+  "Friend",
+  "Coworker",
+  "Manager",
+  "Direct Report",
+  "Mentor",
+  "Mentee",
+];
+
+function generateRelationshipId(): string {
+  if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
+    return `rel-${crypto.randomUUID()}`;
+  }
+  return `rel-${Date.now()}-${Math.floor(Math.random() * 1_000_000)}`;
 }
 
 export default function ContactsPage() {
@@ -59,7 +89,7 @@ export default function ContactsPage() {
     phones: string;
     links: string;
     tags: string;
-    relationship: string;
+    relationships: RelationshipDraft[];
   }>({
     contact_id: "",
     display_name: "",
@@ -69,7 +99,7 @@ export default function ContactsPage() {
     phones: "",
     links: "",
     tags: "",
-    relationship: "",
+    relationships: [],
   });
 
   // Load contacts on mount
@@ -103,7 +133,7 @@ export default function ContactsPage() {
       phones: "",
       links: "",
       tags: "",
-      relationship: "",
+    relationships: [],
     });
     setShowModal(true);
     setStatus({ kind: "idle" });
@@ -120,7 +150,14 @@ export default function ContactsPage() {
       phones: formatList(contact.phones),
       links: formatList(contact.links),
       tags: formatList(contact.tags),
-      relationship: contact.relationship || "",
+      relationships: (contact.relationships || [])
+        .filter((rel) => rel.direction === "outgoing")
+        .map((rel) => ({
+          relationship_id: rel.relationship_id,
+          contact_id: rel.contact_id,
+          type: rel.type,
+          reciprocal_type: rel.other_type || "",
+        })),
     });
     setShowModal(true);
     setStatus({ kind: "idle" });
@@ -136,6 +173,177 @@ export default function ContactsPage() {
       setFormState((prev) => ({ ...prev, [field]: event.target.value }));
     };
 
+  const addRelationshipDraft = () => {
+    setFormState((prev) => ({
+      ...prev,
+      relationships: [
+        ...prev.relationships,
+        {
+          relationship_id: generateRelationshipId(),
+          contact_id: "",
+          type: "",
+          reciprocal_type: "",
+        },
+      ],
+    }));
+  };
+
+  const updateRelationshipDraft = (index: number, update: Partial<RelationshipDraft>) => {
+    setFormState((prev) => ({
+      ...prev,
+      relationships: prev.relationships.map((rel, i) =>
+        i === index ? { ...rel, ...update } : rel
+      ),
+    }));
+  };
+
+  const removeRelationshipDraft = (index: number) => {
+    setFormState((prev) => ({
+      ...prev,
+      relationships: prev.relationships.filter((_, i) => i !== index),
+    }));
+  };
+
+  const relationshipsSection = useMemo(() => {
+    const otherContacts = contacts
+      .filter((c) => c.contact_id !== formState.contact_id)
+      .map((c) => ({ label: `${c.display_name} (${c.contact_id})`, value: c.contact_id }));
+
+    if (otherContacts.length === 0) {
+      return (
+        <div style={{ fontSize: "0.85rem", color: "#777" }}>
+          Add another contact first to create relationships.
+        </div>
+      );
+    }
+
+    return (
+      <div style={{ display: "grid", gap: "12px" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <span style={{ fontWeight: 600, fontSize: "0.9rem" }}>Relationships</span>
+          <button
+            type="button"
+            onClick={addRelationshipDraft}
+            style={{
+              background: "#0b6bcb",
+              color: "#fff",
+              border: "none",
+              borderRadius: "6px",
+              padding: "6px 12px",
+              fontSize: "0.8rem",
+              cursor: "pointer",
+            }}
+          >
+            + Add Relationship
+          </button>
+        </div>
+
+        {formState.relationships.length === 0 ? (
+          <div style={{ fontSize: "0.85rem", color: "#777" }}>
+            No relationships defined yet. Use the button above to add one.
+          </div>
+        ) : (
+          <div style={{ display: "grid", gap: "12px" }}>
+            {formState.relationships.map((rel, index) => (
+              <div
+                key={rel.relationship_id}
+                style={{
+                  display: "grid",
+                  gap: "10px",
+                  border: "1px solid #e5e7eb",
+                  borderRadius: "8px",
+                  padding: "12px",
+                  background: "#f9fafb",
+                }}
+              >
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                  <span style={{ fontWeight: 500, fontSize: "0.85rem" }}>Relationship #{index + 1}</span>
+                  <button
+                    type="button"
+                    onClick={() => removeRelationshipDraft(index)}
+                    style={{
+                      background: "transparent",
+                      border: "none",
+                      color: "#b91c1c",
+                      fontSize: "0.9rem",
+                      cursor: "pointer",
+                    }}
+                    aria-label="Remove relationship"
+                  >
+                    Remove
+                  </button>
+                </div>
+
+                <label style={{ display: "grid", gap: "6px" }}>
+                  <span style={{ fontWeight: 500, fontSize: "0.8rem" }}>Related Contact</span>
+                  <select
+                    value={rel.contact_id}
+                    onChange={(event) => updateRelationshipDraft(index, { contact_id: event.target.value })}
+                    required
+                    style={{
+                      border: "1px solid #d0d0d0",
+                      borderRadius: "6px",
+                      padding: "8px 10px",
+                      fontSize: "0.9rem",
+                    }}
+                  >
+                    <option value="">-- Select contact --</option>
+                    {otherContacts.map((opt) => (
+                      <option key={opt.value} value={opt.value}>
+                        {opt.label}
+                      </option>
+                    ))}
+                  </select>
+                  <span style={{ fontSize: "0.75rem", color: "#6b7280" }}>
+                    Choose another contact to link with this one.
+                  </span>
+                </label>
+
+                <label style={{ display: "grid", gap: "6px" }}>
+                  <span style={{ fontWeight: 500, fontSize: "0.8rem" }}>
+                    Relationship Type
+                  </span>
+                  <input
+                    type="text"
+                    value={rel.type}
+                    onChange={(event) => updateRelationshipDraft(index, { type: event.target.value })}
+                    list="relationship-type-suggestions"
+                    placeholder="e.g. Wife, Manager, Mentor"
+                    required
+                    style={{
+                      border: "1px solid #d0d0d0",
+                      borderRadius: "6px",
+                      padding: "8px 10px",
+                      fontSize: "0.9rem",
+                    }}
+                  />
+                </label>
+
+                <label style={{ display: "grid", gap: "6px" }}>
+                  <span style={{ fontWeight: 500, fontSize: "0.8rem" }}>
+                    Reciprocal Type <span style={{ color: "#9ca3af" }}>(optional)</span>
+                  </span>
+                  <input
+                    type="text"
+                    value={rel.reciprocal_type}
+                    onChange={(event) => updateRelationshipDraft(index, { reciprocal_type: event.target.value })}
+                    placeholder="e.g. Husband, Direct Report"
+                    style={{
+                      border: "1px solid #d0d0d0",
+                      borderRadius: "6px",
+                      padding: "8px 10px",
+                      fontSize: "0.9rem",
+                    }}
+                  />
+                </label>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    );
+  }, [contacts, formState.contact_id, formState.relationships]);
+
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setSubmitting(true);
@@ -150,7 +358,15 @@ export default function ContactsPage() {
       phones: parseList(formState.phones),
       links: parseList(formState.links),
       tags: parseList(formState.tags),
-      relationship: formState.relationship || null,
+      relationships: formState.relationships
+        .filter((rel) => rel.contact_id && rel.type)
+        .map((rel) => ({
+          relationship_id: rel.relationship_id,
+          from_contact_id: formState.contact_id,
+          to_contact_id: rel.contact_id,
+          relationship_type: rel.type,
+          reciprocal_type: rel.reciprocal_type || null,
+        })),
     };
 
     try {
@@ -324,7 +540,7 @@ export default function ContactsPage() {
                       fontSize: "0.9rem",
                     }}
                   >
-                    Relationship
+                    Relationships
                   </th>
                   <th
                     style={{
@@ -392,19 +608,40 @@ export default function ContactsPage() {
                       )}
                     </td>
                     <td style={{ padding: "16px 20px", color: "#555" }}>
-                      {contact.relationship && (
-                        <span
-                          style={{
-                            background: "#e0f2fe",
-                            color: "#0369a1",
-                            padding: "4px 8px",
-                            borderRadius: "4px",
-                            fontSize: "0.8rem",
-                            fontWeight: 500,
-                          }}
-                        >
-                          {contact.relationship}
-                        </span>
+                      {contact.relationships.length > 0 ? (
+                        <div style={{ display: "flex", flexWrap: "wrap", gap: "4px" }}>
+                          {contact.relationships.slice(0, 3).map((rel) => (
+                            <span
+                              key={`${rel.relationship_id}-${rel.contact_id}-${rel.direction}`}
+                              title={`${rel.type} → ${rel.contact_id}`}
+                              style={{
+                                background: rel.direction === "outgoing" ? "#e0f2fe" : "#fef3c7",
+                                color: rel.direction === "outgoing" ? "#0369a1" : "#92400e",
+                                padding: "4px 8px",
+                                borderRadius: "4px",
+                                fontSize: "0.75rem",
+                                fontWeight: 500,
+                              }}
+                            >
+                              {rel.type} → {rel.contact_id.split(":").pop()}
+                            </span>
+                          ))}
+                          {contact.relationships.length > 3 && (
+                            <span
+                              style={{
+                                background: "#f5f5f5",
+                                color: "#555",
+                                padding: "4px 8px",
+                                borderRadius: "4px",
+                                fontSize: "0.75rem",
+                              }}
+                            >
+                              +{contact.relationships.length - 3} more
+                            </span>
+                          )}
+                        </div>
+                      ) : (
+                        <span style={{ color: "#999" }}>None</span>
                       )}
                     </td>
                     <td style={{ padding: "16px 20px", color: "#555", fontSize: "0.9rem" }}>
@@ -580,24 +817,10 @@ export default function ContactsPage() {
                 </label>
 
                 <label style={{ display: "grid", gap: "6px" }}>
-                  <span style={{ fontWeight: 600, fontSize: "0.9rem" }}>Relationship</span>
-                  <select
-                    value={formState.relationship}
-                    onChange={handleChange("relationship")}
-                    style={{
-                      border: "1px solid #d0d0d0",
-                      borderRadius: "8px",
-                      padding: "10px 12px",
-                      fontSize: "0.95rem",
-                    }}
-                  >
-                    <option value="">-- Select --</option>
-                    {RELATIONSHIP_OPTIONS.map((rel) => (
-                      <option key={rel} value={rel}>
-                        {rel}
-                      </option>
-                    ))}
-                  </select>
+                  <span style={{ fontWeight: 600, fontSize: "0.9rem" }}>
+                    Relationships
+                  </span>
+                  {relationshipsSection}
                 </label>
 
                 <label style={{ display: "grid", gap: "6px" }}>

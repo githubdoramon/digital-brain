@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime
-from typing import Any, Dict, List, Optional, Literal
+from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel
 
@@ -15,7 +15,7 @@ class ContactIn(BaseModel):
     phones: Optional[List[str]] = []
     links: Optional[List[str]] = []
     tags: Optional[List[str]] = []
-    relationship: Optional[Literal["Myself", "Wife", "Daughter", "Brother", "Mother", "Coworker", "Friend"]] = None
+    relationships: Optional[List[ContactRelationshipIn]] = []
 
 
 class PlaceIn(BaseModel):
@@ -37,6 +37,24 @@ class EventIn(BaseModel):
     types: Optional[List[str]] = []
     what_text: Optional[str] = ""
     raw: Optional[Dict[str, Any]] = {}
+
+
+class ContactRelationshipIn(BaseModel):
+    relationship_id: str
+    from_contact_id: str
+    to_contact_id: str
+    relationship_type: str
+    reciprocal_type: Optional[str] = None
+
+
+class TodoIn(BaseModel):
+    todo_id: str
+    description: str
+    status: Optional[str] = "pending"
+    due_date: Optional[date] = None
+    contact_ids: Optional[List[str]] = []
+    event_ids: Optional[List[str]] = []
+    place_ids: Optional[List[str]] = []
 
 
 class ResolveIn(BaseModel):
@@ -62,7 +80,6 @@ class AskIn(BaseModel):
     question: str
     limit: Optional[int] = 3
     session_id: Optional[str] = None
-    user_id: Optional[str] = "default_user"
 
 
 class AskOut(BaseModel):

@@ -12,8 +12,7 @@ API_BASE = os.getenv("ORCHESTRATOR_URL", "http://localhost:8000")
 
 def ask(
     question: str, 
-    limit: int = 3, 
-    user_id: Optional[str] = None,
+    limit: int = 3,
     session_id: Optional[str] = None
 ) -> Dict[str, Any]:
     """
@@ -22,15 +21,12 @@ def ask(
     Args:
         question: The question to ask
         limit: Maximum number of search results to return
-        user_id: Optional user ID for personalized memory (default: "default_user")
         session_id: Optional session ID for conversation tracking (backend manages history)
     
     Returns:
         Response dict with answer, memories_used, and other context
     """
     payload = {"question": question, "limit": limit}
-    if user_id:
-        payload["user_id"] = user_id
     if session_id:
         payload["session_id"] = session_id
     
@@ -66,27 +62,26 @@ def main() -> None:
     print("(Backend manages conversation history via session_id)")
     
     session = "demo_session_001"
-    user = "demo_user"
     
     # First question - establish context
     print("\n" + "-"*80)
     q1 = "Hello! I want to ask some questions about my memories."
     print(f"❓ Question: {q1}")
-    bundle1 = ask(q1, user_id=user, session_id=session)
+    bundle1 = ask(q1, session_id=session)
     print(f"\n🤖 Answer:\n{bundle1['answer']}")
     
     # Second question - backend remembers context via session_id
     print("\n" + "-"*80)
     q2 = "Who are my closest contacts?"
     print(f"❓ Question: {q2}")
-    bundle2 = ask(q2, user_id=user, session_id=session)
+    bundle2 = ask(q2, session_id=session)
     print(f"\n🤖 Answer:\n{bundle2['answer']}")
     
     # Third question - full conversation context maintained by backend
     print("\n" + "-"*80)
     q3 = "From those people you just mentioned, who did I meet most recently?"
     print(f"❓ Question: {q3}")
-    bundle3 = ask(q3, user_id=user, session_id=session)
+    bundle3 = ask(q3, session_id=session)
     print(f"\n🤖 Answer:\n{bundle3['answer']}")
     
     # Show long-term memories that were used
@@ -108,7 +103,7 @@ def main() -> None:
     print("\n" + "-"*80)
     q4 = "I prefer vegetarian restaurants"
     print(f"❓ Question: {q4}")
-    bundle4 = ask(q4, user_id=user, session_id=new_session)
+    bundle4 = ask(q4, session_id=new_session)
     print(f"\n🤖 Answer:\n{bundle4['answer']}")
     print("\n💡 mem0 will extract and store relevant facts for long-term memory")
     
@@ -119,7 +114,7 @@ def main() -> None:
     
     q5 = "Recommend a restaurant for dinner"
     print(f"❓ Question: {q5}")
-    bundle5 = ask(q5, user_id=user, session_id=another_session)
+    bundle5 = ask(q5, session_id=another_session)
     print(f"\n🤖 Answer:\n{bundle5['answer']}")
     
     memories = bundle5.get('memories_used', [])

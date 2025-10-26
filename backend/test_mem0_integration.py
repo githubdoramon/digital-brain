@@ -16,12 +16,11 @@ USER_ID = "test_user"
 SESSION_ID = "test_session_001"
 
 
-def ask_question(question: str, user_id: str = USER_ID, session_id: str = SESSION_ID) -> Dict[str, Any]:
+def ask_question(question: str, session_id: str = SESSION_ID) -> Dict[str, Any]:
     """Send a question to the /ask endpoint."""
     payload = {
         "question": question,
         "limit": 3,
-        "user_id": user_id,
         "session_id": session_id
     }
     
@@ -69,7 +68,6 @@ def test_conversation_memory():
     # Question 1: Establish a preference
     ask_question(
         "I prefer detailed technical explanations with examples.",
-        user_id=USER_ID,
         session_id=SESSION_ID
     )
     
@@ -78,7 +76,6 @@ def test_conversation_memory():
     # Question 2: Should remember the preference
     ask_question(
         "How do SQL queries work?",
-        user_id=USER_ID,
         session_id=SESSION_ID
     )
     
@@ -96,7 +93,6 @@ def test_multi_turn_context():
     # Question 1: Ask about something
     ask_question(
         "What are the main benefits of using Mem0?",
-        user_id=USER_ID,
         session_id=session
     )
     
@@ -105,7 +101,6 @@ def test_multi_turn_context():
     # Question 2: Follow-up question (should understand context)
     ask_question(
         "How does that compare to traditional approaches?",
-        user_id=USER_ID,
         session_id=session
     )
     
@@ -121,7 +116,6 @@ def test_user_separation():
     # User 1
     ask_question(
         "My favorite color is blue.",
-        user_id="user_alice",
         session_id="alice_session"
     )
     
@@ -130,7 +124,6 @@ def test_user_separation():
     # User 2
     ask_question(
         "My favorite color is red.",
-        user_id="user_bob",
         session_id="bob_session"
     )
     
@@ -139,7 +132,6 @@ def test_user_separation():
     # Ask User 1 again
     result = ask_question(
         "What's my favorite color?",
-        user_id="user_alice",
         session_id="alice_session"
     )
     

@@ -53,7 +53,6 @@ export default function Home() {
         question: userMessage.content,
         limit: 5,
         session_id: sessionId,
-        user_id: session?.user?.email || "anonymous",
       });
       const assistantMessage: Message = {
         role: "assistant",

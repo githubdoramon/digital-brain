@@ -9,7 +9,18 @@ import llm
 import retrieval
 from auth import get_current_user
 from db import get_conn
-from schemas import AskIn, AskOut, ContactIn, EventIn, GetIn, PlaceIn, ResolveIn, SearchIn
+from schemas import (
+    AskIn,
+    AskOut,
+    ContactIn,
+    ContactRelationshipIn,
+    EventIn,
+    GetIn,
+    PlaceIn,
+    ResolveIn,
+    SearchIn,
+    TodoIn,
+)
 
 
 @asynccontextmanager
@@ -40,6 +51,20 @@ def ingest_contact(c: ContactIn, user: dict = Depends(get_current_user)):
     return {"ok": True}
 
 
+@api.post("/ingest/contact-relationship")
+def ingest_contact_relationship(r: ContactRelationshipIn, user: dict = Depends(get_current_user)):
+    retrieval.upsert_contact_relationship(r)
+    return {"ok": True}
+
+
+@api.delete("/contact-relationships/{relationship_id}")
+def delete_contact_relationship(relationship_id: str, user: dict = Depends(get_current_user)):
+    deleted = retrieval.delete_contact_relationship(relationship_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Relationship not found")
+    return {"ok": True}
+
+
 @api.get("/contacts")
 def list_contacts(user: dict = Depends(get_current_user)):
     return {"contacts": retrieval.list_contacts()}
@@ -61,9 +86,41 @@ def delete_contact(contact_id: str, user: dict = Depends(get_current_user)):
     return {"ok": True}
 
 
+@api.get("/contacts/{contact_id}/relationships")
+def get_contact_relationships(contact_id: str, user: dict = Depends(get_current_user)):
+    return {"relationships": retrieval.list_contact_relationships(contact_id)}
+
+
 @api.post("/ingest/place")
 def ingest_place(p: PlaceIn, user: dict = Depends(get_current_user)):
     retrieval.ingest_place(p)
+    return {"ok": True}
+
+
+@api.post("/ingest/todo")
+def ingest_todo(todo: TodoIn, user: dict = Depends(get_current_user)):
+    retrieval.ingest_todo(todo)
+    return {"ok": True, "id": todo.todo_id}
+
+
+@api.get("/todos")
+def list_todos(user: dict = Depends(get_current_user)):
+    return {"todos": retrieval.list_todos()}
+
+
+@api.get("/todos/{todo_id}")
+def get_todo(todo_id: str, user: dict = Depends(get_current_user)):
+    todo = retrieval.get_todo(todo_id)
+    if not todo:
+        raise HTTPException(status_code=404, detail="Todo not found")
+    return todo
+
+
+@api.delete("/todos/{todo_id}")
+def delete_todo(todo_id: str, user: dict = Depends(get_current_user)):
+    deleted = retrieval.delete_todo(todo_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Todo not found")
     return {"ok": True}
 
 
@@ -106,7 +163,7 @@ async def ask(payload: AskIn, user: dict = Depends(get_current_user)):
     bundle = await llm.answer_question(
         payload.question, 
         search_limit=payload.limit or 3,
-        user_id=payload.user_id or user.get("email", "default_user"),
+        user_id=user.get("email", "default_user"),
         session_id=payload.session_id
     )
     return AskOut(**bundle)

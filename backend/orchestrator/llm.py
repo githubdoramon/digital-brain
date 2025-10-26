@@ -240,7 +240,7 @@ class AgentState:
 
 
 async def answer_question(
-    question: str, 
+    question: str,
     search_limit: int = 3,
     user_id: str = "default_user",
     session_id: Optional[str] = None
@@ -282,7 +282,13 @@ async def answer_question(
             import traceback
             traceback.print_exc()
     
-    messages: List[Dict[str, Any]] = _build_messages(question, search_limit, memories_used, conversation_history)
+    messages: List[Dict[str, Any]] = _build_messages(
+        question,
+        search_limit,
+        memories_used,
+        conversation_history,
+        user_email=user_id,
+    )
 
     while True:
         print("[agent] sending messages ->", json.dumps(messages[-4:], ensure_ascii=False, indent=2))
@@ -366,10 +372,11 @@ async def _store_memory_async(
 
 
 def _build_messages(
-    question: str, 
-    search_limit: int, 
+    question: str,
+    search_limit: int,
     memories_used: List[str] = None,
-    conversation_history: List[Dict[str, str]] = None
+    conversation_history: List[Dict[str, str]] = None,
+    user_email: Optional[str] = None,
 ) -> List[Dict[str, str]]:
     system_prompt = (
         "You are a personal memory assistant. "
@@ -381,7 +388,7 @@ def _build_messages(
         "first refresh the schema with describe_schema, then plan any execute_sql queries needed to retrieve facts. " \
         "Cross-check every table or column in a planned SQL statement against the schema snapshot; never invent new tables. " \
         "Use resolve_query when entity or time extraction helps craft structured constraints. " \
-        "For relationship closeness questions, first review `contacts.relationship` values (family > friend > coworker > other). " \
+        "For relationship closeness questions, use the `contact_relationships` table to understand interpersonal links. " \
         "Do not stop after describing a plan—actually call the necessary tools, inspect their outputs, and base your final answer on that evidence. " \
         "If a SQL attempt fails validation, revise and retry until you either succeed or can explain why the data cannot be retrieved. " \
         "Only respond after you have gathered sufficient evidence from the tools, and cite how you derived the answer. " \
@@ -392,6 +399,12 @@ def _build_messages(
     schema_hint = _load_schema_hint()
     if schema_hint:
         messages.append({"role": "system", "content": schema_hint})
+
+    # Self context based on authenticated email
+    if user_email:
+        self_context = _self_context_from_email(user_email)
+        if self_context:
+            messages.append({"role": "system", "content": self_context})
 
     # Add long-term memories from previous interactions if available
     if memories_used:
@@ -409,6 +422,47 @@ def _build_messages(
     
     messages.append({"role": "user", "content": question.strip()})
     return messages
+
+
+def _self_context_from_email(email: str) -> Optional[str]:
+    contact = retrieval.get_contact_by_email(email)
+    if not contact:
+        return None
+
+    display_name = contact.get("display_name") or email
+    contact_id = contact.get("contact_id")
+    details: List[str] = []
+
+    aliases = contact.get("aliases") or []
+    if aliases:
+        details.append("Aliases: " + ", ".join(aliases))
+
+    tags = contact.get("tags") or []
+    if tags:
+        details.append("Tags: " + ", ".join(tags))
+
+    relationships = contact.get("relationships") or []
+    if relationships:
+        rel_bits = []
+        for rel in relationships:
+            other = rel.get("contact_id")
+            rel_type = rel.get("type")
+            direction = rel.get("direction")
+            if other and rel_type:
+                rel_bits.append(f"{rel_type} ({direction}) → {other}")
+        if rel_bits:
+            details.append("Relationships: " + "; ".join(rel_bits))
+
+    base = [
+        "You are assisting the authenticated user.",
+        f"User email: {email}",
+        f"Corresponding contact: {display_name} ({contact_id})" if contact_id else f"Corresponding contact: {display_name}",
+    ]
+
+    if details:
+        base.extend(details)
+
+    return "\n".join(base)
 
 
 def _ollama_chat(messages: List[Dict[str, Any]]) -> Dict[str, Any]:
@@ -519,11 +573,6 @@ def _load_schema_hint() -> str:
         _SCHEMA_HINT_CACHE = ""
         return ""
 
-    try:
-        relationship_examples = _fetch_relationship_examples()
-    except Exception:
-        relationship_examples = []
-
     lines: List[str] = [
         "Database schema snapshot (read-only):",
     ]
@@ -542,11 +591,6 @@ def _load_schema_hint() -> str:
         else:
             summary = ", ".join(column_bits)
         lines.append(f"- {table_name}: {summary}")
-        if table_name == "contacts" and relationship_examples:
-            lines.append(
-                "  Distinct relationships observed: "
-                + ", ".join(sorted(relationship_examples))
-            )
     lines.append("Use describe_schema for full details and execute_sql to pull rows.")
 
     hint = "\n".join(lines)
@@ -603,26 +647,6 @@ def _extract_table_names(query: str) -> Set[str]:
         if lowered and lowered not in {"select", "from", "join", "unnest"}:
             tables.add(lowered)
     return tables
-
-
-def _fetch_relationship_examples() -> List[str]:
-    try:
-        from db import get_conn
-    except Exception:
-        return []
-
-    with get_conn() as conn, conn.cursor() as cur:
-        cur.execute(
-            """
-            SELECT DISTINCT relationship
-            FROM contacts
-            WHERE relationship IS NOT NULL
-            ORDER BY relationship
-            LIMIT 12
-            """
-        )
-        rows = cur.fetchall()
-    return [row[0] for row in rows if row and row[0]]
 
 
 def _finalize_bundle(

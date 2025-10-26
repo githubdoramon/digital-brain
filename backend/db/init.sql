@@ -11,9 +11,24 @@ CREATE TABLE IF NOT EXISTS contacts (
   emails TEXT[] DEFAULT '{}'::TEXT[],
   phones TEXT[] DEFAULT '{}'::TEXT[],
   links TEXT[] DEFAULT '{}'::TEXT[],
-  tags TEXT[] DEFAULT '{}'::TEXT[],
-  relationship TEXT CHECK (relationship IN ('Myself', 'Wife', 'Daughter', 'Brother', 'Mother', 'Coworker', 'Friend'))
+  tags TEXT[] DEFAULT '{}'::TEXT[]
 );
+
+-- Contact relationships (flexible graph between contacts)
+CREATE TABLE IF NOT EXISTS contact_relationships (
+  relationship_id TEXT PRIMARY KEY,
+  from_contact_id TEXT NOT NULL REFERENCES contacts(contact_id) ON DELETE CASCADE,
+  to_contact_id TEXT NOT NULL REFERENCES contacts(contact_id) ON DELETE CASCADE,
+  relationship_type TEXT NOT NULL,
+  reciprocal_type TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  CHECK (from_contact_id <> to_contact_id),
+  CHECK (btrim(relationship_type) <> '')
+);
+
+CREATE INDEX IF NOT EXISTS idx_contact_relationships_from ON contact_relationships (from_contact_id);
+CREATE INDEX IF NOT EXISTS idx_contact_relationships_to ON contact_relationships (to_contact_id);
 
 -- Places (canonical venue rows)
 CREATE TABLE IF NOT EXISTS places (
@@ -79,6 +94,35 @@ CREATE INDEX IF NOT EXISTS idx_events_tags ON events USING GIN (tags);
 CREATE INDEX IF NOT EXISTS idx_events_what_tsv ON events USING GIN (what_tsv);
 -- Vector index (IVFFLAT) – build after some rows exist for best perf.
 CREATE INDEX IF NOT EXISTS idx_events_embed ON events USING ivfflat (what_embed) WITH (lists = 100);
+
+-- TODOs (tasks with optional associations)
+CREATE TABLE IF NOT EXISTS todos (
+  todo_id TEXT PRIMARY KEY,
+  description TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'pending',
+  due_date DATE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  CHECK (btrim(description) <> '')
+);
+
+CREATE TABLE IF NOT EXISTS todo_contacts (
+  todo_id TEXT NOT NULL REFERENCES todos(todo_id) ON DELETE CASCADE,
+  contact_id TEXT NOT NULL REFERENCES contacts(contact_id) ON DELETE CASCADE,
+  PRIMARY KEY (todo_id, contact_id)
+);
+
+CREATE TABLE IF NOT EXISTS todo_events (
+  todo_id TEXT NOT NULL REFERENCES todos(todo_id) ON DELETE CASCADE,
+  event_id TEXT NOT NULL REFERENCES events(id) ON DELETE CASCADE,
+  PRIMARY KEY (todo_id, event_id)
+);
+
+CREATE TABLE IF NOT EXISTS todo_places (
+  todo_id TEXT NOT NULL REFERENCES todos(todo_id) ON DELETE CASCADE,
+  place_id TEXT NOT NULL REFERENCES places(place_id) ON DELETE CASCADE,
+  PRIMARY KEY (todo_id, place_id)
+);
 
 -- Helpful view
 CREATE OR REPLACE VIEW events_with_places AS
