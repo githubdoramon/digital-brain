@@ -10,6 +10,48 @@ const getAllowedUsers = (): Set<string> | null => {
 
 const allowedUsers = getAllowedUsers();
 
+async function refreshGoogleToken(token: any) {
+  if (!token.refreshToken) {
+    return { ...token, error: "RefreshAccessTokenError" };
+  }
+
+  try {
+    const response = await fetch("https://oauth2.googleapis.com/token", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded",
+      },
+      body: new URLSearchParams({
+        client_id: process.env.GOOGLE_CLIENT_ID ?? "",
+        client_secret: process.env.GOOGLE_CLIENT_SECRET ?? "",
+        grant_type: "refresh_token",
+        refresh_token: token.refreshToken,
+      }),
+    });
+
+    const refreshedTokens = await response.json();
+
+    if (!response.ok) {
+      throw refreshedTokens;
+    }
+
+    return {
+      ...token,
+      accessToken: refreshedTokens.access_token ?? token.accessToken,
+      accessTokenExpires: Date.now() + (refreshedTokens.expires_in ?? 0) * 1000,
+      refreshToken: refreshedTokens.refresh_token ?? token.refreshToken,
+      idToken: refreshedTokens.id_token ?? token.idToken,
+      error: undefined,
+    };
+  } catch (error) {
+    console.error("Failed to refresh Google token", error);
+    return {
+      ...token,
+      error: "RefreshAccessTokenError",
+    };
+  }
+}
+
 export const authOptions: NextAuthOptions = {
   providers: [
     GoogleProvider({
@@ -51,6 +93,9 @@ export const authOptions: NextAuthOptions = {
       if (token.idToken) {
         session.idToken = token.idToken as string;
       }
+      if (token.error) {
+        session.error = token.error as string;
+      }
       return session;
     },
     async jwt({ token, user, account }) {
@@ -61,7 +106,23 @@ export const authOptions: NextAuthOptions = {
       if (user) {
         token.id = user.id;
       }
-      return token;
+
+      if (account?.access_token) {
+        token.accessToken = account.access_token;
+      }
+      if (account?.refresh_token) {
+        token.refreshToken = account.refresh_token;
+      }
+      if (account?.expires_at) {
+        token.accessTokenExpires = account.expires_at * 1000;
+      }
+
+      const bufferTime = 60 * 1000; // 1 minute
+      if (token.accessTokenExpires && Date.now() < token.accessTokenExpires - bufferTime) {
+        return token;
+      }
+
+      return refreshGoogleToken(token);
     },
   },
   secret: process.env.NEXTAUTH_SECRET,

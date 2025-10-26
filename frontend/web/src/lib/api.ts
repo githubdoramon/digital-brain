@@ -1,64 +1,41 @@
 /**
- * Utility for making authenticated API requests to the backend.
+ * Utility for making authenticated API requests through the Next.js proxy.
  */
 
-const API_BASE = process.env.BACKEND_API_BASE ?? "http://localhost:8000";
+const API_BASE = "/api/orchestrator";
 
 /**
- * Get the current Google ID token from NextAuth session
- */
-async function getIdToken(): Promise<string | null> {
-  try {
-    const response = await fetch("/api/auth/session");
-    const session = await response.json();
-    return session?.idToken || null;
-  } catch (error) {
-    console.error("Failed to get ID token:", error);
-    return null;
-  }
-}
-
-/**
- * Make an authenticated request to the backend API
+ * Make an authenticated request via the Next.js API routes.
  */
 export async function apiRequest<T = any>(
   endpoint: string,
   options: RequestInit = {}
 ): Promise<T> {
-  // Get auth token
-  const idToken = await getIdToken();
-  console.log("idToken", idToken);
-
-  // Prepare headers
-  const headers: Record<string, string> = {
-    "Content-Type": "application/json",
-  };
-
-  // Merge existing headers if any
-  if (options.headers) {
-    const existingHeaders = options.headers as Record<string, string>;
-    Object.assign(headers, existingHeaders);
+  const headers = new Headers(options.headers);
+  if (!headers.has("content-type") && !["GET", "HEAD"].includes(options.method ?? "")) {
+    headers.set("content-type", "application/json");
   }
 
-  // Add authorization if we have a token
-  if (idToken) {
-    headers["Authorization"] = `Bearer ${idToken}`;
-  }
-
-  // Make the request
   const response = await fetch(`${API_BASE}${endpoint}`, {
     ...options,
     headers,
   });
 
-  // Handle errors
   if (!response.ok) {
     const error = await response.json().catch(() => ({}));
     throw new Error(error.detail || `Request failed: ${response.statusText}`);
   }
 
-  // Return JSON response
-  return response.json();
+  if (response.status === 204) {
+    return undefined as T;
+  }
+
+  const contentType = response.headers.get("content-type");
+  if (contentType?.includes("application/json")) {
+    return response.json();
+  }
+
+  return (await response.text()) as T;
 }
 
 /**
@@ -68,19 +45,21 @@ export const api = {
   get: <T = any>(endpoint: string) =>
     apiRequest<T>(endpoint, { method: "GET" }),
 
-  post: <T = any>(endpoint: string, data?: any) =>
+  post: <T = any>(endpoint: string, data?: any, init?: RequestInit) =>
     apiRequest<T>(endpoint, {
       method: "POST",
       body: data ? JSON.stringify(data) : undefined,
+      ...init,
     }),
 
-  delete: <T = any>(endpoint: string) =>
-    apiRequest<T>(endpoint, { method: "DELETE" }),
+  delete: <T = any>(endpoint: string, init?: RequestInit) =>
+    apiRequest<T>(endpoint, { method: "DELETE", ...init }),
 
-  put: <T = any>(endpoint: string, data?: any) =>
+  put: <T = any>(endpoint: string, data?: any, init?: RequestInit) =>
     apiRequest<T>(endpoint, {
       method: "PUT",
       body: data ? JSON.stringify(data) : undefined,
+      ...init,
     }),
 };
 
