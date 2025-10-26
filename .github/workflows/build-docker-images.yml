@@ -4,9 +4,9 @@ on:
   push:
     branches:
       - main
-  pull_request:
-    branches:
-      - main
+  # pull_request:
+  #   branches:
+  #     - main
 
 env:
   AWS_REGION: eu-central-1  # Change this to your AWS region
@@ -89,7 +89,7 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ${{ env.ECR_REGISTRY }}/appcalipse/removed-service
+          images: ${{ env.ECR_REGISTRY }}/appcalipse/removed_service
           tags: |
             type=ref,event=branch
             type=ref,event=pr
