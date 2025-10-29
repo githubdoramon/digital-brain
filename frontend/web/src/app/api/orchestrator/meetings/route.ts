@@ -1,12 +1,11 @@
 import { NextRequest } from "next/server";
 import { getServerSession } from "next-auth";
+
 import { authOptions } from "../../auth/[...nextauth]/route";
 
 const ORCHESTRATOR_BASE = process.env.BACKEND_API_BASE ?? "http://localhost:8000";
 
-const ALLOWED_METHODS = ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"];
-
-async function buildAuthorizationHeader(request: NextRequest): Promise<string | undefined> {
+async function getAuthorizationHeader(request: NextRequest): Promise<string | undefined> {
   const existing = request.headers.get("authorization");
   if (existing) {
     return existing;
@@ -17,37 +16,43 @@ async function buildAuthorizationHeader(request: NextRequest): Promise<string | 
   return idToken ? `Bearer ${idToken}` : undefined;
 }
 
-export async function handler(
-  request: NextRequest,
-  context: { params: Promise<{ path?: string[] }> }
-) {
-  if (!ALLOWED_METHODS.includes(request.method)) {
+async function proxyMeetings(request: NextRequest) {
+  if (request.method !== "POST") {
     return new Response("Method Not Allowed", { status: 405 });
   }
 
-  const { path = [] } = await context.params;
-  const targetPath = path.join("/");
-  const url = new URL(`${ORCHESTRATOR_BASE}/${targetPath}`);
-
-  request.nextUrl.searchParams.forEach((value, key) => {
-    url.searchParams.append(key, value);
-  });
+  const url = `${ORCHESTRATOR_BASE}/ingest/meetings`;
 
   const headers = new Headers(request.headers);
   headers.delete("host");
   headers.set("origin", ORCHESTRATOR_BASE);
 
-  const authHeader = await buildAuthorizationHeader(request);
+  const serviceApiKey = request.headers.get("x-service-api-key");
+  if (!serviceApiKey) {
+    return new Response(
+      JSON.stringify({ detail: "Missing x-service-api-key header" }),
+      {
+        status: 401,
+        headers: { "content-type": "application/json" },
+      }
+    );
+  }
+
+  headers.set("x-service-api-key", serviceApiKey);
+
+  const authHeader = await getAuthorizationHeader(request);
   if (authHeader) {
     headers.set("authorization", authHeader);
   } else {
     headers.delete("authorization");
   }
 
+  const bodyBuffer = await request.arrayBuffer();
+
   const init: RequestInit = {
-    method: request.method,
+    method: "POST",
     headers,
-    body: ["GET", "HEAD"].includes(request.method) ? undefined : request.body,
+    body: bodyBuffer.byteLength ? bodyBuffer : undefined,
     duplex: "half",
   };
 
@@ -64,11 +69,9 @@ export async function handler(
       headers: responseHeaders,
     });
   } catch (error) {
-    console.error("Orchestrator proxy error", error);
+    console.error("Meeting ingest proxy error", error);
     return new Response(
-      JSON.stringify({
-        detail: "Failed to reach orchestrator service",
-      }),
+      JSON.stringify({ detail: "Failed to reach orchestrator service" }),
       {
         status: 502,
         headers: { "content-type": "application/json" },
@@ -77,4 +80,7 @@ export async function handler(
   }
 }
 
-export { handler as GET, handler as POST, handler as PUT, handler as PATCH, handler as DELETE, handler as OPTIONS };
+export async function POST(request: NextRequest) {
+  return proxyMeetings(request);
+}
+

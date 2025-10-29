@@ -1,13 +1,16 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
+from typing import List
 
-from fastapi import FastAPI, HTTPException, Depends
+import os
+
+from fastapi import Depends, FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
 import llm
 import retrieval
-from auth import get_current_user
+from auth import get_current_user, maybe_get_current_user
 from db import get_conn
 from schemas import (
     AskIn,
@@ -16,11 +19,22 @@ from schemas import (
     ContactRelationshipIn,
     EventIn,
     GetIn,
+    MeetingIn,
     PlaceIn,
     ResolveIn,
     SearchIn,
     TodoIn,
 )
+
+
+ORCHESTRATOR_API_KEY = os.getenv("ORCHESTRATOR_API_KEY")
+
+
+def require_service_api_key(x_service_api_key: str = Header(default="", alias="x-service-api-key")) -> None:
+    if not ORCHESTRATOR_API_KEY:
+        raise HTTPException(status_code=500, detail="Service API key is not configured")
+    if x_service_api_key != ORCHESTRATOR_API_KEY:
+        raise HTTPException(status_code=401, detail="Invalid service API key")
 
 
 @asynccontextmanager
@@ -128,6 +142,16 @@ def delete_todo(todo_id: str, user: dict = Depends(get_current_user)):
 def ingest_event(e: EventIn, user: dict = Depends(get_current_user)):
     retrieval.ingest_event(e)
     return {"ok": True, "id": e.id}
+
+
+@api.post("/ingest/meetings")
+def ingest_meetings(
+    meetings: List[MeetingIn],
+    _: None = Depends(require_service_api_key),
+    user: Optional[dict] = Depends(maybe_get_current_user),
+):
+    ids = retrieval.ingest_meetings(meetings, current_user=user)
+    return {"ok": True, "ids": ids}
 
 
 # --------------------------- Tool-friendly endpoints ---------------------------

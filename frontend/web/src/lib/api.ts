@@ -4,6 +4,15 @@
 
 const API_BASE = "/api/orchestrator";
 
+export interface MeetingIn {
+  title: string;
+  content: string;
+  date: string;
+  link?: string;
+  attendees?: string[];
+  tags?: string[];
+}
+
 /**
  * Make an authenticated request via the Next.js API routes.
  */
@@ -61,5 +70,9 @@ export const api = {
       body: data ? JSON.stringify(data) : undefined,
       ...init,
     }),
+};
+
+export const orchestratorApi = {
+  ingestMeetings: (meetings: MeetingIn[]) => api.post<{ ids: string[] }>("/meetings", meetings),
 };
 

@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import date, datetime
 from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class ContactIn(BaseModel):
@@ -37,6 +37,15 @@ class EventIn(BaseModel):
     types: Optional[List[str]] = []
     what_text: Optional[str] = ""
     raw: Optional[Dict[str, Any]] = {}
+
+
+class MeetingIn(BaseModel):
+    title: str
+    content: str
+    date: datetime
+    link: Optional[str] = None
+    attendees: List[str] = Field(default_factory=list)
+    tags: List[str] = Field(default_factory=list)
 
 
 class ContactRelationshipIn(BaseModel):

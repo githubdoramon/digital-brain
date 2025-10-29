@@ -4,13 +4,17 @@ import json
 
 from collections import defaultdict
 from datetime import datetime, timedelta
+import re
+from itertools import combinations
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
+from uuid import uuid4
 
 from dateparser.search import search_dates
 from rapidfuzz import process, fuzz
 
 from db import fetch_events, get_conn
 from embeddings import embed_text
+from schemas import ContactIn, ContactRelationshipIn, EventIn, MeetingIn, TodoIn
 
 
 def _upsert_contact_relationships(cur, contact_id: str, relationships: Sequence[Any]) -> None:
@@ -178,6 +182,195 @@ def get_contact_by_email(email: str) -> Optional[Dict[str, Any]]:
             "tags": row["tags"] or [],
             "relationships": relationships_map.get(contact_id, []),
         }
+
+
+def _slugify(text: str) -> str:
+    lowered = (text or "").strip().lower()
+    if not lowered:
+        return "meeting"
+    slug = re.sub(r"[^a-z0-9]+", "-", lowered)
+    slug = slug.strip("-")
+    return slug or "meeting"
+
+
+def _normalize_email(email: str) -> Optional[str]:
+    if not email:
+        return None
+    cleaned = email.strip().lower()
+    return cleaned or None
+
+
+def _display_name_from_email(email: str) -> str:
+    local_part = email.split("@", 1)[0] if "@" in email else email
+    pieces = [piece for piece in re.split(r"[._+]+", local_part) if piece]
+    if not pieces:
+        return email
+    return " ".join(piece.capitalize() for piece in pieces)
+
+
+def _generate_contact_id(email: str) -> str:
+    safe = re.sub(r"[^a-z0-9]+", "-", email)
+    safe = safe.strip("-") or uuid4().hex[:8]
+    return f"contact:{safe}"
+
+
+def _ensure_contact_for_email(email: str) -> Tuple[Optional[str], bool]:
+    normalized = _normalize_email(email)
+    if not normalized:
+        return None, False
+    existing = get_contact_by_email(normalized)
+    if existing:
+        return existing["contact_id"], False
+
+    base_contact_id = _generate_contact_id(normalized)
+    contact_id = base_contact_id
+    counter = 1
+    while get_contact(contact_id):
+        contact_id = f"{base_contact_id}-{counter}"
+        counter += 1
+
+    contact = ContactIn(
+        contact_id=contact_id,
+        display_name=_display_name_from_email(normalized),
+        emails=[normalized],
+        aliases=[],
+        tags=["autocreated", "meeting-attendee"],
+    )
+    ingest_contact(contact)
+    return contact_id, True
+
+
+def _extract_next_steps(content: Optional[str]) -> List[str]:
+    if not content:
+        return []
+    lines = content.splitlines()
+    steps: List[str] = []
+    in_section = False
+    for raw_line in lines:
+        line = raw_line.strip()
+        if not line:
+            continue
+        is_heading = line.startswith("#")
+        if is_heading and "next steps" in line.lower():
+            in_section = True
+            continue
+        if in_section and is_heading:
+            break
+        if in_section:
+            if line.startswith(("-", "*")):
+                step = line.lstrip("-* ").strip()
+                if step:
+                    steps.append(step)
+            else:
+                match = re.match(r"^\d+[\.)]\s*(.+)$", line)
+                if match:
+                    steps.append(match.group(1).strip())
+    return steps
+
+
+def _build_user_tokens(user: Optional[dict]) -> List[str]:
+    if not user:
+        return []
+    tokens: List[str] = []
+    for key in ("name", "given_name", "family_name", "email"):
+        value = user.get(key)
+        if value:
+            tokens.append(value.strip().lower())
+    email = user.get("email") if user else None
+    if email and "@" in email:
+        local = email.split("@", 1)[0]
+        if local:
+            tokens.append(local.lower())
+    name = user.get("name") if user else None
+    if name:
+        parts = [p.strip().lower() for p in re.split(r"\s+", name) if p.strip()]
+        tokens.extend(parts)
+    return [token for token in tokens if token]
+
+
+def ingest_meetings(meetings: Sequence[MeetingIn], current_user: Optional[dict] = None) -> List[str]:
+    event_ids: List[str] = []
+    contact_cache: Dict[str, Tuple[Optional[str], bool]] = {}
+    user_tokens = _build_user_tokens(current_user)
+    for meeting in meetings:
+        attendee_emails = meeting.attendees or []
+        contact_ids: List[str] = []
+        new_contacts_by_domain: Dict[str, List[str]] = {}
+        for email in attendee_emails:
+            normalized = _normalize_email(email)
+            created_now = False
+            if normalized and normalized in contact_cache:
+                cid, _ = contact_cache[normalized]
+            else:
+                cid, created_now = _ensure_contact_for_email(email)
+                if normalized:
+                    contact_cache[normalized] = (cid, created_now)
+            if cid:
+                contact_ids.append(cid)
+                if created_now and normalized and "@" in normalized:
+                    domain = normalized.split("@", 1)[1]
+                    new_contacts_by_domain.setdefault(domain, []).append(cid)
+        unique_contacts = list(dict.fromkeys(contact_ids))
+
+        for domain, ids in new_contacts_by_domain.items():
+            if len(ids) < 2:
+                continue
+            seen_pairs = set()
+            for a, b in combinations(sorted(set(ids)), 2):
+                pair_key = (a, b)
+                if pair_key in seen_pairs:
+                    continue
+                seen_pairs.add(pair_key)
+                relationship_id = f"rel:coworker:{domain}:{a}:{b}"
+                rel = ContactRelationshipIn(
+                    relationship_id=relationship_id,
+                    from_contact_id=a,
+                    to_contact_id=b,
+                    relationship_type="Co-worker",
+                    reciprocal_type="Co-worker",
+                )
+                upsert_contact_relationship(rel)
+
+        event_id = f"meeting:{meeting.date.strftime('%Y%m%dT%H%M%S')}-{_slugify(meeting.title)}-{uuid4().hex[:8]}"
+
+        raw_payload = {
+            "content": meeting.content,
+            "link": meeting.link,
+            "attendees": attendee_emails,
+            "attendee_contact_ids": unique_contacts,
+            "source": "meeting_ingest",
+        }
+
+        event = EventIn(
+            id=event_id,
+            ts=meeting.date,
+            people=unique_contacts,
+            tags=list(dict.fromkeys(meeting.tags or [])),
+            types=["meeting"],
+            what_text=meeting.title,
+            raw=raw_payload,
+        )
+
+        ingest_event(event)
+        event_ids.append(event_id)
+
+        if user_tokens:
+            steps = _extract_next_steps(meeting.content)
+            for idx, step in enumerate(steps):
+                step_lower = step.lower()
+                if not any(token in step_lower for token in user_tokens):
+                    continue
+                todo = TodoIn(
+                    todo_id=f"todo:{event_id}:{uuid4().hex[:8]}",
+                    description=step,
+                    status="pending",
+                    contact_ids=[],
+                    event_ids=[event_id],
+                    place_ids=[],
+                )
+                ingest_todo(todo)
+
+    return event_ids
 
 
 def delete_contact(contact_id: str) -> bool:
