@@ -53,6 +53,11 @@ All endpoints require `Authorization: Bearer <google-id-token>` header.
 ### LLM Chat
 - `POST /ask` - Ask questions about memories
 
+The LLM agent uses a collection of function tools (memory search, SQL access, etc.).
+If you provide a Tavily API key (`TAVILY_API_KEY`), the agent can also run live
+internet searches to enrich its answers. Configure optional overrides using the
+environment variables documented in `backend/env.template`.
+
 ## Development
 
 ```bash

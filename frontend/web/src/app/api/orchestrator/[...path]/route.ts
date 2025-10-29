@@ -1,6 +1,7 @@
 import { NextRequest } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "../../auth/[...nextauth]/route";
+import { ProxyFetchInit } from "@/types/proxy";
 
 const ORCHESTRATOR_BASE = process.env.BACKEND_API_BASE ?? "http://localhost:8000";
 
@@ -35,7 +36,6 @@ export async function handler(
 
   const headers = new Headers(request.headers);
   headers.delete("host");
-  headers.set("origin", ORCHESTRATOR_BASE);
 
   const authHeader = await buildAuthorizationHeader(request);
   if (authHeader) {
@@ -44,7 +44,7 @@ export async function handler(
     headers.delete("authorization");
   }
 
-  const init: RequestInit = {
+  const init: ProxyFetchInit = {
     method: request.method,
     headers,
     body: ["GET", "HEAD"].includes(request.method) ? undefined : request.body,
@@ -52,6 +52,7 @@ export async function handler(
   };
 
   try {
+    console.log("Fetching from orchestrator", url, init);
     const backendResponse = await fetch(url, init);
 
     const responseHeaders = new Headers(backendResponse.headers);

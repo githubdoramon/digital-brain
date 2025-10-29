@@ -98,4 +98,10 @@ class AskOut(BaseModel):
     search_results: List[Dict[str, Any]]
     detailed_events: List[Dict[str, Any]]
     session_id: Optional[str] = None
-    memories_used: Optional[List[str]] = []
+    memories_used: List[str] = Field(default_factory=list)
+    web_results: List[Dict[str, Any]] = Field(default_factory=list)
+    web_summary: Optional[str] = None
+    web_follow_up_questions: Optional[List[str]] = Field(default_factory=list)
+    web_query: Optional[str] = None
+    web_provider: Optional[str] = None
+    web_response_id: Optional[str] = None

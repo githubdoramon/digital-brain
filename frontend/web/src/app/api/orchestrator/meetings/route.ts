@@ -2,6 +2,7 @@ import { NextRequest } from "next/server";
 import { getServerSession } from "next-auth";
 
 import { authOptions } from "../../auth/[...nextauth]/route";
+import { ProxyFetchInit } from "@/types/proxy";
 
 const ORCHESTRATOR_BASE = process.env.BACKEND_API_BASE ?? "http://localhost:8000";
 
@@ -25,7 +26,6 @@ async function proxyMeetings(request: NextRequest) {
 
   const headers = new Headers(request.headers);
   headers.delete("host");
-  headers.set("origin", ORCHESTRATOR_BASE);
 
   const serviceApiKey = request.headers.get("x-service-api-key");
   if (!serviceApiKey) {
@@ -49,7 +49,7 @@ async function proxyMeetings(request: NextRequest) {
 
   const bodyBuffer = await request.arrayBuffer();
 
-  const init: RequestInit = {
+  const init: ProxyFetchInit = {
     method: "POST",
     headers,
     body: bodyBuffer.byteLength ? bodyBuffer : undefined,

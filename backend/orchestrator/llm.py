@@ -12,6 +12,7 @@ from mem0 import AsyncMemory
 
 import retrieval
 import sql_tools
+import web_tools
 
 OLLAMA_HOST = os.getenv("OLLAMA_HOST")
 OLLAMA_CHAT_MODEL = os.getenv("OLLAMA_CHAT_MODEL")
@@ -211,6 +212,29 @@ TOOLS: List[Dict[str, Any]] = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "internet_search",
+            "description": "Search the public internet for up-to-date information beyond the internal memory store.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Web search query string. Defaults to the current question if omitted.",
+                    },
+                    "max_results": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 10,
+                        "description": "Maximum number of web results to return (default configured via environment).",
+                    },
+                },
+                "additionalProperties": False,
+            },
+        },
+    },
 ]
 
 
@@ -219,6 +243,12 @@ class AgentState:
         self.resolution: Dict[str, Any] = {}
         self.search_results: List[Dict[str, Any]] = []
         self.detailed_events: List[Dict[str, Any]] = []
+        self.web_results: List[Dict[str, Any]] = []
+        self.web_summary: Optional[str] = None
+        self.web_follow_up_questions: List[str] = []
+        self.web_query: Optional[str] = None
+        self.web_provider: Optional[str] = None
+        self.web_response_id: Optional[str] = None
 
     def update_resolution(self, data: Dict[str, Any]) -> None:
         if isinstance(data, dict):
@@ -237,6 +267,34 @@ class AgentState:
             self.detailed_events = events
         else:
             self.detailed_events = []
+
+    def update_web_context(self, data: Dict[str, Any]) -> None:
+        if not isinstance(data, dict):
+            return
+
+        results = data.get("results")
+        if isinstance(results, list):
+            self.web_results = [r for r in results if isinstance(r, dict)]
+        else:
+            self.web_results = []
+
+        summary = data.get("summary")
+        self.web_summary = summary if isinstance(summary, str) else None
+
+        follow_ups = data.get("follow_up_questions")
+        if isinstance(follow_ups, list):
+            self.web_follow_up_questions = [str(item) for item in follow_ups if isinstance(item, (str, int, float))]
+        else:
+            self.web_follow_up_questions = []
+
+        query = data.get("query")
+        self.web_query = query if isinstance(query, str) else None
+
+        provider = data.get("provider")
+        self.web_provider = provider if isinstance(provider, str) else None
+
+        response_id = data.get("response_id")
+        self.web_response_id = response_id if isinstance(response_id, str) else None
 
 
 async def answer_question(
@@ -560,6 +618,20 @@ def _handle_tool_call(
         result = sql_tools.execute_sql(query, limit=limit)
         return _normalize_sql_result(result)
 
+    if name == "internet_search":
+        raw_query = args.get("query")
+        query = raw_query if isinstance(raw_query, str) and raw_query.strip() else question
+        max_results_arg = args.get("max_results")
+        try:
+            max_results = int(max_results_arg) if max_results_arg is not None else None
+        except (TypeError, ValueError):
+            max_results = None
+        print(f"[agent] calling internet_search(query={query!r}, max_results={max_results})")
+        result = web_tools.internet_search(query=query, max_results=max_results)
+        if not result.get("error"):
+            state.update_web_context(result)
+        return result
+
     raise RuntimeError(f"Unsupported tool requested: {name}")
 
 
@@ -679,6 +751,12 @@ def _finalize_bundle(
         "detailed_events": state.detailed_events,
         "session_id": session_id,
         "memories_used": memories_used or [],
+        "web_results": state.web_results,
+        "web_summary": state.web_summary,
+        "web_follow_up_questions": state.web_follow_up_questions,
+        "web_query": state.web_query,
+        "web_provider": state.web_provider,
+        "web_response_id": state.web_response_id,
     }
 
 
