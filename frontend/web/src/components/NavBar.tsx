@@ -60,6 +60,14 @@ export async function NavBar() {
               Contacts
             </Link>
             <Link
+              href="/todos"
+              style={{
+                color: "#444",
+              }}
+            >
+              Todos
+            </Link>
+            <Link
               href="/meetings"
               style={{
                 color: "#444",
