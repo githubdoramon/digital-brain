@@ -12,6 +12,11 @@ type Message = {
   memories?: string[];
 };
 
+type AskResponse = {
+  answer?: string;
+  memories_used?: string[];
+};
+
 // Generate a unique session ID for this chat session
 function generateSessionId(): string {
   return `session_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
@@ -49,7 +54,7 @@ export default function Home() {
     setIsLoading(true);
 
     try {
-      const data = await api.post("/ask", {
+      const data = await api.post<AskResponse>("/ask", {
         question: userMessage.content,
         limit: 5,
         session_id: sessionId,
@@ -161,7 +166,7 @@ export default function Home() {
                 Start a conversation by asking a question below
               </p>
               <div style={{ fontSize: "0.85rem", color: "#aaa", textAlign: "center", maxWidth: "400px" }}>
-                Examples: "What meetings did I have last week?" or "Tell me about my conversations with Monica"
+                Examples: &quot;What meetings did I have last week?&quot; or &quot;Tell me about my conversations with Monica&quot;
               </div>
             </div>
           )}

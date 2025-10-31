@@ -1,6 +1,6 @@
-'use client';
+"use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { api } from "@/lib/api";
 
 type Todo = {
@@ -45,7 +45,7 @@ export default function TodosPage() {
   const [status, setStatus] = useState<StatusMessage>({ kind: "idle" });
   const [updatingId, setUpdatingId] = useState<string | null>(null);
 
-  async function loadTodos() {
+  const loadTodos = useCallback(async () => {
     setIsLoading(true);
     setStatus((prev) => (prev.kind === "error" ? { kind: "idle" } : prev));
 
@@ -59,12 +59,11 @@ export default function TodosPage() {
     } finally {
       setIsLoading(false);
     }
-  }
+  }, []);
 
   useEffect(() => {
     loadTodos();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [loadTodos]);
 
   async function toggleTodo(todo: Todo) {
     const nextStatus =

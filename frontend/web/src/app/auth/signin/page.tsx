@@ -1,9 +1,18 @@
 "use client";
 
+import { Suspense } from "react";
 import { signIn } from "next-auth/react";
 import { useSearchParams } from "next/navigation";
 
 export default function SignIn() {
+  return (
+    <Suspense fallback={<LoadingState />}>
+      <SignInContent />
+    </Suspense>
+  );
+}
+
+function SignInContent() {
   const searchParams = useSearchParams();
   const callbackUrl = searchParams.get("callbackUrl") || "/";
   const error = searchParams.get("error");
@@ -89,6 +98,22 @@ export default function SignIn() {
       <p style={{ color: "#999", fontSize: "0.875rem" }}>
         Your data is private and secure
       </p>
+    </div>
+  );
+}
+
+function LoadingState() {
+  return (
+    <div
+      style={{
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        minHeight: "80vh",
+        color: "#666",
+      }}
+    >
+      Loading sign-in...
     </div>
   );
 }

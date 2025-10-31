@@ -1,5 +1,6 @@
 import NextAuth, { NextAuthOptions } from "next-auth";
 import GoogleProvider from "next-auth/providers/google";
+import { JWT } from "next-auth/jwt";
 
 // Parse the allowlist from environment variable
 const getAllowedUsers = (): Set<string> | null => {
@@ -10,7 +11,23 @@ const getAllowedUsers = (): Set<string> | null => {
 
 const allowedUsers = getAllowedUsers();
 
-async function refreshGoogleToken(token: any) {
+type GoogleJWT = JWT & {
+  accessToken?: string;
+  refreshToken?: string;
+  accessTokenExpires?: number;
+  idToken?: string;
+  error?: string;
+};
+
+type GoogleTokenResponse = {
+  access_token?: string;
+  expires_in?: number;
+  refresh_token?: string;
+  id_token?: string;
+  error?: string;
+};
+
+async function refreshGoogleToken(token: GoogleJWT): Promise<GoogleJWT> {
   if (!token.refreshToken) {
     return { ...token, error: "RefreshAccessTokenError" };
   }
@@ -29,7 +46,7 @@ async function refreshGoogleToken(token: any) {
       }),
     });
 
-    const refreshedTokens = await response.json();
+    const refreshedTokens = (await response.json()) as GoogleTokenResponse;
 
     if (!response.ok) {
       throw refreshedTokens;
@@ -122,7 +139,7 @@ export const authOptions: NextAuthOptions = {
         return token;
       }
 
-      return refreshGoogleToken(token);
+      return refreshGoogleToken(token as GoogleJWT);
     },
   },
   secret: process.env.NEXTAUTH_SECRET,

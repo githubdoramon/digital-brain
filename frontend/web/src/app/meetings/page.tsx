@@ -279,7 +279,7 @@ export default function MeetingsPage() {
       >
         <h2 style={{ fontSize: "1.1rem", fontWeight: 600 }}>Request preview</h2>
         <p style={{ color: "#555" }}>
-          The JSON payload sent to <code>{`${API_BASE}/ingest/event`}</code> looks
+          The JSON payload sent to the backend looks
           like this:
         </p>
         <pre

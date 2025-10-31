@@ -16,7 +16,7 @@ export interface MeetingIn {
 /**
  * Make an authenticated request via the Next.js API routes.
  */
-export async function apiRequest<T = any>(
+export async function apiRequest<T = unknown>(
   endpoint: string,
   options: RequestInit = {}
 ): Promise<T> {
@@ -31,8 +31,8 @@ export async function apiRequest<T = any>(
   });
 
   if (!response.ok) {
-    const error = await response.json().catch(() => ({}));
-    throw new Error(error.detail || `Request failed: ${response.statusText}`);
+    const errorBody = (await response.json().catch(() => undefined)) as { detail?: string } | undefined;
+    throw new Error(errorBody?.detail || `Request failed: ${response.statusText}`);
   }
 
   if (response.status === 204) {
@@ -41,30 +41,30 @@ export async function apiRequest<T = any>(
 
   const contentType = response.headers.get("content-type");
   if (contentType?.includes("application/json")) {
-    return response.json();
+    return (await response.json()) as T;
   }
 
-  return (await response.text()) as T;
+  return (await response.text()) as unknown as T;
 }
 
 /**
  * Convenience methods for common HTTP verbs
  */
 export const api = {
-  get: <T = any>(endpoint: string) =>
+  get: <T = unknown>(endpoint: string) =>
     apiRequest<T>(endpoint, { method: "GET" }),
 
-  post: <T = any>(endpoint: string, data?: any, init?: RequestInit) =>
+  post: <T = unknown>(endpoint: string, data?: unknown, init?: RequestInit) =>
     apiRequest<T>(endpoint, {
       method: "POST",
       body: data ? JSON.stringify(data) : undefined,
       ...init,
     }),
 
-  delete: <T = any>(endpoint: string, init?: RequestInit) =>
+  delete: <T = unknown>(endpoint: string, init?: RequestInit) =>
     apiRequest<T>(endpoint, { method: "DELETE", ...init }),
 
-  put: <T = any>(endpoint: string, data?: any, init?: RequestInit) =>
+  put: <T = unknown>(endpoint: string, data?: unknown, init?: RequestInit) =>
     apiRequest<T>(endpoint, {
       method: "PUT",
       body: data ? JSON.stringify(data) : undefined,

@@ -340,6 +340,11 @@ export default function ContactsPage() {
             ))}
           </div>
         )}
+        <datalist id="relationship-type-suggestions">
+          {RELATIONSHIP_SUGGESTIONS.map((suggestion) => (
+            <option key={suggestion} value={suggestion} />
+          ))}
+        </datalist>
       </div>
     );
   }, [contacts, formState.contact_id, formState.relationships]);
@@ -509,7 +514,7 @@ export default function ContactsPage() {
             <div style={{ fontSize: "2.5rem" }}>👥</div>
             <p>No contacts yet</p>
             <p style={{ fontSize: "0.85rem", color: "#aaa" }}>
-              Click "Add New Contact" to get started
+              Click &quot;Add New Contact&quot; to get started
             </p>
           </div>
         ) : (
