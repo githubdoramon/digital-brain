@@ -41,11 +41,11 @@ class EventIn(BaseModel):
 
 class MeetingIn(BaseModel):
     title: str
-    content: str
+    content: Optional[str] = None
     date: datetime
     link: Optional[str] = None
-    attendees: List[str] = Field(default_factory=list)
-    tags: List[str] = Field(default_factory=list)
+    attendees: Optional[List[str]] = Field(default_factory=list)
+    tags: Optional[List[str]] = Field(default_factory=list)
 
 
 class ContactRelationshipIn(BaseModel):
