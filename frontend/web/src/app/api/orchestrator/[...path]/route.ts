@@ -26,6 +26,9 @@ export async function handler(
     return new Response("Method Not Allowed", { status: 405 });
   }
 
+  console.log("env", process.env);
+  console.log("base address", process.env.BACKEND_API_BASE);
+  console.log("ORCHESTRATOR_BASE", ORCHESTRATOR_BASE);
   const { path = [] } = await context.params;
   const targetPath = path.join("/");
   const url = new URL(`${ORCHESTRATOR_BASE}/${targetPath}`);
