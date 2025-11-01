@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
+from time import perf_counter
 from typing import List, Optional
 
 import os
@@ -184,10 +185,30 @@ def get_events(payload: GetIn, user: dict = Depends(get_current_user)):
 # --------------------------- Ask endpoint (LLM-powered) ---------------------------
 @api.post("/ask", response_model=AskOut)
 async def ask(payload: AskIn, user: dict = Depends(get_current_user)):
-    bundle = await llm.answer_question(
-        payload.question, 
-        search_limit=payload.limit or 3,
-        user_id=user.get("email", "default_user"),
-        session_id=payload.session_id
+    start_time = perf_counter()
+    user_email = user.get("email")
+    session_id = payload.session_id or "<none>"
+    limit = payload.limit or 3
+    preview = payload.question.strip().replace("\n", " ")
+    if len(preview) > 120:
+        preview = preview[:117] + "..."
+
+    print(
+        f"[ask] start session={session_id} user={user_email} limit={limit} question={preview!r}"
     )
+
+    bundle = await llm.answer_question(
+        payload.question,
+        search_limit=limit,
+        user_id=user_email or "default_user",
+        session_id=payload.session_id,
+    )
+
+    elapsed = perf_counter() - start_time
+    search_results = bundle.get("search_results")
+    search_count = len(search_results) if isinstance(search_results, list) else "n/a"
+    print(
+        f"[ask] complete session={session_id} user={user_email} elapsed={elapsed:.3f}s search_results={search_count}"
+    )
+
     return AskOut(**bundle)

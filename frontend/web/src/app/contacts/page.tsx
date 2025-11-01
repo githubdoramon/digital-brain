@@ -64,6 +64,17 @@ const RELATIONSHIP_SUGGESTIONS = [
   "Mentee",
 ];
 
+function generateContactId(seed?: string): string {
+  const timestamp = Date.now().toString(36);
+  if (!seed) {
+    return `contact:${timestamp}`;
+  }
+  const cleaned = seed.trim().toLowerCase();
+  const slug = cleaned.replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+  const base = slug ? `${slug}-${timestamp}` : timestamp;
+  return `contact:${base}`;
+}
+
 function generateRelationshipId(): string {
   if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
     return `rel-${crypto.randomUUID()}`;
@@ -125,7 +136,7 @@ export default function ContactsPage() {
   function openAddModal() {
     setEditingContact(null);
     setFormState({
-      contact_id: `contact-${Date.now()}`,
+      contact_id: generateContactId(),
       display_name: "",
       aliases: "",
       birthday: "",
@@ -354,8 +365,11 @@ export default function ContactsPage() {
     setSubmitting(true);
     setStatus({ kind: "idle" });
 
+    const trimmedId = formState.contact_id.trim();
+    const contactId = trimmedId || generateContactId(formState.display_name || formState.emails);
+
     const payload = {
-      contact_id: formState.contact_id.trim() || `contact-${Date.now()}`,
+      contact_id: contactId,
       display_name: formState.display_name.trim(),
       aliases: parseList(formState.aliases),
       birthday: formState.birthday || null,
@@ -367,7 +381,7 @@ export default function ContactsPage() {
         .filter((rel) => rel.contact_id && rel.type)
         .map((rel) => ({
           relationship_id: rel.relationship_id,
-          from_contact_id: formState.contact_id,
+          from_contact_id: contactId,
           to_contact_id: rel.contact_id,
           relationship_type: rel.type,
           reciprocal_type: rel.reciprocal_type || null,

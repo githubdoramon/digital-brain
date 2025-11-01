@@ -4,8 +4,10 @@ import asyncio
 import json
 import os
 import re
-from typing import Any, Dict, List, Set, Optional
 from collections import defaultdict
+from datetime import datetime, timezone
+from time import perf_counter
+from typing import Any, Dict, List, Set, Optional
 
 import requests
 from mem0 import AsyncMemory
@@ -36,6 +38,33 @@ if not QDRANT_PORT:
 print(f"Using Ollama chat model: {OLLAMA_CHAT_MODEL}")
 print(f"Using Ollama embed model: {OLLAMA_EMBED_MODEL}")
 print(f"Using Qdrant at {QDRANT_HOST}:{QDRANT_PORT}")
+
+
+def _shorten(text: str, limit: int = 120) -> str:
+    if not isinstance(text, str):
+        return str(text)
+    single_line = text.replace("\n", " ").strip()
+    if len(single_line) <= limit:
+        return single_line
+    return single_line[: limit - 3] + "..."
+
+
+def _log_timing(label: str, start_time: float, **metadata: Any) -> None:
+    elapsed = perf_counter() - start_time
+    meta_items = []
+    for key, value in metadata.items():
+        if value is None:
+            continue
+        if isinstance(value, float):
+            meta_items.append(f"{key}={value:.3f}")
+        else:
+            meta_items.append(f"{key}={value}")
+    meta_str = " ".join(meta_items)
+    if meta_str:
+        print(f"[timing] {label} took {elapsed:.3f}s ({elapsed*1000:.0f}ms) {meta_str}")
+    else:
+        print(f"[timing] {label} took {elapsed:.3f}s ({elapsed*1000:.0f}ms)")
+
 
 # Mem0 configuration for conversation memory with persistent Qdrant storage
 MEM0_CONFIG = {
@@ -303,22 +332,52 @@ async def answer_question(
     user_id: str = "default_user",
     session_id: Optional[str] = None
 ) -> Dict[str, Any]:
+    total_start = perf_counter()
+    question_preview = _shorten(question)
+    current_utc = datetime.now(timezone.utc)
+    local_now = current_utc.astimezone()
+    time_context = (
+        "Current time context available to you:\n"
+        f"- UTC now: {current_utc.isoformat()}\n"
+        f"- Local system time: {local_now.isoformat()}"
+    )
+    print(
+        f"[agent] answer_question start user_id={user_id} session_id={session_id} "
+        f"search_limit={search_limit} question={question_preview!r} utc={current_utc.isoformat()}"
+    )
+
     state = AgentState()
-    
+
     # Get conversation history from session store
-    conversation_history = []
+    conversation_history: List[Dict[str, str]] = []
     if session_id:
+        history_start = perf_counter()
         conversation_history = _session_store.get(session_id, [])
+        _log_timing(
+            "session.load_history",
+            history_start,
+            session_id=session_id,
+            messages=len(conversation_history),
+        )
         print(f"[session] Retrieved {len(conversation_history)} messages from session {session_id}")
-    
+
     # Retrieve relevant long-term memories from Mem0 (await this)
-    memories_used = []
+    memories_used: List[str] = []
+    memory_start = perf_counter()
     memory = await get_memory()
+    _log_timing(
+        "mem0.get_memory",
+        memory_start,
+        session_id=session_id,
+        available=bool(memory),
+    )
     if memory:
+        search_start: Optional[float] = None
         try:
             print(f"[mem0] Retrieving long-term memories for user_id={user_id}")
+            search_start = perf_counter()
             response = await memory.search(question, user_id=user_id, limit=5)
-            
+
             # Mem0 returns {"results": [{"id": ..., "memory": "...", ...}, ...]}
             if isinstance(response, dict) and "results" in response:
                 results = response["results"]
@@ -326,7 +385,7 @@ async def answer_question(
                     for result in results:
                         if isinstance(result, dict) and "memory" in result:
                             memories_used.append(result["memory"])
-                    
+
                     if memories_used:
                         print(f"[mem0] Found {len(memories_used)} relevant long-term memories")
                     else:
@@ -335,22 +394,39 @@ async def answer_question(
                     print(f"[mem0] Unexpected results format: {type(results)}")
             else:
                 print(f"[mem0] Unexpected response format: {type(response)}")
+            _log_timing(
+                "mem0.search",
+                search_start,
+                results=len(memories_used),
+            )
         except Exception as e:
+            if search_start is not None:
+                _log_timing("mem0.search.error", search_start)
             print(f"[mem0] Error retrieving memories: {e}")
             import traceback
             traceback.print_exc()
-    
+
+    build_start = perf_counter()
     messages: List[Dict[str, Any]] = _build_messages(
         question,
         search_limit,
         memories_used,
         conversation_history,
         user_email=user_id,
+        current_time_context=time_context,
     )
+    _log_timing("agent.build_messages", build_start, message_count=len(messages))
+
+    iteration = 0
 
     while True:
+        iteration += 1
+        loop_start = perf_counter()
+        print(f"[agent] iteration {iteration} start")
         print("[agent] sending messages ->", json.dumps(messages[-4:], ensure_ascii=False, indent=2))
+        chat_start = perf_counter()
         response = _ollama_chat(messages)
+        _log_timing("ollama.chat", chat_start, iteration=iteration)
         message = response.get("message") or {}
         print("[agent] received message ->", json.dumps(message, ensure_ascii=False, indent=2))
         if not message:
@@ -373,6 +449,13 @@ async def answer_question(
                         "content": json.dumps(tool_result, ensure_ascii=False),
                     }
                 )
+            _log_timing(
+                "agent.iteration",
+                loop_start,
+                iteration=iteration,
+                event="tool_calls",
+                tools=len(tool_calls),
+            )
             continue
 
         content = (message.get("content") or "").strip()
@@ -380,22 +463,42 @@ async def answer_question(
             raise RuntimeError(f"Unexpected Ollama response: {response}")
 
         messages.append(message)
-        
+
         # Update session store with this Q&A pair
         if session_id:
             _session_store[session_id].append({"role": "user", "content": question})
             _session_store[session_id].append({"role": "assistant", "content": content})
-            print(f"[session] Stored Q&A in session {session_id}, total messages: {len(_session_store[session_id])}")
-        
+            print(
+                f"[session] Stored Q&A in session {session_id}, total messages: {len(_session_store[session_id])}"
+            )
+
         bundle = _finalize_bundle(question, content, state, search_limit, session_id, memories_used)
-        
+
         # Store the last Q&A pair in mem0 for long-term memory extraction (fire and forget)
         # Let mem0 decide what's worth remembering
         if memory:
             # Fire and forget - don't await, let it run in background
             asyncio.create_task(_store_memory_async(memory, question, content, user_id, session_id))
-        
+
+        answer_length = len(content)
+        search_results_count = len(state.search_results)
+        _log_timing(
+            "agent.iteration",
+            loop_start,
+            iteration=iteration,
+            event="final",
+            answer_chars=answer_length,
+            search_results=search_results_count,
+        )
+
         print("[agent] final bundle ->", json.dumps(bundle, ensure_ascii=False, indent=2))
+        _log_timing(
+            "answer_question.total",
+            total_start,
+            iterations=iteration,
+            session_id=session_id,
+            user_id=user_id,
+        )
         return bundle
 
 
@@ -408,7 +511,6 @@ async def _store_memory_async(
 ) -> None:
     """Store memory in background without blocking the response."""
     try:
-        from datetime import datetime, timezone
         timestamp = datetime.now(timezone.utc).isoformat()
         
         # Pass just the last Q&A pair to mem0, let it extract insights
@@ -417,11 +519,13 @@ async def _store_memory_async(
             {"role": "assistant", "content": content}
         ]
         
+        store_start = perf_counter()
         result = await memory.add(
             last_exchange,
             user_id=user_id,
             metadata={"session_id": session_id, "timestamp": timestamp},
         )
+        _log_timing("mem0.store", store_start, session_id=session_id, user_id=user_id)
         print(f"[mem0] Stored Q&A pair for long-term memory extraction, result: {result}")
     except Exception as e:
         print(f"[mem0] Error storing in long-term memory: {e}")
@@ -435,6 +539,7 @@ def _build_messages(
     memories_used: List[str] = None,
     conversation_history: List[Dict[str, str]] = None,
     user_email: Optional[str] = None,
+    current_time_context: Optional[str] = None,
 ) -> List[Dict[str, str]]:
     system_prompt = (
         "You are a personal memory assistant. "
@@ -471,6 +576,9 @@ def _build_messages(
         print(f"[mem0] Added {len(memories_used)} long-term memories to context")
 
     messages.append({"role": "system", "content": protocol_prompt})
+    
+    if current_time_context:
+        messages.append({"role": "system", "content": current_time_context})
     
     # Add conversation history (short-term session memory)
     if conversation_history:
@@ -556,7 +664,18 @@ def _handle_tool_call(
         need_contacts = _coerce_bool(args.get("need_contacts", True))
         need_places = _coerce_bool(args.get("need_places", True))
         print(f"[agent] calling resolve_query(text={text!r}, need_contacts={need_contacts}, need_places={need_places})")
+        step_start = perf_counter()
         result = retrieval.resolve_query(text, need_contacts=need_contacts, need_places=need_places)
+        contacts = len(result.get("contacts", [])) if isinstance(result, dict) else "n/a"
+        places = len(result.get("places", [])) if isinstance(result, dict) else "n/a"
+        _log_timing(
+            "tool.resolve_query",
+            step_start,
+            need_contacts=need_contacts,
+            need_places=need_places,
+            contacts=contacts,
+            places=places,
+        )
         state.update_resolution(result)
         return result
 
@@ -571,6 +690,7 @@ def _handle_tool_call(
         print(
             f"[agent] calling search_memories(query={query!r}, people={args.get('people')}, place_ids={args.get('place_ids')}, time_start={args.get('time_start')}, time_end={args.get('time_end')}, limit={limit})"
         )
+        step_start = perf_counter()
         result = retrieval.search_memories(
             query=query,
             people=args.get("people"),
@@ -578,6 +698,13 @@ def _handle_tool_call(
             time_start=args.get("time_start"),
             time_end=args.get("time_end"),
             limit=limit,
+        )
+        results_list = result.get("results") if isinstance(result, dict) else None
+        _log_timing(
+            "tool.search_memories",
+            step_start,
+            limit=limit,
+            results=len(results_list) if isinstance(results_list, list) else "n/a",
         )
         state.update_search_results(result)
         return result
@@ -587,13 +714,20 @@ def _handle_tool_call(
         if not isinstance(ids, list):
             raise RuntimeError("get_events requires an array of ids")
         print(f"[agent] calling get_events(ids={ids})")
+        step_start = perf_counter()
         events = retrieval.get_events([str(i) for i in ids])
+        _log_timing("tool.get_events", step_start, count=len(events))
         state.update_detailed_events(events)
         return {"events": events}
 
     if name == "describe_schema":
         print("[agent] calling describe_schema()")
-        return sql_tools.describe_schema()
+        step_start = perf_counter()
+        result = sql_tools.describe_schema()
+        tables = result.get("tables") if isinstance(result, dict) else None
+        table_count = len(tables) if isinstance(tables, dict) else "n/a"
+        _log_timing("tool.describe_schema", step_start, tables=table_count)
+        return result
 
     if name == "execute_sql":
         query = args.get("query")
@@ -604,7 +738,14 @@ def _handle_tool_call(
             limit = int(limit_arg) if limit_arg is not None else 200
         except (TypeError, ValueError):
             limit = 200
+        validation_start = perf_counter()
         unknown_tables = _find_unknown_tables(query)
+        _log_timing(
+            "tool.execute_sql.validation",
+            validation_start,
+            unknown=len(unknown_tables),
+            unknown_list=",".join(sorted(unknown_tables)) if unknown_tables else None,
+        )
         if unknown_tables:
             print(f"[agent] rejecting execute_sql due to unknown tables: {unknown_tables}")
             return {
@@ -615,8 +756,17 @@ def _handle_tool_call(
                 }
             }
         print(f"[agent] calling execute_sql(limit={limit}) -> {query!r}")
+        step_start = perf_counter()
         result = sql_tools.execute_sql(query, limit=limit)
-        return _normalize_sql_result(result)
+        normalized = _normalize_sql_result(result)
+        rows = normalized.get("rows") if isinstance(normalized, dict) else None
+        _log_timing(
+            "tool.execute_sql",
+            step_start,
+            limit=limit,
+            rows=len(rows) if isinstance(rows, list) else "n/a",
+        )
+        return normalized
 
     if name == "internet_search":
         raw_query = args.get("query")
@@ -627,7 +777,15 @@ def _handle_tool_call(
         except (TypeError, ValueError):
             max_results = None
         print(f"[agent] calling internet_search(query={query!r}, max_results={max_results})")
+        step_start = perf_counter()
         result = web_tools.internet_search(query=query, max_results=max_results)
+        hits = result.get("results") if isinstance(result, dict) else None
+        _log_timing(
+            "tool.internet_search",
+            step_start,
+            max_results=max_results,
+            results=len(hits) if isinstance(hits, list) else "n/a",
+        )
         if not result.get("error"):
             state.update_web_context(result)
         return result
@@ -730,7 +888,14 @@ def _finalize_bundle(
     memories_used: List[str] = None,
 ) -> Dict[str, Any]:
     if not state.resolution or not state.search_results:
+        fallback_start = perf_counter()
         fallback = retrieval.run_pipeline(question, search_limit=search_limit)
+        fallback_results = fallback.get("search_results") if isinstance(fallback, dict) else None
+        _log_timing(
+            "pipeline.run_pipeline",
+            fallback_start,
+            search_results=len(fallback_results) if isinstance(fallback_results, list) else "n/a",
+        )
         if not state.resolution:
             state.update_resolution(fallback.get("resolution") or {})
         if not state.search_results:
@@ -740,7 +905,9 @@ def _finalize_bundle(
     elif state.search_results and not state.detailed_events:
         ids = [row.get("id") for row in state.search_results if row.get("id")]
         if ids:
+            events_start = perf_counter()
             events = retrieval.get_events(ids)
+            _log_timing("pipeline.get_events", events_start, count=len(events))
             state.update_detailed_events(events)
 
     return {

@@ -5,7 +5,7 @@ import { ProxyFetchInit } from "@/types/proxy";
 
 const ORCHESTRATOR_BASE = process.env.BACKEND_API_BASE ?? "http://localhost:8000";
 
-const ALLOWED_METHODS = ["POST", "PUT", "PATCH", "DELETE", "OPTIONS"];
+const ALLOWED_METHODS = ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"];
 
 async function buildAuthorizationHeader(request: NextRequest): Promise<string | undefined> {
   const existing = request.headers.get("authorization");
