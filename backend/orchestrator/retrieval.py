@@ -243,10 +243,12 @@ def _ensure_contact_for_email(email: str) -> Tuple[Optional[str], bool]:
 def _extract_next_steps(content: Optional[str]) -> List[str]:
     if not content:
         return []
+    print(f"Extracting next steps from content: {content}")
     lines = content.splitlines()
     steps: List[str] = []
     in_section = False
     for raw_line in lines:
+        print(f"Raw line: {raw_line}")
         line = raw_line.strip()
         if not line:
             continue
@@ -265,6 +267,7 @@ def _extract_next_steps(content: Optional[str]) -> List[str]:
                 match = re.match(r"^\d+[\.)]\s*(.+)$", line)
                 if match:
                     steps.append(match.group(1).strip())
+    print(f"Extracted steps: {steps}")
     return steps
 
 
@@ -357,6 +360,7 @@ def ingest_meetings(meetings: Sequence[MeetingIn], current_user: Optional[dict] 
         if user_tokens:
             steps = _extract_next_steps(meeting.content)
             for idx, step in enumerate(steps):
+                print(f"Step {idx}: {step}")
                 step_lower = step.lower()
                 if not any(token in step_lower for token in user_tokens):
                     continue

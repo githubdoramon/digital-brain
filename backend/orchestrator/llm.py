@@ -418,6 +418,7 @@ async def answer_question(
     _log_timing("agent.build_messages", build_start, message_count=len(messages))
 
     iteration = 0
+    thinking_retries = 0
 
     while True:
         iteration += 1
@@ -459,8 +460,33 @@ async def answer_question(
             continue
 
         content = (message.get("content") or "").strip()
+        thinking = (message.get("thinking") or "").strip()
         if not content:
+            if thinking:
+                thinking_retries += 1
+                thinking_preview = _shorten(thinking)
+                print(
+                    f"[agent] received thinking without content (retry {thinking_retries}) -> {thinking_preview!r}"
+                )
+                if thinking_retries > 3:
+                    raise RuntimeError(
+                        "Assistant returned internal reasoning multiple times without a final answer."
+                    )
+
+                messages.append(
+                    {
+                        "role": "system",
+                        "content": (
+                            "Reminder: provide the final answer for the user in natural language without"
+                            " exposing internal reasoning."
+                        ),
+                    }
+                )
+                continue
+
             raise RuntimeError(f"Unexpected Ollama response: {response}")
+
+        thinking_retries = 0
 
         messages.append(message)
 
