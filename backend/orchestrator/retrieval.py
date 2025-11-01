@@ -301,7 +301,7 @@ def ingest_meetings(meetings: Sequence[MeetingIn]) -> List[str]:
             current_user = json.loads(current_user_info)
         except Exception:
             current_user = None
-            
+
     user_tokens = _build_user_tokens(current_user)
     for meeting in meetings:
         attendee_emails = meeting.attendees or []
@@ -322,6 +322,18 @@ def ingest_meetings(meetings: Sequence[MeetingIn]) -> List[str]:
                     domain = normalized.split("@", 1)[1]
                     new_contacts_by_domain.setdefault(domain, []).append(cid)
         unique_contacts = list(dict.fromkeys(contact_ids))
+
+        # if current user is not on the contact list yet, add them
+        if current_user:
+            current_email = current_user.get("email")
+            if current_email:
+                normalized_current = _normalize_email(current_email)
+                if normalized_current and normalized_current not in contact_cache:
+                    cid, created_now = _ensure_contact_for_email(current_email)
+                    if normalized_current:
+                        contact_cache[normalized_current] = (cid, created_now)
+                    if cid and cid not in unique_contacts:
+                        unique_contacts.append(cid)
 
         for domain, ids in new_contacts_by_domain.items():
             if len(ids) < 2:

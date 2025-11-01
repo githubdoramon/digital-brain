@@ -11,7 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 import llm
 import retrieval
-from auth import get_current_user, maybe_get_current_user
+from auth import get_current_user
 from db import get_conn
 from schemas import (
     AskIn,
