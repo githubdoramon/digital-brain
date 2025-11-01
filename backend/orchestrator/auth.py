@@ -82,34 +82,6 @@ def check_user_allowed(email: str) -> None:
         )
 
 
-async def maybe_get_current_user(authorization: Optional[str] = Header(None)) -> Optional[dict]:
-    """Best-effort retrieval of the current user; returns None if unavailable."""
-    if not authorization:
-        return None
-
-    parts = authorization.split()
-    if len(parts) != 2 or parts[0].lower() != "bearer":
-        return None
-
-    token = parts[1]
-
-    try:
-        user_info = verify_google_token(token)
-    except HTTPException:
-        return None
-
-    email = user_info.get("email")
-    if not email:
-        return None
-
-    try:
-        check_user_allowed(email)
-    except HTTPException:
-        return None
-
-    return user_info
-
-
 async def get_current_user(authorization: Optional[str] = Header(None)) -> dict:
     """
     FastAPI dependency to get and validate current user from JWT.

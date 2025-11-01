@@ -275,10 +275,6 @@ def _build_user_tokens(user: Optional[dict]) -> List[str]:
     if not user:
         return []
     tokens: List[str] = []
-    for key in ("name", "given_name", "family_name", "email"):
-        value = user.get(key)
-        if value:
-            tokens.append(value.strip().lower())
     email = user.get("email") if user else None
     if email and "@" in email:
         local = email.split("@", 1)[0]
@@ -291,9 +287,21 @@ def _build_user_tokens(user: Optional[dict]) -> List[str]:
     return [token for token in tokens if token]
 
 
-def ingest_meetings(meetings: Sequence[MeetingIn], current_user: Optional[dict] = None) -> List[str]:
+def ingest_meetings(meetings: Sequence[MeetingIn]) -> List[str]:
     event_ids: List[str] = []
     contact_cache: Dict[str, Tuple[Optional[str], bool]] = {}
+
+    import os
+    import json
+
+    current_user = None
+    current_user_info = os.environ.get("CURRENT_USER_INFO")
+    if current_user_info:
+        try:
+            current_user = json.loads(current_user_info)
+        except Exception:
+            current_user = None
+            
     user_tokens = _build_user_tokens(current_user)
     for meeting in meetings:
         attendee_emails = meeting.attendees or []

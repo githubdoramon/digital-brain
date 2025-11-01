@@ -149,9 +149,8 @@ def ingest_event(e: EventIn, user: dict = Depends(get_current_user)):
 def ingest_meetings(
     meetings: List[MeetingIn],
     _: None = Depends(require_service_api_key),
-    user: Optional[dict] = Depends(maybe_get_current_user),
 ):
-    ids = retrieval.ingest_meetings(meetings, current_user=user)
+    ids = retrieval.ingest_meetings(meetings)
     return {"ok": True, "ids": ids}
 
 

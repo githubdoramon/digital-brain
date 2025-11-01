@@ -52,7 +52,6 @@ export async function handler(
   };
 
   try {
-    console.log("Fetching from orchestrator", url, init);
     const backendResponse = await fetch(url, init);
 
     const responseHeaders = new Headers(backendResponse.headers);
