@@ -40,6 +40,7 @@ class EventIn(BaseModel):
 
 
 class MeetingIn(BaseModel):
+    id: Optional[str] = None
     title: str
     content: Optional[str] = None
     date: datetime

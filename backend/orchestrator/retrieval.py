@@ -287,6 +287,22 @@ def _build_user_tokens(user: Optional[dict]) -> List[str]:
     return [token for token in tokens if token]
 
 
+def _event_exists(event_id: str) -> bool:
+    if not event_id:
+        return False
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT 1
+            FROM events
+            WHERE id = %s
+            LIMIT 1
+            """,
+            (event_id,),
+        )
+        return cur.fetchone() is not None
+
+
 def ingest_meetings(meetings: Sequence[MeetingIn]) -> List[str]:
     event_ids: List[str] = []
     contact_cache: Dict[str, Tuple[Optional[str], bool]] = {}
@@ -354,7 +370,19 @@ def ingest_meetings(meetings: Sequence[MeetingIn]) -> List[str]:
                 )
                 upsert_contact_relationship(rel)
 
-        event_id = f"meeting:{meeting.date.strftime('%Y%m%dT%H%M%S')}-{_slugify(meeting.title)}-{uuid4().hex[:8]}"
+        normalized_meeting_id: Optional[str] = None
+        provided_meeting_id = getattr(meeting, "id", None)
+        if provided_meeting_id is not None:
+            normalized_meeting_id = str(provided_meeting_id).strip()
+            if not normalized_meeting_id:
+                normalized_meeting_id = None
+
+        if normalized_meeting_id:
+            event_id = f"meeting:{normalized_meeting_id}"
+            existing_event = _event_exists(event_id)
+        else:
+            event_id = f"meeting:{meeting.date.strftime('%Y%m%dT%H%M%S')}-{_slugify(meeting.title)}-{uuid4().hex[:8]}"
+            existing_event = False
 
         raw_payload = {
             "content": meeting.content,
@@ -363,6 +391,10 @@ def ingest_meetings(meetings: Sequence[MeetingIn]) -> List[str]:
             "attendee_contact_ids": unique_contacts,
             "source": "meeting_ingest",
         }
+
+        if normalized_meeting_id:
+            raw_payload["external_meeting_id"] = normalized_meeting_id
+            raw_payload["existing_event"] = existing_event
 
         event = EventIn(
             id=event_id,
