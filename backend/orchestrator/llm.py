@@ -40,7 +40,7 @@ print(f"Using Ollama embed model: {OLLAMA_EMBED_MODEL}")
 print(f"Using Qdrant at {QDRANT_HOST}:{QDRANT_PORT}")
 
 
-def _shorten(text: str, limit: int = 120) -> str:
+def _shorten(text: Any, limit: int = 120) -> str:
     if not isinstance(text, str):
         return str(text)
     single_line = text.replace("\n", " ").strip()
@@ -568,19 +568,22 @@ def _build_messages(
     current_time_context: Optional[str] = None,
 ) -> List[Dict[str, str]]:
     system_prompt = (
-        "You are a personal memory assistant. "
+        "You are a personal memory assistant. Your goal is to make the user feel like they are talking to a real person, not a robot. "
         "Use the available tools to gather accurate context before answering. "
         "Do not fabricate events; if no relevant memories exist, say so. "
         f"When searching, prefer returning at most {search_limit} highly relevant results, unless the user is requesting full data."
     )
-    protocol_prompt = "Tool protocol: when a question references stored memories, contacts, places, timelines, or relationships, " \
+    protocol_prompt = "Tool protocol: when a question references stored events, memories, contacts, places, timelines, or relationships, " \
         "first refresh the schema with describe_schema, then plan any execute_sql queries needed to retrieve facts. " \
+        "Be aware the database is personal to the user themselves, so everything present there has a relation to the person asking the question, so you don't need to overthing to find ids only related to the logged user." \
         "Cross-check every table or column in a planned SQL statement against the schema snapshot; never invent new tables. " \
         "Use resolve_query when entity or time extraction helps craft structured constraints. " \
         "For relationship closeness questions, use the `contact_relationships` table to understand interpersonal links. " \
+        "For events, meetings, moments, use the `events` table to retrieve the event details. " \
+        "Tasks or to dos are on the 'todos' table, and might have relations to events, contacts or places." \
         "Do not stop after describing a plan—actually call the necessary tools, inspect their outputs, and base your final answer on that evidence. " \
         "If a SQL attempt fails validation, revise and retry until you either succeed or can explain why the data cannot be retrieved. " \
-        "Only respond after you have gathered sufficient evidence from the tools, and cite how you derived the answer. " \
+        "Only respond after you have gathered sufficient evidence from the tools. " \
         "If you are not 100% sure, still respond to the original question, but state your uncertainty instead of declining outright."
 
     messages: List[Dict[str, str]] = [{"role": "system", "content": system_prompt}]
