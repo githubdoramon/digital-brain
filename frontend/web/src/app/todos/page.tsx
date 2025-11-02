@@ -112,6 +112,27 @@ export default function TodosPage() {
     }
   }
 
+  async function deleteTodo(todo: Todo) {
+    const confirmed = window.confirm(`Delete todo "${todo.todo_id}"? This cannot be undone.`);
+    if (!confirmed) {
+      return;
+    }
+
+    setUpdatingId(todo.todo_id);
+    setStatus({ kind: "idle" });
+
+    try {
+      await api.delete(`/todos/${encodeURIComponent(todo.todo_id)}`);
+      setTodos((previous) => previous.filter((item) => item.todo_id !== todo.todo_id));
+      setStatus({ kind: "success", message: `Deleted ${todo.todo_id}` });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Failed to delete todo";
+      setStatus({ kind: "error", message });
+    } finally {
+      setUpdatingId(null);
+    }
+  }
+
   const [pendingTodos, accomplishedTodos] = useMemo(() => {
     const pending: Todo[] = [];
     const accomplished: Todo[] = [];
@@ -199,6 +220,7 @@ export default function TodosPage() {
           emptyLabel="All caught up!"
           todos={pendingTodos}
           onToggle={toggleTodo}
+          onDelete={deleteTodo}
           updatingId={updatingId}
         />
         <TodoSection
@@ -206,6 +228,7 @@ export default function TodosPage() {
           emptyLabel="No accomplished todos yet"
           todos={accomplishedTodos}
           onToggle={toggleTodo}
+          onDelete={deleteTodo}
           updatingId={updatingId}
         />
       </div>
@@ -218,10 +241,11 @@ type TodoSectionProps = {
   emptyLabel: string;
   todos: Todo[];
   onToggle: (todo: Todo) => Promise<void>;
+  onDelete: (todo: Todo) => Promise<void>;
   updatingId: string | null;
 };
 
-function TodoSection({ title, emptyLabel, todos, onToggle, updatingId }: TodoSectionProps) {
+function TodoSection({ title, emptyLabel, todos, onToggle, onDelete, updatingId }: TodoSectionProps) {
   if (todos.length === 0) {
     return (
       <section
@@ -322,7 +346,7 @@ function TodoSection({ title, emptyLabel, todos, onToggle, updatingId }: TodoSec
                 )}
               </div>
 
-              <div style={{ display: "flex", justifyContent: "flex-end" }}>
+              <div style={{ display: "flex", justifyContent: "flex-end", gap: "8px" }}>
                 <button
                   type="button"
                   onClick={() => onToggle(todo)}
@@ -343,6 +367,23 @@ function TodoSection({ title, emptyLabel, todos, onToggle, updatingId }: TodoSec
                     : isAccomplished
                     ? "Mark as pending"
                     : "Mark accomplished"}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onDelete(todo)}
+                  disabled={isUpdating}
+                  style={{
+                    background: "#fee2e2",
+                    color: "#b91c1c",
+                    border: "1px solid #fecaca",
+                    borderRadius: "8px",
+                    padding: "8px 16px",
+                    fontWeight: 600,
+                    cursor: isUpdating ? "progress" : "pointer",
+                    opacity: isUpdating ? 0.7 : 1,
+                  }}
+                >
+                  {isUpdating ? "Working..." : "Delete"}
                 </button>
               </div>
             </article>

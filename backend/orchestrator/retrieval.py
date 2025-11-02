@@ -664,6 +664,9 @@ def get_todo(todo_id: str) -> Optional[Dict[str, Any]]:
 
 def delete_todo(todo_id: str) -> bool:
     with get_conn() as conn, conn.cursor() as cur:
+        cur.execute("DELETE FROM todo_contacts WHERE todo_id = %s", (todo_id,))
+        cur.execute("DELETE FROM todo_events WHERE todo_id = %s", (todo_id,))
+        cur.execute("DELETE FROM todo_places WHERE todo_id = %s", (todo_id,))
         cur.execute(
             """
             DELETE FROM todos

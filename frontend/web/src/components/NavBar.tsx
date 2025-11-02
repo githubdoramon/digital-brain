@@ -87,6 +87,7 @@ export async function NavBar() {
                     width={32}
                     height={32}
                     style={{ borderRadius: "50%" }}
+                    unoptimized
                   />
                 )}
                 <span style={{ fontSize: "0.9rem", color: "#666" }}>
