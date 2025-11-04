@@ -104,8 +104,10 @@ def _ensure_read_only(query: str) -> str:
         raise ValueError("Only SELECT queries (including CTEs) are allowed")
     if ";" in cleaned:
         raise ValueError("Multiple statements are not allowed")
+    # Instead of substring matching, use word-boundary regex to catch forbidden statements (like UPDATE, DELETE)
     for forbidden in _READ_ONLY_FORBIDDEN:
-        if forbidden in lowered:
+        pattern = rf"\b{forbidden}\b"
+        if re.search(pattern, lowered):
             raise ValueError(f"Found forbidden statement '{forbidden}' in query")
     for pattern in _INCOMPLETE_PATTERNS:
         if pattern.search(cleaned):
