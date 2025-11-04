@@ -55,8 +55,10 @@ All endpoints require `Authorization: Bearer <google-id-token>` header.
 
 The LLM agent uses a collection of function tools (memory search, SQL access, etc.).
 If you provide a Tavily API key (`TAVILY_API_KEY`), the agent can also run live
-internet searches to enrich its answers. Configure optional overrides using the
-environment variables documented in `backend/env.template`.
+internet searches to enrich its answers. With the same credentials it can now
+fetch the full contents of specific web pages for deeper context via Tavily's
+extract API. Configure optional overrides using the environment variables
+documented in `backend/env.template`.
 
 ## Development
 

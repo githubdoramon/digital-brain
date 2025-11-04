@@ -264,6 +264,42 @@ TOOLS: List[Dict[str, Any]] = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "fetch_web_page",
+            "description": "Fetch the contents of a specific web page using Tavily's crawler for deeper context.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "url": {
+                        "type": "string",
+                        "description": "Absolute HTTP or HTTPS URL to fetch. Required.",
+                    },
+                    "include_links": {
+                        "type": "boolean",
+                        "description": "Set true to include page hyperlinks in the response (defaults to environment configuration).",
+                    },
+                    "include_images": {
+                        "type": "boolean",
+                        "description": "Set true to include image metadata in the response (defaults to environment configuration).",
+                    },
+                    "include_raw_html": {
+                        "type": "boolean",
+                        "description": "Set true to include raw HTML when supported (defaults to environment configuration).",
+                    },
+                    "max_characters": {
+                        "type": "integer",
+                        "minimum": 1000,
+                        "maximum": 100000,
+                        "description": "Optional cap on extracted text length (defaults to environment configuration).",
+                    },
+                },
+                "required": ["url"],
+                "additionalProperties": False,
+            },
+        },
+    },
 ]
 
 
@@ -278,6 +314,7 @@ class AgentState:
         self.web_query: Optional[str] = None
         self.web_provider: Optional[str] = None
         self.web_response_id: Optional[str] = None
+        self.web_documents: List[Dict[str, Any]] = []
 
     def update_resolution(self, data: Dict[str, Any]) -> None:
         if isinstance(data, dict):
@@ -324,6 +361,35 @@ class AgentState:
 
         response_id = data.get("response_id")
         self.web_response_id = response_id if isinstance(response_id, str) else None
+
+    def update_web_documents(self, data: Dict[str, Any]) -> None:
+        if not isinstance(data, dict):
+            return
+
+        new_documents: List[Dict[str, Any]] = []
+
+        documents = data.get("documents")
+        if isinstance(documents, list):
+            new_documents.extend([doc for doc in documents if isinstance(doc, dict)])
+
+        single_document = data.get("document")
+        if isinstance(single_document, dict):
+            new_documents.append(single_document)
+
+        if new_documents:
+            self.web_documents.extend(new_documents)
+
+        summary = data.get("summary")
+        if isinstance(summary, str) and summary.strip():
+            self.web_summary = summary.strip()
+
+        provider = data.get("provider")
+        if isinstance(provider, str):
+            self.web_provider = provider
+
+        response_id = data.get("response_id")
+        if isinstance(response_id, str):
+            self.web_response_id = response_id
 
 
 async def answer_question(
@@ -819,6 +885,47 @@ def _handle_tool_call(
             state.update_web_context(result)
         return result
 
+    if name == "fetch_web_page":
+        raw_url = args.get("url")
+        if not isinstance(raw_url, str) or not raw_url.strip():
+            raise RuntimeError("fetch_web_page requires a url string")
+
+        include_links_arg = args.get("include_links")
+        include_images_arg = args.get("include_images")
+        include_raw_html_arg = args.get("include_raw_html")
+        max_characters_arg = args.get("max_characters")
+
+        include_links = None if include_links_arg is None else _coerce_bool(include_links_arg)
+        include_images = None if include_images_arg is None else _coerce_bool(include_images_arg)
+        include_raw_html = None if include_raw_html_arg is None else _coerce_bool(include_raw_html_arg)
+
+        try:
+            max_characters = int(max_characters_arg) if max_characters_arg is not None else None
+        except (TypeError, ValueError):
+            max_characters = None
+
+        print(
+            "[agent] calling fetch_web_page(url=%r, include_links=%s, include_images=%s, max_characters=%s)"
+            % (raw_url.strip(), include_links, include_images, max_characters)
+        )
+        step_start = perf_counter()
+        result = web_tools.fetch_web_page(
+            raw_url,
+            include_links=include_links,
+            include_images=include_images,
+            include_raw_html=include_raw_html,
+            max_characters=max_characters,
+        )
+        documents = result.get("documents") if isinstance(result, dict) else None
+        _log_timing(
+            "tool.fetch_web_page",
+            step_start,
+            documents=len(documents) if isinstance(documents, list) else "n/a",
+        )
+        if not result.get("error"):
+            state.update_web_documents(result)
+        return result
+
     raise RuntimeError(f"Unsupported tool requested: {name}")
 
 
@@ -953,6 +1060,7 @@ def _finalize_bundle(
         "web_query": state.web_query,
         "web_provider": state.web_provider,
         "web_response_id": state.web_response_id,
+        "web_documents": state.web_documents,
     }
 
 
