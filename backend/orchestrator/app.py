@@ -6,9 +6,10 @@ from typing import List, Optional
 
 import os
 
-from fastapi import Depends, FastAPI, Header, HTTPException
+from fastapi import Depends, FastAPI, Header, HTTPException, Response
 from fastapi.middleware.cors import CORSMiddleware
 
+import conversations
 import llm
 import retrieval
 from auth import get_current_user
@@ -25,6 +26,10 @@ from schemas import (
     ResolveIn,
     SearchIn,
     TodoIn,
+    ThreadCreate,
+    ThreadDetailOut,
+    ThreadOut,
+    ThreadUpdate,
 )
 
 
@@ -186,7 +191,18 @@ def get_events(payload: GetIn, user: dict = Depends(get_current_user)):
 async def ask(payload: AskIn, user: dict = Depends(get_current_user)):
     start_time = perf_counter()
     user_email = user.get("email")
-    session_id = payload.session_id or "<none>"
+    if not user_email:
+        raise HTTPException(status_code=400, detail="Authenticated user email missing")
+
+    requested_thread_id = payload.thread_id or payload.session_id
+    try:
+        thread = conversations.ensure_thread(requested_thread_id, user_email)
+    except LookupError:
+        raise HTTPException(status_code=404, detail="Conversation thread not found")
+    except PermissionError:
+        raise HTTPException(status_code=403, detail="Conversation thread does not belong to user")
+
+    session_id = thread["id"]
     limit = payload.limit or 3
     preview = payload.question.strip().replace("\n", " ")
     if len(preview) > 120:
@@ -199,9 +215,12 @@ async def ask(payload: AskIn, user: dict = Depends(get_current_user)):
     bundle = await llm.answer_question(
         payload.question,
         search_limit=limit,
-        user_id=user_email or "default_user",
-        session_id=payload.session_id,
+        user_id=user_email,
+        session_id=session_id,
+        user_email=user_email,
     )
+    bundle["thread_id"] = session_id
+    bundle["session_id"] = session_id
 
     elapsed = perf_counter() - start_time
     search_results = bundle.get("search_results")
@@ -211,3 +230,76 @@ async def ask(payload: AskIn, user: dict = Depends(get_current_user)):
     )
 
     return AskOut(**bundle)
+
+
+@api.get("/threads", response_model=List[ThreadOut])
+def list_conversation_threads(user: dict = Depends(get_current_user)):
+    user_email = user.get("email")
+    if not user_email:
+        raise HTTPException(status_code=400, detail="Authenticated user email missing")
+    threads = conversations.list_threads(user_email)
+    return [ThreadOut(**thread) for thread in threads]
+
+
+@api.post("/threads", response_model=ThreadOut)
+def create_conversation_thread(payload: ThreadCreate, user: dict = Depends(get_current_user)):
+    user_email = user.get("email")
+    if not user_email:
+        raise HTTPException(status_code=400, detail="Authenticated user email missing")
+    thread = conversations.ensure_thread(None, user_email, title=payload.title)
+    return ThreadOut(**thread)
+
+
+@api.get("/threads/{thread_id}", response_model=ThreadDetailOut)
+def get_conversation_thread(thread_id: str, user: dict = Depends(get_current_user)):
+    user_email = user.get("email")
+    if not user_email:
+        raise HTTPException(status_code=400, detail="Authenticated user email missing")
+    thread = conversations.get_thread_with_messages(thread_id, user_email)
+    if not thread:
+        raise HTTPException(status_code=404, detail="Conversation thread not found")
+    return ThreadDetailOut(
+        **{
+            **{k: v for k, v in thread.items() if k != "messages"},
+            "messages": thread.get("messages", []),
+        }
+    )
+
+
+@api.put("/threads/{thread_id}", response_model=ThreadOut)
+def update_conversation_thread(
+    thread_id: str,
+    payload: ThreadUpdate,
+    user: dict = Depends(get_current_user),
+):
+    user_email = user.get("email")
+    if not user_email:
+        raise HTTPException(status_code=400, detail="Authenticated user email missing")
+    thread = conversations.ensure_thread(thread_id, user_email)
+    normalized_title = payload.title.strip() if payload.title else None
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            UPDATE conversation_threads
+            SET title = %s, updated_at = NOW()
+            WHERE id = %s AND user_email = %s
+            RETURNING id, user_email, title, created_at, updated_at
+            """,
+            (normalized_title, thread_id, user_email),
+        )
+        row = cur.fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Conversation thread not found")
+        conn.commit()
+    return ThreadOut(**row)
+
+
+@api.delete("/threads/{thread_id}", status_code=204)
+def delete_conversation_thread(thread_id: str, user: dict = Depends(get_current_user)):
+    user_email = user.get("email")
+    if not user_email:
+        raise HTTPException(status_code=400, detail="Authenticated user email missing")
+    deleted = conversations.delete_thread(thread_id, user_email)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Conversation thread not found")
+    return Response(status_code=204)

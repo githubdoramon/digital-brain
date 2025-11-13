@@ -1,7 +1,7 @@
 'use client';
 
 import Link from "next/link";
-import { FormEvent, useState, useRef, useEffect } from "react";
+import { FormEvent, useState, useRef, useEffect, useCallback } from "react";
 import type { ReactNode, HTMLAttributes } from "react";
 import { useSession } from "next-auth/react";
 import ReactMarkdown from "react-markdown";
@@ -10,16 +10,48 @@ import remarkGfm from "remark-gfm";
 import { api } from "@/lib/api";
 
 type Message = {
+  id?: number;
   role: "user" | "assistant";
   content: string;
   timestamp: Date;
   memories?: string[];
+  metadata?: Record<string, unknown>;
 };
 
 type AskResponse = {
   answer?: string;
   memories_used?: string[];
+  thread_id?: string;
 };
+
+type ThreadSummary = {
+  id: string;
+  title: string | null;
+  created_at: string;
+  updated_at: string;
+  last_message_preview?: string | null;
+};
+
+type ThreadMessage = {
+  message_id: number;
+  role: "user" | "assistant";
+  content: string;
+  metadata?: Record<string, unknown> | null;
+  created_at: string;
+};
+
+type ThreadDetail = ThreadSummary & {
+  messages: ThreadMessage[];
+};
+
+function extractMemories(metadata?: Record<string, unknown> | null): string[] | undefined {
+  if (!metadata) return undefined;
+  const raw = (metadata as Record<string, unknown>)["memories_used"];
+  if (!Array.isArray(raw)) {
+    return undefined;
+  }
+  return raw.map((item) => (typeof item === "string" ? item : String(item)));
+}
 
 type MarkdownCodeProps = HTMLAttributes<HTMLElement> & {
   inline?: boolean;
@@ -123,17 +155,15 @@ function getMarkdownComponents(role: Message["role"]): Components {
   } satisfies Components;
 }
 
-// Generate a unique session ID for this chat session
-function generateSessionId(): string {
-  return `session_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-}
-
 export default function Home() {
   const { data: session } = useSession();
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
-  const [sessionId] = useState(() => generateSessionId());
+  const [threads, setThreads] = useState<ThreadSummary[]>([]);
+  const [selectedThreadId, setSelectedThreadId] = useState<string | null>(null);
+  const [isLoadingThreads, setIsLoadingThreads] = useState(false);
+  const [isLoadingMessages, setIsLoadingMessages] = useState(false);
   const [showMemories, setShowMemories] = useState(true);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
@@ -141,31 +171,143 @@ export default function Home() {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   };
 
+  const refreshThreads = useCallback(async () => {
+    setIsLoadingThreads(true);
+    try {
+      const data = await api.get<ThreadSummary[]>("/threads");
+      setThreads(data);
+      return data;
+    } catch (error) {
+      console.error("Failed to fetch conversation threads", error);
+      return [];
+    } finally {
+      setIsLoadingThreads(false);
+    }
+  }, []);
+
+  const loadThread = useCallback(async (threadId: string) => {
+    if (!threadId) return;
+    setIsLoadingMessages(true);
+    try {
+      const thread = await api.get<ThreadDetail>(`/threads/${threadId}`);
+      setSelectedThreadId(thread.id);
+      const mappedMessages = thread.messages.map((message) => {
+        const metadata = (message.metadata ?? undefined) as Record<string, unknown> | undefined;
+        return {
+          id: message.message_id,
+          role: message.role,
+          content: message.content,
+          timestamp: new Date(message.created_at),
+          memories: extractMemories(metadata),
+          metadata,
+        } satisfies Message;
+      });
+      setMessages(mappedMessages);
+    } catch (error) {
+      console.error("Failed to load conversation thread", error);
+      setMessages([
+        {
+          role: "assistant",
+          content: "Failed to load conversation history.",
+          timestamp: new Date(),
+        },
+      ]);
+    } finally {
+      setIsLoadingMessages(false);
+    }
+  }, []);
+
+  const deleteThread = useCallback(
+    async (threadId: string) => {
+      if (!threadId) return;
+      if (!window.confirm("Delete this conversation? This action cannot be undone.")) {
+        return;
+      }
+      setIsLoadingMessages(true);
+      try {
+        await api.delete(`/threads/${threadId}`);
+        const updated = threads.filter((thread) => thread.id !== threadId);
+        setThreads(updated);
+        if (threadId === selectedThreadId) {
+          if (updated.length > 0) {
+            await loadThread(updated[0].id);
+          } else {
+            setSelectedThreadId(null);
+            setMessages([]);
+          }
+        }
+      } catch (error) {
+        console.error("Failed to delete conversation thread", error);
+      } finally {
+        setIsLoadingMessages(false);
+      }
+    },
+    [threads, selectedThreadId, loadThread]
+  );
+
   useEffect(() => {
     scrollToBottom();
   }, [messages]);
+
+  useEffect(() => {
+    let isMounted = true;
+    (async () => {
+      const fetched = await refreshThreads();
+      if (!isMounted) {
+        return;
+      }
+      if (fetched.length > 0) {
+        await loadThread(fetched[0].id);
+      } else {
+        setMessages([]);
+        setSelectedThreadId(null);
+      }
+    })();
+    return () => {
+      isMounted = false;
+    };
+  }, [refreshThreads, loadThread]);
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!input.trim() || isLoading) return;
 
-    const userMessage: Message = {
-      role: "user",
-      content: input.trim(),
-      timestamp: new Date(),
-    };
+    const pendingInput = input.trim();
 
-    setMessages((prev) => [...prev, userMessage]);
     setInput("");
     setIsLoading(true);
 
     try {
+      let threadId = selectedThreadId;
+      if (!threadId) {
+        const created = await api.post<ThreadSummary>("/threads", {});
+        threadId = created.id;
+        setThreads((prev) => [created, ...prev]);
+        setSelectedThreadId(threadId);
+        setMessages([]);
+      }
+
+      const userMessage: Message = {
+        role: "user",
+        content: pendingInput,
+        timestamp: new Date(),
+      };
+
+      setMessages((prev) => [...prev, userMessage]);
+
       const data = await api.post<AskResponse>("/ask", {
         question: userMessage.content,
         limit: 5,
-        session_id: sessionId,
+        thread_id: threadId,
       });
+
+      if (data.thread_id && data.thread_id !== threadId) {
+        threadId = data.thread_id;
+        setSelectedThreadId(threadId);
+      }
+
       const assistantMessage: Message = {
+        id: undefined,
         role: "assistant",
         content: data.answer || "I couldn't generate a response.",
         timestamp: new Date(),
@@ -173,6 +315,7 @@ export default function Home() {
       };
 
       setMessages((prev) => [...prev, assistantMessage]);
+      await refreshThreads();
     } catch (error) {
       const errorMessage: Message = {
         role: "assistant",
@@ -186,296 +329,412 @@ export default function Home() {
   }
 
   return (
-    <section style={{ display: "grid", gap: "16px" }}>
-      <div>
-        <h1 style={{ fontSize: "2rem", fontWeight: 600 }}>
-          Welcome{session?.user?.name ? `, ${session.user.name.split(' ')[0]}` : ''}!
-        </h1>
-        <p style={{ color: "#555", marginTop: "8px" }}>
-          Ask questions about your personal memories and get AI-powered insights.
-        </p>
-      </div>
-
-      {/* Chat Interface */}
-      <div
+    <section style={{ display: "grid", gridTemplateColumns: "280px 1fr", gap: "16px", alignItems: "start" }}>
+      <aside
         style={{
           border: "1px solid #e2e2e2",
           borderRadius: "12px",
+          padding: "16px",
           background: "#fff",
-          boxShadow: "0 4px 12px rgba(15, 23, 42, 0.04)",
-          display: "grid",
-          gridTemplateRows: "auto 1fr auto",
-          height: "600px",
+          height: "100%",
+          display: "flex",
+          flexDirection: "column",
+          gap: "12px",
+          maxHeight: "720px",
         }}
       >
-        {/* Chat Header */}
-        <div
-          style={{
-            padding: "20px 24px",
-            borderBottom: "1px solid #e2e2e2",
-            display: "flex",
-            justifyContent: "space-between",
-            alignItems: "center",
-          }}
-        >
-          <div>
-            <h2 style={{ fontSize: "1.25rem", fontWeight: 600 }}>
-              Chat with your Digital Brain
-            </h2>
-            <p style={{ fontSize: "0.875rem", color: "#666", marginTop: "4px" }}>
-              Ask about your memories, contacts, meetings, and more
-            </p>
-          </div>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+          <h2 style={{ fontSize: "1rem", fontWeight: 600, margin: 0 }}>Conversations</h2>
           <button
-            onClick={() => setShowMemories(!showMemories)}
+            onClick={async () => {
+              setIsLoadingMessages(true);
+              try {
+                const created = await api.post<ThreadSummary>("/threads", {});
+                setThreads((prev) => [created, ...prev]);
+                setSelectedThreadId(created.id);
+                setMessages([]);
+              } catch (error) {
+                console.error("Failed to create thread", error);
+              } finally {
+                setIsLoadingMessages(false);
+              }
+            }}
             style={{
-              padding: "8px 12px",
-              background: showMemories ? "#0b6bcb" : "#f5f5f5",
-              color: showMemories ? "#fff" : "#666",
-              border: "1px solid #d0d0d0",
+              border: "1px solid #0b6bcb",
+              background: "#0b6bcb",
+              color: "#fff",
               borderRadius: "6px",
+              padding: "4px 8px",
               fontSize: "0.8rem",
               cursor: "pointer",
-              whiteSpace: "nowrap",
-              transition: "all 0.2s",
             }}
-            title={showMemories ? "Hide memory details" : "Show memory details"}
           >
-            {showMemories ? "🧠 Memories On" : "🧠 Memories Off"}
+            + New Chat
           </button>
         </div>
-
-        {/* Messages Area */}
-        <div
-          style={{
-            padding: "24px",
-            overflowY: "auto",
-            display: "flex",
-            flexDirection: "column",
-            gap: "16px",
-          }}
-        >
-          {messages.length === 0 && (
-            <div
-              style={{
-                display: "flex",
-                flexDirection: "column",
-                alignItems: "center",
-                justifyContent: "center",
-                height: "100%",
-                color: "#999",
-                gap: "12px",
-              }}
-            >
-              <div style={{ fontSize: "2.5rem" }}>💬</div>
-              <p style={{ fontSize: "0.95rem" }}>
-                Start a conversation by asking a question below
-              </p>
-              <div style={{ fontSize: "0.85rem", color: "#aaa", textAlign: "center", maxWidth: "400px" }}>
-                Examples: &quot;What meetings did I have last week?&quot; or &quot;Tell me about my conversations with Monica&quot;
-              </div>
+        <div style={{ flex: 1, overflowY: "auto", display: "flex", flexDirection: "column", gap: "6px" }}>
+          {isLoadingThreads && (
+            <div style={{ color: "#666", fontSize: "0.9rem" }}>Loading conversations...</div>
+          )}
+          {!isLoadingThreads && threads.length === 0 && (
+            <div style={{ color: "#777", fontSize: "0.9rem" }}>
+              No conversations yet. Start a new chat to begin.
             </div>
           )}
-
-          {messages.map((message, index) => (
-            <div
-              key={index}
-              style={{
-                display: "flex",
-                flexDirection: "column",
-                alignItems: message.role === "user" ? "flex-end" : "flex-start",
-              }}
-            >
+          {threads.map((thread) => {
+            const isActive = thread.id === selectedThreadId;
+            return (
               <div
+                key={thread.id}
+                onClick={() => {
+                  if (!isActive) {
+                    loadThread(thread.id);
+                  }
+                }}
                 style={{
-                  maxWidth: "80%",
-                  padding: "12px 16px",
-                  borderRadius: "12px",
-                  background: message.role === "user" ? "#0b6bcb" : "#f5f5f5",
-                  color: message.role === "user" ? "#fff" : "#333",
-                  wordWrap: "break-word",
-                  overflowWrap: "anywhere",
-                  display: "flex",
-                  flexDirection: "column",
-                  gap: "0.5rem",
+                  border: "1px solid",
+                  borderColor: isActive ? "#0b6bcb" : "#e2e2e2",
+                  background: isActive ? "#e0f2fe" : "#fafafa",
+                  borderRadius: "8px",
+                  padding: "10px 12px",
+                  cursor: "pointer",
+                  display: "grid",
+                  gap: "6px",
                 }}
               >
-                <ReactMarkdown
-                  remarkPlugins={[remarkGfm]}
-                  components={getMarkdownComponents(message.role)}
-                >
-                  {message.content}
-                </ReactMarkdown>
-              </div>
-              <div
-                style={{
-                  fontSize: "0.75rem",
-                  color: "#999",
-                  marginTop: "4px",
-                  paddingLeft: message.role === "user" ? "0" : "8px",
-                  paddingRight: message.role === "user" ? "8px" : "0",
-                  display: "flex",
-                  alignItems: "center",
-                  gap: "8px",
-                }}
-              >
-                <span>
-                  {message.timestamp.toLocaleTimeString([], {
+                <div style={{ display: "flex", justifyContent: "space-between", gap: "8px" }}>
+                  <span
+                    style={{
+                      fontWeight: 600,
+                      fontSize: "0.9rem",
+                      color: "#0f1728",
+                      flex: 1,
+                      minWidth: 0,
+                    }}
+                  >
+                    {thread.title?.trim() || "Untitled conversation"}
+                  </span>
+                  <button
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      deleteThread(thread.id);
+                    }}
+                    style={{
+                      border: "none",
+                      background: "transparent",
+                      color: "#ef4444",
+                      fontSize: "0.75rem",
+                      cursor: "pointer",
+                      padding: "2px 4px",
+                    }}
+                    title="Delete conversation"
+                  >
+                    Delete
+                  </button>
+                </div>
+                <span style={{ fontSize: "0.75rem", color: "#6b7280" }}>
+                  {thread.last_message_preview || "No messages yet"}
+                </span>
+                <span style={{ fontSize: "0.7rem", color: "#94a3b8" }}>
+                  Updated{" "}
+                  {new Date(thread.updated_at).toLocaleString([], {
+                    month: "short",
+                    day: "numeric",
                     hour: "2-digit",
                     minute: "2-digit",
                   })}
                 </span>
-                {message.memories && message.memories.length > 0 && (
-                  <span
-                    title={`Used ${message.memories.length} memories from previous conversations`}
-                    style={{
-                      background: "#e0f2fe",
-                      color: "#0369a1",
-                      padding: "2px 6px",
-                      borderRadius: "4px",
-                      fontSize: "0.7rem",
-                      fontWeight: 500,
-                    }}
-                  >
-                    🧠 {message.memories.length} memories
-                  </span>
-                )}
               </div>
-              {message.memories && message.memories.length > 0 && showMemories && (
+            );
+          })}
+        </div>
+      </aside>
+      <div style={{ display: "grid", gap: "16px" }}>
+        <div>
+          <h1 style={{ fontSize: "2rem", fontWeight: 600 }}>
+            Welcome{session?.user?.name ? `, ${session.user.name.split(" ")[0]}` : ""}!
+          </h1>
+          <p style={{ color: "#555", marginTop: "8px" }}>
+            Ask questions about your personal memories and get AI-powered insights.
+          </p>
+        </div>
+        <div
+          style={{
+            border: "1px solid #e2e2e2",
+            borderRadius: "12px",
+            background: "#fff",
+            boxShadow: "0 4px 12px rgba(15, 23, 42, 0.04)",
+            display: "grid",
+            gridTemplateRows: "auto 1fr auto",
+            height: "600px",
+          }}
+        >
+          <div
+            style={{
+              padding: "20px 24px",
+              borderBottom: "1px solid #e2e2e2",
+              display: "flex",
+              justifyContent: "space-between",
+              alignItems: "center",
+            }}
+          >
+            <div>
+              <h2 style={{ fontSize: "1.25rem", fontWeight: 600 }}>
+                Chat with your Digital Brain
+              </h2>
+              <p style={{ fontSize: "0.875rem", color: "#666", marginTop: "4px" }}>
+                Ask about your memories, contacts, meetings, and more
+              </p>
+            </div>
+            <button
+              onClick={() => setShowMemories(!showMemories)}
+              style={{
+                padding: "8px 12px",
+                background: showMemories ? "#0b6bcb" : "#f5f5f5",
+                color: showMemories ? "#fff" : "#666",
+                border: "1px solid #d0d0d0",
+                borderRadius: "6px",
+                fontSize: "0.8rem",
+                cursor: "pointer",
+                whiteSpace: "nowrap",
+                transition: "all 0.2s",
+              }}
+              title={showMemories ? "Hide memory details" : "Show memory details"}
+            >
+              {showMemories ? "🧠 Memories On" : "🧠 Memories Off"}
+            </button>
+          </div>
+          <div
+            style={{
+              padding: "24px",
+              overflowY: "auto",
+              display: "flex",
+              flexDirection: "column",
+              gap: "16px",
+            }}
+          >
+            {isLoadingMessages && (
+              <div style={{ color: "#666", fontSize: "0.9rem" }}>Loading conversation...</div>
+            )}
+
+            {!isLoadingMessages && messages.length === 0 && (
+              <div
+                style={{
+                  display: "flex",
+                  flexDirection: "column",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  height: "100%",
+                  color: "#999",
+                  gap: "12px",
+                  textAlign: "center",
+                }}
+              >
+                <div style={{ fontSize: "2.5rem" }}>💬</div>
+                <p style={{ fontSize: "0.95rem" }}>
+                  Start a conversation by asking a question below
+                </p>
+                <div style={{ fontSize: "0.85rem", color: "#aaa", maxWidth: "400px" }}>
+                  Examples: &quot;What meetings did I have last week?&quot; or &quot;Tell me about my conversations with Monica&quot;
+                </div>
+              </div>
+            )}
+
+            {messages.map((message, index) => (
+              <div
+                key={message.id ?? index}
+                style={{
+                  display: "flex",
+                  flexDirection: "column",
+                  alignItems: message.role === "user" ? "flex-end" : "flex-start",
+                }}
+              >
                 <div
                   style={{
                     maxWidth: "80%",
-                    marginTop: "8px",
-                    padding: "8px 12px",
-                    background: "#f0f9ff",
-                    border: "1px solid #bae6fd",
-                    borderRadius: "8px",
-                    fontSize: "0.8rem",
-                    color: "#0c4a6e",
+                    padding: "12px 16px",
+                    borderRadius: "12px",
+                    background: message.role === "user" ? "#0b6bcb" : "#f5f5f5",
+                    color: message.role === "user" ? "#fff" : "#333",
+                    wordWrap: "break-word",
+                    overflowWrap: "anywhere",
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: "0.5rem",
                   }}
                 >
-                  <div style={{ fontWeight: 600, marginBottom: "4px" }}>
-                    Memories used:
-                  </div>
-                  <ul style={{ margin: 0, paddingLeft: "20px" }}>
-                    {message.memories.map((mem, i) => (
-                      <li key={i} style={{ marginBottom: "2px" }}>
-                        {mem}
-                      </li>
-                    ))}
-                  </ul>
+                  <ReactMarkdown
+                    remarkPlugins={[remarkGfm]}
+                    components={getMarkdownComponents(message.role)}
+                  >
+                    {message.content}
+                  </ReactMarkdown>
                 </div>
-              )}
-            </div>
-          ))}
+                <div
+                  style={{
+                    fontSize: "0.75rem",
+                    color: "#999",
+                    marginTop: "4px",
+                    paddingLeft: message.role === "user" ? "0" : "8px",
+                    paddingRight: message.role === "user" ? "8px" : "0",
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "8px",
+                  }}
+                >
+                  <span>
+                    {message.timestamp.toLocaleTimeString([], {
+                      hour: "2-digit",
+                      minute: "2-digit",
+                    })}
+                  </span>
+                  {message.memories && message.memories.length > 0 && (
+                    <span
+                      title={`Used ${message.memories.length} memories from previous conversations`}
+                      style={{
+                        background: "#e0f2fe",
+                        color: "#0369a1",
+                        padding: "2px 6px",
+                        borderRadius: "4px",
+                        fontSize: "0.7rem",
+                        fontWeight: 500,
+                      }}
+                    >
+                      🧠 {message.memories.length} memories
+                    </span>
+                  )}
+                </div>
+                {message.memories && message.memories.length > 0 && showMemories && (
+                  <div
+                    style={{
+                      maxWidth: "80%",
+                      marginTop: "8px",
+                      padding: "8px 12px",
+                      background: "#f0f9ff",
+                      border: "1px solid #bae6fd",
+                      borderRadius: "8px",
+                      fontSize: "0.8rem",
+                      color: "#0c4a6e",
+                    }}
+                  >
+                    <div style={{ fontWeight: 600, marginBottom: "4px" }}>
+                      Memories used:
+                    </div>
+                    <ul style={{ margin: 0, paddingLeft: "20px" }}>
+                      {message.memories.map((mem, i) => (
+                        <li key={i} style={{ marginBottom: "2px" }}>
+                          {mem}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+              </div>
+            ))}
 
-          {isLoading && (
-            <div
-              style={{
-                display: "flex",
-                alignItems: "flex-start",
-              }}
-            >
+            {isLoading && (
               <div
                 style={{
-                  padding: "12px 16px",
-                  borderRadius: "12px",
-                  background: "#f5f5f5",
-                  color: "#666",
+                  display: "flex",
+                  alignItems: "flex-start",
                 }}
               >
-                <div style={{ display: "flex", gap: "4px", alignItems: "center" }}>
-                  <span>Thinking</span>
-                  <span className="loading-dots">...</span>
+                <div
+                  style={{
+                    padding: "12px 16px",
+                    borderRadius: "12px",
+                    background: "#f5f5f5",
+                    color: "#666",
+                  }}
+                >
+                  <div style={{ display: "flex", gap: "4px", alignItems: "center" }}>
+                    <span>Thinking</span>
+                    <span className="loading-dots">...</span>
+                  </div>
                 </div>
               </div>
-            </div>
-          )}
+            )}
 
-          <div ref={messagesEndRef} />
+            <div ref={messagesEndRef} />
+          </div>
+          <form
+            onSubmit={handleSubmit}
+            style={{
+              padding: "20px 24px",
+              borderTop: "1px solid #e2e2e2",
+              background: "#fafafa",
+              borderRadius: "0 0 12px 12px",
+            }}
+          >
+            <div style={{ display: "flex", gap: "12px" }}>
+              <input
+                type="text"
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
+                placeholder="Ask a question about your memories..."
+                disabled={isLoading}
+                style={{
+                  flex: 1,
+                  border: "1px solid #d0d0d0",
+                  borderRadius: "8px",
+                  padding: "12px 16px",
+                  fontSize: "0.95rem",
+                  outline: "none",
+                  background: "#fff",
+                }}
+              />
+              <button
+                type="submit"
+                disabled={isLoading || !input.trim()}
+                style={{
+                  background: "#0b6bcb",
+                  color: "#fff",
+                  border: "none",
+                  borderRadius: "8px",
+                  padding: "12px 24px",
+                  fontWeight: 600,
+                  cursor: isLoading || !input.trim() ? "not-allowed" : "pointer",
+                  opacity: isLoading || !input.trim() ? 0.6 : 1,
+                  whiteSpace: "nowrap",
+                }}
+              >
+                {isLoading ? "Sending..." : "Send"}
+              </button>
+            </div>
+          </form>
         </div>
 
-        {/* Input Area */}
-        <form
-          onSubmit={handleSubmit}
+        <div
           style={{
-            padding: "20px 24px",
-            borderTop: "1px solid #e2e2e2",
-            background: "#fafafa",
-            borderRadius: "0 0 12px 12px",
+            border: "1px solid #e2e2e2",
+            borderRadius: "12px",
+            padding: "24px",
+            background: "#fff",
           }}
         >
-          <div style={{ display: "flex", gap: "12px" }}>
-            <input
-              type="text"
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              placeholder="Ask a question about your memories..."
-              disabled={isLoading}
-              style={{
-                flex: 1,
-                border: "1px solid #d0d0d0",
-                borderRadius: "8px",
-                padding: "12px 16px",
-                fontSize: "0.95rem",
-                outline: "none",
-                background: "#fff",
-              }}
-            />
-            <button
-              type="submit"
-              disabled={isLoading || !input.trim()}
-              style={{
-                background: "#0b6bcb",
-                color: "#fff",
-                border: "none",
-                borderRadius: "8px",
-                padding: "12px 24px",
-                fontWeight: 600,
-                cursor: isLoading || !input.trim() ? "not-allowed" : "pointer",
-                opacity: isLoading || !input.trim() ? 0.6 : 1,
-                whiteSpace: "nowrap",
-              }}
-            >
-              {isLoading ? "Sending..." : "Send"}
-            </button>
-          </div>
-        </form>
-      </div>
-
-      {/* Quick Links */}
-      <div
-        style={{
-          border: "1px solid #e2e2e2",
-          borderRadius: "12px",
-          padding: "24px",
-          background: "#fff",
-        }}
-      >
-        <h2 style={{ fontSize: "1.25rem", marginBottom: "8px" }}>
-          Quick Links
-        </h2>
-        <ul style={{ listStyle: "disc", paddingInlineStart: "20px", color: "#444" }}>
-          <li>
-            Manage your personal contacts through the
-            {" "}
-            <Link href="/contacts" style={{ color: "#0b6bcb" }}>
-              Contacts page
-            </Link>
-            .
-          </li>
-          <li>
-            Import new meeting transcripts through the
-            {" "}
-            <Link href="/meetings" style={{ color: "#0b6bcb" }}>
-              Meetings page
-            </Link>
-            .
-          </li>
-          <li>
-            Ask questions about your memories using the chat interface above.
-          </li>
-        </ul>
+          <h2 style={{ fontSize: "1.25rem", marginBottom: "8px" }}>
+            Quick Links
+          </h2>
+          <ul style={{ listStyle: "disc", paddingInlineStart: "20px", color: "#444" }}>
+            <li>
+              Manage your personal contacts through the{" "}
+              <Link href="/contacts" style={{ color: "#0b6bcb" }}>
+                Contacts page
+              </Link>
+              .
+            </li>
+            <li>
+              Import new meeting transcripts through the{" "}
+              <Link href="/meetings" style={{ color: "#0b6bcb" }}>
+                Meetings page
+              </Link>
+              .
+            </li>
+            <li>
+              Ask questions about your memories using the chat interface above.
+            </li>
+          </ul>
+        </div>
       </div>
     </section>
   );

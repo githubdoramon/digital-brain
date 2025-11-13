@@ -124,6 +124,30 @@ CREATE TABLE IF NOT EXISTS todo_places (
   PRIMARY KEY (todo_id, place_id)
 );
 
+-- Conversation threads and messages for chat history
+CREATE TABLE IF NOT EXISTS conversation_threads (
+  id TEXT PRIMARY KEY,
+  user_email TEXT NOT NULL,
+  title TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_conversation_threads_user_updated
+  ON conversation_threads (user_email, updated_at DESC);
+
+CREATE TABLE IF NOT EXISTS conversation_messages (
+  message_id BIGSERIAL PRIMARY KEY,
+  thread_id TEXT NOT NULL REFERENCES conversation_threads(id) ON DELETE CASCADE,
+  role TEXT NOT NULL CHECK (role IN ('user', 'assistant', 'system')),
+  content TEXT NOT NULL,
+  metadata JSONB NOT NULL DEFAULT '{}'::JSONB,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_conversation_messages_thread_created
+  ON conversation_messages (thread_id, created_at, message_id);
+
 -- Helpful view
 CREATE OR REPLACE VIEW events_with_places AS
 SELECT e.*, p.name AS place_name, p.city, p.country, p.lat, p.lon

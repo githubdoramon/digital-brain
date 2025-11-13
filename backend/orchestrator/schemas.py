@@ -89,7 +89,8 @@ class GetIn(BaseModel):
 class AskIn(BaseModel):
     question: str
     limit: Optional[int] = 3
-    session_id: Optional[str] = None
+    session_id: Optional[str] = None  # kept for backward compatibility
+    thread_id: Optional[str] = None
 
 
 class AskOut(BaseModel):
@@ -99,6 +100,7 @@ class AskOut(BaseModel):
     search_results: List[Dict[str, Any]]
     detailed_events: List[Dict[str, Any]]
     session_id: Optional[str] = None
+    thread_id: Optional[str] = None
     memories_used: List[str] = Field(default_factory=list)
     web_results: List[Dict[str, Any]] = Field(default_factory=list)
     web_summary: Optional[str] = None
@@ -106,3 +108,32 @@ class AskOut(BaseModel):
     web_query: Optional[str] = None
     web_provider: Optional[str] = None
     web_response_id: Optional[str] = None
+    web_documents: List[Dict[str, Any]] = Field(default_factory=list)
+
+
+class ThreadCreate(BaseModel):
+    title: Optional[str] = None
+
+
+class ThreadUpdate(BaseModel):
+    title: Optional[str] = None
+
+
+class ThreadMessageOut(BaseModel):
+    message_id: int
+    role: str
+    content: str
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+    created_at: datetime
+
+
+class ThreadOut(BaseModel):
+    id: str
+    title: Optional[str] = None
+    created_at: datetime
+    updated_at: datetime
+    last_message_preview: Optional[str] = None
+
+
+class ThreadDetailOut(ThreadOut):
+    messages: List[ThreadMessageOut] = Field(default_factory=list)

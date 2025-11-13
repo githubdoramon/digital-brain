@@ -4,7 +4,6 @@ import asyncio
 import json
 import os
 import re
-from collections import defaultdict
 from datetime import datetime, timezone
 from time import perf_counter
 from typing import Any, Dict, List, Set, Optional
@@ -12,6 +11,7 @@ from typing import Any, Dict, List, Set, Optional
 import requests
 from mem0 import AsyncMemory
 
+import conversations
 import retrieval
 import sql_tools
 import web_tools
@@ -109,9 +109,6 @@ async def get_memory() -> Optional[AsyncMemory]:
             print(f"[mem0] Warning: Failed to initialize Mem0: {e}")
             print("[mem0] Continuing without memory layer")
     return _memory_instance
-
-# In-memory session storage: {session_id: [{"role": "user|assistant", "content": "..."}]}
-_session_store: Dict[str, List[Dict[str, str]]] = defaultdict(list)
 
 _SCHEMA_HINT_CACHE: str | None = None
 _SCHEMA_SNAPSHOT: Dict[str, Any] | None = None
@@ -396,7 +393,8 @@ async def answer_question(
     question: str,
     search_limit: int = 3,
     user_id: str = "default_user",
-    session_id: Optional[str] = None
+    session_id: Optional[str] = None,
+    user_email: Optional[str] = None,
 ) -> Dict[str, Any]:
     total_start = perf_counter()
     question_preview = _shorten(question)
@@ -414,18 +412,23 @@ async def answer_question(
 
     state = AgentState()
 
-    # Get conversation history from session store
+    # Get conversation history from persistent storage
     conversation_history: List[Dict[str, str]] = []
-    if session_id:
+    if session_id and user_email:
         history_start = perf_counter()
-        conversation_history = _session_store.get(session_id, [])
-        _log_timing(
-            "session.load_history",
-            history_start,
-            session_id=session_id,
-            messages=len(conversation_history),
-        )
-        print(f"[session] Retrieved {len(conversation_history)} messages from session {session_id}")
+        try:
+            conversation_history = conversations.get_conversation_history(session_id, user_email)
+            _log_timing(
+                "session.load_history",
+                history_start,
+                session_id=session_id,
+                messages=len(conversation_history),
+            )
+            print(f"[session] Retrieved {len(conversation_history)} messages from session {session_id}")
+        except Exception as exc:
+            _log_timing("session.load_history.error", history_start, session_id=session_id)
+            print(f"[session] Failed to load history for session {session_id}: {exc}")
+            conversation_history = []
 
     # Retrieve relevant long-term memories from Mem0 (await this)
     memories_used: List[str] = []
@@ -557,12 +560,19 @@ async def answer_question(
         messages.append(message)
 
         # Update session store with this Q&A pair
-        if session_id:
-            _session_store[session_id].append({"role": "user", "content": question})
-            _session_store[session_id].append({"role": "assistant", "content": content})
-            print(
-                f"[session] Stored Q&A in session {session_id}, total messages: {len(_session_store[session_id])}"
-            )
+        if session_id and user_email:
+            try:
+                conversations.record_exchange(
+                    thread_id=session_id,
+                    user_email=user_email,
+                    user_message=question,
+                    assistant_message=content,
+                    user_metadata={},
+                    assistant_metadata={"memories_used": memories_used} if memories_used else {},
+                )
+                print(f"[session] Persisted exchange in session {session_id}")
+            except Exception as exc:
+                print(f"[session] Failed to persist exchange for session {session_id}: {exc}")
 
         bundle = _finalize_bundle(question, content, state, search_limit, session_id, memories_used)
 
@@ -1053,6 +1063,7 @@ def _finalize_bundle(
         "search_results": state.search_results,
         "detailed_events": state.detailed_events,
         "session_id": session_id,
+        "thread_id": session_id,
         "memories_used": memories_used or [],
         "web_results": state.web_results,
         "web_summary": state.web_summary,
