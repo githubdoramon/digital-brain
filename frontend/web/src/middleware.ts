@@ -5,8 +5,7 @@ import type { NextRequestWithAuth } from "next-auth/middleware";
 
 // Add API route prefixes (e.g. "/api/public") that should bypass NextAuth middleware.
 const AUTH_BYPASS_PREFIXES: string[] = [
-  "/api/deploy",
-  "/api/orchestrator/ingest/meetings",
+  "/api/orchestrator/ingest/meetings",  
 ];
 
 const authMiddleware = withAuth({

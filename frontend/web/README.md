@@ -15,19 +15,12 @@ See [AUTH_SETUP.md](./AUTH_SETUP.md) for Google OAuth configuration.
 npm install
 
 # Configure environment
-cp env.template .env.local
-# Edit .env.local with your Google OAuth credentials and webhook settings
+cp env.example .env.local
+# Edit .env.local with your Google OAuth credentials
 
 # Run dev server
 npm run dev
 ```
-
-## Deployment Webhook
-
-- `POST /api/deploy` triggers the rollout script when the `X-Deploy-Key` header matches `DEPLOY_WEBHOOK_KEY`.
-- The handler runs the executable defined by `DEPLOY_SCRIPT_PATH` (for example `scripts/redeploy.sh`). Ensure the file is mounted in the runtime container and marked executable.
-- `DEPLOY_SCRIPT_TIMEOUT_MS` controls how long the server waits for the script (default 15 minutes, set to `0` to disable).
-- The script requires Docker CLI access (e.g. bind-mount `/var/run/docker.sock` and the CLI binary or execute on the host).
 
 ## Features
 
