@@ -23,6 +23,7 @@ if [[ -n "$COMPOSE_PROJECT_NAME" ]]; then
   compose_args+=("-p" "$COMPOSE_PROJECT_NAME")
 fi
 
+"aws ecr get-login-password --region eu-central-1 | docker login --username AWS --password-stdin 249728805044.dkr.ecr.eu-central-1.amazonaws.com"
 "$DOCKER_CMD" compose "${compose_args[@]}" pull
 "$DOCKER_CMD" compose "${compose_args[@]}" up -d
 
