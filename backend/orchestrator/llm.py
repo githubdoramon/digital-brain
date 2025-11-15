@@ -654,6 +654,7 @@ def _build_messages(
         "Be aware the database is personal to the user themselves, so everything present there has a relation to the person asking the question, so you don't need to overthing to find ids only related to the logged user." \
         "Cross-check every table or column in a planned SQL statement against the schema snapshot; never invent new tables. " \
         "Use resolve_query when entity or time extraction helps craft structured constraints. " \
+        "For contacts, make sure you search using different strategies when it comes to names, first names, last names, full names, partial names, nicknames, aliases, and so on. " \
         "For relationship closeness questions, use the `contact_relationships` table to understand interpersonal links. " \
         "For events, meetings, moments, use the `events` table to retrieve the event details. " \
         "Tasks or to dos are on the 'todos' table, and might have relations to events, contacts or places." \
