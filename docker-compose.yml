@@ -43,6 +43,8 @@ services:
       - "host.docker.internal:host-gateway"
     ports:
       - "8000:8000"
+    volumes:
+      - ./backend/orchestrator/config/service_manifest.dev.json:/app/config/service_manifest.json:ro
 
   # removed_service:
   #   build:

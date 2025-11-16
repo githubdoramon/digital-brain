@@ -1,0 +1,52 @@
+{
+  "generated_at": "2024-01-01T00:00:00Z",
+  "metadata": {
+    "note": "Default manifest for local development. Generate a fresh file with scripts/generate_service_manifest.py during deployments."
+  },
+  "services": [
+    {
+      "id": "orchestrator",
+      "name": "Orchestrator API",
+      "version": "dev",
+      "git_sha": "local",
+      "build_time": null,
+      "image": "appcalipse/digital-brain-orchestrator:dev",
+      "notes": "Default local development entry"
+    },
+    {
+      "id": "frontend",
+      "name": "Frontend Web",
+      "version": "dev",
+      "git_sha": "local",
+      "build_time": null,
+      "image": "digital-brain-frontend:dev",
+      "notes": "Default local development entry"
+    },
+    {
+      "id": "db",
+      "name": "Postgres + pgvector",
+      "version": "pg16",
+      "git_sha": null,
+      "build_time": null,
+      "image": "pgvector/pgvector:pg16"
+    },
+    {
+      "id": "qdrant",
+      "name": "Qdrant Vector DB",
+      "version": "latest",
+      "git_sha": null,
+      "build_time": null,
+      "image": "qdrant/qdrant:latest"
+    },
+    {
+      "id": "removed_service",
+      "name": "Removed Service Service",
+      "version": "dev",
+      "git_sha": null,
+      "build_time": null,
+      "image": "digital-brain-removed-service:dev",
+      "notes": "Optional service. Update when enabled."
+    }
+  ]
+}
+

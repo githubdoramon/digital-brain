@@ -30,7 +30,9 @@ from schemas import (
     ThreadDetailOut,
     ThreadOut,
     ThreadUpdate,
+    ServiceVersionCollection,
 )
+from versioning import get_service_versions
 
 
 ORCHESTRATOR_API_KEY = os.getenv("ORCHESTRATOR_API_KEY")
@@ -62,6 +64,12 @@ api.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+# --------------------------- System endpoints ---------------------------
+@api.get("/system/versions", response_model=ServiceVersionCollection)
+def read_service_versions(user: dict = Depends(get_current_user)):
+    return get_service_versions()
 
 
 # --------------------------- Ingest endpoints ---------------------------

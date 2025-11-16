@@ -49,6 +49,25 @@ jobs:
             type=sha,prefix={{branch}}-
             type=raw,value=latest,enable={{is_default_branch}}
 
+      - name: Prepare version metadata
+        run: |
+          VERSION="${{ steps.meta.outputs.version }}"
+          if [ -z "$VERSION" ]; then
+            VERSION="${GITHUB_SHA}"
+          fi
+          BUILD_TIME="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+          echo "SERVICE_VERSION=${VERSION}" >> "${GITHUB_ENV}"
+          echo "SERVICE_GIT_SHA=${GITHUB_SHA}" >> "${GITHUB_ENV}"
+          echo "SERVICE_BUILD_TIME=${BUILD_TIME}" >> "${GITHUB_ENV}"
+          echo "SERVICE_DEPLOYMENT=${GITHUB_REF_NAME}" >> "${GITHUB_ENV}"
+          echo "SERVICE_IMAGE=${{ env.ECR_REGISTRY }}/appcalipse/digital-brain-orchestrator:${VERSION}" >> "${GITHUB_ENV}"
+
+      - name: Generate service manifest
+        run: |
+          python scripts/generate_service_manifest.py \
+            --output backend/orchestrator/config/service_manifest.json \
+            --deployment "${GITHUB_REF_NAME}"
+
       - name: Build and push Docker image
         uses: docker/build-push-action@v5
         with:
@@ -96,6 +115,19 @@ jobs:
             type=sha,prefix={{branch}}-
             type=raw,value=latest,enable={{is_default_branch}}
 
+      - name: Prepare version metadata
+        run: |
+          VERSION="${{ steps.meta.outputs.version }}"
+          if [ -z "$VERSION" ]; then
+            VERSION="${GITHUB_SHA}"
+          fi
+          BUILD_TIME="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+          echo "SERVICE_VERSION=${VERSION}" >> "${GITHUB_ENV}"
+          echo "SERVICE_GIT_SHA=${GITHUB_SHA}" >> "${GITHUB_ENV}"
+          echo "SERVICE_BUILD_TIME=${BUILD_TIME}" >> "${GITHUB_ENV}"
+          echo "SERVICE_DEPLOYMENT=${GITHUB_REF_NAME}" >> "${GITHUB_ENV}"
+          echo "SERVICE_IMAGE=${{ env.ECR_REGISTRY }}/appcalipse/removed_service:${VERSION}" >> "${GITHUB_ENV}"
+
       - name: Build and push Docker image
         uses: docker/build-push-action@v5
         with:
@@ -106,6 +138,12 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+          build-args: |
+            SERVICE_VERSION=${{ env.SERVICE_VERSION }}
+            SERVICE_GIT_SHA=${{ env.SERVICE_GIT_SHA }}
+            SERVICE_BUILD_TIME=${{ env.SERVICE_BUILD_TIME }}
+            SERVICE_IMAGE=${{ env.SERVICE_IMAGE }}
+            SERVICE_DEPLOYMENT=${{ env.SERVICE_DEPLOYMENT }}
 
   build-frontend:
     name: Build Frontend Image
@@ -143,6 +181,19 @@ jobs:
             type=sha,prefix={{branch}}-
             type=raw,value=latest,enable={{is_default_branch}}
 
+      - name: Prepare version metadata
+        run: |
+          VERSION="${{ steps.meta.outputs.version }}"
+          if [ -z "$VERSION" ]; then
+            VERSION="${GITHUB_SHA}"
+          fi
+          BUILD_TIME="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+          echo "SERVICE_VERSION=${VERSION}" >> "${GITHUB_ENV}"
+          echo "SERVICE_GIT_SHA=${GITHUB_SHA}" >> "${GITHUB_ENV}"
+          echo "SERVICE_BUILD_TIME=${BUILD_TIME}" >> "${GITHUB_ENV}"
+          echo "SERVICE_DEPLOYMENT=${GITHUB_REF_NAME}" >> "${GITHUB_ENV}"
+          echo "SERVICE_IMAGE=${{ env.ECR_REGISTRY }}/appcalipse/digital-brain-frontend:${VERSION}" >> "${GITHUB_ENV}"
+
       - name: Build and push Docker image
         uses: docker/build-push-action@v5
         with:
@@ -153,4 +204,9 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+          build-args: |
+            NEXT_PUBLIC_APP_VERSION=${{ env.SERVICE_VERSION }}
+            NEXT_PUBLIC_APP_BUILD_TIME=${{ env.SERVICE_BUILD_TIME }}
+            NEXT_PUBLIC_APP_GIT_SHA=${{ env.SERVICE_GIT_SHA }}
+            NEXT_PUBLIC_APP_DEPLOYMENT=${{ env.SERVICE_DEPLOYMENT }}
 

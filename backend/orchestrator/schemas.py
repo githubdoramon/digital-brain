@@ -138,3 +138,24 @@ class ThreadOut(BaseModel):
 
 class ThreadDetailOut(ThreadOut):
     messages: List[ThreadMessageOut] = Field(default_factory=list)
+
+
+class ServiceVersion(BaseModel):
+    id: str
+    name: str
+    version: str = "unknown"
+    git_sha: Optional[str] = None
+    build_time: Optional[datetime] = None
+    image: Optional[str] = None
+    sources: List[str] = Field(default_factory=list)
+    notes: Optional[str] = None
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+
+
+class ServiceVersionCollection(BaseModel):
+    generated_at: datetime
+    services: List[ServiceVersion]
+    manifest_path: Optional[str] = None
+    manifest_metadata: Dict[str, Any] = Field(default_factory=dict)
+    env_entry_count: int = 0
+    fallback_count: int = 0

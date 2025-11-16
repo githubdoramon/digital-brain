@@ -75,6 +75,14 @@ export async function NavBar() {
             >
               Meetings
             </Link>
+            <Link
+              href="/system"
+              style={{
+                color: "#444",
+              }}
+            >
+              System Status
+            </Link>
           </nav>
           
           {session?.user && (
