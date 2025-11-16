@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 from uuid import uuid4
 
@@ -8,6 +9,19 @@ from psycopg.rows import dict_row
 from psycopg.types.json import Json
 
 from db import get_conn
+
+_DEFAULT_TITLE_PREFIX = "Untitled conversation"
+
+
+def _generate_default_title() -> str:
+    timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M")
+    return f"{_DEFAULT_TITLE_PREFIX} - {timestamp} UTC"
+
+
+def is_default_title(title: Optional[str]) -> bool:
+    if not title:
+        return True
+    return title.startswith(_DEFAULT_TITLE_PREFIX)
 
 
 def _generate_thread_id() -> str:
@@ -53,6 +67,8 @@ def ensure_thread(thread_id: Optional[str], user_email: str, title: Optional[str
 
     new_thread_id = thread_id or _generate_thread_id()
     normalized_title = _normalize_title_candidate(title)
+    if not normalized_title:
+        normalized_title = _generate_default_title()
 
     with get_conn() as conn, conn.cursor(row_factory=dict_row) as cur:
         cur.execute(
@@ -155,7 +171,7 @@ def record_exchange(
     assistant_message: str,
     user_metadata: Optional[Dict[str, Any]] = None,
     assistant_metadata: Optional[Dict[str, Any]] = None,
-) -> Tuple[int, int]:
+) -> Dict[str, Any]:
     if not thread_id or not user_email:
         raise ValueError("thread_id and user_email are required")
 
@@ -164,14 +180,25 @@ def record_exchange(
     with get_conn() as conn, conn.cursor(row_factory=dict_row) as cur:
         cur.execute(
             """
-            SELECT id
+            SELECT
+                id,
+                title,
+                (
+                    SELECT COUNT(*)
+                    FROM conversation_messages
+                    WHERE thread_id = %s
+                ) AS message_count
             FROM conversation_threads
             WHERE id = %s AND user_email = %s
             """,
-            (thread_id, user_email),
+            (thread_id, thread_id, user_email),
         )
-        if cur.fetchone() is None:
+        row = cur.fetchone()
+        if row is None:
             raise LookupError("Thread not found for user")
+
+        current_title = row.get("title")
+        message_count_before = row.get("message_count") or 0
 
         cur.execute(
             """
@@ -214,7 +241,12 @@ def record_exchange(
             user_id = row["message_id"]
         elif row["role"] == "assistant":
             assistant_id = row["message_id"]
-    return user_id, assistant_id
+    return {
+        "user_message_id": user_id,
+        "assistant_message_id": assistant_id,
+        "message_count_before": message_count_before,
+        "previous_title": current_title,
+    }
 
 
 def delete_thread(thread_id: str, user_email: str) -> bool:
@@ -236,4 +268,27 @@ def delete_thread(thread_id: str, user_email: str) -> bool:
         else:
             conn.rollback()
         return deleted
+
+
+def update_thread_title(thread_id: str, user_email: str, title: str) -> Optional[Dict[str, Any]]:
+    normalized = _normalize_title_candidate(title)
+    if not normalized:
+        return None
+
+    with get_conn() as conn, conn.cursor(row_factory=dict_row) as cur:
+        cur.execute(
+            """
+            UPDATE conversation_threads
+            SET title = %s, updated_at = NOW()
+            WHERE id = %s AND user_email = %s
+            RETURNING id, user_email, title, created_at, updated_at
+            """,
+            (normalized, thread_id, user_email),
+        )
+        row = cur.fetchone()
+        if not row:
+            conn.rollback()
+            return None
+        conn.commit()
+    return row
 

@@ -27,19 +27,6 @@ async function proxyMeetings(request: NextRequest) {
   const headers = new Headers(request.headers);
   headers.delete("host");
 
-  const serviceApiKey = request.headers.get("x-service-api-key");
-  if (!serviceApiKey) {
-    return new Response(
-      JSON.stringify({ detail: "Missing x-service-api-key header" }),
-      {
-        status: 401,
-        headers: { "content-type": "application/json" },
-      }
-    );
-  }
-
-  headers.set("x-service-api-key", serviceApiKey);
-
   const authHeader = await getAuthorizationHeader(request);
   if (authHeader) {
     headers.set("authorization", authHeader);

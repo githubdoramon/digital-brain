@@ -493,7 +493,7 @@ async def answer_question(
         iteration += 1
         loop_start = perf_counter()
         print(f"[agent] iteration {iteration} start")
-        print("[agent] sending messages ->", json.dumps(messages[-4:], ensure_ascii=False, indent=2))
+        print("[agent] sending messages ->", json.dumps(messages, ensure_ascii=False, indent=2))
         chat_start = perf_counter()
         response = _ollama_chat(messages)
         _log_timing("ollama.chat", chat_start, iteration=iteration)
@@ -560,9 +560,10 @@ async def answer_question(
         messages.append(message)
 
         # Update session store with this Q&A pair
+        new_thread_title: Optional[str] = None
         if session_id and user_email:
             try:
-                conversations.record_exchange(
+                persist_result = conversations.record_exchange(
                     thread_id=session_id,
                     user_email=user_email,
                     user_message=question,
@@ -571,10 +572,21 @@ async def answer_question(
                     assistant_metadata={"memories_used": memories_used} if memories_used else {},
                 )
                 print(f"[session] Persisted exchange in session {session_id}")
+                if (
+                    persist_result.get("message_count_before", 0) == 0
+                    and conversations.is_default_title(persist_result.get("previous_title"))
+                ):
+                    generated_title = _generate_thread_title_from_prompt(question)
+                    if generated_title:
+                        updated = conversations.update_thread_title(session_id, user_email, generated_title)
+                        if updated:
+                            new_thread_title = updated.get("title")
+                            print(f"[session] Updated thread title for {session_id}: {new_thread_title!r}")
             except Exception as exc:
                 print(f"[session] Failed to persist exchange for session {session_id}: {exc}")
-
         bundle = _finalize_bundle(question, content, state, search_limit, session_id, memories_used)
+        if new_thread_title:
+            bundle["thread_title"] = new_thread_title
 
         # Store the last Q&A pair in mem0 for long-term memory extraction (fire and forget)
         # Let mem0 decide what's worth remembering
@@ -633,6 +645,45 @@ async def _store_memory_async(
         print(f"[mem0] Error storing in long-term memory: {e}")
         import traceback
         traceback.print_exc()
+
+
+def _generate_thread_title_from_prompt(question: str) -> Optional[str]:
+    cleaned_question = (question or "").strip()
+    if not cleaned_question:
+        return None
+
+    prompt = (
+        "Create a concise, engaging title for the user's question. "
+        "Limit to at most 6 words, use Title Case, and avoid ending punctuation. "
+        "Respond with the title only.\n\n"
+        f"Question: {cleaned_question}"
+    )
+    payload = {
+        "model": OLLAMA_CHAT_MODEL,
+        "messages": [
+            {
+                "role": "system",
+                "content": "You generate short conversation titles. Keep them under 6 words and descriptive.",
+            },
+            {"role": "user", "content": prompt},
+        ],
+        "stream": False,
+    }
+
+    try:
+        response = requests.post(f"{OLLAMA_HOST}/api/chat", json=payload, timeout=OLLAMA_TIMEOUT)
+        response.raise_for_status()
+        data = response.json()
+        message = data.get("message") or {}
+        candidate = (message.get("content") or "").strip()
+        if not candidate:
+            return None
+    except Exception as exc:
+        print(f"[session] Failed to generate thread title via LLM: {exc}")
+        candidate = cleaned_question
+
+    candidate = candidate.splitlines()[0].strip(' "\'')
+    return candidate or None
 
 
 def _build_messages(

@@ -101,6 +101,7 @@ class AskOut(BaseModel):
     detailed_events: List[Dict[str, Any]]
     session_id: Optional[str] = None
     thread_id: Optional[str] = None
+    thread_title: Optional[str] = None
     memories_used: List[str] = Field(default_factory=list)
     web_results: List[Dict[str, Any]] = Field(default_factory=list)
     web_summary: Optional[str] = None

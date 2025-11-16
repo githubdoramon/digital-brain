@@ -3,9 +3,9 @@ import type { NextFetchEvent, NextRequest } from "next/server";
 import { withAuth } from "next-auth/middleware";
 import type { NextRequestWithAuth } from "next-auth/middleware";
 
-// Add API route prefixes (e.g. "/api/public") that should bypass NextAuth middleware.
-const AUTH_BYPASS_PREFIXES: string[] = [
-  "/api/orchestrator/ingest/meetings",  
+const SERVICE_API_KEY_PREFIXES: string[] = [
+  "/api/orchestrator/ingest/meetings",
+  "/api/removed-service",
 ];
 
 const authMiddleware = withAuth({
@@ -20,11 +20,33 @@ const authMiddleware = withAuth({
 });
 
 function shouldBypassAuth(pathname: string): boolean {
-  return AUTH_BYPASS_PREFIXES.some((prefix) => pathname.startsWith(prefix));
+  return SERVICE_API_KEY_PREFIXES.some((prefix) => pathname.startsWith(prefix));
+}
+
+function validateServiceApiKey(request: NextRequest) {
+  const serviceApiKey = request.headers.get("x-service-api-key");
+  if (!serviceApiKey) {
+    return NextResponse.json(
+      { detail: "Missing x-service-api-key header" },
+      {
+        status: 401,
+        headers: { "content-type": "application/json" },
+      }
+    );
+  }
+
+  return NextResponse.next();
 }
 
 export default function middleware(request: NextRequest, event: NextFetchEvent) {
-  if (shouldBypassAuth(request.nextUrl.pathname)) {
+  const pathname = request.nextUrl.pathname;
+
+  if (shouldBypassAuth(pathname)) {
+    const validationResponse = validateServiceApiKey(request);
+    if (validationResponse) {
+      return validationResponse;
+    }
+
     return NextResponse.next();
   }
 

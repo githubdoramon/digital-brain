@@ -22,6 +22,7 @@ type AskResponse = {
   answer?: string;
   memories_used?: string[];
   thread_id?: string;
+  thread_title?: string | null;
 };
 
 type ThreadSummary = {
@@ -304,6 +305,20 @@ export default function Home() {
       if (data.thread_id && data.thread_id !== threadId) {
         threadId = data.thread_id;
         setSelectedThreadId(threadId);
+      }
+
+      if (threadId && data.thread_title) {
+        const updatedTitle = data.thread_title.trim();
+        if (updatedTitle.length > 0) {
+          const resolvedThreadId = threadId;
+          setThreads((prev) =>
+            prev.map((thread) =>
+              thread.id === resolvedThreadId
+                ? { ...thread, title: updatedTitle, updated_at: new Date().toISOString() }
+                : thread
+            )
+          );
+        }
       }
 
       const assistantMessage: Message = {
