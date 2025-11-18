@@ -16,7 +16,7 @@ export interface MeetingIn {
 /**
  * Make an authenticated request via the Next.js API routes.
  */
-export async function apiRequest<T = unknown>(
+async function apiRequest<T = unknown>(
   endpoint: string,
   options: RequestInit = {}
 ): Promise<T> {
@@ -24,6 +24,8 @@ export async function apiRequest<T = unknown>(
   if (!headers.has("content-type") && !["GET", "HEAD"].includes(options.method ?? "")) {
     headers.set("content-type", "application/json");
   }
+
+  console.log('here', `${API_BASE}${endpoint}`);
 
   const response = await fetch(`${API_BASE}${endpoint}`, {
     ...options,

@@ -1,4 +1,7 @@
-import { apiRequest } from "@/lib/api";
+"use client";
+
+import { useEffect, useState } from "react";
+import { api } from "@/lib/api";
 
 type ServiceVersion = {
   id: string;
@@ -48,9 +51,10 @@ function abbreviateSha(sha?: string | null): string {
   return sha.length > 10 ? sha.slice(0, 10) : sha;
 }
 
-export default async function SystemStatusPage() {
-  let data: ServiceVersionResponse | null = null;
-  let error: string | null = null;
+export default function SystemStatusPage() {
+  const [data, setData] = useState<ServiceVersionResponse | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [isLoading, setIsLoading] = useState<boolean>(true);
 
   const frontendMetadata = {
     version: process.env.NEXT_PUBLIC_APP_VERSION ?? "unknown",
@@ -59,14 +63,31 @@ export default async function SystemStatusPage() {
     deployment: process.env.NEXT_PUBLIC_APP_DEPLOYMENT ?? null,
   };
 
-  try {
-    data = await apiRequest<ServiceVersionResponse>("/system/versions", {
-      cache: "no-store",
-    });
-  } catch (err) {
-    console.error("Failed to load service version data", err);
-    error = err instanceof Error ? err.message : "Failed to load system version data.";
-  }
+  useEffect(() => {
+    let cancelled = false;
+
+    (async () => {
+      try {
+        const response = await api.get<ServiceVersionResponse>("/system/versions");
+        if (!cancelled) {
+          setData(response);
+        }
+      } catch (err) {
+        if (!cancelled) {
+          console.error("Failed to load service version data", err);
+          setError(err instanceof Error ? err.message : "Failed to load system version data.");
+        }
+      } finally {
+        if (!cancelled) {
+          setIsLoading(false);
+        }
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   return (
     <section style={{ display: "grid", gap: "24px" }}>
@@ -125,9 +146,9 @@ export default async function SystemStatusPage() {
           <strong style={{ display: "block", marginBottom: "4px" }}>Unable to fetch versions</strong>
           <span>{error}</span>
         </div>
-      ) : !data ? (
+      ) : isLoading ? (
         <div style={{ color: "#666" }}>Loading service information...</div>
-      ) : (
+      ) : data ? (
         <>
           <div
             style={{
@@ -203,6 +224,8 @@ export default async function SystemStatusPage() {
             </div>
           </div>
         </>
+      ) : (
+        <div style={{ color: "#666" }}>No version data available.</div>
       )}
     </section>
   );
