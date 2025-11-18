@@ -219,19 +219,29 @@ def record_exchange(
         )
         inserted = cur.fetchall()
 
-        cur.execute(
-            """
-            UPDATE conversation_threads
-            SET
-                updated_at = NOW(),
-                title = CASE
-                    WHEN (title IS NULL OR btrim(title) = '') AND %s IS NOT NULL THEN %s
-                    ELSE title
-                END
-            WHERE id = %s
-            """,
-            (title_candidate, title_candidate, thread_id),
-        )
+        if title_candidate:
+            cur.execute(
+                """
+                UPDATE conversation_threads
+                SET
+                    updated_at = NOW(),
+                    title = CASE
+                        WHEN (title IS NULL OR btrim(title) = '') THEN %s
+                        ELSE title
+                    END
+                WHERE id = %s
+                """,
+                (title_candidate, thread_id),
+            )
+        else:
+            cur.execute(
+                """
+                UPDATE conversation_threads
+                SET updated_at = NOW()
+                WHERE id = %s
+                """,
+                (thread_id,),
+            )
 
         conn.commit()
 
