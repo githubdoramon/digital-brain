@@ -1,7 +1,7 @@
 'use client';
 
 import Link from "next/link";
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode, type HTMLAttributes } from "react";
 import { useParams } from "next/navigation";
 import ReactMarkdown from "react-markdown";
 import type { Components } from "react-markdown";
@@ -60,6 +60,12 @@ type MetadataItem = {
   value: ReactNode;
 };
 
+type MarkdownCodeProps = HTMLAttributes<HTMLElement> & {
+  inline?: boolean;
+  className?: string;
+  children?: ReactNode;
+};
+
 const markdownComponents: Components = {
   h1: ({ children }) => (
     <h1 style={{ margin: "0 0 1.25rem 0", fontSize: "1.6rem", fontWeight: 600, color: "#0f172a" }}>{children}</h1>
@@ -104,19 +110,27 @@ const markdownComponents: Components = {
       {children}
     </blockquote>
   ),
-  code: ({ inline, children }) =>
-    inline ? (
-      <code
-        style={{
-          background: "rgba(15, 23, 42, 0.08)",
-          padding: "0.15rem 0.35rem",
-          borderRadius: "4px",
-          fontSize: "0.9rem",
-        }}
-      >
-        {children}
-      </code>
-    ) : (
+  code: ({ inline, className, children }: MarkdownCodeProps) => {
+    const codeProps =
+      typeof className === "string" && className.length > 0 ? { className } : {};
+
+    if (inline) {
+      return (
+        <code
+          style={{
+            background: "rgba(15, 23, 42, 0.08)",
+            padding: "0.15rem 0.35rem",
+            borderRadius: "4px",
+            fontSize: "0.9rem",
+          }}
+          {...codeProps}
+        >
+          {children}
+        </code>
+      );
+    }
+
+    return (
       <pre
         style={{
           background: "#0f172a",
@@ -128,9 +142,10 @@ const markdownComponents: Components = {
           fontSize: "0.9rem",
         }}
       >
-        <code>{children}</code>
+        <code {...codeProps}>{children}</code>
       </pre>
-    ),
+    );
+  },
 };
 
 function normalizeMeeting(response: MeetingResponse): MeetingDetail {
