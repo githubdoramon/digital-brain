@@ -167,6 +167,14 @@ def ingest_meetings(
     return {"ok": True, "ids": ids}
 
 
+@api.get("/meetings/{meeting_id}")
+def get_meeting(meeting_id: str, user: dict = Depends(get_current_user)):
+    meeting = retrieval.get_meeting(meeting_id)
+    if not meeting:
+        raise HTTPException(status_code=404, detail="Meeting not found")
+    return meeting
+
+
 # --------------------------- Tool-friendly endpoints ---------------------------
 @api.post("/resolve")
 def resolve(payload: ResolveIn, user: dict = Depends(get_current_user)):

@@ -658,6 +658,67 @@ def get_todo(todo_id: str) -> Optional[Dict[str, Any]]:
         }
 
 
+def get_meeting(meeting_id: str) -> Optional[Dict[str, Any]]:
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT
+              e.id,
+              e.ts,
+              e.people,
+              e.tags,
+              e.types,
+              e.what_text,
+              e.raw,
+              e.place_id,
+              p.name AS place_name,
+              p.city,
+              p.country,
+              p.lat,
+              p.lon
+            FROM events AS e
+            LEFT JOIN places AS p ON p.place_id = e.place_id
+            WHERE e.id = %s
+            """,
+            (meeting_id,),
+        )
+        row = cur.fetchone()
+        if not row:
+            return None
+
+        raw_data = row.get("raw") or {}
+        if isinstance(raw_data, str):
+            try:
+                raw_data = json.loads(raw_data)
+            except json.JSONDecodeError:
+                raw_data = {"content": raw_data}
+
+        ts_value = row.get("ts")
+        place_id = row.get("place_id")
+
+        return {
+            "id": row["id"],
+            "ts": ts_value.isoformat() if ts_value else None,
+            "title": row.get("what_text"),
+            "people": row.get("people") or [],
+            "tags": row.get("tags") or [],
+            "types": row.get("types") or [],
+            "raw": raw_data,
+            "place": (
+                {
+                    "place_id": place_id,
+                    "name": row.get("place_name"),
+                    "city": row.get("city"),
+                    "country": row.get("country"),
+                    "lat": row.get("lat"),
+                    "lon": row.get("lon"),
+                }
+                if place_id
+                else None
+            ),
+        }
+
+
 def delete_todo(todo_id: str) -> bool:
     with get_conn() as conn, conn.cursor() as cur:
         cur.execute("DELETE FROM todo_contacts WHERE todo_id = %s", (todo_id,))
@@ -708,11 +769,13 @@ def _replace_todo_links(
             )
 
 
-def _collect_todo_links(conn, todo_ids: Sequence[str]) -> Dict[str, Dict[str, List[str]]]:
+def _collect_todo_links(conn, todo_ids: Sequence[str]) -> Dict[str, Dict[str, Any]]:
     if not todo_ids:
         return {}
 
-    link_map: Dict[str, Dict[str, List[str]]] = {todo_id: {"contacts": [], "events": [], "places": []} for todo_id in todo_ids}
+    link_map: Dict[str, Dict[str, Any]] = {
+        todo_id: {"contacts": [], "events": [], "places": []} for todo_id in todo_ids
+    }
 
     with conn.cursor() as cur:
         cur.execute(
@@ -728,14 +791,31 @@ def _collect_todo_links(conn, todo_ids: Sequence[str]) -> Dict[str, Dict[str, Li
 
         cur.execute(
             """
-            SELECT todo_id, event_id
-            FROM todo_events
-            WHERE todo_id = ANY(%s)
+            SELECT
+              te.todo_id,
+              te.event_id,
+              ev.what_text,
+              ev.ts
+            FROM todo_events AS te
+            LEFT JOIN events AS ev ON ev.id = te.event_id
+            WHERE te.todo_id = ANY(%s)
+            ORDER BY ev.ts NULLS LAST, te.event_id
             """,
             (list(todo_ids),),
         )
         for row in cur.fetchall():
-            link_map.setdefault(row["todo_id"], {"contacts": [], "events": [], "places": []})["events"].append(row["event_id"])
+            events = link_map.setdefault(row["todo_id"], {"contacts": [], "events": [], "places": []})["events"]
+            event_id = row["event_id"]
+            event_detail: Dict[str, Any] = {"id": event_id}
+            title = row.get("what_text") or None
+            if title:
+                event_detail["title"] = title
+            else:
+                event_detail["title"] = event_id
+            ts = row.get("ts")
+            if ts:
+                event_detail["ts"] = ts.isoformat()
+            events.append(event_detail)
 
         cur.execute(
             """

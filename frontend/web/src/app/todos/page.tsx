@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import {
   useCallback,
   useEffect,
@@ -12,6 +13,13 @@ import {
 } from "react";
 import { api } from "@/lib/api";
 
+type LinkedEvent = {
+  id: string;
+  title?: string | null;
+  ts?: string | null;
+  link?: string | null;
+};
+
 type Todo = {
   todo_id: string;
   description: string;
@@ -20,14 +28,87 @@ type Todo = {
   created_at: string | null;
   updated_at: string | null;
   contacts: string[];
-  events: string[];
+  events: LinkedEvent[];
   places: string[];
+};
+
+type RawTodo = Omit<Todo, "events"> & {
+  events?: (LinkedEvent | string | null)[] | null;
 };
 
 type StatusMessage =
   | { kind: "idle" }
   | { kind: "success"; message: string }
   | { kind: "error"; message: string };
+
+function normalizeEvent(event: LinkedEvent | string | null | undefined): LinkedEvent | null {
+  if (!event) {
+    return null;
+  }
+
+  if (typeof event === "string") {
+    const trimmed = event.trim();
+    if (!trimmed) {
+      return null;
+    }
+    return { id: trimmed, title: trimmed };
+  }
+
+  const id = event.id?.trim();
+  if (!id) {
+    return null;
+  }
+
+  const normalized: LinkedEvent = {
+    id,
+    title: event.title?.trim() || id,
+  };
+
+  if (event.ts) {
+    normalized.ts = event.ts;
+  }
+
+  if (event.link) {
+    normalized.link = event.link;
+  }
+
+  return normalized;
+}
+
+function normalizeTodo(raw: RawTodo): Todo {
+  const events = (raw.events ?? [])
+    .map((item) => normalizeEvent(item))
+    .filter((item): item is LinkedEvent => Boolean(item));
+
+  const contacts = Array.isArray(raw.contacts) ? raw.contacts : [];
+  const places = Array.isArray(raw.places) ? raw.places : [];
+
+  return {
+    ...raw,
+    contacts,
+    places,
+    events,
+  };
+}
+
+function extractEventIds(events: LinkedEvent[]): string[] {
+  return events.map((event) => event.id);
+}
+
+function formatEventLabel(event: LinkedEvent): string {
+  const label = event.title?.trim();
+  return label && label.length > 0 ? label : event.id;
+}
+
+function formatEventTooltip(event: LinkedEvent): string | undefined {
+  if (event.ts) {
+    const timestamp = Date.parse(event.ts);
+    if (!Number.isNaN(timestamp)) {
+      return new Date(timestamp).toLocaleString();
+    }
+  }
+  return event.id;
+}
 
 const ACCOMPLISHED_STATUS = "accomplished";
 
@@ -109,8 +190,9 @@ export default function TodosPage() {
     setStatus((prev) => (prev.kind === "error" ? { kind: "idle" } : prev));
 
     try {
-      const data = await api.get<{ todos: Todo[] }>("/todos");
-      setTodos(data.todos ?? []);
+      const data = await api.get<{ todos: RawTodo[] }>("/todos");
+      const normalized = (data.todos ?? []).map((todo) => normalizeTodo(todo));
+      setTodos(normalized);
     } catch (error) {
       const message =
         error instanceof Error ? error.message : "Failed to load todos";
@@ -140,7 +222,7 @@ export default function TodosPage() {
         status: nextStatus,
         due_date: todo.due_date,
         contact_ids: todo.contacts,
-        event_ids: todo.events,
+        event_ids: extractEventIds(todo.events),
         place_ids: todo.places,
       });
 
@@ -189,7 +271,7 @@ export default function TodosPage() {
         status: todo.status,
         due_date: normalizedNextDueDate,
         contact_ids: todo.contacts,
-        event_ids: todo.events,
+        event_ids: extractEventIds(todo.events),
         place_ids: todo.places,
       });
 
@@ -597,9 +679,29 @@ function TodoCard({ todo, isUpdating, onToggle, onDelete, onUpdateDueDate }: Tod
           </span>
         )}
         {todo.events.length > 0 && (
-          <span>
-            <strong>Events:</strong> {todo.events.join(", ")}
-          </span>
+          <div style={{ display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" }}>
+            <strong>Meetings:</strong>
+            <div style={{ display: "flex", gap: "6px", flexWrap: "wrap" }}>
+              {todo.events.map((event) => (
+                <Link
+                  key={event.id}
+                  href={`/meetings/${encodeURIComponent(event.id)}`}
+                  style={{
+                    color: "#2563eb",
+                    background: "#eff6ff",
+                    padding: "2px 10px",
+                    borderRadius: "999px",
+                    textDecoration: "none",
+                    fontWeight: 500,
+                    fontSize: "0.8rem",
+                  }}
+                  title={formatEventTooltip(event)}
+                >
+                  {formatEventLabel(event)}
+                </Link>
+              ))}
+            </div>
+          </div>
         )}
         {todo.places.length > 0 && (
           <span>
