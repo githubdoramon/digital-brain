@@ -1,5 +1,6 @@
 'use client';
 
+import Link from "next/link";
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import { api } from "@/lib/api";
 
@@ -13,6 +14,7 @@ type Contact = {
   links: string[];
   tags: string[];
   relationships: ContactRelationship[];
+  external_id?: string | null;
 };
 
 type ContactRelationship = {
@@ -101,6 +103,7 @@ export default function ContactsPage() {
     links: string;
     tags: string;
     relationships: RelationshipDraft[];
+    external_id: string;
   }>({
     contact_id: "",
     display_name: "",
@@ -111,6 +114,7 @@ export default function ContactsPage() {
     links: "",
     tags: "",
     relationships: [],
+    external_id: "",
   });
 
   // Load contacts on mount
@@ -144,7 +148,8 @@ export default function ContactsPage() {
       phones: "",
       links: "",
       tags: "",
-    relationships: [],
+      relationships: [],
+      external_id: "",
     });
     setShowModal(true);
     setStatus({ kind: "idle" });
@@ -169,6 +174,7 @@ export default function ContactsPage() {
           type: rel.type,
           reciprocal_type: rel.other_type || "",
         })),
+      external_id: contact.external_id || "",
     });
     setShowModal(true);
     setStatus({ kind: "idle" });
@@ -377,6 +383,7 @@ export default function ContactsPage() {
       phones: parseList(formState.phones),
       links: parseList(formState.links),
       tags: parseList(formState.tags),
+      external_id: formState.external_id.trim() || null,
       relationships: formState.relationships
         .filter((rel) => rel.contact_id && rel.type)
         .map((rel) => ({
@@ -497,6 +504,21 @@ export default function ContactsPage() {
         >
           + Add New Contact
         </button>
+        <Link
+          href="/contacts/merge"
+          style={{
+            marginLeft: "12px",
+            background: "#6366f1",
+            color: "#fff",
+            borderRadius: "8px",
+            padding: "12px 20px",
+            fontWeight: 600,
+            fontSize: "0.95rem",
+            display: "inline-block",
+          }}
+        >
+          Manage Merges
+        </Link>
       </div>
 
       {/* Contacts List */}
@@ -620,6 +642,11 @@ export default function ContactsPage() {
                   >
                     <td style={{ padding: "16px 20px" }}>
                       <div style={{ fontWeight: 600 }}>{contact.display_name}</div>
+                    {contact.external_id && (
+                      <div style={{ fontSize: "0.75rem", color: "#2563eb", fontWeight: 500 }}>
+                        External ID: {contact.external_id}
+                      </div>
+                    )}
                       {contact.aliases.length > 0 && (
                         <div style={{ fontSize: "0.8rem", color: "#666", marginTop: "2px" }}>
                           {contact.aliases.join(", ")}
@@ -914,6 +941,24 @@ export default function ContactsPage() {
                     placeholder="https://linkedin.com/in/johndoe (comma-separated)"
                     style={{
                       border: "1px solid #d0d0d0",
+                      borderRadius: "8px",
+                      padding: "10px 12px",
+                      fontSize: "0.95rem",
+                    }}
+                  />
+                </label>
+
+                <label style={{ display: "grid", gap: "6px" }}>
+                  <span style={{ fontWeight: 600, fontSize: "0.9rem" }}>
+                    External ID <span style={{ color: "#9ca3af" }}>(optional)</span>
+                  </span>
+                  <input
+                    type="text"
+                    value={formState.external_id}
+                    onChange={handleChange("external_id")}
+                    placeholder="External system person identifier"
+                    style={{
+                      border: "1px solid "#d0d0d0",
                       borderRadius: "8px",
                       padding: "10px 12px",
                       fontSize: "0.95rem",

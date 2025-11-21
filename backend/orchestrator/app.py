@@ -23,10 +23,12 @@ from schemas import (
     AskOut,
     ContactIn,
     ContactRelationshipIn,
+    ContactMergeIn,
     EventIn,
     GetIn,
     MeetingIn,
     PlaceIn,
+    ExternalContactWebhook,
     DocumentCollection,
     DocumentDetailOut,
     DocumentSearchIn,
@@ -153,6 +155,50 @@ def delete_contact(contact_id: str, user: dict = Depends(get_current_user)):
 @api.get("/contacts/{contact_id}/relationships")
 def get_contact_relationships(contact_id: str, user: dict = Depends(get_current_user)):
     return {"relationships": retrieval.list_contact_relationships(contact_id)}
+
+
+@api.post("/webhooks/contacts")
+def receive_contact_webhook(
+    payload: ExternalContactWebhook,
+    _: None = Depends(require_service_api_key),
+):
+    event_name = (payload.event_name or "").lower()
+    external_contact = payload.payload
+    if not external_contact or not external_contact.id:
+        raise HTTPException(status_code=400, detail="Webhook payload is missing person information")
+
+    if event_name == "persondelete":
+        try:
+            updated = retrieval.unlink_external_contact(external_contact.id)
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=f"Failed to unlink external contact: {exc}") from exc
+        return {"ok": True, "action": "unlinked" if updated else "ignored"}
+
+    if event_name in {"personcreate", "personupdate"}:
+        try:
+            contact = retrieval.sync_external_contact(external_contact)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=f"Failed to process contact webhook: {exc}") from exc
+        return {"ok": True, "contact": contact}
+
+    raise HTTPException(status_code=400, detail=f"Unsupported eventName: {payload.event_name}")
+
+@api.get("/contacts/merge-candidates")
+def list_merge_candidates(user: dict = Depends(get_current_user)):
+    return retrieval.list_contact_merge_candidates()
+
+
+@api.post("/contacts/merge")
+def merge_contacts_endpoint(payload: ContactMergeIn, user: dict = Depends(get_current_user)):
+    try:
+        contact = retrieval.merge_contacts(payload.primary_contact_id, payload.duplicate_contact_id)
+    except LookupError:
+        raise HTTPException(status_code=404, detail="One or both contacts not found")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"ok": True, "contact": contact}
 
 
 @api.post("/ingest/place")

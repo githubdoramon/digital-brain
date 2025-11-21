@@ -11,8 +11,12 @@ CREATE TABLE IF NOT EXISTS contacts (
   emails TEXT[] DEFAULT '{}'::TEXT[],
   phones TEXT[] DEFAULT '{}'::TEXT[],
   links TEXT[] DEFAULT '{}'::TEXT[],
-  tags TEXT[] DEFAULT '{}'::TEXT[]
+  tags TEXT[] DEFAULT '{}'::TEXT[],
+  external_id TEXT UNIQUE
 );
+
+ALTER TABLE contacts
+  ADD COLUMN IF NOT EXISTS external_id TEXT UNIQUE;
 
 -- Contact relationships (flexible graph between contacts)
 CREATE TABLE IF NOT EXISTS contact_relationships (

@@ -15,6 +15,7 @@ class ContactIn(BaseModel):
     phones: Optional[List[str]] = []
     links: Optional[List[str]] = []
     tags: Optional[List[str]] = []
+    external_id: Optional[str] = None
     relationships: Optional[List[ContactRelationshipIn]] = []
 
 
@@ -55,6 +56,32 @@ class ContactRelationshipIn(BaseModel):
     to_contact_id: str
     relationship_type: str
     reciprocal_type: Optional[str] = None
+
+
+class ExternalContactPayload(BaseModel):
+    id: str
+    name: Optional[str] = None
+    birth_date: Optional[date] = Field(default=None, alias="birthDate")
+
+    class Config:
+        allow_population_by_field_name = True
+        extra = "allow"
+
+
+class ExternalContactWebhook(BaseModel):
+    id: str
+    event_name: str = Field(alias="eventName")
+    timestamp: datetime
+    payload: ExternalContactPayload
+
+    class Config:
+        extra = "allow"
+        allow_population_by_field_name = True
+
+
+class ContactMergeIn(BaseModel):
+    primary_contact_id: str
+    duplicate_contact_id: str
 
 
 class TodoIn(BaseModel):
