@@ -95,6 +95,45 @@ CREATE INDEX IF NOT EXISTS idx_events_what_tsv ON events USING GIN (what_tsv);
 -- Vector index (IVFFLAT) – build after some rows exist for best perf.
 CREATE INDEX IF NOT EXISTS idx_events_embed ON events USING ivfflat (what_embed) WITH (lists = 100);
 
+-- Documents (uploaded files with embeddings)
+CREATE TABLE IF NOT EXISTS documents (
+  document_id TEXT PRIMARY KEY,
+  title TEXT NOT NULL,
+  tags TEXT[] DEFAULT '{}'::TEXT[],
+  summary TEXT,
+  description TEXT,
+  file_path TEXT NOT NULL,
+  file_name TEXT NOT NULL,
+  file_mime TEXT,
+  file_size BIGINT,
+  content TEXT,
+  content_embed VECTOR(768),
+  content_tsv tsvector,
+  labels TEXT[] DEFAULT '{}'::TEXT[],
+  raw_metadata JSONB DEFAULT '{}'::JSONB,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- FTS trigger for documents
+CREATE OR REPLACE FUNCTION documents_tsv_update() RETURNS trigger AS $$
+BEGIN
+  NEW.content_tsv := to_tsvector('english', coalesce(NEW.content, '') || ' ' || coalesce(NEW.summary, '') || ' ' || coalesce(NEW.description, ''));
+  RETURN NEW;
+END; $$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS documents_tsv_trg ON documents;
+CREATE TRIGGER documents_tsv_trg
+BEFORE INSERT OR UPDATE OF content, summary, description ON documents
+FOR EACH ROW EXECUTE FUNCTION documents_tsv_update();
+
+-- Indices
+CREATE INDEX IF NOT EXISTS idx_documents_created_at ON documents (created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_documents_tags ON documents USING GIN (tags);
+CREATE INDEX IF NOT EXISTS idx_documents_labels ON documents USING GIN (labels);
+CREATE INDEX IF NOT EXISTS idx_documents_content_tsv ON documents USING GIN (content_tsv);
+CREATE INDEX IF NOT EXISTS idx_documents_embed ON documents USING ivfflat (content_embed) WITH (lists = 100);
+
 -- TODOs (tasks with optional associations)
 CREATE TABLE IF NOT EXISTS todos (
   todo_id TEXT PRIMARY KEY,

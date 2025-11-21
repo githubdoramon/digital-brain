@@ -21,11 +21,13 @@ async function apiRequest<T = unknown>(
   options: RequestInit = {}
 ): Promise<T> {
   const headers = new Headers(options.headers);
-  if (!headers.has("content-type") && !["GET", "HEAD"].includes(options.method ?? "")) {
+  const method = options.method ?? "GET";
+  const isFormData =
+    typeof FormData !== "undefined" && options.body instanceof FormData;
+
+  if (!headers.has("content-type") && !["GET", "HEAD"].includes(method) && !isFormData) {
     headers.set("content-type", "application/json");
   }
-
-  console.log('here', `${API_BASE}${endpoint}`);
 
   const response = await fetch(`${API_BASE}${endpoint}`, {
     ...options,
@@ -57,21 +59,33 @@ export const api = {
     apiRequest<T>(endpoint, { method: "GET" }),
 
   post: <T = unknown>(endpoint: string, data?: unknown, init?: RequestInit) =>
-    apiRequest<T>(endpoint, {
-      method: "POST",
-      body: data ? JSON.stringify(data) : undefined,
-      ...init,
-    }),
+    typeof FormData !== "undefined" && data instanceof FormData
+      ? apiRequest<T>(endpoint, {
+          method: "POST",
+          body: data,
+          ...init,
+        })
+      : apiRequest<T>(endpoint, {
+          method: "POST",
+          body: data !== undefined ? JSON.stringify(data) : undefined,
+          ...init,
+        }),
 
   delete: <T = unknown>(endpoint: string, init?: RequestInit) =>
     apiRequest<T>(endpoint, { method: "DELETE", ...init }),
 
   put: <T = unknown>(endpoint: string, data?: unknown, init?: RequestInit) =>
-    apiRequest<T>(endpoint, {
-      method: "PUT",
-      body: data ? JSON.stringify(data) : undefined,
-      ...init,
-    }),
+    typeof FormData !== "undefined" && data instanceof FormData
+      ? apiRequest<T>(endpoint, {
+          method: "PUT",
+          body: data,
+          ...init,
+        })
+      : apiRequest<T>(endpoint, {
+          method: "PUT",
+          body: data !== undefined ? JSON.stringify(data) : undefined,
+          ...init,
+        }),
 };
 
 export const orchestratorApi = {

@@ -67,6 +67,37 @@ class TodoIn(BaseModel):
     place_ids: Optional[List[str]] = []
 
 
+class DocumentOut(BaseModel):
+    document_id: str
+    title: str
+    tags: List[str] = Field(default_factory=list)
+    summary: Optional[str] = None
+    description: Optional[str] = None
+    labels: List[str] = Field(default_factory=list)
+    file_name: str
+    file_mime: Optional[str] = None
+    file_size: Optional[int] = None
+    download_url: str
+    created_at: datetime
+    updated_at: datetime
+    snippet: Optional[str] = None
+
+
+class DocumentCollection(BaseModel):
+    documents: List[DocumentOut] = Field(default_factory=list)
+
+
+class DocumentDetailOut(DocumentOut):
+    raw_metadata: Dict[str, Any] = Field(default_factory=dict)
+    content_preview: Optional[str] = None
+
+
+class DocumentSearchIn(BaseModel):
+    query: str
+    tags: Optional[List[str]] = Field(default_factory=list)
+    limit: Optional[int] = 20
+
+
 class ResolveIn(BaseModel):
     text: str
     need_contacts: Optional[bool] = True
