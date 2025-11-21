@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
+from datetime import datetime
 from time import perf_counter
 from typing import List, Optional
 
@@ -69,6 +70,15 @@ def _parse_tags_payload(raw: Optional[str]) -> List[str]:
         if candidate:
             tags.append(candidate)
     return tags
+
+
+def _parse_iso_datetime(value: Optional[str]) -> Optional[datetime]:
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid document_date: {value}") from exc
 
 
 @asynccontextmanager
@@ -185,12 +195,13 @@ def ingest_event(e: EventIn, user: dict = Depends(get_current_user)):
 
 
 # --------------------------- Document endpoints ---------------------------
-@api.post("/documents", response_model=DocumentDetailOut)
+# --------------------------- Document endpoints ---------------------------
+@api.post("/ingest/document", response_model=DocumentDetailOut)
 async def upload_document(
     title: Optional[str] = Form(None),
     tags: Optional[str] = Form(None),
-    summary: Optional[str] = Form(None),
     description: Optional[str] = Form(None),
+    document_date: Optional[str] = Form(None),
     file: UploadFile = File(...),
     user: dict = Depends(get_current_user),
 ):
@@ -200,12 +211,19 @@ async def upload_document(
         raise HTTPException(status_code=400, detail=str(exc))
 
     try:
+        parsed_date = _parse_iso_datetime(document_date)
+    except HTTPException:
+        raise
+    except Exception:
+        parsed_date = None
+
+    try:
         document = documents.ingest_document(
             title=title,
             tags=parsed_tags,
-            summary=summary,
             description=description,
             upload=file,
+            document_date=parsed_date,
         )
     except documents.DocumentProcessingError as exc:
         raise HTTPException(status_code=400, detail=str(exc))

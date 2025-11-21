@@ -71,8 +71,8 @@ class DocumentOut(BaseModel):
     document_id: str
     title: str
     tags: List[str] = Field(default_factory=list)
-    summary: Optional[str] = None
     description: Optional[str] = None
+    document_date: Optional[datetime] = None
     file_name: str
     file_mime: Optional[str] = None
     file_size: Optional[int] = None

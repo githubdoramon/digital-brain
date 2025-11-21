@@ -100,12 +100,12 @@ CREATE TABLE IF NOT EXISTS documents (
   document_id TEXT PRIMARY KEY,
   title TEXT NOT NULL,
   tags TEXT[] DEFAULT '{}'::TEXT[],
-  summary TEXT,
   description TEXT,
   file_path TEXT NOT NULL,
   file_name TEXT NOT NULL,
   file_mime TEXT,
   file_size BIGINT,
+  document_date TIMESTAMPTZ,
   content TEXT,
   content_embed VECTOR(768),
   content_tsv tsvector,
@@ -117,13 +117,13 @@ CREATE TABLE IF NOT EXISTS documents (
 -- FTS trigger for documents
 CREATE OR REPLACE FUNCTION documents_tsv_update() RETURNS trigger AS $$
 BEGIN
-  NEW.content_tsv := to_tsvector('english', coalesce(NEW.content, '') || ' ' || coalesce(NEW.summary, '') || ' ' || coalesce(NEW.description, ''));
+  NEW.content_tsv := to_tsvector('english', coalesce(NEW.content, '') || ' ' || coalesce(NEW.description, ''));
   RETURN NEW;
 END; $$ LANGUAGE plpgsql;
 
 DROP TRIGGER IF EXISTS documents_tsv_trg ON documents;
 CREATE TRIGGER documents_tsv_trg
-BEFORE INSERT OR UPDATE OF content, summary, description ON documents
+BEFORE INSERT OR UPDATE OF content, description ON documents
 FOR EACH ROW EXECUTE FUNCTION documents_tsv_update();
 
 -- Indices

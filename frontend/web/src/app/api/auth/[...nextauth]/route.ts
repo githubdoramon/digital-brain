@@ -76,6 +76,7 @@ export const authOptions: NextAuthOptions = {
       clientSecret: process.env.GOOGLE_CLIENT_SECRET!,
       authorization: {
         params: {
+          scope: "openid email profile",
           prompt: "consent",
           access_type: "offline",
           response_type: "code",
@@ -98,11 +99,16 @@ export const authOptions: NextAuthOptions = {
     async signIn({ user }): Promise<boolean> {
       const userEmail = user.email;
         
-      // Check if user is in allowlist
-      if (userEmail && allowedUsers && allowedUsers.has(userEmail)) {
+      // No allowlist configured: allow any authenticated user
+      if (!allowedUsers) {
         return true;
       }
-      
+
+      // Check if user is in allowlist
+      if (userEmail && allowedUsers.has(userEmail)) {
+        return true;
+      }
+
       return false;
     },
     async session({ session, token }) {

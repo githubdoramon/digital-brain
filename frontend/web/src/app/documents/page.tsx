@@ -7,8 +7,8 @@ type DocumentItem = {
   document_id: string;
   title: string;
   tags: string[];
-  summary?: string | null;
   description?: string | null;
+  document_date?: string | null;
   file_name: string;
   file_mime?: string | null;
   file_size?: number | null;
@@ -77,8 +77,8 @@ export default function DocumentsPage() {
 
   const [uploadTitle, setUploadTitle] = useState("");
   const [uploadTags, setUploadTags] = useState("");
-  const [uploadSummary, setUploadSummary] = useState("");
   const [uploadDescription, setUploadDescription] = useState("");
+  const [uploadDate, setUploadDate] = useState("");
   const [uploadFile, setUploadFile] = useState<File | null>(null);
 
   const loadDocuments = useCallback(async () => {
@@ -114,11 +114,11 @@ export default function DocumentsPage() {
       if (tags.length > 0) {
         formData.append("tags", JSON.stringify(tags));
       }
-      if (uploadSummary.trim()) {
-        formData.append("summary", uploadSummary.trim());
-      }
       if (uploadDescription.trim()) {
         formData.append("description", uploadDescription.trim());
+      }
+      if (uploadDate) {
+        formData.append("document_date", uploadDate);
       }
       formData.append("file", uploadFile);
 
@@ -126,13 +126,13 @@ export default function DocumentsPage() {
       setStatus(DEFAULT_STATUS);
 
       try {
-        const created = await api.post<DocumentItem>("/documents", formData);
+        const created = await api.post<DocumentItem>("/ingest/document", formData);
         setDocuments((previous) => [created, ...previous.filter((doc) => doc.document_id !== created.document_id)]);
         setStatus({ kind: "success", message: `Uploaded "${created.title}"` });
         setUploadTitle("");
         setUploadTags("");
-        setUploadSummary("");
         setUploadDescription("");
+        setUploadDate("");
         setUploadFile(null);
       } catch (error) {
         const message = error instanceof Error ? error.message : "Failed to upload document";
@@ -141,7 +141,7 @@ export default function DocumentsPage() {
         setIsUploading(false);
       }
     },
-    [uploadDescription, uploadFile, uploadSummary, uploadTags, uploadTitle]
+    [uploadDate, uploadDescription, uploadFile, uploadTags, uploadTitle]
   );
 
   const handleSearch = useCallback(
@@ -287,6 +287,21 @@ export default function DocumentsPage() {
           </label>
 
           <label style={{ display: "grid", gap: "4px" }}>
+            <span style={{ fontWeight: 600 }}>Document date</span>
+            <input
+              type="date"
+              value={uploadDate}
+              onChange={(event) => setUploadDate(event.target.value)}
+              style={{
+                border: "1px solid #d1d5db",
+                borderRadius: "8px",
+                padding: "8px 12px",
+              }}
+            />
+            <small style={{ color: "#6b7280" }}>Leave empty to auto-detect from content</small>
+          </label>
+
+          <label style={{ display: "grid", gap: "4px" }}>
             <span style={{ fontWeight: 600 }}>Tags</span>
             <input
               type="text"
@@ -300,22 +315,6 @@ export default function DocumentsPage() {
               }}
             />
             <small style={{ color: "#6b7280" }}>Separate tags with commas</small>
-          </label>
-
-          <label style={{ display: "grid", gap: "4px" }}>
-            <span style={{ fontWeight: 600 }}>Summary</span>
-            <textarea
-              value={uploadSummary}
-              onChange={(event) => setUploadSummary(event.target.value)}
-              rows={2}
-              placeholder="Key points covered in the document"
-              style={{
-                border: "1px solid #d1d5db",
-                borderRadius: "8px",
-                padding: "8px 12px",
-                resize: "vertical",
-              }}
-            />
           </label>
 
           <label style={{ display: "grid", gap: "4px" }}>
@@ -506,8 +505,13 @@ function DocumentCard({ document, onDelete, isDeleting }: DocumentCardProps) {
       <header style={{ display: "flex", justifyContent: "space-between", gap: "12px", alignItems: "flex-start" }}>
         <div style={{ display: "grid", gap: "6px" }}>
           <h3 style={{ margin: 0, fontSize: "1.1rem", fontWeight: 600 }}>{document.title}</h3>
-          <span style={{ fontSize: "0.85rem", color: "#6b7280" }}>
-            Uploaded {formatDate(document.created_at)} · {formatBytes(document.file_size)} · {document.file_name}
+          <span style={{ fontSize: "0.85rem", color: "#6b7280", display: "flex", flexWrap: "wrap", gap: "8px" }}>
+            <span>Uploaded {formatDate(document.created_at)}</span>
+            <span>· {formatBytes(document.file_size)}</span>
+            <span>· {document.file_name}</span>
+            {document.document_date && (
+              <span>· Document date {formatDate(document.document_date)}</span>
+            )}
           </span>
         </div>
         <div style={{ display: "flex", gap: "8px" }}>
@@ -551,17 +555,31 @@ function DocumentCard({ document, onDelete, isDeleting }: DocumentCardProps) {
       </header>
 
       {document.tags.length > 0 && (
-        <div style={{ display: "flex", flexWrap: "wrap", gap: "6px", fontSize: "0.85rem", color: "#2563eb" }}>
-          <strong style={{ fontWeight: 600 }}>Tags:</strong>
-          {document.tags.map((tag) => (
-            <span key={tag}>#{tag}</span>
-          ))}
+        <div style={{ display: "grid", gap: "4px" }}>
+          <strong style={{ fontSize: "0.85rem", color: "#1d4ed8" }}>Tags</strong>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: "8px" }}>
+            {document.tags.map((tag) => (
+              <span
+                key={tag}
+                style={{
+                  background: "#eff6ff",
+                  color: "#1d4ed8",
+                  borderRadius: "999px",
+                  padding: "2px 10px",
+                  fontSize: "0.8rem",
+                  fontWeight: 600,
+                }}
+              >
+                {tag}
+              </span>
+            ))}
+          </div>
         </div>
       )}
 
-      {(document.summary || document.description || document.snippet) && (
+      {(document.description || document.snippet) && (
         <p style={{ margin: 0, color: "#374151", lineHeight: 1.5 }}>
-          {document.summary || document.description || document.snippet}
+          {document.description || document.snippet}
         </p>
       )}
 

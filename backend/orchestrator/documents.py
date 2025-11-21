@@ -5,6 +5,7 @@ import mimetypes
 import os
 import shutil
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence
 from uuid import uuid4
@@ -31,14 +32,17 @@ DOCUMENT_STORAGE_DIR = Path(
 DOCUMENT_STORAGE_DIR.mkdir(parents=True, exist_ok=True)
 
 MAX_CONTENT_CHARS = int(os.getenv("DOCUMENT_MAX_CONTENT_CHARS", "20000"))
-MAX_EMBED_CHARS = int(os.getenv("DOCUMENT_EMBED_MAX_CHARS", "4000"))
+MAX_EMBED_CHARS = int(os.getenv("DOCUMENT_EMBED_MAX_CHARS", "10000"))
 MAX_LABEL_PROMPT_CHARS = int(os.getenv("DOCUMENT_LABEL_PROMPT_CHARS", "4000"))
-MAX_SUGGESTED_TAGS = int(os.getenv("DOCUMENT_LABEL_MAX_COUNT", "5"))
+MAX_SUGGESTED_TAGS = int(os.getenv("DOCUMENT_LABEL_MAX_COUNT", "3"))
 MAX_TITLE_PROMPT_CHARS = int(os.getenv("DOCUMENT_TITLE_PROMPT_CHARS", "2000"))
+MAX_DATE_PROMPT_CHARS = int(os.getenv("DOCUMENT_DATE_PROMPT_CHARS", "2000"))
+MAX_DESCRIPTION_PROMPT_CHARS = int(os.getenv("DOCUMENT_DESCRIPTION_PROMPT_CHARS", "1200"))
 
 OLLAMA_HOST = os.getenv("OLLAMA_HOST", "http://localhost:11434")
 OLLAMA_CHAT_MODEL = os.getenv("OLLAMA_CHAT_MODEL")
 OLLAMA_TIMEOUT = int(os.getenv("OLLAMA_TIMEOUT", "60"))
+DOCUMENT_LLM_TIMEOUT = int(os.getenv("DOCUMENT_LLM_TIMEOUT", str(max(60, int(os.getenv("OLLAMA_TIMEOUT", "60"))))))
 
 
 @dataclass
@@ -54,9 +58,9 @@ def ingest_document(
     *,
     title: Optional[str],
     tags: Sequence[str] | None,
-    summary: Optional[str],
     description: Optional[str],
     upload: UploadFile,
+    document_date: Optional[datetime] = None,
 ) -> Dict[str, Any]:
     """Persist a new document, extracting text, embeddings, and tags."""
     provided_title = (title or "").strip()
@@ -70,15 +74,24 @@ def ingest_document(
     if content_text:
         content_text = content_text[:MAX_CONTENT_CHARS]
     else:
-        fallback = filter(None, [summary, description, provided_title, stored.file_name, document_id])
+        fallback = filter(None, [description, provided_title, stored.file_name, document_id])
         content_text = " ".join(fallback)
 
     embed_source = (content_text or "")[:MAX_EMBED_CHARS]
-    embedding = embed_text(embed_source)
+    embed_input = _translate_text_to_english(embed_source, MAX_EMBED_CHARS)
+    embedding = embed_text(embed_input)
 
     normalized_tags = _normalize_strings(tags)
-    suggested_tags = _suggest_additional_tags(content_text, normalized_tags)
-    merged_tags = _merge_tag_lists(normalized_tags, suggested_tags)
+    english_tags = _normalize_strings(_translate_tags_to_english(normalized_tags))
+    suggested_tags = _suggest_additional_tags(content_text, english_tags)
+    merged_tags = _merge_tag_lists(english_tags, suggested_tags)
+
+    provided_description = (description or "").strip()
+    generated_description: Optional[str] = None
+    final_description = provided_description
+    if not final_description:
+        generated_description = _summarize_description(content_text)
+        final_description = generated_description or _default_description(content_text, provided_title or stored.file_name or document_id)
 
     generated_title: Optional[str] = None
     final_title = provided_title
@@ -89,6 +102,12 @@ def ingest_document(
         )
         final_title = generated_title or _derive_title_from_filename(stored.file_name) or document_id
 
+    inferred_date: Optional[datetime] = None
+    final_date = document_date
+    if not final_date:
+        inferred_date = _suggest_document_date(content_text, fallback=final_description)
+        final_date = inferred_date
+
     raw_metadata = {
         "original_filename": upload.filename,
         "provided_mime_type": upload.content_type,
@@ -96,19 +115,25 @@ def ingest_document(
         "file_size": stored.size,
         "suggested_tags": suggested_tags,
         "title_generated": bool(generated_title),
+        "date_generated": bool(inferred_date),
+        "description_generated": bool(generated_description),
     }
     if generated_title:
         raw_metadata["generated_title"] = generated_title
+    if inferred_date:
+        raw_metadata["generated_date_iso"] = inferred_date.isoformat()
+    if generated_description:
+        raw_metadata["generated_description"] = generated_description
 
     row = _upsert_document(
         document_id=document_id,
         title=final_title,
         tags=merged_tags,
-        summary=summary,
-        description=description,
+        description=final_description,
         stored=stored,
         content=content_text,
         embedding=embedding,
+        document_date=final_date,
         raw_metadata=raw_metadata,
     )
     return _row_to_document(row, include_metadata=True, include_content=True)
@@ -124,11 +149,11 @@ def list_documents(limit: int = 200, offset: int = 0) -> List[Dict[str, Any]]:
                 document_id,
                 title,
                 tags,
-                summary,
                 description,
                 file_name,
                 file_mime,
                 file_size,
+                document_date,
                 created_at,
                 updated_at,
                 content
@@ -152,11 +177,11 @@ def get_document(document_id: str) -> Optional[Dict[str, Any]]:
                 document_id,
                 title,
                 tags,
-                summary,
                 description,
                 file_name,
                 file_mime,
                 file_size,
+                document_date,
                 created_at,
                 updated_at,
                 content,
@@ -330,7 +355,7 @@ def _suggest_additional_tags(content: str, tags: Sequence[str]) -> List[str]:
             {
                 "role": "system",
                 "content": (
-                    "You are a document librarian. Propose concise topical tags for reference. "
+                    "You are a document librarian. Propose concise topical tags in English for reference. "
                     "Respond with JSON in the shape {\"tags\": [\"tag\", ...]} using 1-3 word phrases."
                 ),
             },
@@ -353,7 +378,7 @@ def _suggest_additional_tags(content: str, tags: Sequence[str]) -> List[str]:
 
     try:
         response = requests.post(
-            f"{OLLAMA_HOST}/api/chat", json=payload, timeout=OLLAMA_TIMEOUT
+            f"{OLLAMA_HOST}/api/chat", json=payload, timeout=DOCUMENT_LLM_TIMEOUT
         )
         response.raise_for_status()
         data = response.json()
@@ -396,16 +421,202 @@ def _parse_suggested_tags_response(raw_content: str) -> List[str]:
     return parsed_tags
 
 
+def _suggest_document_date(content: str, fallback: Optional[str]) -> Optional[datetime]:
+    cleaned = (content or fallback or "").strip()
+    if not cleaned or not OLLAMA_CHAT_MODEL:
+        return None
+    excerpt = cleaned[:MAX_DATE_PROMPT_CHARS]
+    payload = {
+        "model": OLLAMA_CHAT_MODEL,
+        "messages": [
+            {
+                "role": "system",
+                "content": (
+                    "You extract dates from documents. Find the primary date the document was written or refers to. "
+                    "Respond with JSON like {\"date\": \"YYYY-MM-DD\"} or {\"date\": null} if unsure."
+                ),
+            },
+            {
+                "role": "user",
+                "content": (
+                    "Document excerpt:\n{excerpt}\n\n"
+                    "If a clear date is present, respond with it in ISO-8601 (YYYY-MM-DD or YYYY-MM-DDTHH:MM)."
+                ).format(excerpt=excerpt),
+            },
+        ],
+        "stream": False,
+    }
+    try:
+        response = requests.post(
+            f"{OLLAMA_HOST}/api/chat", json=payload, timeout=DOCUMENT_LLM_TIMEOUT
+        )
+        response.raise_for_status()
+        data = response.json()
+        message = data.get("message") or {}
+        raw_content = (message.get("content") or "").strip()
+        if not raw_content:
+            return None
+        candidate = _parse_date_response(raw_content)
+        if candidate:
+            return candidate
+    except Exception as exc:
+        print(f"[documents] Failed to infer date: {exc}")
+    return None
+
+
+def _parse_date_response(raw_content: str) -> Optional[datetime]:
+    try:
+        loaded = json.loads(raw_content)
+        if isinstance(loaded, dict):
+            value = loaded.get("date")
+        elif isinstance(loaded, list) and loaded:
+            value = loaded[0]
+        else:
+            value = loaded
+    except json.JSONDecodeError:
+        value = raw_content.splitlines()[0].strip()
+
+    if not value or value in {"null", "None"}:
+        return None
+    candidate = str(value).strip().strip('"')
+    if not candidate:
+        return None
+    for formatter in (_parse_iso_datetime, _parse_flexible_date):
+        dt = formatter(candidate)
+        if dt:
+            return dt
+    return None
+
+
+def _parse_iso_datetime(value: str) -> Optional[datetime]:
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except Exception:
+        return None
+
+
+def _parse_flexible_date(value: str) -> Optional[datetime]:
+    try:
+        return datetime.strptime(value, "%Y-%m-%d")
+    except Exception:
+        return None
+
+
+def _translate_text_to_english(text: str, max_chars: int) -> str:
+    trimmed = (text or "").strip()
+    if not trimmed or not OLLAMA_CHAT_MODEL:
+        return text
+    excerpt = trimmed[:max_chars]
+    payload = {
+        "model": OLLAMA_CHAT_MODEL,
+        "messages": [
+            {
+                "role": "system",
+                "content": "Translate the user's text into fluent English. Respond with the translation only.",
+            },
+            {
+                "role": "user",
+                "content": excerpt[:100],
+            },
+        ],
+        "stream": False,
+    }
+
+    print(f"Payload: {payload}")
+    try:
+        response = requests.post(f"{OLLAMA_HOST}/api/chat", json=payload, timeout=DOCUMENT_LLM_TIMEOUT)
+        response.raise_for_status()
+        data = response.json()
+        message = data.get("message") or {}
+        candidate = (message.get("content") or "").strip()
+        return candidate or text
+    except Exception as exc:
+        print(f"[documents] Failed to translate text: {exc}")
+        return text
+
+
+def _translate_tags_to_english(tags: Sequence[str]) -> List[str]:
+    normalized = [t for t in tags if t]
+    if not normalized or not OLLAMA_CHAT_MODEL:
+        return normalized
+    prompt = (
+        "Translate each of the following labels into concise English (1-3 words). "
+        "Respond with JSON like {\"tags\": [\"tag\", ...]} in the same order."
+    )
+    payload = {
+        "model": OLLAMA_CHAT_MODEL,
+        "messages": [
+            {"role": "system", "content": prompt},
+            {"role": "user", "content": json.dumps({"tags": normalized}, ensure_ascii=False)},
+        ],
+        "stream": False,
+    }
+    try:
+        response = requests.post(f"{OLLAMA_HOST}/api/chat", json=payload, timeout=DOCUMENT_LLM_TIMEOUT)
+        response.raise_for_status()
+        data = response.json()
+        message = data.get("message") or {}
+        raw = (message.get("content") or "").strip()
+        if not raw:
+            return normalized
+        parsed = json.loads(raw)
+        if isinstance(parsed, dict) and isinstance(parsed.get("tags"), list):
+            translated = []
+            for item in parsed["tags"]:
+                if isinstance(item, str):
+                    cleaned = item.strip()
+                    if cleaned:
+                        translated.append(cleaned)
+            return translated or normalized
+    except Exception as exc:
+        print(f"[documents] Failed to translate tags: {exc}")
+    return normalized
+
+
+def _summarize_description(content: str) -> Optional[str]:
+    cleaned = (content or "").strip()
+    if not cleaned or not OLLAMA_CHAT_MODEL:
+        return None
+    excerpt = cleaned[:MAX_DESCRIPTION_PROMPT_CHARS]
+    payload = {
+        "model": OLLAMA_CHAT_MODEL,
+        "messages": [
+            {
+                "role": "system",
+                "content": (
+                    "Provide a concise English description (<= 400 words) of the user's document excerpt. "
+                    "Highlight the main topic and purpose."
+                ),
+            },
+            {
+                "role": "user",
+                "content": excerpt,
+            },
+        ],
+        "stream": False,
+    }
+    try:
+        response = requests.post(f"{OLLAMA_HOST}/api/chat", json=payload, timeout=DOCUMENT_LLM_TIMEOUT)
+        response.raise_for_status()
+        data = response.json()
+        message = data.get("message") or {}
+        candidate = (message.get("content") or "").strip()
+        return candidate or None
+    except Exception as exc:
+        print(f"[documents] Failed to summarize description: {exc}")
+        return None
+
+
 def _upsert_document(
     *,
     document_id: str,
     title: str,
     tags: Sequence[str],
-    summary: Optional[str],
     description: Optional[str],
     stored: StoredFileInfo,
     content: str,
     embedding: Sequence[float],
+    document_date: Optional[datetime],
     raw_metadata: Dict[str, Any],
 ) -> Dict[str, Any]:
     with get_conn() as conn, conn.cursor() as cur:
@@ -415,12 +626,12 @@ def _upsert_document(
                 document_id,
                 title,
                 tags,
-                summary,
                 description,
                 file_path,
                 file_name,
                 file_mime,
                 file_size,
+                document_date,
                 content,
                 content_embed,
                 raw_metadata,
@@ -431,7 +642,6 @@ def _upsert_document(
             ON CONFLICT (document_id) DO UPDATE
               SET title = EXCLUDED.title,
                   tags = EXCLUDED.tags,
-                  summary = EXCLUDED.summary,
                   description = EXCLUDED.description,
                   file_path = EXCLUDED.file_path,
                   file_name = EXCLUDED.file_name,
@@ -439,17 +649,18 @@ def _upsert_document(
                   file_size = EXCLUDED.file_size,
                   content = EXCLUDED.content,
                   content_embed = EXCLUDED.content_embed,
+                  document_date = EXCLUDED.document_date,
                   raw_metadata = EXCLUDED.raw_metadata,
                   updated_at = NOW()
             RETURNING
                 document_id,
                 title,
                 tags,
-                summary,
                 description,
                 file_name,
                 file_mime,
                 file_size,
+                document_date,
                 created_at,
                 updated_at,
                 content,
@@ -459,12 +670,12 @@ def _upsert_document(
                 document_id,
                 title,
                 list(tags),
-                summary,
                 description,
                 str(stored.path),
                 stored.file_name,
                 stored.mime_type,
                 stored.size,
+                document_date,
                 content,
                 embedding,
                 json.dumps(raw_metadata),
@@ -544,11 +755,11 @@ def _fetch_documents(document_ids: Sequence[str]) -> List[Dict[str, Any]]:
                 document_id,
                 title,
                 tags,
-                summary,
                 description,
                 file_name,
                 file_mime,
                 file_size,
+                document_date,
                 created_at,
                 updated_at,
                 content
@@ -566,13 +777,13 @@ def _row_to_document(
     include_metadata: bool = False,
     include_content: bool = False,
 ) -> Dict[str, Any]:
-    snippet_source = row.get("summary") or row.get("description") or row.get("content") or ""
+    snippet_source = row.get("description") or row.get("content") or ""
     document: Dict[str, Any] = {
         "document_id": row["document_id"],
         "title": row["title"],
         "tags": row.get("tags") or [],
-        "summary": row.get("summary"),
         "description": row.get("description"),
+        "document_date": row.get("document_date"),
         "file_name": row.get("file_name"),
         "file_mime": row.get("file_mime"),
         "file_size": row.get("file_size"),
@@ -602,6 +813,13 @@ def _make_snippet(text: str, length: int = 160) -> str:
     if len(cleaned) <= length:
         return cleaned
     return cleaned[: length - 1] + "…"
+
+
+def _default_description(content: str, fallback: Optional[str]) -> str:
+    snippet = _make_snippet(content, 200)
+    if snippet:
+        return snippet
+    return fallback or "Document description unavailable"
 
 
 def _preferred_extension(filename: str, mime_type: Optional[str]) -> Optional[str]:
@@ -698,7 +916,7 @@ def _suggest_title(content: str, fallback: Optional[str]) -> Optional[str]:
     }
     try:
         response = requests.post(
-            f"{OLLAMA_HOST}/api/chat", json=payload, timeout=OLLAMA_TIMEOUT
+            f"{OLLAMA_HOST}/api/chat", json=payload, timeout=DOCUMENT_LLM_TIMEOUT
         )
         response.raise_for_status()
         data = response.json()

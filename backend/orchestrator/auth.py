@@ -126,8 +126,5 @@ async def get_current_user(authorization: Optional[str] = Header(None)) -> dict:
     
     check_user_allowed(email)
     
-    # Log successful authentication
-    print(f"Auth: {email} | {user_info.get('name', 'Unknown')}")
-    
     return user_info
 
