@@ -7,7 +7,7 @@ from typing import List, Optional
 import json
 import os
 
-from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Response, UploadFile
+from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Query, Response, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 
@@ -184,9 +184,10 @@ def ingest_event(e: EventIn, user: dict = Depends(get_current_user)):
     return {"ok": True, "id": e.id}
 
 
+# --------------------------- Document endpoints ---------------------------
 @api.post("/documents", response_model=DocumentDetailOut)
 async def upload_document(
-    title: str = Form(...),
+    title: Optional[str] = Form(None),
     tags: Optional[str] = Form(None),
     summary: Optional[str] = Form(None),
     description: Optional[str] = Form(None),
@@ -216,8 +217,12 @@ async def upload_document(
 
 
 @api.get("/documents", response_model=DocumentCollection)
-def list_documents(user: dict = Depends(get_current_user)):
-    docs = documents.list_documents()
+def list_documents(
+    limit: int = Query(200, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    user: dict = Depends(get_current_user),
+):
+    docs = documents.list_documents(limit=limit, offset=offset)
     return DocumentCollection(documents=docs)
 
 

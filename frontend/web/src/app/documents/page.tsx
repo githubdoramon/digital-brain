@@ -9,7 +9,6 @@ type DocumentItem = {
   tags: string[];
   summary?: string | null;
   description?: string | null;
-  labels: string[];
   file_name: string;
   file_mime?: string | null;
   file_size?: number | null;
@@ -107,12 +106,8 @@ export default function DocumentsPage() {
         setStatus({ kind: "error", message: "Select a file before uploading" });
         return;
       }
-      const trimmedTitle = uploadTitle.trim();
-      if (!trimmedTitle) {
-        setStatus({ kind: "error", message: "Document title is required" });
-        return;
-      }
 
+      const trimmedTitle = uploadTitle.trim();
       const tags = parseTagsInput(uploadTags);
       const formData = new FormData();
       formData.append("title", trimmedTitle);
@@ -276,19 +271,19 @@ export default function DocumentsPage() {
         <h2 style={{ fontSize: "1.25rem", fontWeight: 600 }}>Upload new document</h2>
         <form style={{ display: "grid", gap: "12px" }} onSubmit={handleUpload}>
           <label style={{ display: "grid", gap: "4px" }}>
-            <span style={{ fontWeight: 600 }}>Title *</span>
+            <span style={{ fontWeight: 600 }}>Title</span>
             <input
               type="text"
               value={uploadTitle}
               onChange={(event) => setUploadTitle(event.target.value)}
               placeholder="Quarterly financial report"
-              required
               style={{
                 border: "1px solid #d1d5db",
                 borderRadius: "8px",
                 padding: "8px 12px",
               }}
             />
+            <small style={{ color: "#6b7280" }}>Leave empty to auto-generate from content</small>
           </label>
 
           <label style={{ display: "grid", gap: "4px" }}>
@@ -555,28 +550,12 @@ function DocumentCard({ document, onDelete, isDeleting }: DocumentCardProps) {
         </div>
       </header>
 
-      {(document.tags.length > 0 || document.labels.length > 0) && (
-        <div style={{ display: "flex", flexWrap: "wrap", gap: "8px", fontSize: "0.85rem" }}>
-          {document.tags.length > 0 && (
-            <span style={{ color: "#2563eb" }}>
-              Tags:{" "}
-              {document.tags.map((tag) => (
-                <span key={tag} style={{ marginRight: "6px" }}>
-                  #{tag}
-                </span>
-              ))}
-            </span>
-          )}
-          {document.labels.length > 0 && (
-            <span style={{ color: "#059669" }}>
-              Labels:{" "}
-              {document.labels.map((label) => (
-                <span key={label} style={{ marginRight: "6px" }}>
-                  {label}
-                </span>
-              ))}
-            </span>
-          )}
+      {document.tags.length > 0 && (
+        <div style={{ display: "flex", flexWrap: "wrap", gap: "6px", fontSize: "0.85rem", color: "#2563eb" }}>
+          <strong style={{ fontWeight: 600 }}>Tags:</strong>
+          {document.tags.map((tag) => (
+            <span key={tag}>#{tag}</span>
+          ))}
         </div>
       )}
 

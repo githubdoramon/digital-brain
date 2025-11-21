@@ -33,7 +33,8 @@ DOCUMENT_STORAGE_DIR.mkdir(parents=True, exist_ok=True)
 MAX_CONTENT_CHARS = int(os.getenv("DOCUMENT_MAX_CONTENT_CHARS", "20000"))
 MAX_EMBED_CHARS = int(os.getenv("DOCUMENT_EMBED_MAX_CHARS", "4000"))
 MAX_LABEL_PROMPT_CHARS = int(os.getenv("DOCUMENT_LABEL_PROMPT_CHARS", "4000"))
-MAX_LABELS = int(os.getenv("DOCUMENT_LABEL_MAX_COUNT", "5"))
+MAX_SUGGESTED_TAGS = int(os.getenv("DOCUMENT_LABEL_MAX_COUNT", "5"))
+MAX_TITLE_PROMPT_CHARS = int(os.getenv("DOCUMENT_TITLE_PROMPT_CHARS", "2000"))
 
 OLLAMA_HOST = os.getenv("OLLAMA_HOST", "http://localhost:11434")
 OLLAMA_CHAT_MODEL = os.getenv("OLLAMA_CHAT_MODEL")
@@ -51,16 +52,14 @@ class StoredFileInfo:
 
 def ingest_document(
     *,
-    title: str,
+    title: Optional[str],
     tags: Sequence[str] | None,
     summary: Optional[str],
     description: Optional[str],
     upload: UploadFile,
 ) -> Dict[str, Any]:
-    """Persist a new document, extracting text, embeddings, and labels."""
-    cleaned_title = (title or "").strip()
-    if not cleaned_title:
-        raise DocumentProcessingError("Document title is required")
+    """Persist a new document, extracting text, embeddings, and tags."""
+    provided_title = (title or "").strip()
     if not upload:
         raise DocumentProcessingError("File upload is required")
 
@@ -71,39 +70,53 @@ def ingest_document(
     if content_text:
         content_text = content_text[:MAX_CONTENT_CHARS]
     else:
-        fallback = filter(None, [summary, description, cleaned_title])
+        fallback = filter(None, [summary, description, provided_title, stored.file_name, document_id])
         content_text = " ".join(fallback)
 
     embed_source = (content_text or "")[:MAX_EMBED_CHARS]
     embedding = embed_text(embed_source)
 
     normalized_tags = _normalize_strings(tags)
-    generated_labels = _suggest_labels(content_text, normalized_tags)
-    labels = _normalize_strings(generated_labels)
+    suggested_tags = _suggest_additional_tags(content_text, normalized_tags)
+    merged_tags = _merge_tag_lists(normalized_tags, suggested_tags)
+
+    generated_title: Optional[str] = None
+    final_title = provided_title
+    if not final_title:
+        generated_title = _suggest_title(
+            content_text,
+            fallback=stored.file_name or document_id,
+        )
+        final_title = generated_title or _derive_title_from_filename(stored.file_name) or document_id
 
     raw_metadata = {
         "original_filename": upload.filename,
         "provided_mime_type": upload.content_type,
         "stored_mime_type": stored.mime_type,
         "file_size": stored.size,
+        "suggested_tags": suggested_tags,
+        "title_generated": bool(generated_title),
     }
+    if generated_title:
+        raw_metadata["generated_title"] = generated_title
 
     row = _upsert_document(
         document_id=document_id,
-        title=cleaned_title,
-        tags=normalized_tags,
+        title=final_title,
+        tags=merged_tags,
         summary=summary,
         description=description,
         stored=stored,
         content=content_text,
         embedding=embedding,
-        labels=labels,
         raw_metadata=raw_metadata,
     )
     return _row_to_document(row, include_metadata=True, include_content=True)
 
 
-def list_documents(limit: int = 200) -> List[Dict[str, Any]]:
+def list_documents(limit: int = 200, offset: int = 0) -> List[Dict[str, Any]]:
+    limit = max(1, min(limit, 200))
+    offset = max(0, offset)
     with get_conn() as conn, conn.cursor() as cur:
         cur.execute(
             """
@@ -116,15 +129,14 @@ def list_documents(limit: int = 200) -> List[Dict[str, Any]]:
                 file_name,
                 file_mime,
                 file_size,
-                labels,
                 created_at,
                 updated_at,
                 content
             FROM documents
             ORDER BY created_at DESC
-            LIMIT %s
+            LIMIT %s OFFSET %s
             """,
-            (limit,),
+            (limit, offset),
         )
         rows = cur.fetchall()
     return [_row_to_document(row) for row in rows]
@@ -145,7 +157,6 @@ def get_document(document_id: str) -> Optional[Dict[str, Any]]:
                 file_name,
                 file_mime,
                 file_size,
-                labels,
                 created_at,
                 updated_at,
                 content,
@@ -307,7 +318,7 @@ def _extract_text(path: Path, mime_type: Optional[str]) -> str:
         return ""
 
 
-def _suggest_labels(content: str, tags: Sequence[str]) -> List[str]:
+def _suggest_additional_tags(content: str, tags: Sequence[str]) -> List[str]:
     cleaned = (content or "").strip()
     if not cleaned or not OLLAMA_CHAT_MODEL:
         return []
@@ -319,8 +330,8 @@ def _suggest_labels(content: str, tags: Sequence[str]) -> List[str]:
             {
                 "role": "system",
                 "content": (
-                    "You are a document librarian. Propose concise topical labels for reference. "
-                    "Respond with JSON in the shape {\"labels\": [\"label\", ...]} using 1-3 word phrases."
+                    "You are a document librarian. Propose concise topical tags for reference. "
+                    "Respond with JSON in the shape {\"tags\": [\"tag\", ...]} using 1-3 word phrases."
                 ),
             },
             {
@@ -329,11 +340,11 @@ def _suggest_labels(content: str, tags: Sequence[str]) -> List[str]:
                     "Existing tags: {existing_tags}\n"
                     "Document excerpt:\n"
                     "{excerpt}\n\n"
-                    "Return up to {max_labels} new labels relevant to the content."
+                    "Return up to {max_tags} new tags relevant to the content."
                 ).format(
                     existing_tags=existing,
                     excerpt=prompt_content,
-                    max_labels=MAX_LABELS,
+                    max_tags=MAX_SUGGESTED_TAGS,
                 ),
             },
         ],
@@ -350,25 +361,30 @@ def _suggest_labels(content: str, tags: Sequence[str]) -> List[str]:
         raw_content = (message.get("content") or "").strip()
         if not raw_content:
             return []
-        parsed = _parse_labels_response(raw_content)
-        return parsed[:MAX_LABELS]
+        parsed = _parse_suggested_tags_response(raw_content)
+        return parsed[:MAX_SUGGESTED_TAGS]
     except Exception as exc:
-        print(f"[documents] Failed to generate labels: {exc}")
+        print(f"[documents] Failed to generate tags: {exc}")
         return []
 
 
-def _parse_labels_response(raw_content: str) -> List[str]:
+def _parse_suggested_tags_response(raw_content: str) -> List[str]:
     try:
         loaded = json.loads(raw_content)
-        if isinstance(loaded, dict) and "labels" in loaded:
-            candidate = loaded["labels"]
+        if isinstance(loaded, dict):
+            if "tags" in loaded:
+                candidate = loaded["tags"]
+            elif "labels" in loaded:
+                candidate = loaded["labels"]
+            else:
+                candidate = loaded
         else:
             candidate = loaded
     except json.JSONDecodeError:
         lines = [line.strip("-• ").strip() for line in raw_content.splitlines()]
         candidate = [line for line in lines if line]
 
-    labels: List[str] = []
+    parsed_tags: List[str] = []
     if isinstance(candidate, dict):
         candidate = list(candidate.values())
     if isinstance(candidate, list):
@@ -376,8 +392,8 @@ def _parse_labels_response(raw_content: str) -> List[str]:
             if isinstance(item, str):
                 label = item.strip()
                 if label:
-                    labels.append(label)
-    return labels
+                    parsed_tags.append(label)
+    return parsed_tags
 
 
 def _upsert_document(
@@ -390,7 +406,6 @@ def _upsert_document(
     stored: StoredFileInfo,
     content: str,
     embedding: Sequence[float],
-    labels: Sequence[str],
     raw_metadata: Dict[str, Any],
 ) -> Dict[str, Any]:
     with get_conn() as conn, conn.cursor() as cur:
@@ -408,12 +423,11 @@ def _upsert_document(
                 file_size,
                 content,
                 content_embed,
-                labels,
                 raw_metadata,
                 created_at,
                 updated_at
             )
-            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,NOW(),NOW())
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,NOW(),NOW())
             ON CONFLICT (document_id) DO UPDATE
               SET title = EXCLUDED.title,
                   tags = EXCLUDED.tags,
@@ -425,7 +439,6 @@ def _upsert_document(
                   file_size = EXCLUDED.file_size,
                   content = EXCLUDED.content,
                   content_embed = EXCLUDED.content_embed,
-                  labels = EXCLUDED.labels,
                   raw_metadata = EXCLUDED.raw_metadata,
                   updated_at = NOW()
             RETURNING
@@ -437,7 +450,6 @@ def _upsert_document(
                 file_name,
                 file_mime,
                 file_size,
-                labels,
                 created_at,
                 updated_at,
                 content,
@@ -455,7 +467,6 @@ def _upsert_document(
                 stored.size,
                 content,
                 embedding,
-                list(labels),
                 json.dumps(raw_metadata),
             ),
         )
@@ -538,7 +549,6 @@ def _fetch_documents(document_ids: Sequence[str]) -> List[Dict[str, Any]]:
                 file_name,
                 file_mime,
                 file_size,
-                labels,
                 created_at,
                 updated_at,
                 content
@@ -563,7 +573,6 @@ def _row_to_document(
         "tags": row.get("tags") or [],
         "summary": row.get("summary"),
         "description": row.get("description"),
-        "labels": row.get("labels") or [],
         "file_name": row.get("file_name"),
         "file_mime": row.get("file_mime"),
         "file_size": row.get("file_size"),
@@ -630,4 +639,74 @@ def _normalize_strings(values: Iterable[str] | None) -> List[str]:
         seen.add(lower)
         normalized.append(candidate)
     return normalized
+
+
+def _merge_tag_lists(primary: Sequence[str], secondary: Sequence[str]) -> List[str]:
+    merged: List[str] = list(primary or [])
+    seen = {tag.lower() for tag in merged if isinstance(tag, str)}
+    for tag in secondary:
+        if not isinstance(tag, str):
+            continue
+        candidate = tag.strip()
+        if not candidate:
+            continue
+        lowered = candidate.lower()
+        if lowered in seen:
+            continue
+        merged.append(candidate)
+        seen.add(lowered)
+    return merged
+
+
+def _derive_title_from_filename(filename: Optional[str]) -> Optional[str]:
+    if not filename:
+        return None
+    stem = Path(filename).stem
+    cleaned = stem.replace("_", " ").replace("-", " ").strip()
+    if not cleaned:
+        return None
+    parts = [part for part in cleaned.split() if part]
+    if not parts:
+        return None
+    return " ".join(word.capitalize() for word in parts)
+
+
+def _suggest_title(content: str, fallback: Optional[str]) -> Optional[str]:
+    cleaned = (content or "").strip()
+    if not cleaned or not OLLAMA_CHAT_MODEL:
+        return _derive_title_from_filename(fallback)
+    excerpt = cleaned[:MAX_TITLE_PROMPT_CHARS]
+    payload = {
+        "model": OLLAMA_CHAT_MODEL,
+        "messages": [
+            {
+                "role": "system",
+                "content": (
+                    "You generate concise, descriptive document titles (maximum 8 words). "
+                    "Respond with text only, no JSON."
+                ),
+            },
+            {
+                "role": "user",
+                "content": (
+                    "Suggest a short title for the following document excerpt:\n\n"
+                    "{excerpt}"
+                ).format(excerpt=excerpt),
+            },
+        ],
+        "stream": False,
+    }
+    try:
+        response = requests.post(
+            f"{OLLAMA_HOST}/api/chat", json=payload, timeout=OLLAMA_TIMEOUT
+        )
+        response.raise_for_status()
+        data = response.json()
+        message = data.get("message") or {}
+        candidate = (message.get("content") or "").strip()
+        if candidate:
+            return candidate.splitlines()[0].strip()
+    except Exception as exc:
+        print(f"[documents] Failed to generate title: {exc}")
+    return _derive_title_from_filename(fallback)
 

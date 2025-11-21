@@ -73,7 +73,6 @@ class DocumentOut(BaseModel):
     tags: List[str] = Field(default_factory=list)
     summary: Optional[str] = None
     description: Optional[str] = None
-    labels: List[str] = Field(default_factory=list)
     file_name: str
     file_mime: Optional[str] = None
     file_size: Optional[int] = None

@@ -109,7 +109,6 @@ CREATE TABLE IF NOT EXISTS documents (
   content TEXT,
   content_embed VECTOR(768),
   content_tsv tsvector,
-  labels TEXT[] DEFAULT '{}'::TEXT[],
   raw_metadata JSONB DEFAULT '{}'::JSONB,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
@@ -130,7 +129,6 @@ FOR EACH ROW EXECUTE FUNCTION documents_tsv_update();
 -- Indices
 CREATE INDEX IF NOT EXISTS idx_documents_created_at ON documents (created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_documents_tags ON documents USING GIN (tags);
-CREATE INDEX IF NOT EXISTS idx_documents_labels ON documents USING GIN (labels);
 CREATE INDEX IF NOT EXISTS idx_documents_content_tsv ON documents USING GIN (content_tsv);
 CREATE INDEX IF NOT EXISTS idx_documents_embed ON documents USING ivfflat (content_embed) WITH (lists = 100);
 
