@@ -958,7 +958,7 @@ export default function ContactsPage() {
                     onChange={handleChange("external_id")}
                     placeholder="External system person identifier"
                     style={{
-                      border: "1px solid "#d0d0d0",
+                      border: "1px solid #d0d0d0",
                       borderRadius: "8px",
                       padding: "10px 12px",
                       fontSize: "0.95rem",
