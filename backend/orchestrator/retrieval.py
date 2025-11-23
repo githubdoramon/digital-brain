@@ -18,7 +18,7 @@ from schemas import (
     ContactIn,
     ContactRelationshipIn,
     EventIn,
-    ExternalContactPayload,
+    ExternalPerson,
     MeetingIn,
     TodoIn,
 )
@@ -276,24 +276,15 @@ def _generate_external_contact_id(external_id: str) -> str:
     return f"contact:external:{safe}"
 
 
-def sync_external_contact(record: ExternalContactPayload) -> Dict[str, Any]:
+def sync_external_contact(record: ExternalPerson, previous: Optional[ExternalPerson] = None) -> Dict[str, Any]:
     external_id = str(record.id).strip()
     if not external_id:
         raise ValueError("External contact id is required")
 
-    preferred_name = (
-        getattr(record, "display_name", None)
-        or getattr(record, "full_name", None)
-        or record.name
-    )
+    preferred_name = record.name or (previous.name if previous else None)
     display_name = (preferred_name or f"External Contact {external_id}").strip()
 
-    aliases = _merge_lists(getattr(record, "aliases", []) or [])
-    emails = _merge_emails(getattr(record, "emails", []) or [])
-    phones = _merge_lists(getattr(record, "phones", []) or [])
-    links = _merge_lists(getattr(record, "links", []) or [])
-    tags = _merge_lists(getattr(record, "tags", []) or [], ["external-sync"])
-    birthday = getattr(record, "birth_date", None) or getattr(record, "birthday", None)
+    birthday = getattr(record, "birth_date", None) or getattr(previous, "birth_date", None)
     if isinstance(birthday, str):
         try:
             birthday = date.fromisoformat(birthday.split("T", 1)[0])
@@ -351,11 +342,11 @@ def sync_external_contact(record: ExternalContactPayload) -> Dict[str, Any]:
         existing_display = existing_row["display_name"] if existing_row else None
         existing_birthday = existing_row["birthday"] if existing_row else None
 
-    merged_aliases = _merge_lists(existing_aliases, aliases)
-    merged_emails = _merge_emails(existing_emails, emails)
-    merged_phones = _merge_lists(existing_phones, phones)
-    merged_links = _merge_lists(existing_links, links)
-    merged_tags = _merge_lists(existing_tags, tags)
+    merged_aliases = _merge_lists(existing_aliases)
+    merged_emails = _merge_emails(existing_emails)
+    merged_phones = _merge_lists(existing_phones)
+    merged_links = _merge_lists(existing_links)
+    merged_tags = _merge_lists(existing_tags)
 
     final_display_name = existing_display or display_name
     final_birthday = existing_birthday or birthday

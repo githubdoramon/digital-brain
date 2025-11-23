@@ -163,20 +163,21 @@ def receive_contact_webhook(
     _: None = Depends(require_service_api_key),
 ):
     event_name = (payload.event_name or "").lower()
-    external_contact = payload.payload
-    if not external_contact or not external_contact.id:
+    payload_body = payload.payload
+    person = payload_body.person if payload_body else None
+    if not person or not person.id:
         raise HTTPException(status_code=400, detail="Webhook payload is missing person information")
 
     if event_name == "persondelete":
         try:
-            updated = retrieval.unlink_external_contact(external_contact.id)
+            updated = retrieval.unlink_external_contact(person.id)
         except Exception as exc:
             raise HTTPException(status_code=500, detail=f"Failed to unlink external contact: {exc}") from exc
         return {"ok": True, "action": "unlinked" if updated else "ignored"}
 
     if event_name in {"personcreate", "personupdate"}:
         try:
-            contact = retrieval.sync_external_contact(external_contact)
+            contact = retrieval.sync_external_contact(person, payload_body.previous if payload_body else None)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         except Exception as exc:

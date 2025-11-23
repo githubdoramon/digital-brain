@@ -58,10 +58,43 @@ class ContactRelationshipIn(BaseModel):
     reciprocal_type: Optional[str] = None
 
 
-class ExternalContactPayload(BaseModel):
+class ExternalPerson(BaseModel):
     id: str
     name: Optional[str] = None
-    birth_date: Optional[date] = Field(default=None, alias="birthDate")
+    birth_date: Optional[str] = Field(default=None, alias="birthDate")
+    thumbnail_path: Optional[str] = Field(default=None, alias="thumbnailPath")
+    face_asset_id: Optional[str] = Field(default=None, alias="faceAssetId")
+    is_hidden: Optional[bool] = Field(default=None, alias="isHidden")
+    is_favorite: Optional[bool] = Field(default=None, alias="isFavorite")
+    color: Optional[str] = None
+    created_at: Optional[datetime] = Field(default=None, alias="createdAt")
+    updated_at: Optional[datetime] = Field(default=None, alias="updatedAt")
+    owner_id: Optional[str] = Field(default=None, alias="ownerId")
+    update_id: Optional[str] = Field(default=None, alias="updateId")
+
+    class Config:
+        allow_population_by_field_name = True
+        extra = "allow"
+
+
+class ExternalContactPayload(BaseModel):
+    person: ExternalPerson
+    previous: Optional[ExternalPerson] = None
+    actor_id: Optional[str] = Field(default=None, alias="actorId")
+
+    class Config:
+        allow_population_by_field_name = True
+        extra = "allow"
+
+
+class ExternalWebhookInfo(BaseModel):
+    id: str
+    url: Optional[str] = None
+    method: Optional[str] = None
+    headers: Dict[str, str] = Field(default_factory=dict)
+    timeout: Optional[int] = None
+    retries: Optional[int] = None
+    backoff_ms: Optional[int] = Field(default=None, alias="backoffMs")
 
     class Config:
         allow_population_by_field_name = True
@@ -69,10 +102,11 @@ class ExternalContactPayload(BaseModel):
 
 
 class ExternalContactWebhook(BaseModel):
-    id: str
+    webhook: Optional[ExternalWebhookInfo] = None
     event_name: str = Field(alias="eventName")
     timestamp: datetime
     payload: ExternalContactPayload
+    delivery_id: str = Field(alias="deliveryId")
 
     class Config:
         extra = "allow"
