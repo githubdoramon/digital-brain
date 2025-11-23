@@ -276,6 +276,13 @@ def _generate_external_contact_id(external_id: str) -> str:
     return f"contact:external:{safe}"
 
 
+def _is_default_external_display(name: Optional[str], external_id: str) -> bool:
+    if not name:
+        return True
+    expected = f"external contact {external_id}".strip()
+    return name.strip().lower() == expected
+
+
 def sync_external_contact(record: ExternalPerson, previous: Optional[ExternalPerson] = None) -> Dict[str, Any]:
     external_id = str(record.id).strip()
     if not external_id:
@@ -348,7 +355,14 @@ def sync_external_contact(record: ExternalPerson, previous: Optional[ExternalPer
     merged_links = _merge_lists(existing_links)
     merged_tags = _merge_lists(existing_tags)
 
-    final_display_name = existing_display or display_name
+    new_display_name = display_name.strip() if display_name else None
+    final_display_name = existing_display
+    if final_display_name:
+        if _is_default_external_display(final_display_name, external_id) and new_display_name and not _is_default_external_display(new_display_name, external_id):
+            final_display_name = new_display_name
+    else:
+        final_display_name = new_display_name or f"External Contact {external_id}"
+
     final_birthday = existing_birthday or birthday
 
     ingest_contact(
