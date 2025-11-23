@@ -106,7 +106,7 @@ class ExternalContactWebhook(BaseModel):
     event_name: str = Field(alias="eventName")
     timestamp: datetime
     payload: ExternalContactPayload
-    delivery_id: str = Field(alias="deliveryId")
+    id: str
 
     class Config:
         extra = "allow"
