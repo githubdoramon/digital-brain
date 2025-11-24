@@ -135,6 +135,20 @@ def delete_contact_relationship(relationship_id: str, user: dict = Depends(get_c
 def list_contacts(user: dict = Depends(get_current_user)):
     return {"contacts": retrieval.list_contacts()}
 
+@api.get("/contacts/merge-candidates")
+def list_merge_candidates(user: dict = Depends(get_current_user)):
+    return retrieval.list_contact_merge_candidates()
+
+
+@api.post("/contacts/merge")
+def merge_contacts_endpoint(payload: ContactMergeIn, user: dict = Depends(get_current_user)):
+    try:
+        contact = retrieval.merge_contacts(payload.primary_contact_id, payload.duplicate_contact_id)
+    except LookupError:
+        raise HTTPException(status_code=404, detail="One or both contacts not found")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"ok": True, "contact": contact}
 
 @api.get("/contacts/{contact_id}")
 def get_contact(contact_id: str, user: dict = Depends(get_current_user)):
@@ -185,22 +199,6 @@ def receive_contact_webhook(
         return {"ok": True, "contact": contact}
 
     raise HTTPException(status_code=400, detail=f"Unsupported eventName: {payload.event_name}")
-
-@api.get("/contacts/merge-candidates")
-def list_merge_candidates(user: dict = Depends(get_current_user)):
-    return retrieval.list_contact_merge_candidates()
-
-
-@api.post("/contacts/merge")
-def merge_contacts_endpoint(payload: ContactMergeIn, user: dict = Depends(get_current_user)):
-    try:
-        contact = retrieval.merge_contacts(payload.primary_contact_id, payload.duplicate_contact_id)
-    except LookupError:
-        raise HTTPException(status_code=404, detail="One or both contacts not found")
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return {"ok": True, "contact": contact}
-
 
 @api.post("/ingest/place")
 def ingest_place(p: PlaceIn, user: dict = Depends(get_current_user)):
