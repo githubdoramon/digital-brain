@@ -190,6 +190,7 @@ class AskOut(BaseModel):
     resolution: Dict[str, Any]
     search_results: List[Dict[str, Any]]
     detailed_events: List[Dict[str, Any]]
+    document_results: List[Dict[str, Any]] = Field(default_factory=list)
     session_id: Optional[str] = None
     thread_id: Optional[str] = None
     thread_title: Optional[str] = None

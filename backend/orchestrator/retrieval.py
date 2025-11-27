@@ -1423,39 +1423,94 @@ def search_memories(
         except Exception:
             span = None
 
-    vec = vector_search(query, 50)
-    bm = bm25_search(query, 50)
-    st = structured_candidates(span, list(people or []), list(place_ids or []), 200)
+    normalized_query = (query or "").strip()
 
-    cand_ids = set(vec) | set(bm) | set(st)
-    scored: List[Tuple[str, float]] = []
-    for i in cand_ids:
-        v = vec.get(i, 0.0)
-        b = bm.get(i, 0.0)
-        s = st.get(i, 0.0)
+    vec_events = vector_search(normalized_query or "", 50)
+    bm_events = bm25_search(normalized_query, 50) if normalized_query else {}
+    st_events = structured_candidates(span, list(people or []), list(place_ids or []), 200)
+
+    vec_docs = vector_search_documents(normalized_query, 50) if normalized_query else {}
+    bm_docs = bm25_search_documents(normalized_query, 50) if normalized_query else {}
+
+    event_ids = set(vec_events) | set(bm_events) | set(st_events)
+    event_scores: Dict[str, float] = {}
+    for event_id in event_ids:
+        v = vec_events.get(event_id, 0.0)
+        b = bm_events.get(event_id, 0.0)
+        s = st_events.get(event_id, 0.0)
         bonus = 0.05 if s > 0 else 0.0
-        scored.append((i, 0.6 * v + 0.3 * b + 0.1 * s + bonus))
-    scored.sort(key=lambda x: x[1], reverse=True)
-    top_ids = [i for i, _ in scored[:limit]]
+        event_scores[event_id] = 0.6 * v + 0.3 * b + 0.1 * s + bonus
 
-    rows = fetch_events(top_ids)
-    results = [
-        {
-            "id": r["id"],
-            "ts": r["ts"].isoformat(),
-            "place": {
-                "place_id": r["place_id"],
-                "name": r["place_name"],
-                "city": r["city"],
-                "country": r["country"],
-            },
-            "people": r["people"],
-            "tags": r["tags"],
-            "types": r.get("types", []),
-            "snippet": make_snippet(r["what_text"]),
-        }
-        for r in rows
-    ]
+    doc_ids = set(vec_docs) | set(bm_docs)
+    doc_scores: Dict[str, float] = {}
+    for doc_id in doc_ids:
+        v = vec_docs.get(doc_id, 0.0)
+        b = bm_docs.get(doc_id, 0.0)
+        doc_scores[doc_id] = 0.6 * v + 0.4 * b
+
+    combined: List[Tuple[str, str, float]] = []
+    combined.extend((event_id, "event", event_scores[event_id]) for event_id in event_scores)
+    combined.extend((doc_id, "document", doc_scores[doc_id]) for doc_id in doc_scores)
+    combined.sort(key=lambda item: item[2], reverse=True)
+
+    if not combined:
+        return {"results": []}
+
+    final_limit = max(1, int(limit))
+    top_combined = combined[:final_limit]
+
+    event_ids_ordered = [item_id for item_id, kind, _ in top_combined if kind == "event"]
+    doc_ids_ordered = [item_id for item_id, kind, _ in top_combined if kind == "document"]
+
+    event_rows = fetch_events(event_ids_ordered) if event_ids_ordered else []
+    event_lookup = {row["id"]: row for row in event_rows}
+
+    doc_lookup = fetch_document_summaries(doc_ids_ordered) if doc_ids_ordered else {}
+
+    results: List[Dict[str, Any]] = []
+    for item_id, kind, _ in top_combined:
+        if kind == "event":
+            row = event_lookup.get(item_id)
+            if not row:
+                continue
+            results.append(
+                {
+                    "id": row["id"],
+                    "kind": "event",
+                    "ts": row["ts"].isoformat(),
+                    "place": {
+                        "place_id": row["place_id"],
+                        "name": row["place_name"],
+                        "city": row["city"],
+                        "country": row["country"],
+                    },
+                    "people": row["people"],
+                    "tags": row["tags"],
+                    "types": row.get("types", []),
+                    "snippet": make_snippet(row["what_text"]),
+                }
+            )
+        else:
+            doc = doc_lookup.get(item_id)
+            if not doc:
+                continue
+            results.append(
+                {
+                    "id": doc["document_id"],
+                    "kind": "document",
+                    "title": doc.get("title"),
+                    "description": doc.get("description"),
+                    "tags": doc.get("tags", []),
+                    "document_date": _isoformat(doc.get("document_date")),
+                    "created_at": _isoformat(doc.get("created_at")),
+                    "updated_at": _isoformat(doc.get("updated_at")),
+                    "download_url": doc.get("download_url"),
+                    "file_name": doc.get("file_name"),
+                    "file_mime": doc.get("file_mime"),
+                    "file_size": doc.get("file_size"),
+                    "snippet": doc.get("snippet", ""),
+                }
+            )
 
     return {"results": results}
 
@@ -1475,6 +1530,24 @@ def vector_search(query: str, k: int = 50):
         return {r["id"]: float(r["vscore"]) for r in cur.fetchall()}
 
 
+def vector_search_documents(query: str, k: int = 50) -> Dict[str, float]:
+    if not query:
+        return {}
+    qvec = embed_text(query)
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT document_id, 1 - (content_embed <=> %s::vector) AS vscore
+            FROM documents
+            WHERE content_embed IS NOT NULL
+            ORDER BY content_embed <=> %s::vector
+            LIMIT %s
+            """,
+            (qvec, qvec, k),
+        )
+        return {r["document_id"]: float(r["vscore"]) for r in cur.fetchall()}
+
+
 def bm25_search(query: str, k: int = 50):
     with get_conn() as conn, conn.cursor() as cur:
         cur.execute(
@@ -1488,6 +1561,23 @@ def bm25_search(query: str, k: int = 50):
             (query, query, k),
         )
         return {r["id"]: float(r["bscore"]) for r in cur.fetchall()}
+
+
+def bm25_search_documents(query: str, k: int = 50) -> Dict[str, float]:
+    if not query:
+        return {}
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT document_id, ts_rank_cd(content_tsv, plainto_tsquery('english', %s)) AS bscore
+            FROM documents
+            WHERE content_tsv @@ plainto_tsquery('english', %s)
+            ORDER BY bscore DESC
+            LIMIT %s
+            """,
+            (query, query, k),
+        )
+        return {r["document_id"]: float(r["bscore"]) for r in cur.fetchall()}
 
 
 def structured_candidates(timespan, people_ids: List[str], place_ids: List[str], k: int = 200):
@@ -1522,6 +1612,59 @@ def make_snippet(text: Optional[str], length: int = 160) -> str:
         return ""
     t = " ".join(text.split())
     return (t[:length] + "…") if len(t) > length else t
+
+
+def fetch_document_summaries(document_ids: Sequence[str]) -> Dict[str, Dict[str, Any]]:
+    if not document_ids:
+        return {}
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT
+                document_id,
+                title,
+                tags,
+                description,
+                file_name,
+                file_mime,
+                file_size,
+                document_date,
+                created_at,
+                updated_at,
+                content
+            FROM documents
+            WHERE document_id = ANY(%s)
+            """,
+            (list(document_ids),),
+        )
+        rows = cur.fetchall()
+
+    summaries: Dict[str, Dict[str, Any]] = {}
+    for row in rows:
+        snippet_source = row.get("description") or row.get("content") or ""
+        summaries[row["document_id"]] = {
+            "document_id": row["document_id"],
+            "title": row.get("title"),
+            "tags": row.get("tags") or [],
+            "description": row.get("description"),
+            "document_date": row.get("document_date"),
+            "file_name": row.get("file_name"),
+            "file_mime": row.get("file_mime"),
+            "file_size": row.get("file_size"),
+            "created_at": row.get("created_at"),
+            "updated_at": row.get("updated_at"),
+            "snippet": make_snippet(snippet_source, length=200),
+            "download_url": f"/documents/{row['document_id']}/download",
+        }
+    return summaries
+
+
+def _isoformat(value: Optional[Any]) -> Optional[str]:
+    if isinstance(value, datetime):
+        return value.isoformat()
+    if isinstance(value, date):
+        return value.isoformat()
+    return None
 
 
 # --------------------------- Fetch helpers ---------------------------
@@ -1560,10 +1703,22 @@ def run_pipeline(question: str, search_limit: int = 3) -> Dict[str, Any]:
         time_end=timespan[1],
         limit=search_limit,
     )
-    detailed = get_events([row["id"] for row in search.get("results", [])])
+    results = search.get("results", []) if isinstance(search, dict) else []
+    event_ids = [
+        row.get("id")
+        for row in results
+        if isinstance(row, dict) and row.get("id") and row.get("kind", "event") == "event"
+    ]
+    detailed = get_events(event_ids)
+    document_results = [
+        row
+        for row in results
+        if isinstance(row, dict) and row.get("kind") == "document"
+    ]
     return {
         "question": question,
         "resolution": resolution,
-        "search_results": search.get("results", []),
+        "search_results": results,
         "detailed_events": detailed,
+        "document_results": document_results,
     }

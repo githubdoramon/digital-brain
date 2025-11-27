@@ -1103,12 +1103,22 @@ def _finalize_bundle(
         if not state.detailed_events:
             state.update_detailed_events(fallback.get("detailed_events", []))
     elif state.search_results and not state.detailed_events:
-        ids = [row.get("id") for row in state.search_results if row.get("id")]
+        ids = [
+            row.get("id")
+            for row in state.search_results
+            if row.get("id") and row.get("kind", "event") == "event"
+        ]
         if ids:
             events_start = perf_counter()
             events = retrieval.get_events(ids)
             _log_timing("pipeline.get_events", events_start, count=len(events))
             state.update_detailed_events(events)
+
+    document_results = [
+        row
+        for row in state.search_results
+        if isinstance(row, dict) and row.get("kind") == "document"
+    ]
 
     return {
         "question": question,
@@ -1116,6 +1126,7 @@ def _finalize_bundle(
         "resolution": state.resolution or {},
         "search_results": state.search_results,
         "detailed_events": state.detailed_events,
+        "document_results": document_results,
         "session_id": session_id,
         "thread_id": session_id,
         "memories_used": memories_used or [],
