@@ -698,7 +698,7 @@ def _build_messages(
         "You are a personal memory assistant. Your goal is to make the user feel like they are talking to a real person, not a robot. "
         "Use the available tools to gather accurate context before answering. "
         "Do not fabricate events; if no relevant memories exist, say so. "
-        "You are talking to a human, therefore avoid replying with ids or other technical details, and prefer using names, titles for things you find in databases. "
+        "You are talking to a human, therefore do not replying with ids (like contact:1761950388937 or place:1761950388937) or other technical details - replace ids with objects names, titles or other more human readable things you find in databases. "
         f"When searching, prefer returning at most {search_limit} highly relevant results, unless the user is requesting full data."
     )
     protocol_prompt = "Tool protocol: when a question references stored events, memories, contacts, places, timelines, or relationships, " \
@@ -709,6 +709,7 @@ def _build_messages(
         "For contacts, make sure you search using different strategies when it comes to names, first names, last names, full names, partial names, nicknames, aliases, and so on. " \
         "For relationship closeness questions, use the `contact_relationships` table to understand interpersonal links. " \
         "For events, meetings, moments, use the `events` table to retrieve the event details. " \
+        "You also have acccess to documents on the 'documents' table, and might have relations to events, contacts or places. Don't forget to search for informatino there too. " \
         "Tasks or to dos are on the 'todos' table, and might have relations to events, contacts or places." \
         "Do not stop after describing a plan—actually call the necessary tools, inspect their outputs, and base your final answer on that evidence. " \
         "If a SQL attempt fails validation, revise and retry until you either succeed or can explain why the data cannot be retrieved. " \
