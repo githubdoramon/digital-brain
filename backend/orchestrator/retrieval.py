@@ -436,6 +436,16 @@ def merge_contacts(primary_contact_id: str, duplicate_contact_id: str) -> Dict[s
         final_birthday = primary["birthday"] or duplicate["birthday"]
         final_external_id = primary["external_id"] or duplicate["external_id"]
 
+        if final_external_id and duplicate["external_id"] == final_external_id:
+            cur.execute(
+                """
+                UPDATE contacts
+                SET external_id = NULL
+                WHERE contact_id = %s
+                """,
+                (duplicate_contact_id,),
+            )
+
         cur.execute(
             """
             UPDATE contacts
