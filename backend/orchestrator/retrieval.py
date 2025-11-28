@@ -1444,9 +1444,11 @@ def search_memories(
     doc_ids = set(vec_docs) | set(bm_docs)
     doc_scores: Dict[str, float] = {}
     for doc_id in doc_ids:
+        print(f"[retrieval] doc_id={doc_id}")
         v = vec_docs.get(doc_id, 0.0)
         b = bm_docs.get(doc_id, 0.0)
         doc_scores[doc_id] = 0.6 * v + 0.4 * b
+
 
     combined: List[Tuple[str, str, float]] = []
     combined.extend((event_id, "event", event_scores[event_id]) for event_id in event_scores)
@@ -1531,9 +1533,11 @@ def vector_search(query: str, k: int = 50):
 
 
 def vector_search_documents(query: str, k: int = 50) -> Dict[str, float]:
+    print(f"[retrieval] vector_search_documents(query={query!r}, k={k})")
     if not query:
         return {}
     qvec = embed_text(query)
+    print(f"[retrieval] qvec={qvec}")
     with get_conn() as conn, conn.cursor() as cur:
         cur.execute(
             """

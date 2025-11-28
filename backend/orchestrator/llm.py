@@ -158,7 +158,7 @@ TOOLS: List[Dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": "search_memories",
-            "description": "Search the memory store for events matching the query and optional filters.",
+            "description": "Search the memory store for events and documents matching the query and optional filters.",
             "parameters": {
                 "type": "object",
                 "properties": {
