@@ -217,6 +217,8 @@ def update_document_metadata(
         return None
 
     row = _load_document_row(document_id)
+
+    print(f"[documents] row={row}")
     if not row:
         return None
 
@@ -290,6 +292,7 @@ def update_document_metadata(
     generated_description: Optional[str] = None
     if not final_description:
         generated_description = _summarize_description(content_text)
+        print(f"[documents] generated_description={generated_description}")
         final_description = generated_description or _default_description(
             content_text,
             provided_title or file_name or document_id,
@@ -299,6 +302,7 @@ def update_document_metadata(
     generated_title: Optional[str] = None
     if not final_title:
         generated_title = _suggest_title(content_text, fallback=file_name or document_id)
+        print(f"[documents] generated_title={generated_title}")
         final_title = (
             generated_title
             or _derive_title_from_filename(file_name)
@@ -311,8 +315,11 @@ def update_document_metadata(
         inferred_date = _suggest_document_date(content_text, fallback=final_description)
         final_date = inferred_date
 
+    print(f"[documents] normalized_tags={normalized_tags}")
     english_tags = _normalize_strings(_translate_tags_to_english(normalized_tags))
+    print(f"[documents] english_tags={english_tags}")
     suggested_tags = _suggest_additional_tags(content_text, english_tags)
+    print(f"[documents] suggested_tags={suggested_tags}")
     merged_tags = _merge_tag_lists(english_tags, suggested_tags)
 
     embedding = _generate_document_embedding(
@@ -519,7 +526,7 @@ def _suggest_additional_tags(content: str, tags: Sequence[str]) -> List[str]:
                     "As an example, when tagging a document about a specific war, you could create a tag with the war name, but another one as `history` or `world war`."
                     "Another example, when tagging a blood test result, you could create a tag with the test name, but another one as `health` or `medical`."
                     "Another example, when tagging a document about a specific person, you could create a tag with the person name, but another one as `family` or `friends` if you have this indication in the document."
-                    "Respond with JSON in the shape {\"tags\": [\"tag\", ...]} using 1-3 word phrases."
+                    "Respond ONLY with JSON in the shape {\"tags\": [\"tag\", ...]} using 1-3 word phrases. Do not include any other text or numerical order in your response."
                 ),
             },
             {
@@ -746,8 +753,8 @@ def _summarize_description(content: str) -> Optional[str]:
             {
                 "role": "system",
                 "content": (
-                    "Provide a concise English description (<= 400 words) of the user's document excerpt. "
-                    "Highlight the main topic and purpose."
+                    "Provide a concise English description (<= 400 words) of the user's document excerpt. No need to output the amount of words used and no need to use any kind of text formatting."
+                    "Highlight the main topic, purpose and main findings of the document."
                 ),
             },
             {
@@ -1069,6 +1076,7 @@ def _generate_document_embedding(document: Dict[str, Any]) -> Sequence[float]:
     segments: List[str] = []
 
     tags = document.get("tags")
+    print(f"[documents] tags={tags}")
     if isinstance(tags, (list, tuple)):
         tag_text = " ".join(str(tag).strip() for tag in tags if isinstance(tag, str) and tag.strip())
         if tag_text:
