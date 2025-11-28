@@ -814,6 +814,7 @@ def _handle_tool_call(
     raw_args = function.get("arguments") or "{}"
 
     try:
+        print(f"[agent] raw_args={raw_args}")
         args = json.loads(raw_args) if isinstance(raw_args, str) else raw_args
     except json.JSONDecodeError as exc:
         raise RuntimeError(f"Invalid arguments for tool {name}: {raw_args}") from exc
@@ -841,11 +842,14 @@ def _handle_tool_call(
     if name == "search_memories":
         query = args.get("query") or question
         limit_arg = args.get("limit")
+        print(f"[agent] search_memories limit_arg={limit_arg}")
+        print(f"[agent] search_limit={search_limit}")
         try:
             limit = int(limit_arg) if limit_arg is not None else search_limit
         except (TypeError, ValueError):
             limit = search_limit
         limit = max(1, min(limit, search_limit))
+        limit = 5
         print(
             f"[agent] calling search_memories(query={query!r}, people={args.get('people')}, place_ids={args.get('place_ids')}, time_start={args.get('time_start')}, time_end={args.get('time_end')}, limit={limit})"
         )

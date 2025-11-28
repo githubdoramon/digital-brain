@@ -1414,7 +1414,7 @@ def search_memories(
     place_ids: Optional[Sequence[str]] = None,
     time_start: Optional[str] = None,
     time_end: Optional[str] = None,
-    limit: int = 5,
+    limit: int = 10,
 ) -> Dict[str, Any]:
     span = None
     if time_start and time_end:
