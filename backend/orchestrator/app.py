@@ -31,6 +31,7 @@ from schemas import (
     ExternalContactWebhook,
     DocumentCollection,
     DocumentDetailOut,
+    DocumentUpdateIn,
     DocumentSearchIn,
     ResolveIn,
     SearchIn,
@@ -292,6 +293,31 @@ def list_documents(
 @api.get("/documents/{document_id}", response_model=DocumentDetailOut)
 def get_document_detail(document_id: str, user: dict = Depends(get_current_user)):
     document = documents.get_document(document_id)
+    if not document:
+        raise HTTPException(status_code=404, detail="Document not found")
+    return DocumentDetailOut(**document)
+
+
+@api.patch("/documents/{document_id}", response_model=DocumentDetailOut)
+def update_document(
+    document_id: str,
+    payload: DocumentUpdateIn,
+    user: dict = Depends(get_current_user),
+):
+    try:
+        document = documents.update_document_metadata(
+            document_id,
+            title=payload.title,
+            tags=payload.tags,
+            description=payload.description,
+            document_date=payload.document_date,
+        )
+    except documents.DocumentProcessingError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:
+        print(f"[documents] Failed to update document metadata: {exc}")
+        raise HTTPException(status_code=500, detail="Failed to update document")
+
     if not document:
         raise HTTPException(status_code=404, detail="Document not found")
     return DocumentDetailOut(**document)

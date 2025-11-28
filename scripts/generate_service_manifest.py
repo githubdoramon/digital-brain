@@ -108,7 +108,6 @@ def generate_manifest(output: Path, deployment: Optional[str] = None) -> None:
 
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
-    print(f"Wrote service manifest with {len(services)} entries to {output}")
 
 
 def main(argv: List[str]) -> int:

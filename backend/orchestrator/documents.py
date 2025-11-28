@@ -31,10 +31,10 @@ DOCUMENT_STORAGE_DIR = Path(
 )
 DOCUMENT_STORAGE_DIR.mkdir(parents=True, exist_ok=True)
 
-MAX_CONTENT_CHARS = int(os.getenv("DOCUMENT_MAX_CONTENT_CHARS", "20000"))
-MAX_EMBED_CHARS = int(os.getenv("DOCUMENT_EMBED_MAX_CHARS", "10000"))
-MAX_LABEL_PROMPT_CHARS = int(os.getenv("DOCUMENT_LABEL_PROMPT_CHARS", "4000"))
-MAX_SUGGESTED_TAGS = int(os.getenv("DOCUMENT_LABEL_MAX_COUNT", "3"))
+MAX_CONTENT_CHARS = int(os.getenv("DOCUMENT_MAX_CONTENT_CHARS", "30000"))
+MAX_EMBED_CHARS = int(os.getenv("DOCUMENT_EMBED_MAX_CHARS", "20000"))
+MAX_LABEL_PROMPT_CHARS = int(os.getenv("DOCUMENT_LABEL_PROMPT_CHARS", "10000"))
+MAX_SUGGESTED_TAGS = int(os.getenv("DOCUMENT_LABEL_MAX_COUNT", "5"))
 MAX_TITLE_PROMPT_CHARS = int(os.getenv("DOCUMENT_TITLE_PROMPT_CHARS", "2000"))
 MAX_DATE_PROMPT_CHARS = int(os.getenv("DOCUMENT_DATE_PROMPT_CHARS", "2000"))
 MAX_DESCRIPTION_PROMPT_CHARS = int(os.getenv("DOCUMENT_DESCRIPTION_PROMPT_CHARS", "1200"))
@@ -73,13 +73,10 @@ def ingest_document(
     content_text = _extract_text(stored.path, stored.mime_type)
     if content_text:
         content_text = content_text[:MAX_CONTENT_CHARS]
+        print(f"[documents] content_text={content_text}")
     else:
         fallback = filter(None, [description, provided_title, stored.file_name, document_id])
         content_text = " ".join(fallback)
-
-    embed_source = (content_text or "")[:MAX_EMBED_CHARS]
-    embed_input = _translate_text_to_english(embed_source, MAX_EMBED_CHARS)
-    embedding = embed_text(embed_input)
 
     normalized_tags = _normalize_strings(tags)
     english_tags = _normalize_strings(_translate_tags_to_english(normalized_tags))
@@ -124,6 +121,17 @@ def ingest_document(
         raw_metadata["generated_date_iso"] = inferred_date.isoformat()
     if generated_description:
         raw_metadata["generated_description"] = generated_description
+
+    embedding = _generate_document_embedding(
+        {
+            "document_id": document_id,
+            "content": content_text,
+            "description": final_description,
+            "title": final_title,
+            "tags": merged_tags,
+            "file_name": stored.file_name,
+        }
+    )
 
     row = _upsert_document(
         document_id=document_id,
@@ -194,6 +202,158 @@ def get_document(document_id: str) -> Optional[Dict[str, Any]]:
         row = cur.fetchone()
     if not row:
         return None
+    return _row_to_document(row, include_metadata=True, include_content=True)
+
+
+def update_document_metadata(
+    document_id: str,
+    *,
+    title: Optional[str] = None,
+    tags: Sequence[str] | None = None,
+    description: Optional[str] = None,
+    document_date: Optional[datetime] = None,
+) -> Optional[Dict[str, Any]]:
+    if not document_id:
+        return None
+
+    row = _load_document_row(document_id)
+    if not row:
+        return None
+
+    file_path = row.get("file_path")
+    if not file_path:
+        raise DocumentProcessingError("Stored file reference is missing for the document")
+
+    path_obj = Path(file_path)
+    derived_name = path_obj.name if path_obj.name not in {"", "."} else None
+    file_name = row.get("file_name") or derived_name or document_id
+    file_mime = row.get("file_mime")
+    size_candidate = row.get("file_size")
+    if size_candidate is None:
+        size_candidate = path_obj.stat().st_size if path_obj.exists() else 0
+    try:
+        size_int = int(size_candidate)
+    except (TypeError, ValueError):
+        size_int = 0
+
+    stored = StoredFileInfo(
+        document_id=document_id,
+        path=path_obj,
+        file_name=file_name,
+        mime_type=file_mime,
+        size=size_int,
+    )
+
+    existing_raw = row.get("raw_metadata")
+    if isinstance(existing_raw, str):
+        try:
+            existing_raw = json.loads(existing_raw)
+        except json.JSONDecodeError:
+            existing_raw = {"raw": existing_raw}
+    if not isinstance(existing_raw, dict):
+        existing_raw = {}
+    raw_metadata = dict(existing_raw)
+    if file_name and "original_filename" not in raw_metadata:
+        raw_metadata["original_filename"] = file_name
+    if file_mime:
+        raw_metadata["stored_mime_type"] = file_mime
+    raw_metadata["file_size"] = size_int
+
+    title_input = title if title is not None else row.get("title")
+    provided_title = (title_input or "").strip()
+    description_input = description if description is not None else row.get("description")
+    provided_description = (description_input or "").strip()
+
+    tags_input = tags if tags is not None else row.get("tags") or []
+    normalized_tags = _normalize_strings(tags_input)
+
+    content_text = (row.get("content") or "")[:MAX_CONTENT_CHARS]
+    if not content_text:
+        fallback_parts: List[str] = []
+        for candidate in (
+            provided_description,
+            row.get("description"),
+            provided_title,
+            row.get("title"),
+            file_name,
+            document_id,
+        ):
+            if not candidate:
+                continue
+            text = candidate.strip() if isinstance(candidate, str) else str(candidate).strip()
+            if text:
+                fallback_parts.append(text)
+        fallback_joined = " ".join(fallback_parts)
+        content_text = fallback_joined[:MAX_CONTENT_CHARS]
+
+    final_description = provided_description
+    generated_description: Optional[str] = None
+    if not final_description:
+        generated_description = _summarize_description(content_text)
+        final_description = generated_description or _default_description(
+            content_text,
+            provided_title or file_name or document_id,
+        )
+
+    final_title = provided_title
+    generated_title: Optional[str] = None
+    if not final_title:
+        generated_title = _suggest_title(content_text, fallback=file_name or document_id)
+        final_title = (
+            generated_title
+            or _derive_title_from_filename(file_name)
+            or document_id
+        )
+
+    final_date = document_date if document_date is not None else row.get("document_date")
+    inferred_date: Optional[datetime] = None
+    if not final_date:
+        inferred_date = _suggest_document_date(content_text, fallback=final_description)
+        final_date = inferred_date
+
+    english_tags = _normalize_strings(_translate_tags_to_english(normalized_tags))
+    suggested_tags = _suggest_additional_tags(content_text, english_tags)
+    merged_tags = _merge_tag_lists(english_tags, suggested_tags)
+
+    embedding = _generate_document_embedding(
+        {
+            "document_id": document_id,
+            "content": content_text,
+            "description": final_description,
+            "title": final_title,
+            "tags": merged_tags,
+            "file_name": file_name,
+        }
+    )
+
+    raw_metadata["suggested_tags"] = suggested_tags
+    raw_metadata["title_generated"] = bool(generated_title)
+    raw_metadata["date_generated"] = bool(inferred_date)
+    raw_metadata["description_generated"] = bool(generated_description)
+    if generated_title:
+        raw_metadata["generated_title"] = generated_title
+    else:
+        raw_metadata.pop("generated_title", None)
+    if inferred_date:
+        raw_metadata["generated_date_iso"] = inferred_date.isoformat()
+    else:
+        raw_metadata.pop("generated_date_iso", None)
+    if generated_description:
+        raw_metadata["generated_description"] = generated_description
+    else:
+        raw_metadata.pop("generated_description", None)
+
+    row = _upsert_document(
+        document_id=document_id,
+        title=final_title,
+        tags=merged_tags,
+        description=final_description,
+        stored=stored,
+        content=content_text,
+        embedding=embedding,
+        document_date=final_date,
+        raw_metadata=raw_metadata,
+    )
     return _row_to_document(row, include_metadata=True, include_content=True)
 
 
@@ -355,7 +515,10 @@ def _suggest_additional_tags(content: str, tags: Sequence[str]) -> List[str]:
             {
                 "role": "system",
                 "content": (
-                    "You are a document librarian. Propose concise topical tags in English for reference. "
+                    "You are a document librarian. Propose concise topical tags in English for reference. Create both specific tags as more generic ones to make sure this document is easily searchable in the future."
+                    "As an example, when tagging a document about a specific war, you could create a tag with the war name, but another one as `history` or `world war`."
+                    "Another example, when tagging a blood test result, you could create a tag with the test name, but another one as `health` or `medical`."
+                    "Another example, when tagging a document about a specific person, you could create a tag with the person name, but another one as `family` or `friends` if you have this indication in the document."
                     "Respond with JSON in the shape {\"tags\": [\"tag\", ...]} using 1-3 word phrases."
                 ),
             },
@@ -522,7 +685,6 @@ def _translate_text_to_english(text: str, max_chars: int) -> str:
         "stream": False,
     }
 
-    print(f"Payload: {payload}")
     try:
         response = requests.post(f"{OLLAMA_HOST}/api/chat", json=payload, timeout=DOCUMENT_LLM_TIMEOUT)
         response.raise_for_status()
@@ -687,6 +849,7 @@ def _upsert_document(
 
 
 def _vector_search_documents(query: str, k: int) -> Dict[str, float]:
+    print(f"[documents] query={query}")
     query_vector = embed_text(query)
     with get_conn() as conn, conn.cursor() as cur:
         cur.execute(
@@ -743,6 +906,32 @@ def _tag_search_documents(tags: Sequence[str]) -> Dict[str, float]:
         else:
             scores[row["document_id"]] = 0.2
     return scores
+
+
+def _load_document_row(document_id: str) -> Optional[Dict[str, Any]]:
+    if not document_id:
+        return None
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT
+                document_id,
+                title,
+                tags,
+                description,
+                file_path,
+                file_name,
+                file_mime,
+                file_size,
+                document_date,
+                content,
+                raw_metadata
+            FROM documents
+            WHERE document_id = %s
+            """,
+            (document_id,),
+        )
+        return cur.fetchone()
 
 
 def _fetch_documents(document_ids: Sequence[str]) -> List[Dict[str, Any]]:
@@ -874,6 +1063,60 @@ def _merge_tag_lists(primary: Sequence[str], secondary: Sequence[str]) -> List[s
         merged.append(candidate)
         seen.add(lowered)
     return merged
+
+
+def _generate_document_embedding(document: Dict[str, Any]) -> Sequence[float]:
+    segments: List[str] = []
+
+    tags = document.get("tags")
+    if isinstance(tags, (list, tuple)):
+        tag_text = " ".join(str(tag).strip() for tag in tags if isinstance(tag, str) and tag.strip())
+        if tag_text:
+            segments.append(tag_text)
+
+    content = document.get("content")
+    if isinstance(content, str):
+        cleaned = content.strip()
+        if cleaned:
+            segments.append(cleaned)
+
+    description = document.get("description")
+    if isinstance(description, str):
+        cleaned = description.strip()
+        if cleaned and cleaned not in segments:
+            segments.append(cleaned)
+
+    title = document.get("title")
+    if isinstance(title, str):
+        cleaned = title.strip()
+        if cleaned:
+            segments.append(cleaned)
+
+    file_name = document.get("file_name")
+    if isinstance(file_name, str):
+        cleaned = file_name.strip()
+        if cleaned:
+            segments.append(cleaned)
+
+    if not segments:
+        doc_id = document.get("document_id")
+        if doc_id:
+            segments.append(str(doc_id))
+
+    combined = " ".join(segments).strip()
+    if not combined:
+        combined = str(document.get("document_id") or "document")
+
+    embed_source = combined[:MAX_EMBED_CHARS]
+    if not embed_source:
+        embed_source = str(document.get("document_id") or "document")
+
+    embed_input = _translate_text_to_english(embed_source, MAX_EMBED_CHARS)
+    if not embed_input.strip():
+        embed_input = embed_source
+
+    print(f"[embeding doc]: embed_input={embed_input}")
+    return embed_text(embed_input)
 
 
 def _derive_title_from_filename(filename: Optional[str]) -> Optional[str]:

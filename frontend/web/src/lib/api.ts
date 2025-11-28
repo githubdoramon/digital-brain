@@ -71,6 +71,19 @@ export const api = {
           ...init,
         }),
 
+  patch: <T = unknown>(endpoint: string, data?: unknown, init?: RequestInit) =>
+    typeof FormData !== "undefined" && data instanceof FormData
+      ? apiRequest<T>(endpoint, {
+          method: "PATCH",
+          body: data,
+          ...init,
+        })
+      : apiRequest<T>(endpoint, {
+          method: "PATCH",
+          body: data !== undefined ? JSON.stringify(data) : undefined,
+          ...init,
+        }),
+
   delete: <T = unknown>(endpoint: string, init?: RequestInit) =>
     apiRequest<T>(endpoint, { method: "DELETE", ...init }),
 

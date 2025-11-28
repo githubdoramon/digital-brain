@@ -12,6 +12,8 @@ from uuid import uuid4
 from dateparser.search import search_dates
 from rapidfuzz import process, fuzz
 
+from documents import _vector_search_documents as vector_search_documents
+
 from db import fetch_events, get_conn
 from embeddings import embed_text
 from schemas import (
@@ -22,6 +24,9 @@ from schemas import (
     MeetingIn,
     TodoIn,
 )
+
+
+MAX_EVENT_EMBED_CHARS = 6000
 
 
 def _upsert_contact_relationships(cur, contact_id: str, relationships: Sequence[Any]) -> None:
@@ -1321,8 +1326,78 @@ def normalize_event_types(types: Optional[Sequence[str]]) -> List[str]:
     return normalized or ["generic"]
 
 
+def _generate_event_embedding(event: Any) -> Sequence[float]:
+    def _get(field: str) -> Any:
+        if isinstance(event, dict):
+            return event.get(field)
+        return getattr(event, field, None)
+
+    segments: List[str] = []
+
+    what_text = _get("what_text") or _get("content")
+    if isinstance(what_text, str):
+        cleaned = what_text.strip()
+        if cleaned:
+            segments.append(cleaned)
+
+    summary = _get("summary")
+    if isinstance(summary, str):
+        cleaned = summary.strip()
+        if cleaned:
+            segments.append(cleaned)
+
+    tags = _get("tags")
+    if isinstance(tags, (list, tuple)):
+        formatted = ", ".join(str(tag).strip() for tag in tags if isinstance(tag, str) and tag.strip())
+        if formatted:
+            segments.append(f"tags: {formatted}")
+
+    types = _get("types")
+    if isinstance(types, (list, tuple)):
+        formatted = ", ".join(str(t).strip() for t in types if isinstance(t, str) and t.strip())
+        if formatted:
+            segments.append(f"types: {formatted}")
+
+    people = _get("people")
+    if isinstance(people, (list, tuple)):
+        formatted = ", ".join(str(person).strip() for person in people if person)
+        if formatted:
+            segments.append(f"people: {formatted}")
+
+    place_id = _get("place_id")
+    if place_id:
+        segments.append(f"place: {place_id}")
+
+    raw = _get("raw")
+    if isinstance(raw, (dict, list)):
+        try:
+            raw_text = json.dumps(raw, ensure_ascii=False)
+        except TypeError:
+            raw_text = str(raw)
+        if raw_text:
+            segments.append(raw_text)
+    elif isinstance(raw, str):
+        cleaned = raw.strip()
+        if cleaned:
+            segments.append(cleaned)
+
+    if not segments:
+        fallback = _get("id") or _get("event_id") or ""
+        segments.append(str(fallback or "event"))
+
+    combined = " ".join(segments).strip()
+    if not combined:
+        combined = str(_get("id") or _get("event_id") or "event")
+
+    embed_source = combined[:MAX_EVENT_EMBED_CHARS]
+    if not embed_source:
+        embed_source = "event"
+
+    return embed_text(embed_source)
+
+
 def ingest_event(event) -> None:
-    emb = embed_text(event.what_text or "")
+    emb = _generate_event_embedding(event)
     types = normalize_event_types(event.types)
     with get_conn() as conn, conn.cursor() as cur:
         cur.execute(
@@ -1458,9 +1533,6 @@ def search_memories(
     combined.extend((doc_id, "document", doc_scores[doc_id]) for doc_id in doc_scores)
     combined.sort(key=lambda item: item[2], reverse=True)
 
-    print(len(combined))
-    print(combined)
-
     if not combined:
         return {"results": []}
 
@@ -1524,6 +1596,7 @@ def search_memories(
 
 
 def vector_search(query: str, k: int = 50):
+    print(f"[retrieval] vector_search memories (query={query!r}, k={k})")
     qvec = embed_text(query)
     with get_conn() as conn, conn.cursor() as cur:
         cur.execute(
@@ -1536,26 +1609,6 @@ def vector_search(query: str, k: int = 50):
             (qvec, qvec, k),
         )
         return {r["id"]: float(r["vscore"]) for r in cur.fetchall()}
-
-
-def vector_search_documents(query: str, k: int = 50) -> Dict[str, float]:
-    print(f"[retrieval] vector_search_documents(query={query!r}, k={k})")
-    if not query:
-        return {}
-    qvec = embed_text(query)
-    print(f"[retrieval] qvec={qvec}")
-    with get_conn() as conn, conn.cursor() as cur:
-        cur.execute(
-            """
-            SELECT document_id, 1 - (content_embed <=> %s::vector) AS vscore
-            FROM documents
-            WHERE content_embed IS NOT NULL
-            ORDER BY content_embed <=> %s::vector
-            LIMIT %s
-            """,
-            (qvec, qvec, k),
-        )
-        return {r["document_id"]: float(r["vscore"]) for r in cur.fetchall()}
 
 
 def bm25_search(query: str, k: int = 50):

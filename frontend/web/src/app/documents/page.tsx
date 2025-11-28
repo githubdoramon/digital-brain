@@ -64,6 +64,21 @@ function formatDate(value: string): string {
   }
 }
 
+function toDateInputValue(value: string | null | undefined): string {
+  if (!value) {
+    return "";
+  }
+  try {
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) {
+      return "";
+    }
+    return date.toISOString().slice(0, 10);
+  } catch {
+    return "";
+  }
+}
+
 export default function DocumentsPage() {
   const [documents, setDocuments] = useState<DocumentItem[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -80,6 +95,14 @@ export default function DocumentsPage() {
   const [uploadDescription, setUploadDescription] = useState("");
   const [uploadDate, setUploadDate] = useState("");
   const [uploadFile, setUploadFile] = useState<File | null>(null);
+
+  const [editingDocument, setEditingDocument] = useState<DocumentItem | null>(null);
+  const [editTitle, setEditTitle] = useState("");
+  const [editTags, setEditTags] = useState("");
+  const [editDescription, setEditDescription] = useState("");
+  const [editDate, setEditDate] = useState("");
+  const [isSavingEdit, setIsSavingEdit] = useState(false);
+  const [editError, setEditError] = useState<string | null>(null);
 
   const loadDocuments = useCallback(async () => {
     setIsLoading(true);
@@ -205,6 +228,72 @@ export default function DocumentsPage() {
     []
   );
 
+  const beginEditing = useCallback((document: DocumentItem) => {
+    setEditingDocument(document);
+    setEditTitle(document.title ?? "");
+    setEditTags(document.tags.join(", "));
+    setEditDescription(document.description ?? "");
+    setEditDate(toDateInputValue(document.document_date));
+    setEditError(null);
+  }, []);
+
+  const closeEdit = useCallback(() => {
+    if (isSavingEdit) {
+      return;
+    }
+    setEditingDocument(null);
+    setEditTitle("");
+    setEditTags("");
+    setEditDescription("");
+    setEditDate("");
+    setEditError(null);
+  }, [isSavingEdit]);
+
+  const handleEditSubmit = useCallback(
+    async (event: FormEvent<HTMLFormElement>) => {
+      event.preventDefault();
+      if (!editingDocument) {
+        return;
+      }
+
+      setIsSavingEdit(true);
+      setEditError(null);
+
+      const trimmedTitle = editTitle.trim();
+      const trimmedDescription = editDescription.trim();
+      const parsedTags = parseTagsInput(editTags);
+
+      const payload: Record<string, unknown> = {
+        title: trimmedTitle,
+        description: trimmedDescription,
+        tags: parsedTags,
+        document_date: editDate ? new Date(editDate).toISOString() : null,
+      };
+
+      try {
+        const updated = await api.patch<DocumentItem>(
+          `/documents/${encodeURIComponent(editingDocument.document_id)}`,
+          payload
+        );
+        setDocuments((previous) =>
+          previous.map((item) => (item.document_id === updated.document_id ? updated : item))
+        );
+        setStatus({ kind: "success", message: `Updated "${updated.title}"` });
+        setEditingDocument(null);
+        setEditTitle("");
+        setEditTags("");
+        setEditDescription("");
+        setEditDate("");
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Failed to update document";
+        setEditError(message);
+      } finally {
+        setIsSavingEdit(false);
+      }
+    },
+    [editDate, editDescription, editTags, editTitle, editingDocument]
+  );
+
   const totalCount = documents.length;
 
   const summaryText = useMemo(() => {
@@ -218,7 +307,8 @@ export default function DocumentsPage() {
   }, [isLoading, totalCount]);
 
   return (
-    <section style={{ display: "grid", gap: "24px" }}>
+    <>
+      <section style={{ display: "grid", gap: "24px" }}>
       <header style={{ display: "grid", gap: "8px" }}>
         <h1 style={{ fontSize: "2rem", fontWeight: 600 }}>Documents</h1>
         <p style={{ color: "#555" }}>
@@ -473,6 +563,7 @@ export default function DocumentsPage() {
               <DocumentCard
                 key={document.document_id}
                 document={document}
+                onEdit={beginEditing}
                 onDelete={handleDelete}
                 isDeleting={deletingId === document.document_id}
               />
@@ -481,16 +572,177 @@ export default function DocumentsPage() {
         </div>
       </section>
     </section>
+
+    {editingDocument && (
+      <div
+        role="dialog"
+        aria-modal="true"
+        style={{
+          position: "fixed",
+          inset: 0,
+          background: "rgba(15, 23, 42, 0.45)",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          padding: "24px",
+          zIndex: 50,
+        }}
+        onClick={(event) => {
+          if (event.target === event.currentTarget) {
+            closeEdit();
+          }
+        }}
+      >
+        <div
+          style={{
+            background: "#fff",
+            borderRadius: "12px",
+            boxShadow: "0 20px 45px rgba(15, 23, 42, 0.2)",
+            padding: "24px",
+            maxWidth: "560px",
+            width: "100%",
+            display: "grid",
+            gap: "16px",
+          }}
+        >
+          <h2 style={{ margin: 0, fontSize: "1.25rem", fontWeight: 600 }}>Edit document metadata</h2>
+          <p style={{ margin: 0, color: "#4b5563", fontSize: "0.9rem" }}>
+            Update the document details. Leave fields blank to regenerate suggestions.
+          </p>
+
+          {editError && (
+            <div
+              role="alert"
+              style={{
+                background: "#fee2e2",
+                border: "1px solid #fca5a5",
+                color: "#991b1b",
+                borderRadius: "8px",
+                padding: "10px 12px",
+                fontSize: "0.9rem",
+              }}
+            >
+              {editError}
+            </div>
+          )}
+
+          <form style={{ display: "grid", gap: "12px" }} onSubmit={handleEditSubmit}>
+            <label style={{ display: "grid", gap: "4px" }}>
+              <span style={{ fontWeight: 600 }}>Title</span>
+              <input
+                type="text"
+                value={editTitle}
+                onChange={(event) => setEditTitle(event.target.value)}
+                placeholder="Auto-generated if left blank"
+                disabled={isSavingEdit}
+                style={{
+                  border: "1px solid #d1d5db",
+                  borderRadius: "8px",
+                  padding: "8px 12px",
+                }}
+              />
+            </label>
+
+            <label style={{ display: "grid", gap: "4px" }}>
+              <span style={{ fontWeight: 600 }}>Document date</span>
+              <input
+                type="date"
+                value={editDate}
+                onChange={(event) => setEditDate(event.target.value)}
+                disabled={isSavingEdit}
+                style={{
+                  border: "1px solid #d1d5db",
+                  borderRadius: "8px",
+                  padding: "8px 12px",
+                }}
+              />
+              <small style={{ color: "#6b7280" }}>Clear to re-infer from content</small>
+            </label>
+
+            <label style={{ display: "grid", gap: "4px" }}>
+              <span style={{ fontWeight: 600 }}>Tags</span>
+              <input
+                type="text"
+                value={editTags}
+                onChange={(event) => setEditTags(event.target.value)}
+                placeholder="finance, planning"
+                disabled={isSavingEdit}
+                style={{
+                  border: "1px solid #d1d5db",
+                  borderRadius: "8px",
+                  padding: "8px 12px",
+                }}
+              />
+              <small style={{ color: "#6b7280" }}>Separate tags with commas</small>
+            </label>
+
+            <label style={{ display: "grid", gap: "4px" }}>
+              <span style={{ fontWeight: 600 }}>Description</span>
+              <textarea
+                value={editDescription}
+                onChange={(event) => setEditDescription(event.target.value)}
+                rows={3}
+                placeholder="Provide a summary or leave blank for auto description"
+                disabled={isSavingEdit}
+                style={{
+                  border: "1px solid #d1d5db",
+                  borderRadius: "8px",
+                  padding: "8px 12px",
+                  resize: "vertical",
+                }}
+              />
+            </label>
+
+            <div style={{ display: "flex", justifyContent: "flex-end", gap: "8px" }}>
+              <button
+                type="button"
+                onClick={closeEdit}
+                disabled={isSavingEdit}
+                style={{
+                  background: "transparent",
+                  border: "1px solid #d1d5db",
+                  borderRadius: "8px",
+                  padding: "8px 16px",
+                  fontWeight: 600,
+                  cursor: isSavingEdit ? "not-allowed" : "pointer",
+                  color: "#1f2937",
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                type="submit"
+                disabled={isSavingEdit}
+                style={{
+                  background: "#0b6bcb",
+                  color: "#fff",
+                  border: "none",
+                  borderRadius: "8px",
+                  padding: "8px 16px",
+                  fontWeight: 600,
+                  cursor: isSavingEdit ? "progress" : "pointer",
+                  opacity: isSavingEdit ? 0.75 : 1,
+                }}
+              >
+                {isSavingEdit ? "Saving…" : "Save changes"}
+              </button>
+            </div>
+          </form>
+        </div>
+      </div>
+    )}
+    </>
   );
 }
 
 type DocumentCardProps = {
   document: DocumentItem;
+  onEdit: (document: DocumentItem) => void;
   onDelete: (document: DocumentItem) => Promise<void>;
   isDeleting: boolean;
 };
 
-function DocumentCard({ document, onDelete, isDeleting }: DocumentCardProps) {
+function DocumentCard({ document, onEdit, onDelete, isDeleting }: DocumentCardProps) {
   return (
     <article
       style={{
@@ -534,6 +786,21 @@ function DocumentCard({ document, onDelete, isDeleting }: DocumentCardProps) {
           >
             Download
           </a>
+          <button
+            type="button"
+            onClick={() => onEdit(document)}
+            style={{
+              background: "#f3f4f6",
+              color: "#1f2937",
+              border: "1px solid #d1d5db",
+              borderRadius: "8px",
+              padding: "8px 14px",
+              fontWeight: 600,
+              cursor: "pointer",
+            }}
+          >
+            Edit metadata
+          </button>
           <button
             type="button"
             onClick={() => void onDelete(document)}

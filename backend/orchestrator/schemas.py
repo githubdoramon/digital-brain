@@ -152,6 +152,13 @@ class DocumentDetailOut(DocumentOut):
     content_preview: Optional[str] = None
 
 
+class DocumentUpdateIn(BaseModel):
+    title: Optional[str] = None
+    tags: Optional[List[str]] = Field(default=None)
+    description: Optional[str] = None
+    document_date: Optional[datetime] = None
+
+
 class DocumentSearchIn(BaseModel):
     query: str
     tags: Optional[List[str]] = Field(default_factory=list)

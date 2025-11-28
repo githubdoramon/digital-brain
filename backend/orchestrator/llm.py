@@ -35,20 +35,6 @@ if not QDRANT_HOST:
 if not QDRANT_PORT:
     raise RuntimeError("QDRANT_PORT environment variable is required")
 
-print(f"Using Ollama chat model: {OLLAMA_CHAT_MODEL}")
-print(f"Using Ollama embed model: {OLLAMA_EMBED_MODEL}")
-print(f"Using Qdrant at {QDRANT_HOST}:{QDRANT_PORT}")
-
-
-def _shorten(text: Any, limit: int = 120) -> str:
-    if not isinstance(text, str):
-        return str(text)
-    single_line = text.replace("\n", " ").strip()
-    if len(single_line) <= limit:
-        return single_line
-    return single_line[: limit - 3] + "..."
-
-
 def _log_timing(label: str, start_time: float, **metadata: Any) -> None:
     elapsed = perf_counter() - start_time
     meta_items = []
@@ -397,17 +383,12 @@ async def answer_question(
     user_email: Optional[str] = None,
 ) -> Dict[str, Any]:
     total_start = perf_counter()
-    question_preview = _shorten(question)
     current_utc = datetime.now(timezone.utc)
     local_now = current_utc.astimezone()
     time_context = (
         "Current time context available to you:\n"
         f"- UTC now: {current_utc.isoformat()}\n"
         f"- Local system time: {local_now.isoformat()}"
-    )
-    print(
-        f"[agent] answer_question start user_id={user_id} session_id={session_id} "
-        f"search_limit={search_limit} question={question_preview!r} utc={current_utc.isoformat()}"
     )
 
     state = AgentState()
@@ -533,10 +514,7 @@ async def answer_question(
         if not content:
             if thinking:
                 thinking_retries += 1
-                thinking_preview = _shorten(thinking)
-                print(
-                    f"[agent] received thinking without content (retry {thinking_retries}) -> {thinking_preview!r}"
-                )
+
                 if thinking_retries > 3:
                     raise RuntimeError(
                         "Assistant returned internal reasoning multiple times without a final answer."
@@ -698,7 +676,7 @@ def _build_messages(
         "You are a personal memory assistant. Your goal is to make the user feel like they are talking to a real person, not a robot. "
         "Use the available tools to gather accurate context before answering. "
         "Do not fabricate events; if no relevant memories exist, say so. "
-        "You are talking to a human, therefore do not replying with ids (like contact:1761950388937 or place:1761950388937) or other technical details - replace ids with objects names, titles or other more human readable things you find in databases. "
+        "You are talking to a human, therefore do not reply with ids (like contact:1761950388937 or place:1761950388937) or other technical details - replace ids with objects names, titles or other more human readable things you find in databases. I repeat, do not include IDs in answers. "
         f"When searching, prefer returning at most {search_limit} highly relevant results, unless the user is requesting full data."
     )
     protocol_prompt = "Tool protocol: when a question references stored events, memories, contacts, places, timelines, or relationships, " \
@@ -814,7 +792,6 @@ def _handle_tool_call(
     raw_args = function.get("arguments") or "{}"
 
     try:
-        print(f"[agent] raw_args={raw_args}")
         args = json.loads(raw_args) if isinstance(raw_args, str) else raw_args
     except json.JSONDecodeError as exc:
         raise RuntimeError(f"Invalid arguments for tool {name}: {raw_args}") from exc
@@ -842,16 +819,12 @@ def _handle_tool_call(
     if name == "search_memories":
         query = args.get("query") or question
         limit_arg = args.get("limit")
-        print(f"[agent] search_memories limit_arg={limit_arg}")
-        print(f"[agent] search_limit={search_limit}")
         try:
             limit = int(limit_arg) if limit_arg is not None else search_limit
         except (TypeError, ValueError):
             limit = search_limit
-        print(f"[agent] before limit={limit}")
-        limit = max(1, min(limit, search_limit))
-        print(f"[agent] limit={limit}")
-        limit = 10
+        limit = max(1, min(5, min(limit, search_limit)))
+
         print(
             f"[agent] calling search_memories(query={query!r}, people={args.get('people')}, place_ids={args.get('place_ids')}, time_start={args.get('time_start')}, time_end={args.get('time_end')}, limit={limit})"
         )
