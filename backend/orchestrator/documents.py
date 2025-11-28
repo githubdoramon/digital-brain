@@ -31,8 +31,8 @@ DOCUMENT_STORAGE_DIR = Path(
 )
 DOCUMENT_STORAGE_DIR.mkdir(parents=True, exist_ok=True)
 
-MAX_CONTENT_CHARS = int(os.getenv("DOCUMENT_MAX_CONTENT_CHARS", "30000"))
-MAX_EMBED_CHARS = int(os.getenv("DOCUMENT_EMBED_MAX_CHARS", "20000"))
+MAX_CONTENT_CHARS = int(os.getenv("DOCUMENT_MAX_CONTENT_CHARS", "20000"))
+MAX_EMBED_CHARS = int(os.getenv("DOCUMENT_EMBED_MAX_CHARS", "8000"))
 MAX_LABEL_PROMPT_CHARS = int(os.getenv("DOCUMENT_LABEL_PROMPT_CHARS", "10000"))
 MAX_SUGGESTED_TAGS = int(os.getenv("DOCUMENT_LABEL_MAX_COUNT", "5"))
 MAX_TITLE_PROMPT_CHARS = int(os.getenv("DOCUMENT_TITLE_PROMPT_CHARS", "2000"))
@@ -510,9 +510,11 @@ def _extract_text(path: Path, mime_type: Optional[str]) -> str:
 
 def _suggest_additional_tags(content: str, tags: Sequence[str]) -> List[str]:
     cleaned = (content or "").strip()
+    print(f"[documents] cleaned={cleaned}")
     if not cleaned or not OLLAMA_CHAT_MODEL:
         return []
     prompt_content = cleaned[:MAX_LABEL_PROMPT_CHARS]
+    print(f"[documents] prompt_content={prompt_content}")
     existing = ", ".join(tags) if tags else "none"
     payload = {
         "model": OLLAMA_CHAT_MODEL,
@@ -521,9 +523,9 @@ def _suggest_additional_tags(content: str, tags: Sequence[str]) -> List[str]:
                 "role": "system",
                 "content": (
                     "You are a document librarian. Propose concise topical tags in English for reference. Create both specific tags as more generic ones to make sure this document is easily searchable in the future."
-                    "As an example, when tagging a document about a specific war, you could create a tag with the war name, but another one as `history` or `world war`."
-                    "Another example, when tagging a blood test result, you could create a tag with the test name, but another one as `health` or `medical`."
-                    "Another example, when tagging a document about a specific person, you could create a tag with the person name, but another one as `family` or `friends` if you have this indication in the document."
+                    "As an example, when tagging a document about a specific war, you could create a tag with the war name, but another one as \"history\" or \"world war\"."
+                    "Another example, when tagging a blood test result, you could create a tag with the test name, but another one as \"health\" or \"medical\"."
+                    "Another example, when tagging a document about a specific person, you could create a tag with the person name, but another one as \"family\" or \"friends\" if you have this indication in the document."
                     "Respond ONLY with JSON in the shape {\"tags\": [\"tag\", ...]} using 1-3 word phrases. Do not include any other text or numerical order in your response."
                 ),
             },
