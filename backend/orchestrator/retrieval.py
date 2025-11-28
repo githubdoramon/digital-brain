@@ -1513,8 +1513,7 @@ def search_memories(
         v = vec_events.get(event_id, 0.0)
         b = bm_events.get(event_id, 0.0)
         s = st_events.get(event_id, 0.0)
-        bonus = 0.05 if s > 0 else 0.0
-        score = 0.6 * v + 0.3 * b + 0.1 * s + bonus
+        score = 0.6 * v + 0.3 * b + 0.1 * s
         print(f"[retrieval] event_id={event_id} score={score}")
         event_scores[event_id] = score
 
@@ -1644,6 +1643,8 @@ def bm25_search_documents(query: str, k: int = 50) -> Dict[str, float]:
 
 
 def structured_candidates(timespan, people_ids: List[str], place_ids: List[str], k: int = 200):
+    if not timespan and not people_ids and not place_ids:
+        return {}
     clauses = []
     params: List[Any] = []
     if timespan:

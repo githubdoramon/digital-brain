@@ -216,7 +216,6 @@ def update_document_metadata(
 
     row = _load_document_row(document_id)
 
-    print(f"[documents] row={row}")
     if not row:
         return None
 
@@ -290,7 +289,6 @@ def update_document_metadata(
     generated_description: Optional[str] = None
     if not final_description:
         generated_description = _summarize_description(content_text)
-        print(f"[documents] generated_description={generated_description}")
         final_description = generated_description or _default_description(
             content_text,
             provided_title or file_name or document_id,
@@ -300,7 +298,6 @@ def update_document_metadata(
     generated_title: Optional[str] = None
     if not final_title:
         generated_title = _suggest_title(content_text, fallback=file_name or document_id)
-        print(f"[documents] generated_title={generated_title}")
         final_title = (
             generated_title
             or _derive_title_from_filename(file_name)
@@ -313,11 +310,8 @@ def update_document_metadata(
         inferred_date = _suggest_document_date(content_text, fallback=final_description)
         final_date = inferred_date
 
-    print(f"[documents] normalized_tags={normalized_tags}")
     english_tags = _normalize_strings(_translate_tags_to_english(normalized_tags))
-    print(f"[documents] english_tags={english_tags}")
     suggested_tags = _suggest_additional_tags(content_text, english_tags)
-    print(f"[documents] suggested_tags={suggested_tags}")
     merged_tags = _merge_tag_lists(english_tags, suggested_tags)
 
     embedding = _generate_document_embedding(
@@ -510,11 +504,9 @@ def _extract_text(path: Path, mime_type: Optional[str]) -> str:
 
 def _suggest_additional_tags(content: str, tags: Sequence[str]) -> List[str]:
     cleaned = (content or "").strip()
-    print(f"[documents] cleaned={cleaned}")
     if not cleaned or not OLLAMA_CHAT_MODEL:
         return []
     prompt_content = cleaned[:MAX_LABEL_PROMPT_CHARS]
-    print(f"[documents] prompt_content={prompt_content}")
     existing = ", ".join(tags) if tags else "none"
     payload = {
         "model": OLLAMA_CHAT_MODEL,
@@ -674,7 +666,6 @@ def _parse_flexible_date(value: str) -> Optional[datetime]:
 
 def _translate_text_to_english(text: str, max_chars: int) -> str:
     trimmed = (text or "").strip()
-    print(f"[documents] trimmed={trimmed}")
     if not trimmed or not OLLAMA_CHAT_MODEL:
         return text
     excerpt = trimmed[:max_chars]
@@ -683,7 +674,7 @@ def _translate_text_to_english(text: str, max_chars: int) -> str:
         "messages": [
             {
                 "role": "system",
-                "content": "Translate the user's text into fluent English. Respond with the translation only.",
+                "content": "Translate the user's text into fluent English. Respond with the translation only. If already in english, just return the same text.",
             },
             {
                 "role": "user",
@@ -697,7 +688,6 @@ def _translate_text_to_english(text: str, max_chars: int) -> str:
         response = requests.post(f"{OLLAMA_HOST}/api/chat", json=payload, timeout=OLLAMA_TIMEOUT)
         response.raise_for_status()
         data = response.json()
-        print(f"[documents] translation data={data}")
         message = data.get("message") or {}
         candidate = (message.get("content") or "").strip()
         return candidate or text
@@ -726,8 +716,6 @@ def _translate_tags_to_english(tags: Sequence[str]) -> List[str]:
         response = requests.post(f"{OLLAMA_HOST}/api/chat", json=payload, timeout=OLLAMA_TIMEOUT)
         response.raise_for_status()
         data = response.json()
-        print(f"[documents] tags={normalized}")
-        print(f"[documents] tags data={data}")
         message = data.get("message") or {}
         raw = (message.get("content") or "").strip()
         if not raw:
@@ -860,7 +848,6 @@ def _upsert_document(
 
 
 def _vector_search_documents(query: str, k: int) -> Dict[str, float]:
-    print(f"[documents] query={query}")
     query_vector = embed_text(query)
     with get_conn() as conn, conn.cursor() as cur:
         cur.execute(
@@ -1080,7 +1067,6 @@ def _generate_document_embedding(document: Dict[str, Any]) -> Sequence[float]:
     segments: List[str] = []
 
     tags = document.get("tags")
-    print(f"[documents] tags={tags}")
     if isinstance(tags, (list, tuple)):
         tag_text = " ".join(str(tag).strip() for tag in tags if isinstance(tag, str) and tag.strip())
         if tag_text:
@@ -1110,23 +1096,19 @@ def _generate_document_embedding(document: Dict[str, Any]) -> Sequence[float]:
         if cleaned:
             segments.append(cleaned)
 
-    if not segments:
-        doc_id = document.get("document_id")
-        if doc_id:
-            segments.append(str(doc_id))
-
     combined = " ".join(segments).strip()
-    if not combined:
-        combined = str(document.get("document_id") or "document")
 
     embed_source = combined[:MAX_EMBED_CHARS]
-    if not embed_source:
-        embed_source = str(document.get("document_id") or "document")
+    embed_input = ""
+    if embed_source is not None:
+        embed_input = _translate_text_to_english(embed_source, MAX_EMBED_CHARS)
 
-    embed_input = _translate_text_to_english(embed_source, MAX_EMBED_CHARS)
     if not embed_input.strip():
         embed_input = embed_source
 
+    doc_id = document.get("id")
+    if doc_id is not None:
+        embed_source = f"{embed_source} document Id: {doc_id}"
     print(f"[embeding doc]: embed_input={embed_input}")
     return embed_text(embed_input)
 
