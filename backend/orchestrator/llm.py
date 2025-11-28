@@ -848,8 +848,10 @@ def _handle_tool_call(
             limit = int(limit_arg) if limit_arg is not None else search_limit
         except (TypeError, ValueError):
             limit = search_limit
+        print(f"[agent] before limit={limit}")
         limit = max(1, min(limit, search_limit))
-        limit = 5
+        print(f"[agent] limit={limit}")
+        limit = 10
         print(
             f"[agent] calling search_memories(query={query!r}, people={args.get('people')}, place_ids={args.get('place_ids')}, time_start={args.get('time_start')}, time_end={args.get('time_end')}, limit={limit})"
         )

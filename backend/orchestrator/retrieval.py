@@ -1439,21 +1439,27 @@ def search_memories(
         b = bm_events.get(event_id, 0.0)
         s = st_events.get(event_id, 0.0)
         bonus = 0.05 if s > 0 else 0.0
-        event_scores[event_id] = 0.6 * v + 0.3 * b + 0.1 * s + bonus
+        score = 0.6 * v + 0.3 * b + 0.1 * s + bonus
+        print(f"[retrieval] event_id={event_id} score={score}")
+        event_scores[event_id] = score
 
     doc_ids = set(vec_docs) | set(bm_docs)
     doc_scores: Dict[str, float] = {}
     for doc_id in doc_ids:
-        print(f"[retrieval] doc_id={doc_id}")
         v = vec_docs.get(doc_id, 0.0)
         b = bm_docs.get(doc_id, 0.0)
-        doc_scores[doc_id] = 0.6 * v + 0.4 * b
+        score = 0.6 * v + 0.4 * b
+        print(f"[retrieval] doc_id={doc_id} score={score}")
+        doc_scores[doc_id] = score
 
 
     combined: List[Tuple[str, str, float]] = []
     combined.extend((event_id, "event", event_scores[event_id]) for event_id in event_scores)
     combined.extend((doc_id, "document", doc_scores[doc_id]) for doc_id in doc_scores)
     combined.sort(key=lambda item: item[2], reverse=True)
+
+    print(len(combined))
+    print(combined)
 
     if not combined:
         return {"results": []}
