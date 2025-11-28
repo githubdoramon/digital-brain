@@ -42,8 +42,6 @@ MAX_DESCRIPTION_PROMPT_CHARS = int(os.getenv("DOCUMENT_DESCRIPTION_PROMPT_CHARS"
 OLLAMA_HOST = os.getenv("OLLAMA_HOST", "http://localhost:11434")
 OLLAMA_CHAT_MODEL = os.getenv("OLLAMA_CHAT_MODEL")
 OLLAMA_TIMEOUT = int(os.getenv("OLLAMA_TIMEOUT", "60"))
-DOCUMENT_LLM_TIMEOUT = int(os.getenv("DOCUMENT_LLM_TIMEOUT", str(max(60, int(os.getenv("OLLAMA_TIMEOUT", "60"))))))
-
 
 @dataclass
 class StoredFileInfo:
@@ -548,7 +546,7 @@ def _suggest_additional_tags(content: str, tags: Sequence[str]) -> List[str]:
 
     try:
         response = requests.post(
-            f"{OLLAMA_HOST}/api/chat", json=payload, timeout=DOCUMENT_LLM_TIMEOUT
+            f"{OLLAMA_HOST}/api/chat", json=payload, timeout=OLLAMA_TIMEOUT
         )
         response.raise_for_status()
         data = response.json()
@@ -618,7 +616,7 @@ def _suggest_document_date(content: str, fallback: Optional[str]) -> Optional[da
     }
     try:
         response = requests.post(
-            f"{OLLAMA_HOST}/api/chat", json=payload, timeout=DOCUMENT_LLM_TIMEOUT
+            f"{OLLAMA_HOST}/api/chat", json=payload, timeout=OLLAMA_TIMEOUT
         )
         response.raise_for_status()
         data = response.json()
@@ -674,6 +672,7 @@ def _parse_flexible_date(value: str) -> Optional[datetime]:
 
 def _translate_text_to_english(text: str, max_chars: int) -> str:
     trimmed = (text or "").strip()
+    print(f"[documents] trimmed={trimmed}")
     if not trimmed or not OLLAMA_CHAT_MODEL:
         return text
     excerpt = trimmed[:max_chars]
@@ -693,9 +692,10 @@ def _translate_text_to_english(text: str, max_chars: int) -> str:
     }
 
     try:
-        response = requests.post(f"{OLLAMA_HOST}/api/chat", json=payload, timeout=DOCUMENT_LLM_TIMEOUT)
+        response = requests.post(f"{OLLAMA_HOST}/api/chat", json=payload, timeout=OLLAMA_TIMEOUT)
         response.raise_for_status()
         data = response.json()
+        print(f"[documents] translation data={data}")
         message = data.get("message") or {}
         candidate = (message.get("content") or "").strip()
         return candidate or text
@@ -721,9 +721,11 @@ def _translate_tags_to_english(tags: Sequence[str]) -> List[str]:
         "stream": False,
     }
     try:
-        response = requests.post(f"{OLLAMA_HOST}/api/chat", json=payload, timeout=DOCUMENT_LLM_TIMEOUT)
+        response = requests.post(f"{OLLAMA_HOST}/api/chat", json=payload, timeout=OLLAMA_TIMEOUT)
         response.raise_for_status()
         data = response.json()
+        print(f"[documents] tags={normalized}")
+        print(f"[documents] tags data={data}")
         message = data.get("message") or {}
         raw = (message.get("content") or "").strip()
         if not raw:
@@ -765,7 +767,7 @@ def _summarize_description(content: str) -> Optional[str]:
         "stream": False,
     }
     try:
-        response = requests.post(f"{OLLAMA_HOST}/api/chat", json=payload, timeout=DOCUMENT_LLM_TIMEOUT)
+        response = requests.post(f"{OLLAMA_HOST}/api/chat", json=payload, timeout=OLLAMA_TIMEOUT)
         response.raise_for_status()
         data = response.json()
         message = data.get("message") or {}
@@ -1167,7 +1169,7 @@ def _suggest_title(content: str, fallback: Optional[str]) -> Optional[str]:
     }
     try:
         response = requests.post(
-            f"{OLLAMA_HOST}/api/chat", json=payload, timeout=DOCUMENT_LLM_TIMEOUT
+            f"{OLLAMA_HOST}/api/chat", json=payload, timeout=OLLAMA_TIMEOUT
         )
         response.raise_for_status()
         data = response.json()
