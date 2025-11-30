@@ -8,12 +8,13 @@ const BACKEND_PATHS: Record<string, string> = {
 };
 
 type RouteParams = {
-  type?: string;
+  type: string;
 };
 
-export async function POST(request: NextRequest, context: { params: RouteParams }) {
-  const type = context.params?.type ?? "";
-  const backendPath = BACKEND_PATHS[type];
+export async function POST(request: NextRequest, context: { params: Promise<RouteParams> }) {
+  const { type } = await context.params;
+  const normalizedType = type ?? "";
+  const backendPath = BACKEND_PATHS[normalizedType];
   if (!backendPath) {
     return new Response("Not Found", { status: 404 });
   }

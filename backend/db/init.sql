@@ -46,6 +46,29 @@ CREATE TABLE IF NOT EXISTS places (
 );
 
 -- Events (your memories)
+DO $$
+DECLARE
+  rel_kind CHAR;
+BEGIN
+  SELECT c.relkind
+  INTO rel_kind
+  FROM pg_catalog.pg_class c
+  JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+  WHERE c.relname = 'events'
+    AND n.nspname = 'public'
+  LIMIT 1;
+
+  IF rel_kind = 'v' THEN
+    EXECUTE 'DROP VIEW public.events CASCADE';
+  ELSIF rel_kind = 'm' THEN
+    EXECUTE 'DROP MATERIALIZED VIEW public.events CASCADE';
+  END IF;
+END;
+$$;
+
+-- Drop dependent views so column renames don't fail on legacy schemas.
+DROP VIEW IF EXISTS events_with_places CASCADE;
+
 CREATE TABLE IF NOT EXISTS events (
   id TEXT PRIMARY KEY,
   start_date TIMESTAMPTZ NOT NULL,
@@ -82,44 +105,66 @@ CREATE TABLE IF NOT EXISTS events (
   )
 );
 
--- Backfill legacy schemas (rename/add columns when table already existed)
 DO $$
+DECLARE
+  events_is_table BOOLEAN;
 BEGIN
-  IF EXISTS (
-    SELECT 1 FROM information_schema.columns
-    WHERE table_name = 'events' AND column_name = 'ts'
-  ) THEN
-    EXECUTE 'ALTER TABLE events RENAME COLUMN ts TO start_date';
-  END IF;
+  SELECT EXISTS (
+    SELECT 1
+    FROM information_schema.tables
+    WHERE table_schema = 'public'
+      AND table_name = 'events'
+      AND table_type = 'BASE TABLE'
+  )
+  INTO events_is_table;
 
-  IF NOT EXISTS (
-    SELECT 1 FROM information_schema.columns
-    WHERE table_name = 'events' AND column_name = 'end_date'
-  ) THEN
-    EXECUTE 'ALTER TABLE events ADD COLUMN end_date TIMESTAMPTZ';
-  END IF;
+  IF events_is_table THEN
+    IF EXISTS (
+      SELECT 1 FROM information_schema.columns
+      WHERE table_schema = 'public'
+        AND table_name = 'events'
+        AND column_name = 'ts'
+    ) THEN
+      EXECUTE 'ALTER TABLE events RENAME COLUMN ts TO start_date';
+    END IF;
 
-  IF EXISTS (
-    SELECT 1 FROM information_schema.columns
-    WHERE table_name = 'events' AND column_name = 'what_text'
-  ) THEN
-    EXECUTE 'ALTER TABLE events RENAME COLUMN what_text TO title';
-  END IF;
+    IF NOT EXISTS (
+      SELECT 1 FROM information_schema.columns
+      WHERE table_schema = 'public'
+        AND table_name = 'events'
+        AND column_name = 'end_date'
+    ) THEN
+      EXECUTE 'ALTER TABLE events ADD COLUMN end_date TIMESTAMPTZ';
+    END IF;
 
-  IF NOT EXISTS (
-    SELECT 1 FROM information_schema.columns
-    WHERE table_name = 'events' AND column_name = 'summary'
-  ) THEN
-    EXECUTE 'ALTER TABLE events ADD COLUMN summary TEXT';
-    -- seed summary with title/legacy text when available
-    EXECUTE 'UPDATE events SET summary = title WHERE summary IS NULL';
-  END IF;
+    IF EXISTS (
+      SELECT 1 FROM information_schema.columns
+      WHERE table_schema = 'public'
+        AND table_name = 'events'
+        AND column_name = 'what_text'
+    ) THEN
+      EXECUTE 'ALTER TABLE events RENAME COLUMN what_text TO title';
+    END IF;
 
-  IF NOT EXISTS (
-    SELECT 1 FROM information_schema.columns
-    WHERE table_name = 'events' AND column_name = 'external_id'
-  ) THEN
-    EXECUTE 'ALTER TABLE events ADD COLUMN external_id TEXT UNIQUE';
+    IF NOT EXISTS (
+      SELECT 1 FROM information_schema.columns
+      WHERE table_schema = 'public'
+        AND table_name = 'events'
+        AND column_name = 'summary'
+    ) THEN
+      EXECUTE 'ALTER TABLE events ADD COLUMN summary TEXT';
+      -- seed summary with title/legacy text when available
+      EXECUTE 'UPDATE events SET summary = title WHERE summary IS NULL';
+    END IF;
+
+    IF NOT EXISTS (
+      SELECT 1 FROM information_schema.columns
+      WHERE table_schema = 'public'
+        AND table_name = 'events'
+        AND column_name = 'external_id'
+    ) THEN
+      EXECUTE 'ALTER TABLE events ADD COLUMN external_id TEXT UNIQUE';
+    END IF;
   END IF;
 END;
 $$;
