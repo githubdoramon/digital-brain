@@ -3,12 +3,12 @@ from __future__ import annotations
 from contextlib import asynccontextmanager
 from datetime import datetime
 from time import perf_counter
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
 import json
 import os
 
-from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Query, Response, UploadFile
+from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Query, Request, Response, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 
@@ -22,6 +22,7 @@ import retrieval
 import todos as todos_service
 from auth import get_current_user
 from db import get_conn
+import telegram_bot
 from schemas import (
     AskIn,
     AskOut,
@@ -205,6 +206,26 @@ def receive_contact_webhook(
         return {"ok": True, "contact": contact}
 
     raise HTTPException(status_code=400, detail=f"Unsupported eventName: {payload.event_name}")
+
+
+@api.post("/webhooks/telegram/messages")
+async def handle_telegram_messages(
+    payload: Dict[str, Any],
+    request: Request,
+):
+    try:
+        return telegram_bot.process_update(
+            payload,
+            secret_token=request.headers.get("X-Telegram-Bot-Api-Secret-Token"),
+        )
+    except telegram_bot.TelegramAuthError as exc:
+        raise HTTPException(status_code=401, detail=str(exc)) from exc
+    except telegram_bot.TelegramConfigError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    except telegram_bot.TelegramProcessingError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except telegram_bot.TelegramUploadError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
 
 @api.post("/ingest/place")
 def ingest_place(p: PlaceIn, user: dict = Depends(get_current_user)):
