@@ -11,7 +11,9 @@ from typing import Any, Dict, List, Set, Optional
 import requests
 from mem0 import AsyncMemory
 
+import contacts as contacts_service
 import conversations
+import events as events_service
 import retrieval
 import sql_tools
 import web_tools
@@ -729,7 +731,7 @@ def _build_messages(
 
 
 def _self_context_from_email(email: str) -> Optional[str]:
-    contact = retrieval.get_contact_by_email(email)
+    contact = contacts_service.get_contact_by_email(email)
     if not contact:
         return None
 
@@ -854,7 +856,7 @@ def _handle_tool_call(
             raise RuntimeError("get_events requires an array of ids")
         print(f"[agent] calling get_events(ids={ids})")
         step_start = perf_counter()
-        events = retrieval.get_events([str(i) for i in ids])
+        events = events_service.get_events([str(i) for i in ids])
         _log_timing("tool.get_events", step_start, count=len(events))
         state.update_detailed_events(events)
         return {"events": events}
@@ -1090,7 +1092,7 @@ def _finalize_bundle(
         ]
         if ids:
             events_start = perf_counter()
-            events = retrieval.get_events(ids)
+            events = events_service.get_events(ids)
             _log_timing("pipeline.get_events", events_start, count=len(events))
             state.update_detailed_events(events)
 

@@ -12,10 +12,14 @@ from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Query, 
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 
+import contacts as contacts_service
 import conversations
 import documents
+import events as events_service
 import llm
+import places as places_service
 import retrieval
+import todos as todos_service
 from auth import get_current_user
 from db import get_conn
 from schemas import (
@@ -115,19 +119,19 @@ def read_service_versions(user: dict = Depends(get_current_user)):
 # --------------------------- Ingest endpoints ---------------------------
 @api.post("/ingest/contact")
 def ingest_contact(c: ContactIn, user: dict = Depends(get_current_user)):
-    retrieval.ingest_contact(c)
+    contacts_service.ingest_contact(c)
     return {"ok": True}
 
 
 @api.post("/ingest/contact-relationship")
 def ingest_contact_relationship(r: ContactRelationshipIn, user: dict = Depends(get_current_user)):
-    retrieval.upsert_contact_relationship(r)
+    contacts_service.upsert_contact_relationship(r)
     return {"ok": True}
 
 
 @api.delete("/contact-relationships/{relationship_id}")
 def delete_contact_relationship(relationship_id: str, user: dict = Depends(get_current_user)):
-    deleted = retrieval.delete_contact_relationship(relationship_id)
+    deleted = contacts_service.delete_contact_relationship(relationship_id)
     if not deleted:
         raise HTTPException(status_code=404, detail="Relationship not found")
     return {"ok": True}
@@ -135,17 +139,17 @@ def delete_contact_relationship(relationship_id: str, user: dict = Depends(get_c
 
 @api.get("/contacts")
 def list_contacts(user: dict = Depends(get_current_user)):
-    return {"contacts": retrieval.list_contacts()}
+    return {"contacts": contacts_service.list_contacts()}
 
 @api.get("/contacts/merge-candidates")
 def list_merge_candidates(user: dict = Depends(get_current_user)):
-    return retrieval.list_contact_merge_candidates()
+    return contacts_service.list_contact_merge_candidates()
 
 
 @api.post("/contacts/merge")
 def merge_contacts_endpoint(payload: ContactMergeIn, user: dict = Depends(get_current_user)):
     try:
-        contact = retrieval.merge_contacts(payload.primary_contact_id, payload.duplicate_contact_id)
+        contact = contacts_service.merge_contacts(payload.primary_contact_id, payload.duplicate_contact_id)
     except LookupError:
         raise HTTPException(status_code=404, detail="One or both contacts not found")
     except ValueError as exc:
@@ -154,7 +158,7 @@ def merge_contacts_endpoint(payload: ContactMergeIn, user: dict = Depends(get_cu
 
 @api.get("/contacts/{contact_id}")
 def get_contact(contact_id: str, user: dict = Depends(get_current_user)):
-    contact = retrieval.get_contact(contact_id)
+    contact = contacts_service.get_contact(contact_id)
     if contact is None:
         raise HTTPException(status_code=404, detail="Contact not found")
     return contact
@@ -162,7 +166,7 @@ def get_contact(contact_id: str, user: dict = Depends(get_current_user)):
 
 @api.delete("/contacts/{contact_id}")
 def delete_contact(contact_id: str, user: dict = Depends(get_current_user)):
-    deleted = retrieval.delete_contact(contact_id)
+    deleted = contacts_service.delete_contact(contact_id)
     if not deleted:
         raise HTTPException(status_code=404, detail="Contact not found")
     return {"ok": True}
@@ -170,7 +174,7 @@ def delete_contact(contact_id: str, user: dict = Depends(get_current_user)):
 
 @api.get("/contacts/{contact_id}/relationships")
 def get_contact_relationships(contact_id: str, user: dict = Depends(get_current_user)):
-    return {"relationships": retrieval.list_contact_relationships(contact_id)}
+    return {"relationships": contacts_service.list_contact_relationships(contact_id)}
 
 
 @api.post("/webhooks/contacts")
@@ -186,14 +190,14 @@ def receive_contact_webhook(
 
     if event_name == "persondelete":
         try:
-            updated = retrieval.unlink_external_contact(person.id)
+            updated = contacts_service.unlink_external_contact(person.id)
         except Exception as exc:
             raise HTTPException(status_code=500, detail=f"Failed to unlink external contact: {exc}") from exc
         return {"ok": True, "action": "unlinked" if updated else "ignored"}
 
     if event_name in {"personcreate", "personupdate"}:
         try:
-            contact = retrieval.sync_external_contact(person, payload_body.previous if payload_body else None)
+            contact = contacts_service.sync_external_contact(person, payload_body.previous if payload_body else None)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         except Exception as exc:
@@ -204,24 +208,24 @@ def receive_contact_webhook(
 
 @api.post("/ingest/place")
 def ingest_place(p: PlaceIn, user: dict = Depends(get_current_user)):
-    retrieval.ingest_place(p)
+    places_service.ingest_place(p)
     return {"ok": True}
 
 
 @api.post("/ingest/todo")
 def ingest_todo(todo: TodoIn, user: dict = Depends(get_current_user)):
-    retrieval.ingest_todo(todo)
+    todos_service.ingest_todo(todo)
     return {"ok": True, "id": todo.todo_id}
 
 
 @api.get("/todos")
 def list_todos(user: dict = Depends(get_current_user)):
-    return {"todos": retrieval.list_todos()}
+    return {"todos": todos_service.list_todos()}
 
 
 @api.get("/todos/{todo_id}")
 def get_todo(todo_id: str, user: dict = Depends(get_current_user)):
-    todo = retrieval.get_todo(todo_id)
+    todo = todos_service.get_todo(todo_id)
     if not todo:
         raise HTTPException(status_code=404, detail="Todo not found")
     return todo
@@ -229,7 +233,7 @@ def get_todo(todo_id: str, user: dict = Depends(get_current_user)):
 
 @api.delete("/todos/{todo_id}")
 def delete_todo(todo_id: str, user: dict = Depends(get_current_user)):
-    deleted = retrieval.delete_todo(todo_id)
+    deleted = todos_service.delete_todo(todo_id)
     if not deleted:
         raise HTTPException(status_code=404, detail="Todo not found")
     return {"ok": True}
@@ -237,7 +241,7 @@ def delete_todo(todo_id: str, user: dict = Depends(get_current_user)):
 
 @api.post("/ingest/event")
 def ingest_event(e: EventIn, user: dict = Depends(get_current_user)):
-    retrieval.ingest_event(e)
+    events_service.ingest_event(e)
     return {"ok": True, "id": e.id}
 
 
@@ -357,7 +361,7 @@ def ingest_meeting_notes(
     meetings: List[MeetingIn],
     _: None = Depends(require_service_api_key),
 ):
-    ids = retrieval.ingest_meeting_notes(meetings)
+    ids = events_service.ingest_meeting_notes(meetings, todo_writer=todos_service.ingest_todo)
     return {"ok": True, "ids": ids}
 
 
@@ -367,7 +371,7 @@ def ingest_external_meeting(
     _: None = Depends(require_service_api_key),
 ):
     try:
-        event_id = retrieval.ingest_external_meeting(payload)
+        event_id = events_service.ingest_external_meeting(payload)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {"ok": True, "id": event_id}
@@ -379,7 +383,7 @@ def update_external_meeting_endpoint(
     _: None = Depends(require_service_api_key),
 ):
     try:
-        event_id = retrieval.update_external_meeting(payload)
+        event_id = events_service.update_external_meeting(payload)
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
@@ -389,7 +393,7 @@ def update_external_meeting_endpoint(
 
 @api.get("/meetings/{meeting_id}")
 def get_meeting(meeting_id: str, user: dict = Depends(get_current_user)):
-    meeting = retrieval.get_meeting(meeting_id)
+    meeting = events_service.get_meeting(meeting_id)
     if not meeting:
         raise HTTPException(status_code=404, detail="Meeting not found")
     return meeting
@@ -419,7 +423,7 @@ def search(payload: SearchIn, user: dict = Depends(get_current_user)):
 
 @api.post("/get")
 def get_events(payload: GetIn, user: dict = Depends(get_current_user)):
-    return {"events": retrieval.get_events(payload.ids)}
+    return {"events": events_service.get_events(payload.ids)}
 
 
 # --------------------------- Ask endpoint (LLM-powered) ---------------------------
