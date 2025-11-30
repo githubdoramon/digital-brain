@@ -1523,7 +1523,7 @@ def search_memories(
         v = vec_docs.get(doc_id, 0.0)
         b = bm_docs.get(doc_id, 0.0)
         score = 0.6 * v + 0.4 * b
-        print(f"[retrieval] doc_id={doc_id} score={score}")
+        print(f"[retrieval] doc_id={doc_id} score={score}") 
         doc_scores[doc_id] = score
 
 

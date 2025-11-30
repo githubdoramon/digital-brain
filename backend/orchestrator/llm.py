@@ -692,6 +692,7 @@ def _build_messages(
         "Do not stop after describing a plan—actually call the necessary tools, inspect their outputs, and base your final answer on that evidence. " \
         "If a SQL attempt fails validation, revise and retry until you either succeed or can explain why the data cannot be retrieved. " \
         "Only respond after you have gathered sufficient evidence from the tools. " \
+        "Always reply in the same language you were asked in, do not translate the answer to any language if not requested." \
         "If you are not 100% sure, still respond to the original question, but state your uncertainty instead of declining outright."
 
     messages: List[Dict[str, str]] = [{"role": "system", "content": system_prompt}]
