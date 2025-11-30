@@ -3,9 +3,24 @@ import type { NextFetchEvent, NextRequest } from "next/server";
 import { withAuth } from "next-auth/middleware";
 import type { NextRequestWithAuth } from "next-auth/middleware";
 
-const SERVICE_API_KEY_PREFIXES: string[] = [
-  "/api/orchestrator/meeting",
-  "/api/removed-service",
+type ServiceKeyRule = {
+  prefix: string;
+  header: string;
+};
+
+const SERVICE_KEY_RULES: ServiceKeyRule[] = [
+  {
+    prefix: "/api/orchestrator/meeting",
+    header: "x-service-api-key",
+  },
+  {
+    prefix: "/api/removed-service",
+    header: "x-service-api-key",
+  },
+  {
+    prefix: "/api/webhooks/telegram",
+    header: "x-telegram-bot-api-secret-token",
+  },
 ];
 
 const authMiddleware = withAuth({
@@ -19,30 +34,30 @@ const authMiddleware = withAuth({
   },
 });
 
-function shouldBypassAuth(pathname: string): boolean {
-  return SERVICE_API_KEY_PREFIXES.some((prefix) => pathname.startsWith(prefix));
+function findServiceKeyRule(pathname: string): ServiceKeyRule | undefined {
+  return SERVICE_KEY_RULES.find((rule) => pathname.startsWith(rule.prefix));
 }
 
-function validateServiceApiKey(request: NextRequest) {
-  const serviceApiKey = request.headers.get("x-service-api-key");
-  if (!serviceApiKey) {
-    return NextResponse.json(
-      { detail: "Missing x-service-api-key header" },
-      {
-        status: 401,
-        headers: { "content-type": "application/json" },
-      }
-    );
+function validateServiceHeader(request: NextRequest, rule: ServiceKeyRule) {
+  if (request.headers.has(rule.header)) {
+    return null;
   }
 
-  return NextResponse.next();
+  return NextResponse.json(
+    { detail: `Missing ${rule.header} header` },
+    {
+      status: 401,
+      headers: { "content-type": "application/json" },
+    }
+  );
 }
 
 export default function middleware(request: NextRequest, event: NextFetchEvent) {
   const pathname = request.nextUrl.pathname;
 
-  if (shouldBypassAuth(pathname)) {
-    const validationResponse = validateServiceApiKey(request);
+  const serviceKeyRule = findServiceKeyRule(pathname);
+  if (serviceKeyRule) {
+    const validationResponse = validateServiceHeader(request, serviceKeyRule);
     if (validationResponse) {
       return validationResponse;
     }
