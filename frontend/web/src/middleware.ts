@@ -55,7 +55,10 @@ function validateServiceHeader(request: NextRequest, rule: ServiceKeyRule) {
 export default function middleware(request: NextRequest, event: NextFetchEvent) {
   const pathname = request.nextUrl.pathname;
 
+  console.log(`[middleware] pathname=${pathname}`);
+
   const serviceKeyRule = findServiceKeyRule(pathname);
+  console.log(`[middleware] serviceKeyRule=${serviceKeyRule}`);
   if (serviceKeyRule) {
     const validationResponse = validateServiceHeader(request, serviceKeyRule);
     if (validationResponse) {
