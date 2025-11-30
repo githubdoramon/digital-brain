@@ -213,6 +213,8 @@ async def handle_telegram_messages(
     payload: Dict[str, Any],
     request: Request,
 ):
+    print(f"[app] payload={payload}")
+    print(f"[app] request={request}")
     try:
         return telegram_bot.process_update(
             payload,
