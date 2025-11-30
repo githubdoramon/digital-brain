@@ -2,6 +2,8 @@ const ORCHESTRATOR_BASE = process.env.BACKEND_API_BASE ?? "http://localhost:8000
 
 const allowedMethods = new Set(["POST", "OPTIONS"]);
 
+type NodeFetchRequestInit = RequestInit & { duplex?: "half" };
+
 async function proxyToBackend(request: Request): Promise<Response> {
   if (!allowedMethods.has(request.method)) {
     return new Response("Method Not Allowed", { status: 405 });
@@ -14,11 +16,18 @@ async function proxyToBackend(request: Request): Promise<Response> {
   const body = request.method === "POST" ? await request.arrayBuffer() : undefined;
 
   try {
-    const response = await fetch(url, {
+    const fetchOptions: NodeFetchRequestInit = {
       method: request.method,
       headers,
       body,
-      duplex: "half",
+    };
+
+    if (body !== undefined) {
+      fetchOptions.duplex = "half";
+    }
+
+    const response = await fetch(url, {
+      ...fetchOptions,
     });
 
     const passthroughHeaders = new Headers(response.headers);
