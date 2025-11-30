@@ -13,10 +13,21 @@ import {
 } from "react";
 import { api } from "@/lib/api";
 
+type RawLinkedEvent = {
+  id?: string | null;
+  title?: string | null;
+  ts?: string | null;
+  start_date?: string | null;
+  end_date?: string | null;
+  link?: string | null;
+  [key: string]: unknown;
+};
+
 type LinkedEvent = {
   id: string;
   title?: string | null;
-  ts?: string | null;
+  startDate?: string | null;
+  endDate?: string | null;
   link?: string | null;
 };
 
@@ -33,7 +44,7 @@ type Todo = {
 };
 
 type RawTodo = Omit<Todo, "events"> & {
-  events?: (LinkedEvent | string | null)[] | null;
+  events?: (RawLinkedEvent | string | null)[] | null;
 };
 
 type StatusMessage =
@@ -41,7 +52,7 @@ type StatusMessage =
   | { kind: "success"; message: string }
   | { kind: "error"; message: string };
 
-function normalizeEvent(event: LinkedEvent | string | null | undefined): LinkedEvent | null {
+function normalizeEvent(event: RawLinkedEvent | string | null | undefined): LinkedEvent | null {
   if (!event) {
     return null;
   }
@@ -64,8 +75,23 @@ function normalizeEvent(event: LinkedEvent | string | null | undefined): LinkedE
     title: event.title?.trim() || id,
   };
 
-  if (event.ts) {
-    normalized.ts = event.ts;
+  const startValue =
+    event.start_date ??
+    event.ts ??
+    (typeof (event as Record<string, unknown>).startDate === "string"
+      ? ((event as Record<string, unknown>).startDate as string)
+      : null);
+  if (typeof startValue === "string" && startValue.trim()) {
+    normalized.startDate = startValue;
+  }
+
+  const endValue =
+    event.end_date ??
+    (typeof (event as Record<string, unknown>).endDate === "string"
+      ? ((event as Record<string, unknown>).endDate as string)
+      : null);
+  if (typeof endValue === "string" && endValue.trim()) {
+    normalized.endDate = endValue;
   }
 
   if (event.link) {
@@ -101,8 +127,8 @@ function formatEventLabel(event: LinkedEvent): string {
 }
 
 function formatEventTooltip(event: LinkedEvent): string | undefined {
-  if (event.ts) {
-    const timestamp = Date.parse(event.ts);
+  if (event.startDate) {
+    const timestamp = Date.parse(event.startDate);
     if (!Number.isNaN(timestamp)) {
       return new Date(timestamp).toLocaleString();
     }

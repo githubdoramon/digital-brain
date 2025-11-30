@@ -100,8 +100,3 @@ export const api = {
           ...init,
         }),
 };
-
-export const orchestratorApi = {
-  ingestMeetings: (meetings: MeetingIn[]) => api.post<{ ids: string[] }>("/meetings", meetings),
-};
-

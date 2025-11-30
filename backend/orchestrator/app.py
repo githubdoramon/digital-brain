@@ -25,6 +25,7 @@ from schemas import (
     ContactRelationshipIn,
     ContactMergeIn,
     EventIn,
+    ExternalMeetingPayload,
     GetIn,
     MeetingIn,
     PlaceIn,
@@ -351,13 +352,39 @@ def download_document(document_id: str, user: dict = Depends(get_current_user)):
     return FileResponse(file_path, media_type=media_type, filename=filename)
 
 
-@api.post("/ingest/meetings")
-def ingest_meetings(
+@api.post("/ingest/meetings/notes")
+def ingest_meeting_notes(
     meetings: List[MeetingIn],
     _: None = Depends(require_service_api_key),
 ):
-    ids = retrieval.ingest_meetings(meetings)
+    ids = retrieval.ingest_meeting_notes(meetings)
     return {"ok": True, "ids": ids}
+
+
+@api.post("/ingest/meetings")
+def ingest_external_meeting(
+    payload: ExternalMeetingPayload,
+    _: None = Depends(require_service_api_key),
+):
+    try:
+        event_id = retrieval.ingest_external_meeting(payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"ok": True, "id": event_id}
+
+
+@api.post("/ingest/meetings/update")
+def update_external_meeting_endpoint(
+    payload: ExternalMeetingPayload,
+    _: None = Depends(require_service_api_key),
+):
+    try:
+        event_id = retrieval.update_external_meeting(payload)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"ok": True, "id": event_id}
 
 
 @api.get("/meetings/{meeting_id}")

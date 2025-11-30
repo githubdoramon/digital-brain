@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, Field
 
@@ -31,13 +31,25 @@ class PlaceIn(BaseModel):
 
 class EventIn(BaseModel):
     id: str
-    ts: datetime
+    start_date: datetime
+    end_date: Optional[datetime] = None
     place_id: Optional[str] = None
     people: Optional[List[str]] = []
     tags: Optional[List[str]] = []
     types: Optional[List[str]] = []
-    what_text: Optional[str] = ""
+    title: Optional[str] = ""
+    summary: Optional[str] = ""
     raw: Optional[Dict[str, Any]] = {}
+    external_id: Optional[str] = None
+
+
+class ExternalMeetingPayload(BaseModel):
+    event: EventIn
+    external_type: Literal["google"] = Field(alias="externalType")
+    external_id: str = Field(alias="externalId")
+
+    class Config:
+        allow_population_by_field_name = True
 
 
 class MeetingIn(BaseModel):

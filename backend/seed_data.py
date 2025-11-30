@@ -66,12 +66,17 @@ def ingest_place(place_id, name, city=None, country=None, lat=None, lon=None):
     print(f"  Added place: {name} ({place_id})")
     return resp.json()
 
-def ingest_event(event_id, ts, what_text, place_id=None, people=None, tags=None, types=None):
+def ingest_event(event_id, start_date, summary, title=None, place_id=None, people=None, tags=None, types=None):
     """Add an event to the database"""
+    computed_title = (title or "").strip()
+    if not computed_title:
+        first_line = (summary or "").strip().split(".")[0]
+        computed_title = first_line.strip() or event_id
     data = {
         "id": event_id,
-        "ts": ts,
-        "what_text": what_text,
+        "start_date": start_date,
+        "title": computed_title,
+        "summary": summary,
         "place_id": place_id,
         "people": people or [],
         "tags": tags or [],

@@ -10,8 +10,10 @@ type Status =
 
 type EventPayload = {
   id: string;
-  ts: string;
-  what_text: string;
+  startDate: string;
+  endDate: string;
+  title: string;
+  summary: string;
   people: string;
   tags: string;
 };
@@ -33,8 +35,10 @@ function parseList(value: string) {
 export default function MeetingsPage() {
   const [formState, setFormState] = useState<EventPayload>(() => ({
     id: `meeting-${Date.now()}`,
-    ts: toLocalDateTimeInput(new Date()),
-    what_text: "",
+    startDate: toLocalDateTimeInput(new Date()),
+    endDate: "",
+    title: "",
+    summary: "",
     people: "",
     tags: "meeting",
   }));
@@ -42,14 +46,18 @@ export default function MeetingsPage() {
   const [isSubmitting, setSubmitting] = useState(false);
 
   const requestPreview = useMemo(() => {
-    const body = {
+    const body: Record<string, unknown> = {
       id: formState.id,
-      ts: new Date(formState.ts).toISOString(),
-      what_text: formState.what_text,
+      start_date: new Date(formState.startDate).toISOString(),
+      title: formState.title,
+      summary: formState.summary,
       people: parseList(formState.people),
       tags: parseList(formState.tags),
       types: ["meeting"],
     };
+    if (formState.endDate) {
+      body.end_date = new Date(formState.endDate).toISOString();
+    }
     return JSON.stringify(body, null, 2);
   }, [formState]);
 
@@ -63,26 +71,35 @@ export default function MeetingsPage() {
     setSubmitting(true);
     setStatus({ kind: "idle" });
 
-    const payload = {
+    const basePayload = {
       id: formState.id.trim() || `meeting-${Date.now()}`,
-      ts: new Date(formState.ts).toISOString(),
-      what_text: formState.what_text,
+      start_date: new Date(formState.startDate).toISOString(),
+      title: formState.title.trim(),
+      summary: formState.summary,
       people: parseList(formState.people),
       tags: parseList(formState.tags),
       types: ["meeting"],
     };
+    const eventId = basePayload.id;
+    const payload = formState.endDate
+      ? {
+          ...basePayload,
+          end_date: new Date(formState.endDate).toISOString(),
+        }
+      : basePayload;
 
     try {
       await api.post("/ingest/event", payload);
 
       setStatus({
         kind: "success",
-        message: `Meeting ${payload.id} imported successfully`,
+        message: `Meeting ${eventId} imported successfully`,
       });
       setFormState((prev) => ({
         ...prev,
         id: `meeting-${Date.now()}`,
-        what_text: "",
+        title: "",
+        summary: "",
       }));
     } catch (error) {
       const message =
@@ -133,12 +150,42 @@ export default function MeetingsPage() {
           </label>
 
           <label style={{ display: "grid", gap: "6px" }}>
+            <span style={{ fontWeight: 600 }}>Title</span>
+            <input
+              type="text"
+              required
+              value={formState.title}
+              onChange={handleChange("title")}
+              placeholder="Weekly sync with product team"
+              style={{
+                border: "1px solid #d0d0d0",
+                borderRadius: "8px",
+                padding: "10px 12px",
+              }}
+            />
+          </label>
+
+          <label style={{ display: "grid", gap: "6px" }}>
             <span style={{ fontWeight: 600 }}>Date &amp; Time</span>
             <input
               type="datetime-local"
               required
-              value={formState.ts}
-              onChange={handleChange("ts")}
+              value={formState.startDate}
+              onChange={handleChange("startDate")}
+              style={{
+                border: "1px solid #d0d0d0",
+                borderRadius: "8px",
+                padding: "10px 12px",
+              }}
+            />
+          </label>
+
+          <label style={{ display: "grid", gap: "6px" }}>
+            <span style={{ fontWeight: 600 }}>End Date &amp; Time (optional)</span>
+            <input
+              type="datetime-local"
+              value={formState.endDate}
+              onChange={handleChange("endDate")}
               style={{
                 border: "1px solid #d0d0d0",
                 borderRadius: "8px",
@@ -151,10 +198,10 @@ export default function MeetingsPage() {
             <span style={{ fontWeight: 600 }}>Summary</span>
             <textarea
               required
-              value={formState.what_text}
-              onChange={handleChange("what_text")}
+              value={formState.summary}
+              onChange={handleChange("summary")}
               rows={6}
-              placeholder="Describe the meeting outcomes, decisions, and key notes."
+              placeholder="Describe decisions, context, and key next steps."
               style={{
                 border: "1px solid #d0d0d0",
                 borderRadius: "8px",
@@ -246,8 +293,10 @@ export default function MeetingsPage() {
             onClick={() =>
               setFormState({
                 id: `meeting-${Date.now()}`,
-                ts: toLocalDateTimeInput(new Date()),
-                what_text: "",
+                startDate: toLocalDateTimeInput(new Date()),
+                endDate: "",
+                title: "",
+                summary: "",
                 people: "",
                 tags: "meeting",
               })

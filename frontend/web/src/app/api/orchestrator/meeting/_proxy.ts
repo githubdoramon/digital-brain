@@ -1,7 +1,7 @@
 import { NextRequest } from "next/server";
 import { getServerSession } from "next-auth";
 
-import { authOptions } from "../../auth/[...nextauth]/route";
+import { authOptions } from "../auth/[...nextauth]/route";
 import { ProxyFetchInit } from "@/types/proxy";
 
 const ORCHESTRATOR_BASE = process.env.BACKEND_API_BASE ?? "http://localhost:8000";
@@ -17,13 +17,12 @@ async function getAuthorizationHeader(request: NextRequest): Promise<string | un
   return idToken ? `Bearer ${idToken}` : undefined;
 }
 
-async function proxyMeetings(request: NextRequest) {
+export async function proxyMeetingRequest(request: NextRequest, backendPath: string): Promise<Response> {
   if (request.method !== "POST") {
     return new Response("Method Not Allowed", { status: 405 });
   }
 
-  const url = `${ORCHESTRATOR_BASE}/ingest/meetings`;
-
+  const url = `${ORCHESTRATOR_BASE}${backendPath}`;
   const headers = new Headers(request.headers);
   headers.delete("host");
 
@@ -35,7 +34,6 @@ async function proxyMeetings(request: NextRequest) {
   }
 
   const bodyBuffer = await request.arrayBuffer();
-
   const init: ProxyFetchInit = {
     method: "POST",
     headers,
@@ -45,7 +43,6 @@ async function proxyMeetings(request: NextRequest) {
 
   try {
     const backendResponse = await fetch(url, init);
-
     const responseHeaders = new Headers(backendResponse.headers);
     responseHeaders.delete("content-encoding");
     responseHeaders.delete("transfer-encoding");
@@ -56,7 +53,7 @@ async function proxyMeetings(request: NextRequest) {
       headers: responseHeaders,
     });
   } catch (error) {
-    console.error("Meeting ingest proxy error", error);
+    console.error("Meeting proxy error", error);
     return new Response(
       JSON.stringify({ detail: "Failed to reach orchestrator service" }),
       {
@@ -65,9 +62,5 @@ async function proxyMeetings(request: NextRequest) {
       }
     );
   }
-}
-
-export async function POST(request: NextRequest) {
-  return proxyMeetings(request);
 }
 

@@ -4,7 +4,7 @@ import { withAuth } from "next-auth/middleware";
 import type { NextRequestWithAuth } from "next-auth/middleware";
 
 const SERVICE_API_KEY_PREFIXES: string[] = [
-  "/api/orchestrator/ingest/meetings",
+  "/api/orchestrator/meeting",
   "/api/removed-service",
 ];
 

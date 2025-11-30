@@ -29,7 +29,9 @@ type MeetingPlace = {
 type MeetingResponse = {
   id: string;
   title?: string | null;
-  ts?: string | null;
+  start_date?: string | null;
+  end_date?: string | null;
+  summary?: string | null;
   people?: string[] | null;
   tags?: string[] | null;
   types?: string[] | null;
@@ -47,7 +49,9 @@ type MeetingResponse = {
 type MeetingDetail = {
   id: string;
   title: string | null;
-  ts: string | null;
+  startDate: string | null;
+  endDate: string | null;
+  summary: string | null;
   people: string[];
   tags: string[];
   types: string[];
@@ -186,7 +190,9 @@ function normalizeMeeting(response: MeetingResponse): MeetingDetail {
   return {
     id,
     title: response.title ?? null,
-    ts: response.ts ?? null,
+    startDate: response.start_date ?? null,
+    endDate: response.end_date ?? null,
+    summary: response.summary ?? null,
     people: Array.isArray(response.people) ? response.people.map(String) : [],
     tags: Array.isArray(response.tags) ? response.tags.map(String) : [],
     types: Array.isArray(response.types) ? response.types.map(String) : [],
@@ -279,7 +285,8 @@ export default function MeetingDetailPage() {
 
   const attendees = meeting ? getAttendees(meeting.raw, meeting.people) : [];
   const attendeeLabel = attendees.length > 0 ? attendees.join(", ") : undefined;
-  const scheduledLabel = meeting ? formatDateTime(meeting.ts) : undefined;
+  const scheduledLabel = meeting ? formatDateTime(meeting.startDate) : undefined;
+  const endLabel = meeting ? formatDateTime(meeting.endDate) : undefined;
   const meetingLink =
     meeting?.raw?.link && typeof meeting.raw.link === "string" && meeting.raw.link.trim().length > 0
       ? meeting.raw.link
@@ -293,6 +300,9 @@ export default function MeetingDetailPage() {
     }
     if (attendeeLabel) {
       metadataItems.push({ label: "Attendees", value: attendeeLabel });
+    }
+    if (endLabel) {
+      metadataItems.push({ label: "Ends", value: endLabel });
     }
     if (meeting.tags.length > 0) {
       metadataItems.push({ label: "Tags", value: meeting.tags.join(", ") });
@@ -323,10 +333,15 @@ export default function MeetingDetailPage() {
     }
   }
 
-  const meetingContent =
-    meeting && meeting.raw && typeof meeting.raw.content === "string"
-      ? meeting.raw.content.trim()
-      : "";
+  const meetingContent = (() => {
+    if (meeting?.summary) {
+      return meeting.summary.trim();
+    }
+    if (meeting && meeting.raw && typeof meeting.raw.content === "string") {
+      return meeting.raw.content.trim();
+    }
+    return "";
+  })();
 
   const title = meeting?.title?.trim() || "Meeting details";
 

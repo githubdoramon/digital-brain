@@ -48,13 +48,16 @@ CREATE TABLE IF NOT EXISTS places (
 -- Events (your memories)
 CREATE TABLE IF NOT EXISTS events (
   id TEXT PRIMARY KEY,
-  ts TIMESTAMPTZ NOT NULL,
+  start_date TIMESTAMPTZ NOT NULL,
+  end_date TIMESTAMPTZ,
   place_id TEXT REFERENCES places(place_id),
   people TEXT[] DEFAULT '{}'::TEXT[],
   tags TEXT[] DEFAULT '{}'::TEXT[],
   types TEXT[] DEFAULT ARRAY['generic']::TEXT[],
-  what_text TEXT,
+  title TEXT,
+  summary TEXT,
   raw JSONB DEFAULT '{}'::JSONB,
+  external_id TEXT UNIQUE,
   what_embed VECTOR(768),              -- 768 for nomic-embed-text, 1536 for OpenAI text-embedding-3-*
   what_tsv tsvector,
   CHECK (
@@ -79,20 +82,65 @@ CREATE TABLE IF NOT EXISTS events (
   )
 );
 
+-- Backfill legacy schemas (rename/add columns when table already existed)
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_name = 'events' AND column_name = 'ts'
+  ) THEN
+    EXECUTE 'ALTER TABLE events RENAME COLUMN ts TO start_date';
+  END IF;
+
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_name = 'events' AND column_name = 'end_date'
+  ) THEN
+    EXECUTE 'ALTER TABLE events ADD COLUMN end_date TIMESTAMPTZ';
+  END IF;
+
+  IF EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_name = 'events' AND column_name = 'what_text'
+  ) THEN
+    EXECUTE 'ALTER TABLE events RENAME COLUMN what_text TO title';
+  END IF;
+
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_name = 'events' AND column_name = 'summary'
+  ) THEN
+    EXECUTE 'ALTER TABLE events ADD COLUMN summary TEXT';
+    -- seed summary with title/legacy text when available
+    EXECUTE 'UPDATE events SET summary = title WHERE summary IS NULL';
+  END IF;
+
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_name = 'events' AND column_name = 'external_id'
+  ) THEN
+    EXECUTE 'ALTER TABLE events ADD COLUMN external_id TEXT UNIQUE';
+  END IF;
+END;
+$$;
+
 -- FTS trigger to keep what_tsv updated
 CREATE OR REPLACE FUNCTION events_tsv_update() RETURNS trigger AS $$
 BEGIN
-  NEW.what_tsv := to_tsvector('english', coalesce(NEW.what_text,''));
+  NEW.what_tsv := to_tsvector(
+    'english',
+    coalesce(NEW.title,'') || ' ' || coalesce(NEW.summary,'')
+  );
   RETURN NEW;
 END; $$ LANGUAGE plpgsql;
 
 DROP TRIGGER IF EXISTS events_tsv_trg ON events;
 CREATE TRIGGER events_tsv_trg
-BEFORE INSERT OR UPDATE OF what_text ON events
+BEFORE INSERT OR UPDATE OF title, summary ON events
 FOR EACH ROW EXECUTE FUNCTION events_tsv_update();
 
 -- Indices
-CREATE INDEX IF NOT EXISTS idx_events_ts ON events (ts);
+CREATE INDEX IF NOT EXISTS idx_events_start_date ON events (start_date);
 CREATE INDEX IF NOT EXISTS idx_events_people ON events USING GIN (people);
 CREATE INDEX IF NOT EXISTS idx_events_tags ON events USING GIN (tags);
 CREATE INDEX IF NOT EXISTS idx_events_what_tsv ON events USING GIN (what_tsv);

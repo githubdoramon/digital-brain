@@ -20,6 +20,7 @@ from schemas import (
     ContactIn,
     ContactRelationshipIn,
     EventIn,
+    ExternalMeetingPayload,
     ExternalPerson,
     MeetingIn,
     TodoIn,
@@ -743,7 +744,104 @@ def _event_exists(event_id: str) -> bool:
         return cur.fetchone() is not None
 
 
-def ingest_meetings(meetings: Sequence[MeetingIn]) -> List[str]:
+def _get_event_id_by_external_id(external_id: Optional[str]) -> Optional[str]:
+    if not external_id:
+        return None
+    normalized = external_id.strip()
+    if not normalized:
+        return None
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT id
+            FROM events
+            WHERE external_id = %s
+            LIMIT 1
+            """,
+            (normalized,),
+        )
+        row = cur.fetchone()
+        return row["id"] if row else None
+
+
+def _find_matching_meeting_event(
+    title: Optional[str],
+    start_date: Optional[datetime],
+    attendees: Sequence[str],
+) -> Optional[str]:
+    if not title or not start_date or not attendees:
+        return None
+    normalized_title = title.strip()
+    if not normalized_title:
+        return None
+    attendee_set = {att for att in attendees if att}
+    if not attendee_set:
+        return None
+
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT id, people
+            FROM events
+            WHERE title = %s
+              AND start_date = %s
+              AND types @> ARRAY['meeting']
+            """,
+            (normalized_title, start_date),
+        )
+        rows = cur.fetchall()
+
+    for row in rows:
+        existing_people = set(row.get("people") or [])
+        if existing_people == attendee_set:
+            return row["id"]
+    return None
+
+
+def _format_external_event_id(external_type: str, external_id: str) -> str:
+    if not external_type or not external_id:
+        raise ValueError("externalType and externalId are required")
+    normalized_type = external_type.strip().lower()
+    normalized_id = external_id.strip()
+    if not normalized_type:
+        raise ValueError("externalType cannot be blank")
+    if not normalized_id:
+        raise ValueError("externalId cannot be blank")
+    if normalized_type not in {"google"}:
+        raise ValueError(f"Unsupported externalType: {external_type}")
+    return f"{normalized_type}:{normalized_id}"
+
+
+def ingest_external_meeting(payload: ExternalMeetingPayload) -> str:
+    event = payload.event
+    external_identifier = _format_external_event_id(payload.external_type, payload.external_id)
+    existing_id = _get_event_id_by_external_id(external_identifier)
+
+    normalized_event_id = (event.id or "").strip() if getattr(event, "id", None) else None
+    if existing_id:
+        normalized_event_id = existing_id
+    if not normalized_event_id:
+        normalized_event_id = f"{external_identifier}:{uuid4().hex[:8]}"
+
+    event.id = normalized_event_id
+    event.external_id = external_identifier
+    ingest_event(event)
+    return normalized_event_id
+
+
+def update_external_meeting(payload: ExternalMeetingPayload) -> str:
+    external_identifier = _format_external_event_id(payload.external_type, payload.external_id)
+    existing_id = _get_event_id_by_external_id(external_identifier)
+    if not existing_id:
+        raise LookupError(f"No event found for external id {external_identifier}")
+    event = payload.event
+    event.id = existing_id
+    event.external_id = external_identifier
+    ingest_event(event)
+    return existing_id
+
+
+def ingest_meeting_notes(meetings: Sequence[MeetingIn]) -> List[str]:
     event_ids: List[str] = []
     contact_cache: Dict[str, Tuple[Optional[str], bool]] = {}
 
@@ -813,16 +911,32 @@ def ingest_meetings(meetings: Sequence[MeetingIn]) -> List[str]:
         normalized_meeting_id: Optional[str] = None
         provided_meeting_id = getattr(meeting, "id", None)
         if provided_meeting_id is not None:
-            normalized_meeting_id = str(provided_meeting_id).strip()
-            if not normalized_meeting_id:
-                normalized_meeting_id = None
+            normalized_meeting_id = str(provided_meeting_id).strip() or None
+
+        start_date = meeting.date
+        title = meeting.title.strip()
+        if not title:
+            title = normalized_meeting_id or "Untitled meeting"
+        tags = list(dict.fromkeys(meeting.tags or []))
+        summary = meeting.content or ""
+
+        event_id: Optional[str] = None
+        existing_event = False
 
         if normalized_meeting_id:
-            event_id = f"meeting:{normalized_meeting_id}"
-            existing_event = _event_exists(event_id)
-        else:
-            event_id = f"meeting:{meeting.date.strftime('%Y%m%dT%H%M%S')}-{_slugify(meeting.title)}-{uuid4().hex[:8]}"
-            existing_event = False
+            candidate = f"meeting:{normalized_meeting_id}"
+            if _event_exists(candidate):
+                event_id = candidate
+                existing_event = True
+
+        if not event_id:
+            matched = _find_matching_meeting_event(title, start_date, unique_contacts)
+            if matched:
+                event_id = matched
+                existing_event = True
+
+        if not event_id:
+            event_id = f"meeting:{meeting.date.strftime('%Y%m%dT%H%M%S')}-{_slugify(title)}-{uuid4().hex[:8]}"
 
         raw_payload = {
             "content": meeting.content,
@@ -830,19 +944,20 @@ def ingest_meetings(meetings: Sequence[MeetingIn]) -> List[str]:
             "attendees": attendee_emails,
             "attendee_contact_ids": unique_contacts,
             "source": "meeting_ingest",
+            "existing_event": existing_event,
         }
 
         if normalized_meeting_id:
             raw_payload["external_meeting_id"] = normalized_meeting_id
-            raw_payload["existing_event"] = existing_event
 
         event = EventIn(
             id=event_id,
-            ts=meeting.date,
+            start_date=start_date,
             people=unique_contacts,
-            tags=list(dict.fromkeys(meeting.tags or [])),
+            tags=tags,
             types=["meeting"],
-            what_text=meeting.title,
+            title=title,
+            summary=summary,
             raw=raw_payload,
         )
 
@@ -1107,11 +1222,14 @@ def get_meeting(meeting_id: str) -> Optional[Dict[str, Any]]:
             """
             SELECT
               e.id,
-              e.ts,
+              e.start_date,
+              e.end_date,
               e.people,
               e.tags,
               e.types,
-              e.what_text,
+              e.title,
+              e.summary,
+              e.external_id,
               e.raw,
               e.place_id,
               p.name AS place_name,
@@ -1136,16 +1254,20 @@ def get_meeting(meeting_id: str) -> Optional[Dict[str, Any]]:
             except json.JSONDecodeError:
                 raw_data = {"content": raw_data}
 
-        ts_value = row.get("ts")
+        start_value = row.get("start_date")
+        end_value = row.get("end_date")
         place_id = row.get("place_id")
 
         return {
             "id": row["id"],
-            "ts": ts_value.isoformat() if ts_value else None,
-            "title": row.get("what_text"),
+            "start_date": start_value.isoformat() if start_value else None,
+            "end_date": end_value.isoformat() if end_value else None,
+            "title": row.get("title"),
+            "summary": row.get("summary"),
             "people": row.get("people") or [],
             "tags": row.get("tags") or [],
             "types": row.get("types") or [],
+            "external_id": row.get("external_id"),
             "raw": raw_data,
             "place": (
                 {
@@ -1237,12 +1359,12 @@ def _collect_todo_links(conn, todo_ids: Sequence[str]) -> Dict[str, Dict[str, An
             SELECT
               te.todo_id,
               te.event_id,
-              ev.what_text,
-              ev.ts
+              ev.title,
+              ev.start_date
             FROM todo_events AS te
             LEFT JOIN events AS ev ON ev.id = te.event_id
             WHERE te.todo_id = ANY(%s)
-            ORDER BY ev.ts NULLS LAST, te.event_id
+            ORDER BY ev.start_date NULLS LAST, te.event_id
             """,
             (list(todo_ids),),
         )
@@ -1250,14 +1372,14 @@ def _collect_todo_links(conn, todo_ids: Sequence[str]) -> Dict[str, Dict[str, An
             events = link_map.setdefault(row["todo_id"], {"contacts": [], "events": [], "places": []})["events"]
             event_id = row["event_id"]
             event_detail: Dict[str, Any] = {"id": event_id}
-            title = row.get("what_text") or None
+            title = row.get("title") or None
             if title:
                 event_detail["title"] = title
             else:
                 event_detail["title"] = event_id
-            ts = row.get("ts")
-            if ts:
-                event_detail["ts"] = ts.isoformat()
+            start_date = row.get("start_date")
+            if start_date:
+                event_detail["start_date"] = start_date.isoformat()
             events.append(event_detail)
 
         cur.execute(
@@ -1334,17 +1456,17 @@ def _generate_event_embedding(event: Any) -> Sequence[float]:
 
     segments: List[str] = []
 
-    what_text = _get("what_text") or _get("content")
-    if isinstance(what_text, str):
-        cleaned = what_text.strip()
-        if cleaned:
-            segments.append(cleaned)
+    title = _get("title")
+    if isinstance(title, str):
+        cleaned_title = title.strip()
+        if cleaned_title:
+            segments.append(cleaned_title)
 
-    summary = _get("summary")
+    summary = _get("summary") or _get("content")
     if isinstance(summary, str):
-        cleaned = summary.strip()
-        if cleaned:
-            segments.append(cleaned)
+        cleaned_summary = summary.strip()
+        if cleaned_summary:
+            segments.append(cleaned_summary)
 
     tags = _get("tags")
     if isinstance(tags, (list, tuple)):
@@ -1402,27 +1524,46 @@ def ingest_event(event) -> None:
     with get_conn() as conn, conn.cursor() as cur:
         cur.execute(
             """
-            INSERT INTO events (id, ts, place_id, people, tags, types, what_text, raw, what_embed)
-            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)
+            INSERT INTO events (
+              id,
+              start_date,
+              end_date,
+              place_id,
+              people,
+              tags,
+              types,
+              title,
+              summary,
+              raw,
+              external_id,
+              what_embed
+            )
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
             ON CONFLICT (id) DO UPDATE
-              SET ts=EXCLUDED.ts,
+              SET start_date=EXCLUDED.start_date,
+                  end_date=EXCLUDED.end_date,
                   place_id=EXCLUDED.place_id,
                   people=EXCLUDED.people,
                   tags=EXCLUDED.tags,
                   types=EXCLUDED.types,
-                  what_text=EXCLUDED.what_text,
+                  title=EXCLUDED.title,
+                  summary=EXCLUDED.summary,
                   raw=EXCLUDED.raw,
+                  external_id=EXCLUDED.external_id,
                   what_embed=EXCLUDED.what_embed
             """,
             (
                 event.id,
-                event.ts,
+                event.start_date,
+                event.end_date,
                 event.place_id,
                 event.people or [],
                 event.tags or [],
                 types,
-                event.what_text or "",
+                event.title or "",
+                event.summary or "",
                 json.dumps(event.raw or {}),
+                event.external_id,
                 emb,
             ),
         )
@@ -1556,17 +1697,24 @@ def search_memories(
                 {
                     "id": row["id"],
                     "kind": "event",
-                    "ts": row["ts"].isoformat(),
-                    "place": {
-                        "place_id": row["place_id"],
-                        "name": row["place_name"],
-                        "city": row["city"],
-                        "country": row["country"],
-                    },
+                    "start_date": row["start_date"].isoformat() if row.get("start_date") else None,
+                    "end_date": row["end_date"].isoformat() if row.get("end_date") else None,
+                    "title": row.get("title"),
+                    "summary": row.get("summary"),
+                    "place": (
+                        {
+                            "place_id": row["place_id"],
+                            "name": row["place_name"],
+                            "city": row["city"],
+                            "country": row["country"],
+                        }
+                        if row.get("place_id")
+                        else None
+                    ),
                     "people": row["people"],
                     "tags": row["tags"],
                     "types": row.get("types", []),
-                    "snippet": make_snippet(row["what_text"]),
+                    "snippet": make_snippet(row.get("summary") or row.get("title")),
                 }
             )
         else:
@@ -1648,7 +1796,7 @@ def structured_candidates(timespan, people_ids: List[str], place_ids: List[str],
     clauses = []
     params: List[Any] = []
     if timespan:
-        clauses.append("ts BETWEEN %s AND %s")
+        clauses.append("start_date BETWEEN %s AND %s")
         params += [timespan[0], timespan[1]]
     if people_ids:
         clauses.append("people && %s")
@@ -1663,7 +1811,7 @@ def structured_candidates(timespan, people_ids: List[str], place_ids: List[str],
             SELECT id, 1.0 AS sscore
             FROM events
             WHERE {where}
-            ORDER BY ts DESC
+            ORDER BY start_date DESC
             LIMIT %s
             """,
             (*params, k),
@@ -1737,19 +1885,26 @@ def get_events(ids: List[str]) -> List[Dict[str, Any]]:
     return [
         {
             "id": r["id"],
-            "ts": r["ts"].isoformat(),
+            "start_date": r["start_date"].isoformat() if r.get("start_date") else None,
+            "end_date": r["end_date"].isoformat() if r.get("end_date") else None,
             "people": r["people"],
             "tags": r["tags"],
             "types": r.get("types", []),
-            "what_text": r["what_text"],
-            "place": {
-                "place_id": r["place_id"],
-                "name": r["place_name"],
-                "city": r["city"],
-                "country": r["country"],
-                "lat": r["lat"],
-                "lon": r["lon"],
-            },
+            "title": r.get("title"),
+            "summary": r.get("summary"),
+            "external_id": r.get("external_id"),
+            "place": (
+                {
+                    "place_id": r["place_id"],
+                    "name": r["place_name"],
+                    "city": r["city"],
+                    "country": r["country"],
+                    "lat": r["lat"],
+                    "lon": r["lon"],
+                }
+                if r.get("place_id")
+                else None
+            ),
         }
         for r in rows
     ]

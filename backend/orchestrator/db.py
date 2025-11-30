@@ -34,7 +34,15 @@ def fetch_events(ids: List[str]):
     with get_conn() as conn, conn.cursor() as cur:
         cur.execute(
             """
-            SELECT e.id, e.ts, e.people, e.tags, e.types, e.what_text,
+            SELECT e.id,
+                   e.start_date,
+                   e.end_date,
+                   e.people,
+                   e.tags,
+                   e.types,
+                   e.title,
+                   e.summary,
+                   e.external_id,
                    p.place_id, p.name AS place_name, p.city, p.country, p.lat, p.lon
             FROM events e
             LEFT JOIN places p ON p.place_id = e.place_id
