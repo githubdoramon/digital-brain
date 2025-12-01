@@ -30,7 +30,7 @@ from schemas import (
     ContactRelationshipIn,
     ContactMergeIn,
     EventIn,
-    ExternalMeetingPayload,
+    ExternalEventPayload,
     GetIn,
     MeetingIn,
     PlaceIn,
@@ -378,7 +378,7 @@ def download_document(document_id: str, user: dict = Depends(get_current_user)):
     return FileResponse(file_path, media_type=media_type, filename=filename)
 
 
-@api.post("/ingest/meetings/notes")
+@api.post("/ingest/events/notes")
 def ingest_meeting_notes(
     meetings: List[MeetingIn],
     _: None = Depends(require_service_api_key),
@@ -387,21 +387,21 @@ def ingest_meeting_notes(
     return {"ok": True, "ids": ids}
 
 
-@api.post("/ingest/meetings")
-def ingest_external_meeting(
-    payload: ExternalMeetingPayload,
+@api.post("/ingest/events")
+def ingest_external_event(
+    payload: ExternalEventPayload,
     _: None = Depends(require_service_api_key),
 ):
     try:
-        event_id = events_service.ingest_external_meeting(payload)
+        event_id = events_service.ingest_external_event(payload)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {"ok": True, "id": event_id}
 
 
-@api.post("/ingest/meetings/update")
-def update_external_meeting_endpoint(
-    payload: ExternalMeetingPayload,
+@api.post("/ingest/events/update")
+def update_external_event_endpoint(
+    payload: ExternalEventPayload,
     _: None = Depends(require_service_api_key),
 ):
     try:

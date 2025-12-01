@@ -10,7 +10,7 @@ type ServiceKeyRule = {
 
 const SERVICE_KEY_RULES: ServiceKeyRule[] = [
   {
-    prefix: "/api/orchestrator/meeting",
+    prefix: "/api/orchestrator/ingest/events",
     header: "x-service-api-key",
   },
   {

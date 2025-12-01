@@ -14,7 +14,7 @@ from embeddings import embed_text
 from schemas import (
     ContactRelationshipIn,
     EventIn,
-    ExternalMeetingPayload,
+    ExternalEventPayload,
     MeetingIn,
     TodoIn,
 )
@@ -56,7 +56,7 @@ def _format_external_event_id(external_type: str, external_id: str) -> str:
     return f"{normalized_type}:{normalized_id}"
 
 
-def ingest_external_meeting(payload: ExternalMeetingPayload) -> str:
+def ingest_external_event(payload: ExternalEventPayload) -> str:
     event = payload.event
     external_identifier = _format_external_event_id(payload.external_type, payload.external_id)
     existing_id = _get_event_id_by_external_id(external_identifier)
@@ -73,7 +73,7 @@ def ingest_external_meeting(payload: ExternalMeetingPayload) -> str:
     return normalized_event_id
 
 
-def update_external_meeting(payload: ExternalMeetingPayload) -> str:
+def update_external_meeting(payload: ExternalEventPayload) -> str:
     external_identifier = _format_external_event_id(payload.external_type, payload.external_id)
     existing_id = _get_event_id_by_external_id(external_identifier)
     if not existing_id:

@@ -43,7 +43,7 @@ class EventIn(BaseModel):
     external_id: Optional[str] = None
 
 
-class ExternalMeetingPayload(BaseModel):
+class ExternalEventPayload(BaseModel):
     event: EventIn
     external_type: Literal["google"] = Field(alias="externalType")
     external_id: str = Field(alias="externalId")
