@@ -213,8 +213,6 @@ async def handle_telegram_messages(
     payload: Dict[str, Any],
     request: Request,
 ):
-    print(f"[app] payload={payload}")
-    print(f"[app] request={request}")
     try:
         return telegram_bot.process_update(
             payload,
@@ -227,6 +225,7 @@ async def handle_telegram_messages(
     except telegram_bot.TelegramProcessingError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except telegram_bot.TelegramUploadError as exc:
+        print(f"[telegram_bot] upload error={exc}")
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
 @api.post("/ingest/place")

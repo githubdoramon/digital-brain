@@ -66,6 +66,7 @@ def process_update(update: Dict[str, Any], *, secret_token: Optional[str]) -> Di
 
     chat = message.get("chat") or {}
     chat_id = chat.get("id")
+    print(f"[telegram_bot] chat_id={chat_id}")
     if chat_id is None:
         raise TelegramProcessingError("Missing chat identifier in Telegram payload")
 
@@ -79,6 +80,7 @@ def process_update(update: Dict[str, Any], *, secret_token: Optional[str]) -> Di
         logger.info("Telegram webhook skipped non-image message chat=%s", chat_id_int)
         return {"ok": True, "skipped": "non_image_message"}
 
+    print(f"[telegram_bot] candidate={candidate}")
     file_bytes, remote_filename = _download_file(candidate["file_id"], config)
     taken_at = _message_datetime(message)
     filename = _build_filename(candidate, remote_filename, chat_id_int)
