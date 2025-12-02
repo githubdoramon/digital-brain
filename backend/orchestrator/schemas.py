@@ -31,22 +31,21 @@ class PlaceIn(BaseModel):
 
 class EventIn(BaseModel):
     id: str
-    start_date: datetime
-    end_date: Optional[datetime] = None
-    place_id: Optional[str] = None
-    people: Optional[List[str]] = []
+    start_date: datetime = Field(alias="startDate")
+    end_date: Optional[datetime] = Field(alias="endDate")
+    place_id: Optional[str] = Field(alias="placeId")
+    people: Optional[List[str]] = Field(alias="people")
     tags: Optional[List[str]] = []
     types: Optional[List[str]] = []
     title: Optional[str] = ""
     summary: Optional[str] = ""
     raw: Optional[Dict[str, Any]] = {}
-    external_id: Optional[str] = None
+    external_id: Optional[str] = Field(alias="externalId")
 
 
 class ExternalEventPayload(BaseModel):
     event: EventIn
     external_type: Literal["google"] = Field(alias="externalType")
-    external_id: str = Field(alias="externalId")
 
     class Config:
         allow_population_by_field_name = True

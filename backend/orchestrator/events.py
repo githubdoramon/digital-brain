@@ -58,10 +58,10 @@ def _format_external_event_id(external_type: str, external_id: str) -> str:
 
 def ingest_external_event(payload: ExternalEventPayload) -> str:
     event = payload.event
-    external_identifier = _format_external_event_id(payload.external_type, payload.external_id)
+    external_identifier = _format_external_event_id(payload.external_type, payload.event.id)
     existing_id = _get_event_id_by_external_id(external_identifier)
 
-    normalized_event_id = (event.id or "").strip() if getattr(event, "id", None) else None
+    normalized_event_id = ""
     if existing_id:
         normalized_event_id = existing_id
     if not normalized_event_id:
@@ -71,19 +71,6 @@ def ingest_external_event(payload: ExternalEventPayload) -> str:
     event.external_id = external_identifier
     ingest_event(event)
     return normalized_event_id
-
-
-def update_external_meeting(payload: ExternalEventPayload) -> str:
-    external_identifier = _format_external_event_id(payload.external_type, payload.external_id)
-    existing_id = _get_event_id_by_external_id(external_identifier)
-    if not existing_id:
-        raise LookupError(f"No event found for external id {external_identifier}")
-    event = payload.event
-    event.id = existing_id
-    event.external_id = external_identifier
-    ingest_event(event)
-    return existing_id
-
 
 def ingest_meeting_notes(
     meetings: Sequence[MeetingIn],

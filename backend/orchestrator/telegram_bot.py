@@ -50,7 +50,7 @@ class TelegramConfig:
 
     @property
     def immich_upload_url(self) -> str:
-        return f"{self.immich_url}/api/asset/upload"
+        return f"{self.immich_url}/api/assets"
 
 
 def process_update(update: Dict[str, Any], *, secret_token: Optional[str]) -> Dict[str, Any]:

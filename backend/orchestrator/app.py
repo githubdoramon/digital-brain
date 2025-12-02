@@ -399,20 +399,6 @@ def ingest_external_event(
     return {"ok": True, "id": event_id}
 
 
-@api.post("/ingest/events/update")
-def update_external_event_endpoint(
-    payload: ExternalEventPayload,
-    _: None = Depends(require_service_api_key),
-):
-    try:
-        event_id = events_service.update_external_meeting(payload)
-    except LookupError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return {"ok": True, "id": event_id}
-
-
 @api.get("/meetings/{meeting_id}")
 def get_meeting(meeting_id: str, user: dict = Depends(get_current_user)):
     meeting = events_service.get_meeting(meeting_id)
