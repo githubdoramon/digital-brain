@@ -32,15 +32,15 @@ class PlaceIn(BaseModel):
 class EventIn(BaseModel):
     id: str
     start_date: datetime = Field(alias="startDate")
-    end_date: Optional[datetime] = Field(alias="endDate")
-    place_id: Optional[str] = Field(alias="placeId")
-    people: Optional[List[str]] = Field(alias="people")
-    tags: Optional[List[str]] = []
-    types: Optional[List[str]] = []
+    end_date: Optional[datetime] = Field(default=None, alias="endDate")
+    place_id: Optional[str] = Field(default=None, alias="placeId")
+    people: Optional[List[str]] = Field(default_factory=list, alias="people")
+    tags: Optional[List[str]] = Field(default_factory=list)
+    types: Optional[List[str]] = Field(default_factory=list)
     title: Optional[str] = ""
     summary: Optional[str] = ""
-    raw: Optional[Dict[str, Any]] = {}
-    external_id: Optional[str] = Field(alias="externalId")
+    raw: Optional[Dict[str, Any]] = Field(default_factory=dict)
+    external_id: Optional[str] = Field(default=None, alias="externalId")
 
 
 class ExternalEventPayload(BaseModel):
