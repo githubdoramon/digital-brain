@@ -250,17 +250,16 @@ def _upload_to_immich(
     config: TelegramConfig,
 ) -> Dict[str, Any]:
     iso_timestamp = _format_timestamp(taken_at)
-    headers = {"x-api-key": config.immich_api_key}
+    headers = {
+        "x-api-key": config.immich_api_key,
+        "accept": "application/json",
+    }
     data = {
         "deviceAssetId": device_asset_id,
         "deviceId": config.immich_device_id,
-        "assetType": "image",
-        "createdAt": iso_timestamp,
-        "modifiedAt": iso_timestamp,
+        "fileCreatedAt": iso_timestamp,
+        "fileModifiedAt": iso_timestamp,
         "isFavorite": "false",
-        "isArchived": "false",
-        "duration": "0",
-        "localDateTime": iso_timestamp,
     }
     files = {
         "assetData": (
