@@ -250,7 +250,7 @@ def _upload_to_immich(
     config: TelegramConfig,
 ) -> Dict[str, Any]:
     iso_timestamp = _format_timestamp(taken_at)
-    headers = {"Authorization": f"Bearer {config.immich_api_key}"}
+    headers = {"x-api-key": config.immich_api_key}
     data = {
         "deviceAssetId": device_asset_id,
         "deviceId": config.immich_device_id,
