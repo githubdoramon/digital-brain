@@ -183,7 +183,7 @@ def ingest_meeting_notes(
 
         event = EventIn(
             id=event_id,
-            start_date=start_date,
+            startDate=start_date,
             people=unique_contacts,
             tags=tags,
             types=["meeting"],

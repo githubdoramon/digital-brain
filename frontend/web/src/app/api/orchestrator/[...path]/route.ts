@@ -26,11 +26,8 @@ export async function handler(
     return new Response("Method Not Allowed", { status: 405 });
   }
 
-  console.log(request.url);
   const { path = [] } = await context.params;
-  console.log(path);
   const targetPath = path.join("/");
-  console.log(targetPath);
   const url = new URL(`${ORCHESTRATOR_BASE}/${targetPath}`);
 
   request.nextUrl.searchParams.forEach((value, key) => {
@@ -56,7 +53,6 @@ export async function handler(
 
   try {
     const backendResponse = await fetch(url, init);
-    console.log(backendResponse);
     const responseHeaders = new Headers(backendResponse.headers);
     responseHeaders.delete("content-encoding");
     responseHeaders.delete("transfer-encoding");
