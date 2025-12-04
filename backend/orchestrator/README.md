@@ -50,11 +50,6 @@ All endpoints require `Authorization: Bearer <google-id-token>` header.
 - `POST /ingest/meetings` - Upsert external meetings (e.g., Google Calendar) using the expanded `EventIn` payload plus `externalType`/`externalId`
 - `POST /ingest/meetings/update` - Apply updates for an external meeting using the same payload as above
 
-### Search & Retrieval
-- `POST /resolve` - Resolve entities in text
-- `POST /search` - Search memories
-- `POST /get` - Get events by IDs
-
 ### LLM Chat
 - `POST /ask` - Ask questions about memories
 

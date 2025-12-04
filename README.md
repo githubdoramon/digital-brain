@@ -14,22 +14,6 @@ Monorepo containing backend services and frontend client for the Digital Brain p
 - Docker and Docker Compose
 - Python 3.11+ (for running helper scripts locally)
 
-### Quick start
-
-```bash
-cd backend
-./setup.sh
-```
-
-The script will:
-
-1. Ensure `backend/.env` exists (creates one from `backend/env.template` if missing)
-2. Optionally verify Ollama availability when embeddings are configured
-3. Launch database and orchestrator services via `docker compose -f backend/docker-compose.yml`
-4. Seed the database with sample data
-
-Backend API base URL (default): `http://localhost:8000`
-
 ### Memory Layer (Mem0)
 
 The backend now includes **Mem0**, an intelligent memory layer that enables the system to remember conversations and user preferences across sessions.

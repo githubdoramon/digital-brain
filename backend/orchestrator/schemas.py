@@ -176,25 +176,6 @@ class DocumentSearchIn(BaseModel):
     limit: Optional[int] = 20
 
 
-class ResolveIn(BaseModel):
-    text: str
-    need_contacts: Optional[bool] = True
-    need_places: Optional[bool] = True
-
-
-class SearchIn(BaseModel):
-    query: str
-    people: Optional[List[str]] = []
-    place_ids: Optional[List[str]] = []
-    time_start: Optional[str] = None
-    time_end: Optional[str] = None
-    limit: Optional[int] = 5
-
-
-class GetIn(BaseModel):
-    ids: List[str]
-
-
 class AskIn(BaseModel):
     question: str
     limit: Optional[int] = 3

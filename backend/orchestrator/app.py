@@ -18,7 +18,6 @@ import documents
 import events as events_service
 import llm
 import places as places_service
-import retrieval
 import todos as todos_service
 from auth import get_current_user
 from db import get_conn
@@ -27,11 +26,9 @@ from schemas import (
     AskIn,
     AskOut,
     ContactIn,
-    ContactRelationshipIn,
     ContactMergeIn,
     EventIn,
     ExternalEventPayload,
-    GetIn,
     MeetingIn,
     PlaceIn,
     ExternalContactWebhook,
@@ -39,8 +36,6 @@ from schemas import (
     DocumentDetailOut,
     DocumentUpdateIn,
     DocumentSearchIn,
-    ResolveIn,
-    SearchIn,
     TodoIn,
     ThreadCreate,
     ThreadDetailOut,
@@ -124,20 +119,6 @@ def ingest_contact(c: ContactIn, user: dict = Depends(get_current_user)):
     return {"ok": True}
 
 
-@api.post("/ingest/contact-relationship")
-def ingest_contact_relationship(r: ContactRelationshipIn, user: dict = Depends(get_current_user)):
-    contacts_service.upsert_contact_relationship(r)
-    return {"ok": True}
-
-
-@api.delete("/contact-relationships/{relationship_id}")
-def delete_contact_relationship(relationship_id: str, user: dict = Depends(get_current_user)):
-    deleted = contacts_service.delete_contact_relationship(relationship_id)
-    if not deleted:
-        raise HTTPException(status_code=404, detail="Relationship not found")
-    return {"ok": True}
-
-
 @api.get("/contacts")
 def list_contacts(user: dict = Depends(get_current_user)):
     return {"contacts": contacts_service.list_contacts()}
@@ -171,11 +152,6 @@ def delete_contact(contact_id: str, user: dict = Depends(get_current_user)):
     if not deleted:
         raise HTTPException(status_code=404, detail="Contact not found")
     return {"ok": True}
-
-
-@api.get("/contacts/{contact_id}/relationships")
-def get_contact_relationships(contact_id: str, user: dict = Depends(get_current_user)):
-    return {"relationships": contacts_service.list_contact_relationships(contact_id)}
 
 
 @api.post("/webhooks/contacts")
@@ -407,33 +383,6 @@ def get_meeting(meeting_id: str, user: dict = Depends(get_current_user)):
     return meeting
 
 
-# --------------------------- Tool-friendly endpoints ---------------------------
-@api.post("/resolve")
-def resolve(payload: ResolveIn, user: dict = Depends(get_current_user)):
-    return retrieval.resolve_query(
-        payload.text,
-        need_contacts=payload.need_contacts,
-        need_places=payload.need_places,
-    )
-
-
-@api.post("/search")
-def search(payload: SearchIn, user: dict = Depends(get_current_user)):
-    return retrieval.search_memories(
-        query=payload.query,
-        people=payload.people,
-        place_ids=payload.place_ids,
-        time_start=payload.time_start,
-        time_end=payload.time_end,
-        limit=payload.limit or 5,
-    )
-
-
-@api.post("/get")
-def get_events(payload: GetIn, user: dict = Depends(get_current_user)):
-    return {"events": events_service.get_events(payload.ids)}
-
-
 # --------------------------- Ask endpoint (LLM-powered) ---------------------------
 @api.post("/ask", response_model=AskOut)
 async def ask(payload: AskIn, user: dict = Depends(get_current_user)):
@@ -523,7 +472,7 @@ def update_conversation_thread(
     user_email = user.get("email")
     if not user_email:
         raise HTTPException(status_code=400, detail="Authenticated user email missing")
-    thread = conversations.ensure_thread(thread_id, user_email)
+    conversations.ensure_thread(thread_id, user_email)
     normalized_title = payload.title.strip() if payload.title else None
     with get_conn() as conn, conn.cursor() as cur:
         cur.execute(

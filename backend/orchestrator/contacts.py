@@ -22,8 +22,6 @@ __all__ = [
     "list_contact_merge_candidates",
     "delete_contact",
     "upsert_contact_relationship",
-    "list_contact_relationships",
-    "delete_contact_relationship",
     "ensure_contact_for_email",
     "normalize_email",
 ]
@@ -733,25 +731,6 @@ def upsert_contact_relationship(rel: ContactRelationshipIn) -> None:
             ),
         )
         conn.commit()
-
-
-def list_contact_relationships(contact_id: str) -> List[Dict[str, Any]]:
-    relationships_map = _collect_contact_relationships([contact_id])
-    return relationships_map.get(contact_id, [])
-
-
-def delete_contact_relationship(relationship_id: str) -> bool:
-    with get_conn() as conn, conn.cursor() as cur:
-        cur.execute(
-            """
-            DELETE FROM contact_relationships
-            WHERE relationship_id = %s
-            """,
-            (relationship_id,),
-        )
-        deleted = cur.rowcount > 0
-        conn.commit()
-        return deleted
 
 
 def _collect_contact_relationships(contact_ids: Optional[Iterable[str]] = None) -> Dict[str, List[Dict[str, Any]]]:
