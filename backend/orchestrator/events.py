@@ -56,6 +56,126 @@ def _format_external_event_id(external_type: str, external_id: str) -> str:
     return f"{normalized_type}:{normalized_id}"
 
 
+def _load_current_user_from_env() -> Optional[dict]:
+    current_user_info = os.environ.get("CURRENT_USER_INFO")
+    if not current_user_info:
+        return None
+    try:
+        return json.loads(current_user_info)
+    except Exception:
+        return None
+
+
+def _resolve_attendee_contacts(
+    attendee_emails: Sequence[str],
+    *,
+    contact_cache: Dict[str, Tuple[Optional[str], bool]],
+    current_user: Optional[dict],
+) -> Tuple[List[str], Dict[str, List[str]]]:
+    contact_ids: List[str] = []
+    new_contacts_by_domain: Dict[str, List[str]] = {}
+
+    for email in attendee_emails:
+        normalized = contacts_service.normalize_email(email)
+        created_now = False
+        contact_id: Optional[str] = None
+        if normalized and normalized in contact_cache:
+            contact_id, _ = contact_cache[normalized]
+        else:
+            contact_id, created_now = contacts_service.ensure_contact_for_email(email)
+            if normalized:
+                contact_cache[normalized] = (contact_id, created_now)
+        if contact_id:
+            contact_ids.append(contact_id)
+            if created_now and normalized and "@" in normalized:
+                domain = normalized.split("@", 1)[1]
+                new_contacts_by_domain.setdefault(domain, []).append(contact_id)
+
+    unique_contacts = list(dict.fromkeys(contact_ids))
+
+    if current_user:
+        current_email = current_user.get("email")
+        if current_email:
+            normalized_current = contacts_service.normalize_email(current_email)
+            if normalized_current and normalized_current not in contact_cache:
+                contact_id, created_now = contacts_service.ensure_contact_for_email(current_email)
+                if normalized_current:
+                    contact_cache[normalized_current] = (contact_id, created_now)
+                if contact_id and contact_id not in unique_contacts:
+                    unique_contacts.append(contact_id)
+
+    return unique_contacts, new_contacts_by_domain
+
+
+def _create_coworker_relationships(new_contacts_by_domain: Dict[str, List[str]]) -> None:
+    for domain, ids in new_contacts_by_domain.items():
+        if len(ids) < 2:
+            continue
+        seen_pairs = set()
+        for a, b in combinations(sorted(set(ids)), 2):
+            pair_key = (a, b)
+            if pair_key in seen_pairs:
+                continue
+            seen_pairs.add(pair_key)
+            relationship_id = f"rel:coworker:{domain}:{a}:{b}"
+            rel = ContactRelationshipIn(
+                relationship_id=relationship_id,
+                from_contact_id=a,
+                to_contact_id=b,
+                relationship_type="Co-worker",
+                reciprocal_type="Co-worker",
+            )
+            contacts_service.upsert_contact_relationship(rel)
+
+
+def _extract_attendee_emails_from_event(event: EventIn) -> List[str]:
+    def _from_value(value: Any) -> Optional[str]:
+        if isinstance(value, str):
+            candidate = value.strip()
+            if not candidate:
+                return None
+            if "<" in candidate and ">" in candidate:
+                match = re.search(r"[\w\.\+-]+@[\w\.-]+\.[\w\.-]+", candidate)
+                if match:
+                    candidate = match.group(0)
+            if "@" not in candidate:
+                return None
+            return candidate
+        if isinstance(value, dict):
+            for key in ("email", "emailAddress", "address"):
+                nested = value.get(key)
+                email = _from_value(nested)
+                if email:
+                    return email
+        return None
+
+    emails: List[str] = []
+    raw_payload = event.raw if isinstance(event.raw, dict) else {}
+    raw_attendees = raw_payload.get("attendees") if raw_payload else None
+    if isinstance(raw_attendees, (list, tuple)):
+        for attendee in raw_attendees:
+            email = _from_value(attendee)
+            if email:
+                emails.append(email)
+
+    fallback_people = event.people or []
+    for person in fallback_people:
+        if isinstance(person, str) and "@" in person:
+            trimmed = person.strip()
+            if trimmed:
+                emails.append(trimmed)
+
+    cleaned: List[str] = []
+    seen = set()
+    for email in emails:
+        normalized = email.strip()
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        cleaned.append(normalized)
+    return cleaned
+
+
 def ingest_external_event(payload: ExternalEventPayload) -> str:
     event = payload.event
     external_identifier = _format_external_event_id(payload.external_type, payload.event.id)
@@ -69,6 +189,25 @@ def ingest_external_event(payload: ExternalEventPayload) -> str:
 
     event.id = normalized_event_id
     event.external_id = external_identifier
+
+    contact_cache: Dict[str, Tuple[Optional[str], bool]] = {}
+    current_user = _load_current_user_from_env()
+    attendee_emails = _extract_attendee_emails_from_event(event)
+    unique_contacts, new_contacts_by_domain = _resolve_attendee_contacts(
+        attendee_emails,
+        contact_cache=contact_cache,
+        current_user=current_user,
+    )
+    if unique_contacts:
+        event.people = unique_contacts
+        raw_source = event.raw if isinstance(event.raw, dict) else {}
+        raw_payload = dict(raw_source)
+        if attendee_emails and "attendees" not in raw_payload:
+            raw_payload["attendees"] = attendee_emails
+        raw_payload["attendee_contact_ids"] = unique_contacts
+        event.raw = raw_payload
+    _create_coworker_relationships(new_contacts_by_domain)
+
     ingest_event(event)
     return normalized_event_id
 
@@ -80,64 +219,17 @@ def ingest_meeting_notes(
     event_ids: List[str] = []
     contact_cache: Dict[str, Tuple[Optional[str], bool]] = {}
 
-    current_user = None
-    current_user_info = os.environ.get("CURRENT_USER_INFO")
-    if current_user_info:
-        try:
-            current_user = json.loads(current_user_info)
-        except Exception:
-            current_user = None
+    current_user = _load_current_user_from_env()
 
     user_tokens = _build_user_tokens(current_user)
     for meeting in meetings:
         attendee_emails = meeting.attendees or []
-        contact_ids: List[str] = []
-        new_contacts_by_domain: Dict[str, List[str]] = {}
-        for email in attendee_emails:
-            normalized = contacts_service.normalize_email(email)
-            created_now = False
-            if normalized and normalized in contact_cache:
-                cid, _ = contact_cache[normalized]
-            else:
-                cid, created_now = contacts_service.ensure_contact_for_email(email)
-                if normalized:
-                    contact_cache[normalized] = (cid, created_now)
-            if cid:
-                contact_ids.append(cid)
-                if created_now and normalized and "@" in normalized:
-                    domain = normalized.split("@", 1)[1]
-                    new_contacts_by_domain.setdefault(domain, []).append(cid)
-        unique_contacts = list(dict.fromkeys(contact_ids))
-
-        if current_user:
-            current_email = current_user.get("email")
-            if current_email:
-                normalized_current = contacts_service.normalize_email(current_email)
-                if normalized_current and normalized_current not in contact_cache:
-                    cid, created_now = contacts_service.ensure_contact_for_email(current_email)
-                    if normalized_current:
-                        contact_cache[normalized_current] = (cid, created_now)
-                    if cid and cid not in unique_contacts:
-                        unique_contacts.append(cid)
-
-        for domain, ids in new_contacts_by_domain.items():
-            if len(ids) < 2:
-                continue
-            seen_pairs = set()
-            for a, b in combinations(sorted(set(ids)), 2):
-                pair_key = (a, b)
-                if pair_key in seen_pairs:
-                    continue
-                seen_pairs.add(pair_key)
-                relationship_id = f"rel:coworker:{domain}:{a}:{b}"
-                rel = ContactRelationshipIn(
-                    relationship_id=relationship_id,
-                    from_contact_id=a,
-                    to_contact_id=b,
-                    relationship_type="Co-worker",
-                    reciprocal_type="Co-worker",
-                )
-                contacts_service.upsert_contact_relationship(rel)
+        unique_contacts, new_contacts_by_domain = _resolve_attendee_contacts(
+            attendee_emails,
+            contact_cache=contact_cache,
+            current_user=current_user,
+        )
+        _create_coworker_relationships(new_contacts_by_domain)
 
         normalized_meeting_id: Optional[str] = None
         provided_meeting_id = getattr(meeting, "id", None)
