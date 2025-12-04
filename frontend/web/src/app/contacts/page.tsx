@@ -117,6 +117,15 @@ export default function ContactsPage() {
     external_id: "",
   });
 
+  const contactNameById = useMemo(
+    () =>
+      contacts.reduce<Record<string, string>>((acc, contact) => {
+        acc[contact.contact_id] = contact.display_name;
+        return acc;
+      }, {}),
+    [contacts]
+  );
+
   // Load contacts on mount
   useEffect(() => {
     loadContacts();
@@ -656,22 +665,26 @@ export default function ContactsPage() {
                     <td style={{ padding: "16px 20px", color: "#555" }}>
                       {contact.relationships.length > 0 ? (
                         <div style={{ display: "flex", flexWrap: "wrap", gap: "4px" }}>
-                          {contact.relationships.slice(0, 3).map((rel) => (
-                            <span
-                              key={`${rel.relationship_id}-${rel.contact_id}-${rel.direction}`}
-                              title={`${rel.type} → ${rel.contact_id}`}
-                              style={{
-                                background: rel.direction === "outgoing" ? "#e0f2fe" : "#fef3c7",
-                                color: rel.direction === "outgoing" ? "#0369a1" : "#92400e",
-                                padding: "4px 8px",
-                                borderRadius: "4px",
-                                fontSize: "0.75rem",
-                                fontWeight: 500,
-                              }}
-                            >
-                              {rel.type} → {rel.contact_id.split(":").pop()}
-                            </span>
-                          ))}
+                          {contact.relationships.slice(0, 3).map((rel) => {
+                            const relatedName =
+                              contactNameById[rel.contact_id] || rel.contact_id.split(":").pop();
+                            return (
+                              <span
+                                key={`${rel.relationship_id}-${rel.contact_id}-${rel.direction}`}
+                                title={`${rel.type} · ${relatedName}`}
+                                style={{
+                                  background: "#eef2ff",
+                                  color: "#312e81",
+                                  padding: "4px 8px",
+                                  borderRadius: "4px",
+                                  fontSize: "0.75rem",
+                                  fontWeight: 500,
+                                }}
+                              >
+                                {rel.type} · {relatedName}
+                              </span>
+                            );
+                          })}
                           {contact.relationships.length > 3 && (
                             <span
                               style={{
