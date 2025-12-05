@@ -689,7 +689,7 @@ def _build_messages(
         "For contacts, make sure you search using different strategies when it comes to names, first names, last names, full names, partial names, nicknames, aliases, and so on. " \
         "For relationship closeness questions, use the `contact_relationships` table to understand interpersonal links. " \
         "For events, meetings, moments, use the `events` table to retrieve the event details and their summaries. " \
-        "You also have acccess to documents on the 'documents' table, and might have relations to events, contacts or places. Don't forget to search for informatino there too. " \
+        "You also have acccess to documents on the 'documents' table, and might have relations to events, contacts or places. Don't forget to search for informatino there too, including documents tags. " \
         "Tasks or to dos are on the 'todos' table, and might have relations to events, contacts or places." \
         "Do not stop after describing a plan—actually call the necessary tools, inspect their outputs, and base your final answer on that evidence. " \
         "If a SQL attempt fails validation, revise and retry until you either succeed or can explain why the data cannot be retrieved. " \

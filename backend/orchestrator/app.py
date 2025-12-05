@@ -165,7 +165,7 @@ def receive_contact_webhook(
     if not person or not person.id:
         raise HTTPException(status_code=400, detail="Webhook payload is missing person information")
 
-    if event_name == "persondelete":
+    if event_name == "persondelete" or person.is_hidden:
         try:
             updated = contacts_service.unlink_external_contact(person.id)
         except Exception as exc:
