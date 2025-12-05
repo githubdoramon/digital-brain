@@ -1,3 +1,18 @@
+\if :{?db_schema}
+\else
+  \set db_schema public
+\endif
+
+\echo Applying database migrations to schema ':db_schema'
+
+DO $schema$
+BEGIN
+  EXECUTE format('CREATE SCHEMA IF NOT EXISTS %I', :'db_schema');
+END
+$schema$;
+
+SELECT set_config('search_path', format('%s,public', :'db_schema'), false);
+
 CREATE EXTENSION IF NOT EXISTS vector;
 CREATE EXTENSION IF NOT EXISTS pg_trgm;
 CREATE EXTENSION IF NOT EXISTS btree_gin;
@@ -49,19 +64,20 @@ CREATE TABLE IF NOT EXISTS places (
 DO $$
 DECLARE
   rel_kind CHAR;
+  target_schema TEXT := current_schema();
 BEGIN
   SELECT c.relkind
   INTO rel_kind
   FROM pg_catalog.pg_class c
   JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
   WHERE c.relname = 'events'
-    AND n.nspname = 'public'
+    AND n.nspname = target_schema
   LIMIT 1;
 
   IF rel_kind = 'v' THEN
-    EXECUTE 'DROP VIEW public.events CASCADE';
+    EXECUTE format('DROP VIEW %I.events CASCADE', target_schema);
   ELSIF rel_kind = 'm' THEN
-    EXECUTE 'DROP MATERIALIZED VIEW public.events CASCADE';
+    EXECUTE format('DROP MATERIALIZED VIEW %I.events CASCADE', target_schema);
   END IF;
 END;
 $$;
@@ -112,7 +128,7 @@ BEGIN
   SELECT EXISTS (
     SELECT 1
     FROM information_schema.tables
-    WHERE table_schema = 'public'
+    WHERE table_schema = current_schema()
       AND table_name = 'events'
       AND table_type = 'BASE TABLE'
   )
@@ -121,7 +137,7 @@ BEGIN
   IF events_is_table THEN
     IF EXISTS (
       SELECT 1 FROM information_schema.columns
-      WHERE table_schema = 'public'
+      WHERE table_schema = current_schema()
         AND table_name = 'events'
         AND column_name = 'ts'
     ) THEN
@@ -130,7 +146,7 @@ BEGIN
 
     IF NOT EXISTS (
       SELECT 1 FROM information_schema.columns
-      WHERE table_schema = 'public'
+      WHERE table_schema = current_schema()
         AND table_name = 'events'
         AND column_name = 'end_date'
     ) THEN
@@ -139,7 +155,7 @@ BEGIN
 
     IF EXISTS (
       SELECT 1 FROM information_schema.columns
-      WHERE table_schema = 'public'
+      WHERE table_schema = current_schema()
         AND table_name = 'events'
         AND column_name = 'what_text'
     ) THEN
@@ -148,7 +164,7 @@ BEGIN
 
     IF NOT EXISTS (
       SELECT 1 FROM information_schema.columns
-      WHERE table_schema = 'public'
+      WHERE table_schema = current_schema()
         AND table_name = 'events'
         AND column_name = 'summary'
     ) THEN
@@ -159,7 +175,7 @@ BEGIN
 
     IF NOT EXISTS (
       SELECT 1 FROM information_schema.columns
-      WHERE table_schema = 'public'
+      WHERE table_schema = current_schema()
         AND table_name = 'events'
         AND column_name = 'external_id'
     ) THEN

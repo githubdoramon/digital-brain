@@ -5,6 +5,7 @@ from contextlib import contextmanager
 from typing import Iterator, List
 
 import psycopg
+from psycopg import sql
 from psycopg.rows import dict_row
 
 # Construct DB connection string from environment variables
@@ -13,8 +14,20 @@ POSTGRES_PASSWORD = os.getenv("POSTGRES_PASSWORD")
 POSTGRES_DB = os.getenv("POSTGRES_DB")
 POSTGRES_HOST = os.getenv("POSTGRES_HOST")
 POSTGRES_PORT = os.getenv("POSTGRES_PORT")
+POSTGRES_SCHEMA = (os.getenv("POSTGRES_SCHEMA") or "public").strip()
 
 DB_DSN = f"postgresql://{POSTGRES_USER}:{POSTGRES_PASSWORD}@{POSTGRES_HOST}:{POSTGRES_PORT}/{POSTGRES_DB}"
+
+
+def _set_search_path(conn: psycopg.Connection) -> None:
+    if not POSTGRES_SCHEMA:
+        return
+    with conn.cursor() as cur:
+        cur.execute(
+            sql.SQL("SET search_path TO {}, public").format(
+                sql.Identifier(POSTGRES_SCHEMA)
+            )
+        )
 
 
 @contextmanager
@@ -22,6 +35,7 @@ def get_conn() -> Iterator[psycopg.Connection]:
     if not POSTGRES_PASSWORD:
         raise RuntimeError("POSTGRES_PASSWORD environment variable is not set")
     conn = psycopg.connect(DB_DSN, row_factory=dict_row)
+    _set_search_path(conn)
     try:
         yield conn
     finally:

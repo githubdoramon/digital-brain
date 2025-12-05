@@ -5,7 +5,7 @@ from typing import Any, Dict
 
 from psycopg.rows import dict_row
 
-from db import get_conn
+from db import POSTGRES_SCHEMA, get_conn
 
 _READ_ONLY_FORBIDDEN = {
     "insert",
@@ -49,6 +49,7 @@ _AGGREGATE_UNCLOSED_PATTERNS = [
 
 
 def describe_schema() -> Dict[str, Any]:
+    schema = POSTGRES_SCHEMA or "public"
     with get_conn() as conn, conn.cursor(row_factory=dict_row) as cur:
         cur.execute(
             """
@@ -59,9 +60,10 @@ def describe_schema() -> Dict[str, Any]:
                 is_nullable,
                 column_default
             FROM information_schema.columns
-            WHERE table_schema = 'public'
+            WHERE table_schema = %s
             ORDER BY table_name, ordinal_position
-            """
+            """,
+            (schema,),
         )
         columns = cur.fetchall()
 
