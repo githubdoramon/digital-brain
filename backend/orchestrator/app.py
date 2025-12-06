@@ -165,9 +165,25 @@ def receive_contact_webhook(
     if not person or not person.id:
         raise HTTPException(status_code=400, detail="Webhook payload is missing person information")
 
-    if event_name == "persondelete" or person.is_hidden:
+    external_id = str(person.id)
+
+    if person.is_hidden:
+        existing = contacts_service.get_contact_by_external_id(external_id)
+        if existing:
+            display_name = (existing.get("display_name") or "").strip().lower()
+            if display_name.startswith("external contact"):
+                try:
+                    deleted = contacts_service.delete_contact(existing["contact_id"])
+                except Exception as exc:
+                    raise HTTPException(status_code=500, detail=f"Failed to delete hidden contact: {exc}") from exc
+                if deleted:
+                    # Stop early so we do not re-create the hidden contact later in this handler.
+                    return {"ok": True, "action": "deleted"}
+        return {"ok": True, "action": "ignored"}
+
+    if event_name == "persondelete":
         try:
-            updated = contacts_service.unlink_external_contact(person.id)
+            updated = contacts_service.unlink_external_contact(external_id)
         except Exception as exc:
             raise HTTPException(status_code=500, detail=f"Failed to unlink external contact: {exc}") from exc
         return {"ok": True, "action": "unlinked" if updated else "ignored"}
