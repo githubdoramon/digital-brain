@@ -5,7 +5,7 @@ import os
 import re
 from datetime import datetime
 from itertools import combinations
-from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, List, Optional, Sequence, Set, Tuple
 from uuid import uuid4
 
 import contacts as contacts_service
@@ -289,11 +289,16 @@ def ingest_meeting_notes(
 
         if not todo_writer or not user_tokens:
             continue
+        existing_todo_signatures = _get_existing_todo_signatures(event_id)
         steps = _extract_next_steps(meeting.content)
         for idx, step in enumerate(steps):
             step_lower = step.lower()
             if not any(token in step_lower for token in user_tokens):
                 continue
+            normalized_step = _normalize_todo_description(step)
+            if not normalized_step or normalized_step in existing_todo_signatures:
+                continue
+            existing_todo_signatures.add(normalized_step)
             todo = TodoIn(
                 todo_id=f"todo:{event_id}:{uuid4().hex[:8]}",
                 description=step,
@@ -512,6 +517,35 @@ def _extract_next_steps(content: Optional[str]) -> List[str]:
                 if match:
                     steps.append(match.group(1).strip())
     return steps
+
+
+def _normalize_todo_description(text: Optional[str]) -> str:
+    if not text:
+        return ""
+    squashed = " ".join(text.split())
+    return squashed.strip().lower()
+
+
+def _get_existing_todo_signatures(event_id: Optional[str]) -> Set[str]:
+    if not event_id:
+        return set()
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT t.description
+            FROM todos AS t
+            INNER JOIN todo_events AS te ON te.todo_id = t.todo_id
+            WHERE te.event_id = %s
+            """,
+            (event_id,),
+        )
+        rows = cur.fetchall()
+    signatures: Set[str] = set()
+    for row in rows:
+        signature = _normalize_todo_description(row.get("description"))
+        if signature:
+            signatures.add(signature)
+    return signatures
 
 
 def _event_exists(event_id: str) -> bool:
