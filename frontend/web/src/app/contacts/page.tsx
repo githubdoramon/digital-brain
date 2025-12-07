@@ -176,7 +176,6 @@ export default function ContactsPage() {
       links: formatList(contact.links),
       tags: formatList(contact.tags),
       relationships: (contact.relationships || [])
-        .filter((rel) => rel.direction === "outgoing")
         .map((rel) => ({
           relationship_id: rel.relationship_id,
           contact_id: rel.contact_id,
