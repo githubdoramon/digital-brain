@@ -1,4 +1,5 @@
 const ORCHESTRATOR_BASE = process.env.BACKEND_API_BASE ?? "http://localhost:8000";
+const IMMICH_FACE_API_KEY = process.env.IMMICH_FACE_API_KEY ?? "";
 
 const allowedMethods = new Set(["POST", "OPTIONS"]);
 
@@ -12,6 +13,9 @@ async function proxyToBackend(request: Request): Promise<Response> {
   const url = `${ORCHESTRATOR_BASE}/access/gate`;
   const headers = new Headers(request.headers);
   headers.delete("host");
+  if (IMMICH_FACE_API_KEY) {
+    headers.set("x-api-key", IMMICH_FACE_API_KEY);
+  }
 
   const body = request.method === "POST" ? await request.arrayBuffer() : undefined;
 
