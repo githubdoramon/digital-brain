@@ -22,6 +22,7 @@ class ImmichIdentifyError(RuntimeError):
 class ImmichConfig:
     base_url: str
     api_key: str
+    face_api_key: str
     device_id: Optional[str] = None
     http_timeout: int = IMMICH_HTTP_TIMEOUT
 
@@ -29,9 +30,10 @@ class ImmichConfig:
 def _load_base_auth() -> Tuple[str, str]:
     base_url = (os.getenv("IMMICH_SERVER_URL") or "").strip().rstrip("/")
     api_key = (os.getenv("IMMICH_API_KEY") or "").strip()
-    if not base_url or not api_key:
+    face_api_key = (os.getenv("IMMICH_FACE_API_KEY") or "").strip()
+    if not base_url or not api_key or not face_api_key:
         raise ImmichClientError("IMMICH_SERVER_URL and IMMICH_API_KEY must be configured")
-    return base_url, api_key
+    return base_url, api_key, face_api_key
 
 
 def get_immich_config(require_device: bool = False) -> ImmichConfig:
@@ -59,7 +61,7 @@ def identify_contact_from_image(
     cfg = config or get_immich_config()
     url = f"{cfg.base_url}/api/face/identify"
     headers = {
-        "x-api-key": cfg.api_key,
+        "x-api-key": cfg.face_api_key,
         "accept": "application/json",
     }
     files = {
