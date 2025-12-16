@@ -59,7 +59,7 @@ def identify_contact_from_image(
         raise ImmichIdentifyError("Image payload is empty")
 
     cfg = config or get_immich_config()
-    url = f"{cfg.base_url}/api/face/identify"
+    url = f"{cfg.base_url}/api/faces/identify"
     headers = {
         "x-api-key": cfg.face_api_key,
         "accept": "application/json",
