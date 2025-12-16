@@ -47,22 +47,6 @@ services:
       - ./backend/orchestrator/config/service_manifest.dev.json:/app/config/service_manifest.json:ro
       - ./backend/orchestrator/storage/documents:/app/storage/documents
 
-  # removed_service:
-  #   build:
-  #     context: ./backend/removed_service
-  #     dockerfile: Dockerfile
-  #   container_name: mem-removed-service
-  #   depends_on:
-  #     db:
-  #       condition: service_healthy
-  #   env_file:
-  #     - ./backend/.env
-  #   ports:
-  #     - "7001:7001"
-  #   volumes:
-  #     - ./backend/removed_service/models:/app/models
-  #     - ./backend/removed_service/dataset:/app/dataset
-
   frontend:
     build:
       context: ./frontend/web

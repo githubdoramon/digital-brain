@@ -28,10 +28,6 @@ DIGITAL_BRAIN_SERVICES = {
         "name": "Frontend Web",
         "image": "appcalipse/digital-brain-frontend",
     },
-    "removed_service": {
-        "name": "Removed Service Service",
-        "image": "digital-brain-removed-service",
-    },
 }
 
 THIRD_PARTY_SERVICES = {

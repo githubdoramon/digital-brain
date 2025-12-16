@@ -9,10 +9,12 @@ from typing import Any, Dict, Optional, Set, Tuple
 
 import requests
 
+import immich_client
+
 logger = logging.getLogger(__name__)
 
 TELEGRAM_HTTP_TIMEOUT = int(os.getenv("TELEGRAM_HTTP_TIMEOUT", "20"))
-IMMICH_HTTP_TIMEOUT = int(os.getenv("IMMICH_HTTP_TIMEOUT", "45"))
+IMMICH_HTTP_TIMEOUT = immich_client.IMMICH_HTTP_TIMEOUT
 
 
 class TelegramConfigError(RuntimeError):
@@ -115,12 +117,10 @@ def _load_config() -> TelegramConfig:
     if not bot_token:
         raise TelegramConfigError("TELEGRAM_BOT_TOKEN is not configured")
 
-    immich_url = (os.getenv("IMMICH_SERVER_URL") or "").strip().rstrip("/")
-    immich_api_key = (os.getenv("IMMICH_API_KEY") or "").strip()
-    if not immich_url or not immich_api_key:
-        raise TelegramConfigError("IMMICH_SERVER_URL and IMMICH_API_KEY must be configured")
-
-    device_id = (os.getenv("IMMICH_DEVICE_ID") or "telegram-bot").strip()
+    immich_cfg = immich_client.get_immich_config(require_device=True)
+    immich_url = immich_cfg.base_url
+    immich_api_key = immich_cfg.api_key
+    device_id = immich_cfg.device_id or "telegram-bot"
     secret = (os.getenv("TELEGRAM_WEBHOOK_SECRET") or "").strip() or None
     allowed_ids = _parse_allowed_chat_ids(os.getenv("TELEGRAM_ALLOWED_CHAT_IDS"))
 

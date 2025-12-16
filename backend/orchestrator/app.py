@@ -1,17 +1,17 @@
 from __future__ import annotations
 
+import json
+import os
 from contextlib import asynccontextmanager
 from datetime import datetime
 from time import perf_counter
 from typing import Any, Dict, List, Optional
 
-import json
-import os
-
 from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Query, Request, Response, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 
+import action_logs
 import contacts as contacts_service
 import conversations
 import documents
@@ -21,6 +21,7 @@ import places as places_service
 import todos as todos_service
 from auth import get_current_user
 from db import get_conn
+import immich_client
 import telegram_bot
 from schemas import (
     AskIn,
@@ -389,6 +390,48 @@ def ingest_external_event(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {"ok": True, "id": event_id}
+
+
+@api.post("/access/gate")
+def validate_gate_access(
+    image: UploadFile = File(...),
+    _: None = Depends(require_service_api_key),
+):
+    try:
+        image_bytes = image.file.read()
+    except Exception as exc:  # pragma: no cover - defensive path
+        raise HTTPException(status_code=400, detail=f"Failed to read image: {exc}") from exc
+
+    try:
+        contact, _ = immich_client.identify_contact_from_image(
+            image_bytes=image_bytes,
+            filename=image.filename,
+            mime_type=image.content_type,
+        )
+    except immich_client.ImmichClientError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    except immich_client.ImmichIdentifyError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    if not contact:
+        raise HTTPException(status_code=403, detail="Not authorized")
+
+    action_logs.insert_action_log(
+        action_logs.PERSON_IDENTIFIED,
+        {"name": contact_name, "location": "gate"},
+    )
+
+    tags = [tag.lower() for tag in (contact.get("tags") or []) if isinstance(tag, str)]
+    contact_name = contact.get("display_name") or contact.get("contact_id") or "unknown"
+    open_gate = False
+    if "gate-access" in tags:
+        open_gate = True
+        action_logs.insert_action_log(
+            action_logs.LOG_TYPE_GATE_OPENED,
+            {"name": contact_name, "location": "gate"},
+        )
+
+    return {"contact_name": contact_name, "open_gate": open_gate}
 
 
 @api.get("/meetings/{meeting_id}")

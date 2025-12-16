@@ -37,15 +37,6 @@
       "git_sha": null,
       "build_time": null,
       "image": "qdrant/qdrant:latest"
-    },
-    {
-      "id": "removed_service",
-      "name": "Removed Service Service",
-      "version": "dev",
-      "git_sha": null,
-      "build_time": null,
-      "image": "digital-brain-removed-service:dev",
-      "notes": "Optional service. Update when enabled."
     }
   ]
 }

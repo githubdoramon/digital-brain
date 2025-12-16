@@ -12,7 +12,6 @@ Create three ECR repositories in your AWS account:
 
 ```bash
 aws ecr create-repository --repository-name digital-brain-orchestrator --region us-east-1
-aws ecr create-repository --repository-name digital-brain-removed-service --region us-east-1
 aws ecr create-repository --repository-name digital-brain-frontend --region us-east-1
 ```
 
@@ -89,7 +88,6 @@ env:
 
 2. **Builds three images in parallel**:
    - `digital-brain-orchestrator`
-   - `digital-brain-removed-service`
    - `digital-brain-frontend`
 
 3. **Tags images with**:
@@ -109,7 +107,6 @@ aws ecr get-login-password --region us-east-1 | docker login --username AWS --pa
 
 # Pull images
 docker pull <ACCOUNT_ID>.dkr.ecr.us-east-1.amazonaws.com/digital-brain-orchestrator:latest
-docker pull <ACCOUNT_ID>.dkr.ecr.us-east-1.amazonaws.com/digital-brain-removed-service:latest
 docker pull <ACCOUNT_ID>.dkr.ecr.us-east-1.amazonaws.com/digital-brain-frontend:latest
 ```
 

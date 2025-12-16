@@ -79,7 +79,6 @@ def _fallback_services() -> List[Dict[str, Any]]:
         ("frontend", "Frontend Web", os.getenv("FRONTEND_IMAGE", "digital-brain-frontend")),
         ("db", "Postgres + pgvector", "pgvector/pgvector:pg16"),
         ("qdrant", "Qdrant Vector DB", "qdrant/qdrant:latest"),
-        ("removed_service", "Removed Service Service", os.getenv("REMOVED_SERVICE_IMAGE", "digital-brain-removed-service")),
     )
 
     fallback_entries: List[Dict[str, Any]] = []

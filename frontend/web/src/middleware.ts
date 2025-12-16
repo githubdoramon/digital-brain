@@ -14,7 +14,7 @@ const SERVICE_KEY_RULES: ServiceKeyRule[] = [
     header: "x-service-api-key",
   },
   {
-    prefix: "/api/removed-service",
+    prefix: "/api/gate",
     header: "x-service-api-key",
   },
   {

@@ -298,6 +298,24 @@ CREATE TABLE IF NOT EXISTS conversation_messages (
 CREATE INDEX IF NOT EXISTS idx_conversation_messages_thread_created
   ON conversation_messages (thread_id, created_at, message_id);
 
+-- Action logs (system actions such as gate access)
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_type WHERE typname = 'action_log_type'
+  ) THEN
+    CREATE TYPE action_log_type AS ENUM ('person_identified','gate_opened');
+  END IF;
+END;
+$$;
+
+CREATE TABLE IF NOT EXISTS action_logs (
+  id TEXT PRIMARY KEY,
+  log_type action_log_type NOT NULL,
+  raw JSONB NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
 -- Helpful view
 CREATE OR REPLACE VIEW events_with_places AS
 SELECT e.*, p.name AS place_name, p.city, p.country, p.lat, p.lon
