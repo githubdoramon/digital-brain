@@ -27,7 +27,7 @@ class ImmichConfig:
     http_timeout: int = IMMICH_HTTP_TIMEOUT
 
 
-def _load_base_auth() -> Tuple[str, str]:
+def _load_base_auth() -> Tuple[str, str, str]:
     base_url = (os.getenv("IMMICH_SERVER_URL") or "").strip().rstrip("/")
     api_key = (os.getenv("IMMICH_API_KEY") or "").strip()
     face_api_key = (os.getenv("IMMICH_FACE_API_KEY") or "").strip()
@@ -37,11 +37,11 @@ def _load_base_auth() -> Tuple[str, str]:
 
 
 def get_immich_config(require_device: bool = False) -> ImmichConfig:
-    base_url, api_key = _load_base_auth()
+    base_url, api_key, face_api_key = _load_base_auth()
     device_id = (os.getenv("IMMICH_DEVICE_ID") or "").strip() or None
     if require_device and not device_id:
         device_id = "telegram-bot"
-    return ImmichConfig(base_url=base_url, api_key=api_key, device_id=device_id)
+    return ImmichConfig(base_url=base_url, api_key=api_key, face_api_key=face_api_key, device_id=device_id)
 
 
 def identify_contact_from_image(
