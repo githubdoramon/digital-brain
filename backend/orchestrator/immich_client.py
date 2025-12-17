@@ -88,8 +88,11 @@ def identify_contact_from_image(
     except ValueError as exc:
         raise ImmichIdentifyError("Immich identify returned invalid JSON") from exc
 
-    person_id = payload.get("personId") if isinstance(payload, dict) else None
-    contact = get_contact_by_external_id(str(person_id)) if person_id else None
+    print(f"identify_contact_from_image: {payload}")
 
+    person_id = payload.get("personId") if isinstance(payload, dict) else None
+    print(f"person_id: {person_id}")
+    contact = get_contact_by_external_id(str(person_id)) if person_id else None
+    print(f"contact: {contact}")
     return contact, payload
 

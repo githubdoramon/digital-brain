@@ -211,6 +211,7 @@ def get_contact_by_email(email: str) -> Optional[Dict[str, Any]]:
 
 
 def get_contact_by_external_id(external_id: str) -> Optional[Dict[str, Any]]:
+    print(f"get_contact_by_external_id: {external_id}")
     if not external_id:
         return None
     with get_conn() as conn, conn.cursor() as cur:
