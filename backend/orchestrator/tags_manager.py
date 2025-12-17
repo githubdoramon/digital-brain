@@ -134,6 +134,17 @@ MAJOR_TAG_KEYWORDS = {
     ],
 }
 
+
+def _has_major_tag(tags: Sequence[str]) -> bool:
+    lowered = {str(tag).strip().lower() for tag in tags if isinstance(tag, str) and str(tag).strip()}
+    return any(major.lower() in lowered for major in MAJOR_TAGS)
+
+
+def _needs_additional_tags(tags: Sequence[str]) -> bool:
+    normalized = _normalize_strings(tags)
+    return (len(normalized) < 4) or (not _has_major_tag(normalized))
+
+
 def _normalize_strings(values: Iterable[str] | None) -> List[str]:
     if not values:
         return []
@@ -279,14 +290,20 @@ def _suggest_tags(
 
 
 def _suggest_additional_tags(content: str, tags: Sequence[str]) -> List[str]:
+    if not _needs_additional_tags(tags):
+        return []
     return _suggest_tags(content, tags, "document")
 
 
 def _suggest_event_tags(
     title: Optional[str],
     summary: Optional[str],
-    tags: Sequence[str]
+    tags: Sequence[str],
+    *,
+    types: Optional[Sequence[str]] = None,
 ) -> List[str]:
+    if not _needs_additional_tags(tags):
+        return []
     combined_parts = [part.strip() for part in (title or "", summary or "") if part]
     combined_content = "\n".join(combined_parts)
     return _suggest_tags(

@@ -445,7 +445,7 @@ def ingest_event(event: EventIn) -> None:
                 event.end_date,
                 event.place_id,
                 event.people or [],
-                final_tags,
+                merged_tags,
                 types,
                 event.title or "",
                 event.summary or "",
