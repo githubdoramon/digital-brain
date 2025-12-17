@@ -403,7 +403,7 @@ def validate_gate_access(
         raise HTTPException(status_code=400, detail=f"Failed to read image: {exc}") from exc
 
     try:
-        contact, _ = immich_client.identify_contact_from_image(
+        contacts, _ = immich_client.identify_contacts_from_image(
             image_bytes=image_bytes,
             filename=image.filename,
             mime_type=image.content_type,
@@ -413,25 +413,27 @@ def validate_gate_access(
     except immich_client.ImmichIdentifyError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
-    if not contact:
+    if not contacts:
         raise HTTPException(status_code=403, detail="Not authorized")
 
-    action_logs.insert_action_log(
-        action_logs.PERSON_IDENTIFIED,
-        {"name": contact_name, "location": "gate"},
-    )
-
-    tags = [tag.lower() for tag in (contact.get("tags") or []) if isinstance(tag, str)]
-    contact_name = contact.get("display_name") or contact.get("contact_id") or "unknown"
-    open_gate = False
-    if "gate-access" in tags:
-        open_gate = True
+    for contact in contacts:
+        contact_name = contact.get("display_name") or contact.get("contact_id") or "unknown"
         action_logs.insert_action_log(
-            action_logs.LOG_TYPE_GATE_OPENED,
+            action_logs.PERSON_IDENTIFIED,
             {"name": contact_name, "location": "gate"},
         )
+        tags = [tag.lower() for tag in (contact.get("tags") or []) if isinstance(tag, str)]
+        open_gate = False
+        if "gate-access" in tags:
+            open_gate = True
+            action_logs.insert_action_log(
+                action_logs.LOG_TYPE_GATE_OPENED,
+                {"name": contact_name, "location": "gate"},
+            )
 
-    return {"contact_name": contact_name, "open_gate": open_gate}
+    contact_names = ", ".join([contact.get("display_name") or contact.get("contact_id") or "unknown" for contact in contacts])
+
+    return {"contact_names": contact_names, "open_gate": open_gate}
 
 
 @api.get("/meetings/{meeting_id}")

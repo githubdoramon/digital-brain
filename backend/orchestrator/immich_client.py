@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import requests
 
@@ -44,16 +44,17 @@ def get_immich_config(require_device: bool = False) -> ImmichConfig:
     return ImmichConfig(base_url=base_url, api_key=api_key, face_api_key=face_api_key, device_id=device_id)
 
 
-def identify_contact_from_image(
+def identify_contacts_from_image(
     image_bytes: bytes,
     filename: Optional[str] = None,
     mime_type: Optional[str] = None,
     config: Optional[ImmichConfig] = None,
-) -> Tuple[Optional[Dict[str, Any]], Dict[str, Any]]:
+) -> Tuple[List[Dict[str, Any]], Any]:
     """
-    Call Immich's face identify endpoint and map a detected person to a contact.
+    Call Immich's face identify endpoint and map detected faces to contacts.
 
-    Returns (contact, raw_response). Contact is None when no person match exists.
+    Returns (contacts, raw_response). Contacts includes only matches that were
+    linked to an existing contact via personId.
     """
     if not image_bytes:
         raise ImmichIdentifyError("Image payload is empty")
@@ -88,11 +89,17 @@ def identify_contact_from_image(
     except ValueError as exc:
         raise ImmichIdentifyError("Immich identify returned invalid JSON") from exc
 
-    print(f"identify_contact_from_image: {payload}")
+    matches: List[Any] = payload if isinstance(payload, list) else [payload] if payload else []
+    contacts: List[Dict[str, Any]] = []
+    seen_ids = set()
 
-    person_id = payload.get("personId") if isinstance(payload, dict) else None
-    print(f"person_id: {person_id}")
-    contact = get_contact_by_external_id(str(person_id)) if person_id else None
-    print(f"contact: {contact}")
-    return contact, payload
+    for match in matches:
+        person_id = match.get("personId") if isinstance(match, dict) else None
+        if not person_id or person_id in seen_ids:
+            continue
+        seen_ids.add(person_id)
+        contact = get_contact_by_external_id(str(person_id))
+        if contact:
+            contacts.append(contact)
 
+    return contacts, payload
