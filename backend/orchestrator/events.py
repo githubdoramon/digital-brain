@@ -18,6 +18,11 @@ from schemas import (
     MeetingIn,
     TodoIn,
 )
+from tags_manager import (
+    _merge_tag_lists,
+    _normalize_strings,
+    _suggest_event_tags,
+)
 
 
 MAX_EVENT_EMBED_CHARS = 6000
@@ -394,8 +399,15 @@ def normalize_event_types(types: Optional[Sequence[str]]) -> List[str]:
 
 
 def ingest_event(event: EventIn) -> None:
-    emb = _generate_event_embedding(event)
     types = normalize_event_types(event.types)
+    normalized_tags = _normalize_strings(event.tags)
+    title_text = event.title or ""
+    summary_text = event.summary or ""
+    suggested_tags = _suggest_event_tags(title_text, summary_text, normalized_tags, types=types)
+    merged_tags = _merge_tag_lists(normalized_tags, suggested_tags)
+
+    embedding_payload = {**event.dict(), "tags": merged_tags, "types": types}
+    emb = _generate_event_embedding(embedding_payload)
     with get_conn() as conn, conn.cursor() as cur:
         cur.execute(
             """
@@ -433,7 +445,7 @@ def ingest_event(event: EventIn) -> None:
                 event.end_date,
                 event.place_id,
                 event.people or [],
-                event.tags or [],
+                final_tags,
                 types,
                 event.title or "",
                 event.summary or "",

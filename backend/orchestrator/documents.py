@@ -7,7 +7,7 @@ import shutil
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Sequence
+from typing import Any, Dict, List, Optional, Sequence
 from uuid import uuid4
 
 import requests
@@ -17,6 +17,11 @@ from pdfminer.high_level import extract_text as extract_pdf_text
 
 from db import get_conn
 from embeddings import embed_text
+from tags_manager import (
+    _merge_tag_lists,
+    _normalize_strings,
+    _suggest_additional_tags,
+)
 
 
 class DocumentProcessingError(RuntimeError):
@@ -33,8 +38,6 @@ DOCUMENT_STORAGE_DIR.mkdir(parents=True, exist_ok=True)
 
 MAX_CONTENT_CHARS = int(os.getenv("DOCUMENT_MAX_CONTENT_CHARS", "20000"))
 MAX_EMBED_CHARS = int(os.getenv("DOCUMENT_EMBED_MAX_CHARS", "8000"))
-MAX_LABEL_PROMPT_CHARS = int(os.getenv("DOCUMENT_LABEL_PROMPT_CHARS", "10000"))
-MAX_SUGGESTED_TAGS = int(os.getenv("DOCUMENT_LABEL_MAX_COUNT", "5"))
 MAX_TITLE_PROMPT_CHARS = int(os.getenv("DOCUMENT_TITLE_PROMPT_CHARS", "2000"))
 MAX_DATE_PROMPT_CHARS = int(os.getenv("DOCUMENT_DATE_PROMPT_CHARS", "2000"))
 MAX_DESCRIPTION_PROMPT_CHARS = int(os.getenv("DOCUMENT_DESCRIPTION_PROMPT_CHARS", "1200"))
@@ -502,87 +505,6 @@ def _extract_text(path: Path, mime_type: Optional[str]) -> str:
         return ""
 
 
-def _suggest_additional_tags(content: str, tags: Sequence[str]) -> List[str]:
-    cleaned = (content or "").strip()
-    if not cleaned or not OLLAMA_CHAT_MODEL:
-        return []
-    prompt_content = cleaned[:MAX_LABEL_PROMPT_CHARS]
-    existing = ", ".join(tags) if tags else "none"
-    payload = {
-        "model": OLLAMA_CHAT_MODEL,
-        "messages": [
-            {
-                "role": "system",
-                "content": (
-                    "You are a document librarian. Propose concise topical tags in English for reference. Create both specific tags as more generic ones to make sure this document is easily searchable in the future."
-                    "As an example, when tagging a document about a specific war, you could create a tag with the war name, but another one as \"history\" or \"world war\"."
-                    "Another example, when tagging a blood test result, you could create a tag with the test name, but another one as \"health\" or \"medical\"."
-                    "Another example, when tagging a document about a specific person, you could create a tag with the person name, but another one as \"family\" or \"friends\" if you have this indication in the document."
-                    "Respond ONLY with JSON in the shape {\"tags\": [\"tag\", ...]} using 1-3 word phrases. Do not include any other text or numerical order in your response."
-                ),
-            },
-            {
-                "role": "user",
-                "content": (
-                    "Existing tags: {existing_tags}\n"
-                    "Document excerpt:\n"
-                    "{excerpt}\n\n"
-                    "Return up to {max_tags} new tags relevant to the content."
-                ).format(
-                    existing_tags=existing,
-                    excerpt=prompt_content,
-                    max_tags=MAX_SUGGESTED_TAGS,
-                ),
-            },
-        ],
-        "stream": False,
-    }
-
-    try:
-        response = requests.post(
-            f"{OLLAMA_HOST}/api/chat", json=payload, timeout=OLLAMA_TIMEOUT
-        )
-        response.raise_for_status()
-        data = response.json()
-        message = data.get("message") or {}
-        raw_content = (message.get("content") or "").strip()
-        if not raw_content:
-            return []
-        parsed = _parse_suggested_tags_response(raw_content)
-        return parsed[:MAX_SUGGESTED_TAGS]
-    except Exception as exc:
-        print(f"[documents] Failed to generate tags: {exc}")
-        return []
-
-
-def _parse_suggested_tags_response(raw_content: str) -> List[str]:
-    try:
-        loaded = json.loads(raw_content)
-        if isinstance(loaded, dict):
-            if "tags" in loaded:
-                candidate = loaded["tags"]
-            elif "labels" in loaded:
-                candidate = loaded["labels"]
-            else:
-                candidate = loaded
-        else:
-            candidate = loaded
-    except json.JSONDecodeError:
-        lines = [line.strip("-• ").strip() for line in raw_content.splitlines()]
-        candidate = [line for line in lines if line]
-
-    parsed_tags: List[str] = []
-    if isinstance(candidate, dict):
-        candidate = list(candidate.values())
-    if isinstance(candidate, list):
-        for item in candidate:
-            if isinstance(item, str):
-                label = item.strip()
-                if label:
-                    parsed_tags.append(label)
-    return parsed_tags
-
-
 def _suggest_document_date(content: str, fallback: Optional[str]) -> Optional[datetime]:
     cleaned = (content or fallback or "").strip()
     if not cleaned or not OLLAMA_CHAT_MODEL:
@@ -1027,42 +949,6 @@ def _sanitize_filename(name: str) -> str:
     return "".join(ch for ch in name if ch.isalnum() or ch in {"-", "_", "."}).strip()
 
 
-def _normalize_strings(values: Iterable[str] | None) -> List[str]:
-    if not values:
-        return []
-    seen = set()
-    normalized: List[str] = []
-    for item in values:
-        if item is None:
-            continue
-        candidate = str(item).strip()
-        if not candidate:
-            continue
-        lower = candidate.lower()
-        if lower in seen:
-            continue
-        seen.add(lower)
-        normalized.append(candidate)
-    return normalized
-
-
-def _merge_tag_lists(primary: Sequence[str], secondary: Sequence[str]) -> List[str]:
-    merged: List[str] = list(primary or [])
-    seen = {tag.lower() for tag in merged if isinstance(tag, str)}
-    for tag in secondary:
-        if not isinstance(tag, str):
-            continue
-        candidate = tag.strip()
-        if not candidate:
-            continue
-        lowered = candidate.lower()
-        if lowered in seen:
-            continue
-        merged.append(candidate)
-        seen.add(lowered)
-    return merged
-
-
 def _generate_document_embedding(document: Dict[str, Any]) -> Sequence[float]:
     segments: List[str] = []
 
@@ -1137,7 +1023,7 @@ def _suggest_title(content: str, fallback: Optional[str]) -> Optional[str]:
             {
                 "role": "system",
                 "content": (
-                    "You generate concise, descriptive document titles (maximum 8 words). "
+                    "You generate concise, descriptive document titles (maximum 8 words). If documents are not in english, you still suggest a title in english. Do not use any kind of text formatting."
                     "Respond with text only, no JSON."
                 ),
             },
