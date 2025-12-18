@@ -55,6 +55,20 @@ class StoredFileInfo:
     size: int
 
 
+@dataclass
+class DocumentPrepared:
+    title: str
+    description: str
+    tags: List[str]
+    document_date: Optional[datetime]
+    embedding: Sequence[float]
+    raw_metadata: Dict[str, Any]
+    suggested_tags: List[str]
+    generated_title: Optional[str]
+    generated_description: Optional[str]
+    inferred_date: Optional[datetime]
+
+
 def ingest_document(
     *,
     title: Optional[str],
@@ -74,80 +88,40 @@ def ingest_document(
     content_text = _extract_text(stored.path, stored.mime_type)
     if content_text:
         content_text = content_text[:MAX_CONTENT_CHARS]
-        print(f"[documents] content_text={content_text}")
     else:
         fallback = filter(None, [description, provided_title, stored.file_name, document_id])
         content_text = " ".join(fallback)
 
-    normalized_tags = _normalize_strings(tags)
-    print(f"[documents] normalized_tags={normalized_tags}")
-    english_tags = _normalize_strings(_translate_tags_to_english(normalized_tags))
-    print(f"[documents] english_tags={english_tags}")
-    suggested_tags = _suggest_additional_tags(content_text, english_tags)
-    print(f"[documents] suggested_tags={suggested_tags}")
-    merged_tags = _merge_tag_lists(english_tags, suggested_tags)
-    print(f"[documents] merged_tags={merged_tags}")
-
-    provided_description = (description or "").strip()
-    generated_description: Optional[str] = None
-    final_description = provided_description
-    if not final_description:
-        generated_description = _summarize_description(content_text)
-        final_description = generated_description or _default_description(content_text, provided_title or stored.file_name or document_id)
-
-    generated_title: Optional[str] = None
-    final_title = provided_title
-    if not final_title:
-        generated_title = _suggest_title(
-            content_text,
-            fallback=stored.file_name or document_id,
-        )
-        final_title = generated_title or _derive_title_from_filename(stored.file_name) or document_id
-
-    inferred_date: Optional[datetime] = None
-    final_date = document_date
-    if not final_date:
-        inferred_date = _suggest_document_date(content_text, fallback=final_description)
-        final_date = inferred_date
-
-    raw_metadata = {
+    base_raw_metadata = {
         "original_filename": upload.filename,
         "provided_mime_type": upload.content_type,
         "stored_mime_type": stored.mime_type,
         "file_size": stored.size,
-        "suggested_tags": suggested_tags,
-        "title_generated": bool(generated_title),
-        "date_generated": bool(inferred_date),
-        "description_generated": bool(generated_description),
     }
-    if generated_title:
-        raw_metadata["generated_title"] = generated_title
-    if inferred_date:
-        raw_metadata["generated_date_iso"] = inferred_date.isoformat()
-    if generated_description:
-        raw_metadata["generated_description"] = generated_description
 
-    embedding = _generate_document_embedding(
-        {
-            "document_id": document_id,
-            "content": content_text,
-            "description": final_description,
-            "title": final_title,
-            "tags": merged_tags,
-            "file_name": stored.file_name,
-        }
+    tags_input = tags if tags is not None else []
+
+    prepared = _build_document_fields(
+        document_id=document_id,
+        content_text=content_text,
+        tags=tags_input,
+        provided_title=provided_title,
+        provided_description=(description or "").strip(),
+        document_date=document_date,
+        file_name=stored.file_name,
+        raw_metadata=base_raw_metadata,
     )
-
+    
     row = _upsert_document(
         document_id=document_id,
-        title=final_title,
-        tags=merged_tags,
-        description=final_description,
+        title=prepared.title,
+        tags=prepared.tags,
+        description=prepared.description,
         stored=stored,
         content=content_text,
-        embedding=embedding,
-        document_date=final_date,
-        raw_metadata=raw_metadata,
+        embedding=prepared.embedding,
+        document_date=prepared.document_date,
+        raw_metadata=prepared.raw_metadata,
     )
     return _row_to_document(row, include_metadata=True, include_content=True)
 
@@ -271,7 +245,6 @@ def update_document_metadata(
     provided_description = (description_input or "").strip()
 
     tags_input = tags if tags is not None else row.get("tags") or []
-    normalized_tags = _normalize_strings(tags_input)
 
     content_text = (row.get("content") or "")[:MAX_CONTENT_CHARS]
     if not content_text:
@@ -292,73 +265,28 @@ def update_document_metadata(
         fallback_joined = " ".join(fallback_parts)
         content_text = fallback_joined[:MAX_CONTENT_CHARS]
 
-    final_description = provided_description
-    generated_description: Optional[str] = None
-    if not final_description:
-        generated_description = _summarize_description(content_text)
-        final_description = generated_description or _default_description(
-            content_text,
-            provided_title or file_name or document_id,
-        )
 
-    final_title = provided_title
-    generated_title: Optional[str] = None
-    if not final_title:
-        generated_title = _suggest_title(content_text, fallback=file_name or document_id)
-        final_title = (
-            generated_title
-            or _derive_title_from_filename(file_name)
-            or document_id
-        )
-
-    final_date = document_date if document_date is not None else row.get("document_date")
-    inferred_date: Optional[datetime] = None
-    if not final_date:
-        inferred_date = _suggest_document_date(content_text, fallback=final_description)
-        final_date = inferred_date
-
-    english_tags = _normalize_strings(_translate_tags_to_english(normalized_tags))
-    suggested_tags = _suggest_additional_tags(content_text, english_tags)
-    merged_tags = _merge_tag_lists(english_tags, suggested_tags)
-
-    embedding = _generate_document_embedding(
-        {
-            "document_id": document_id,
-            "content": content_text,
-            "description": final_description,
-            "title": final_title,
-            "tags": merged_tags,
-            "file_name": file_name,
-        }
+    prepared = _build_document_fields(
+        document_id=document_id,
+        content_text=content_text,
+        tags=tags_input,
+        provided_title=provided_title,
+        provided_description=provided_description,
+        document_date=document_date if document_date is not None else row.get("document_date"),
+        file_name=file_name,
+        raw_metadata=raw_metadata,
     )
-
-    raw_metadata["suggested_tags"] = suggested_tags
-    raw_metadata["title_generated"] = bool(generated_title)
-    raw_metadata["date_generated"] = bool(inferred_date)
-    raw_metadata["description_generated"] = bool(generated_description)
-    if generated_title:
-        raw_metadata["generated_title"] = generated_title
-    else:
-        raw_metadata.pop("generated_title", None)
-    if inferred_date:
-        raw_metadata["generated_date_iso"] = inferred_date.isoformat()
-    else:
-        raw_metadata.pop("generated_date_iso", None)
-    if generated_description:
-        raw_metadata["generated_description"] = generated_description
-    else:
-        raw_metadata.pop("generated_description", None)
 
     row = _upsert_document(
         document_id=document_id,
-        title=final_title,
-        tags=merged_tags,
-        description=final_description,
+        title=prepared.title,
+        tags=prepared.tags,
+        description=prepared.description,
         stored=stored,
         content=content_text,
-        embedding=embedding,
-        document_date=final_date,
-        raw_metadata=raw_metadata,
+        embedding=prepared.embedding,
+        document_date=prepared.document_date,
+        raw_metadata=prepared.raw_metadata,
     )
     return _row_to_document(row, include_metadata=True, include_content=True)
 
@@ -588,6 +516,90 @@ def _parse_flexible_date(value: str) -> Optional[datetime]:
         return datetime.strptime(value, "%Y-%m-%d")
     except Exception:
         return None
+
+
+def _build_document_fields(
+    *,
+    document_id: str,
+    content_text: str,
+    tags: Sequence[str],
+    provided_title: str,
+    provided_description: str,
+    document_date: Optional[datetime],
+    file_name: Optional[str],
+    raw_metadata: Dict[str, Any],
+) -> DocumentPrepared:
+    normalized_tags = _normalize_strings(tags)
+    english_tags = _normalize_strings(_translate_tags_to_english(normalized_tags))
+    suggested_tags = _suggest_additional_tags(content_text, english_tags)
+    merged_tags = _merge_tag_lists(english_tags, suggested_tags)
+
+    final_description = provided_description
+    generated_description: Optional[str] = None
+    if not final_description:
+        generated_description = _summarize_description(content_text)
+        final_description = generated_description or _default_description(
+            content_text,
+            provided_title or file_name or document_id,
+        )
+
+    final_title = provided_title
+    generated_title: Optional[str] = None
+    if not final_title:
+        generated_title = _suggest_title(content_text, fallback=file_name or document_id)
+        final_title = (
+            generated_title
+            or _derive_title_from_filename(file_name)
+            or document_id
+        )
+
+    final_date = document_date
+    inferred_date: Optional[datetime] = None
+    if not final_date:
+        inferred_date = _suggest_document_date(content_text, fallback=final_description)
+        final_date = inferred_date
+
+    embedding = _generate_document_embedding(
+        {
+            "document_id": document_id,
+            "content": content_text,
+            "description": final_description,
+            "title": final_title,
+            "tags": merged_tags,
+            "file_name": file_name,
+        }
+    )
+
+    metadata = dict(raw_metadata or {})
+    metadata["suggested_tags"] = suggested_tags
+    metadata["title_generated"] = bool(generated_title)
+    metadata["date_generated"] = bool(inferred_date)
+    metadata["description_generated"] = bool(generated_description)
+    if generated_title:
+        metadata["generated_title"] = generated_title
+    else:
+        metadata.pop("generated_title", None)
+    if inferred_date:
+        metadata["generated_date_iso"] = inferred_date.isoformat()
+    else:
+        metadata.pop("generated_date_iso", None)
+    if generated_description:
+        metadata["generated_description"] = generated_description
+    else:
+        metadata.pop("generated_description", None)
+
+    return DocumentPrepared(
+        title=final_title,
+        description=final_description,
+        tags=merged_tags,
+        document_date=final_date,
+        embedding=embedding,
+        raw_metadata=metadata,
+        suggested_tags=suggested_tags,
+        generated_title=generated_title,
+        generated_description=generated_description,
+        inferred_date=inferred_date,
+    )
 
 
 def _translate_text_to_english(text: str, max_chars: int) -> str:
@@ -999,7 +1011,6 @@ def _generate_document_embedding(document: Dict[str, Any]) -> Sequence[float]:
     doc_id = document.get("id")
     if doc_id is not None:
         embed_source = f"{embed_source} document Id: {doc_id}"
-    print(f"[embeding doc]: embed_input={embed_input}")
     return embed_text(embed_input)
 
 
