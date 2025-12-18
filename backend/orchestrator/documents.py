@@ -538,7 +538,7 @@ def _build_document_fields(
     print(f"[documents] suggested_tags={suggested_tags}")
     merged_tags = _merge_tag_lists(english_tags, suggested_tags)
     print(f"[documents] merged_tags={merged_tags}")
-    
+
     final_description = provided_description
     generated_description: Optional[str] = None
     if not final_description:
@@ -644,7 +644,7 @@ def _translate_tags_to_english(tags: Sequence[str]) -> List[str]:
     if not normalized or not OLLAMA_CHAT_MODEL:
         return normalized
     prompt = (
-        "Translate each of the following labels into concise English (1-3 words). "
+        "Translate each of the following labels into concise English (1-3 words). If a tag is already in English, just return the exact same tag. "
         "Respond with JSON like {\"tags\": [\"tag\", ...]} in the same order."
     )
     payload = {
@@ -664,11 +664,14 @@ def _translate_tags_to_english(tags: Sequence[str]) -> List[str]:
         if not raw:
             return normalized
         parsed = json.loads(raw)
+        print(f"[documents] parsed={parsed}")
         if isinstance(parsed, dict) and isinstance(parsed.get("tags"), list):
             translated = []
             for item in parsed["tags"]:
                 if isinstance(item, str):
+                    print(f"[documents] item={item}")
                     cleaned = item.strip()
+                    print(f"[documents] cleaned={cleaned}")
                     if cleaned:
                         translated.append(cleaned)
             return translated or normalized
