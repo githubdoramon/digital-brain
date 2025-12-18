@@ -111,7 +111,7 @@ def ingest_document(
         file_name=stored.file_name,
         raw_metadata=base_raw_metadata,
     )
-    
+
     row = _upsert_document(
         document_id=document_id,
         title=prepared.title,
@@ -529,11 +529,16 @@ def _build_document_fields(
     file_name: Optional[str],
     raw_metadata: Dict[str, Any],
 ) -> DocumentPrepared:
+    print(f"[documents] tags={tags}")
     normalized_tags = _normalize_strings(tags)
+    print(f"[documents] normalized_tags={normalized_tags}")
     english_tags = _normalize_strings(_translate_tags_to_english(normalized_tags))
+    print(f"[documents] english_tags={english_tags}")
     suggested_tags = _suggest_additional_tags(content_text, english_tags)
+    print(f"[documents] suggested_tags={suggested_tags}")
     merged_tags = _merge_tag_lists(english_tags, suggested_tags)
-
+    print(f"[documents] merged_tags={merged_tags}")
+    
     final_description = provided_description
     generated_description: Optional[str] = None
     if not final_description:
