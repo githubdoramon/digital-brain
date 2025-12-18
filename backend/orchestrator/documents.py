@@ -80,9 +80,13 @@ def ingest_document(
         content_text = " ".join(fallback)
 
     normalized_tags = _normalize_strings(tags)
+    print(f"[documents] normalized_tags={normalized_tags}")
     english_tags = _normalize_strings(_translate_tags_to_english(normalized_tags))
+    print(f"[documents] english_tags={english_tags}")
     suggested_tags = _suggest_additional_tags(content_text, english_tags)
+    print(f"[documents] suggested_tags={suggested_tags}")
     merged_tags = _merge_tag_lists(english_tags, suggested_tags)
+    print(f"[documents] merged_tags={merged_tags}")
 
     provided_description = (description or "").strip()
     generated_description: Optional[str] = None
