@@ -36,11 +36,6 @@ THIRD_PARTY_SERVICES = {
         "image": "pgvector/pgvector:pg16",
         "version": "pg16",
     },
-    "qdrant": {
-        "name": "Qdrant Vector DB",
-        "image": "qdrant/qdrant:latest",
-        "version": "latest",
-    },
 }
 
 

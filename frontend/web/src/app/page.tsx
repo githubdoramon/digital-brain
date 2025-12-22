@@ -14,13 +14,11 @@ type Message = {
   role: "user" | "assistant";
   content: string;
   timestamp: Date;
-  memories?: string[];
   metadata?: Record<string, unknown>;
 };
 
 type AskResponse = {
   answer?: string;
-  memories_used?: string[];
   thread_id?: string;
   thread_title?: string | null;
 };
@@ -44,15 +42,6 @@ type ThreadMessage = {
 type ThreadDetail = ThreadSummary & {
   messages: ThreadMessage[];
 };
-
-function extractMemories(metadata?: Record<string, unknown> | null): string[] | undefined {
-  if (!metadata) return undefined;
-  const raw = (metadata as Record<string, unknown>)["memories_used"];
-  if (!Array.isArray(raw)) {
-    return undefined;
-  }
-  return raw.map((item) => (typeof item === "string" ? item : String(item)));
-}
 
 type MarkdownCodeProps = HTMLAttributes<HTMLElement> & {
   inline?: boolean;
@@ -165,7 +154,6 @@ export default function Home() {
   const [selectedThreadId, setSelectedThreadId] = useState<string | null>(null);
   const [isLoadingThreads, setIsLoadingThreads] = useState(false);
   const [isLoadingMessages, setIsLoadingMessages] = useState(false);
-  const [showMemories, setShowMemories] = useState(true);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   const scrollToBottom = () => {
@@ -199,7 +187,6 @@ export default function Home() {
           role: message.role,
           content: message.content,
           timestamp: new Date(message.created_at),
-          memories: extractMemories(metadata),
           metadata,
         } satisfies Message;
       });
@@ -326,7 +313,6 @@ export default function Home() {
         role: "assistant",
         content: data.answer || "I couldn't generate a response.",
         timestamp: new Date(),
-        memories: data.memories_used || [],
       };
 
       setMessages((prev) => [...prev, assistantMessage]);
@@ -470,7 +456,7 @@ export default function Home() {
             Welcome{session?.user?.name ? `, ${session.user.name.split(" ")[0]}` : ""}!
           </h1>
           <p style={{ color: "#555", marginTop: "8px" }}>
-            Ask questions about your personal memories and get AI-powered insights.
+            Ask questions about your personal data and get AI-powered insights.
           </p>
         </div>
         <div
@@ -498,7 +484,7 @@ export default function Home() {
                 Chat with your Digital Brain
               </h2>
               <p style={{ fontSize: "0.875rem", color: "#666", marginTop: "4px" }}>
-                Ask about your memories, contacts, meetings, and more
+                Ask about your contacts, meetings, documents, and more
               </p>
             </div>
             <button
@@ -592,58 +578,13 @@ export default function Home() {
                     marginTop: "4px",
                     paddingLeft: message.role === "user" ? "0" : "8px",
                     paddingRight: message.role === "user" ? "8px" : "0",
-                    display: "flex",
-                    alignItems: "center",
-                    gap: "8px",
                   }}
                 >
-                  <span>
-                    {message.timestamp.toLocaleTimeString([], {
-                      hour: "2-digit",
-                      minute: "2-digit",
-                    })}
-                  </span>
-                  {message.memories && message.memories.length > 0 && (
-                    <span
-                      title={`Used ${message.memories.length} memories from previous conversations`}
-                      style={{
-                        background: "#e0f2fe",
-                        color: "#0369a1",
-                        padding: "2px 6px",
-                        borderRadius: "4px",
-                        fontSize: "0.7rem",
-                        fontWeight: 500,
-                      }}
-                    >
-                      🧠 {message.memories.length} memories
-                    </span>
-                  )}
+                  {message.timestamp.toLocaleTimeString([], {
+                    hour: "2-digit",
+                    minute: "2-digit",
+                  })}
                 </div>
-                {message.memories && message.memories.length > 0 && showMemories && (
-                  <div
-                    style={{
-                      maxWidth: "80%",
-                      marginTop: "8px",
-                      padding: "8px 12px",
-                      background: "#f0f9ff",
-                      border: "1px solid #bae6fd",
-                      borderRadius: "8px",
-                      fontSize: "0.8rem",
-                      color: "#0c4a6e",
-                    }}
-                  >
-                    <div style={{ fontWeight: 600, marginBottom: "4px" }}>
-                      Memories used:
-                    </div>
-                    <ul style={{ margin: 0, paddingLeft: "20px" }}>
-                      {message.memories.map((mem, i) => (
-                        <li key={i} style={{ marginBottom: "2px" }}>
-                          {mem}
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-                )}
               </div>
             ))}
 
@@ -686,7 +627,7 @@ export default function Home() {
                 type="text"
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
-                placeholder="Ask a question about your memories..."
+                placeholder="Ask a question about your data..."
                 disabled={isLoading}
                 style={{
                   flex: 1,
@@ -746,7 +687,7 @@ export default function Home() {
               .
             </li>
             <li>
-              Ask questions about your memories using the chat interface above.
+              Ask questions using the chat interface above.
             </li>
           </ul>
         </div>

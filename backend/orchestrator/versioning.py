@@ -78,7 +78,6 @@ def _fallback_services() -> List[Dict[str, Any]]:
         ("orchestrator", "Orchestrator API", os.getenv("ORCHESTRATOR_IMAGE", "appcalipse/digital-brain-orchestrator")),
         ("frontend", "Frontend Web", os.getenv("FRONTEND_IMAGE", "digital-brain-frontend")),
         ("db", "Postgres + pgvector", "pgvector/pgvector:pg16"),
-        ("qdrant", "Qdrant Vector DB", "qdrant/qdrant:latest"),
     )
 
     fallback_entries: List[Dict[str, Any]] = []

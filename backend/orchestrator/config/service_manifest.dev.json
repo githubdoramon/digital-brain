@@ -29,14 +29,6 @@
       "git_sha": null,
       "build_time": null,
       "image": "pgvector/pgvector:pg16"
-    },
-    {
-      "id": "qdrant",
-      "name": "Qdrant Vector DB",
-      "version": "latest",
-      "git_sha": null,
-      "build_time": null,
-      "image": "qdrant/qdrant:latest"
     }
   ]
 }

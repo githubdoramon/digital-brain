@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import json
 import os
 import re
@@ -9,7 +8,6 @@ from time import perf_counter
 from typing import Any, Dict, List, Set, Optional
 
 import requests
-from mem0 import AsyncMemory
 
 import contacts as contacts_service
 import conversations
@@ -22,8 +20,6 @@ OLLAMA_HOST = os.getenv("OLLAMA_HOST")
 OLLAMA_CHAT_MODEL = os.getenv("OLLAMA_CHAT_MODEL")
 OLLAMA_EMBED_MODEL = os.getenv("OLLAMA_EMBED_MODEL")
 OLLAMA_TIMEOUT = int(os.getenv("OLLAMA_TIMEOUT", "120"))  # Keep default for timeout
-QDRANT_HOST = os.getenv("QDRANT_HOST")
-QDRANT_PORT = int(os.getenv("QDRANT_PORT")) if os.getenv("QDRANT_PORT") else None
 
 # Validate required configuration
 if not OLLAMA_HOST:
@@ -32,10 +28,6 @@ if not OLLAMA_CHAT_MODEL:
     raise RuntimeError("OLLAMA_CHAT_MODEL environment variable is required")
 if not OLLAMA_EMBED_MODEL:
     raise RuntimeError("OLLAMA_EMBED_MODEL environment variable is required")
-if not QDRANT_HOST:
-    raise RuntimeError("QDRANT_HOST environment variable is required")
-if not QDRANT_PORT:
-    raise RuntimeError("QDRANT_PORT environment variable is required")
 
 def _log_timing(label: str, start_time: float, **metadata: Any) -> None:
     elapsed = perf_counter() - start_time
@@ -53,50 +45,6 @@ def _log_timing(label: str, start_time: float, **metadata: Any) -> None:
     else:
         print(f"[timing] {label} took {elapsed:.3f}s ({elapsed*1000:.0f}ms)")
 
-
-# Mem0 configuration for conversation memory with persistent Qdrant storage
-MEM0_CONFIG = {
-    "llm": {
-        "provider": "ollama",
-        "config": {
-            "model": OLLAMA_CHAT_MODEL,
-            "ollama_base_url": OLLAMA_HOST,
-        }
-    },
-    "embedder": {
-        "provider": "ollama",
-        "config": {
-            "model": OLLAMA_EMBED_MODEL,
-            "ollama_base_url": OLLAMA_HOST,
-            "embedding_dims": 768,  # nomic-embed-text outputs 768-dimensional vectors
-        }
-    },
-    "vector_store": {
-        "provider": "qdrant",
-        "config": {
-            "host": QDRANT_HOST,
-            "port": QDRANT_PORT,
-            "collection_name": "digital_brain_interaction_memories",
-            "embedding_model_dims": 768,  # nomic-embed-text outputs 768-dimensional vectors
-        }
-    },
-    "version": "v1.1"
-}
-
-# Initialize Mem0 async memory instance
-_memory_instance: Optional[AsyncMemory] = None
-
-async def get_memory() -> Optional[AsyncMemory]:
-    """Get or create the Mem0 async memory instance."""
-    global _memory_instance
-    if _memory_instance is None:
-        try:
-            _memory_instance = await AsyncMemory.from_config(MEM0_CONFIG)
-            print("[mem0] AsyncMemory instance initialized successfully")
-        except Exception as e:
-            print(f"[mem0] Warning: Failed to initialize Mem0: {e}")
-            print("[mem0] Continuing without memory layer")
-    return _memory_instance
 
 _SCHEMA_HINT_CACHE: str | None = None
 _SCHEMA_SNAPSHOT: Dict[str, Any] | None = None
@@ -413,56 +361,10 @@ async def answer_question(
             print(f"[session] Failed to load history for session {session_id}: {exc}")
             conversation_history = []
 
-    # Retrieve relevant long-term memories from Mem0 (await this)
-    memories_used: List[str] = []
-    memory_start = perf_counter()
-    memory = await get_memory()
-    _log_timing(
-        "mem0.get_memory",
-        memory_start,
-        session_id=session_id,
-        available=bool(memory),
-    )
-    if memory:
-        search_start: Optional[float] = None
-        try:
-            print(f"[mem0] Retrieving long-term memories for user_id={user_id}")
-            search_start = perf_counter()
-            response = await memory.search(question, user_id=user_id, limit=5)
-
-            # Mem0 returns {"results": [{"id": ..., "memory": "...", ...}, ...]}
-            if isinstance(response, dict) and "results" in response:
-                results = response["results"]
-                if isinstance(results, list):
-                    for result in results:
-                        if isinstance(result, dict) and "memory" in result:
-                            memories_used.append(result["memory"])
-
-                    if memories_used:
-                        print(f"[mem0] Found {len(memories_used)} relevant long-term memories")
-                    else:
-                        print("[mem0] No long-term memories found for this query")
-                else:
-                    print(f"[mem0] Unexpected results format: {type(results)}")
-            else:
-                print(f"[mem0] Unexpected response format: {type(response)}")
-            _log_timing(
-                "mem0.search",
-                search_start,
-                results=len(memories_used),
-            )
-        except Exception as e:
-            if search_start is not None:
-                _log_timing("mem0.search.error", search_start)
-            print(f"[mem0] Error retrieving memories: {e}")
-            import traceback
-            traceback.print_exc()
-
     build_start = perf_counter()
     messages: List[Dict[str, Any]] = _build_messages(
         question,
         search_limit,
-        memories_used,
         conversation_history,
         user_email=user_id,
         current_time_context=time_context,
@@ -549,7 +451,7 @@ async def answer_question(
                     user_message=question,
                     assistant_message=content,
                     user_metadata={},
-                    assistant_metadata={"memories_used": memories_used} if memories_used else {},
+                    assistant_metadata={},
                 )
                 print(f"[session] Persisted exchange in session {session_id}")
                 if (
@@ -564,15 +466,9 @@ async def answer_question(
                             print(f"[session] Updated thread title for {session_id}: {new_thread_title!r}")
             except Exception as exc:
                 print(f"[session] Failed to persist exchange for session {session_id}: {exc}")
-        bundle = _finalize_bundle(question, content, state, search_limit, session_id, memories_used)
+        bundle = _finalize_bundle(question, content, state, search_limit, session_id)
         if new_thread_title:
             bundle["thread_title"] = new_thread_title
-
-        # Store the last Q&A pair in mem0 for long-term memory extraction (fire and forget)
-        # Let mem0 decide what's worth remembering
-        if memory:
-            # Fire and forget - don't await, let it run in background
-            asyncio.create_task(_store_memory_async(memory, question, content, user_id, session_id))
 
         answer_length = len(content)
         search_results_count = len(state.search_results)
@@ -594,37 +490,6 @@ async def answer_question(
             user_id=user_id,
         )
         return bundle
-
-
-async def _store_memory_async(
-    memory: AsyncMemory,
-    question: str,
-    content: str,
-    user_id: str,
-    session_id: Optional[str]
-) -> None:
-    """Store memory in background without blocking the response."""
-    try:
-        timestamp = datetime.now(timezone.utc).isoformat()
-        
-        # Pass just the last Q&A pair to mem0, let it extract insights
-        last_exchange = [
-            {"role": "user", "content": question},
-            {"role": "assistant", "content": content}
-        ]
-        
-        store_start = perf_counter()
-        result = await memory.add(
-            last_exchange,
-            user_id=user_id,
-            metadata={"session_id": session_id, "timestamp": timestamp},
-        )
-        _log_timing("mem0.store", store_start, session_id=session_id, user_id=user_id)
-        print(f"[mem0] Stored Q&A pair for long-term memory extraction, result: {result}")
-    except Exception as e:
-        print(f"[mem0] Error storing in long-term memory: {e}")
-        import traceback
-        traceback.print_exc()
 
 
 def _generate_thread_title_from_prompt(question: str) -> Optional[str]:
@@ -669,7 +534,6 @@ def _generate_thread_title_from_prompt(question: str) -> Optional[str]:
 def _build_messages(
     question: str,
     search_limit: int,
-    memories_used: List[str] = None,
     conversation_history: List[Dict[str, str]] = None,
     user_email: Optional[str] = None,
     current_time_context: Optional[str] = None,
@@ -708,12 +572,6 @@ def _build_messages(
         self_context = _self_context_from_email(user_email)
         if self_context:
             messages.append({"role": "system", "content": self_context})
-
-    # Add long-term memories from previous interactions if available
-    if memories_used:
-        memory_context = "Relevant long-term knowledge about the user:\n" + "\n".join(f"- {mem}" for mem in memories_used)
-        messages.append({"role": "system", "content": memory_context})
-        print(f"[mem0] Added {len(memories_used)} long-term memories to context")
 
     messages.append({"role": "system", "content": protocol_prompt})
     
@@ -1067,7 +925,6 @@ def _finalize_bundle(
     state: AgentState,
     search_limit: int,
     session_id: Optional[str],
-    memories_used: List[str] = None,
 ) -> Dict[str, Any]:
     if not state.resolution or not state.search_results:
         fallback_start = perf_counter()
@@ -1111,7 +968,6 @@ def _finalize_bundle(
         "document_results": document_results,
         "session_id": session_id,
         "thread_id": session_id,
-        "memories_used": memories_used or [],
         "web_results": state.web_results,
         "web_summary": state.web_summary,
         "web_follow_up_questions": state.web_follow_up_questions,
