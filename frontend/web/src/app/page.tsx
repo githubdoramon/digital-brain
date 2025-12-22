@@ -487,23 +487,6 @@ export default function Home() {
                 Ask about your contacts, meetings, documents, and more
               </p>
             </div>
-            <button
-              onClick={() => setShowMemories(!showMemories)}
-              style={{
-                padding: "8px 12px",
-                background: showMemories ? "#0b6bcb" : "#f5f5f5",
-                color: showMemories ? "#fff" : "#666",
-                border: "1px solid #d0d0d0",
-                borderRadius: "6px",
-                fontSize: "0.8rem",
-                cursor: "pointer",
-                whiteSpace: "nowrap",
-                transition: "all 0.2s",
-              }}
-              title={showMemories ? "Hide memory details" : "Show memory details"}
-            >
-              {showMemories ? "🧠 Memories On" : "🧠 Memories Off"}
-            </button>
           </div>
           <div
             style={{
