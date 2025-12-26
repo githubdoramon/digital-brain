@@ -50,6 +50,14 @@ function formatList(items: string[]): string {
   return items.join(", ");
 }
 
+function normalizeText(value: string): string {
+  if (!value) return "";
+  return value
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase();
+}
+
 const RELATIONSHIP_SUGGESTIONS = [
   "Spouse",
   "Partner",
@@ -88,6 +96,7 @@ export default function ContactsPage() {
   const [contacts, setContacts] = useState<Contact[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [status, setStatus] = useState<Status>({ kind: "idle" });
+  const [searchQuery, setSearchQuery] = useState("");
   const [isSubmitting, setSubmitting] = useState(false);
   
   // Modal state
@@ -125,6 +134,31 @@ export default function ContactsPage() {
       }, {}),
     [contacts]
   );
+
+  const filteredContacts = useMemo(() => {
+    const query = normalizeText(searchQuery.trim());
+    const matches =
+      query === ""
+        ? contacts
+        : contacts.filter((contact) => {
+            const nameMatch = normalizeText(contact.display_name).includes(query);
+            const aliasMatch = contact.aliases.some((alias) =>
+              normalizeText(alias).includes(query)
+            );
+            return nameMatch || aliasMatch;
+          });
+
+    return [...matches].sort((a, b) => {
+      const aNormalized = normalizeText(a.display_name);
+      const bNormalized = normalizeText(b.display_name);
+      const aExternal = aNormalized.startsWith("external contact");
+      const bExternal = bNormalized.startsWith("external contact");
+
+      if (aExternal && !bExternal) return 1;
+      if (!aExternal && bExternal) return -1;
+      return aNormalized.localeCompare(bNormalized);
+    });
+  }, [contacts, searchQuery]);
 
   // Load contacts on mount
   useEffect(() => {
@@ -496,37 +530,63 @@ export default function ContactsPage() {
       )}
 
       {/* Add Contact Button */}
-      <div>
-        <button
-          onClick={openAddModal}
+      <div
+        style={{
+          display: "flex",
+          gap: "12px",
+          flexWrap: "wrap",
+          alignItems: "center",
+          justifyContent: "space-between",
+        }}
+      >
+        <div>
+          <button
+            onClick={openAddModal}
+            style={{
+              background: "#0b6bcb",
+              color: "#fff",
+              border: "none",
+              borderRadius: "8px",
+              padding: "12px 24px",
+              fontWeight: 600,
+              cursor: "pointer",
+              fontSize: "0.95rem",
+            }}
+          >
+            + Add New Contact
+          </button>
+          <Link
+            href="/contacts/merge"
+            style={{
+              marginLeft: "12px",
+              background: "#6366f1",
+              color: "#fff",
+              borderRadius: "8px",
+              padding: "12px 20px",
+              fontWeight: 600,
+              fontSize: "0.95rem",
+              display: "inline-block",
+            }}
+          >
+            Manage Merges
+          </Link>
+        </div>
+
+        <input
+          type="search"
+          value={searchQuery}
+          onChange={(event) => setSearchQuery(event.target.value)}
+          placeholder="Search by name or alias"
+          aria-label="Search contacts by name or alias"
           style={{
-            background: "#0b6bcb",
-            color: "#fff",
-            border: "none",
+            border: "1px solid #d0d0d0",
             borderRadius: "8px",
-            padding: "12px 24px",
-            fontWeight: 600,
-            cursor: "pointer",
+            padding: "10px 12px",
             fontSize: "0.95rem",
+            minWidth: "220px",
+            maxWidth: "320px",
           }}
-        >
-          + Add New Contact
-        </button>
-        <Link
-          href="/contacts/merge"
-          style={{
-            marginLeft: "12px",
-            background: "#6366f1",
-            color: "#fff",
-            borderRadius: "8px",
-            padding: "12px 20px",
-            fontWeight: 600,
-            fontSize: "0.95rem",
-            display: "inline-block",
-          }}
-        >
-          Manage Merges
-        </Link>
+        />
       </div>
 
       {/* Contacts List */}
@@ -560,6 +620,35 @@ export default function ContactsPage() {
             <p style={{ fontSize: "0.85rem", color: "#aaa" }}>
               Click &quot;Add New Contact&quot; to get started
             </p>
+          </div>
+        ) : filteredContacts.length === 0 ? (
+          <div
+            style={{
+              padding: "48px",
+              textAlign: "center",
+              color: "#999",
+              display: "flex",
+              flexDirection: "column",
+              alignItems: "center",
+              gap: "12px",
+            }}
+          >
+            <div style={{ fontSize: "2rem" }}>🔍</div>
+            <p>No contacts match that search.</p>
+            <button
+              onClick={() => setSearchQuery("")}
+              style={{
+                background: "#f5f5f5",
+                color: "#444",
+                border: "1px solid #d0d0d0",
+                borderRadius: "6px",
+                padding: "8px 14px",
+                fontSize: "0.9rem",
+                cursor: "pointer",
+              }}
+            >
+              Clear search
+            </button>
           </div>
         ) : (
           <div style={{ overflowX: "auto" }}>
@@ -634,11 +723,12 @@ export default function ContactsPage() {
                 </tr>
               </thead>
               <tbody>
-                {contacts.map((contact, index) => (
+                {filteredContacts.map((contact, index) => (
                   <tr
                     key={contact.contact_id}
                     style={{
-                      borderBottom: index < contacts.length - 1 ? "1px solid #e2e2e2" : "none",
+                      borderBottom:
+                        index < filteredContacts.length - 1 ? "1px solid #e2e2e2" : "none",
                       transition: "background 0.2s",
                     }}
                     onMouseEnter={(e) => {
