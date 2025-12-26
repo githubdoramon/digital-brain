@@ -10,6 +10,7 @@ from rapidfuzz import process, fuzz
 from documents import _vector_search_documents as vector_search_documents
 from db import fetch_events, get_conn
 from embeddings import embed_text
+from search_normalization import normalize_search_text
 
 
 # --------------------------- Resolution helpers ---------------------------
@@ -49,6 +50,9 @@ def resolve_entities(
     alias_col: Optional[str] = None,
     limit: int = 3,
 ) -> List[str]:
+    query_text = normalize_search_text(q)
+    if not query_text:
+        return []
     with get_conn() as conn, conn.cursor() as cur:
         if alias_col:
             cur.execute(f"SELECT {key_col} AS id, {label_col} AS label, {alias_col} AS aliases FROM {table}")
@@ -57,14 +61,18 @@ def resolve_entities(
         rows = cur.fetchall()
     choices: List[Tuple[str, str]] = []
     for r in rows:
-        choices.append((r["id"], r["label"]))
+        base_label = normalize_search_text(r["label"])
+        if base_label:
+            choices.append((r["id"], base_label))
         if alias_col and r.get("aliases"):
             for a in r["aliases"]:
-                choices.append((r["id"], a))
+                alias_label = normalize_search_text(a)
+                if alias_label:
+                    choices.append((r["id"], alias_label))
     if not choices:
         return []
     labels = [c[1] for c in choices]
-    matches = process.extract(q, labels, scorer=fuzz.WRatio, limit=limit)
+    matches = process.extract(query_text, labels, scorer=fuzz.WRatio, limit=limit)
     out_ids = {choices[idx][0] for label, score, idx in matches if score >= 85}
     return list(out_ids)
 
@@ -84,10 +92,9 @@ def search_memories(
             span = (datetime.fromisoformat(time_start), datetime.fromisoformat(time_end))
         except Exception:
             span = None
+    normalized_query = normalize_search_text(query)
 
-    normalized_query = (query or "").strip()
-
-    vec_events = vector_search(normalized_query or "", 50)
+    vec_events = vector_search(normalized_query, 50) if normalized_query else {}
     bm_events = bm25_search(normalized_query, 50) if normalized_query else {}
     st_events = structured_candidates(span, list(people or []), list(place_ids or []), 200)
 
@@ -189,7 +196,10 @@ def search_memories(
 
 def vector_search(query: str, k: int = 50):
     print(f"[retrieval] vector_search memories (query={query!r}, k={k})")
-    qvec = embed_text(query)
+    cleaned_query = normalize_search_text(query)
+    if not cleaned_query:
+        return {}
+    qvec = embed_text(cleaned_query)
     with get_conn() as conn, conn.cursor() as cur:
         cur.execute(
             """
@@ -204,33 +214,37 @@ def vector_search(query: str, k: int = 50):
 
 
 def bm25_search(query: str, k: int = 50):
+    cleaned_query = normalize_search_text(query)
+    if not cleaned_query:
+        return {}
     with get_conn() as conn, conn.cursor() as cur:
         cur.execute(
             """
-            SELECT id, ts_rank_cd(what_tsv, plainto_tsquery('english', %s)) AS bscore
+            SELECT id, ts_rank_cd(what_tsv, plainto_tsquery('english', unaccent(%s))) AS bscore
             FROM events
-            WHERE what_tsv @@ plainto_tsquery('english', %s)
+            WHERE what_tsv @@ plainto_tsquery('english', unaccent(%s))
             ORDER BY bscore DESC
             LIMIT %s
             """,
-            (query, query, k),
+            (cleaned_query, cleaned_query, k),
         )
         return {r["id"]: float(r["bscore"]) for r in cur.fetchall()}
 
 
 def bm25_search_documents(query: str, k: int = 50) -> Dict[str, float]:
-    if not query:
+    cleaned_query = normalize_search_text(query)
+    if not cleaned_query:
         return {}
     with get_conn() as conn, conn.cursor() as cur:
         cur.execute(
             """
-            SELECT document_id, ts_rank_cd(content_tsv, plainto_tsquery('english', %s)) AS bscore
+            SELECT document_id, ts_rank_cd(content_tsv, plainto_tsquery('english', unaccent(%s))) AS bscore
             FROM documents
-            WHERE content_tsv @@ plainto_tsquery('english', %s)
+            WHERE content_tsv @@ plainto_tsquery('english', unaccent(%s))
             ORDER BY bscore DESC
             LIMIT %s
             """,
-            (query, query, k),
+            (cleaned_query, cleaned_query, k),
         )
         return {r["document_id"]: float(r["bscore"]) for r in cur.fetchall()}
 

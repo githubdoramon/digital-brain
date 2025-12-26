@@ -17,6 +17,7 @@ from pdfminer.high_level import extract_text as extract_pdf_text
 
 from db import get_conn
 from embeddings import embed_text
+from search_normalization import normalize_search_list, normalize_search_text
 from tags_manager import (
     _merge_tag_lists,
     _normalize_strings,
@@ -297,13 +298,13 @@ def search_documents(
     tags: Sequence[str] | None = None,
     limit: int = 20,
 ) -> List[Dict[str, Any]]:
-    q = (query or "").strip()
-    normalized_tags = _normalize_strings(tags)
+    search_query = normalize_search_text(query)
+    normalized_tags = normalize_search_list(tags)
 
     scores: Dict[str, float] = {}
-    if q:
-        vec_scores = _vector_search_documents(q, 50)
-        bm_scores = _bm25_search_documents(q, 50)
+    if search_query:
+        vec_scores = _vector_search_documents(search_query, 50)
+        bm_scores = _bm25_search_documents(search_query, 50)
         for doc_id, score in vec_scores.items():
             scores[doc_id] = scores.get(doc_id, 0.0) + 0.6 * score
         for doc_id, score in bm_scores.items():
@@ -794,7 +795,10 @@ def _upsert_document(
 
 
 def _vector_search_documents(query: str, k: int) -> Dict[str, float]:
-    query_vector = embed_text(query)
+    cleaned_query = normalize_search_text(query)
+    if not cleaned_query:
+        return {}
+    query_vector = embed_text(cleaned_query)
     with get_conn() as conn, conn.cursor() as cur:
         cur.execute(
             """
@@ -809,42 +813,47 @@ def _vector_search_documents(query: str, k: int) -> Dict[str, float]:
 
 
 def _bm25_search_documents(query: str, k: int) -> Dict[str, float]:
+    cleaned_query = normalize_search_text(query)
+    if not cleaned_query:
+        return {}
     with get_conn() as conn, conn.cursor() as cur:
         cur.execute(
             """
-            SELECT document_id, ts_rank_cd(content_tsv, plainto_tsquery('english', %s)) AS score
+            SELECT document_id, ts_rank_cd(content_tsv, plainto_tsquery('english', unaccent(%s))) AS score
             FROM documents
-            WHERE content_tsv @@ plainto_tsquery('english', %s)
+            WHERE content_tsv @@ plainto_tsquery('english', unaccent(%s))
             ORDER BY score DESC
             LIMIT %s
             """,
-            (query, query, k),
+            (cleaned_query, cleaned_query, k),
         )
         return {row["document_id"]: float(row["score"]) for row in cur.fetchall()}
 
 
 def _tag_search_documents(tags: Sequence[str]) -> Dict[str, float]:
-    if not tags:
+    normalized_tags = normalize_search_list(tags)
+    if not normalized_tags:
         return {}
-    lowered_tags = {tag.lower() for tag in tags if tag}
     with get_conn() as conn, conn.cursor() as cur:
         cur.execute(
             """
             SELECT document_id, tags
             FROM documents
-            WHERE tags && %s::text[]
+            WHERE EXISTS (
+                SELECT 1
+                FROM unnest(tags) AS t(tag)
+                WHERE unaccent(lower(t.tag)) = ANY(%s)
+            )
             """,
-            (list(tags),),
+            (normalized_tags,),
         )
         rows = cur.fetchall()
 
     scores: Dict[str, float] = {}
     for row in rows:
         doc_tags = row.get("tags") or []
-        overlap = 0
-        for tag in doc_tags:
-            if isinstance(tag, str) and tag.lower() in lowered_tags:
-                overlap += 1
+        doc_normalized = set(normalize_search_list(doc_tags))
+        overlap = sum(1 for tag in doc_normalized if tag in normalized_tags)
         if overlap:
             scores[row["document_id"]] = 0.3 + 0.2 * overlap
         else:

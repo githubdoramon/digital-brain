@@ -55,7 +55,7 @@ TOOLS: List[Dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": "describe_schema",
-            "description": "Return available database tables and their columns.",
+            "description": "Return available database tables and their columns so you have full context of what you can search in the database.",
             "parameters": {
                 "type": "object",
                 "properties": {},

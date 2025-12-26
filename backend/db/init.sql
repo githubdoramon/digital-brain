@@ -1,21 +1,11 @@
-\if :{?db_schema}
-\else
-  \set db_schema public
-\endif
-
-\echo Applying database migrations to schema ':db_schema'
-
-DO $schema$
-BEGIN
-  EXECUTE format('CREATE SCHEMA IF NOT EXISTS %I', :'db_schema');
-END
-$schema$;
-
-SELECT set_config('search_path', format('%s,public', :'db_schema'), false);
+-- Ensure we always use the brain schema (psql meta-commands removed for DBeaver)
+CREATE SCHEMA IF NOT EXISTS brain;
+SET search_path TO brain, public;
 
 CREATE EXTENSION IF NOT EXISTS vector;
 CREATE EXTENSION IF NOT EXISTS pg_trgm;
 CREATE EXTENSION IF NOT EXISTS btree_gin;
+CREATE EXTENSION IF NOT EXISTS unaccent;
 
 -- Contacts (IDs + aliases for fuzzy resolution)
 CREATE TABLE IF NOT EXISTS contacts (
@@ -190,7 +180,7 @@ CREATE OR REPLACE FUNCTION events_tsv_update() RETURNS trigger AS $$
 BEGIN
   NEW.what_tsv := to_tsvector(
     'english',
-    coalesce(NEW.title,'') || ' ' || coalesce(NEW.summary,'')
+    unaccent(coalesce(NEW.title,'') || ' ' || coalesce(NEW.summary,''))
   );
   RETURN NEW;
 END; $$ LANGUAGE plpgsql;
@@ -230,7 +220,10 @@ CREATE TABLE IF NOT EXISTS documents (
 -- FTS trigger for documents
 CREATE OR REPLACE FUNCTION documents_tsv_update() RETURNS trigger AS $$
 BEGIN
-  NEW.content_tsv := to_tsvector('english', coalesce(NEW.content, '') || ' ' || coalesce(NEW.description, ''));
+  NEW.content_tsv := to_tsvector(
+    'english',
+    unaccent(coalesce(NEW.content, '') || ' ' || coalesce(NEW.description, ''))
+  );
   RETURN NEW;
 END; $$ LANGUAGE plpgsql;
 
