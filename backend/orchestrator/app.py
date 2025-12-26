@@ -261,7 +261,6 @@ def ingest_event(e: EventIn, user: dict = Depends(get_current_user)):
 
 
 # --------------------------- Document endpoints ---------------------------
-# --------------------------- Document endpoints ---------------------------
 @api.post("/ingest/document", response_model=DocumentDetailOut)
 async def upload_document(
     title: Optional[str] = Form(None),
@@ -298,6 +297,24 @@ async def upload_document(
         raise HTTPException(status_code=500, detail="Failed to ingest document")
 
     return DocumentDetailOut(**document)
+
+@api.post("/ingest/document/external")
+def ingest_external_document(
+    file: UploadFile = File(...),
+    _: None = Depends(require_service_api_key),
+):
+    try:
+        document = documents.ingest_document(
+            upload=file,
+        )
+    except documents.DocumentProcessingError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:
+        print(f"[documents] Failed to ingest document: {exc}")
+        raise HTTPException(status_code=500, detail="Failed to ingest document")
+
+    return DocumentDetailOut(**document)
+    
 
 
 @api.get("/documents", response_model=DocumentCollection)
@@ -380,7 +397,7 @@ def ingest_meeting_notes(
     return {"ok": True, "ids": ids}
 
 
-@api.post("/ingest/events")
+@api.post("/ingest/event/external")
 def ingest_external_event(
     payload: ExternalEventPayload,
     _: None = Depends(require_service_api_key),
