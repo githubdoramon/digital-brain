@@ -2,10 +2,9 @@ from __future__ import annotations
 
 import json
 import os
-import re
 from datetime import datetime, timezone
 from time import perf_counter
-from typing import Any, Dict, List, Set, Optional
+from typing import Any, Dict, List, Optional
 
 import requests
 
@@ -15,6 +14,7 @@ import events as events_service
 import retrieval
 import sql_tools
 import web_tools
+import tags_manager
 
 OLLAMA_HOST = os.getenv("OLLAMA_HOST")
 OLLAMA_CHAT_MODEL = os.getenv("OLLAMA_CHAT_MODEL")
@@ -44,10 +44,6 @@ def _log_timing(label: str, start_time: float, **metadata: Any) -> None:
         print(f"[timing] {label} took {elapsed:.3f}s ({elapsed*1000:.0f}ms) {meta_str}")
     else:
         print(f"[timing] {label} took {elapsed:.3f}s ({elapsed*1000:.0f}ms)")
-
-
-_SCHEMA_HINT_CACHE: str | None = None
-_SCHEMA_SNAPSHOT: Dict[str, Any] | None = None
 
 
 TOOLS: List[Dict[str, Any]] = [
@@ -154,7 +150,7 @@ TOOLS: List[Dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": "execute_sql",
-            "description": "Execute a read-only SQL query against the memories database.",
+            "description": "Execute a read-only SQL query against the memories database, containing events, contacts, places, documents, and other information relevant to the user.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -545,17 +541,17 @@ def _build_messages(
         "You are talking to a human, therefore do not reply with ids ever (like contact:1761950388937 or place:1761950388937) or other technical details - replace ids with objects names, titles or other more human readable things you find in databases. I repeat, do not include IDs in answers. "
         f"When searching, prefer returning at most {search_limit} highly relevant results, unless the user is requesting full data."
     )
-    protocol_prompt = "Tool protocol: when a question references stored events, memories, contacts, places, timelines, or relationships, " \
-        "first refresh the schema with describe_schema, then plan any execute_sql queries needed to retrieve facts. " \
-        "Be aware the database is personal to the user themselves, so everything present there has a relation to the person asking the question, so you don't need to overthing to find ids only related to the logged user." \
+    protocol_prompt = "Tool protocol: when a question references documents, events, memories, contacts, places, timelines, or relationships, " \
+        "first refresh the schema with the describe_schema tool, then plan any execute_sql queries needed to retrieve facts. You also have access to search_memories tool to search for events, documents, contacts, places, timelines, or relationships including vector search on descriptions, summaries and more metadata. Think through the user question to find the appropriate information. " \
         "Cross-check every table or column in a planned SQL statement against the schema snapshot; never invent new tables. Make sure you query things in a case insensitive way. " \
+        "Be aware the database is personal to the user themselves, so everything present there has a relation to the person asking the question, so you don't need to overthink to find ids only related to the logged user." \
         "Use resolve_query when entity or time extraction helps craft structured constraints. " \
         "For contacts, make sure you search using different strategies when it comes to names, first names, last names, full names, partial names, nicknames, aliases, and so on. " \
         "For relationship closeness questions, use the `contact_relationships` table to understand interpersonal links. " \
         "For events, meetings, moments, use the `events` table to retrieve the event details and their summaries. " \
-        "You also have acccess to documents on the 'documents' table, and might have relations to events, contacts or places. Don't forget to search for informatino there too, including documents tags. " \
+        "You also have acccess to documents on the 'documents' table, and might have relations to events, contacts or places. Don't forget to search for information there too, including documents tags, descriptions and content. " \
         "Tasks or to dos are on the 'todos' table, and might have relations to events, contacts or places." \
-        "Do not stop after describing a plan—actually call the necessary tools, inspect their outputs, and base your final answer on that evidence. " \
+        "Do not stop after describing a plan. Actually call the necessary tools, inspect their outputs, and base your final answer on that evidence. " \
         "If a SQL attempt fails validation, revise and retry until you either succeed or can explain why the data cannot be retrieved. " \
         "Only respond after you have gathered sufficient evidence from the tools. " \
         "Always reply in the same language you were asked in, do not translate the answer to any language if not requested. " \
@@ -563,9 +559,13 @@ def _build_messages(
 
     messages: List[Dict[str, str]] = [{"role": "system", "content": system_prompt}]
 
-    schema_hint = _load_schema_hint()
+    schema_hint = sql_tools.load_schema_hint()
     if schema_hint:
         messages.append({"role": "system", "content": schema_hint})
+
+    tags_context = _tag_context_for_agent()
+    if tags_context:
+        messages.append({"role": "system", "content": tags_context})
 
     # Self context based on authenticated email
     if user_email:
@@ -627,6 +627,24 @@ def _self_context_from_email(email: str) -> Optional[str]:
         base.extend(details)
 
     return "\n".join(base)
+
+
+def _tag_context_for_agent() -> Optional[str]:
+    major_tags = getattr(tags_manager, "MAJOR_TAGS", None)
+    major_keywords = getattr(tags_manager, "MAJOR_TAG_KEYWORDS", None)
+    if not major_tags:
+        return None
+
+    lines = [
+        "Tag taxonomy available for events and documents. Use these when searching or proposing filters.",
+        f"Major tags: {', '.join(major_tags)}.",
+        "Keyword cues per major tag:",
+    ]
+    for tag in major_tags:
+        keywords = (major_keywords or {}).get(tag) or []
+        if keywords:
+            lines.append(f"- {tag}: {', '.join(keywords)}")
+    return "\n".join(lines)
 
 
 def _ollama_chat(messages: List[Dict[str, Any]]) -> Dict[str, Any]:
@@ -738,7 +756,7 @@ def _handle_tool_call(
         except (TypeError, ValueError):
             limit = 200
         validation_start = perf_counter()
-        unknown_tables = _find_unknown_tables(query)
+        unknown_tables = sql_tools.find_unknown_tables(query)
         _log_timing(
             "tool.execute_sql.validation",
             validation_start,
@@ -751,7 +769,7 @@ def _handle_tool_call(
                 "error": {
                     "message": "Unknown tables referenced in SQL.",
                     "unknown_tables": sorted(unknown_tables),
-                    "available_tables": sorted(_get_schema_snapshot().keys()),
+                    "available_tables": sorted(sql_tools.get_schema_snapshot().keys()),
                 }
             }
         print(f"[agent] calling execute_sql(limit={limit}) -> {query!r}")
@@ -831,92 +849,6 @@ def _handle_tool_call(
         return result
 
     raise RuntimeError(f"Unsupported tool requested: {name}")
-
-
-def _load_schema_hint() -> str:
-    global _SCHEMA_HINT_CACHE
-    if _SCHEMA_HINT_CACHE is not None:
-        return _SCHEMA_HINT_CACHE
-
-    snapshot = _get_schema_snapshot()
-    if not snapshot:
-        _SCHEMA_HINT_CACHE = ""
-        return ""
-
-    lines: List[str] = [
-        "Database schema snapshot (read-only):",
-    ]
-    for table_name in sorted(snapshot):
-        columns = snapshot[table_name].get("columns") or []
-        column_bits: List[str] = []
-        for col in columns:
-            name = col.get("name")
-            dtype = col.get("type")
-            if name and dtype:
-                column_bits.append(f"{name} ({dtype})")
-            elif name:
-                column_bits.append(name)
-        if len(column_bits) > 6:
-            summary = ", ".join(column_bits[:6]) + ", ..."
-        else:
-            summary = ", ".join(column_bits)
-        lines.append(f"- {table_name}: {summary}")
-    lines.append("Use describe_schema for full details and execute_sql to pull rows.")
-
-    hint = "\n".join(lines)
-    _SCHEMA_HINT_CACHE = hint
-    return hint
-
-
-def _get_schema_snapshot() -> Dict[str, Any]:
-    global _SCHEMA_SNAPSHOT
-    if _SCHEMA_SNAPSHOT is not None:
-        return _SCHEMA_SNAPSHOT
-
-    try:
-        schema_snapshot = sql_tools.describe_schema()
-    except Exception:
-        _SCHEMA_SNAPSHOT = {}
-        return {}
-
-    tables = schema_snapshot.get("tables") or {}
-    # Normalize keys to their original case but allow later lookups to lowercase
-    _SCHEMA_SNAPSHOT = tables
-    return tables
-
-
-def _find_unknown_tables(query: str) -> Set[str]:
-    snapshot = _get_schema_snapshot()
-    if not snapshot:
-        return set()
-    known_tables = {name.lower() for name in snapshot.keys()}
-    referenced = _extract_table_names(query)
-    return {table for table in referenced if table not in known_tables}
-
-
-_TABLE_REF_REGEX = re.compile(r"\b(?:from|join|into)\s+([a-zA-Z_][\w.]*)", re.IGNORECASE)
-
-
-def _extract_table_names(query: str) -> Set[str]:
-    tables: Set[str] = set()
-    if not query:
-        return tables
-    for match in _TABLE_REF_REGEX.findall(query):
-        candidate = match.strip()
-        if not candidate:
-            continue
-        # Strip aliasing or quoting remnants
-        candidate = candidate.strip('"')
-        if " " in candidate:
-            candidate = candidate.split(" ")[0]
-        if "," in candidate:
-            candidate = candidate.split(",")[0]
-        if "." in candidate:
-            candidate = candidate.split(".")[-1]
-        lowered = candidate.lower()
-        if lowered and lowered not in {"select", "from", "join", "unnest"}:
-            tables.add(lowered)
-    return tables
 
 
 def _finalize_bundle(

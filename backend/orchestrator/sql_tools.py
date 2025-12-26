@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import re
-from typing import Any, Dict
+from typing import Any, Dict, List, Set
 
 from psycopg.rows import dict_row
 
@@ -47,6 +47,11 @@ _AGGREGATE_UNCLOSED_PATTERNS = [
     for name in ["count", "sum", "avg", "min", "max"]
 ]
 
+_SCHEMA_HINT_CACHE: str | None = None
+_SCHEMA_SNAPSHOT: Dict[str, Any] | None = None
+
+_TABLE_REF_REGEX = re.compile(r"\b(?:from|join|into)\s+([a-zA-Z_][\w.]*)", re.IGNORECASE)
+
 
 def describe_schema() -> Dict[str, Any]:
     schema = POSTGRES_SCHEMA or "public"
@@ -80,6 +85,90 @@ def describe_schema() -> Dict[str, Any]:
             }
         )
     return {"tables": tables}
+
+
+def load_schema_hint() -> str:
+    """Return a human-readable summary of tables and columns, cached per process."""
+    global _SCHEMA_HINT_CACHE
+    if _SCHEMA_HINT_CACHE is not None:
+        return _SCHEMA_HINT_CACHE
+
+    snapshot = get_schema_snapshot()
+    if not snapshot:
+        _SCHEMA_HINT_CACHE = ""
+        return ""
+
+    lines: List[str] = [
+        "Database schema snapshot (read-only):",
+    ]
+    for table_name in sorted(snapshot):
+        columns = snapshot[table_name].get("columns") or []
+        column_bits: List[str] = []
+        for col in columns:
+            name = col.get("name")
+            dtype = col.get("type")
+            if name and dtype:
+                column_bits.append(f"{name} ({dtype})")
+            elif name:
+                column_bits.append(name)
+        if len(column_bits) > 6:
+            summary = ", ".join(column_bits[:6]) + ", ..."
+        else:
+            summary = ", ".join(column_bits)
+        lines.append(f"- {table_name}: {summary}")
+    lines.append("Use describe_schema for full details and execute_sql to pull rows.")
+
+    hint = "\n".join(lines)
+    _SCHEMA_HINT_CACHE = hint
+    return hint
+
+
+def get_schema_snapshot() -> Dict[str, Any]:
+    """Return cached schema snapshot keyed by table name."""
+    global _SCHEMA_SNAPSHOT
+    if _SCHEMA_SNAPSHOT is not None:
+        return _SCHEMA_SNAPSHOT
+
+    try:
+        schema_snapshot = describe_schema()
+    except Exception:
+        _SCHEMA_SNAPSHOT = {}
+        return {}
+
+    tables = schema_snapshot.get("tables") or {}
+    _SCHEMA_SNAPSHOT = tables
+    return tables
+
+
+def find_unknown_tables(query: str) -> Set[str]:
+    snapshot = get_schema_snapshot()
+    if not snapshot:
+        return set()
+    known_tables = {name.lower() for name in snapshot.keys()}
+    referenced = extract_table_names(query)
+    return {table for table in referenced if table not in known_tables}
+
+
+def extract_table_names(query: str) -> Set[str]:
+    tables: Set[str] = set()
+    if not query:
+        return tables
+    for match in _TABLE_REF_REGEX.findall(query):
+        candidate = match.strip()
+        if not candidate:
+            continue
+        # Strip aliasing or quoting remnants
+        candidate = candidate.strip('"')
+        if " " in candidate:
+            candidate = candidate.split(" ")[0]
+        if "," in candidate:
+            candidate = candidate.split(",")[0]
+        if "." in candidate:
+            candidate = candidate.split(".")[-1]
+        lowered = candidate.lower()
+        if lowered and lowered not in {"select", "from", "join", "unnest"}:
+            tables.add(lowered)
+    return tables
 
 
 def execute_sql(query: str, limit: int = 200) -> Dict[str, Any]:
