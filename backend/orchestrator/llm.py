@@ -151,16 +151,20 @@ TOOLS: List[Dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": "get_document",
-            "description": "Retrieve a single document by its ID, including full content and metadata.",
+            "description": "Retrieve a single document, either by ID or by title (fuzzy match), including full content and metadata.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "id": {
                         "type": "string",
                         "description": "Document ID to fetch.",
-                    }
+                    },
+                    "title": {
+                        "type": "string",
+                        "description": "Title to match when the exact document ID is unknown.",
+                    },
                 },
-                "required": ["id"],
+                "oneOf": [{"required": ["id"]}, {"required": ["title"]}],
                 "additionalProperties": False,
             },
         },
@@ -393,12 +397,12 @@ async def answer_question(
         iteration += 1
         loop_start = perf_counter()
         print(f"[agent] iteration {iteration} start")
-        print("[agent] sending messages ->", json.dumps(messages, ensure_ascii=False, indent=2))
+        print("[agent] sending messages ->", json.dumps(messages, ensure_ascii=False, indent=2, default=str))
         chat_start = perf_counter()
         response = _ollama_chat(messages)
         _log_timing("ollama.chat", chat_start, iteration=iteration)
         message = response.get("message") or {}
-        print("[agent] received message ->", json.dumps(message, ensure_ascii=False, indent=2))
+        print("[agent] received message ->", json.dumps(message, ensure_ascii=False, indent=2, default=str))
         if not message:
             raise RuntimeError(f"Unexpected Ollama response: {response}")
 
@@ -410,13 +414,13 @@ async def answer_question(
             for call in tool_calls:
                 tool_result = _handle_tool_call(call, state, question, search_limit)
                 print(
-                    f"[agent] tool result for {call.get('id')}: {json.dumps(tool_result, ensure_ascii=False)[:500]}"
+                    f"[agent] tool result for {call.get('id')}: {json.dumps(tool_result, ensure_ascii=False, default=str)[:500]}"
                 )
                 messages.append(
                     {
                         "role": "tool",
                         "tool_call_id": call.get("id"),
-                        "content": json.dumps(tool_result, ensure_ascii=False),
+                        "content": json.dumps(tool_result, ensure_ascii=False, default=str),
                     }
                 )
             _log_timing(
@@ -496,7 +500,7 @@ async def answer_question(
             search_results=search_results_count,
         )
 
-        print("[agent] final bundle ->", json.dumps(bundle, ensure_ascii=False, indent=2))
+        print("[agent] final bundle ->", json.dumps(bundle, ensure_ascii=False, indent=2, default=str))
         _log_timing(
             "answer_question.total",
             total_start,
@@ -757,18 +761,45 @@ def _handle_tool_call(
         return {"events": events}
 
     if name == "get_document":
-        document_id = args.get("id")
-        if not isinstance(document_id, str) or not document_id.strip():
-            raise RuntimeError("get_document requires a non-empty id string")
-        cleaned_id = document_id.strip()
-        print(f"[agent] calling get_document(id={cleaned_id})")
+        document_id_raw = args.get("id")
+        title_raw = args.get("title")
+        document_id = document_id_raw.strip() if isinstance(document_id_raw, str) else None
+        title = title_raw.strip() if isinstance(title_raw, str) else None
+
+        if not document_id and not title:
+            raise RuntimeError("get_document requires either id or title")
+
         step_start = perf_counter()
-        document = documents_service.get_document(cleaned_id)
+
+        if document_id:
+            print(f"[agent] calling get_document(id={document_id})")
+            document = documents_service.get_document(document_id)
+            match_strategy = "id"
+        else:
+            print(f"[agent] searching document by title={title!r}")
+            search_results = documents_service.search_documents(title, limit=1)
+            top = search_results[0] if search_results else None
+            matched_id = top.get("document_id") if isinstance(top, dict) else None
+            document = documents_service.get_document(matched_id) if matched_id else None
+            match_strategy = "title"
+
         content_len = len(document.get("content") or "") if isinstance(document, dict) else 0
-        _log_timing("tool.get_document", step_start, found=bool(document), content_chars=content_len)
+        _log_timing(
+            "tool.get_document",
+            step_start,
+            found=bool(document),
+            content_chars=content_len,
+            strategy=match_strategy,
+        )
         if not document:
-            return {"document": None, "error": "Document not found"}
-        return {"document": document}
+            return {
+                "document": None,
+                "error": "Document not found",
+                "strategy": match_strategy,
+                "title": title,
+                "id": document_id,
+            }
+        return {"document": document, "strategy": match_strategy}
 
     if name == "describe_schema":
         print("[agent] calling describe_schema()")
