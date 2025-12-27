@@ -305,7 +305,11 @@ def ingest_external_document(
 ):
     try:
         document = documents.ingest_document(
+            title=None,
+            tags=None,
+            description=None,
             upload=file,
+            document_date=None,
         )
     except documents.DocumentProcessingError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
