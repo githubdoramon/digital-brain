@@ -10,6 +10,7 @@ import requests
 
 import contacts as contacts_service
 import conversations
+import documents as documents_service
 import events as events_service
 import retrieval
 import sql_tools
@@ -142,6 +143,24 @@ TOOLS: List[Dict[str, Any]] = [
                     }
                 },
                 "required": ["ids"],
+                "additionalProperties": False,
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_document",
+            "description": "Retrieve a single document by its ID, including full content and metadata.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "id": {
+                        "type": "string",
+                        "description": "Document ID to fetch.",
+                    }
+                },
+                "required": ["id"],
                 "additionalProperties": False,
             },
         },
@@ -549,7 +568,7 @@ def _build_messages(
         "For contacts, make sure you search using different strategies when it comes to names, first names, last names, full names, partial names, nicknames, aliases, and so on. " \
         "For relationship closeness questions, use the `contact_relationships` table to understand interpersonal links. " \
         "For events, meetings, moments, use the `events` table to retrieve the event details and their summaries. " \
-        "You also have acccess to documents on the 'documents' table, and might have relations to events, contacts or places. Don't forget to search for information there too, including documents tags, descriptions and content. " \
+        "You also have acccess to documents on the 'documents' table, and might have relations to events, contacts or places. Don't forget to search for information there too, including documents tags, descriptions and content. If you think some document has relevant information being requested, you can use the get_document tool to retrieve its content. " \
         "Tasks or to dos are on the 'todos' table, and might have relations to events, contacts or places." \
         "Do not stop after describing a plan. Actually call the necessary tools, inspect their outputs, and base your final answer on that evidence. " \
         "If a SQL attempt fails validation, revise and retry until you either succeed or can explain why the data cannot be retrieved. " \
@@ -736,6 +755,20 @@ def _handle_tool_call(
         _log_timing("tool.get_events", step_start, count=len(events))
         state.update_detailed_events(events)
         return {"events": events}
+
+    if name == "get_document":
+        document_id = args.get("id")
+        if not isinstance(document_id, str) or not document_id.strip():
+            raise RuntimeError("get_document requires a non-empty id string")
+        cleaned_id = document_id.strip()
+        print(f"[agent] calling get_document(id={cleaned_id})")
+        step_start = perf_counter()
+        document = documents_service.get_document(cleaned_id)
+        content_len = len(document.get("content") or "") if isinstance(document, dict) else 0
+        _log_timing("tool.get_document", step_start, found=bool(document), content_chars=content_len)
+        if not document:
+            return {"document": None, "error": "Document not found"}
+        return {"document": document}
 
     if name == "describe_schema":
         print("[agent] calling describe_schema()")
