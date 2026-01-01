@@ -8,19 +8,21 @@ import ReactMarkdown from "react-markdown";
 import type { Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { api } from "@/lib/api";
+import EventProposalCard, { EventProposal } from "@/components/EventProposalCard";
 
 type Message = {
   id?: number;
   role: "user" | "assistant";
   content: string;
   timestamp: Date;
-  metadata?: Record<string, unknown>;
+  metadata?: AssistantMetadata;
 };
 
 type AskResponse = {
   answer?: string;
   thread_id?: string;
   thread_title?: string | null;
+  event_proposal?: EventProposal | null;
 };
 
 type ThreadSummary = {
@@ -35,13 +37,17 @@ type ThreadMessage = {
   message_id: number;
   role: "user" | "assistant";
   content: string;
-  metadata?: Record<string, unknown> | null;
+  metadata?: AssistantMetadata | null;
   created_at: string;
 };
 
 type ThreadDetail = ThreadSummary & {
   messages: ThreadMessage[];
 };
+
+type AssistantMetadata = {
+  event_proposal?: EventProposal;
+} & Record<string, unknown>;
 
 type MarkdownCodeProps = HTMLAttributes<HTMLElement> & {
   inline?: boolean;
@@ -154,6 +160,7 @@ export default function Home() {
   const [selectedThreadId, setSelectedThreadId] = useState<string | null>(null);
   const [isLoadingThreads, setIsLoadingThreads] = useState(false);
   const [isLoadingMessages, setIsLoadingMessages] = useState(false);
+  const [eventCaptureEnabled, setEventCaptureEnabled] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   const scrollToBottom = () => {
@@ -180,8 +187,9 @@ export default function Home() {
     try {
       const thread = await api.get<ThreadDetail>(`/threads/${threadId}`);
       setSelectedThreadId(thread.id);
+      setEventCaptureEnabled(false);
       const mappedMessages = thread.messages.map((message) => {
-        const metadata = (message.metadata ?? undefined) as Record<string, unknown> | undefined;
+        const metadata = (message.metadata ?? undefined) as AssistantMetadata | undefined;
         return {
           id: message.message_id,
           role: message.role,
@@ -222,6 +230,7 @@ export default function Home() {
           } else {
             setSelectedThreadId(null);
             setMessages([]);
+            setEventCaptureEnabled(false);
           }
         }
       } catch (error) {
@@ -231,6 +240,33 @@ export default function Home() {
       }
     },
     [threads, selectedThreadId, loadThread]
+  );
+
+  const handleInsertEvent = useCallback(
+    async (proposal: EventProposal) => {
+      if (!selectedThreadId) {
+        throw new Error("Select a conversation before inserting an event.");
+      }
+      if (!proposal.start_date) {
+        throw new Error("Event start time is missing.");
+      }
+
+      await api.post(`/threads/${selectedThreadId}/events`, {
+        title: proposal.title,
+        startDate: proposal.start_date,
+        endDate: proposal.end_date,
+        summary: proposal.summary,
+        people: proposal.people ?? [],
+        tags: proposal.tags ?? [],
+        types: proposal.types ?? [],
+        place: proposal.place,
+        placeId: proposal.place_id,
+        confidence: proposal.confidence,
+        missing: proposal.missing ?? [],
+        raw: proposal.raw ?? {},
+      });
+    },
+    [selectedThreadId]
   );
 
   useEffect(() => {
@@ -249,6 +285,7 @@ export default function Home() {
       } else {
         setMessages([]);
         setSelectedThreadId(null);
+        setEventCaptureEnabled(false);
       }
     })();
     return () => {
@@ -272,6 +309,7 @@ export default function Home() {
         threadId = created.id;
         setThreads((prev) => [created, ...prev]);
         setSelectedThreadId(threadId);
+        setEventCaptureEnabled(false);
         setMessages([]);
       }
 
@@ -287,6 +325,7 @@ export default function Home() {
         question: userMessage.content,
         limit: 5,
         thread_id: threadId,
+        event_capture_enabled: eventCaptureEnabled,
       });
 
       if (data.thread_id && data.thread_id !== threadId) {
@@ -308,11 +347,16 @@ export default function Home() {
         }
       }
 
+      const metadata: AssistantMetadata | undefined = data.event_proposal
+        ? { event_proposal: data.event_proposal }
+        : undefined;
+
       const assistantMessage: Message = {
         id: undefined,
         role: "assistant",
         content: data.answer || "I couldn't generate a response.",
         timestamp: new Date(),
+        metadata,
       };
 
       setMessages((prev) => [...prev, assistantMessage]);
@@ -353,6 +397,7 @@ export default function Home() {
                 const created = await api.post<ThreadSummary>("/threads", {});
                 setThreads((prev) => [created, ...prev]);
                 setSelectedThreadId(created.id);
+                setEventCaptureEnabled(false);
                 setMessages([]);
               } catch (error) {
                 console.error("Failed to create thread", error);
@@ -487,6 +532,21 @@ export default function Home() {
                 Ask about your contacts, meetings, documents, and more
               </p>
             </div>
+            <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+              <label style={{ display: "flex", alignItems: "center", gap: "8px", fontSize: "0.9rem", color: "#0f172a" }}>
+                <input
+                  type="checkbox"
+                  checked={eventCaptureEnabled}
+                  disabled={!selectedThreadId}
+                  onChange={(e) => setEventCaptureEnabled(e.target.checked)}
+                  style={{ width: "18px", height: "18px" }}
+                />
+                Enable event capture
+              </label>
+              <span style={{ fontSize: "0.85rem", color: "#475569" }}>
+                {eventCaptureEnabled ? "LLM will propose structured events" : "Disabled"}
+              </span>
+            </div>
           </div>
           <div
             style={{
@@ -524,52 +584,61 @@ export default function Home() {
               </div>
             )}
 
-            {messages.map((message, index) => (
-              <div
-                key={message.id ?? index}
-                style={{
-                  display: "flex",
-                  flexDirection: "column",
-                  alignItems: message.role === "user" ? "flex-end" : "flex-start",
-                }}
-              >
+            {messages.map((message, index) => {
+              const eventProposal = (message.metadata as AssistantMetadata | undefined)?.event_proposal;
+              return (
                 <div
+                  key={message.id ?? index}
                   style={{
-                    maxWidth: "80%",
-                    padding: "12px 16px",
-                    borderRadius: "12px",
-                    background: message.role === "user" ? "#0b6bcb" : "#f5f5f5",
-                    color: message.role === "user" ? "#fff" : "#333",
-                    wordWrap: "break-word",
-                    overflowWrap: "anywhere",
                     display: "flex",
                     flexDirection: "column",
-                    gap: "0.5rem",
+                    alignItems: message.role === "user" ? "flex-end" : "flex-start",
+                    gap: "6px",
                   }}
                 >
-                  <ReactMarkdown
-                    remarkPlugins={[remarkGfm]}
-                    components={getMarkdownComponents(message.role)}
+                  <div
+                    style={{
+                      maxWidth: "80%",
+                      padding: "12px 16px",
+                      borderRadius: "12px",
+                      background: message.role === "user" ? "#0b6bcb" : "#f5f5f5",
+                      color: message.role === "user" ? "#fff" : "#333",
+                      wordWrap: "break-word",
+                      overflowWrap: "anywhere",
+                      display: "flex",
+                      flexDirection: "column",
+                      gap: "0.5rem",
+                    }}
                   >
-                    {message.content}
-                  </ReactMarkdown>
+                    <ReactMarkdown
+                      remarkPlugins={[remarkGfm]}
+                      components={getMarkdownComponents(message.role)}
+                    >
+                      {message.content}
+                    </ReactMarkdown>
+                  </div>
+                  {eventProposal && (
+                    <div style={{ maxWidth: "80%", alignSelf: "stretch" }}>
+                      <EventProposalCard proposal={eventProposal} onInsert={handleInsertEvent} />
+                    </div>
+                  )}
+                  <div
+                    style={{
+                      fontSize: "0.75rem",
+                      color: "#999",
+                      marginTop: "4px",
+                      paddingLeft: message.role === "user" ? "0" : "8px",
+                      paddingRight: message.role === "user" ? "8px" : "0",
+                    }}
+                  >
+                    {message.timestamp.toLocaleTimeString([], {
+                      hour: "2-digit",
+                      minute: "2-digit",
+                    })}
+                  </div>
                 </div>
-                <div
-                  style={{
-                    fontSize: "0.75rem",
-                    color: "#999",
-                    marginTop: "4px",
-                    paddingLeft: message.role === "user" ? "0" : "8px",
-                    paddingRight: message.role === "user" ? "8px" : "0",
-                  }}
-                >
-                  {message.timestamp.toLocaleTimeString([], {
-                    hour: "2-digit",
-                    minute: "2-digit",
-                  })}
-                </div>
-              </div>
-            ))}
+              );
+            })}
 
             {isLoading && (
               <div

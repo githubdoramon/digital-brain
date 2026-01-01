@@ -22,6 +22,9 @@ OLLAMA_CHAT_MODEL = os.getenv("OLLAMA_CHAT_MODEL")
 OLLAMA_EMBED_MODEL = os.getenv("OLLAMA_EMBED_MODEL")
 OLLAMA_TIMEOUT = int(os.getenv("OLLAMA_TIMEOUT", "120"))  # Keep default for timeout
 
+EVENT_PROPOSAL_START = "<event_proposal>"
+EVENT_PROPOSAL_END = "</event_proposal>"
+
 # Validate required configuration
 if not OLLAMA_HOST:
     raise RuntimeError("OLLAMA_HOST environment variable is required")
@@ -350,6 +353,7 @@ async def answer_question(
     user_id: str = "default_user",
     session_id: Optional[str] = None,
     user_email: Optional[str] = None,
+    event_capture_enabled: bool = False,
 ) -> Dict[str, Any]:
     total_start = perf_counter()
     current_utc = datetime.now(timezone.utc)
@@ -387,6 +391,7 @@ async def answer_question(
         conversation_history,
         user_email=user_id,
         current_time_context=time_context,
+        event_capture_enabled=event_capture_enabled,
     )
     _log_timing("agent.build_messages", build_start, message_count=len(messages))
 
@@ -460,17 +465,20 @@ async def answer_question(
 
         messages.append(message)
 
+        event_proposal = _extract_event_proposal(content) if event_capture_enabled else None
+
         # Update session store with this Q&A pair
         new_thread_title: Optional[str] = None
         if session_id and user_email:
             try:
+                assistant_metadata = {"event_proposal": event_proposal} if event_proposal else {}
                 persist_result = conversations.record_exchange(
                     thread_id=session_id,
                     user_email=user_email,
                     user_message=question,
                     assistant_message=content,
                     user_metadata={},
-                    assistant_metadata={},
+                    assistant_metadata=assistant_metadata,
                 )
                 print(f"[session] Persisted exchange in session {session_id}")
                 if (
@@ -485,7 +493,14 @@ async def answer_question(
                             print(f"[session] Updated thread title for {session_id}: {new_thread_title!r}")
             except Exception as exc:
                 print(f"[session] Failed to persist exchange for session {session_id}: {exc}")
-        bundle = _finalize_bundle(question, content, state, search_limit, session_id)
+        bundle = _finalize_bundle(
+            question,
+            content,
+            state,
+            search_limit,
+            session_id,
+            event_proposal=event_proposal,
+        )
         if new_thread_title:
             bundle["thread_title"] = new_thread_title
 
@@ -556,6 +571,7 @@ def _build_messages(
     conversation_history: List[Dict[str, str]] = None,
     user_email: Optional[str] = None,
     current_time_context: Optional[str] = None,
+    event_capture_enabled: bool = False,
 ) -> List[Dict[str, str]]:
     system_prompt = (
         "You are a personal memory assistant. Your goal is to make the user feel like they are talking to a real person, not a robot. "
@@ -600,6 +616,9 @@ def _build_messages(
     
     if current_time_context:
         messages.append({"role": "system", "content": current_time_context})
+
+    if event_capture_enabled:
+        messages.append({"role": "system", "content": _event_capture_prompt()})
     
     # Add conversation history (short-term session memory)
     if conversation_history:
@@ -609,6 +628,28 @@ def _build_messages(
     
     messages.append({"role": "user", "content": question.strip()})
     return messages
+
+
+def _event_capture_prompt() -> str:
+    return (
+        "The user is describing something that happened to them or someone they know. "
+        "Your job is to extract a precise event record for storage. "
+        "When you do not have high confidence about key facts (start time, participants, place, title), ask concise clarifying questions instead of inventing details. "
+        f"When you are confident enough to propose an event, provide a brief summary in natural language and append a single JSON object enclosed between {EVENT_PROPOSAL_START} and {EVENT_PROPOSAL_END}. "
+        "Do not wrap the JSON in code fences. The JSON must include: "
+        '{"title": "...", '
+        '"startDate": "ISO-8601 timestamp (required)", '
+        '"endDate": "ISO-8601 timestamp or null", '
+        '"summary": "...", '
+        '"people": ["list of people involved (names or contact ids)"], '
+        '"place": "text description of the location", '
+        '"placeId": "existing place id if you know it, otherwise null", '
+        '"tags": ["relevant tags"], '
+        '"types": ["event types"], '
+        '"confidence": number between 0 and 1, '
+        '"missing": ["fields you are still uncertain about"]}. '
+        "Only include the JSON when you are ready to propose an insertable event."
+    )
 
 
 def _self_context_from_email(email: str) -> Optional[str]:
@@ -921,6 +962,7 @@ def _finalize_bundle(
     state: AgentState,
     search_limit: int,
     session_id: Optional[str],
+    event_proposal: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     if not state.resolution or not state.search_results:
         fallback_start = perf_counter()
@@ -971,7 +1013,108 @@ def _finalize_bundle(
         "web_provider": state.web_provider,
         "web_response_id": state.web_response_id,
         "web_documents": state.web_documents,
+        "event_proposal": event_proposal,
     }
+
+
+def _extract_event_proposal(content: str) -> Optional[Dict[str, Any]]:
+    if not content:
+        return None
+
+    def _parse_candidate(raw_text: str) -> Optional[Dict[str, Any]]:
+        if not raw_text:
+            return None
+        cleaned = raw_text.strip()
+        if cleaned.startswith("```") and cleaned.endswith("```"):
+            cleaned = cleaned.strip("`").strip()
+        try:
+            parsed = json.loads(cleaned)
+        except Exception:
+            return None
+        return _normalize_event_proposal(parsed)
+
+    start = content.find(EVENT_PROPOSAL_START)
+    end = content.find(EVENT_PROPOSAL_END)
+    if start != -1 and end != -1 and end > start:
+        body = content[start + len(EVENT_PROPOSAL_START) : end]
+        candidate = _parse_candidate(body)
+        if candidate:
+            return candidate
+
+    # Fallback: try to parse the first JSON object present
+    first_brace = content.find("{")
+    last_brace = content.rfind("}")
+    if first_brace != -1 and last_brace != -1 and last_brace > first_brace:
+        fallback = _parse_candidate(content[first_brace : last_brace + 1])
+        if fallback:
+            return fallback
+    return None
+
+
+def _normalize_event_proposal(raw: Any) -> Optional[Dict[str, Any]]:
+    if not isinstance(raw, dict):
+        return None
+
+    def _parse_dt(value: Any) -> Optional[datetime]:
+        if isinstance(value, str) and value.strip():
+            try:
+                return datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
+            except Exception:
+                return None
+        if isinstance(value, datetime):
+            return value
+        return None
+
+    start_dt = _parse_dt(raw.get("startDate") or raw.get("start_date"))
+    if not start_dt:
+        return None
+
+    end_dt = _parse_dt(raw.get("endDate") or raw.get("end_date"))
+
+    def _string_list(value: Any) -> List[str]:
+        if not isinstance(value, (list, tuple)):
+            return []
+        cleaned: List[str] = []
+        for item in value:
+            if isinstance(item, (str, int, float)):
+                text = str(item).strip()
+                if text:
+                    cleaned.append(text)
+        return cleaned
+
+    def _clamp_confidence(value: Any) -> Optional[float]:
+        try:
+            num = float(value)
+        except (TypeError, ValueError):
+            return None
+        if num < 0:
+            num = 0.0
+        if num > 1:
+            num = 1.0
+        return num
+
+    title = (raw.get("title") or "").strip() or None
+    summary = (raw.get("summary") or "").strip() or None
+    place = (raw.get("place") or "").strip() or None
+    place_id = (raw.get("placeId") or raw.get("place_id") or "").strip() or None
+    confidence = _clamp_confidence(raw.get("confidence"))
+    missing = _string_list(raw.get("missing"))
+
+    normalized = {
+        "title": title,
+        "start_date": start_dt.isoformat(),
+        "end_date": end_dt.isoformat() if end_dt else None,
+        "summary": summary,
+        "people": _string_list(raw.get("people")),
+        "tags": _string_list(raw.get("tags")),
+        "types": _string_list(raw.get("types")),
+        "place": place,
+        "place_id": place_id,
+        "confidence": confidence,
+        "missing": missing,
+        "raw": raw,
+    }
+    return normalized
 
 
 def _coerce_bool(value: Any) -> bool:

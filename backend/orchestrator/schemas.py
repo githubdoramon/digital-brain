@@ -43,6 +43,28 @@ class EventIn(BaseModel):
     external_id: Optional[str] = Field(default=None, alias="externalId")
 
 
+class EventProposal(BaseModel):
+    title: Optional[str] = None
+    start_date: Optional[datetime] = Field(default=None, alias="startDate")
+    end_date: Optional[datetime] = Field(default=None, alias="endDate")
+    summary: Optional[str] = None
+    people: List[str] = Field(default_factory=list)
+    tags: List[str] = Field(default_factory=list)
+    types: List[str] = Field(default_factory=list)
+    place: Optional[str] = None
+    place_id: Optional[str] = Field(default=None, alias="placeId")
+    confidence: Optional[float] = None
+    missing: List[str] = Field(default_factory=list)
+    raw: Dict[str, Any] = Field(default_factory=dict)
+
+    class Config:
+        allow_population_by_field_name = True
+
+
+class EventProposalCreate(EventProposal):
+    start_date: datetime = Field(alias="startDate")
+
+
 class ExternalEventPayload(BaseModel):
     event: EventIn
     external_type: Literal["google"] = Field(alias="externalType")
@@ -181,6 +203,7 @@ class AskIn(BaseModel):
     limit: Optional[int] = 3
     session_id: Optional[str] = None  # kept for backward compatibility
     thread_id: Optional[str] = None
+    event_capture_enabled: Optional[bool] = False
 
 
 class AskOut(BaseModel):
@@ -193,6 +216,7 @@ class AskOut(BaseModel):
     session_id: Optional[str] = None
     thread_id: Optional[str] = None
     thread_title: Optional[str] = None
+    event_proposal: Optional[EventProposal] = None
     web_results: List[Dict[str, Any]] = Field(default_factory=list)
     web_summary: Optional[str] = None
     web_follow_up_questions: Optional[List[str]] = Field(default_factory=list)

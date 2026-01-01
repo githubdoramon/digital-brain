@@ -40,7 +40,11 @@ def _normalize_title_candidate(text: Optional[str]) -> Optional[str]:
     return cleaned
 
 
-def ensure_thread(thread_id: Optional[str], user_email: str, title: Optional[str] = None) -> Dict[str, Any]:
+def ensure_thread(
+    thread_id: Optional[str],
+    user_email: str,
+    title: Optional[str] = None,
+) -> Dict[str, Any]:
     """
     Ensure a thread exists for the given user. If thread_id is None, a new thread is created.
     Returns the thread row as a dict.
@@ -69,7 +73,6 @@ def ensure_thread(thread_id: Optional[str], user_email: str, title: Optional[str
     normalized_title = _normalize_title_candidate(title)
     if not normalized_title:
         normalized_title = _generate_default_title()
-
     with get_conn() as conn, conn.cursor(row_factory=dict_row) as cur:
         cur.execute(
             """

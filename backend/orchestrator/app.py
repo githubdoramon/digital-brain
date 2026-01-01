@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+from uuid import uuid4
 from contextlib import asynccontextmanager
 from datetime import datetime
 from time import perf_counter
@@ -38,6 +39,7 @@ from schemas import (
     DocumentUpdateIn,
     DocumentSearchIn,
     TodoIn,
+    EventProposalCreate,
     ThreadCreate,
     ThreadDetailOut,
     ThreadOut,
@@ -258,6 +260,62 @@ def delete_todo(todo_id: str, user: dict = Depends(get_current_user)):
 def ingest_event(e: EventIn, user: dict = Depends(get_current_user)):
     events_service.ingest_event(e)
     return {"ok": True, "id": e.id}
+
+
+@api.post("/threads/{thread_id}/events")
+def ingest_thread_event(
+    thread_id: str,
+    payload: EventProposalCreate,
+    user: dict = Depends(get_current_user),
+):
+    user_email = user.get("email")
+    if not user_email:
+        raise HTTPException(status_code=400, detail="Authenticated user email missing")
+
+    try:
+        conversations.ensure_thread(thread_id, user_email)
+    except LookupError:
+        raise HTTPException(status_code=404, detail="Conversation thread not found")
+    except PermissionError:
+        raise HTTPException(status_code=403, detail="Conversation thread does not belong to user")
+
+    if not payload.start_date:
+        raise HTTPException(status_code=400, detail="startDate is required to ingest an event")
+
+    event_id = f"event:{uuid4().hex}"
+
+    raw_payload = dict(payload.raw or {})
+    raw_payload.update(
+        {
+            "source": "event_capture",
+            "thread_id": thread_id,
+            "confidence": payload.confidence,
+            "missing": payload.missing,
+            "place": payload.place,
+        }
+    )
+
+    event = EventIn(
+        id=event_id,
+        startDate=payload.start_date,
+        endDate=payload.end_date,
+        placeId=payload.place_id,
+        people=payload.people or [],
+        tags=payload.tags or [],
+        types=payload.types or [],
+        title=payload.title or "Untitled event",
+        summary=payload.summary or "",
+        raw=raw_payload,
+    )
+
+    try:
+        events_service.ingest_event(event)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to ingest event: {exc}") from exc
+
+    return {"ok": True, "id": event_id}
 
 
 # --------------------------- Document endpoints ---------------------------
@@ -482,6 +540,7 @@ async def ask(payload: AskIn, user: dict = Depends(get_current_user)):
         raise HTTPException(status_code=403, detail="Conversation thread does not belong to user")
 
     session_id = thread["id"]
+    event_capture_enabled = bool(payload.event_capture_enabled)
     limit = payload.limit or 3
     preview = payload.question.strip().replace("\n", " ")
     if len(preview) > 120:
@@ -497,6 +556,7 @@ async def ask(payload: AskIn, user: dict = Depends(get_current_user)):
         user_id=user_email,
         session_id=session_id,
         user_email=user_email,
+        event_capture_enabled=event_capture_enabled,
     )
     bundle["thread_id"] = session_id
     bundle["session_id"] = session_id
@@ -556,16 +616,22 @@ def update_conversation_thread(
         raise HTTPException(status_code=400, detail="Authenticated user email missing")
     conversations.ensure_thread(thread_id, user_email)
     normalized_title = payload.title.strip() if payload.title else None
+    updates = ["updated_at = NOW()"]
+    params: list = []
+
+    if payload.title is not None:
+        updates.append("title = %s")
+        params.append(normalized_title)
+
     with get_conn() as conn, conn.cursor() as cur:
-        cur.execute(
-            """
+        query = f"""
             UPDATE conversation_threads
-            SET title = %s, updated_at = NOW()
+            SET {", ".join(updates)}
             WHERE id = %s AND user_email = %s
             RETURNING id, user_email, title, created_at, updated_at
-            """,
-            (normalized_title, thread_id, user_email),
-        )
+        """
+        params.extend([thread_id, user_email])
+        cur.execute(query, params)
         row = cur.fetchone()
         if not row:
             raise HTTPException(status_code=404, detail="Conversation thread not found")
