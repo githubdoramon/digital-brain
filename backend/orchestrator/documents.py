@@ -29,12 +29,8 @@ class DocumentProcessingError(RuntimeError):
     """Raised when an uploaded document cannot be processed."""
 
 
-DOCUMENT_STORAGE_DIR = Path(
-    os.getenv(
-        "DOCUMENT_STORAGE_DIR",
-        Path(__file__).resolve().parent / "storage" / "documents",
-    )
-)
+DOCUMENT_STORAGE_DIR = Path("app" / "storage" / "documents")
+
 DOCUMENT_STORAGE_DIR.mkdir(parents=True, exist_ok=True)
 
 MAX_CONTENT_CHARS = int(os.getenv("DOCUMENT_MAX_CONTENT_CHARS", "20000"))
