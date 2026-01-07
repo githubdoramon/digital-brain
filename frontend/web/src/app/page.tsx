@@ -7,7 +7,7 @@ import { useSession } from "next-auth/react";
 import ReactMarkdown from "react-markdown";
 import type { Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { api } from "@/lib/api";
+import { api, askWithStreaming, StreamBundle } from "@/lib/api";
 import EventProposalCard, { EventProposal } from "@/components/EventProposalCard";
 
 type Message = {
@@ -16,13 +16,6 @@ type Message = {
   content: string;
   timestamp: Date;
   metadata?: AssistantMetadata;
-};
-
-type AskResponse = {
-  answer?: string;
-  thread_id?: string;
-  thread_title?: string | null;
-  event_proposal?: EventProposal | null;
 };
 
 type ThreadSummary = {
@@ -161,6 +154,8 @@ export default function Home() {
   const [isLoadingThreads, setIsLoadingThreads] = useState(false);
   const [isLoadingMessages, setIsLoadingMessages] = useState(false);
   const [eventCaptureEnabled, setEventCaptureEnabled] = useState(false);
+  const [streamingContent, setStreamingContent] = useState<string>("");
+  const [streamingStatus, setStreamingStatus] = useState<string>("");
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   const scrollToBottom = () => {
@@ -301,6 +296,8 @@ export default function Home() {
 
     setInput("");
     setIsLoading(true);
+    setStreamingContent("");
+    setStreamingStatus("");
 
     try {
       let threadId = selectedThreadId;
@@ -321,12 +318,35 @@ export default function Home() {
 
       setMessages((prev) => [...prev, userMessage]);
 
-      const data = await api.post<AskResponse>("/ask", {
-        question: userMessage.content,
-        limit: 5,
-        thread_id: threadId,
-        event_capture_enabled: eventCaptureEnabled,
-      });
+      const data: StreamBundle = await askWithStreaming(
+        pendingInput,
+        {
+          threadId,
+          limit: 5,
+          eventCaptureEnabled,
+        },
+        {
+          onToken: (_token, fullContent) => {
+            setStreamingContent(fullContent);
+          },
+          onStatus: (message) => {
+            setStreamingStatus(message);
+          },
+          onToolCall: (name) => {
+            setStreamingStatus(`Using tool: ${name}...`);
+          },
+          onToolResult: () => {
+            setStreamingStatus("Processing results...");
+          },
+          onError: (message) => {
+            setStreamingStatus(`Error: ${message}`);
+          },
+        }
+      );
+
+      // Clear streaming state
+      setStreamingContent("");
+      setStreamingStatus("");
 
       if (data.thread_id && data.thread_id !== threadId) {
         threadId = data.thread_id;
@@ -348,7 +368,7 @@ export default function Home() {
       }
 
       const metadata: AssistantMetadata | undefined = data.event_proposal
-        ? { event_proposal: data.event_proposal }
+        ? { event_proposal: data.event_proposal as EventProposal }
         : undefined;
 
       const assistantMessage: Message = {
@@ -362,6 +382,8 @@ export default function Home() {
       setMessages((prev) => [...prev, assistantMessage]);
       await refreshThreads();
     } catch (error) {
+      setStreamingContent("");
+      setStreamingStatus("");
       const errorMessage: Message = {
         role: "assistant",
         content: `Error: ${error instanceof Error ? error.message : "Unexpected error occurred"}`,
@@ -644,21 +666,55 @@ export default function Home() {
               <div
                 style={{
                   display: "flex",
+                  flexDirection: "column",
                   alignItems: "flex-start",
+                  gap: "8px",
                 }}
               >
+                {streamingStatus && (
+                  <div
+                    style={{
+                      padding: "6px 12px",
+                      borderRadius: "8px",
+                      background: "#e0f2fe",
+                      color: "#0369a1",
+                      fontSize: "0.85rem",
+                      display: "flex",
+                      alignItems: "center",
+                      gap: "6px",
+                    }}
+                  >
+                    <span style={{ animation: "pulse 1.5s infinite" }}>●</span>
+                    {streamingStatus}
+                  </div>
+                )}
                 <div
                   style={{
+                    maxWidth: "80%",
                     padding: "12px 16px",
                     borderRadius: "12px",
                     background: "#f5f5f5",
-                    color: "#666",
+                    color: "#333",
+                    wordWrap: "break-word",
+                    overflowWrap: "anywhere",
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: "0.5rem",
                   }}
                 >
-                  <div style={{ display: "flex", gap: "4px", alignItems: "center" }}>
-                    <span>Thinking</span>
-                    <span className="loading-dots">...</span>
-                  </div>
+                  {streamingContent ? (
+                    <ReactMarkdown
+                      remarkPlugins={[remarkGfm]}
+                      components={getMarkdownComponents("assistant")}
+                    >
+                      {streamingContent}
+                    </ReactMarkdown>
+                  ) : (
+                    <div style={{ display: "flex", gap: "4px", alignItems: "center", color: "#666" }}>
+                      <span>Thinking</span>
+                      <span className="loading-dots">...</span>
+                    </div>
+                  )}
                 </div>
               </div>
             )}

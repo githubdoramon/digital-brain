@@ -16,6 +16,7 @@ import retrieval
 import sql_tools
 import web_tools
 import tags_manager
+import skills
 
 OLLAMA_HOST = os.getenv("OLLAMA_HOST")
 OLLAMA_CHAT_MODEL = os.getenv("OLLAMA_CHAT_MODEL")
@@ -255,6 +256,32 @@ TOOLS: List[Dict[str, Any]] = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "run_skill_script",
+            "description": "Execute a script from an active skill. Only use when a skill with scripts is active and instructs you to run a specific script.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "skill_name": {
+                        "type": "string",
+                        "description": "Name of the active skill containing the script.",
+                    },
+                    "script_name": {
+                        "type": "string",
+                        "description": "Name of the script file to execute (e.g., 'generate.py').",
+                    },
+                    "args": {
+                        "type": "object",
+                        "description": "Arguments to pass to the script as JSON.",
+                    },
+                },
+                "required": ["skill_name", "script_name"],
+                "additionalProperties": False,
+            },
+        },
+    },
 ]
 
 
@@ -270,6 +297,8 @@ class AgentState:
         self.web_provider: Optional[str] = None
         self.web_response_id: Optional[str] = None
         self.web_documents: List[Dict[str, Any]] = []
+        # Skills tracking
+        self.activated_skills: List[Dict[str, Any]] = []
 
     def update_resolution(self, data: Dict[str, Any]) -> None:
         if isinstance(data, dict):
@@ -392,6 +421,7 @@ async def answer_question(
         user_email=user_id,
         current_time_context=time_context,
         event_capture_enabled=event_capture_enabled,
+        state=state,
     )
     _log_timing("agent.build_messages", build_start, message_count=len(messages))
 
@@ -526,6 +556,326 @@ async def answer_question(
         return bundle
 
 
+# ----------------------- Streaming Implementation -----------------------
+
+from typing import AsyncGenerator
+
+async def _ollama_chat_stream(
+    messages: List[Dict[str, Any]],
+    tools: List[Dict[str, Any]],
+) -> AsyncGenerator[Dict[str, Any], None]:
+    """
+    Stream responses from Ollama, yielding chunks as they arrive.
+
+    Uses httpx for async HTTP streaming.
+    """
+    import httpx
+
+    payload = {
+        "model": OLLAMA_CHAT_MODEL,
+        "messages": messages,
+        "tools": tools,
+        "tool_choice": "auto",
+        "stream": True,
+    }
+
+    timeout = httpx.Timeout(OLLAMA_TIMEOUT, connect=10.0)
+
+    async with httpx.AsyncClient(timeout=timeout) as client:
+        async with client.stream(
+            "POST",
+            f"{OLLAMA_HOST}/api/chat",
+            json=payload,
+        ) as response:
+            response.raise_for_status()
+            async for line in response.aiter_lines():
+                if line.strip():
+                    try:
+                        chunk = json.loads(line)
+                        yield chunk
+                        if chunk.get("done"):
+                            break
+                    except json.JSONDecodeError:
+                        continue
+
+
+import asyncio
+
+async def _run_skill_script_with_queue(
+    tool_call: Dict[str, Any],
+    state: AgentState,
+    status_queue: asyncio.Queue,
+) -> Dict[str, Any]:
+    """
+    Run a skill script, pushing status messages to the queue in real-time.
+
+    Returns the final result dict.
+    """
+    function = tool_call.get("function") or {}
+    raw_args = function.get("arguments") or "{}"
+
+    try:
+        args = json.loads(raw_args) if isinstance(raw_args, str) else raw_args
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"Invalid arguments for run_skill_script: {raw_args}") from exc
+
+    skill_name = args.get("skill_name")
+    script_name = args.get("script_name")
+    script_args = args.get("args") or {}
+
+    if not skill_name or not isinstance(skill_name, str):
+        return {"error": "run_skill_script requires a skill_name string"}
+    if not script_name or not isinstance(script_name, str):
+        return {"error": "run_skill_script requires a script_name string"}
+
+    # Verify the skill is active
+    active_skill_names = [s.get("name") for s in state.activated_skills]
+    if skill_name not in active_skill_names:
+        return {
+            "error": f"Skill '{skill_name}' is not active. Active skills: {active_skill_names}"
+        }
+
+    # Get skill and run script with streaming
+    registry = skills.get_registry()
+    skill = registry.get_skill(skill_name)
+    if not skill:
+        return {"error": f"Skill '{skill_name}' not found in registry"}
+
+    print(f"[agent] calling run_skill_script (streaming) skill={skill_name}, script={script_name}, args={script_args}")
+    step_start = perf_counter()
+
+    runner = skills.get_runner_for_skill(skill.path)
+
+    # Async callback that pushes status to queue
+    async def push_status(line: str) -> None:
+        if line.startswith("STATUS: "):
+            status_msg = line[8:]  # Strip "STATUS: " prefix
+            await status_queue.put({"type": "status", "message": status_msg})
+
+    # Use streaming execution with async callback
+    result = await runner.run_script_streaming(
+        script_name,
+        script_args,
+        on_output_async=push_status,
+    )
+
+    _log_timing(
+        "tool.run_skill_script.streaming",
+        step_start,
+        skill=skill_name,
+        script=script_name,
+        returncode=result.get("returncode"),
+    )
+    return result
+
+
+async def answer_question_stream(
+    question: str,
+    search_limit: int = 3,
+    user_id: str = "default_user",
+    session_id: Optional[str] = None,
+    user_email: Optional[str] = None,
+    event_capture_enabled: bool = False,
+) -> AsyncGenerator[Dict[str, Any], None]:
+    """
+    Stream LLM responses, yielding events as they occur.
+
+    Event types:
+    - {"type": "token", "content": "..."} - Text chunks as they arrive
+    - {"type": "tool_call", "name": "...", "args": {...}} - Tool invocations
+    - {"type": "tool_result", "name": "...", "result": {...}} - Tool outputs
+    - {"type": "status", "message": "..."} - Status updates
+    - {"type": "done", "bundle": {...}} - Final complete response
+
+    Args:
+        question: User's question
+        search_limit: Max search results
+        user_id: User identifier
+        session_id: Conversation session ID
+        user_email: User email for context
+        event_capture_enabled: Whether to extract event proposals
+    """
+    total_start = perf_counter()
+    current_utc = datetime.now(timezone.utc)
+    local_now = current_utc.astimezone()
+    time_context = (
+        "Current time context available to you:\n"
+        f"- UTC now: {current_utc.isoformat()}\n"
+        f"- Local system time: {local_now.isoformat()}"
+    )
+
+    state = AgentState()
+
+    # Get conversation history from persistent storage
+    conversation_history: List[Dict[str, str]] = []
+    if session_id and user_email:
+        try:
+            conversation_history = conversations.get_conversation_history(session_id, user_email)
+            print(f"[session] Retrieved {len(conversation_history)} messages from session {session_id}")
+        except Exception as exc:
+            print(f"[session] Failed to load history for session {session_id}: {exc}")
+            conversation_history = []
+
+    messages: List[Dict[str, Any]] = _build_messages(
+        question,
+        search_limit,
+        conversation_history,
+        user_email=user_id,
+        current_time_context=time_context,
+        event_capture_enabled=event_capture_enabled,
+        state=state,
+    )
+
+    iteration = 0
+    accumulated_content = ""
+
+    while True:
+        iteration += 1
+        yield {"type": "status", "message": f"Thinking (iteration {iteration})..."}
+
+        tool_calls = []
+        current_content = ""
+
+        async for chunk in _ollama_chat_stream(messages, TOOLS):
+            message = chunk.get("message", {})
+
+            # Stream content tokens
+            delta = message.get("content", "")
+            if delta:
+                current_content += delta
+                yield {"type": "token", "content": delta}
+
+            # Collect tool calls (may come in chunks)
+            chunk_tool_calls = message.get("tool_calls")
+            if chunk_tool_calls:
+                tool_calls.extend(chunk_tool_calls)
+
+            if chunk.get("done"):
+                break
+
+        # Handle tool calls
+        if tool_calls:
+            messages.append({
+                "role": "assistant",
+                "content": current_content,
+                "tool_calls": tool_calls,
+            })
+
+            for call in tool_calls:
+                func = call.get("function", {})
+                func_name = func.get("name", "unknown")
+                func_args = func.get("arguments", {})
+
+                yield {
+                    "type": "tool_call",
+                    "name": func_name,
+                    "args": func_args if isinstance(func_args, dict) else {},
+                }
+
+                # Use streaming execution for skill scripts
+                if func_name == "run_skill_script":
+                    # Create queue for real-time status updates
+                    status_queue: asyncio.Queue = asyncio.Queue()
+
+                    # Run script in background task
+                    script_task = asyncio.create_task(
+                        _run_skill_script_with_queue(call, state, status_queue)
+                    )
+
+                    # Yield status messages as they arrive
+                    while not script_task.done():
+                        try:
+                            # Wait for status with short timeout
+                            event = await asyncio.wait_for(
+                                status_queue.get(), timeout=0.1
+                            )
+                            yield event
+                        except asyncio.TimeoutError:
+                            continue
+
+                    # Get final result
+                    result = await script_task
+
+                    # Drain any remaining status messages
+                    while not status_queue.empty():
+                        event = await status_queue.get()
+                        yield event
+                else:
+                    # Use sync handler for all other tools
+                    result = _handle_tool_call(call, state, question, search_limit)
+
+                yield {
+                    "type": "tool_result",
+                    "name": func_name,
+                    "result": result,
+                }
+
+                messages.append({
+                    "role": "tool",
+                    "tool_call_id": call.get("id"),
+                    "content": json.dumps(result, ensure_ascii=False, default=str),
+                })
+
+            continue
+
+        # No tool calls - we have the final answer
+        accumulated_content = current_content
+        break
+
+    # Extract event proposal if enabled
+    event_proposal = _extract_event_proposal(accumulated_content) if event_capture_enabled else None
+
+    # Persist conversation
+    new_thread_title: Optional[str] = None
+    if session_id and user_email:
+        try:
+            assistant_metadata = {"event_proposal": event_proposal} if event_proposal else {}
+            persist_result = conversations.record_exchange(
+                thread_id=session_id,
+                user_email=user_email,
+                user_message=question,
+                assistant_message=accumulated_content,
+                user_metadata={},
+                assistant_metadata=assistant_metadata,
+            )
+            print(f"[session] Persisted exchange in session {session_id}")
+
+            if (
+                persist_result.get("message_count_before", 0) == 0
+                and conversations.is_default_title(persist_result.get("previous_title"))
+            ):
+                generated_title = _generate_thread_title_from_prompt(question)
+                if generated_title:
+                    updated = conversations.update_thread_title(session_id, user_email, generated_title)
+                    if updated:
+                        new_thread_title = updated.get("title")
+                        print(f"[session] Updated thread title for {session_id}: {new_thread_title!r}")
+        except Exception as exc:
+            print(f"[session] Failed to persist exchange for session {session_id}: {exc}")
+
+    # Build final bundle
+    bundle = _finalize_bundle(
+        question,
+        accumulated_content,
+        state,
+        search_limit,
+        session_id,
+        event_proposal=event_proposal,
+    )
+    if new_thread_title:
+        bundle["thread_title"] = new_thread_title
+
+    _log_timing(
+        "answer_question_stream.total",
+        total_start,
+        iterations=iteration,
+        session_id=session_id,
+        user_id=user_id,
+    )
+
+    yield {"type": "done", "bundle": bundle}
+
+
 def _generate_thread_title_from_prompt(question: str) -> Optional[str]:
     cleaned_question = (question or "").strip()
     if not cleaned_question:
@@ -572,29 +922,30 @@ def _build_messages(
     user_email: Optional[str] = None,
     current_time_context: Optional[str] = None,
     event_capture_enabled: bool = False,
+    state: Optional[AgentState] = None,
 ) -> List[Dict[str, str]]:
     system_prompt = (
-        "You are a personal memory assistant. Your goal is to make the user feel like they are talking to a real person, not a robot. "
-        "Use the available tools to gather accurate context before answering. "
-        "Do not fabricate events; if no relevant memories exist, say so. "
-        "You are talking to a human, therefore do not reply with ids ever (like contact:1761950388937 or place:1761950388937) or other technical details - replace ids with objects names, titles or other more human readable things you find in databases. I repeat, do not include IDs in answers. "
-        f"When searching, prefer returning at most {search_limit} highly relevant results, unless the user is requesting full data."
+        "You are a personal memory assistant helping the user explore their stored memories, contacts, events, and documents. "
+        "Be conversational and helpful - make the user feel like they're talking to a knowledgeable friend, not a robot. "
+        "Never fabricate information; if no relevant memories exist, say so honestly. "
+        "Never expose raw IDs (like contact:1761950388937) - always use human-readable names and titles. "
+        f"Prefer returning at most {search_limit} highly relevant results unless the user requests more."
     )
-    protocol_prompt = "Tool protocol: when a question references documents, events, memories, contacts, places, timelines, or relationships, " \
-        "first refresh the schema with the describe_schema tool, then plan any execute_sql queries needed to retrieve facts. You also have access to search_memories tool to search for events, documents, contacts, places, timelines, or relationships including vector search on descriptions, summaries and more metadata. Think through the user question to find the appropriate information. " \
-        "Cross-check every table or column in a planned SQL statement against the schema snapshot; never invent new tables. Make sure you query things in a case insensitive way. " \
-        "Be aware the database is personal to the user themselves, so everything present there has a relation to the person asking the question, so you don't need to overthink to find ids only related to the logged user." \
-        "Use resolve_query when entity or time extraction helps craft structured constraints. " \
-        "For contacts, make sure you search using different strategies when it comes to names, first names, last names, full names, partial names, nicknames, aliases, and so on. " \
-        "For relationship closeness questions, use the `contact_relationships` table to understand interpersonal links. " \
-        "For events, meetings, moments, use the `events` table to retrieve the event details and their summaries. " \
-        "You also have acccess to documents on the 'documents' table, and might have relations to events, contacts or places. Don't forget to search for information there too, including documents tags, descriptions and content. If you think some document has relevant information being requested, you can use the get_document tool to retrieve its content. " \
-        "Tasks or to dos are on the 'todos' table, and might have relations to events, contacts or places." \
-        "Do not stop after describing a plan. Actually call the necessary tools, inspect their outputs, and base your final answer on that evidence. " \
-        "If a SQL attempt fails validation, revise and retry until you either succeed or can explain why the data cannot be retrieved. " \
-        "Only respond after you have gathered sufficient evidence from the tools. " \
-        "Always reply in the same language you were asked in, do not translate the answer to any language if not requested. " \
-        "If you are not 100% sure, still respond to the original question, but state your uncertainty instead of declining outright."
+    protocol_prompt = (
+        "Tool usage guidelines:\n"
+        "- Use `describe_schema` if you need to understand database structure before writing SQL.\n"
+        "- Use `search_memories` for semantic/vector search across events and documents.\n"
+        "- Use `execute_sql` for precise queries - validate column names against schema, use ILIKE for case-insensitive matching.\n"
+        "- Use `resolve_query` to extract contacts, places, and time ranges from natural language.\n"
+        "- The database is personal to this user - all data relates to them.\n"
+        "- Tasks/todos are in the 'todos' table.\n\n"
+        "Important behaviors:\n"
+        "- Actually call tools and use their results - don't just describe what you would do.\n"
+        "- If a SQL query fails, revise and retry based on the error.\n"
+        "- Respond in the same language the user asked in.\n"
+        "- If uncertain, provide your best answer with appropriate caveats rather than refusing.\n\n"
+        "For detailed guidance on specific topics (contacts, events, documents), refer to any activated skills below."
+    )
 
     messages: List[Dict[str, str]] = [{"role": "system", "content": system_prompt}]
 
@@ -619,13 +970,42 @@ def _build_messages(
 
     if event_capture_enabled:
         messages.append({"role": "system", "content": _event_capture_prompt()})
-    
+
+    # Skills integration: inject skill index and matching skills
+    try:
+        registry = skills.get_registry()
+
+        # Always include skill index (lightweight, ~50 tokens per skill)
+        skill_index = registry.get_skill_index()
+        if skill_index:
+            messages.append({"role": "system", "content": skill_index})
+
+        # Find and inject matching skills based on user question
+        matching_skills = registry.find_matching_skills(question)
+        for match in matching_skills:
+            skill_prompt = (
+                f"ACTIVE SKILL [{match.skill.name}] (confidence: {match.confidence:.2f}):\n"
+                f"{match.skill.instructions}"
+            )
+            messages.append({"role": "system", "content": skill_prompt})
+            print(f"[skills] Activated skill: {match.skill.name} (confidence: {match.confidence:.2f})")
+
+            # Track activated skills in state
+            if state:
+                state.activated_skills.append({
+                    "name": match.skill.name,
+                    "confidence": match.confidence,
+                    "has_scripts": match.skill.has_scripts,
+                })
+    except Exception as exc:
+        print(f"[skills] Error loading skills: {exc}")
+
     # Add conversation history (short-term session memory)
     if conversation_history:
         for msg in conversation_history:
             messages.append({"role": msg["role"], "content": msg["content"]})
         print(f"[session] Added {len(conversation_history)} messages from session history")
-    
+
     messages.append({"role": "user", "content": question.strip()})
     return messages
 
@@ -953,6 +1333,44 @@ def _handle_tool_call(
             state.update_web_documents(result)
         return result
 
+    if name == "run_skill_script":
+        skill_name = args.get("skill_name")
+        script_name = args.get("script_name")
+        script_args = args.get("args") or {}
+
+        if not skill_name or not isinstance(skill_name, str):
+            return {"error": "run_skill_script requires a skill_name string"}
+        if not script_name or not isinstance(script_name, str):
+            return {"error": "run_skill_script requires a script_name string"}
+
+        # Verify the skill is active
+        active_skill_names = [s.get("name") for s in state.activated_skills]
+        if skill_name not in active_skill_names:
+            return {
+                "error": f"Skill '{skill_name}' is not active. Active skills: {active_skill_names}"
+            }
+
+        # Get skill and run script
+        registry = skills.get_registry()
+        skill = registry.get_skill(skill_name)
+        if not skill:
+            return {"error": f"Skill '{skill_name}' not found in registry"}
+
+        print(f"[agent] calling run_skill_script(skill={skill_name}, script={script_name}, args={script_args})")
+        step_start = perf_counter()
+
+        runner = skills.get_runner_for_skill(skill.path)
+        result = runner.run_script(script_name, script_args)
+
+        _log_timing(
+            "tool.run_skill_script",
+            step_start,
+            skill=skill_name,
+            script=script_name,
+            returncode=result.get("returncode"),
+        )
+        return result
+
     raise RuntimeError(f"Unsupported tool requested: {name}")
 
 
@@ -1014,6 +1432,7 @@ def _finalize_bundle(
         "web_response_id": state.web_response_id,
         "web_documents": state.web_documents,
         "event_proposal": event_proposal,
+        "activated_skills": state.activated_skills,
     }
 
 

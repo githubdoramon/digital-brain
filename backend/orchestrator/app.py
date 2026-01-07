@@ -10,7 +10,7 @@ from typing import Any, Dict, List, Optional
 
 from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Query, Request, Response, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 
 import action_logs
 import contacts as contacts_service
@@ -24,6 +24,7 @@ from auth import get_current_user
 from db import get_conn
 import immich_client
 import telegram_bot
+import skills
 from schemas import (
     AskIn,
     AskOut,
@@ -571,6 +572,71 @@ async def ask(payload: AskIn, user: dict = Depends(get_current_user)):
     return AskOut(**bundle)
 
 
+@api.post("/ask/stream")
+async def ask_stream(payload: AskIn, user: dict = Depends(get_current_user)):
+    """
+    Stream LLM responses as Server-Sent Events (SSE).
+
+    Returns a stream of events:
+    - {"type": "token", "content": "..."} - Text chunks as they arrive
+    - {"type": "tool_call", "name": "...", "args": {...}} - Tool invocations
+    - {"type": "tool_result", "name": "...", "result": {...}} - Tool outputs
+    - {"type": "status", "message": "..."} - Status updates
+    - {"type": "done", "bundle": {...}} - Final complete response
+    """
+    start_time = perf_counter()
+    user_email = user.get("email")
+    if not user_email:
+        raise HTTPException(status_code=400, detail="Authenticated user email missing")
+
+    requested_thread_id = payload.thread_id or payload.session_id
+    try:
+        thread = conversations.ensure_thread(requested_thread_id, user_email)
+    except LookupError:
+        raise HTTPException(status_code=404, detail="Conversation thread not found")
+    except PermissionError:
+        raise HTTPException(status_code=403, detail="Conversation thread does not belong to user")
+
+    session_id = thread["id"]
+    event_capture_enabled = bool(payload.event_capture_enabled)
+    limit = payload.limit or 3
+
+    preview = payload.question.strip().replace("\n", " ")
+    if len(preview) > 120:
+        preview = preview[:117] + "..."
+    print(f"[ask/stream] start session={session_id} user={user_email} limit={limit} question={preview!r}")
+
+    async def event_generator():
+        try:
+            async for event in llm.answer_question_stream(
+                payload.question,
+                search_limit=limit,
+                user_id=user_email,
+                session_id=session_id,
+                user_email=user_email,
+                event_capture_enabled=event_capture_enabled,
+            ):
+                # SSE format: data: {json}\n\n
+                yield f"data: {json.dumps(event, default=str)}\n\n"
+
+                if event.get("type") == "done":
+                    elapsed = perf_counter() - start_time
+                    print(f"[ask/stream] complete session={session_id} user={user_email} elapsed={elapsed:.3f}s")
+        except Exception as exc:
+            print(f"[ask/stream] error session={session_id}: {exc}")
+            yield f"data: {json.dumps({'type': 'error', 'message': str(exc)})}\n\n"
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
 @api.get("/threads", response_model=List[ThreadOut])
 def list_conversation_threads(user: dict = Depends(get_current_user)):
     user_email = user.get("email")
@@ -648,3 +714,68 @@ def delete_conversation_thread(thread_id: str, user: dict = Depends(get_current_
     if not deleted:
         raise HTTPException(status_code=404, detail="Conversation thread not found")
     return Response(status_code=204)
+
+
+# --------------------------- Skills Management Endpoints ---------------------------
+
+
+@api.get("/skills")
+def list_skills(user: dict = Depends(get_current_user)):
+    """List all available skills with their metadata."""
+    registry = skills.get_registry()
+    skill_list = registry.list_skills()
+    return {
+        "skills": [s.to_dict() for s in skill_list],
+        "total": len(skill_list),
+    }
+
+
+@api.get("/skills/{skill_name}")
+def get_skill(skill_name: str, user: dict = Depends(get_current_user)):
+    """Get details for a specific skill."""
+    registry = skills.get_registry()
+    skill = registry.get_skill(skill_name)
+    if not skill:
+        raise HTTPException(status_code=404, detail=f"Skill '{skill_name}' not found")
+    return skill.to_dict()
+
+
+@api.post("/skills/match")
+def match_skills(
+    query: str = Query(..., description="User query to match against skills"),
+    max_skills: int = Query(2, ge=1, le=5, description="Maximum skills to return"),
+    min_confidence: float = Query(0.7, ge=0.0, le=1.0, description="Minimum confidence threshold"),
+    user: dict = Depends(get_current_user),
+):
+    """
+    Test skill matching for a query.
+
+    Returns skills that would be activated for the given query,
+    useful for debugging and understanding skill selection.
+    """
+    registry = skills.get_registry()
+    matches = registry.find_matching_skills(
+        query,
+        max_skills=max_skills,
+        min_confidence=min_confidence,
+    )
+    return {
+        "query": query,
+        "matches": [m.to_dict() for m in matches],
+        "total_matches": len(matches),
+    }
+
+
+@api.get("/skills/stats")
+def get_skills_stats(user: dict = Depends(get_current_user)):
+    """Get skills registry statistics including activation counts."""
+    registry = skills.get_registry()
+    return registry.get_stats()
+
+
+@api.post("/skills/reload")
+def reload_skills(user: dict = Depends(get_current_user)):
+    """Force reload all skills from disk."""
+    from skills.registry import reload_registry
+    count = reload_registry()
+    return {"reloaded": count, "message": f"Reloaded {count} skills"}
