@@ -22,6 +22,7 @@ The following environment variables will be set
 curl -s "$HA_URL/api/states" -H "Authorization: Bearer $HA_TOKEN" | \
   jq -r '.[] | select(.entity_id | startswith("switch.")) | .entity_id'
 ```
+Make sure to replace the text inside startswith with the rigth domain you are looking for
 
 ### Turn on/off
 ```bash
@@ -82,8 +83,6 @@ curl -s "$HA_URL/api/states/{entity_id}" -H "Authorization: Bearer $HA_TOKEN"
 ## Notes
 
 - API returns JSON by default
-- Long-lived tokens don't expire — store securely
-- List entities to find what is the right one the user is asking to be changed
+- Do not guess entities. List/search them to find what is the right one the user is asking to be changed
 - Switches can be the actual entity for many other domains, like lights or climate
 - Test entity IDs with the list command first
-

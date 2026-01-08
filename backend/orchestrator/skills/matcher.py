@@ -115,6 +115,35 @@ class SkillMatcher:
         except Exception as e:
             print(f"[skills.matcher] Failed to embed query: {e}")
             return None
+    
+    def _build_context_query(
+        self,
+        query: str,
+        conversation_history: Optional[List[Dict[str, str]]] = None,
+    ) -> str:
+        """
+        Build a context-aware query string from conversation history.
+        
+        Args:
+            query: The current user query
+            conversation_history: Optional list of previous messages
+            
+        Returns:
+            A formatted string combining recent history and current query
+        """
+        context_parts = []
+        
+        if conversation_history:
+            # Include last few messages for context (limit to avoid too long queries)
+            recent_history = conversation_history[-5:]  # Last 5 messages
+            for msg in recent_history:
+                role_prefix = "User: " if msg["role"] == "user" else "Assistant: "
+                context_parts.append(f"{role_prefix}{msg['content']}")
+        
+        # Add current question
+        context_parts.append(f"User: {query}")
+        
+        return "\n".join(context_parts)
 
     def add_skill(self, skill: Skill) -> None:
         """Add a new skill to the matcher."""
@@ -132,6 +161,7 @@ class SkillMatcher:
         query: str,
         max_skills: int = 5,
         min_confidence: float = 0.5,
+        conversation_history: Optional[List[Dict[str, str]]] = None,
     ) -> List[SkillMatch]:
         """
         Find skills that match the user query.
@@ -140,6 +170,7 @@ class SkillMatcher:
             query: User's question or request
             max_skills: Maximum number of skills to return (default 2)
             min_confidence: Minimum confidence threshold (default 0.7)
+            conversation_history: Optional conversation history for better context
 
         Returns:
             List of SkillMatch objects sorted by confidence (highest first)
@@ -151,7 +182,11 @@ class SkillMatcher:
         if not self.skills:
             return []
 
-        query_embedding = self._get_query_embedding(query)
+        # Build context-aware query if history is provided
+        context_query = self._build_context_query(query, conversation_history)
+        print(f"[skills.matcher] Context query:\n{context_query}")
+        
+        query_embedding = self._get_query_embedding(context_query)
         print(f"[skills.matcher] Query embedding: {query_embedding}")
         if not query_embedding:
             return []

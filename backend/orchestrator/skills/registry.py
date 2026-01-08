@@ -79,6 +79,7 @@ class SkillRegistry:
         query: str,
         max_skills: int = 5,
         min_confidence: float = 0.5,
+        conversation_history: Optional[List[Dict[str, Any]]] = None,
     ) -> List[SkillMatch]:
         """
         Find skills that match the user query.
@@ -87,6 +88,7 @@ class SkillRegistry:
             query: User's question or request
             max_skills: Maximum number of skills to return
             min_confidence: Minimum confidence threshold
+            conversation_history: Optional conversation history for better context
 
         Returns:
             List of SkillMatch objects
@@ -99,6 +101,7 @@ class SkillRegistry:
                 query,
                 max_skills=max_skills,
                 min_confidence=min_confidence,
+                conversation_history=conversation_history,
             )
 
             # Track activations

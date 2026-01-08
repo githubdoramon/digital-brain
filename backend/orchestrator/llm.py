@@ -1006,8 +1006,11 @@ def _build_messages(
         if skill_index:
             messages.append({"role": "system", "content": skill_index})
 
-        # Find and inject matching skills based on user question
-        matching_skills = registry.find_matching_skills(question)
+        # Find and inject matching skills based on full thread context
+        matching_skills = registry.find_matching_skills(
+            query=question,
+            conversation_history=conversation_history,
+        )
         print(f"[skills] Matching skills: {matching_skills}")
         for match in matching_skills:
             skill_prompt = (
