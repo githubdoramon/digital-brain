@@ -114,6 +114,8 @@ def execute_bash(
             env=cmd_env,
         )
 
+        print(result)
+
         stdout = result.stdout or ""
         stderr = result.stderr or ""
         truncated = False

@@ -51,14 +51,15 @@ curl -s "$HA_URL/api/template" -H "Authorization: Bearer $HA_TOKEN"  \
 curl -s -X POST "$HA_URL/api/services/switch/turn_on" \
   -H "Authorization: Bearer $HA_TOKEN" \
   -H "Content-Type: application/json" \
-  -d '{"entity_id": "switch.office_lamp"}'
+  -d '{"entity_id": "switch.<switch_entity_id>"}'
 
 # Turn off
 curl -s -X POST "$HA_URL/api/services/switch/turn_off" \
   -H "Authorization: Bearer $HA_TOKEN" \
   -H "Content-Type: application/json" \
-  -d '{"entity_id": "switch.office_lamp"}'
+  -d '{"entity_id": "switch.<switch_entity_id>"}'
 ```
+
 
 ### Control lights
 ```bash
@@ -66,7 +67,7 @@ curl -s -X POST "$HA_URL/api/services/switch/turn_off" \
 curl -s -X POST "$HA_URL/api/services/light/turn_on" \
   -H "Authorization: Bearer $HA_TOKEN" \
   -H "Content-Type: application/json" \
-  -d '{"entity_id": "light.living_room", "brightness_pct": 80}'
+  -d '{"entity_id": "light.<light_entity_id>", "brightness_pct": 80}'
 ```
 
 ### Trigger scene
@@ -74,7 +75,7 @@ curl -s -X POST "$HA_URL/api/services/light/turn_on" \
 curl -s -X POST "$HA_URL/api/services/scene/turn_on" \
   -H "Authorization: Bearer $HA_TOKEN" \
   -H "Content-Type: application/json" \
-  -d '{"entity_id": "scene.movie_time"}'
+  -d '{"entity_id": "scene.<scene_entity_id>"}'
 ```
 
 ### Call any service
@@ -105,5 +106,5 @@ curl -s "$HA_URL/api/states/{entity_id}" -H "Authorization: Bearer $HA_TOKEN"
 
 - API returns JSON by default
 - Switches can be the actual entity for many other domains, like lights or climate
-- Do not guess entities, EVER. Always list all entities and then check which is the most likely to be the one the user actually wants you to act on.
+- Do not guess entities, EVER. Always start by listing all entities and then check which is the most likely to be the one the user actually wants you to act on.
 - Test entity IDs with the list command first
