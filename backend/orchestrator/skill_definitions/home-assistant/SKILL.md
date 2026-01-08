@@ -1,6 +1,6 @@
 ---
 name: homeassistant
-description: Controls the user's home and office - smart plugs, lights, scenes, automations. Can be used whenever the user is asking to execute automations.
+description: Controls the user's home and office - smart plugs, lights, scenes, automations. Can be used whenever the user is asking to execute automations. Turn things on and off, change scenes, get camera streams/pictures
 homepage: https://www.home-assistant.io/
 metadata: {"requires":{"bins":["bash"],"env":["HA_TOKEN"]},"primaryEnv":"HA_TOKEN"}
 ---

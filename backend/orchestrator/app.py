@@ -836,7 +836,7 @@ def get_skill(skill_name: str, user: dict = Depends(get_current_user)):
 def match_skills(
     query: str = Query(..., description="User query to match against skills"),
     max_skills: int = Query(2, ge=1, le=5, description="Maximum skills to return"),
-    min_confidence: float = Query(0.7, ge=0.0, le=1.0, description="Minimum confidence threshold"),
+    min_confidence: float = Query(0.5, ge=0.0, le=1.0, description="Minimum confidence threshold"),
     user: dict = Depends(get_current_user),
 ):
     """

@@ -131,7 +131,7 @@ class SkillMatcher:
         self,
         query: str,
         max_skills: int = 5,
-        min_confidence: float = 0.6,
+        min_confidence: float = 0.5,
     ) -> List[SkillMatch]:
         """
         Find skills that match the user query.
@@ -160,7 +160,6 @@ class SkillMatcher:
 
         for name, skill in self.skills.items():
             skill_embedding = self._get_skill_embedding(skill)
-            print(f"[skills.matcher] Skill embedding: {skill_embedding}")
             if not skill_embedding:
                 continue
 

@@ -77,8 +77,8 @@ class SkillRegistry:
     def find_matching_skills(
         self,
         query: str,
-        max_skills: int = 2,
-        min_confidence: float = 0.7,
+        max_skills: int = 5,
+        min_confidence: float = 0.5,
     ) -> List[SkillMatch]:
         """
         Find skills that match the user query.
