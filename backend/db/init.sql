@@ -291,6 +291,13 @@ CREATE TABLE IF NOT EXISTS conversation_messages (
 CREATE INDEX IF NOT EXISTS idx_conversation_messages_thread_created
   ON conversation_messages (thread_id, created_at, message_id);
 
+-- Main sessions (quick chat mode - one main session per user)
+CREATE TABLE IF NOT EXISTS main_sessions (
+  user_email TEXT PRIMARY KEY,
+  current_thread_id TEXT REFERENCES conversation_threads(id) ON DELETE SET NULL,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
 -- Action logs (system actions such as gate access)
 DO $$
 BEGIN

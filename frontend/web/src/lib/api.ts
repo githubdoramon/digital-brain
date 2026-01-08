@@ -109,6 +109,7 @@ export type StreamEvent =
   | { type: "tool_call"; name: string; args?: Record<string, unknown> }
   | { type: "tool_result"; name: string; result: unknown }
   | { type: "status"; message: string }
+  | { type: "session_info"; thread_id: string; is_new_session: boolean }
   | { type: "done"; bundle: StreamBundle }
   | { type: "error"; message: string };
 
@@ -116,6 +117,7 @@ export type StreamBundle = {
   answer: string;
   thread_id?: string;
   thread_title?: string | null;
+  is_new_session?: boolean;
   event_proposal?: unknown;
   activated_skills?: string[];
 };
@@ -125,6 +127,7 @@ export type StreamCallbacks = {
   onToolCall?: (name: string, args?: Record<string, unknown>) => void;
   onToolResult?: (name: string, result: unknown) => void;
   onStatus?: (message: string) => void;
+  onSessionInfo?: (threadId: string, isNewSession: boolean) => void;
   onError?: (message: string) => void;
 };
 
@@ -197,6 +200,9 @@ export async function askWithStreaming(
               break;
             case "status":
               callbacks.onStatus?.(event.message);
+              break;
+            case "session_info":
+              callbacks.onSessionInfo?.(event.thread_id, event.is_new_session);
               break;
             case "error":
               callbacks.onError?.(event.message);

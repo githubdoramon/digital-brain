@@ -533,26 +533,52 @@ async def ask(payload: AskIn, user: dict = Depends(get_current_user)):
         raise HTTPException(status_code=400, detail="Authenticated user email missing")
 
     requested_thread_id = payload.thread_id or payload.session_id
-    try:
-        thread = conversations.ensure_thread(requested_thread_id, user_email)
-    except LookupError:
-        raise HTTPException(status_code=404, detail="Conversation thread not found")
-    except PermissionError:
-        raise HTTPException(status_code=403, detail="Conversation thread does not belong to user")
+    question = payload.question
+    is_new_session = False
+
+    if requested_thread_id:
+        # Explicit thread - existing behavior (unchanged)
+        try:
+            thread = conversations.ensure_thread(requested_thread_id, user_email)
+        except LookupError:
+            raise HTTPException(status_code=404, detail="Conversation thread not found")
+        except PermissionError:
+            raise HTTPException(status_code=403, detail="Conversation thread does not belong to user")
+    else:
+        # Main session mode - resolve main session with timeout and command parsing
+        thread, is_new_session, question = conversations.resolve_main_session(
+            user_email, question
+        )
 
     session_id = thread["id"]
+
+    # Handle /new command with no actual message - just acknowledge the reset
+    if is_new_session and not question.strip():
+        print(f"[ask] session reset session={session_id} user={user_email}")
+        return AskOut(
+            question=payload.question,
+            answer="New session started. How can I help you?",
+            resolution={},
+            search_results=[],
+            detailed_events=[],
+            session_id=session_id,
+            thread_id=session_id,
+            is_new_session=True,
+        )
+
     event_capture_enabled = bool(payload.event_capture_enabled)
     limit = payload.limit or 3
-    preview = payload.question.strip().replace("\n", " ")
+    preview = question.strip().replace("\n", " ")
     if len(preview) > 120:
         preview = preview[:117] + "..."
 
+    mode = "main_session" if not requested_thread_id else "thread"
     print(
-        f"[ask] start session={session_id} user={user_email} limit={limit} question={preview!r}"
+        f"[ask] start session={session_id} user={user_email} limit={limit} mode={mode} is_new={is_new_session} question={preview!r}"
     )
 
     bundle = await llm.answer_question(
-        payload.question,
+        question,
         search_limit=limit,
         user_id=user_email,
         session_id=session_id,
@@ -561,6 +587,7 @@ async def ask(payload: AskIn, user: dict = Depends(get_current_user)):
     )
     bundle["thread_id"] = session_id
     bundle["session_id"] = session_id
+    bundle["is_new_session"] = is_new_session
 
     elapsed = perf_counter() - start_time
     search_results = bundle.get("search_results")
@@ -590,32 +617,74 @@ async def ask_stream(payload: AskIn, user: dict = Depends(get_current_user)):
         raise HTTPException(status_code=400, detail="Authenticated user email missing")
 
     requested_thread_id = payload.thread_id or payload.session_id
-    try:
-        thread = conversations.ensure_thread(requested_thread_id, user_email)
-    except LookupError:
-        raise HTTPException(status_code=404, detail="Conversation thread not found")
-    except PermissionError:
-        raise HTTPException(status_code=403, detail="Conversation thread does not belong to user")
+    question = payload.question
+    is_new_session = False
+
+    if requested_thread_id:
+        # Explicit thread - existing behavior (unchanged)
+        try:
+            thread = conversations.ensure_thread(requested_thread_id, user_email)
+        except LookupError:
+            raise HTTPException(status_code=404, detail="Conversation thread not found")
+        except PermissionError:
+            raise HTTPException(status_code=403, detail="Conversation thread does not belong to user")
+    else:
+        # Main session mode - resolve main session with timeout and command parsing
+        thread, is_new_session, question = conversations.resolve_main_session(
+            user_email, question
+        )
 
     session_id = thread["id"]
+
+    # Handle /new command with no actual message - just acknowledge the reset
+    if is_new_session and not question.strip():
+        print(f"[ask/stream] session reset session={session_id} user={user_email}")
+
+        async def reset_generator():
+            yield f"data: {json.dumps({'type': 'session_info', 'thread_id': session_id, 'is_new_session': True})}\n\n"
+            yield f"data: {json.dumps({'type': 'token', 'content': 'New session started. How can I help you?'})}\n\n"
+            yield f"data: {json.dumps({'type': 'done', 'bundle': {'question': payload.question, 'answer': 'New session started. How can I help you?', 'resolution': {}, 'search_results': [], 'detailed_events': [], 'session_id': session_id, 'thread_id': session_id, 'is_new_session': True}})}\n\n"
+
+        return StreamingResponse(
+            reset_generator(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no",
+            },
+        )
+
     event_capture_enabled = bool(payload.event_capture_enabled)
     limit = payload.limit or 3
 
-    preview = payload.question.strip().replace("\n", " ")
+    preview = question.strip().replace("\n", " ")
     if len(preview) > 120:
         preview = preview[:117] + "..."
-    print(f"[ask/stream] start session={session_id} user={user_email} limit={limit} question={preview!r}")
+    mode = "main_session" if not requested_thread_id else "thread"
+    print(f"[ask/stream] start session={session_id} user={user_email} limit={limit} mode={mode} is_new={is_new_session} question={preview!r}")
 
     async def event_generator():
         try:
+            # Send initial metadata event with session info
+            yield f"data: {json.dumps({'type': 'session_info', 'thread_id': session_id, 'is_new_session': is_new_session})}\n\n"
+
             async for event in llm.answer_question_stream(
-                payload.question,
+                question,
                 search_limit=limit,
                 user_id=user_email,
                 session_id=session_id,
                 user_email=user_email,
                 event_capture_enabled=event_capture_enabled,
             ):
+                # Inject session info into done event
+                if event.get("type") == "done":
+                    bundle = event.get("bundle", {})
+                    bundle["thread_id"] = session_id
+                    bundle["session_id"] = session_id
+                    bundle["is_new_session"] = is_new_session
+                    event["bundle"] = bundle
+
                 # SSE format: data: {json}\n\n
                 yield f"data: {json.dumps(event, default=str)}\n\n"
 

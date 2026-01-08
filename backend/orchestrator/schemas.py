@@ -216,6 +216,7 @@ class AskOut(BaseModel):
     session_id: Optional[str] = None
     thread_id: Optional[str] = None
     thread_title: Optional[str] = None
+    is_new_session: bool = False
     event_proposal: Optional[EventProposal] = None
     web_results: List[Dict[str, Any]] = Field(default_factory=list)
     web_summary: Optional[str] = None

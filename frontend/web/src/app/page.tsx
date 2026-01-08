@@ -42,6 +42,8 @@ type AssistantMetadata = {
   event_proposal?: EventProposal;
 } & Record<string, unknown>;
 
+type ChatMode = "quick" | "threads";
+
 type MarkdownCodeProps = HTMLAttributes<HTMLElement> & {
   inline?: boolean;
   children?: ReactNode;
@@ -157,6 +159,10 @@ export default function Home() {
   const [streamingContent, setStreamingContent] = useState<string>("");
   const [streamingStatus, setStreamingStatus] = useState<string>("");
   const messagesEndRef = useRef<HTMLDivElement>(null);
+
+  // Quick Chat mode state
+  const [chatMode, setChatMode] = useState<ChatMode>("quick");
+  const [quickChatMessages, setQuickChatMessages] = useState<Message[]>([]);
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -299,104 +305,195 @@ export default function Home() {
     setStreamingContent("");
     setStreamingStatus("");
 
-    try {
-      let threadId = selectedThreadId;
-      if (!threadId) {
-        const created = await api.post<ThreadSummary>("/threads", {});
-        threadId = created.id;
-        setThreads((prev) => [created, ...prev]);
-        setSelectedThreadId(threadId);
-        setEventCaptureEnabled(false);
-        setMessages([]);
-      }
+    if (chatMode === "quick") {
+      // Quick Chat mode - no explicit thread_id, let backend handle main session
+      try {
+        const userMessage: Message = {
+          role: "user",
+          content: pendingInput,
+          timestamp: new Date(),
+        };
 
-      const userMessage: Message = {
-        role: "user",
-        content: pendingInput,
-        timestamp: new Date(),
-      };
+        setQuickChatMessages((prev) => [...prev, userMessage]);
 
-      setMessages((prev) => [...prev, userMessage]);
+        let sessionIsNew = false;
 
-      const data: StreamBundle = await askWithStreaming(
-        pendingInput,
-        {
-          threadId,
-          limit: 5,
-          eventCaptureEnabled,
-        },
-        {
-          onToken: (_token, fullContent) => {
-            setStreamingContent(fullContent);
+        const data: StreamBundle = await askWithStreaming(
+          pendingInput,
+          {
+            threadId: undefined, // Backend resolves main session
+            limit: 5,
+            eventCaptureEnabled: false,
           },
-          onStatus: (message) => {
-            setStreamingStatus(message);
-          },
-          onToolCall: (name) => {
-            setStreamingStatus(`Using tool: ${name}...`);
-          },
-          onToolResult: () => {
-            setStreamingStatus("Processing results...");
-          },
-          onError: (message) => {
-            setStreamingStatus(`Error: ${message}`);
-          },
+          {
+            onToken: (_token, fullContent) => {
+              setStreamingContent(fullContent);
+            },
+            onStatus: (message) => {
+              setStreamingStatus(message);
+            },
+            onSessionInfo: (_threadId, isNewSession) => {
+              sessionIsNew = isNewSession;
+            },
+            onToolCall: (name) => {
+              setStreamingStatus(`Using tool: ${name}...`);
+            },
+            onToolResult: () => {
+              setStreamingStatus("Processing results...");
+            },
+            onError: (message) => {
+              setStreamingStatus(`Error: ${message}`);
+            },
+          }
+        );
+
+        // Clear streaming state
+        setStreamingContent("");
+        setStreamingStatus("");
+
+        // Update from response if available
+        if (data.is_new_session !== undefined) {
+          sessionIsNew = data.is_new_session;
         }
-      );
 
-      // Clear streaming state
-      setStreamingContent("");
-      setStreamingStatus("");
+        const metadata: AssistantMetadata | undefined = data.event_proposal
+          ? { event_proposal: data.event_proposal as EventProposal }
+          : undefined;
 
-      if (data.thread_id && data.thread_id !== threadId) {
-        threadId = data.thread_id;
-        setSelectedThreadId(threadId);
-      }
+        const assistantMessage: Message = {
+          id: undefined,
+          role: "assistant",
+          content: data.answer || "I couldn't generate a response.",
+          timestamp: new Date(),
+          metadata,
+        };
 
-      if (threadId && data.thread_title) {
-        const updatedTitle = data.thread_title.trim();
-        if (updatedTitle.length > 0) {
-          const resolvedThreadId = threadId;
-          setThreads((prev) =>
-            prev.map((thread) =>
-              thread.id === resolvedThreadId
-                ? { ...thread, title: updatedTitle, updated_at: new Date().toISOString() }
-                : thread
-            )
-          );
+        // If new session, clear previous messages and start fresh
+        if (sessionIsNew) {
+          setQuickChatMessages([userMessage, assistantMessage]);
+        } else {
+          setQuickChatMessages((prev) => [...prev, assistantMessage]);
         }
+
+        // Refresh threads list to show the quick chat thread
+        await refreshThreads();
+      } catch (error) {
+        setStreamingContent("");
+        setStreamingStatus("");
+        const errorMessage: Message = {
+          role: "assistant",
+          content: `Error: ${error instanceof Error ? error.message : "Unexpected error occurred"}`,
+          timestamp: new Date(),
+        };
+        setQuickChatMessages((prev) => [...prev, errorMessage]);
+      } finally {
+        setIsLoading(false);
       }
+    } else {
+      // Threads mode - existing behavior
+      try {
+        let threadId = selectedThreadId;
+        if (!threadId) {
+          const created = await api.post<ThreadSummary>("/threads", {});
+          threadId = created.id;
+          setThreads((prev) => [created, ...prev]);
+          setSelectedThreadId(threadId);
+          setEventCaptureEnabled(false);
+          setMessages([]);
+        }
 
-      const metadata: AssistantMetadata | undefined = data.event_proposal
-        ? { event_proposal: data.event_proposal as EventProposal }
-        : undefined;
+        const userMessage: Message = {
+          role: "user",
+          content: pendingInput,
+          timestamp: new Date(),
+        };
 
-      const assistantMessage: Message = {
-        id: undefined,
-        role: "assistant",
-        content: data.answer || "I couldn't generate a response.",
-        timestamp: new Date(),
-        metadata,
-      };
+        setMessages((prev) => [...prev, userMessage]);
 
-      setMessages((prev) => [...prev, assistantMessage]);
-      await refreshThreads();
-    } catch (error) {
-      setStreamingContent("");
-      setStreamingStatus("");
-      const errorMessage: Message = {
-        role: "assistant",
-        content: `Error: ${error instanceof Error ? error.message : "Unexpected error occurred"}`,
-        timestamp: new Date(),
-      };
-      setMessages((prev) => [...prev, errorMessage]);
-    } finally {
-      setIsLoading(false);
+        const data: StreamBundle = await askWithStreaming(
+          pendingInput,
+          {
+            threadId,
+            limit: 5,
+            eventCaptureEnabled,
+          },
+          {
+            onToken: (_token, fullContent) => {
+              setStreamingContent(fullContent);
+            },
+            onStatus: (message) => {
+              setStreamingStatus(message);
+            },
+            onToolCall: (name) => {
+              setStreamingStatus(`Using tool: ${name}...`);
+            },
+            onToolResult: () => {
+              setStreamingStatus("Processing results...");
+            },
+            onError: (message) => {
+              setStreamingStatus(`Error: ${message}`);
+            },
+          }
+        );
+
+        // Clear streaming state
+        setStreamingContent("");
+        setStreamingStatus("");
+
+        if (data.thread_id && data.thread_id !== threadId) {
+          threadId = data.thread_id;
+          setSelectedThreadId(threadId);
+        }
+
+        if (threadId && data.thread_title) {
+          const updatedTitle = data.thread_title.trim();
+          if (updatedTitle.length > 0) {
+            const resolvedThreadId = threadId;
+            setThreads((prev) =>
+              prev.map((thread) =>
+                thread.id === resolvedThreadId
+                  ? { ...thread, title: updatedTitle, updated_at: new Date().toISOString() }
+                  : thread
+              )
+            );
+          }
+        }
+
+        const metadata: AssistantMetadata | undefined = data.event_proposal
+          ? { event_proposal: data.event_proposal as EventProposal }
+          : undefined;
+
+        const assistantMessage: Message = {
+          id: undefined,
+          role: "assistant",
+          content: data.answer || "I couldn't generate a response.",
+          timestamp: new Date(),
+          metadata,
+        };
+
+        setMessages((prev) => [...prev, assistantMessage]);
+        await refreshThreads();
+      } catch (error) {
+        setStreamingContent("");
+        setStreamingStatus("");
+        const errorMessage: Message = {
+          role: "assistant",
+          content: `Error: ${error instanceof Error ? error.message : "Unexpected error occurred"}`,
+          timestamp: new Date(),
+        };
+        setMessages((prev) => [...prev, errorMessage]);
+      } finally {
+        setIsLoading(false);
+      }
     }
   }
 
+  // Determine which messages to display based on mode
+  const displayMessages = chatMode === "quick" ? quickChatMessages : messages;
+
   return (
-    <section style={{ display: "grid", gridTemplateColumns: "280px 1fr", gap: "16px", alignItems: "start" }}>
+    <section style={{ display: "grid", gridTemplateColumns: chatMode === "threads" ? "280px 1fr" : "1fr", gap: "16px", alignItems: "start" }}>
+      {chatMode === "threads" && (
       <aside
         style={{
           border: "1px solid #e2e2e2",
@@ -517,14 +614,49 @@ export default function Home() {
           })}
         </div>
       </aside>
+      )}
       <div style={{ display: "grid", gap: "16px" }}>
-        <div>
-          <h1 style={{ fontSize: "2rem", fontWeight: 600 }}>
-            Welcome{session?.user?.name ? `, ${session.user.name.split(" ")[0]}` : ""}!
-          </h1>
-          <p style={{ color: "#555", marginTop: "8px" }}>
-            Ask questions about your personal data and get AI-powered insights.
-          </p>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+          <div>
+            <h1 style={{ fontSize: "2rem", fontWeight: 600 }}>
+              Welcome{session?.user?.name ? `, ${session.user.name.split(" ")[0]}` : ""}!
+            </h1>
+            <p style={{ color: "#555", marginTop: "8px" }}>
+              Ask questions about your personal data and get AI-powered insights.
+            </p>
+          </div>
+          <div style={{ display: "flex", gap: "4px", background: "#f1f5f9", borderRadius: "8px", padding: "4px" }}>
+            <button
+              onClick={() => setChatMode("quick")}
+              style={{
+                padding: "8px 16px",
+                borderRadius: "6px",
+                border: "none",
+                background: chatMode === "quick" ? "#fff" : "transparent",
+                color: chatMode === "quick" ? "#0b6bcb" : "#64748b",
+                fontWeight: chatMode === "quick" ? 600 : 400,
+                cursor: "pointer",
+                boxShadow: chatMode === "quick" ? "0 1px 3px rgba(0,0,0,0.1)" : "none",
+              }}
+            >
+              Quick Chat
+            </button>
+            <button
+              onClick={() => setChatMode("threads")}
+              style={{
+                padding: "8px 16px",
+                borderRadius: "6px",
+                border: "none",
+                background: chatMode === "threads" ? "#fff" : "transparent",
+                color: chatMode === "threads" ? "#0b6bcb" : "#64748b",
+                fontWeight: chatMode === "threads" ? 600 : 400,
+                cursor: "pointer",
+                boxShadow: chatMode === "threads" ? "0 1px 3px rgba(0,0,0,0.1)" : "none",
+              }}
+            >
+              Threads
+            </button>
+          </div>
         </div>
         <div
           style={{
@@ -583,7 +715,7 @@ export default function Home() {
               <div style={{ color: "#666", fontSize: "0.9rem" }}>Loading conversation...</div>
             )}
 
-            {!isLoadingMessages && messages.length === 0 && (
+            {!isLoadingMessages && displayMessages.length === 0 && (
               <div
                 style={{
                   display: "flex",
@@ -606,7 +738,7 @@ export default function Home() {
               </div>
             )}
 
-            {messages.map((message, index) => {
+            {displayMessages.map((message, index) => {
               const eventProposal = (message.metadata as AssistantMetadata | undefined)?.event_proposal;
               return (
                 <div

@@ -305,3 +305,170 @@ def update_thread_title(thread_id: str, user_email: str, title: str) -> Optional
         conn.commit()
     return row
 
+
+# ---------------------------------------------------------------------------
+# Main Session (Quick Chat mode)
+# ---------------------------------------------------------------------------
+
+DEFAULT_IDLE_MINUTES = 30
+RESET_TRIGGERS = ["/new"]
+
+
+def parse_session_command(message: str) -> tuple[bool, str]:
+    """
+    Parse message for session commands like /new.
+    Returns (is_reset, stripped_body).
+    """
+    body = message.strip()
+    body_lower = body.lower()
+    for trigger in RESET_TRIGGERS:
+        if body_lower == trigger:
+            return (True, "")
+        if body_lower.startswith(f"{trigger} "):
+            return (True, body[len(trigger):].strip())
+    return (False, body)
+
+
+def get_main_session(user_email: str) -> Optional[Dict[str, Any]]:
+    """Get main session metadata for user, including the thread if it exists."""
+    if not user_email:
+        return None
+
+    with get_conn() as conn, conn.cursor(row_factory=dict_row) as cur:
+        cur.execute(
+            """
+            SELECT
+                ms.user_email,
+                ms.current_thread_id,
+                ms.updated_at,
+                t.id AS thread_id,
+                t.title AS thread_title,
+                t.created_at AS thread_created_at
+            FROM main_sessions ms
+            LEFT JOIN conversation_threads t ON t.id = ms.current_thread_id
+            WHERE ms.user_email = %s
+            """,
+            (user_email,),
+        )
+        return cur.fetchone()
+
+
+def _upsert_main_session(user_email: str, thread_id: str) -> None:
+    """Create or update main session pointer."""
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO main_sessions (user_email, current_thread_id, updated_at)
+            VALUES (%s, %s, NOW())
+            ON CONFLICT (user_email) DO UPDATE
+            SET current_thread_id = EXCLUDED.current_thread_id,
+                updated_at = NOW()
+            """,
+            (user_email, thread_id),
+        )
+        conn.commit()
+
+
+def _touch_main_session(user_email: str) -> None:
+    """Update the main session timestamp without changing the thread."""
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            UPDATE main_sessions
+            SET updated_at = NOW()
+            WHERE user_email = %s
+            """,
+            (user_email,),
+        )
+        conn.commit()
+
+
+def _create_thread_for_main_session(user_email: str) -> Dict[str, Any]:
+    """Create a new thread for the main session with a Quick Chat title."""
+    new_thread_id = _generate_thread_id()
+    title = f"Quick Chat - {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M')} UTC"
+    with get_conn() as conn, conn.cursor(row_factory=dict_row) as cur:
+        cur.execute(
+            """
+            INSERT INTO conversation_threads (id, user_email, title)
+            VALUES (%s, %s, %s)
+            RETURNING id, user_email, title, created_at, updated_at
+            """,
+            (new_thread_id, user_email, title),
+        )
+        row = cur.fetchone()
+        conn.commit()
+        return row
+
+
+def resolve_main_session(
+    user_email: str,
+    message: str,
+    idle_minutes: int = DEFAULT_IDLE_MINUTES,
+) -> tuple[Dict[str, Any], bool, str]:
+    """
+    Resolve main session for user.
+
+    Returns: (thread, is_new_session, stripped_message)
+    - thread: The conversation thread dict
+    - is_new_session: True if a new session was created (timeout or /new command)
+    - stripped_message: The message with any command prefix removed
+    """
+    if not user_email:
+        raise ValueError("user_email is required")
+
+    is_reset, stripped_body = parse_session_command(message)
+    main_session = get_main_session(user_email)
+
+    # First time user or no main session exists
+    if main_session is None:
+        thread = _create_thread_for_main_session(user_email)
+        _upsert_main_session(user_email, thread["id"])
+        return (thread, True, stripped_body)
+
+    # Check if the current thread still exists (may have been deleted)
+    current_thread_id = main_session.get("current_thread_id")
+    thread_exists = main_session.get("thread_id") is not None
+
+    if not thread_exists or not current_thread_id:
+        # Thread was deleted, create a new one
+        thread = _create_thread_for_main_session(user_email)
+        _upsert_main_session(user_email, thread["id"])
+        return (thread, True, stripped_body)
+
+    # Check idle timeout
+    updated_at = main_session["updated_at"]
+    if updated_at.tzinfo is None:
+        updated_at = updated_at.replace(tzinfo=timezone.utc)
+    elapsed = datetime.now(timezone.utc) - updated_at
+    is_timed_out = elapsed.total_seconds() > (idle_minutes * 60)
+
+    if is_reset or is_timed_out:
+        # Create new thread, update pointer
+        thread = _create_thread_for_main_session(user_email)
+        _upsert_main_session(user_email, thread["id"])
+        return (thread, True, stripped_body)
+
+    # Use existing thread, update timestamp
+    _touch_main_session(user_email)
+
+    # Get the full thread data
+    with get_conn() as conn, conn.cursor(row_factory=dict_row) as cur:
+        cur.execute(
+            """
+            SELECT id, user_email, title, created_at, updated_at
+            FROM conversation_threads
+            WHERE id = %s AND user_email = %s
+            """,
+            (current_thread_id, user_email),
+        )
+        thread = cur.fetchone()
+
+    if not thread:
+        # Shouldn't happen, but handle gracefully
+        thread = _create_thread_for_main_session(user_email)
+        _upsert_main_session(user_email, thread["id"])
+        return (thread, True, stripped_body)
+
+    return (thread, False, stripped_body)
+
