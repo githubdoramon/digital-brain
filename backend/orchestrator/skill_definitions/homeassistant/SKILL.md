@@ -1,7 +1,6 @@
 ---
 name: homeassistant
 description: Controls the user's home and office - smart plugs, lights, scenes, automations. Can be used whenever the user is asking to execute automations. Turn things on and off, change scenes, get camera streams/pictures
-homepage: https://www.home-assistant.io/
 metadata: {"requires":{"bins":["bash"],"env":["HA_TOKEN"]},"primaryEnv":"HA_TOKEN"}
 ---
 
@@ -11,7 +10,7 @@ Control smart home devices via Home Assistant API.
 
 ## Setup
 
-The following environment variables will be set
+The following environment variables are already set, so you must use on your requests
 - `HA_URL`: The home Assistant URL
 - `HA_TOKEN`: Long-lived access token
 
