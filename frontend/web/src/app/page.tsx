@@ -7,7 +7,7 @@ import { useSession } from "next-auth/react";
 import ReactMarkdown from "react-markdown";
 import type { Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { api, askWithStreaming, StreamBundle } from "@/lib/api";
+import { api, ask, StreamBundle } from "@/lib/api";
 import EventProposalCard, { EventProposal } from "@/components/EventProposalCard";
 
 type Message = {
@@ -316,48 +316,14 @@ export default function Home() {
 
         setQuickChatMessages((prev) => [...prev, userMessage]);
 
-        let sessionIsNew = false;
+        // Use non-streaming endpoint
+        const data: StreamBundle = await ask(pendingInput, {
+          threadId: undefined, // Backend resolves main session
+          limit: 5,
+          eventCaptureEnabled: false,
+        });
 
-        const data: StreamBundle = await askWithStreaming(
-          pendingInput,
-          {
-            threadId: undefined, // Backend resolves main session
-            limit: 5,
-            eventCaptureEnabled: false,
-          },
-          {
-            onToken: (_token, fullContent) => {
-              setStreamingContent(fullContent);
-            },
-            onClearContent: () => {
-              setStreamingContent("");
-            },
-            onStatus: (message) => {
-              setStreamingStatus(message);
-            },
-            onSessionInfo: (_threadId, isNewSession) => {
-              sessionIsNew = isNewSession;
-            },
-            onToolCall: (name) => {
-              setStreamingStatus(`Using tool: ${name}...`);
-            },
-            onToolResult: () => {
-              setStreamingStatus("Processing results...");
-            },
-            onError: (message) => {
-              setStreamingStatus(`Error: ${message}`);
-            },
-          }
-        );
-
-        // Clear streaming state
-        setStreamingContent("");
-        setStreamingStatus("");
-
-        // Update from response if available
-        if (data.is_new_session !== undefined) {
-          sessionIsNew = data.is_new_session;
-        }
+        const sessionIsNew = data.is_new_session ?? false;
 
         const metadata: AssistantMetadata | undefined = data.event_proposal
           ? { event_proposal: data.event_proposal as EventProposal }
@@ -381,8 +347,6 @@ export default function Home() {
         // Refresh threads list to show the quick chat thread
         await refreshThreads();
       } catch (error) {
-        setStreamingContent("");
-        setStreamingStatus("");
         const errorMessage: Message = {
           role: "assistant",
           content: `Error: ${error instanceof Error ? error.message : "Unexpected error occurred"}`,
@@ -413,38 +377,12 @@ export default function Home() {
 
         setMessages((prev) => [...prev, userMessage]);
 
-        const data: StreamBundle = await askWithStreaming(
-          pendingInput,
-          {
-            threadId,
-            limit: 5,
-            eventCaptureEnabled,
-          },
-          {
-            onToken: (_token, fullContent) => {
-              setStreamingContent(fullContent);
-            },
-            onClearContent: () => {
-              setStreamingContent("");
-            },
-            onStatus: (message) => {
-              setStreamingStatus(message);
-            },
-            onToolCall: (name) => {
-              setStreamingStatus(`Using tool: ${name}...`);
-            },
-            onToolResult: () => {
-              setStreamingStatus("Processing results...");
-            },
-            onError: (message) => {
-              setStreamingStatus(`Error: ${message}`);
-            },
-          }
-        );
-
-        // Clear streaming state
-        setStreamingContent("");
-        setStreamingStatus("");
+        // Use non-streaming endpoint
+        const data: StreamBundle = await ask(pendingInput, {
+          threadId,
+          limit: 5,
+          eventCaptureEnabled,
+        });
 
         if (data.thread_id && data.thread_id !== threadId) {
           threadId = data.thread_id;
@@ -480,8 +418,6 @@ export default function Home() {
         setMessages((prev) => [...prev, assistantMessage]);
         await refreshThreads();
       } catch (error) {
-        setStreamingContent("");
-        setStreamingStatus("");
         const errorMessage: Message = {
           role: "assistant",
           content: `Error: ${error instanceof Error ? error.message : "Unexpected error occurred"}`,

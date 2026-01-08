@@ -123,6 +123,26 @@ export type StreamBundle = {
   activated_skills?: string[];
 };
 
+/**
+ * Non-streaming ask endpoint - simpler, more reliable.
+ * Use this for testing or when streaming isn't needed.
+ */
+export async function ask(
+  question: string,
+  options: {
+    threadId?: string | null;
+    limit?: number;
+    eventCaptureEnabled?: boolean;
+  }
+): Promise<StreamBundle> {
+  return api.post<StreamBundle>("/ask", {
+    question,
+    thread_id: options.threadId,
+    limit: options.limit ?? 5,
+    event_capture_enabled: options.eventCaptureEnabled ?? false,
+  });
+}
+
 export type StreamCallbacks = {
   onToken?: (content: string, fullContent: string) => void;
   onClearContent?: () => void;
