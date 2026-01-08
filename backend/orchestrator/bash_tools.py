@@ -60,6 +60,8 @@ def execute_bash(
         - error: Error message if execution failed
         - truncated: True if output was truncated
     """
+    print(f"[bash_tools] execute_bash called with command: {command!r}")
+    
     if not command or not isinstance(command, str):
         return {
             "error": "Command is required and must be a string",
@@ -103,6 +105,8 @@ def execute_bash(
     if env:
         cmd_env.update(env)
 
+    print(f"[bash_tools] Executing command with timeout={timeout}s, working_dir={working_dir}")
+    
     try:
         result = subprocess.run(
             command,
@@ -135,9 +139,12 @@ def execute_bash(
         if truncated:
             output["truncated"] = True
 
+        print(f"[bash_tools] Command completed with returncode={result.returncode}, stdout_len={len(stdout)}, stderr_len={len(stderr)}")
+        
         return output
 
     except subprocess.TimeoutExpired:
+        print(f"[bash_tools] Command TIMEOUT after {timeout} seconds")
         return {
             "error": f"Command timed out after {timeout} seconds",
             "stdout": "",
@@ -145,6 +152,7 @@ def execute_bash(
             "returncode": -1,
         }
     except Exception as e:
+        print(f"[bash_tools] Command FAILED with exception: {e}")
         return {
             "error": str(e),
             "stdout": "",

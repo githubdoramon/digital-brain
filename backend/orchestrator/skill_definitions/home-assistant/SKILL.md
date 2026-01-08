@@ -11,9 +11,9 @@ Control smart home devices via Home Assistant API.
 
 ## Setup
 
-Set environment variables:
-- `HA_URL`: Your Home Assistant URL (e.g., `http://192.168.1.100:8123`)
-- `HA_TOKEN`: Long-lived access token (create in HA → Profile → Long-Lived Access Tokens)
+The following environment variables will be set
+- `HA_URL`: The home Assistant URL
+- `HA_TOKEN`: Long-lived access token
 
 ## Quick Commands
 
