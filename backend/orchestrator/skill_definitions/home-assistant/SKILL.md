@@ -17,14 +17,35 @@ The following environment variables will be set
 
 ## Quick Commands
 
+### List areas
+Great to try to match a user's request to a specific area
+```bash
+curl -s "$HA_URL/api/template" -H "Authorization: Bearer $HA_TOKEN"  -d '{"template": "{{ areas() | tojson }}"}'  | \
+  jq -r '.[]'
+```
+
+### List all entities
+```bash
+curl -s "$HA_URL/api/states" -H "Authorization: Bearer $HA_TOKEN" | \
+  jq -r '.[] | select(.entity_id) | .entity_id'
+```
+
 ### List entities by domain
 ```bash
 curl -s "$HA_URL/api/states" -H "Authorization: Bearer $HA_TOKEN" | \
-  jq -r '.[] | select(.entity_id | startswith("switch.")) | .entity_id'
+  jq -r '.[] | select(.entity_id | startswith("<domain name>.")) | .entity_id'
 ```
 Make sure to replace the text inside startswith with the rigth domain you are looking for
 
-### Turn on/off
+### List entities from a given area
+If you know the correct area from the first command, you can list entities from this area (replacing the area name in the command)
+```bash
+curl -s "$HA_URL/api/template" -H "Authorization: Bearer $HA_TOKEN"  \
+  -d '{"template": "{{ area_entities(\"<area name>\")| tojson }}"}' | \
+  jq -r '.[]'
+```
+
+### Turn switches on/off
 ```bash
 # Turn on
 curl -s -X POST "$HA_URL/api/services/switch/turn_on" \
@@ -83,6 +104,6 @@ curl -s "$HA_URL/api/states/{entity_id}" -H "Authorization: Bearer $HA_TOKEN"
 ## Notes
 
 - API returns JSON by default
-- Do not guess entities. List/search them to find what is the right one the user is asking to be changed
 - Switches can be the actual entity for many other domains, like lights or climate
+- Do not guess entities, EVER. Always list all entities and then check which is the most likely to be the one the user actually wants you to act on.
 - Test entity IDs with the list command first
