@@ -999,6 +999,7 @@ def _build_messages(
     # Skills integration: inject skill index and matching skills
     try:
         registry = skills.get_registry()
+        print(f"[skills] Registry: {registry}")
 
         # Always include skill index (lightweight, ~50 tokens per skill)
         skill_index = registry.get_skill_index()
@@ -1007,6 +1008,7 @@ def _build_messages(
 
         # Find and inject matching skills based on user question
         matching_skills = registry.find_matching_skills(question)
+        print(f"[skills] Matching skills: {matching_skills}")
         for match in matching_skills:
             skill_prompt = (
                 f"ACTIVE SKILL [{match.skill.name}] (confidence: {match.confidence:.2f}):\n"

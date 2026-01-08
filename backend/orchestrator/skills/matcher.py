@@ -130,8 +130,8 @@ class SkillMatcher:
     def find_matching_skills(
         self,
         query: str,
-        max_skills: int = 2,
-        min_confidence: float = 0.7,
+        max_skills: int = 5,
+        min_confidence: float = 0.6,
     ) -> List[SkillMatch]:
         """
         Find skills that match the user query.
@@ -152,6 +152,7 @@ class SkillMatcher:
             return []
 
         query_embedding = self._get_query_embedding(query)
+        print(f"[skills.matcher] Query embedding: {query_embedding}")
         if not query_embedding:
             return []
 
@@ -159,14 +160,15 @@ class SkillMatcher:
 
         for name, skill in self.skills.items():
             skill_embedding = self._get_skill_embedding(skill)
+            print(f"[skills.matcher] Skill embedding: {skill_embedding}")
             if not skill_embedding:
                 continue
 
             similarity = _cosine_similarity(query_embedding, skill_embedding)
-
+            print(f"[skills.matcher] Similarity: {similarity}")
             if similarity >= min_confidence:
                 matches.append(SkillMatch(skill=skill, confidence=similarity))
-
+                print(f"[skills.matcher] Match: {skill.name} (confidence: {similarity})")
         # Sort by confidence (highest first) and limit
         matches.sort(key=lambda m: m.confidence, reverse=True)
         return matches[:max_skills]
