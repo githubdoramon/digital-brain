@@ -17,6 +17,7 @@ import sql_tools
 import web_tools
 import tags_manager
 import skills
+import bash_tools
 
 OLLAMA_HOST = os.getenv("OLLAMA_HOST")
 OLLAMA_CHAT_MODEL = os.getenv("OLLAMA_CHAT_MODEL")
@@ -278,6 +279,30 @@ TOOLS: List[Dict[str, Any]] = [
                     },
                 },
                 "required": ["skill_name", "script_name"],
+                "additionalProperties": False,
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "bash",
+            "description": "Execute a shell command and return stdout, stderr, and exit code. Use this for CLI operations like curl, jq, file manipulation, or any system command. Commands run in a sandboxed environment with timeout protection.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "command": {
+                        "type": "string",
+                        "description": "The shell command to execute (e.g., 'curl -s https://api.example.com/data | jq .name').",
+                    },
+                    "timeout": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 120,
+                        "description": "Maximum execution time in seconds (default 30, max 120).",
+                    },
+                },
+                "required": ["command"],
                 "additionalProperties": False,
             },
         },
@@ -1007,6 +1032,14 @@ def _build_messages(
         print(f"[session] Added {len(conversation_history)} messages from session history")
 
     messages.append({"role": "user", "content": question.strip()})
+
+    # Print the constructed messages for debugging, truncating if too long
+    import pprint
+    messages_str = pprint.pformat(messages)
+    if len(messages_str) > 500:
+        print("[debug] messages (last 500 chars):", messages_str[-500:])
+    else:
+        print("[debug] messages:", messages_str)
     return messages
 
 
@@ -1368,6 +1401,31 @@ def _handle_tool_call(
             skill=skill_name,
             script=script_name,
             returncode=result.get("returncode"),
+        )
+        return result
+
+    if name == "bash":
+        command = args.get("command")
+        if not command or not isinstance(command, str):
+            return {"error": "bash requires a command string"}
+
+        timeout_arg = args.get("timeout")
+        try:
+            timeout = int(timeout_arg) if timeout_arg is not None else None
+        except (TypeError, ValueError):
+            timeout = None
+
+        print(f"[agent] calling bash(command={command!r}, timeout={timeout})")
+        step_start = perf_counter()
+
+        result = bash_tools.execute_bash(command, timeout=timeout)
+
+        _log_timing(
+            "tool.bash",
+            step_start,
+            returncode=result.get("returncode"),
+            stdout_len=len(result.get("stdout", "")),
+            stderr_len=len(result.get("stderr", "")),
         )
         return result
 
