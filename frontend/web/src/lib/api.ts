@@ -106,6 +106,7 @@ export const api = {
  */
 export type StreamEvent =
   | { type: "token"; content: string }
+  | { type: "clear_content" }
   | { type: "tool_call"; name: string; args?: Record<string, unknown> }
   | { type: "tool_result"; name: string; result: unknown }
   | { type: "status"; message: string }
@@ -124,6 +125,7 @@ export type StreamBundle = {
 
 export type StreamCallbacks = {
   onToken?: (content: string, fullContent: string) => void;
+  onClearContent?: () => void;
   onToolCall?: (name: string, args?: Record<string, unknown>) => void;
   onToolResult?: (name: string, result: unknown) => void;
   onStatus?: (message: string) => void;
@@ -191,6 +193,11 @@ export async function askWithStreaming(
             case "token":
               fullContent += event.content;
               callbacks.onToken?.(event.content, fullContent);
+              break;
+            case "clear_content":
+              // Model is calling tools - clear intermediate "thinking" content
+              fullContent = "";
+              callbacks.onClearContent?.();
               break;
             case "tool_call":
               callbacks.onToolCall?.(event.name, event.args);

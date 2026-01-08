@@ -753,6 +753,38 @@ async def answer_question_stream(
 
     iteration = 0
     accumulated_content = ""
+    narration_retries = 0
+    max_narration_retries = 2
+
+    # Patterns that indicate the model is describing instead of calling tools
+    narration_patterns = [
+        "i will search",
+        "i'll search",
+        "let me search",
+        "let me look",
+        "let me query",
+        "let me check",
+        "i will query",
+        "i'll query",
+        "i will look",
+        "i'll look",
+        "i would use",
+        "i can use",
+        "i need to search",
+        "i need to query",
+        "searching for",
+        "querying the",
+        "to find this, i",
+        "to answer this, i",
+    ]
+
+    def _looks_like_narration(content: str) -> bool:
+        """Check if content appears to be narrating tool usage instead of calling tools."""
+        lower = content.lower().strip()
+        # Only check if it's short (likely just an intro) and matches patterns
+        if len(lower) > 500:
+            return False
+        return any(pattern in lower for pattern in narration_patterns)
 
     while True:
         iteration += 1
@@ -760,6 +792,7 @@ async def answer_question_stream(
 
         tool_calls = []
         current_content = ""
+        streamed_any_content = False
 
         async for chunk in _ollama_chat_stream(messages, TOOLS):
             message = chunk.get("message", {})
@@ -769,6 +802,7 @@ async def answer_question_stream(
             if delta:
                 current_content += delta
                 yield {"type": "token", "content": delta}
+                streamed_any_content = True
 
             # Collect tool calls (may come in chunks)
             chunk_tool_calls = message.get("tool_calls")
@@ -780,6 +814,12 @@ async def answer_question_stream(
 
         # Handle tool calls
         if tool_calls:
+            # If we streamed content before tool calls, tell frontend to clear it
+            # This handles the case where model says "Let me search..." before calling tools
+            if streamed_any_content:
+                yield {"type": "clear_content"}
+            narration_retries = 0  # Reset on successful tool call
+
             messages.append({
                 "role": "assistant",
                 "content": current_content,
@@ -843,7 +883,30 @@ async def answer_question_stream(
 
             continue
 
-        # No tool calls - we have the final answer
+        # No tool calls - check if the model is narrating instead of acting
+        if _looks_like_narration(current_content) and narration_retries < max_narration_retries:
+            narration_retries += 1
+            print(f"[agent] Detected narration without tool call, retry {narration_retries}/{max_narration_retries}")
+
+            # Clear the streamed narration content
+            if streamed_any_content:
+                yield {"type": "clear_content"}
+
+            # Add the narration as assistant message and nudge to actually call tools
+            messages.append({
+                "role": "assistant",
+                "content": current_content,
+            })
+            messages.append({
+                "role": "system",
+                "content": (
+                    "You described what you would do but didn't actually call a tool. "
+                    "Please INVOKE the tool now using the tool_call mechanism - don't describe, just do it."
+                ),
+            })
+            continue
+
+        # Final answer (or max retries reached)
         accumulated_content = current_content
         break
 
@@ -964,8 +1027,13 @@ def _build_messages(
         "- Use `resolve_query` to extract contacts, places, and time ranges from natural language.\n"
         "- The database is personal to this user - all data relates to them.\n"
         "- Tasks/todos are in the 'todos' table.\n\n"
-        "Important behaviors:\n"
-        "- Actually call tools and use their results - don't just describe what you would do.\n"
+        "CRITICAL - Tool calling behavior:\n"
+        "- You MUST actually invoke tools using the tool_call mechanism - NEVER just describe what you would do.\n"
+        "- WRONG: 'I will search for meetings...' or 'Let me query the database...'\n"
+        "- RIGHT: Actually call search_memories or execute_sql with proper arguments.\n"
+        "- If you need information from the database, CALL the tool immediately - don't narrate your intentions.\n"
+        "- After receiving tool results, synthesize them into a helpful answer.\n\n"
+        "Other behaviors:\n"
         "- If a SQL query fails, revise and retry based on the error.\n"
         "- Respond in the same language the user asked in.\n"
         "- If uncertain, provide your best answer with appropriate caveats rather than refusing.\n\n"

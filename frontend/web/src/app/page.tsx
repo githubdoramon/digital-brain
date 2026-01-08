@@ -329,6 +329,9 @@ export default function Home() {
             onToken: (_token, fullContent) => {
               setStreamingContent(fullContent);
             },
+            onClearContent: () => {
+              setStreamingContent("");
+            },
             onStatus: (message) => {
               setStreamingStatus(message);
             },
@@ -420,6 +423,9 @@ export default function Home() {
           {
             onToken: (_token, fullContent) => {
               setStreamingContent(fullContent);
+            },
+            onClearContent: () => {
+              setStreamingContent("");
             },
             onStatus: (message) => {
               setStreamingStatus(message);
