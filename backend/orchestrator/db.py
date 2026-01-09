@@ -18,9 +18,13 @@ POSTGRES_SCHEMA = (os.getenv("POSTGRES_SCHEMA") or "public").strip()
 
 DB_DSN = f"postgresql://{POSTGRES_USER}:{POSTGRES_PASSWORD}@{POSTGRES_HOST}:{POSTGRES_PORT}/{POSTGRES_DB}"
 
+# Log schema configuration at startup
+print(f"[db] Configured POSTGRES_SCHEMA={POSTGRES_SCHEMA!r}")
+
 
 def _set_search_path(conn: psycopg.Connection) -> None:
     if not POSTGRES_SCHEMA:
+        print(f"[db] WARNING: POSTGRES_SCHEMA is empty, using default search_path")
         return
     with conn.cursor() as cur:
         cur.execute(
@@ -28,6 +32,10 @@ def _set_search_path(conn: psycopg.Connection) -> None:
                 sql.Identifier(POSTGRES_SCHEMA)
             )
         )
+        # Verify the search path was set correctly
+        cur.execute("SHOW search_path")
+        result = cur.fetchone()
+        print(f"[db] search_path set to: {result}")
 
 
 @contextmanager
