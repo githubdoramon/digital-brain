@@ -335,6 +335,20 @@ def get_main_session(user_email: str) -> Optional[Dict[str, Any]]:
         return None
 
     with get_conn() as conn, conn.cursor(row_factory=dict_row) as cur:
+        # Debug: verify search path before query
+        cur.execute("SHOW search_path")
+        sp = cur.fetchone()
+        print(f"[conversations] get_main_session search_path={sp}")
+
+        # Debug: check if table exists
+        cur.execute("""
+            SELECT table_schema, table_name
+            FROM information_schema.tables
+            WHERE table_name = 'main_sessions'
+        """)
+        tables = cur.fetchall()
+        print(f"[conversations] main_sessions table locations: {tables}")
+
         cur.execute(
             """
             SELECT

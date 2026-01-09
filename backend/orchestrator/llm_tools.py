@@ -364,20 +364,20 @@ def handle_tool_call(
         limit = args.get("limit", search_limit)
         time_start = args.get("time_start")
         time_end = args.get("time_end")
-        contact_ids = args.get("contact_ids")
-        tags = args.get("tags")
+        contact_ids = args.get("contact_ids")  # Maps to 'people' parameter
+        # Note: 'tags' from tool schema is not yet supported by retrieval.search_memories
 
-        print(f"[agent] calling search_memories(query={query!r}, limit={limit}, time_start={time_start}, time_end={time_end}, contact_ids={contact_ids}, tags={tags})")
+        print(f"[agent] calling search_memories(query={query!r}, limit={limit}, time_start={time_start}, time_end={time_end}, contact_ids={contact_ids})")
         step_start = perf_counter()
 
-        results = retrieval.search(
+        search_result = retrieval.search_memories(
             query,
-            limit=limit,
+            people=contact_ids,
             time_start=time_start,
             time_end=time_end,
-            contact_ids=contact_ids,
-            tags=tags,
+            limit=limit,
         )
+        results = search_result.get("results", [])
         state.search_results.extend(results)
 
         _log_timing("tool.search_memories", step_start, results=len(results))
@@ -428,12 +428,7 @@ def handle_tool_call(
         print(f"[agent] calling get_events(event_ids={event_ids})")
         step_start = perf_counter()
 
-        events = []
-        for eid in event_ids:
-            event = events_service.get_event_by_id(eid)
-            if event:
-                events.append(event)
-
+        events = events_service.get_events(event_ids) if event_ids else []
         state.detailed_events.extend(events)
 
         _log_timing("tool.get_events", step_start, found=len(events), requested=len(event_ids))
@@ -447,7 +442,7 @@ def handle_tool_call(
         print(f"[agent] calling get_document(document_id={document_id!r})")
         step_start = perf_counter()
 
-        document = documents_service.get_document_by_id(document_id)
+        document = documents_service.get_document(document_id)
 
         _log_timing("tool.get_document", step_start, found=document is not None)
 
@@ -461,7 +456,8 @@ def handle_tool_call(
         print(f"[agent] calling web_search(query={query!r}, max_results={max_results})")
         step_start = perf_counter()
 
-        results = web_tools.search(query, max_results=max_results)
+        search_result = web_tools.internet_search(query, max_results=max_results)
+        results = search_result.get("results", [])
 
         _log_timing("tool.web_search", step_start, results=len(results))
         return {"results": results, "count": len(results)}
