@@ -18,6 +18,7 @@ import web_tools
 import tags_manager
 import skills
 import bash_tools
+from mcp import is_ha_configured, list_ha_tools, call_ha_tool
 
 OLLAMA_HOST = os.getenv("OLLAMA_HOST")
 OLLAMA_CHAT_MODEL = os.getenv("OLLAMA_CHAT_MODEL")
@@ -303,6 +304,33 @@ TOOLS: List[Dict[str, Any]] = [
                     },
                 },
                 "required": ["command"],
+                "additionalProperties": False,
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "home_assistant",
+            "description": "Control Home Assistant smart home/office devices via MCP protocol. Use this to control lights, switches, climate, covers, scenes, and other entities. IMPORTANT: Always list entities first before controlling them - never guess entity IDs.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "action": {
+                        "type": "string",
+                        "enum": ["list_tools", "call_tool"],
+                        "description": "Action to perform: 'list_tools' to see available HA tools, 'call_tool' to execute a specific tool.",
+                    },
+                    "tool_name": {
+                        "type": "string",
+                        "description": "Name of the MCP tool to call (required when action is 'call_tool').",
+                    },
+                    "arguments": {
+                        "type": "object",
+                        "description": "Arguments to pass to the MCP tool (when action is 'call_tool').",
+                    },
+                },
+                "required": ["action"],
                 "additionalProperties": False,
             },
         },
@@ -1501,6 +1529,48 @@ def _handle_tool_call(
             stderr_len=len(result.get("stderr", "")),
         )
         return result
+
+    if name == "home_assistant":
+        action = args.get("action")
+        if not action or action not in ("list_tools", "call_tool"):
+            return {"error": "home_assistant requires action to be 'list_tools' or 'call_tool'"}
+
+        step_start = perf_counter()
+
+        if not is_ha_configured():
+            _log_timing("tool.home_assistant", step_start, error="not_configured")
+            return {
+                "error": "Home Assistant MCP client not configured. Set HA_URL and HA_TOKEN environment variables.",
+                "hint": "HA_URL should be your Home Assistant URL (e.g., http://homeassistant.local:8123)",
+            }
+
+        if action == "list_tools":
+            print("[agent] calling home_assistant(action=list_tools)")
+            tools = list_ha_tools()
+            _log_timing("tool.home_assistant.list_tools", step_start, tool_count=len(tools))
+            return {
+                "tools": tools,
+                "count": len(tools),
+                "hint": "Use action='call_tool' with tool_name and arguments to execute a tool.",
+            }
+
+        if action == "call_tool":
+            tool_name = args.get("tool_name")
+            if not tool_name or not isinstance(tool_name, str):
+                return {"error": "call_tool action requires a tool_name string"}
+
+            tool_args = args.get("arguments") or {}
+            print(f"[agent] calling home_assistant(action=call_tool, tool={tool_name}, args={tool_args})")
+
+            result = call_ha_tool(tool_name, tool_args)
+
+            _log_timing(
+                "tool.home_assistant.call_tool",
+                step_start,
+                tool=tool_name,
+                success=result.get("success"),
+            )
+            return result
 
     raise RuntimeError(f"Unsupported tool requested: {name}")
 

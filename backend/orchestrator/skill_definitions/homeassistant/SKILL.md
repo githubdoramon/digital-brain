@@ -1,109 +1,74 @@
 ---
 name: homeassistant
 description: Controls the user's home and office - smart plugs, lights, scenes, automations. Can be used whenever the user is asking to execute automations. Turn things on and off, change scenes, get camera streams/pictures
-metadata: {"requires":{"bins":["bash"],"env":["HA_TOKEN"]},"primaryEnv":"HA_TOKEN"}
+metadata: {"requires":{"env":["HA_TOKEN","HA_URL"]},"primaryEnv":"HA_TOKEN"}
 ---
 
 # Home Assistant
 
-Control smart home devices via Home Assistant API.
+Control smart home (or office) devices via Home Assistant's MCP (Model Context Protocol) integration.
 
-## Setup
+## How to Use
 
-The following environment variables are already set, so you must use on your requests
-- `HA_URL`: The home Assistant URL
-- `HA_TOKEN`: Long-lived access token
+Use the `home_assistant` tool to interact with Home Assistant. This tool connects to HA's MCP server which exposes the Assist API.
 
-## Quick Commands
+### Step 1: Discover Available Tools
 
-### List areas
-Great to try to match a user's request to a specific area
-```bash
-curl -s "$HA_URL/api/template" -H "Authorization: Bearer $HA_TOKEN"  -d '{"template": "{{ areas() | tojson }}"}'  | \
-  jq -r '.[]'
+First, list what tools are available from Home Assistant:
+
+```
+home_assistant(action="list_tools")
 ```
 
-### List all entities
-```bash
-curl -s "$HA_URL/api/states" -H "Authorization: Bearer $HA_TOKEN" | \
-  jq -r '.[] | select(.entity_id) | .entity_id'
+This returns the MCP tools exposed by HA, which typically include tools for:
+- Controlling devices (lights, switches, climate, covers)
+- Running automations and scripts
+- Getting entity states
+- Calling services
+
+### Step 2: Call a Tool
+
+Once you know what tools are available, call them:
+
+```
+home_assistant(action="call_tool", tool_name="<tool_name>", arguments={...})
 ```
 
-### List entities by domain
-```bash
-curl -s "$HA_URL/api/states" -H "Authorization: Bearer $HA_TOKEN" | \
-  jq -r '.[] | select(.entity_id | startswith("<domain name>.")) | .entity_id'
-```
-Make sure to replace the text inside startswith with the rigth domain you are looking for
+The available tools and their arguments depend on what Home Assistant exposes via its MCP server configuration.
 
-### List entities from a given area
-If you know the correct area from the first command, you can list entities from this area (replacing the area name in the command)
-```bash
-curl -s "$HA_URL/api/template" -H "Authorization: Bearer $HA_TOKEN"  \
-  -d '{"template": "{{ area_entities(\"<area name>\")| tojson }}"}' | \
-  jq -r '.[]'
-```
+## Critical Rules
 
-### Turn switches on/off
-```bash
-# Turn on
-curl -s -X POST "$HA_URL/api/services/switch/turn_on" \
-  -H "Authorization: Bearer $HA_TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{"entity_id": "switch.<switch_entity_id>"}'
+1. **NEVER guess entity IDs** - Always discover entities first using the available MCP tools
+2. **Check tool availability** - Use `list_tools` first to see what's available
+3. **Use exact entity IDs** - Entity IDs are case-sensitive and must match exactly
 
-# Turn off
-curl -s -X POST "$HA_URL/api/services/switch/turn_off" \
-  -H "Authorization: Bearer $HA_TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{"entity_id": "switch.<switch_entity_id>"}'
-```
+## Common Entity Domains
 
+When working with entities, they follow the pattern `domain.entity_name`:
 
-### Control lights
-```bash
-# Turn on with brightness
-curl -s -X POST "$HA_URL/api/services/light/turn_on" \
-  -H "Authorization: Bearer $HA_TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{"entity_id": "light.<light_entity_id>", "brightness_pct": 80}'
-```
+- `switch.*` - Smart plugs, generic switches
+- `light.*` - Lights (Hue, LIFX, etc.)
+- `scene.*` - Pre-configured scenes
+- `automation.*` - Automations
+- `script.*` - Scripts
+- `climate.*` - Thermostats, HVAC
+- `cover.*` - Blinds, garage doors
+- `media_player.*` - TVs, speakers
+- `sensor.*` - Temperature, humidity, motion sensors
+- `binary_sensor.*` - On/off sensors (doors, windows)
+- `fan.*` - Fans
+- `lock.*` - Smart locks
 
-### Trigger scene
-```bash
-curl -s -X POST "$HA_URL/api/services/scene/turn_on" \
-  -H "Authorization: Bearer $HA_TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{"entity_id": "scene.<scene_entity_id>"}'
-```
+## Typical Workflow
 
-### Call any service
-```bash
-curl -s -X POST "$HA_URL/api/services/{domain}/{service}" \
-  -H "Authorization: Bearer $HA_TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{"entity_id": "...", ...}'
-```
-
-### Get entity state
-```bash
-curl -s "$HA_URL/api/states/{entity_id}" -H "Authorization: Bearer $HA_TOKEN"
-```
-
-## Entity Domains
-
-- `switch.*` — Smart plugs, generic switches
-- `light.*` — Lights (Hue, LIFX, etc.)
-- `scene.*` — Pre-configured scenes
-- `automation.*` — Automations
-- `climate.*` — Thermostats
-- `cover.*` — Blinds, garage doors
-- `media_player.*` — TVs, speakers
-- `sensor.*` — Temperature, humidity, etc.
+1. User asks to control something (e.g., "turn on the living room lights")
+2. Call `home_assistant(action="list_tools")` to see available tools
+3. Use the appropriate tool to list/find entities matching the user's request
+4. Call the control tool with the correct entity ID
+5. Confirm the action to the user
 
 ## Notes
 
-- API returns JSON by default
-- Switches can be the actual entity for many other domains, like lights or climate
-- Do not guess entities, EVER. Always start by listing all entities and then check which is the most likely to be the one the user actually wants you to act on.
-- Test entity IDs with the list command first
+- The MCP server exposes tools based on what's configured in Home Assistant's "Exposed Entities" settings
+- If a tool isn't available, the user may need to expose more entities in HA's settings
+- Authentication is handled automatically via the HA_TOKEN environment variable
