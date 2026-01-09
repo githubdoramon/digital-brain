@@ -296,6 +296,24 @@ def _suggest_event_tags(
     )
 
 
+def _merge_tag_lists(primary: Sequence[str], secondary: Sequence[str]) -> List[str]:
+    merged: List[str] = list(primary or [])
+    seen = {tag.lower() for tag in merged if isinstance(tag, str)}
+    for tag in secondary:
+        if not isinstance(tag, str):
+            continue
+        candidate = tag.strip()
+        if not candidate:
+            continue
+        lowered = candidate.lower()
+        if lowered in seen:
+            continue
+        merged.append(candidate)
+        seen.add(lowered)
+    return merged
+
+
+
 def get_tag_taxonomy() -> Dict[str, List[str]]:
     """
     Return the tag taxonomy as a dict mapping major tags to their minor tags (keywords).
