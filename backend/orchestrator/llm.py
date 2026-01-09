@@ -228,9 +228,17 @@ async def answer_question(
             thinking_retries += 1
             if thinking_retries > 3:
                 # Give up and return an error message to the user
-                print(f"[agent] Model returned empty content {thinking_retries} times, giving up")
-                content = "I apologize, but I wasn't able to complete this request. Please try rephrasing your question."
-                break
+                error_msg = "I apologize, but I wasn't able to complete this request. Please try rephrasing your question."
+                print(f"[agent] Model returned empty content {thinking_retries} times, returning error")
+                _log_timing("answer_question.total", total_start, iterations=iteration, error="empty_content")
+                return finalize_bundle(
+                    question,
+                    error_msg,
+                    state,
+                    search_limit,
+                    session_id,
+                    event_proposal=None,
+                )
 
             if thinking:
                 print(f"[agent] Model returned only thinking, nudging for answer (retry {thinking_retries}/3)")
@@ -437,7 +445,7 @@ async def answer_question_stream(
         if not current_content.strip():
             empty_response_retries += 1
             if empty_response_retries > 3:
-                print(f"[agent] Model returned empty content {empty_response_retries} times, giving up")
+                print(f"[agent] Model returned empty content {empty_response_retries} times, returning error")
                 accumulated_content = "I apologize, but I wasn't able to complete this request. Please try rephrasing your question."
                 break
 

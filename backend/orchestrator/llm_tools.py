@@ -383,7 +383,7 @@ def handle_tool_call(
         print(f"[agent] calling execute_sql(sql={sql!r})")
         step_start = perf_counter()
 
-        result = sql_tools.execute_safe_query(sql)
+        result = sql_tools.execute_sql(sql)
         result = _normalize_sql_result(result)
 
         _log_timing(

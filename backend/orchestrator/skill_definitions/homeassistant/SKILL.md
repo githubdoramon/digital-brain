@@ -12,7 +12,7 @@ Control smart home (or office) devices via Home Assistant's MCP (Model Context P
 
 Use the `home_assistant` tool to interact with Home Assistant. This tool connects to HA's MCP server which exposes the Assist API.
 
-### Step 1: Discover Available Tools
+### Step 1: Discover Available Tools - NEVER SKIP THIS STEP
 
 First, ALWAYS list what tools are available from Home Assistant. DO NOT GUESS TOOL NAMES.
 

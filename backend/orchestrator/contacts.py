@@ -733,6 +733,58 @@ def upsert_contact_relationship(rel: ContactRelationshipIn) -> None:
         conn.commit()
 
 
+def find_self_contact(email: str) -> Optional[Dict[str, Any]]:
+    """
+    Find the user's own contact record by email.
+
+    Used by the LLM prompt builder to get context about the user.
+
+    Args:
+        email: The user's email address
+
+    Returns:
+        Contact dict if found, None otherwise
+    """
+    return get_contact_by_email(email)
+
+
+def resolve_query(query: str) -> Dict[str, Any]:
+    """
+    Extract structured entities from a natural-language query.
+
+    Attempts to find contacts, places, and time ranges mentioned in the query.
+
+    Args:
+        query: The natural-language query to parse
+
+    Returns:
+        Dict with 'contacts', 'places', and 'time_range' keys
+    """
+    # Simple implementation: search for contacts by name matching
+    contacts_found: List[Dict[str, Any]] = []
+    places_found: List[Dict[str, Any]] = []
+
+    # Get all contacts and do fuzzy matching
+    all_contacts = list_contacts()
+    query_lower = query.lower()
+
+    for contact in all_contacts:
+        display_name = (contact.get("display_name") or "").lower()
+        aliases = [a.lower() for a in (contact.get("aliases") or [])]
+
+        # Check if any name appears in the query
+        if display_name and display_name in query_lower:
+            contacts_found.append(contact)
+        elif any(alias in query_lower for alias in aliases):
+            contacts_found.append(contact)
+
+    return {
+        "contacts": contacts_found,
+        "places": places_found,
+        "time_range": None,
+    }
+
+
 def _collect_contact_relationships(contact_ids: Optional[Iterable[str]] = None) -> Dict[str, List[Dict[str, Any]]]:
     conditions = []
     params: List[Any] = []

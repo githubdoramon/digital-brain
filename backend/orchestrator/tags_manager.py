@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import os
-from typing import Iterable, List, Literal, Optional, Sequence
+from typing import Dict, Iterable, List, Literal, Optional, Sequence
 
 import requests
 
@@ -164,23 +164,6 @@ def _normalize_strings(values: Iterable[str] | None) -> List[str]:
     return normalized
 
 
-def _merge_tag_lists(primary: Sequence[str], secondary: Sequence[str]) -> List[str]:
-    merged: List[str] = list(primary or [])
-    seen = {tag.lower() for tag in merged if isinstance(tag, str)}
-    for tag in secondary:
-        if not isinstance(tag, str):
-            continue
-        candidate = tag.strip()
-        if not candidate:
-            continue
-        lowered = candidate.lower()
-        if lowered in seen:
-            continue
-        merged.append(candidate)
-        seen.add(lowered)
-    return merged
-
-
 def _parse_suggested_tags_response(raw_content: str) -> List[str]:
     try:
         loaded = json.loads(raw_content)
@@ -311,3 +294,12 @@ def _suggest_event_tags(
         tags,
         subject="event",
     )
+
+
+def get_tag_taxonomy() -> Dict[str, List[str]]:
+    """
+    Return the tag taxonomy as a dict mapping major tags to their minor tags (keywords).
+
+    Used by the LLM prompt builder to provide context about available tags.
+    """
+    return {major: list(keywords) for major, keywords in MAJOR_TAG_KEYWORDS.items()}
