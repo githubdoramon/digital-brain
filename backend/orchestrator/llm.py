@@ -27,8 +27,6 @@ from llm_agent import (
     MAX_ITERATIONS,
     MAX_CONTINUATION_RETRIES,
     looks_like_continuation,
-    create_continuation_nudge,
-    create_thinking_nudge,
     extract_event_proposal,
     finalize_bundle,
 )
@@ -245,10 +243,14 @@ async def answer_question(
             else:
                 print(f"[agent] Model returned empty content, nudging to continue (retry {thinking_retries}/3)")
 
-            messages.append(create_thinking_nudge())
+            # Add a user message to prompt continuation (system messages may be ignored)
+            messages.append({
+                "role": "user",
+                "content": "Please continue and provide your response.",
+            })
             continue
 
-        thinking_retries = 0
+        thinking_retries = 0  # Reset on non-empty content
 
         # Check max iterations
         if iteration >= MAX_ITERATIONS:
@@ -258,9 +260,13 @@ async def answer_question(
         # Check for continuation intent
         elif looks_like_continuation(content) and continuation_retries < MAX_CONTINUATION_RETRIES:
             continuation_retries += 1
+            thinking_retries = 0  # Reset thinking retries when we have actual content
             print(f"[agent] Detected continuation intent, retry {continuation_retries}/{MAX_CONTINUATION_RETRIES}: {content[:100]}...")
-            messages.append(message)
-            messages.append(create_continuation_nudge())
+            # Don't append the incomplete message - just nudge to actually call the tool
+            messages.append({
+                "role": "user",
+                "content": "You said you would perform an action but didn't call any tool. Please actually invoke the tool now.",
+            })
             continue
 
         # Finalize response
@@ -450,7 +456,11 @@ async def answer_question_stream(
                 break
 
             print(f"[agent] Model returned empty content, nudging to continue (retry {empty_response_retries}/3)")
-            messages.append(create_thinking_nudge())
+            # Add a user message to prompt continuation (system messages may be ignored)
+            messages.append({
+                "role": "user",
+                "content": "Please continue and provide your response.",
+            })
             continue
 
         empty_response_retries = 0  # Reset on non-empty content
@@ -462,13 +472,17 @@ async def answer_question_stream(
         # Check for continuation intent
         elif looks_like_continuation(current_content) and continuation_retries < MAX_CONTINUATION_RETRIES:
             continuation_retries += 1
+            empty_response_retries = 0  # Reset empty retries when we have actual content
             print(f"[agent] Detected continuation intent, retry {continuation_retries}/{MAX_CONTINUATION_RETRIES}")
 
             if streamed_any_content:
                 yield {"type": "clear_content"}
 
-            messages.append({"role": "assistant", "content": current_content})
-            messages.append(create_continuation_nudge())
+            # Don't append the incomplete message - just nudge to actually call the tool
+            messages.append({
+                "role": "user",
+                "content": "You said you would perform an action but didn't call any tool. Please actually invoke the tool now.",
+            })
             continue
 
         # Final answer

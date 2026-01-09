@@ -264,18 +264,23 @@ TOOLS: List[Dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": "home_assistant",
-            "description": "Control Home Assistant smart home/office devices via MCP protocol. Use this to control lights, switches, climate, covers, scenes, and other entities. IMPORTANT: Always list entities first before controlling them - never guess entity IDs.",
+            "description": (
+                "Control Home Assistant smart home/office devices via MCP protocol. "
+                "CRITICAL: You MUST call with action='list_tools' FIRST to discover available tools - "
+                "NEVER guess tool names or entity IDs. Tool names and entity IDs vary per installation. "
+                "Only after listing tools can you use action='call_tool' with a valid tool_name from the list."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {
                     "action": {
                         "type": "string",
                         "enum": ["list_tools", "call_tool"],
-                        "description": "Action to perform: 'list_tools' to see available HA tools, 'call_tool' to execute a specific tool.",
+                        "description": "Action to perform: 'list_tools' MUST be called first to discover available tools. Only use 'call_tool' after you have the tool list.",
                     },
                     "tool_name": {
                         "type": "string",
-                        "description": "Name of the MCP tool to call (required when action is 'call_tool').",
+                        "description": "Name of the MCP tool to call - MUST be a tool name returned by 'list_tools'. Required when action is 'call_tool'.",
                     },
                     "arguments": {
                         "type": "object",

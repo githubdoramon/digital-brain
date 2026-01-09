@@ -279,8 +279,13 @@ def finalize_bundle(
     clean_answer = strip_event_proposal(answer) if event_proposal else answer
 
     bundle: Dict[str, Any] = {
+        "question": question,
         "answer": clean_answer,
         "thread_id": session_id,
+        # Required fields from AgentState
+        "resolution": state.resolution,
+        "search_results": state.search_results,
+        "detailed_events": state.detailed_events,
     }
 
     if event_proposal:

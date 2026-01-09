@@ -8,6 +8,12 @@ metadata: {"requires":{"env":["HA_TOKEN","HA_URL"]},"primaryEnv":"HA_TOKEN"}
 
 Control smart home (or office) devices via Home Assistant's MCP (Model Context Protocol) integration.
 
+## MANDATORY FIRST STEP - READ THIS BEFORE DOING ANYTHING
+
+**YOU MUST CALL `list_tools` BEFORE ANY OTHER ACTION. THIS IS NOT OPTIONAL.**
+
+Tool names like `light_control`, `switch.turn_on`, etc. DO NOT EXIST by default. Every Home Assistant installation has DIFFERENT tool names based on how it's configured. You CANNOT guess them.
+
 ## How to Use
 
 Use the `home_assistant` tool to interact with Home Assistant. This tool connects to HA's MCP server which exposes the Assist API.
