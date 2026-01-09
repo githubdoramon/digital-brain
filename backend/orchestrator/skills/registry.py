@@ -78,7 +78,7 @@ class SkillRegistry:
         self,
         query: str,
         max_skills: int = 5,
-        min_confidence: float = 0.5,
+        min_confidence: float = 6,
         conversation_history: Optional[List[Dict[str, Any]]] = None,
     ) -> List[SkillMatch]:
         """

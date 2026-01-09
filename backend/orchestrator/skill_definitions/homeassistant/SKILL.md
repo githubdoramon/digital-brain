@@ -14,7 +14,7 @@ Use the `home_assistant` tool to interact with Home Assistant. This tool connect
 
 ### Step 1: Discover Available Tools
 
-First, list what tools are available from Home Assistant:
+First, ALWAYS list what tools are available from Home Assistant. DO NOT GUESS TOOL NAMES.
 
 ```
 home_assistant(action="list_tools")

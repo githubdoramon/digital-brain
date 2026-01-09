@@ -160,7 +160,7 @@ class SkillMatcher:
         self,
         query: str,
         max_skills: int = 5,
-        min_confidence: float = 0.5,
+        min_confidence: float = 0.6,
         conversation_history: Optional[List[Dict[str, str]]] = None,
     ) -> List[SkillMatch]:
         """
@@ -184,16 +184,14 @@ class SkillMatcher:
 
         # Build context-aware query if history is provided
         context_query = self._build_context_query(query, conversation_history)
-        print(f"[skills.matcher] Context query:\n{context_query}")
         
         query_embedding = self._get_query_embedding(context_query)
-        print(f"[skills.matcher] Query embedding: {query_embedding}")
         if not query_embedding:
             return []
 
         matches: List[SkillMatch] = []
 
-        for name, skill in self.skills.items():
+        for _, skill in self.skills.items():
             skill_embedding = self._get_skill_embedding(skill)
             if not skill_embedding:
                 continue
@@ -202,7 +200,6 @@ class SkillMatcher:
             print(f"[skills.matcher] Similarity: {similarity}")
             if similarity >= min_confidence:
                 matches.append(SkillMatch(skill=skill, confidence=similarity))
-                print(f"[skills.matcher] Match: {skill.name} (confidence: {similarity})")
         # Sort by confidence (highest first) and limit
         matches.sort(key=lambda m: m.confidence, reverse=True)
         return matches[:max_skills]
