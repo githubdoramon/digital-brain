@@ -31,19 +31,17 @@ from llm_agent import (
     finalize_bundle,
 )
 
-# Configuration
-OLLAMA_HOST = os.getenv("OLLAMA_HOST")
-OLLAMA_CHAT_MODEL = os.getenv("OLLAMA_CHAT_MODEL")
-OLLAMA_EMBED_MODEL = os.getenv("OLLAMA_EMBED_MODEL")
-OLLAMA_TIMEOUT = int(os.getenv("OLLAMA_TIMEOUT", "120"))
+# Configuration - OpenAI-compatible API (works with OpenAI, Ollama, etc.)
+LLM_BASE_URL = os.getenv("LLM_BASE_URL")
+LLM_API_KEY = os.getenv("LLM_API_KEY", "")  # Optional for Ollama
+LLM_CHAT_MODEL = os.getenv("LLM_CHAT_MODEL")
+LLM_TIMEOUT = int(os.getenv("LLM_TIMEOUT", "120"))
 
 # Validate required configuration
-if not OLLAMA_HOST:
-    raise RuntimeError("OLLAMA_HOST environment variable is required")
-if not OLLAMA_CHAT_MODEL:
-    raise RuntimeError("OLLAMA_CHAT_MODEL environment variable is required")
-if not OLLAMA_EMBED_MODEL:
-    raise RuntimeError("OLLAMA_EMBED_MODEL environment variable is required")
+if not LLM_BASE_URL:
+    raise RuntimeError("LLM_BASE_URL environment variable is required")
+if not LLM_CHAT_MODEL:
+    raise RuntimeError("LLM_CHAT_MODEL environment variable is required")
 
 
 def _log_timing(label: str, start_time: float, **metadata: Any) -> None:
@@ -65,58 +63,108 @@ def _log_timing(label: str, start_time: float, **metadata: Any) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Ollama API calls
+# OpenAI-compatible API calls
 # ---------------------------------------------------------------------------
 
-def _ollama_chat(messages: List[Dict[str, Any]]) -> Dict[str, Any]:
-    """Make a synchronous chat request to Ollama."""
+def _get_headers() -> Dict[str, str]:
+    """Get headers for API requests."""
+    headers = {"Content-Type": "application/json"}
+    if LLM_API_KEY:
+        headers["Authorization"] = f"Bearer {LLM_API_KEY}"
+    return headers
+
+
+def _llm_chat(messages: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """Make a synchronous chat request to OpenAI-compatible API."""
     payload = {
-        "model": OLLAMA_CHAT_MODEL,
+        "model": LLM_CHAT_MODEL,
         "messages": messages,
         "tools": TOOLS,
         "tool_choice": "auto",
         "stream": False,
     }
     resp = requests.post(
-        f"{OLLAMA_HOST}/api/chat",
+        f"{LLM_BASE_URL}/chat/completions",
+        headers=_get_headers(),
         json=payload,
-        timeout=OLLAMA_TIMEOUT,
+        timeout=LLM_TIMEOUT,
     )
     resp.raise_for_status()
-    return resp.json()
+    data = resp.json()
+    # Normalize OpenAI response format to match what the rest of the code expects
+    # OpenAI: {"choices": [{"message": {...}}]}
+    # We return: {"message": {...}}
+    if "choices" in data and data["choices"]:
+        return {"message": data["choices"][0].get("message", {})}
+    return data
 
 
-async def _ollama_chat_stream(
+async def _llm_chat_stream(
     messages: List[Dict[str, Any]],
     tools: List[Dict[str, Any]],
 ) -> AsyncGenerator[Dict[str, Any], None]:
-    """Stream chat responses from Ollama."""
+    """Stream chat responses from OpenAI-compatible API."""
     payload = {
-        "model": OLLAMA_CHAT_MODEL,
+        "model": LLM_CHAT_MODEL,
         "messages": messages,
         "tools": tools,
         "tool_choice": "auto",
         "stream": True,
     }
 
-    timeout = httpx.Timeout(OLLAMA_TIMEOUT, connect=10.0)
+    timeout = httpx.Timeout(LLM_TIMEOUT, connect=10.0)
 
     async with httpx.AsyncClient(timeout=timeout) as client:
         async with client.stream(
             "POST",
-            f"{OLLAMA_HOST}/api/chat",
+            f"{LLM_BASE_URL}/chat/completions",
+            headers=_get_headers(),
             json=payload,
         ) as response:
             response.raise_for_status()
+            accumulated_tool_calls: Dict[int, Dict[str, Any]] = {}
             async for line in response.aiter_lines():
-                if line.strip():
-                    try:
-                        chunk = json.loads(line)
-                        yield chunk
-                        if chunk.get("done"):
-                            break
-                    except json.JSONDecodeError:
-                        continue
+                line = line.strip()
+                if not line or line == "data: [DONE]":
+                    continue
+                if line.startswith("data: "):
+                    line = line[6:]
+                try:
+                    chunk = json.loads(line)
+                    delta = chunk.get("choices", [{}])[0].get("delta", {})
+                    finish_reason = chunk.get("choices", [{}])[0].get("finish_reason")
+
+                    # Handle tool calls (they come in pieces)
+                    if "tool_calls" in delta:
+                        for tc in delta["tool_calls"]:
+                            idx = tc.get("index", 0)
+                            if idx not in accumulated_tool_calls:
+                                accumulated_tool_calls[idx] = {
+                                    "id": tc.get("id", ""),
+                                    "type": "function",
+                                    "function": {"name": "", "arguments": ""},
+                                }
+                            if tc.get("id"):
+                                accumulated_tool_calls[idx]["id"] = tc["id"]
+                            if "function" in tc:
+                                if tc["function"].get("name"):
+                                    accumulated_tool_calls[idx]["function"]["name"] = tc["function"]["name"]
+                                if tc["function"].get("arguments"):
+                                    accumulated_tool_calls[idx]["function"]["arguments"] += tc["function"]["arguments"]
+
+                    # Yield normalized chunk for content
+                    normalized = {"message": {"content": delta.get("content", "")}}
+
+                    # When done, include accumulated tool calls
+                    if finish_reason == "tool_calls" or (finish_reason == "stop" and accumulated_tool_calls):
+                        normalized["message"]["tool_calls"] = list(accumulated_tool_calls.values())
+                        normalized["done"] = True
+                    elif finish_reason == "stop":
+                        normalized["done"] = True
+
+                    yield normalized
+                except json.JSONDecodeError:
+                    continue
 
 
 # ---------------------------------------------------------------------------
@@ -188,7 +236,7 @@ async def answer_question(
 
         # Call LLM
         chat_start = perf_counter()
-        response = _ollama_chat(messages)
+        response = _llm_chat(messages)
         _log_timing("ollama.chat", chat_start, iteration=iteration)
 
         message = response.get("message") or {}
@@ -383,7 +431,7 @@ async def answer_question_stream(
         streamed_any_content = False
 
         # Stream from Ollama
-        async for chunk in _ollama_chat_stream(messages, TOOLS):
+        async for chunk in _llm_chat_stream(messages, TOOLS):
             message = chunk.get("message", {})
 
             # Stream content tokens
@@ -597,24 +645,31 @@ async def _run_skill_script_streaming(
 
 def _generate_thread_title(question: str) -> Optional[str]:
     """Generate a thread title from the first question."""
-    prompt = (
-        "Generate a very short title (3-6 words) for a conversation that starts with this question. "
-        "Return ONLY the title, no quotes or explanation.\n\n"
-        f"Question: {question}"
-    )
+    messages = [
+        {
+            "role": "user",
+            "content": (
+                "Generate a very short title (3-6 words) for a conversation that starts with this question. "
+                "Return ONLY the title, no quotes or explanation.\n\n"
+                f"Question: {question}"
+            ),
+        }
+    ]
 
     try:
         response = requests.post(
-            f"{OLLAMA_HOST}/api/generate",
+            f"{LLM_BASE_URL}/chat/completions",
+            headers=_get_headers(),
             json={
-                "model": OLLAMA_CHAT_MODEL,
-                "prompt": prompt,
+                "model": LLM_CHAT_MODEL,
+                "messages": messages,
                 "stream": False,
             },
             timeout=30,
         )
         response.raise_for_status()
-        title = response.json().get("response", "").strip()
+        data = response.json()
+        title = data.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
 
         # Clean up the title
         title = title.strip('"\'')
