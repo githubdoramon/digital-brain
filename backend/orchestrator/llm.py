@@ -223,15 +223,22 @@ async def answer_question(
         content = (message.get("content") or "").strip()
         thinking = (message.get("thinking") or "").strip()
 
-        # Handle empty content with thinking
+        # Handle empty content
         if not content:
+            thinking_retries += 1
+            if thinking_retries > 3:
+                # Give up and return an error message to the user
+                print(f"[agent] Model returned empty content {thinking_retries} times, giving up")
+                content = "I apologize, but I wasn't able to complete this request. Please try rephrasing your question."
+                break
+
             if thinking:
-                thinking_retries += 1
-                if thinking_retries > 3:
-                    raise RuntimeError("Assistant returned internal reasoning multiple times without a final answer.")
-                messages.append(create_thinking_nudge())
-                continue
-            raise RuntimeError(f"Unexpected Ollama response: {response}")
+                print(f"[agent] Model returned only thinking, nudging for answer (retry {thinking_retries}/3)")
+            else:
+                print(f"[agent] Model returned empty content, nudging to continue (retry {thinking_retries}/3)")
+
+            messages.append(create_thinking_nudge())
+            continue
 
         thinking_retries = 0
 
@@ -351,6 +358,7 @@ async def answer_question_stream(
     iteration = 0
     accumulated_content = ""
     continuation_retries = 0
+    empty_response_retries = 0
 
     while True:
         iteration += 1
@@ -424,6 +432,20 @@ async def answer_question_stream(
                 })
 
             continue
+
+        # Handle empty content
+        if not current_content.strip():
+            empty_response_retries += 1
+            if empty_response_retries > 3:
+                print(f"[agent] Model returned empty content {empty_response_retries} times, giving up")
+                accumulated_content = "I apologize, but I wasn't able to complete this request. Please try rephrasing your question."
+                break
+
+            print(f"[agent] Model returned empty content, nudging to continue (retry {empty_response_retries}/3)")
+            messages.append(create_thinking_nudge())
+            continue
+
+        empty_response_retries = 0  # Reset on non-empty content
 
         # Check max iterations
         if iteration >= MAX_ITERATIONS:
