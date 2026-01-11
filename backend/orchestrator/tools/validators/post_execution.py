@@ -153,6 +153,16 @@ class PostExecutionValidator:
             return PostExecutionResult(
                 coverage=GoalCoverage.FAILED,
                 reason=f"Tool error: {error_msg}",
+                suggested_next_tools=self._suggest_alternative_tools(tool_name),
+            )
+
+        # Check for success: False (some tools like home_assistant use this pattern)
+        if result.get("success") is False:
+            error_msg = result.get("error", "Operation failed")
+            return PostExecutionResult(
+                coverage=GoalCoverage.FAILED,
+                reason=f"Tool returned failure: {error_msg}",
+                suggested_next_tools=self._suggest_alternative_tools(tool_name),
             )
 
         # Check return codes (for bash, scripts, etc.)

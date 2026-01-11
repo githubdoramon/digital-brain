@@ -233,10 +233,21 @@ Located in `tools/validators/post_execution.py`.
 
 ### What It Checks
 
-1. **Success/failure** - Did the tool return an error?
+1. **Success/failure** - Did the tool return an error or `success: false`?
 2. **Empty results** - Did the tool return no data?
 3. **Fact extraction** - What facts should be added to state?
 4. **Goal coverage** - Is the goal satisfied? (optional LLM check)
+5. **Failure guidance** - Provides hints to the LLM on how to recover from failures
+
+### GoalCoverage States
+
+The post-validator returns one of these states:
+- `SATISFIED` - Goal is achieved
+- `NEEDS_MORE_TOOLS` - Need more tool calls to complete
+- `NEED_USER_INPUT` - Need clarification from user
+- `FAILED` - Tool call failed, includes recovery guidance
+
+When `FAILED` is returned, the controller injects guidance into the result to help the LLM recover.
 
 ### Success Detection
 

@@ -92,6 +92,23 @@ def handle_home_assistant(
             tool=tool_name,
             success=result.get("success"),
         )
+
+        # If the tool call failed, provide helpful guidance
+        if not result.get("success"):
+            error_msg = result.get("error", "Unknown error")
+            # Check if this looks like a hallucinated tool name
+            if "not found" in error_msg.lower() or "unknown" in error_msg.lower():
+                result["hint"] = (
+                    f"Tool '{tool_name}' was not found. You MUST call home_assistant with "
+                    "action='list_tools' FIRST to get the actual available tool names. "
+                    "Do NOT guess tool names - they are specific to this Home Assistant installation."
+                )
+            else:
+                result["hint"] = (
+                    "The tool call failed. Check the error message and try again with corrected arguments. "
+                    "If unsure about available tools or their arguments, call action='list_tools' first."
+                )
+
         return result
 
     return {"error": f"Unknown action: {action}"}

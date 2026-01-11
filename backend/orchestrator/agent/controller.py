@@ -237,6 +237,16 @@ class AgentController:
                     })
                     continue
 
+                # Check for malformed tool call (JSON in content instead of proper tool call)
+                if self._looks_like_malformed_tool_call(content) and state.step_count < self.config.max_steps - 1:
+                    messages.append({
+                        "role": "user",
+                        "content": "You output JSON instead of making a proper tool call. Do NOT output raw JSON. "
+                        "Use the home_assistant tool with action='call_tool', tool_name set to the HA tool name "
+                        "(e.g., 'HassLightSet'), and arguments containing the parameters. Try again.",
+                    })
+                    continue
+
                 # Final answer
                 messages.append(message)
                 return self._finalize(
@@ -389,6 +399,18 @@ class AgentController:
                     messages.append({
                         "role": "user",
                         "content": "You expressed intent to perform an action but didn't call any tool. Please invoke the tool now.",
+                    })
+                    continue
+
+                # Check for malformed tool call (JSON in content instead of proper tool call)
+                if self._looks_like_malformed_tool_call(current_content) and state.step_count < self.config.max_steps - 1:
+                    if streamed_any:
+                        yield {"type": "clear_content"}
+                    messages.append({
+                        "role": "user",
+                        "content": "You output JSON instead of making a proper tool call. Do NOT output raw JSON. "
+                        "Use the home_assistant tool with action='call_tool', tool_name set to the HA tool name "
+                        "(e.g., 'HassLightSet'), and arguments containing the parameters. Try again.",
                     })
                     continue
 
@@ -738,8 +760,10 @@ class AgentController:
             result=result,
         )
 
-        # Post-execution validation (for fact extraction)
+        # Post-execution validation (for fact extraction AND failure detection)
         if self.config.enable_validation:
+            from tools.validators.post_execution import GoalCoverage
+
             post_result = self.post_validator.validate(
                 tool_name,
                 args,
@@ -747,10 +771,45 @@ class AgentController:
                 state.goal,
                 state.known_facts,
             )
+
+            # Extract facts from result
             for fact in post_result.extracted_facts:
                 state.add_fact(fact)
 
+            # If tool failed, enhance the result with guidance
+            if post_result.coverage == GoalCoverage.FAILED:
+                result["_validation"] = {
+                    "status": "failed",
+                    "reason": post_result.reason,
+                    "guidance": self._get_failure_guidance(tool_name, result, post_result),
+                }
+                # Add suggested alternatives if available
+                if post_result.suggested_next_tools:
+                    result["_validation"]["suggested_tools"] = post_result.suggested_next_tools
+
         return result
+
+    def _get_failure_guidance(
+        self,
+        tool_name: str,
+        result: dict[str, Any],
+        post_result,
+    ) -> str:
+        """Generate guidance message for failed tool calls."""
+        if tool_name == "home_assistant":
+            error = result.get("error", "")
+            if "not found" in error.lower() or "unknown" in error.lower():
+                return (
+                    "The Home Assistant tool call failed because the tool name was not recognized. "
+                    "You MUST call home_assistant with action='list_tools' FIRST to discover "
+                    "the actual available tool names for this installation. Do NOT guess tool names."
+                )
+            return (
+                "The Home Assistant call failed. Review the error and try again with "
+                "corrected arguments. If unsure, call action='list_tools' to see available tools."
+            )
+
+        return f"Tool '{tool_name}' failed: {post_result.reason}. Review and retry with corrected parameters."
 
     def _execute_handler(
         self,
@@ -793,6 +852,29 @@ class AgentController:
             return False
 
         return any(p in lower for p in patterns)
+
+    def _looks_like_malformed_tool_call(self, content: str) -> bool:
+        """Check if content looks like a malformed tool call (JSON output instead of proper tool call)."""
+        stripped = content.strip()
+
+        # Check for JSON-like tool call patterns
+        if stripped.startswith("{") and stripped.endswith("}"):
+            # Quick check for common tool call indicators
+            tool_indicators = [
+                '"type": "function"',
+                '"name":',
+                '"function":',
+                '"parameters":',
+                '"arguments":',
+                '"tool_call"',
+                "HassLightSet",
+                "HassClimateSet",
+                "HassTurnOn",
+                "HassTurnOff",
+            ]
+            return any(indicator in stripped for indicator in tool_indicators)
+
+        return False
 
     def _handle_limit_violation(
         self,
