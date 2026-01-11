@@ -305,6 +305,29 @@ def trace_guidance_injected(guidance_preview: str) -> None:
         print(f"[agent.decision] → Injecting recovery guidance: {_truncate(guidance_preview, 100)}")
 
 
+def trace_decision(decision: str, reason: str, details: Optional[dict[str, Any]] = None) -> None:
+    """Log a controller decision."""
+    if _should_log(LogLevel.DECISION):
+        print(f"[agent.decision] {decision}")
+        print(f"[agent.decision]   Reason: {reason}")
+        if details:
+            for key, value in details.items():
+                if isinstance(value, list) and value:
+                    print(f"[agent.decision]   {key}: {', '.join(str(v) for v in value[:3])}")
+                elif value:
+                    print(f"[agent.decision]   {key}: {value}")
+
+
+def trace_goal_check(achieved: bool, reason: str, pending: list[str]) -> None:
+    """Log goal completion check."""
+    if _should_log(LogLevel.DECISION):
+        status = "✓ ACHIEVED" if achieved else "⋯ IN PROGRESS"
+        print(f"[agent.goal] {status}")
+        print(f"[agent.goal]   {reason}")
+        if pending:
+            print(f"[agent.goal]   Pending: {', '.join(pending[:3])}")
+
+
 # =============================================================================
 # LIMIT/STOP LOGGING
 # =============================================================================
@@ -373,6 +396,47 @@ def trace_run_error(run_id: str, error: str) -> None:
         print(f"[agent] ✗ Error in run {run_id}")
         print(f"[agent]   {error}")
         print(f"{'='*60}\n")
+
+
+# =============================================================================
+# TOOL LIFECYCLE EVENTS (clawdbot-inspired)
+# =============================================================================
+
+def trace_tool_lifecycle_start(tool_name: str, call_id: str, args: dict[str, Any]) -> None:
+    """Log tool execution lifecycle start."""
+    if _should_log(LogLevel.INFO):
+        args_str = _format_args(args)
+        print(f"[lifecycle.tool] START: {tool_name} (id={call_id[:8]})")
+        print(f"[lifecycle.tool]   args: {args_str}")
+
+
+def trace_tool_lifecycle_end(
+    tool_name: str,
+    call_id: str,
+    success: bool,
+    duration_ms: float,
+    result_summary: str,
+) -> None:
+    """Log tool execution lifecycle end."""
+    if _should_log(LogLevel.INFO):
+        status = "SUCCESS" if success else "FAILED"
+        print(f"[lifecycle.tool] END: {tool_name} (id={call_id[:8]}) {status}")
+        print(f"[lifecycle.tool]   duration: {duration_ms:.0f}ms")
+        print(f"[lifecycle.tool]   result: {result_summary}")
+
+
+def trace_run_lifecycle_checkpoint(
+    run_id: str,
+    phase: str,
+    steps: int,
+    tool_calls: int,
+    goal_achieved: bool,
+) -> None:
+    """Log run lifecycle checkpoint."""
+    if _should_log(LogLevel.INFO):
+        goal_status = "✓" if goal_achieved else "⋯"
+        print(f"[lifecycle.run] CHECKPOINT: {phase}")
+        print(f"[lifecycle.run]   run={run_id[:8]} steps={steps} tools={tool_calls} goal={goal_status}")
 
 
 # =============================================================================

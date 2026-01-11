@@ -103,6 +103,14 @@ class AgentController:
         return self._post_validator
 
     @property
+    def goal_validator(self):
+        """Lazy-load goal completion validator."""
+        if not hasattr(self, "_goal_validator") or self._goal_validator is None:
+            from tools.validators.post_execution import GoalCompletionValidator
+            self._goal_validator = GoalCompletionValidator()
+        return self._goal_validator
+
+    @property
     def logger(self):
         """Lazy-load agent logger."""
         if self._logger is None:
@@ -241,6 +249,19 @@ class AgentController:
                         search_limit,
                         run_id,
                     )
+
+                    # Check if goal was achieved after tool execution
+                    goal_check = self._check_goal_completion(state, "")
+                    if goal_check["pending_actions"]:
+                        # Track pending actions but don't inject prompt yet
+                        # Let the LLM decide on next step
+                        for action in goal_check["pending_actions"]:
+                            state.add_pending_action(action)
+                        trace.trace_decision(
+                            "Goal not yet achieved",
+                            goal_check["reason"],
+                            {"pending_actions": goal_check["pending_actions"]},
+                        )
                     continue
 
                 # Handle empty content
@@ -274,6 +295,44 @@ class AgentController:
                         "content": "You output JSON instead of making a proper tool call. Do NOT output raw JSON. "
                         "Use the home_assistant tool with action='call_tool', tool_name set to the HA tool name "
                         "(e.g., 'HassLightSet'), and arguments containing the parameters. Try again.",
+                    })
+                    continue
+
+                # Check for code describing tool usage instead of actual tool call
+                if self._looks_like_code_describing_tool(content) and state.step_count < self.config.max_steps - 1:
+                    trace.trace_malformed_output(content, "Code describing tool instead of calling it")
+                    self.logger.log_malformed_output(content, "Code describing tool instead of calling it")
+                    messages.append({
+                        "role": "user",
+                        "content": "WRONG: You wrote CODE describing a tool call instead of ACTUALLY calling the tool. "
+                        "Do NOT output code snippets, variable assignments, or descriptions. "
+                        "You MUST use the tool_call mechanism to invoke tools. "
+                        "Call the home_assistant tool NOW with action='call_tool', tool_name='HassTurnOff' (or appropriate tool), "
+                        "and arguments={'name': 'device name'}. ACTUALLY CALL THE TOOL - don't describe it.",
+                    })
+                    continue
+
+                # CRITICAL: Check if goal was actually achieved before returning
+                # This prevents premature termination (clawdbot pattern)
+                goal_check = self._check_goal_completion(state, content)
+                if not goal_check["achieved"] and goal_check["pending_actions"] and state.step_count < self.config.max_steps - 1:
+                    trace.trace_decision(
+                        "Preventing premature completion",
+                        "Goal not achieved, forcing continuation",
+                        {"pending_actions": goal_check["pending_actions"]},
+                    )
+                    self.logger.log_decision(
+                        decision="Forcing continuation",
+                        reason=goal_check["reason"],
+                        details={"pending_actions": goal_check["pending_actions"]},
+                    )
+                    # Inject a generic prompt to force the LLM to complete the action
+                    messages.append({
+                        "role": "user",
+                        "content": f"INCOMPLETE: You have not completed the user's request yet. "
+                        f"Status: {goal_check['reason']}. "
+                        f"Required: {goal_check['pending_actions'][0]}. "
+                        f"Do NOT respond to the user - FIRST invoke the appropriate tool to complete the action.",
                     })
                     continue
 
@@ -467,6 +526,42 @@ class AgentController:
                         "content": "You output JSON instead of making a proper tool call. Do NOT output raw JSON. "
                         "Use the home_assistant tool with action='call_tool', tool_name set to the HA tool name "
                         "(e.g., 'HassLightSet'), and arguments containing the parameters. Try again.",
+                    })
+                    continue
+
+                # Check for code describing tool usage instead of actual tool call
+                if self._looks_like_code_describing_tool(current_content) and state.step_count < self.config.max_steps - 1:
+                    trace.trace_malformed_output(current_content, "Code describing tool instead of calling it")
+                    self.logger.log_malformed_output(current_content, "Code describing tool instead of calling it")
+                    if streamed_any:
+                        yield {"type": "clear_content"}
+                    messages.append({
+                        "role": "user",
+                        "content": "WRONG: You wrote CODE describing a tool call instead of ACTUALLY calling the tool. "
+                        "Do NOT output code snippets, variable assignments, or descriptions. "
+                        "You MUST use the tool_call mechanism to invoke tools. "
+                        "Call the home_assistant tool NOW with action='call_tool', tool_name='HassTurnOff' (or appropriate tool), "
+                        "and arguments={'name': 'device name'}. ACTUALLY CALL THE TOOL - don't describe it.",
+                    })
+                    continue
+
+                # CRITICAL: Check if goal was actually achieved before returning
+                goal_check = self._check_goal_completion(state, current_content)
+                if not goal_check["achieved"] and goal_check["pending_actions"] and state.step_count < self.config.max_steps - 1:
+                    trace.trace_decision(
+                        "Preventing premature completion (stream)",
+                        "Goal not achieved, forcing continuation",
+                        {"pending_actions": goal_check["pending_actions"]},
+                    )
+                    if streamed_any:
+                        yield {"type": "clear_content"}
+                    yield {"type": "status", "message": "Completing action..."}
+                    messages.append({
+                        "role": "user",
+                        "content": f"INCOMPLETE: You have not completed the user's request yet. "
+                        f"Status: {goal_check['reason']}. "
+                        f"Required: {goal_check['pending_actions'][0]}. "
+                        f"Do NOT respond to the user - FIRST invoke the appropriate tool to complete the action.",
                     })
                     continue
 
@@ -768,6 +863,7 @@ class AgentController:
         func = call.get("function", {})
         tool_name = func.get("name", "")
         raw_args = func.get("arguments", "{}")
+        call_id = call.get("id", "unknown")
 
         try:
             args = json.loads(raw_args) if isinstance(raw_args, str) else raw_args
@@ -775,8 +871,9 @@ class AgentController:
             trace.trace_tool_error(tool_name, f"Invalid JSON arguments: {raw_args}")
             return {"error": f"Invalid JSON arguments: {raw_args}"}
 
-        # Trace tool call start
+        # Trace tool call start with lifecycle event
         trace.trace_tool_call_start(tool_name, args)
+        trace.trace_tool_lifecycle_start(tool_name, call_id, args)
 
         # Pre-execution validation
         if self.config.enable_validation:
@@ -818,6 +915,7 @@ class AgentController:
             result_summary = "OK" if success else "Failed"
 
         trace.trace_tool_execution_result(tool_name, duration_ms, success, result_summary)
+        trace.trace_tool_lifecycle_end(tool_name, call_id, success, duration_ms, result_summary)
         if not success:
             trace.trace_tool_error(tool_name, result.get("error", "Unknown error"))
 
@@ -894,7 +992,61 @@ class AgentController:
                 if post_result.suggested_next_tools:
                     result["_validation"]["suggested_tools"] = post_result.suggested_next_tools
 
+                # Track failure for potential retry
+                state.add_fact(f"Tool {tool_name} failed: {post_result.reason}")
+
+        # Track successful tool execution as completion evidence
+        if success:
+            evidence = self._get_completion_evidence(tool_name, args, result)
+            if evidence:
+                state.add_completion_evidence(evidence)
+
         return result
+
+    def _get_completion_evidence(
+        self,
+        tool_name: str,
+        args: dict[str, Any],
+        result: dict[str, Any],
+    ) -> Optional[str]:
+        """Generate completion evidence string for successful tool execution."""
+        # Skip discovery-only tools
+        if tool_name == "describe_schema":
+            return None
+
+        # Handle tools with discovery/execution actions
+        if tool_name == "home_assistant":
+            action = args.get("action")
+            if action == "list_tools":
+                return None  # Discovery, not completion
+            if action == "call_tool":
+                return f"Executed HA tool: {args.get('tool_name', 'unknown')}"
+
+        # Handle query tools
+        if tool_name in ("search_memories", "execute_sql", "get_events", "web_search"):
+            count = result.get("count", 0)
+            if count > 0:
+                return f"{tool_name}: found {count} results"
+            rows = result.get("rows") or result.get("results") or result.get("events", [])
+            if rows:
+                return f"{tool_name}: retrieved {len(rows)} items"
+            return None
+
+        if tool_name == "get_document":
+            doc = result.get("document")
+            if doc:
+                return f"Retrieved document: {doc.get('title', 'untitled')}"
+            return None
+
+        if tool_name == "resolve_query":
+            contacts = len(result.get("contacts", []))
+            places = len(result.get("places", []))
+            if contacts or places:
+                return f"Resolved {contacts} contacts, {places} places"
+            return None
+
+        # Default: generic successful execution
+        return f"Executed {tool_name}"
 
     def _get_failure_guidance(
         self,
@@ -944,6 +1096,39 @@ class AgentController:
             print(f"[controller] Tool execution error: {e}")
             return {"error": str(e)}
 
+    def _check_goal_completion(
+        self,
+        state: AgentState,
+        final_content: str,
+    ) -> dict[str, Any]:
+        """
+        Check if the user's goal was actually achieved.
+
+        Uses the GoalCompletionValidator to verify that the actual request
+        was completed, not just that tools were called.
+
+        Returns:
+            Dict with 'achieved', 'reason', and 'pending_actions' keys
+        """
+        achieved, reason, pending_actions = self.goal_validator.check_goal_achieved(
+            goal=state.goal,
+            tool_calls=state.tool_calls,
+            known_facts=state.known_facts,
+            final_content=final_content,
+        )
+
+        # Trace the goal check
+        trace.trace_goal_check(achieved, reason, pending_actions)
+
+        if achieved:
+            state.mark_goal_achieved(reason)
+
+        return {
+            "achieved": achieved,
+            "reason": reason,
+            "pending_actions": pending_actions,
+        }
+
     def _looks_like_continuation(self, content: str) -> bool:
         """Check if content indicates model wants to continue but didn't call a tool."""
         patterns = [
@@ -982,16 +1167,67 @@ class AgentController:
                 '"parameters":',
                 '"arguments":',
                 '"tool_call"',
-                '"action":',
-                "HassLightSet",
-                "HassClimateSet",
-                "HassTurnOn",
-                "HassTurnOff",
-                "home_assistant",
+                '"action":'
             ]
             return any(indicator in stripped for indicator in tool_indicators)
 
         return False
+
+    def _looks_like_code_describing_tool(self, content: str) -> bool:
+        """
+        Check if content contains code describing tool usage instead of actually calling the tool.
+
+        This catches cases where the LLM outputs code snippets like:
+        - action = 'call_tool'
+        - tool_name = 'HassTurnOff'
+        - arguments = {'name': 'office lights'}
+        """
+        lower = content.lower()
+
+        # Check for code block with tool-related variable assignments
+        code_indicators = [
+            "action = ",
+            "action=",
+            "tool_name = ",
+            "tool_name=",
+            "arguments = ",
+            "arguments=",
+            "'call_tool'",
+            '"call_tool"',
+            "'list_tools'",
+            '"list_tools"',
+        ]
+
+        # Must have a code block indicator
+        has_code_block = "```" in content or "action =" in lower or "tool_name =" in lower
+
+        # And must reference tool-related patterns
+        has_tool_reference = any(ind in lower for ind in code_indicators)
+
+        # Also check for Home Assistant tool names mentioned as strings
+        ha_tools_as_strings = [
+            "'hassturnoff'", '"hassturnoff"',
+            "'hassturnon'", '"hassturnon"',
+            "'hasslightset'", '"hasslightset"',
+            "'hassclimatesettemperature'", '"hassclimatesettemperature"',
+        ]
+        has_ha_tool_string = any(tool in lower for tool in ha_tools_as_strings)
+
+        # Check for phrases indicating description instead of action
+        description_phrases = [
+            "here is the code",
+            "here's the code",
+            "the code is",
+            "use this code",
+            "code to",
+            "i will turn off",
+            "i'll turn off",
+            "i will turn on",
+            "i'll turn on",
+        ]
+        has_description_phrase = any(phrase in lower for phrase in description_phrases)
+
+        return (has_code_block and has_tool_reference) or has_ha_tool_string or (has_description_phrase and has_tool_reference)
 
     def _handle_limit_violation(
         self,
@@ -1071,12 +1307,29 @@ class AgentController:
             if event_proposal:
                 answer = self._strip_event_proposal(answer)
 
+        duration_ms = (perf_counter() - total_start) * 1000
+
+        # Validate response has actual content (clawdbot pattern)
+        has_content = bool(answer and answer.strip() and len(answer.strip()) > 10)
+        if not has_content and state.tool_calls_count > 0:
+            # We did work but have no answer - this is suspicious
+            trace.trace_decision(
+                "Empty response with tool calls",
+                "Generated fallback response",
+                {"tool_calls": state.tool_calls_count},
+            )
+            # Generate a minimal response based on what was done
+            if state.completion_evidence:
+                answer = f"Done. {state.completion_evidence[-1]}"
+            elif state.known_facts:
+                answer = f"Based on my search: {state.known_facts[-1]}"
+            else:
+                answer = "I completed the requested action."
+
         # Log completion
         self.logger.complete_run(run_id, success=True, final_answer=answer)
 
-        duration_ms = (perf_counter() - total_start) * 1000
-
-        # Trace run completion
+        # Trace run completion with lifecycle checkpoint
         trace.trace_run_complete(
             run_id,
             success=True,
@@ -1084,6 +1337,13 @@ class AgentController:
             steps=state.step_count,
             tool_calls=state.tool_calls_count,
             answer_preview=answer[:200] if answer else None,
+        )
+        trace.trace_run_lifecycle_checkpoint(
+            run_id,
+            phase="FINALIZED",
+            steps=state.step_count,
+            tool_calls=state.tool_calls_count,
+            goal_achieved=state.goal_achieved,
         )
 
         bundle = {
@@ -1093,6 +1353,16 @@ class AgentController:
             "resolution": state.resolution,
             "search_results": state.search_results,
             "detailed_events": state.detailed_events,
+            # Completion metadata (clawdbot-inspired)
+            "_meta": {
+                "goal_achieved": state.goal_achieved,
+                "completion_evidence": state.completion_evidence,
+                "steps_taken": state.step_count,
+                "tool_calls_made": state.tool_calls_count,
+                "duration_ms": duration_ms,
+                "successful_tools": state.successful_tool_calls,
+                "failed_tools": state.failed_tool_calls,
+            },
         }
 
         if event_proposal:

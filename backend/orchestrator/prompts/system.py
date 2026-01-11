@@ -52,19 +52,31 @@ def get_bounded_agent_protocol() -> str:
     Get the enhanced protocol for the bounded agent.
 
     This protocol emphasizes:
+    - CRITICAL: Proper tool calling via tool_call mechanism
     - State awareness
     - Bounded reasoning
     - Tool validation expectations
     """
     return (
         "AGENT PROTOCOL:\n\n"
+        "*** CRITICAL - TOOL CALLING BEHAVIOR ***\n"
+        "You MUST invoke tools using the tool_call mechanism, NOT by outputting text.\n"
+        "ABSOLUTELY FORBIDDEN:\n"
+        "  - Outputting code like `action = 'call_tool'`\n"
+        "  - Writing JSON like `{\"action\": \"call_tool\"}`\n"
+        "  - Saying 'here is the code to...' or 'I will call...'\n"
+        "  - Describing tool parameters instead of calling the tool\n"
+        "CORRECT BEHAVIOR:\n"
+        "  - Use the tool_call mechanism to invoke tools\n"
+        "  - Your text output should ONLY be responses to the user\n"
+        "  - If you need to perform an action, CALL THE TOOL - don't describe it\n\n"
         "1. STATE AWARENESS:\n"
         "   - You receive CURRENT_STATE at each turn showing your progress\n"
         "   - Track KNOWN_FACTS to avoid redundant queries\n"
         "   - Check STEP count - you have limited iterations\n"
         "   - Monitor TOOL_CALLS_USED against your budget\n\n"
         "2. TOOL USAGE:\n"
-        "   - Call tools directly - never describe what you'll do\n"
+        "   - INVOKE tools via tool_call - never output code/JSON describing them\n"
         "   - One action at a time for clarity\n"
         "   - Validate your parameters match the schema\n"
         "   - If a tool fails, try a different approach\n\n"

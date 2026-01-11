@@ -63,6 +63,11 @@ class AgentState:
         intent: Classified intent from router
         allowed_tool_groups: Tool groups allowed for this intent
 
+        # Completion tracking (clawdbot-inspired)
+        goal_achieved: Whether the user's goal was actually accomplished
+        pending_actions: Actions required to complete the goal
+        completion_evidence: Evidence that goal was achieved
+
         # Legacy compatibility fields (from existing AgentState in llm_tools.py)
         resolution: Entity resolution results
         search_results: Accumulated search results
@@ -88,6 +93,11 @@ class AgentState:
     intent: Optional[str] = None
     allowed_tool_groups: list[str] = field(default_factory=list)
     skill_hints: list[str] = field(default_factory=list)
+
+    # Completion tracking (clawdbot-inspired)
+    goal_achieved: bool = False
+    pending_actions: list[str] = field(default_factory=list)
+    completion_evidence: list[str] = field(default_factory=list)
 
     # Legacy compatibility (from existing AgentState)
     resolution: dict[str, Any] = field(default_factory=dict)
@@ -140,6 +150,32 @@ class AgentState:
     def clear_questions(self) -> None:
         """Clear pending questions after they've been asked."""
         self.pending_questions.clear()
+
+    def add_pending_action(self, action: str) -> None:
+        """Add a pending action required to complete the goal."""
+        if action and action not in self.pending_actions:
+            self.pending_actions.append(action)
+
+    def complete_pending_action(self, action: str) -> None:
+        """Mark a pending action as completed."""
+        if action in self.pending_actions:
+            self.pending_actions.remove(action)
+            self.completed_actions.append(action)
+
+    def add_completion_evidence(self, evidence: str) -> None:
+        """Add evidence that the goal was achieved."""
+        if evidence and evidence not in self.completion_evidence:
+            self.completion_evidence.append(evidence)
+
+    def mark_goal_achieved(self, evidence: Optional[str] = None) -> None:
+        """Mark the goal as achieved with optional evidence."""
+        self.goal_achieved = True
+        if evidence:
+            self.add_completion_evidence(evidence)
+
+    def has_pending_actions(self) -> bool:
+        """Check if there are pending actions required."""
+        return len(self.pending_actions) > 0
 
     def record_tool_call(self, record: ToolCallRecord) -> None:
         """Record a tool call (called by controller after execution)."""
@@ -218,8 +254,16 @@ class AgentState:
             recent_actions = self.completed_actions[-3:]
             lines.append(f"COMPLETED: {'; '.join(recent_actions)}")
 
+        if self.pending_actions:
+            lines.append(f"PENDING_ACTIONS: {'; '.join(self.pending_actions)}")
+
         if self.pending_questions:
             lines.append(f"PENDING_QUESTIONS: {'; '.join(self.pending_questions)}")
+
+        if self.goal_achieved:
+            lines.append("GOAL_STATUS: ACHIEVED")
+        elif self.pending_actions:
+            lines.append("GOAL_STATUS: IN_PROGRESS")
 
         return "\n".join(lines)
 

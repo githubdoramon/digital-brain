@@ -87,7 +87,7 @@ TOOLS: list[dict[str, Any]] = [
             "name": "execute_sql",
             "description": (
                 "Run a read-only SQL query on the user's personal database. Use for precise queries "
-                "when you know the schema. Always validate column names with describe_schema first."
+                "when you know the schema. Always validate column names with describe_schema first. Only use this tool as a last resort if the other ones do not bring you the proper result."
             ),
             "parameters": {
                 "type": "object",

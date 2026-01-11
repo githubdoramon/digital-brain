@@ -407,8 +407,12 @@ Rules:
         elif tool_name == "home_assistant":
             if result.get("tools"):
                 facts.append(f"Listed {len(result['tools'])} Home Assistant tools")
+                # This is a discovery step - the goal is NOT yet achieved
+                facts.append("PENDING: Need to call the actual HA tool to complete the action")
             elif result.get("success"):
                 facts.append("Home Assistant command executed successfully")
+                # This is the completion step - mark as achieved
+                facts.append("GOAL_ACHIEVED: Device command completed")
 
         return facts
 
@@ -430,3 +434,300 @@ Rules:
                         alternatives.append(tool)
 
         return alternatives
+
+
+class GoalCompletionValidator:
+    """
+    Validates that the user's actual goal was achieved.
+
+    This is separate from tool execution validation - it checks whether
+    the entire task is complete, not just individual tool calls.
+
+    Inspired by clawdbot's result aggregation pattern.
+
+    The validator is generic and works across all tool types by:
+    1. Detecting goal type (action vs query vs conversational)
+    2. Checking for discovery-only patterns (list/describe but no execute)
+    3. Verifying actual results exist
+    """
+
+    # Patterns that indicate an ACTION goal (user wants something done)
+    ACTION_PATTERNS = [
+        # Device/IoT actions
+        "turn on", "turn off", "switch on", "switch off",
+        "dim", "brighten", "set", "change", "adjust",
+        "open", "close", "lock", "unlock",
+        "start", "stop", "pause", "resume",
+        # Data actions
+        "create", "add", "insert", "save", "store",
+        "delete", "remove", "update", "modify", "edit",
+        "send", "execute", "run", "trigger",
+    ]
+
+    # Patterns that indicate a QUERY goal (user wants information)
+    QUERY_PATTERNS = [
+        "what", "who", "when", "where", "why", "how",
+        "find", "search", "list", "show", "tell me",
+        "do i have", "is there", "are there",
+        "get", "retrieve", "fetch", "look up", "lookup",
+    ]
+
+    # Tool-specific discovery actions that need follow-up execution
+    # Format: {tool_name: {discovery_action: execution_action}}
+    DISCOVERY_EXECUTION_PAIRS = {
+        "home_assistant": {
+            "list_tools": "call_tool",
+        },
+        "describe_schema": {
+            # describe_schema is discovery, execute_sql is execution
+            None: "execute_sql",  # None means the tool itself is discovery
+        },
+    }
+
+    def check_goal_achieved(
+        self,
+        goal: str,
+        tool_calls: list,
+        known_facts: list[str],
+        final_content: str,
+    ) -> tuple[bool, str, list[str]]:
+        """
+        Check if the user's goal was actually achieved.
+
+        Args:
+            goal: The original user goal
+            tool_calls: List of ToolCallRecord objects
+            known_facts: Facts accumulated during execution
+            final_content: The final response content
+
+        Returns:
+            Tuple of (achieved: bool, reason: str, pending_actions: list[str])
+        """
+        goal_lower = goal.lower()
+
+        # Determine goal type
+        is_action_goal = any(p in goal_lower for p in self.ACTION_PATTERNS)
+        is_query_goal = any(p in goal_lower for p in self.QUERY_PATTERNS)
+
+        # Check for discovery-only pattern (generic across all tools)
+        discovery_check = self._check_discovery_without_execution(tool_calls, known_facts)
+        if discovery_check[0] is False and discovery_check[2]:
+            # Discovery was done but execution is pending
+            return discovery_check
+
+        # For action goals, check for actual execution
+        if is_action_goal:
+            return self._check_action_goal_achieved(goal, tool_calls, known_facts)
+
+        # For query goals, check if we have a substantive answer
+        if is_query_goal:
+            return self._check_query_goal_achieved(goal, tool_calls, known_facts, final_content)
+
+        # Default: check for any successful tool execution or substantive content
+        successful_calls = [tc for tc in tool_calls if tc.success]
+        if successful_calls:
+            return (True, "Tools executed successfully", [])
+
+        # No tool calls but has content - might be conversational
+        if final_content and len(final_content.strip()) > 20:
+            return (True, "Response generated", [])
+
+        return (False, "No successful tool execution detected", [])
+
+    def _check_discovery_without_execution(
+        self,
+        tool_calls: list,
+        known_facts: list[str],
+    ) -> tuple[bool, str, list[str]]:
+        """
+        Check if we did discovery (list/describe) but not execution.
+
+        This is a generic check that works across all tools.
+        """
+        if not tool_calls:
+            return (True, "No tool calls", [])  # Not a discovery issue
+
+        # Check for PENDING markers in facts
+        pending_facts = [f for f in known_facts if f.startswith("PENDING:")]
+        if pending_facts:
+            # Extract the pending action from the fact
+            pending_action = pending_facts[-1].replace("PENDING:", "").strip()
+            return (False, "Discovery complete but action pending", [pending_action])
+
+        # Check tool-specific discovery patterns
+        tool_names = {tc.tool_name for tc in tool_calls}
+
+        for tool_name, pairs in self.DISCOVERY_EXECUTION_PAIRS.items():
+            for discovery_action, execution_action in pairs.items():
+                if discovery_action is None:
+                    # The tool itself is discovery (like describe_schema)
+                    if tool_name in tool_names:
+                        # Check if execution tool was also called
+                        if execution_action not in tool_names:
+                            has_successful_discovery = any(
+                                tc.tool_name == tool_name and tc.success
+                                for tc in tool_calls
+                            )
+                            if has_successful_discovery:
+                                return (
+                                    False,
+                                    f"Used {tool_name} for discovery but did not execute",
+                                    [f"Use {execution_action} to complete the action"]
+                                )
+                else:
+                    # Check action parameter (like home_assistant's action param)
+                    discovery_calls = [
+                        tc for tc in tool_calls
+                        if tc.tool_name == tool_name
+                        and tc.arguments.get("action") == discovery_action
+                        and tc.success
+                    ]
+                    execution_calls = [
+                        tc for tc in tool_calls
+                        if tc.tool_name == tool_name
+                        and tc.arguments.get("action") == execution_action
+                    ]
+
+                    if discovery_calls and not execution_calls:
+                        return (
+                            False,
+                            f"Used {tool_name} {discovery_action} but did not {execution_action}",
+                            [f"Call {tool_name} with action='{execution_action}' to complete"]
+                        )
+
+        return (True, "No discovery-only pattern detected", [])
+
+    def _check_action_goal_achieved(
+        self,
+        goal: str,
+        tool_calls: list,
+        known_facts: list[str],
+    ) -> tuple[bool, str, list[str]]:
+        """Check if an action goal was achieved (e.g., turn off lights, create event)."""
+
+        if not tool_calls:
+            return (False, "No tool calls made for action", ["Execute the required tool"])
+
+        # Check for GOAL_ACHIEVED marker in facts
+        goal_achieved_facts = [
+            f for f in known_facts
+            if "GOAL_ACHIEVED" in f or "successfully" in f.lower() or "completed" in f.lower()
+        ]
+        if goal_achieved_facts:
+            return (True, "Action completed successfully", [])
+
+        # Check for successful tool calls that modify data
+        successful_calls = [tc for tc in tool_calls if tc.success]
+
+        # Look for execution-type calls (not just discovery)
+        execution_calls = []
+        for tc in successful_calls:
+            # Skip pure discovery tools
+            if tc.tool_name == "describe_schema":
+                continue
+            # Skip discovery actions
+            if tc.tool_name in self.DISCOVERY_EXECUTION_PAIRS:
+                pairs = self.DISCOVERY_EXECUTION_PAIRS[tc.tool_name]
+                action = tc.arguments.get("action")
+                if action in pairs:
+                    continue  # This is a discovery action
+            execution_calls.append(tc)
+
+        if execution_calls:
+            return (True, "Action executed", [])
+
+        # Only discovery calls were made
+        if successful_calls:
+            return (
+                False,
+                "Only discovery/query tools were used, action not executed",
+                ["Execute the tool that performs the actual action"]
+            )
+
+        # Failed calls
+        failed_calls = [tc for tc in tool_calls if not tc.success]
+        if failed_calls:
+            last_error = failed_calls[-1].error or "unknown error"
+            return (
+                False,
+                f"Action failed: {last_error}",
+                ["Retry with corrected parameters"]
+            )
+
+        return (False, "No action execution detected", ["Execute the required action"])
+
+    def _check_query_goal_achieved(
+        self,
+        goal: str,
+        tool_calls: list,
+        known_facts: list[str],
+        final_content: str,
+    ) -> tuple[bool, str, list[str]]:
+        """Check if a query goal was achieved (e.g., search for memories)."""
+
+        # For queries, we need actual results
+        if not tool_calls:
+            return (False, "No tool calls made for query", ["Search for relevant information"])
+
+        # Check if we got actual results from facts
+        result_indicators = ["found", "retrieved", "returned", "results", "rows", "items", "records"]
+        result_facts = [
+            f for f in known_facts
+            if any(w in f.lower() for w in result_indicators)
+        ]
+
+        if result_facts:
+            return (True, "Query returned results", [])
+
+        # Check for successful query tools
+        query_tools = ["search_memories", "execute_sql", "get_events", "get_document", "web_search"]
+        successful_query_calls = [
+            tc for tc in tool_calls
+            if tc.tool_name in query_tools and tc.success
+        ]
+
+        if successful_query_calls:
+            # Check if results were actually returned
+            for tc in successful_query_calls:
+                result = tc.result
+                if self._has_results(result):
+                    return (True, "Query returned data", [])
+
+            # Query succeeded but no results
+            return (
+                False,
+                "Query executed but returned no results",
+                ["Try different search terms or alternative tools"]
+            )
+
+        # Check if final content has substantive information
+        if final_content and len(final_content.strip()) > 50:
+            return (True, "Response contains substantive information", [])
+
+        return (
+            False,
+            "Query did not return useful results",
+            ["Try alternative search terms or tools"]
+        )
+
+    def _has_results(self, result: dict) -> bool:
+        """Check if a tool result contains actual data."""
+        if not result or not isinstance(result, dict):
+            return False
+
+        # Check common result containers
+        for key in ["results", "rows", "events", "documents", "items", "data", "tools"]:
+            value = result.get(key)
+            if isinstance(value, list) and len(value) > 0:
+                return True
+
+        # Check count indicators
+        if result.get("count", 0) > 0:
+            return True
+
+        # Check success with data
+        if result.get("success") and not result.get("error"):
+            # Has some non-error content
+            return True
+
+        return False
