@@ -3,8 +3,9 @@ Tests for ToolRegistry.
 """
 
 import pytest
-from tools.registry import ToolRegistry, TOOL_GROUPS, get_registry
+
 from tools.contracts import ToolContract, ToolParameter
+from tools.registry import TOOL_GROUPS, ToolRegistry, get_registry
 
 
 class TestToolGroups:

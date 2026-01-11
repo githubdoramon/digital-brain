@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 import requests
 
@@ -23,11 +23,11 @@ class ImmichConfig:
     base_url: str
     api_key: str
     face_api_key: str
-    device_id: Optional[str] = None
+    device_id: str | None = None
     http_timeout: int = IMMICH_HTTP_TIMEOUT
 
 
-def _load_base_auth() -> Tuple[str, str, str]:
+def _load_base_auth() -> tuple[str, str, str]:
     base_url = (os.getenv("IMMICH_SERVER_URL") or "").strip().rstrip("/")
     api_key = (os.getenv("IMMICH_API_KEY") or "").strip()
     face_api_key = (os.getenv("IMMICH_FACE_API_KEY") or "").strip()
@@ -46,10 +46,10 @@ def get_immich_config(require_device: bool = False) -> ImmichConfig:
 
 def identify_contacts_from_image(
     image_bytes: bytes,
-    filename: Optional[str] = None,
-    mime_type: Optional[str] = None,
-    config: Optional[ImmichConfig] = None,
-) -> Tuple[List[Dict[str, Any]], Any]:
+    filename: str | None = None,
+    mime_type: str | None = None,
+    config: ImmichConfig | None = None,
+) -> tuple[list[dict[str, Any]], Any]:
     """
     Call Immich's face identify endpoint and map detected faces to contacts.
 
@@ -89,8 +89,8 @@ def identify_contacts_from_image(
     except ValueError as exc:
         raise ImmichIdentifyError("Immich identify returned invalid JSON") from exc
 
-    matches: List[Any] = payload if isinstance(payload, list) else [payload] if payload else []
-    contacts: List[Dict[str, Any]] = []
+    matches: list[Any] = payload if isinstance(payload, list) else [payload] if payload else []
+    contacts: list[dict[str, Any]] = []
     seen_ids = set()
 
     for match in matches:

@@ -2,13 +2,13 @@ from __future__ import annotations
 
 import re
 from collections import defaultdict
+from collections.abc import Iterable, Sequence
 from datetime import date
-from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Any
 from uuid import uuid4
 
 from db import get_conn
 from schemas import ContactIn, ContactRelationshipIn, ExternalPerson
-
 
 __all__ = [
     "ingest_contact",
@@ -118,7 +118,7 @@ def ingest_contact(contact: ContactIn) -> None:
         conn.commit()
 
 
-def list_contacts() -> List[Dict[str, Any]]:
+def list_contacts() -> list[dict[str, Any]]:
     with get_conn() as conn, conn.cursor() as cur:
         cur.execute(
             """
@@ -129,7 +129,7 @@ def list_contacts() -> List[Dict[str, Any]]:
         )
         rows = cur.fetchall()
         relationships_map = _collect_contact_relationships()
-        contacts: List[Dict[str, Any]] = []
+        contacts: list[dict[str, Any]] = []
         for row in rows:
             contact_id = row["contact_id"]
             contacts.append(
@@ -149,7 +149,7 @@ def list_contacts() -> List[Dict[str, Any]]:
         return contacts
 
 
-def get_contact(contact_id: str) -> Optional[Dict[str, Any]]:
+def get_contact(contact_id: str) -> dict[str, Any] | None:
     with get_conn() as conn, conn.cursor() as cur:
         cur.execute(
             """
@@ -177,7 +177,7 @@ def get_contact(contact_id: str) -> Optional[Dict[str, Any]]:
         }
 
 
-def get_contact_by_email(email: str) -> Optional[Dict[str, Any]]:
+def get_contact_by_email(email: str) -> dict[str, Any] | None:
     normalized = normalize_email(email)
     if not normalized:
         return None
@@ -210,7 +210,7 @@ def get_contact_by_email(email: str) -> Optional[Dict[str, Any]]:
         }
 
 
-def get_contact_by_external_id(external_id: str) -> Optional[Dict[str, Any]]:
+def get_contact_by_external_id(external_id: str) -> dict[str, Any] | None:
     if not external_id:
         return None
     with get_conn() as conn, conn.cursor() as cur:
@@ -253,8 +253,8 @@ def _fetch_contact_row(cur, contact_id: str):
     return cur.fetchone()
 
 
-def _merge_lists(*lists: Optional[Iterable[Any]]) -> List[str]:
-    merged: List[str] = []
+def _merge_lists(*lists: Iterable[Any] | None) -> list[str]:
+    merged: list[str] = []
     for items in lists:
         if not items:
             continue
@@ -269,8 +269,8 @@ def _merge_lists(*lists: Optional[Iterable[Any]]) -> List[str]:
     return merged
 
 
-def _merge_emails(*lists: Optional[Iterable[str]]) -> List[str]:
-    merged: List[str] = []
+def _merge_emails(*lists: Iterable[str] | None) -> list[str]:
+    merged: list[str] = []
     for items in lists:
         if not items:
             continue
@@ -289,14 +289,14 @@ def _generate_external_contact_id(external_id: str) -> str:
     return f"contact:external:{safe}"
 
 
-def _is_default_external_display(name: Optional[str], external_id: str) -> bool:
+def _is_default_external_display(name: str | None, external_id: str) -> bool:
     if not name:
         return True
     expected = f"external contact {external_id}".strip()
     return name.strip().lower() == expected
 
 
-def sync_external_contact(record: ExternalPerson, previous: Optional[ExternalPerson] = None) -> Dict[str, Any]:
+def sync_external_contact(record: ExternalPerson, previous: ExternalPerson | None = None) -> dict[str, Any]:
     external_id = str(record.id).strip()
     if not external_id:
         raise ValueError("External contact id is required")
@@ -312,7 +312,7 @@ def sync_external_contact(record: ExternalPerson, previous: Optional[ExternalPer
             birthday = None
 
     existing_row = None
-    contact_id: Optional[str] = None
+    contact_id: str | None = None
 
     with get_conn() as conn, conn.cursor() as cur:
         cur.execute(
@@ -420,7 +420,7 @@ def unlink_external_contact(external_id: str) -> bool:
         return updated
 
 
-def merge_contacts(primary_contact_id: str, duplicate_contact_id: str) -> Dict[str, Any]:
+def merge_contacts(primary_contact_id: str, duplicate_contact_id: str) -> dict[str, Any]:
     if primary_contact_id == duplicate_contact_id:
         raise ValueError("Cannot merge a contact with itself")
 
@@ -562,7 +562,7 @@ def merge_contacts(primary_contact_id: str, duplicate_contact_id: str) -> Dict[s
     return get_contact(primary_contact_id)
 
 
-def list_contact_merge_candidates() -> Dict[str, Any]:
+def list_contact_merge_candidates() -> dict[str, Any]:
     with get_conn() as conn, conn.cursor() as cur:
         cur.execute(
             """
@@ -573,7 +573,7 @@ def list_contact_merge_candidates() -> Dict[str, Any]:
         )
         rows = cur.fetchall()
 
-    def _serialize(row) -> Dict[str, Any]:
+    def _serialize(row) -> dict[str, Any]:
         return {
             "contact_id": row["contact_id"],
             "display_name": row["display_name"],
@@ -585,8 +585,8 @@ def list_contact_merge_candidates() -> Dict[str, Any]:
             "external_id": row["external_id"],
         }
 
-    external_contacts: List[Dict[str, Any]] = []
-    unlinked_contacts: List[Dict[str, Any]] = []
+    external_contacts: list[dict[str, Any]] = []
+    unlinked_contacts: list[dict[str, Any]] = []
     for row in rows:
         serialized = _serialize(row)
         if row["external_id"]:
@@ -596,7 +596,7 @@ def list_contact_merge_candidates() -> Dict[str, Any]:
 
     from rapidfuzz import fuzz
 
-    suggestions: List[Dict[str, Any]] = []
+    suggestions: list[dict[str, Any]] = []
     for external in external_contacts:
         source_name_candidates = [
             external.get("display_name") or "",
@@ -607,8 +607,8 @@ def list_contact_merge_candidates() -> Dict[str, Any]:
             continue
 
         best_score = -1
-        best_target: Optional[Dict[str, Any]] = None
-        best_match_name: Optional[str] = None
+        best_target: dict[str, Any] | None = None
+        best_match_name: str | None = None
 
         for candidate_name in source_candidates:
             for target in unlinked_contacts:
@@ -641,7 +641,7 @@ def list_contact_merge_candidates() -> Dict[str, Any]:
     }
 
 
-def normalize_email(email: str) -> Optional[str]:
+def normalize_email(email: str) -> str | None:
     if not email:
         return None
     cleaned = email.strip().lower()
@@ -662,7 +662,7 @@ def _generate_contact_id(email: str) -> str:
     return f"contact:{safe}"
 
 
-def ensure_contact_for_email(email: str) -> Tuple[Optional[str], bool]:
+def ensure_contact_for_email(email: str) -> tuple[str | None, bool]:
     normalized = normalize_email(email)
     if not normalized:
         return None, False
@@ -733,7 +733,7 @@ def upsert_contact_relationship(rel: ContactRelationshipIn) -> None:
         conn.commit()
 
 
-def find_self_contact(email: str) -> Optional[Dict[str, Any]]:
+def find_self_contact(email: str) -> dict[str, Any] | None:
     """
     Find the user's own contact record by email.
 
@@ -748,7 +748,7 @@ def find_self_contact(email: str) -> Optional[Dict[str, Any]]:
     return get_contact_by_email(email)
 
 
-def resolve_query(query: str) -> Dict[str, Any]:
+def resolve_query(query: str) -> dict[str, Any]:
     """
     Extract structured entities from a natural-language query.
 
@@ -761,8 +761,8 @@ def resolve_query(query: str) -> Dict[str, Any]:
         Dict with 'contacts', 'places', and 'time_range' keys
     """
     # Simple implementation: search for contacts by name matching
-    contacts_found: List[Dict[str, Any]] = []
-    places_found: List[Dict[str, Any]] = []
+    contacts_found: list[dict[str, Any]] = []
+    places_found: list[dict[str, Any]] = []
 
     # Get all contacts and do fuzzy matching
     all_contacts = list_contacts()
@@ -785,9 +785,9 @@ def resolve_query(query: str) -> Dict[str, Any]:
     }
 
 
-def _collect_contact_relationships(contact_ids: Optional[Iterable[str]] = None) -> Dict[str, List[Dict[str, Any]]]:
+def _collect_contact_relationships(contact_ids: Iterable[str] | None = None) -> dict[str, list[dict[str, Any]]]:
     conditions = []
-    params: List[Any] = []
+    params: list[Any] = []
     if contact_ids:
         contact_list = list(contact_ids)
         if contact_list:
@@ -819,7 +819,7 @@ def _collect_contact_relationships(contact_ids: Optional[Iterable[str]] = None) 
         cur.execute(query, tuple(params))
         rows = cur.fetchall()
 
-    relationships_map: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
+    relationships_map: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for row in rows:
         created_at = row["created_at"].isoformat() if row["created_at"] else None
         updated_at = row["updated_at"].isoformat() if row["updated_at"] else None

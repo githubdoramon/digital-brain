@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -9,53 +9,53 @@ from pydantic import BaseModel, Field
 class ContactIn(BaseModel):
     contact_id: str
     display_name: str
-    aliases: Optional[List[str]] = []
-    birthday: Optional[date] = None
-    emails: Optional[List[str]] = []
-    phones: Optional[List[str]] = []
-    links: Optional[List[str]] = []
-    tags: Optional[List[str]] = []
-    external_id: Optional[str] = None
-    relationships: Optional[List[ContactRelationshipIn]] = []
+    aliases: list[str] | None = []
+    birthday: date | None = None
+    emails: list[str] | None = []
+    phones: list[str] | None = []
+    links: list[str] | None = []
+    tags: list[str] | None = []
+    external_id: str | None = None
+    relationships: list[ContactRelationshipIn] | None = []
 
 
 class PlaceIn(BaseModel):
     place_id: str
-    name: Optional[str] = None
-    city: Optional[str] = None
-    country: Optional[str] = None
-    lat: Optional[float] = None
-    lon: Optional[float] = None
-    geohash: Optional[str] = None
+    name: str | None = None
+    city: str | None = None
+    country: str | None = None
+    lat: float | None = None
+    lon: float | None = None
+    geohash: str | None = None
 
 
 class EventIn(BaseModel):
     id: str
     start_date: datetime = Field(alias="startDate")
-    end_date: Optional[datetime] = Field(default=None, alias="endDate")
-    place_id: Optional[str] = Field(default=None, alias="placeId")
-    people: Optional[List[str]] = Field(default_factory=list, alias="people")
-    tags: Optional[List[str]] = Field(default_factory=list)
-    types: Optional[List[str]] = Field(default_factory=list)
-    title: Optional[str] = ""
-    summary: Optional[str] = ""
-    raw: Optional[Dict[str, Any]] = Field(default_factory=dict)
-    external_id: Optional[str] = Field(default=None, alias="externalId")
+    end_date: datetime | None = Field(default=None, alias="endDate")
+    place_id: str | None = Field(default=None, alias="placeId")
+    people: list[str] | None = Field(default_factory=list, alias="people")
+    tags: list[str] | None = Field(default_factory=list)
+    types: list[str] | None = Field(default_factory=list)
+    title: str | None = ""
+    summary: str | None = ""
+    raw: dict[str, Any] | None = Field(default_factory=dict)
+    external_id: str | None = Field(default=None, alias="externalId")
 
 
 class EventProposal(BaseModel):
-    title: Optional[str] = None
-    start_date: Optional[datetime] = Field(default=None, alias="startDate")
-    end_date: Optional[datetime] = Field(default=None, alias="endDate")
-    summary: Optional[str] = None
-    people: List[str] = Field(default_factory=list)
-    tags: List[str] = Field(default_factory=list)
-    types: List[str] = Field(default_factory=list)
-    place: Optional[str] = None
-    place_id: Optional[str] = Field(default=None, alias="placeId")
-    confidence: Optional[float] = None
-    missing: List[str] = Field(default_factory=list)
-    raw: Dict[str, Any] = Field(default_factory=dict)
+    title: str | None = None
+    start_date: datetime | None = Field(default=None, alias="startDate")
+    end_date: datetime | None = Field(default=None, alias="endDate")
+    summary: str | None = None
+    people: list[str] = Field(default_factory=list)
+    tags: list[str] = Field(default_factory=list)
+    types: list[str] = Field(default_factory=list)
+    place: str | None = None
+    place_id: str | None = Field(default=None, alias="placeId")
+    confidence: float | None = None
+    missing: list[str] = Field(default_factory=list)
+    raw: dict[str, Any] = Field(default_factory=dict)
 
     class Config:
         allow_population_by_field_name = True
@@ -74,13 +74,13 @@ class ExternalEventPayload(BaseModel):
 
 
 class MeetingIn(BaseModel):
-    id: Optional[str] = None
+    id: str | None = None
     title: str
-    content: Optional[str] = None
+    content: str | None = None
     date: datetime
-    link: Optional[str] = None
-    attendees: Optional[List[str]] = Field(default_factory=list)
-    tags: Optional[List[str]] = Field(default_factory=list)
+    link: str | None = None
+    attendees: list[str] | None = Field(default_factory=list)
+    tags: list[str] | None = Field(default_factory=list)
 
 
 class ContactRelationshipIn(BaseModel):
@@ -88,22 +88,22 @@ class ContactRelationshipIn(BaseModel):
     from_contact_id: str
     to_contact_id: str
     relationship_type: str
-    reciprocal_type: Optional[str] = None
+    reciprocal_type: str | None = None
 
 
 class ExternalPerson(BaseModel):
     id: str
-    name: Optional[str] = None
-    birth_date: Optional[str] = Field(default=None, alias="birthDate")
-    thumbnail_path: Optional[str] = Field(default=None, alias="thumbnailPath")
-    face_asset_id: Optional[str] = Field(default=None, alias="faceAssetId")
-    is_hidden: Optional[bool] = Field(default=None, alias="isHidden")
-    is_favorite: Optional[bool] = Field(default=None, alias="isFavorite")
-    color: Optional[str] = None
-    created_at: Optional[datetime] = Field(default=None, alias="createdAt")
-    updated_at: Optional[datetime] = Field(default=None, alias="updatedAt")
-    owner_id: Optional[str] = Field(default=None, alias="ownerId")
-    update_id: Optional[str] = Field(default=None, alias="updateId")
+    name: str | None = None
+    birth_date: str | None = Field(default=None, alias="birthDate")
+    thumbnail_path: str | None = Field(default=None, alias="thumbnailPath")
+    face_asset_id: str | None = Field(default=None, alias="faceAssetId")
+    is_hidden: bool | None = Field(default=None, alias="isHidden")
+    is_favorite: bool | None = Field(default=None, alias="isFavorite")
+    color: str | None = None
+    created_at: datetime | None = Field(default=None, alias="createdAt")
+    updated_at: datetime | None = Field(default=None, alias="updatedAt")
+    owner_id: str | None = Field(default=None, alias="ownerId")
+    update_id: str | None = Field(default=None, alias="updateId")
 
     class Config:
         allow_population_by_field_name = True
@@ -112,8 +112,8 @@ class ExternalPerson(BaseModel):
 
 class ExternalContactPayload(BaseModel):
     person: ExternalPerson
-    previous: Optional[ExternalPerson] = None
-    actor_id: Optional[str] = Field(default=None, alias="actorId")
+    previous: ExternalPerson | None = None
+    actor_id: str | None = Field(default=None, alias="actorId")
 
     class Config:
         allow_population_by_field_name = True
@@ -122,12 +122,12 @@ class ExternalContactPayload(BaseModel):
 
 class ExternalWebhookInfo(BaseModel):
     id: str
-    url: Optional[str] = None
-    method: Optional[str] = None
-    headers: Dict[str, str] = Field(default_factory=dict)
-    timeout: Optional[int] = None
-    retries: Optional[int] = None
-    backoff_ms: Optional[int] = Field(default=None, alias="backoffMs")
+    url: str | None = None
+    method: str | None = None
+    headers: dict[str, str] = Field(default_factory=dict)
+    timeout: int | None = None
+    retries: int | None = None
+    backoff_ms: int | None = Field(default=None, alias="backoffMs")
 
     class Config:
         allow_population_by_field_name = True
@@ -135,7 +135,7 @@ class ExternalWebhookInfo(BaseModel):
 
 
 class ExternalContactWebhook(BaseModel):
-    webhook: Optional[ExternalWebhookInfo] = None
+    webhook: ExternalWebhookInfo | None = None
     event_name: str = Field(alias="eventName")
     timestamp: datetime
     payload: ExternalContactPayload
@@ -154,123 +154,123 @@ class ContactMergeIn(BaseModel):
 class TodoIn(BaseModel):
     todo_id: str
     description: str
-    status: Optional[str] = "pending"
-    due_date: Optional[date] = None
-    contact_ids: Optional[List[str]] = []
-    event_ids: Optional[List[str]] = []
-    place_ids: Optional[List[str]] = []
+    status: str | None = "pending"
+    due_date: date | None = None
+    contact_ids: list[str] | None = []
+    event_ids: list[str] | None = []
+    place_ids: list[str] | None = []
 
 
 class DocumentOut(BaseModel):
     document_id: str
     title: str
-    tags: List[str] = Field(default_factory=list)
-    description: Optional[str] = None
-    document_date: Optional[datetime] = None
+    tags: list[str] = Field(default_factory=list)
+    description: str | None = None
+    document_date: datetime | None = None
     file_name: str
-    file_mime: Optional[str] = None
-    file_size: Optional[int] = None
+    file_mime: str | None = None
+    file_size: int | None = None
     download_url: str
     created_at: datetime
     updated_at: datetime
-    snippet: Optional[str] = None
+    snippet: str | None = None
 
 
 class DocumentCollection(BaseModel):
-    documents: List[DocumentOut] = Field(default_factory=list)
+    documents: list[DocumentOut] = Field(default_factory=list)
 
 
 class DocumentDetailOut(DocumentOut):
-    raw_metadata: Dict[str, Any] = Field(default_factory=dict)
-    content_preview: Optional[str] = None
+    raw_metadata: dict[str, Any] = Field(default_factory=dict)
+    content_preview: str | None = None
 
 
 class DocumentUpdateIn(BaseModel):
-    title: Optional[str] = None
-    tags: Optional[List[str]] = Field(default=None)
-    description: Optional[str] = None
-    document_date: Optional[datetime] = None
+    title: str | None = None
+    tags: list[str] | None = Field(default=None)
+    description: str | None = None
+    document_date: datetime | None = None
 
 
 class DocumentSearchIn(BaseModel):
     query: str
-    tags: Optional[List[str]] = Field(default_factory=list)
-    limit: Optional[int] = 20
+    tags: list[str] | None = Field(default_factory=list)
+    limit: int | None = 20
 
 
 class AskIn(BaseModel):
     question: str
-    limit: Optional[int] = 3
-    session_id: Optional[str] = None  # kept for backward compatibility
-    thread_id: Optional[str] = None
-    event_capture_enabled: Optional[bool] = False
+    limit: int | None = 3
+    session_id: str | None = None  # kept for backward compatibility
+    thread_id: str | None = None
+    event_capture_enabled: bool | None = False
 
 
 class AskOut(BaseModel):
     question: str
     answer: str
-    resolution: Dict[str, Any]
-    search_results: List[Dict[str, Any]]
-    detailed_events: List[Dict[str, Any]]
-    document_results: List[Dict[str, Any]] = Field(default_factory=list)
-    session_id: Optional[str] = None
-    thread_id: Optional[str] = None
-    thread_title: Optional[str] = None
+    resolution: dict[str, Any]
+    search_results: list[dict[str, Any]]
+    detailed_events: list[dict[str, Any]]
+    document_results: list[dict[str, Any]] = Field(default_factory=list)
+    session_id: str | None = None
+    thread_id: str | None = None
+    thread_title: str | None = None
     is_new_session: bool = False
-    event_proposal: Optional[EventProposal] = None
-    web_results: List[Dict[str, Any]] = Field(default_factory=list)
-    web_summary: Optional[str] = None
-    web_follow_up_questions: Optional[List[str]] = Field(default_factory=list)
-    web_query: Optional[str] = None
-    web_provider: Optional[str] = None
-    web_response_id: Optional[str] = None
-    web_documents: List[Dict[str, Any]] = Field(default_factory=list)
+    event_proposal: EventProposal | None = None
+    web_results: list[dict[str, Any]] = Field(default_factory=list)
+    web_summary: str | None = None
+    web_follow_up_questions: list[str] | None = Field(default_factory=list)
+    web_query: str | None = None
+    web_provider: str | None = None
+    web_response_id: str | None = None
+    web_documents: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class ThreadCreate(BaseModel):
-    title: Optional[str] = None
+    title: str | None = None
 
 
 class ThreadUpdate(BaseModel):
-    title: Optional[str] = None
+    title: str | None = None
 
 
 class ThreadMessageOut(BaseModel):
     message_id: int
     role: str
     content: str
-    metadata: Dict[str, Any] = Field(default_factory=dict)
+    metadata: dict[str, Any] = Field(default_factory=dict)
     created_at: datetime
 
 
 class ThreadOut(BaseModel):
     id: str
-    title: Optional[str] = None
+    title: str | None = None
     created_at: datetime
     updated_at: datetime
-    last_message_preview: Optional[str] = None
+    last_message_preview: str | None = None
 
 
 class ThreadDetailOut(ThreadOut):
-    messages: List[ThreadMessageOut] = Field(default_factory=list)
+    messages: list[ThreadMessageOut] = Field(default_factory=list)
 
 
 class ServiceVersion(BaseModel):
     id: str
     name: str
     version: str = "unknown"
-    git_sha: Optional[str] = None
-    build_time: Optional[datetime] = None
-    image: Optional[str] = None
-    sources: List[str] = Field(default_factory=list)
-    notes: Optional[str] = None
-    metadata: Dict[str, Any] = Field(default_factory=dict)
+    git_sha: str | None = None
+    build_time: datetime | None = None
+    image: str | None = None
+    sources: list[str] = Field(default_factory=list)
+    notes: str | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 class ServiceVersionCollection(BaseModel):
     generated_at: datetime
-    services: List[ServiceVersion]
-    manifest_path: Optional[str] = None
-    manifest_metadata: Dict[str, Any] = Field(default_factory=dict)
+    services: list[ServiceVersion]
+    manifest_path: str | None = None
+    manifest_metadata: dict[str, Any] = Field(default_factory=dict)
     env_entry_count: int = 0
     fallback_count: int = 0

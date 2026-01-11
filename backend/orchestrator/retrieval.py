@@ -1,20 +1,21 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
 from datetime import date, datetime, timedelta
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any
+
+from dateparser.search import search_dates
+from rapidfuzz import fuzz, process
 
 import events as events_service
-from dateparser.search import search_dates
-from rapidfuzz import process, fuzz
-
-from documents import _vector_search_documents as vector_search_documents
 from db import fetch_events, get_conn
+from documents import _vector_search_documents as vector_search_documents
 from embeddings import embed_text
 from search_normalization import normalize_search_text
 
 
 # --------------------------- Resolution helpers ---------------------------
-def resolve_query(text: str, need_contacts: bool = True, need_places: bool = True) -> Dict[str, Any]:
+def resolve_query(text: str, need_contacts: bool = True, need_places: bool = True) -> dict[str, Any]:
     q = (text or "").strip()
     people = (
         resolve_entities(q, "contacts", "contact_id", "display_name", "aliases")
@@ -30,7 +31,7 @@ def resolve_query(text: str, need_contacts: bool = True, need_places: bool = Tru
     }
 
 
-def parse_timespan_text(q: str) -> Optional[Tuple[datetime, datetime]]:
+def parse_timespan_text(q: str) -> tuple[datetime, datetime] | None:
     found = search_dates(q, settings={"RETURN_AS_TIMEZONE_AWARE": True})
     if not found:
         return None
@@ -47,9 +48,9 @@ def resolve_entities(
     table: str,
     key_col: str,
     label_col: str,
-    alias_col: Optional[str] = None,
+    alias_col: str | None = None,
     limit: int = 3,
-) -> List[str]:
+) -> list[str]:
     query_text = normalize_search_text(q)
     if not query_text:
         return []
@@ -59,7 +60,7 @@ def resolve_entities(
         else:
             cur.execute(f"SELECT {key_col} AS id, {label_col} AS label FROM {table}")
         rows = cur.fetchall()
-    choices: List[Tuple[str, str]] = []
+    choices: list[tuple[str, str]] = []
     for r in rows:
         base_label = normalize_search_text(r["label"])
         if base_label:
@@ -80,12 +81,12 @@ def resolve_entities(
 # --------------------------- Search helpers ---------------------------
 def search_memories(
     query: str,
-    people: Optional[Sequence[str]] = None,
-    place_ids: Optional[Sequence[str]] = None,
-    time_start: Optional[str] = None,
-    time_end: Optional[str] = None,
+    people: Sequence[str] | None = None,
+    place_ids: Sequence[str] | None = None,
+    time_start: str | None = None,
+    time_end: str | None = None,
     limit: int = 10,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     span = None
     if time_start and time_end:
         try:
@@ -102,7 +103,7 @@ def search_memories(
     bm_docs = bm25_search_documents(normalized_query, 50) if normalized_query else {}
 
     event_ids = set(vec_events) | set(bm_events) | set(st_events)
-    event_scores: Dict[str, float] = {}
+    event_scores: dict[str, float] = {}
     for event_id in event_ids:
         v = vec_events.get(event_id, 0.0)
         b = bm_events.get(event_id, 0.0)
@@ -112,7 +113,7 @@ def search_memories(
         event_scores[event_id] = score
 
     doc_ids = set(vec_docs) | set(bm_docs)
-    doc_scores: Dict[str, float] = {}
+    doc_scores: dict[str, float] = {}
     for doc_id in doc_ids:
         v = vec_docs.get(doc_id, 0.0)
         b = bm_docs.get(doc_id, 0.0)
@@ -120,7 +121,7 @@ def search_memories(
         print(f"[retrieval] doc_id={doc_id} score={score}")
         doc_scores[doc_id] = score
 
-    combined: List[Tuple[str, str, float]] = []
+    combined: list[tuple[str, str, float]] = []
     combined.extend((event_id, "event", event_scores[event_id]) for event_id in event_scores)
     combined.extend((doc_id, "document", doc_scores[doc_id]) for doc_id in doc_scores)
     combined.sort(key=lambda item: item[2], reverse=True)
@@ -139,7 +140,7 @@ def search_memories(
 
     doc_lookup = fetch_document_summaries(doc_ids_ordered) if doc_ids_ordered else {}
 
-    results: List[Dict[str, Any]] = []
+    results: list[dict[str, Any]] = []
     for item_id, kind, _ in top_combined:
         if kind == "event":
             row = event_lookup.get(item_id)
@@ -231,7 +232,7 @@ def bm25_search(query: str, k: int = 50):
         return {r["id"]: float(r["bscore"]) for r in cur.fetchall()}
 
 
-def bm25_search_documents(query: str, k: int = 50) -> Dict[str, float]:
+def bm25_search_documents(query: str, k: int = 50) -> dict[str, float]:
     cleaned_query = normalize_search_text(query)
     if not cleaned_query:
         return {}
@@ -249,11 +250,11 @@ def bm25_search_documents(query: str, k: int = 50) -> Dict[str, float]:
         return {r["document_id"]: float(r["bscore"]) for r in cur.fetchall()}
 
 
-def structured_candidates(timespan, people_ids: List[str], place_ids: List[str], k: int = 200):
+def structured_candidates(timespan, people_ids: list[str], place_ids: list[str], k: int = 200):
     if not timespan and not people_ids and not place_ids:
         return {}
     clauses = []
-    params: List[Any] = []
+    params: list[Any] = []
     if timespan:
         clauses.append("start_date BETWEEN %s AND %s")
         params += [timespan[0], timespan[1]]
@@ -278,14 +279,14 @@ def structured_candidates(timespan, people_ids: List[str], place_ids: List[str],
         return {r["id"]: float(r["sscore"]) for r in cur.fetchall()}
 
 
-def make_snippet(text: Optional[str], length: int = 160) -> str:
+def make_snippet(text: str | None, length: int = 160) -> str:
     if not text:
         return ""
     t = " ".join(text.split())
     return (t[:length] + "…") if len(t) > length else t
 
 
-def fetch_document_summaries(document_ids: Sequence[str]) -> Dict[str, Dict[str, Any]]:
+def fetch_document_summaries(document_ids: Sequence[str]) -> dict[str, dict[str, Any]]:
     if not document_ids:
         return {}
     with get_conn() as conn, conn.cursor() as cur:
@@ -310,7 +311,7 @@ def fetch_document_summaries(document_ids: Sequence[str]) -> Dict[str, Dict[str,
         )
         rows = cur.fetchall()
 
-    summaries: Dict[str, Dict[str, Any]] = {}
+    summaries: dict[str, dict[str, Any]] = {}
     for row in rows:
         snippet_source = row.get("description") or row.get("content") or ""
         summaries[row["document_id"]] = {
@@ -330,7 +331,7 @@ def fetch_document_summaries(document_ids: Sequence[str]) -> Dict[str, Dict[str,
     return summaries
 
 
-def _isoformat(value: Optional[Any]) -> Optional[str]:
+def _isoformat(value: Any | None) -> str | None:
     if isinstance(value, datetime):
         return value.isoformat()
     if isinstance(value, date):
@@ -339,7 +340,7 @@ def _isoformat(value: Optional[Any]) -> Optional[str]:
 
 
 # --------------------------- Pipeline ---------------------------
-def run_pipeline(question: str, search_limit: int = 3) -> Dict[str, Any]:
+def run_pipeline(question: str, search_limit: int = 3) -> dict[str, Any]:
     resolution = resolve_query(question)
     timespan = resolution.get("timespan") or [None, None]
     search = search_memories(

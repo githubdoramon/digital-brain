@@ -9,7 +9,7 @@ This module provides:
 """
 
 from .contracts import ToolContract, ToolParameter
-from .registry import ToolRegistry, get_registry, TOOL_GROUPS
+from .registry import TOOL_GROUPS, ToolRegistry, get_registry
 
 __all__ = [
     "ToolContract",

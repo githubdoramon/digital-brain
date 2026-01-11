@@ -7,7 +7,7 @@ Handles:
 """
 
 from time import perf_counter
-from typing import Any, Dict, Optional, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Optional
 
 if TYPE_CHECKING:
     from agent.state import AgentState
@@ -23,16 +23,16 @@ def _log_timing(label: str, start_time: float, **metadata: Any) -> None:
     print(" ".join(parts))
 
 
-def _normalize_sql_result(result: Dict[str, Any]) -> Dict[str, Any]:
+def _normalize_sql_result(result: dict[str, Any]) -> dict[str, Any]:
     """Normalize SQL results, converting date objects to ISO strings."""
     if "rows" in result and isinstance(result["rows"], list):
         result["rows"] = [_json_safe(row) for row in result["rows"]]
     return result
 
 
-def _json_safe(row: Dict[str, Any]) -> Dict[str, Any]:
+def _json_safe(row: dict[str, Any]) -> dict[str, Any]:
     """Convert a row dict to JSON-safe format."""
-    safe: Dict[str, Any] = {}
+    safe: dict[str, Any] = {}
     for key, value in row.items():
         if hasattr(value, "isoformat"):
             safe[key] = value.isoformat()
@@ -42,10 +42,10 @@ def _json_safe(row: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def handle_execute_sql(
-    args: Dict[str, Any],
+    args: dict[str, Any],
     state: Optional["AgentState"] = None,
     **kwargs,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """
     Execute execute_sql tool.
 
@@ -76,10 +76,10 @@ def handle_execute_sql(
 
 
 def handle_describe_schema(
-    args: Dict[str, Any],
+    args: dict[str, Any],
     state: Optional["AgentState"] = None,
     **kwargs,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """
     Execute describe_schema tool.
 

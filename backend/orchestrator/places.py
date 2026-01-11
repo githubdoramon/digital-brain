@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from db import get_conn
 
-
 __all__ = ["ingest_place"]
 
 

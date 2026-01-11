@@ -3,8 +3,9 @@ from __future__ import annotations
 import json
 import logging
 import os
+from collections.abc import Iterable
 from datetime import datetime, timezone
-from typing import Any, Dict, Iterable, List, Tuple
+from typing import Any
 
 from schemas import ServiceVersion, ServiceVersionCollection
 
@@ -15,7 +16,7 @@ DEFAULT_MANIFEST_PATH = "/app/config/service_manifest.json"
 ENV_PREFIX = "SERVICE_INFO__"
 
 
-def _load_manifest() -> Tuple[List[Dict[str, Any]], str | None, Dict[str, Any]]:
+def _load_manifest() -> tuple[list[dict[str, Any]], str | None, dict[str, Any]]:
     """Load service definitions from a JSON manifest file if it exists."""
     manifest_path = os.getenv(MANIFEST_PATH_ENV, DEFAULT_MANIFEST_PATH)
     if not manifest_path:
@@ -43,9 +44,9 @@ def _load_manifest() -> Tuple[List[Dict[str, Any]], str | None, Dict[str, Any]]:
     return services, manifest_path, metadata
 
 
-def _load_env_overrides() -> List[Dict[str, Any]]:
+def _load_env_overrides() -> list[dict[str, Any]]:
     """Parse SERVICE_INFO__* environment variables that contain JSON payloads."""
-    overrides: List[Dict[str, Any]] = []
+    overrides: list[dict[str, Any]] = []
 
     for key, serialized in os.environ.items():
         if not key.startswith(ENV_PREFIX):
@@ -72,19 +73,19 @@ def _load_env_overrides() -> List[Dict[str, Any]]:
     return overrides
 
 
-def _fallback_services() -> List[Dict[str, Any]]:
+def _fallback_services() -> list[dict[str, Any]]:
     """Provide coarse defaults so the API always returns something meaningful."""
-    known_services: Iterable[Tuple[str, str, str | None]] = (
+    known_services: Iterable[tuple[str, str, str | None]] = (
         ("orchestrator", "Orchestrator API", os.getenv("ORCHESTRATOR_IMAGE", "appcalipse/digital-brain-orchestrator")),
         ("frontend", "Frontend Web", os.getenv("FRONTEND_IMAGE", "digital-brain-frontend")),
         ("db", "Postgres + pgvector", "pgvector/pgvector:pg16"),
     )
 
-    fallback_entries: List[Dict[str, Any]] = []
+    fallback_entries: list[dict[str, Any]] = []
     for service_id, display_name, image in known_services:
         version_value = os.getenv(f"{service_id.upper()}_VERSION") or os.getenv(f"{service_id.upper()}_GIT_SHA")
         build_time = os.getenv(f"{service_id.upper()}_BUILD_TIME")
-        entry: Dict[str, Any] = {
+        entry: dict[str, Any] = {
             "id": service_id,
             "name": display_name,
             "version": version_value or "unknown",
@@ -104,14 +105,14 @@ def _fallback_services() -> List[Dict[str, Any]]:
 
 
 def _merge_services(
-    fallback: List[Dict[str, Any]],
-    manifest_entries: List[Dict[str, Any]],
-    env_overrides: List[Dict[str, Any]],
-) -> List[Dict[str, Any]]:
+    fallback: list[dict[str, Any]],
+    manifest_entries: list[dict[str, Any]],
+    env_overrides: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
     """Merge service maps giving priority to manifest, then environment overrides."""
-    registry: Dict[str, Dict[str, Any]] = {}
+    registry: dict[str, dict[str, Any]] = {}
 
-    def apply(entries: List[Dict[str, Any]], source: str) -> None:
+    def apply(entries: list[dict[str, Any]], source: str) -> None:
         for raw in entries:
             service_id = raw.get("id") or raw.get("service_id") or raw.get("service") or raw.get("name")
             if not service_id:

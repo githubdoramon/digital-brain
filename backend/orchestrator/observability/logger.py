@@ -14,11 +14,11 @@ This data enables:
 """
 
 import json
-import uuid
-from dataclasses import dataclass, field, asdict
-from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
 import threading
+import uuid
+from dataclasses import asdict, dataclass, field
+from datetime import datetime, timezone
+from typing import Any, Optional
 
 
 @dataclass
@@ -26,22 +26,22 @@ class ToolCallLog:
     """Log of a single tool call."""
 
     tool_name: str
-    arguments: Dict[str, Any]
+    arguments: dict[str, Any]
 
     # Validation
     pre_validation_passed: bool = True
-    validation_errors: Optional[List[str]] = None
+    validation_errors: Optional[list[str]] = None
     repair_attempt: int = 0
 
     # Execution
     duration_ms: float = 0
-    result: Optional[Dict[str, Any]] = None
+    result: Optional[dict[str, Any]] = None
 
     # Post-validation
     goal_coverage: Optional[str] = None
-    extracted_facts: Optional[List[str]] = None
+    extracted_facts: Optional[list[str]] = None
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return asdict(self)
 
 
@@ -62,12 +62,12 @@ class StepLog:
     had_tool_calls: bool = False
 
     # Tool calls in this step
-    tool_calls: List[ToolCallLog] = field(default_factory=list)
+    tool_calls: list[ToolCallLog] = field(default_factory=list)
 
     # State snapshot (optional, for debugging)
-    state_snapshot: Optional[Dict[str, Any]] = None
+    state_snapshot: Optional[dict[str, Any]] = None
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         result = {
             "step_number": self.step_number,
             "timestamp": self.timestamp.isoformat(),
@@ -99,11 +99,11 @@ class AgentRunLog:
 
     # Intent routing
     intent: Optional[str] = None
-    allowed_tool_groups: Optional[List[str]] = None
-    skill_hints: Optional[List[str]] = None
+    allowed_tool_groups: Optional[list[str]] = None
+    skill_hints: Optional[list[str]] = None
 
     # Execution trace
-    steps: List[StepLog] = field(default_factory=list)
+    steps: list[StepLog] = field(default_factory=list)
 
     # Summary stats
     total_steps: int = 0
@@ -116,7 +116,7 @@ class AgentRunLog:
     error: Optional[str] = None
     limit_hit: Optional[str] = None
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "run_id": self.run_id,
             "question": self.question,
@@ -162,7 +162,7 @@ class AgentLogger:
             max_logs: Maximum number of logs to keep in memory
             enable_state_snapshots: Whether to capture state snapshots at each step
         """
-        self._logs: Dict[str, AgentRunLog] = {}
+        self._logs: dict[str, AgentRunLog] = {}
         self._lock = threading.Lock()
         self._max_logs = max_logs
         self._enable_state_snapshots = enable_state_snapshots
@@ -210,8 +210,8 @@ class AgentLogger:
         self,
         run_id: str,
         intent: str,
-        allowed_tool_groups: List[str],
-        skill_hints: Optional[List[str]] = None,
+        allowed_tool_groups: list[str],
+        skill_hints: Optional[list[str]] = None,
     ) -> None:
         """Log intent routing results."""
         with self._lock:
@@ -225,7 +225,7 @@ class AgentLogger:
         self,
         run_id: str,
         step_number: int,
-        state_snapshot: Optional[Dict[str, Any]] = None,
+        state_snapshot: Optional[dict[str, Any]] = None,
     ) -> StepLog:
         """
         Start logging a new step.
@@ -280,14 +280,14 @@ class AgentLogger:
         run_id: str,
         step_number: int,
         tool_name: str,
-        arguments: Dict[str, Any],
+        arguments: dict[str, Any],
         pre_validation_passed: bool = True,
-        validation_errors: Optional[List[str]] = None,
+        validation_errors: Optional[list[str]] = None,
         repair_attempt: int = 0,
         duration_ms: float = 0,
-        result: Optional[Dict[str, Any]] = None,
+        result: Optional[dict[str, Any]] = None,
         goal_coverage: Optional[str] = None,
-        extracted_facts: Optional[List[str]] = None,
+        extracted_facts: Optional[list[str]] = None,
     ) -> None:
         """Log a tool call within a step."""
         tool_log = ToolCallLog(
@@ -369,7 +369,7 @@ class AgentLogger:
         log = self.get_log(run_id)
         return log.to_json() if log else None
 
-    def get_recent_logs(self, n: int = 10) -> List[AgentRunLog]:
+    def get_recent_logs(self, n: int = 10) -> list[AgentRunLog]:
         """Get the N most recent run logs."""
         with self._lock:
             sorted_logs = sorted(
@@ -379,24 +379,24 @@ class AgentLogger:
             )
             return sorted_logs[:n]
 
-    def get_stats(self) -> Dict[str, Any]:
+    def get_stats(self) -> dict[str, Any]:
         """Get summary statistics across all logged runs."""
         with self._lock:
             if not self._logs:
                 return {"total_runs": 0}
 
             logs = list(self._logs.values())
-            completed = [l for l in logs if l.completed_at]
-            successful = [l for l in completed if l.success]
+            completed = [log for log in logs if log.completed_at]
+            successful = [log for log in completed if log.success]
 
             return {
                 "total_runs": len(logs),
                 "completed_runs": len(completed),
                 "successful_runs": len(successful),
                 "success_rate": len(successful) / len(completed) if completed else 0,
-                "avg_steps": sum(l.total_steps for l in completed) / len(completed) if completed else 0,
-                "avg_tool_calls": sum(l.total_tool_calls for l in completed) / len(completed) if completed else 0,
-                "avg_duration_ms": sum(l.duration_ms or 0 for l in completed) / len(completed) if completed else 0,
+                "avg_steps": sum(log.total_steps for log in completed) / len(completed) if completed else 0,
+                "avg_tool_calls": sum(log.total_tool_calls for log in completed) / len(completed) if completed else 0,
+                "avg_duration_ms": sum(log.duration_ms or 0 for log in completed) / len(completed) if completed else 0,
             }
 
 

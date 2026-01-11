@@ -12,8 +12,7 @@ The controller validates, normalizes, and executes.
 """
 
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List, Optional, Union
-import json
+from typing import Any, Callable, Optional, Union
 
 
 @dataclass
@@ -25,7 +24,7 @@ class ToolParameter:
     description: str
     required: bool = False
     default: Any = None
-    enum: Optional[List[Any]] = None
+    enum: Optional[list[Any]] = None
     minimum: Optional[Union[int, float]] = None
     maximum: Optional[Union[int, float]] = None
     min_length: Optional[int] = None
@@ -33,9 +32,9 @@ class ToolParameter:
     items_type: Optional[str] = None  # For arrays
     validator: Optional[Callable[[Any], bool]] = None  # Custom runtime validator
 
-    def to_json_schema(self) -> Dict[str, Any]:
+    def to_json_schema(self) -> dict[str, Any]:
         """Convert to JSON Schema format."""
-        schema: Dict[str, Any] = {
+        schema: dict[str, Any] = {
             "type": self.type,
             "description": self.description,
         }
@@ -68,32 +67,32 @@ class ToolContract:
 
     name: str
     description: str
-    parameters: List[ToolParameter] = field(default_factory=list)
+    parameters: list[ToolParameter] = field(default_factory=list)
     handler: Optional[Callable] = None
 
     # Guards
     block_unknown_params: bool = True
-    value_validators: Dict[str, Callable[[Any], bool]] = field(default_factory=dict)
+    value_validators: dict[str, Callable[[Any], bool]] = field(default_factory=dict)
 
     # Normalization
-    normalizer: Optional[Callable[[Dict[str, Any]], Dict[str, Any]]] = None
+    normalizer: Optional[Callable[[dict[str, Any]], dict[str, Any]]] = None
 
     # Constraints
-    constraints: List[str] = field(default_factory=list)  # e.g., ["read_only"]
+    constraints: list[str] = field(default_factory=list)  # e.g., ["read_only"]
 
-    def get_required_params(self) -> List[str]:
+    def get_required_params(self) -> list[str]:
         """Get list of required parameter names."""
         return [p.name for p in self.parameters if p.required]
 
-    def get_optional_params(self) -> List[str]:
+    def get_optional_params(self) -> list[str]:
         """Get list of optional parameter names."""
         return [p.name for p in self.parameters if not p.required]
 
-    def get_all_param_names(self) -> List[str]:
+    def get_all_param_names(self) -> list[str]:
         """Get list of all valid parameter names."""
         return [p.name for p in self.parameters]
 
-    def to_json_schema(self) -> Dict[str, Any]:
+    def to_json_schema(self) -> dict[str, Any]:
         """Convert to JSON Schema format for validation."""
         properties = {}
         required = []
@@ -114,7 +113,7 @@ class ToolContract:
 
         return schema
 
-    def to_openai_tool(self) -> Dict[str, Any]:
+    def to_openai_tool(self) -> dict[str, Any]:
         """Convert to OpenAI function calling format."""
         return {
             "type": "function",
@@ -126,8 +125,8 @@ class ToolContract:
         }
 
     def validate_params(
-        self, params: Dict[str, Any]
-    ) -> tuple[bool, Optional[str], Optional[List[str]]]:
+        self, params: dict[str, Any]
+    ) -> tuple[bool, Optional[str], Optional[list[str]]]:
         """
         Validate parameters against schema and guards.
 
@@ -177,7 +176,7 @@ class ToolContract:
 
     def _validate_param_value(
         self, param: ToolParameter, value: Any
-    ) -> List[str]:
+    ) -> list[str]:
         """Validate a single parameter value against its schema."""
         errors = []
 
@@ -241,7 +240,7 @@ class ToolContract:
 
         return errors
 
-    def normalize(self, params: Dict[str, Any]) -> Dict[str, Any]:
+    def normalize(self, params: dict[str, Any]) -> dict[str, Any]:
         """
         Apply normalization to parameters.
 
@@ -264,8 +263,8 @@ class ToolContract:
         return result
 
     def get_validation_feedback(
-        self, params: Dict[str, Any]
-    ) -> Dict[str, Any]:
+        self, params: dict[str, Any]
+    ) -> dict[str, Any]:
         """
         Generate structured feedback for the model to repair invalid params.
 

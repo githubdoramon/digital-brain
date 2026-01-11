@@ -2,14 +2,15 @@
 Tests for IntentRouter.
 """
 
+
 import pytest
-from unittest.mock import MagicMock, patch
+
 from agent.router import (
-    IntentRouter,
-    IntentClassification,
-    IntentType,
-    TOOL_GROUPS,
     INTENT_TOOL_MAP,
+    TOOL_GROUPS,
+    IntentClassification,
+    IntentRouter,
+    IntentType,
 )
 
 

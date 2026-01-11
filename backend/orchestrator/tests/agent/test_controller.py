@@ -6,9 +6,10 @@ Full integration tests would require mocking the LLM backend.
 """
 
 import pytest
+
 from agent.controller import AgentController, get_controller
-from agent.state import AgentState, ToolCallRecord
 from agent.limits import AgentConfig, LimitType
+from agent.state import AgentState, ToolCallRecord
 
 
 class TestAgentControllerInitialization:

@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import os
 from time import perf_counter
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from mcp.client import MCPClient, MCPClientError
 
@@ -30,7 +30,7 @@ HA_MCP_TIMEOUT = int(os.getenv("HA_MCP_TIMEOUT", "30"))
 HA_MCP_ENDPOINT = "/api/mcp"
 
 # Singleton client instance
-_client: Optional[MCPClient] = None
+_client: MCPClient | None = None
 
 
 def is_ha_configured() -> bool:
@@ -79,7 +79,7 @@ def reset_client() -> None:
 # -------------------------------------------------------------------------
 
 
-def list_ha_tools(force_refresh: bool = False) -> List[Dict[str, Any]]:
+def list_ha_tools(force_refresh: bool = False) -> list[dict[str, Any]]:
     """
     List available Home Assistant MCP tools.
 
@@ -99,8 +99,8 @@ def list_ha_tools(force_refresh: bool = False) -> List[Dict[str, Any]]:
 
 
 def call_ha_tool(
-    tool_name: str, arguments: Optional[Dict[str, Any]] = None
-) -> Dict[str, Any]:
+    tool_name: str, arguments: dict[str, Any] | None = None
+) -> dict[str, Any]:
     """
     Call a Home Assistant MCP tool.
 
@@ -138,8 +138,8 @@ def call_ha_tool(
 
 
 async def call_ha_tool_async(
-    tool_name: str, arguments: Optional[Dict[str, Any]] = None
-) -> Dict[str, Any]:
+    tool_name: str, arguments: dict[str, Any] | None = None
+) -> dict[str, Any]:
     """
     Call a Home Assistant MCP tool (async version).
 

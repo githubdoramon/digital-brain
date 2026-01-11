@@ -5,7 +5,7 @@ import os
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, Optional, Set, Tuple
+from typing import Any
 
 import requests
 
@@ -39,8 +39,8 @@ class TelegramConfig:
     immich_url: str
     immich_api_key: str
     immich_device_id: str
-    allowed_chat_ids: Set[int]
-    secret_token: Optional[str]
+    allowed_chat_ids: set[int]
+    secret_token: str | None
 
     @property
     def telegram_api_url(self) -> str:
@@ -55,8 +55,8 @@ class TelegramConfig:
         return f"{self.immich_url}/api/assets"
 
 
-def process_update(update: Dict[str, Any], *, secret_token: Optional[str]) -> Dict[str, Any]:
-    
+def process_update(update: dict[str, Any], *, secret_token: str | None) -> dict[str, Any]:
+
     config = _load_config()
     _verify_secret(secret_token, config)
 
@@ -134,8 +134,8 @@ def _load_config() -> TelegramConfig:
     )
 
 
-def _parse_allowed_chat_ids(raw: Optional[str]) -> Set[int]:
-    ids: Set[int] = set()
+def _parse_allowed_chat_ids(raw: str | None) -> set[int]:
+    ids: set[int] = set()
     if not raw:
         return ids
     for chunk in raw.split(","):
@@ -149,14 +149,14 @@ def _parse_allowed_chat_ids(raw: Optional[str]) -> Set[int]:
     return ids
 
 
-def _verify_secret(provided: Optional[str], config: TelegramConfig) -> None:
+def _verify_secret(provided: str | None, config: TelegramConfig) -> None:
     if not config.secret_token:
         return
     if provided != config.secret_token:
         raise TelegramAuthError("Invalid Telegram secret token")
 
 
-def _extract_message(update: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+def _extract_message(update: dict[str, Any]) -> dict[str, Any] | None:
     for key in ("message", "edited_message", "channel_post", "edited_channel_post"):
         message = update.get(key)
         if message:
@@ -164,7 +164,7 @@ def _extract_message(update: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     return None
 
 
-def _extract_image_candidate(message: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+def _extract_image_candidate(message: dict[str, Any]) -> dict[str, Any] | None:
     photos = message.get("photo") or []
     if photos:
         # Telegram sends an array of sizes; pick the largest by file_size or width*height
@@ -185,7 +185,7 @@ def _extract_image_candidate(message: Dict[str, Any]) -> Optional[Dict[str, Any]
     return None
 
 
-def _download_file(file_id: str, config: TelegramConfig) -> Tuple[bytes, str]:
+def _download_file(file_id: str, config: TelegramConfig) -> tuple[bytes, str]:
     file_info = _call_telegram("getFile", {"file_id": file_id}, config)
     file_path = file_info.get("file_path")
     if not file_path:
@@ -202,7 +202,7 @@ def _download_file(file_id: str, config: TelegramConfig) -> Tuple[bytes, str]:
     return response.content, filename
 
 
-def _call_telegram(method: str, params: Dict[str, Any], config: TelegramConfig) -> Dict[str, Any]:
+def _call_telegram(method: str, params: dict[str, Any], config: TelegramConfig) -> dict[str, Any]:
     url = f"{config.telegram_api_url}/{method}"
     try:
         response = requests.get(url, params=params, timeout=TELEGRAM_HTTP_TIMEOUT)
@@ -221,14 +221,14 @@ def _call_telegram(method: str, params: Dict[str, Any], config: TelegramConfig) 
     return payload.get("result") or {}
 
 
-def _message_datetime(message: Dict[str, Any]) -> datetime:
+def _message_datetime(message: dict[str, Any]) -> datetime:
     timestamp = message.get("date")
     if isinstance(timestamp, int):
         return datetime.fromtimestamp(timestamp, tz=timezone.utc)
     return datetime.now(timezone.utc)
 
 
-def _build_filename(candidate: Dict[str, Any], remote_filename: str, chat_id: int) -> str:
+def _build_filename(candidate: dict[str, Any], remote_filename: str, chat_id: int) -> str:
     if remote_filename:
         return remote_filename
 
@@ -244,11 +244,11 @@ def _build_filename(candidate: Dict[str, Any], remote_filename: str, chat_id: in
 def _upload_to_immich(
     image_bytes: bytes,
     filename: str,
-    mime_type: Optional[str],
+    mime_type: str | None,
     taken_at: datetime,
     device_asset_id: str,
     config: TelegramConfig,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     iso_timestamp = _format_timestamp(taken_at)
     headers = {
         "x-api-key": config.immich_api_key,

@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional, Sequence
+from collections.abc import Sequence
+from typing import Any
 
 from db import get_conn
 from schemas import TodoIn
-
 
 __all__ = [
     "ingest_todo",
@@ -50,7 +50,7 @@ def ingest_todo(todo: TodoIn) -> None:
         conn.commit()
 
 
-def list_todos() -> List[Dict[str, Any]]:
+def list_todos() -> list[dict[str, Any]]:
     with get_conn() as conn, conn.cursor() as cur:
         cur.execute(
             """
@@ -67,7 +67,7 @@ def list_todos() -> List[Dict[str, Any]]:
         todo_ids = [row["todo_id"] for row in rows]
         link_map = _collect_todo_links(conn, todo_ids)
 
-        todos: List[Dict[str, Any]] = []
+        todos: list[dict[str, Any]] = []
         for row in rows:
             todo_id = row["todo_id"]
             links = link_map.get(todo_id, {})
@@ -87,7 +87,7 @@ def list_todos() -> List[Dict[str, Any]]:
         return todos
 
 
-def get_todo(todo_id: str) -> Optional[Dict[str, Any]]:
+def get_todo(todo_id: str) -> dict[str, Any] | None:
     with get_conn() as conn, conn.cursor() as cur:
         cur.execute(
             """
@@ -167,11 +167,11 @@ def _replace_todo_links(
             )
 
 
-def _collect_todo_links(conn, todo_ids: Sequence[str]) -> Dict[str, Dict[str, Any]]:
+def _collect_todo_links(conn, todo_ids: Sequence[str]) -> dict[str, dict[str, Any]]:
     if not todo_ids:
         return {}
 
-    link_map: Dict[str, Dict[str, Any]] = {
+    link_map: dict[str, dict[str, Any]] = {
         todo_id: {"contacts": [], "events": [], "places": []} for todo_id in todo_ids
     }
 
@@ -208,7 +208,7 @@ def _collect_todo_links(conn, todo_ids: Sequence[str]) -> Dict[str, Dict[str, An
                 "events"
             ]
             event_id = row["event_id"]
-            event_detail: Dict[str, Any] = {"id": event_id}
+            event_detail: dict[str, Any] = {"id": event_id}
             title = row.get("title") or None
             event_detail["title"] = title or event_id
             start_date = row.get("start_date")

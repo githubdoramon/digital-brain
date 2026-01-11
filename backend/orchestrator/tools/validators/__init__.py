@@ -6,8 +6,8 @@ Provides:
 - PostExecutionValidator: Checks goal coverage after execution
 """
 
+from .post_execution import GoalCoverage, PostExecutionResult, PostExecutionValidator
 from .pre_execution import PreExecutionValidator, ValidationResult
-from .post_execution import PostExecutionValidator, GoalCoverage, PostExecutionResult
 
 __all__ = [
     "PreExecutionValidator",

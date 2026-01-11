@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import json
 import os
-from typing import Dict, Iterable, List, Literal, Optional, Sequence
+from collections.abc import Iterable, Sequence
+from typing import Literal
 
 import requests
 
@@ -145,11 +146,11 @@ def _needs_additional_tags(tags: Sequence[str]) -> bool:
     return (len(normalized) < 4) or (not _has_major_tag(normalized))
 
 
-def _normalize_strings(values: Iterable[str] | None) -> List[str]:
+def _normalize_strings(values: Iterable[str] | None) -> list[str]:
     if not values:
         return []
     seen = set()
-    normalized: List[str] = []
+    normalized: list[str] = []
     for item in values:
         if item is None:
             continue
@@ -164,7 +165,7 @@ def _normalize_strings(values: Iterable[str] | None) -> List[str]:
     return normalized
 
 
-def _parse_suggested_tags_response(raw_content: str) -> List[str]:
+def _parse_suggested_tags_response(raw_content: str) -> list[str]:
     try:
         loaded = json.loads(raw_content)
         if isinstance(loaded, dict):
@@ -180,7 +181,7 @@ def _parse_suggested_tags_response(raw_content: str) -> List[str]:
         lines = [line.strip("-• ").strip() for line in raw_content.splitlines()]
         candidate = [line for line in lines if line]
 
-    parsed_tags: List[str] = []
+    parsed_tags: list[str] = []
     if isinstance(candidate, dict):
         candidate = list(candidate.values())
     if isinstance(candidate, list):
@@ -196,7 +197,7 @@ def _suggest_tags(
     content: str,
     tags: Sequence[str],
     subject: Literal["document", "event"],
-) -> List[str]:
+) -> list[str]:
     cleaned = (content or "").strip()
     if not cleaned or not OLLAMA_CHAT_MODEL:
         return []
@@ -237,18 +238,11 @@ def _suggest_tags(
             {
                 "role": "user",
                 "content": (
-                    "Existing tags: {existing_tags}\n"
-                    "Major categories (must include at least one): {major_categories}\n"
-                    "{subject_label}:\n"
-                    "{excerpt}\n\n"
-                    "Return up to {max_tags} new tags relevant to this {subject}."
-                ).format(
-                    existing_tags=existing,
-                    major_categories=major_categories,
-                    subject_label=subject_excerpt_label,
-                    excerpt=prompt_content,
-                    max_tags=MAX_SUGGESTED_TAGS,
-                    subject=subject,
+                    f"Existing tags: {existing}\n"
+                    f"Major categories (must include at least one): {major_categories}\n"
+                    f"{subject_excerpt_label}:\n"
+                    f"{prompt_content}\n\n"
+                    f"Return up to {MAX_SUGGESTED_TAGS} new tags relevant to this {subject}."
                 ),
             },
         ],
@@ -272,19 +266,19 @@ def _suggest_tags(
         return []
 
 
-def _suggest_additional_tags(content: str, tags: Sequence[str]) -> List[str]:
+def _suggest_additional_tags(content: str, tags: Sequence[str]) -> list[str]:
     if not _needs_additional_tags(tags):
         return []
     return _suggest_tags(content, tags, "document")
 
 
 def _suggest_event_tags(
-    title: Optional[str],
-    summary: Optional[str],
+    title: str | None,
+    summary: str | None,
     tags: Sequence[str],
     *,
-    types: Optional[Sequence[str]] = None,
-) -> List[str]:
+    types: Sequence[str] | None = None,
+) -> list[str]:
     if not _needs_additional_tags(tags):
         return []
     combined_parts = [part.strip() for part in (title or "", summary or "") if part]
@@ -296,8 +290,8 @@ def _suggest_event_tags(
     )
 
 
-def _merge_tag_lists(primary: Sequence[str], secondary: Sequence[str]) -> List[str]:
-    merged: List[str] = list(primary or [])
+def _merge_tag_lists(primary: Sequence[str], secondary: Sequence[str]) -> list[str]:
+    merged: list[str] = list(primary or [])
     seen = {tag.lower() for tag in merged if isinstance(tag, str)}
     for tag in secondary:
         if not isinstance(tag, str):
@@ -314,7 +308,7 @@ def _merge_tag_lists(primary: Sequence[str], secondary: Sequence[str]) -> List[s
 
 
 
-def get_tag_taxonomy() -> Dict[str, List[str]]:
+def get_tag_taxonomy() -> dict[str, list[str]]:
     """
     Return the tag taxonomy as a dict mapping major tags to their minor tags (keywords).
 

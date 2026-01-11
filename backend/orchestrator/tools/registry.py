@@ -8,17 +8,15 @@ The registry maintains all tool contracts and provides:
 - Singleton access pattern
 """
 
-from typing import Any, Callable, Dict, List, Optional
 import threading
+from typing import Any, Optional
 
 from .contracts import (
     ToolContract,
     ToolParameter,
-    validate_sql_safe,
     validate_limit,
-    validate_positive_int,
+    validate_sql_safe,
 )
-
 
 # Tool group definitions - maps group names to tool names
 TOOL_GROUPS = {
@@ -32,7 +30,7 @@ TOOL_GROUPS = {
 }
 
 # Reverse mapping: tool name -> groups
-TOOL_TO_GROUPS: Dict[str, List[str]] = {}
+TOOL_TO_GROUPS: dict[str, list[str]] = {}
 for group, tools in TOOL_GROUPS.items():
     for tool in tools:
         if tool not in TOOL_TO_GROUPS:
@@ -51,14 +49,14 @@ class ToolRegistry:
     """
 
     def __init__(self):
-        self._contracts: Dict[str, ToolContract] = {}
-        self._groups: Dict[str, List[str]] = dict(TOOL_GROUPS)
+        self._contracts: dict[str, ToolContract] = {}
+        self._groups: dict[str, list[str]] = dict(TOOL_GROUPS)
         self._lock = threading.Lock()
 
     def register(
         self,
         contract: ToolContract,
-        groups: Optional[List[str]] = None,
+        groups: Optional[list[str]] = None,
     ) -> None:
         """
         Register a tool contract.
@@ -82,11 +80,11 @@ class ToolRegistry:
         """Get a tool contract by name."""
         return self._contracts.get(name)
 
-    def get_all_contracts(self) -> List[ToolContract]:
+    def get_all_contracts(self) -> list[ToolContract]:
         """Get all registered tool contracts."""
         return list(self._contracts.values())
 
-    def get_tools_for_groups(self, groups: List[str]) -> List[ToolContract]:
+    def get_tools_for_groups(self, groups: list[str]) -> list[ToolContract]:
         """
         Get all tool contracts for the specified groups.
 
@@ -102,7 +100,7 @@ class ToolRegistry:
             if name in self._contracts
         ]
 
-    def get_tool_names_for_groups(self, groups: List[str]) -> List[str]:
+    def get_tool_names_for_groups(self, groups: list[str]) -> list[str]:
         """Get tool names for the specified groups."""
         tool_names = set()
         for group in groups:
@@ -110,8 +108,8 @@ class ToolRegistry:
         return list(tool_names)
 
     def get_tool_definitions(
-        self, allowed_tools: Optional[List[str]] = None
-    ) -> List[Dict[str, Any]]:
+        self, allowed_tools: Optional[list[str]] = None
+    ) -> list[dict[str, Any]]:
         """
         Get OpenAI-format tool definitions.
 
@@ -128,17 +126,17 @@ class ToolRegistry:
         return definitions
 
     def get_tool_definitions_for_groups(
-        self, groups: List[str]
-    ) -> List[Dict[str, Any]]:
+        self, groups: list[str]
+    ) -> list[dict[str, Any]]:
         """Get OpenAI-format tool definitions for specific groups."""
         allowed = self.get_tool_names_for_groups(groups)
         return self.get_tool_definitions(allowed)
 
-    def list_groups(self) -> List[str]:
+    def list_groups(self) -> list[str]:
         """List all available tool groups."""
         return list(self._groups.keys())
 
-    def list_tools_in_group(self, group: str) -> List[str]:
+    def list_tools_in_group(self, group: str) -> list[str]:
         """List all tools in a specific group."""
         return self._groups.get(group, [])
 

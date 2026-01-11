@@ -2,13 +2,24 @@ from __future__ import annotations
 
 import json
 import os
-from uuid import uuid4
 from contextlib import asynccontextmanager
 from datetime import datetime
 from time import perf_counter
-from typing import Any, Dict, List, Optional
+from typing import Any
+from uuid import uuid4
 
-from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Query, Request, Response, UploadFile
+from fastapi import (
+    Depends,
+    FastAPI,
+    File,
+    Form,
+    Header,
+    HTTPException,
+    Query,
+    Request,
+    Response,
+    UploadFile,
+)
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
 
@@ -17,38 +28,37 @@ import contacts as contacts_service
 import conversations
 import documents
 import events as events_service
+import immich_client
 import llm
 import places as places_service
+import skills
+import telegram_bot
 import todos as todos_service
 from auth import get_current_user
 from db import get_conn
-import immich_client
-import telegram_bot
-import skills
 from schemas import (
     AskIn,
     AskOut,
     ContactIn,
     ContactMergeIn,
+    DocumentCollection,
+    DocumentDetailOut,
+    DocumentSearchIn,
+    DocumentUpdateIn,
     EventIn,
+    EventProposalCreate,
+    ExternalContactWebhook,
     ExternalEventPayload,
     MeetingIn,
     PlaceIn,
-    ExternalContactWebhook,
-    DocumentCollection,
-    DocumentDetailOut,
-    DocumentUpdateIn,
-    DocumentSearchIn,
-    TodoIn,
-    EventProposalCreate,
+    ServiceVersionCollection,
     ThreadCreate,
     ThreadDetailOut,
     ThreadOut,
     ThreadUpdate,
-    ServiceVersionCollection,
+    TodoIn,
 )
 from versioning import get_service_versions
-
 
 ORCHESTRATOR_API_KEY = os.getenv("ORCHESTRATOR_API_KEY")
 
@@ -60,7 +70,7 @@ def require_service_api_key(x_service_api_key: str = Header(default="", alias="x
         raise HTTPException(status_code=401, detail="Invalid service API key")
 
 
-def _parse_tags_payload(raw: Optional[str]) -> List[str]:
+def _parse_tags_payload(raw: str | None) -> list[str]:
     if not raw:
         return []
     try:
@@ -70,7 +80,7 @@ def _parse_tags_payload(raw: Optional[str]) -> List[str]:
         parsed = [part.strip() for part in raw.split(",")]
     if not isinstance(parsed, list):
         raise ValueError("tags must be an array")
-    tags: List[str] = []
+    tags: list[str] = []
     for item in parsed:
         if item is None:
             continue
@@ -80,7 +90,7 @@ def _parse_tags_payload(raw: Optional[str]) -> List[str]:
     return tags
 
 
-def _parse_iso_datetime(value: Optional[str]) -> Optional[datetime]:
+def _parse_iso_datetime(value: str | None) -> datetime | None:
     if not value:
         return None
     try:
@@ -206,7 +216,7 @@ def receive_contact_webhook(
 
 @api.post("/webhooks/telegram/messages")
 async def handle_telegram_messages(
-    payload: Dict[str, Any],
+    payload: dict[str, Any],
     request: Request,
 ):
     try:
@@ -322,10 +332,10 @@ def ingest_thread_event(
 # --------------------------- Document endpoints ---------------------------
 @api.post("/ingest/document", response_model=DocumentDetailOut)
 async def upload_document(
-    title: Optional[str] = Form(None),
-    tags: Optional[str] = Form(None),
-    description: Optional[str] = Form(None),
-    document_date: Optional[str] = Form(None),
+    title: str | None = Form(None),
+    tags: str | None = Form(None),
+    description: str | None = Form(None),
+    document_date: str | None = Form(None),
     file: UploadFile = File(...),
     user: dict = Depends(get_current_user),
 ):
@@ -377,7 +387,7 @@ def ingest_external_document(
         raise HTTPException(status_code=500, detail="Failed to ingest document")
 
     return DocumentDetailOut(**document)
-    
+
 
 
 @api.get("/documents", response_model=DocumentCollection)
@@ -453,7 +463,7 @@ def download_document(document_id: str, user: dict = Depends(get_current_user)):
 
 @api.post("/ingest/events/notes")
 def ingest_meeting_notes(
-    meetings: List[MeetingIn],
+    meetings: list[MeetingIn],
     _: None = Depends(require_service_api_key),
 ):
     ids = events_service.ingest_meeting_notes(meetings, todo_writer=todos_service.ingest_todo)
@@ -588,7 +598,7 @@ def _resolve_session_context(payload: AskIn, user_email: str) -> _SessionContext
 _RESET_MESSAGE = "New session started. How can I help you?"
 
 
-def _make_reset_bundle(ctx: _SessionContext) -> Dict[str, Any]:
+def _make_reset_bundle(ctx: _SessionContext) -> dict[str, Any]:
     """Create response bundle for a session reset with no actual question."""
     return {
         "question": ctx.original_question,
@@ -729,7 +739,7 @@ async def ask_stream(payload: AskIn, user: dict = Depends(get_current_user)):
     )
 
 
-@api.get("/threads", response_model=List[ThreadOut])
+@api.get("/threads", response_model=list[ThreadOut])
 def list_conversation_threads(user: dict = Depends(get_current_user)):
     user_email = user.get("email")
     if not user_email:

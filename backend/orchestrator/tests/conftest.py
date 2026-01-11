@@ -4,9 +4,10 @@ Pytest configuration and shared fixtures for agent tests.
 
 import os
 import sys
+from typing import Any
+from unittest.mock import MagicMock
+
 import pytest
-from typing import Any, Dict, List
-from unittest.mock import MagicMock, AsyncMock
 
 # Add parent directory to path for imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -32,8 +33,8 @@ def mock_llm_response():
     """Factory fixture for mock LLM responses."""
     def _create_response(
         content: str = "",
-        tool_calls: List[Dict[str, Any]] = None,
-    ) -> Dict[str, Any]:
+        tool_calls: list[dict[str, Any]] = None,
+    ) -> dict[str, Any]:
         response = {
             "message": {
                 "content": content,
@@ -51,9 +52,9 @@ def mock_tool_call():
     """Factory fixture for mock tool calls."""
     def _create_tool_call(
         name: str,
-        arguments: Dict[str, Any],
+        arguments: dict[str, Any],
         call_id: str = "call_123",
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         return {
             "id": call_id,
             "type": "function",
@@ -115,8 +116,8 @@ def agent_config():
 @pytest.fixture
 def mock_tool_registry():
     """Mock tool registry for testing."""
-    from tools.registry import ToolRegistry
     from tools.contracts import ToolContract, ToolParameter
+    from tools.registry import ToolRegistry
 
     registry = ToolRegistry()
 

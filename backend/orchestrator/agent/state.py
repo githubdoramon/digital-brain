@@ -13,8 +13,7 @@ The controller is the single source of truth for:
 
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
-import json
+from typing import Any, Optional
 
 
 @dataclass
@@ -22,15 +21,15 @@ class ToolCallRecord:
     """Record of a single tool call execution."""
 
     tool_name: str
-    arguments: Dict[str, Any]
-    result: Dict[str, Any]
+    arguments: dict[str, Any]
+    result: dict[str, Any]
     duration_ms: float
     success: bool
     error: Optional[str] = None
-    validation_errors: Optional[List[str]] = None
+    validation_errors: Optional[list[str]] = None
     was_repaired: bool = False
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for serialization."""
         return {
             "tool_name": self.tool_name,
@@ -73,28 +72,28 @@ class AgentState:
 
     # Core task tracking
     goal: str
-    constraints: List[str] = field(default_factory=list)
+    constraints: list[str] = field(default_factory=list)
 
     # Knowledge accumulation
-    known_facts: List[str] = field(default_factory=list)
-    completed_actions: List[str] = field(default_factory=list)
-    pending_questions: List[str] = field(default_factory=list)
+    known_facts: list[str] = field(default_factory=list)
+    completed_actions: list[str] = field(default_factory=list)
+    pending_questions: list[str] = field(default_factory=list)
 
     # Progress tracking (controller-managed)
-    tool_calls: List[ToolCallRecord] = field(default_factory=list)
+    tool_calls: list[ToolCallRecord] = field(default_factory=list)
     step_count: int = 0
     repair_count: int = 0
 
     # Intent routing results
     intent: Optional[str] = None
-    allowed_tool_groups: List[str] = field(default_factory=list)
-    skill_hints: List[str] = field(default_factory=list)
+    allowed_tool_groups: list[str] = field(default_factory=list)
+    skill_hints: list[str] = field(default_factory=list)
 
     # Legacy compatibility (from existing AgentState)
-    resolution: Dict[str, Any] = field(default_factory=dict)
-    search_results: List[Dict[str, Any]] = field(default_factory=list)
-    detailed_events: List[Dict[str, Any]] = field(default_factory=list)
-    activated_skills: List[Dict[str, Any]] = field(default_factory=list)
+    resolution: dict[str, Any] = field(default_factory=dict)
+    search_results: list[dict[str, Any]] = field(default_factory=list)
+    detailed_events: list[dict[str, Any]] = field(default_factory=list)
+    activated_skills: list[dict[str, Any]] = field(default_factory=list)
 
     # Timestamps
     started_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
@@ -146,7 +145,7 @@ class AgentState:
         """Record a tool call (called by controller after execution)."""
         self.tool_calls.append(record)
 
-    def get_recent_tool_calls(self, n: int = 3) -> List[ToolCallRecord]:
+    def get_recent_tool_calls(self, n: int = 3) -> list[ToolCallRecord]:
         """Get the N most recent tool calls."""
         return self.tool_calls[-n:] if self.tool_calls else []
 
@@ -178,7 +177,7 @@ class AgentState:
         recent = self.tool_calls[-n:]
         return all(self._is_empty_result(tc.result) for tc in recent)
 
-    def _is_empty_result(self, result: Dict[str, Any]) -> bool:
+    def _is_empty_result(self, result: dict[str, Any]) -> bool:
         """Check if a tool result is effectively empty."""
         if "error" in result:
             return True
@@ -224,7 +223,7 @@ class AgentState:
 
         return "\n".join(lines)
 
-    def to_metadata(self) -> Dict[str, Any]:
+    def to_metadata(self) -> dict[str, Any]:
         """
         Convert state to metadata for storage/logging.
 
@@ -244,7 +243,7 @@ class AgentState:
             "activated_skills": [s.get("name") for s in self.activated_skills],
         }
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Full serialization for logging/debugging."""
         return {
             "goal": self.goal,

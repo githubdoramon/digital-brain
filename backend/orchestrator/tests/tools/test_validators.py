@@ -6,6 +6,7 @@ Some tests are placeholders for more complex validation scenarios.
 """
 
 import pytest
+
 from agent.state import AgentState, ToolCallRecord
 from tools.contracts import ToolContract, ToolParameter
 

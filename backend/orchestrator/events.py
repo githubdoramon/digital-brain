@@ -3,9 +3,10 @@ from __future__ import annotations
 import json
 import os
 import re
+from collections.abc import Sequence
 from datetime import datetime
 from itertools import combinations
-from typing import Any, Callable, Dict, List, Optional, Sequence, Set, Tuple
+from typing import Any, Callable
 from uuid import uuid4
 
 import contacts as contacts_service
@@ -23,7 +24,6 @@ from tags_manager import (
     _normalize_strings,
     _suggest_event_tags,
 )
-
 
 MAX_EVENT_EMBED_CHARS = 6000
 
@@ -61,7 +61,7 @@ def _format_external_event_id(external_type: str, external_id: str) -> str:
     return f"{normalized_type}:{normalized_id}"
 
 
-def _load_current_user_from_env() -> Optional[dict]:
+def _load_current_user_from_env() -> dict | None:
     current_user_info = os.environ.get("CURRENT_USER_INFO")
     if not current_user_info:
         return None
@@ -74,16 +74,16 @@ def _load_current_user_from_env() -> Optional[dict]:
 def _resolve_attendee_contacts(
     attendee_emails: Sequence[str],
     *,
-    contact_cache: Dict[str, Tuple[Optional[str], bool]],
-    current_user: Optional[dict],
-) -> Tuple[List[str], Dict[str, List[str]]]:
-    contact_ids: List[str] = []
-    new_contacts_by_domain: Dict[str, List[str]] = {}
+    contact_cache: dict[str, tuple[str | None, bool]],
+    current_user: dict | None,
+) -> tuple[list[str], dict[str, list[str]]]:
+    contact_ids: list[str] = []
+    new_contacts_by_domain: dict[str, list[str]] = {}
 
     for email in attendee_emails:
         normalized = contacts_service.normalize_email(email)
         created_now = False
-        contact_id: Optional[str] = None
+        contact_id: str | None = None
         if normalized and normalized in contact_cache:
             contact_id, _ = contact_cache[normalized]
         else:
@@ -112,7 +112,7 @@ def _resolve_attendee_contacts(
     return unique_contacts, new_contacts_by_domain
 
 
-def _create_coworker_relationships(new_contacts_by_domain: Dict[str, List[str]]) -> None:
+def _create_coworker_relationships(new_contacts_by_domain: dict[str, list[str]]) -> None:
     for domain, ids in new_contacts_by_domain.items():
         if len(ids) < 2:
             continue
@@ -133,8 +133,8 @@ def _create_coworker_relationships(new_contacts_by_domain: Dict[str, List[str]])
             contacts_service.upsert_contact_relationship(rel)
 
 
-def _extract_attendee_emails_from_event(event: EventIn) -> List[str]:
-    def _from_value(value: Any) -> Optional[str]:
+def _extract_attendee_emails_from_event(event: EventIn) -> list[str]:
+    def _from_value(value: Any) -> str | None:
         if isinstance(value, str):
             candidate = value.strip()
             if not candidate:
@@ -154,7 +154,7 @@ def _extract_attendee_emails_from_event(event: EventIn) -> List[str]:
                     return email
         return None
 
-    emails: List[str] = []
+    emails: list[str] = []
     raw_payload = event.raw if isinstance(event.raw, dict) else {}
     raw_attendees = raw_payload.get("attendees") if raw_payload else None
     if isinstance(raw_attendees, (list, tuple)):
@@ -170,7 +170,7 @@ def _extract_attendee_emails_from_event(event: EventIn) -> List[str]:
             if trimmed:
                 emails.append(trimmed)
 
-    cleaned: List[str] = []
+    cleaned: list[str] = []
     seen = set()
     for email in emails:
         normalized = email.strip()
@@ -195,7 +195,7 @@ def ingest_external_event(payload: ExternalEventPayload) -> str:
     event.id = normalized_event_id
     event.external_id = external_identifier
 
-    contact_cache: Dict[str, Tuple[Optional[str], bool]] = {}
+    contact_cache: dict[str, tuple[str | None, bool]] = {}
     current_user = _load_current_user_from_env()
     attendee_emails = _extract_attendee_emails_from_event(event)
     unique_contacts, new_contacts_by_domain = _resolve_attendee_contacts(
@@ -219,10 +219,10 @@ def ingest_external_event(payload: ExternalEventPayload) -> str:
 def ingest_meeting_notes(
     meetings: Sequence[MeetingIn],
     *,
-    todo_writer: Optional[Callable[[TodoIn], None]] = None,
-) -> List[str]:
-    event_ids: List[str] = []
-    contact_cache: Dict[str, Tuple[Optional[str], bool]] = {}
+    todo_writer: Callable[[TodoIn], None] | None = None,
+) -> list[str]:
+    event_ids: list[str] = []
+    contact_cache: dict[str, tuple[str | None, bool]] = {}
 
     current_user = _load_current_user_from_env()
 
@@ -236,7 +236,7 @@ def ingest_meeting_notes(
         )
         _create_coworker_relationships(new_contacts_by_domain)
 
-        normalized_meeting_id: Optional[str] = None
+        normalized_meeting_id: str | None = None
         provided_meeting_id = getattr(meeting, "id", None)
         if provided_meeting_id is not None:
             normalized_meeting_id = str(provided_meeting_id).strip() or None
@@ -248,7 +248,7 @@ def ingest_meeting_notes(
         tags = list(dict.fromkeys(meeting.tags or []))
         summary = meeting.content or ""
 
-        event_id: Optional[str] = None
+        event_id: str | None = None
         existing_event = False
 
         if normalized_meeting_id:
@@ -296,7 +296,7 @@ def ingest_meeting_notes(
             continue
         existing_todo_signatures = _get_existing_todo_signatures(event_id)
         steps = _extract_next_steps(meeting.content)
-        for idx, step in enumerate(steps):
+        for _idx, step in enumerate(steps):
             step_lower = step.lower()
             if not any(token in step_lower for token in user_tokens):
                 continue
@@ -317,7 +317,7 @@ def ingest_meeting_notes(
     return event_ids
 
 
-def get_meeting(meeting_id: str) -> Optional[Dict[str, Any]]:
+def get_meeting(meeting_id: str) -> dict[str, Any] | None:
     with get_conn() as conn, conn.cursor() as cur:
         cur.execute(
             """
@@ -385,10 +385,10 @@ def get_meeting(meeting_id: str) -> Optional[Dict[str, Any]]:
         }
 
 
-def normalize_event_types(types: Optional[Sequence[str]]) -> List[str]:
+def normalize_event_types(types: Sequence[str] | None) -> list[str]:
     if not types:
         return ["generic"]
-    normalized: List[str] = []
+    normalized: list[str] = []
     for value in types:
         if not isinstance(value, str):
             continue
@@ -457,7 +457,7 @@ def ingest_event(event: EventIn) -> None:
         conn.commit()
 
 
-def get_events(ids: List[str]) -> List[Dict[str, Any]]:
+def get_events(ids: list[str]) -> list[dict[str, Any]]:
     rows = fetch_events(ids)
     return [
         {
@@ -487,10 +487,10 @@ def get_events(ids: List[str]) -> List[Dict[str, Any]]:
     ]
 
 
-def _build_user_tokens(user: Optional[dict]) -> List[str]:
+def _build_user_tokens(user: dict | None) -> list[str]:
     if not user:
         return []
-    tokens: List[str] = []
+    tokens: list[str] = []
     email = user.get("email") if user else None
     if email and "@" in email:
         local = email.split("@", 1)[0]
@@ -503,11 +503,11 @@ def _build_user_tokens(user: Optional[dict]) -> List[str]:
     return [token for token in tokens if token]
 
 
-def _extract_next_steps(content: Optional[str]) -> List[str]:
+def _extract_next_steps(content: str | None) -> list[str]:
     if not content:
         return []
     lines = content.splitlines()
-    steps: List[str] = []
+    steps: list[str] = []
     in_section = False
     for raw_line in lines:
         line = raw_line.strip()
@@ -531,14 +531,14 @@ def _extract_next_steps(content: Optional[str]) -> List[str]:
     return steps
 
 
-def _normalize_todo_description(text: Optional[str]) -> str:
+def _normalize_todo_description(text: str | None) -> str:
     if not text:
         return ""
     squashed = " ".join(text.split())
     return squashed.strip().lower()
 
 
-def _get_existing_todo_signatures(event_id: Optional[str]) -> Set[str]:
+def _get_existing_todo_signatures(event_id: str | None) -> set[str]:
     if not event_id:
         return set()
     with get_conn() as conn, conn.cursor() as cur:
@@ -552,7 +552,7 @@ def _get_existing_todo_signatures(event_id: Optional[str]) -> Set[str]:
             (event_id,),
         )
         rows = cur.fetchall()
-    signatures: Set[str] = set()
+    signatures: set[str] = set()
     for row in rows:
         signature = _normalize_todo_description(row.get("description"))
         if signature:
@@ -576,7 +576,7 @@ def _event_exists(event_id: str) -> bool:
         return cur.fetchone() is not None
 
 
-def _get_event_id_by_external_id(external_id: Optional[str]) -> Optional[str]:
+def _get_event_id_by_external_id(external_id: str | None) -> str | None:
     if not external_id:
         return None
     normalized = external_id.strip()
@@ -597,10 +597,10 @@ def _get_event_id_by_external_id(external_id: Optional[str]) -> Optional[str]:
 
 
 def _find_matching_meeting_event(
-    title: Optional[str],
-    start_date: Optional[datetime],
+    title: str | None,
+    start_date: datetime | None,
     attendees: Sequence[str],
-) -> Optional[str]:
+) -> str | None:
     if not title or not start_date or not attendees:
         return None
     normalized_title = title.strip()
@@ -645,7 +645,7 @@ def _generate_event_embedding(event: Any) -> Sequence[float]:
             return event.get(field)
         return getattr(event, field, None)
 
-    segments: List[str] = []
+    segments: list[str] = []
 
     title = _get("title")
     if isinstance(title, str):

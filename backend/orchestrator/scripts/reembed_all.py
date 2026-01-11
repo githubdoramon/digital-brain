@@ -22,24 +22,27 @@ import json
 import os
 import sys
 import time
-from typing import Any, Dict, List, Sequence
+from collections.abc import Sequence
+from typing import Any
+
 from dotenv import load_dotenv
+
 load_dotenv('../.env')  # Load from backend/.env
 
 # Add parent directory to path for imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from db import get_conn
-from embeddings import embed_text
+from db import get_conn  # noqa: E402
+from embeddings import embed_text  # noqa: E402
 
 # Constants - nomic-embed-text v1 has 8192 token context
 MAX_EVENT_EMBED_CHARS = 6000
 MAX_DOCUMENT_EMBED_CHARS = 8000
 
 
-def generate_event_embed_text(event: Dict[str, Any]) -> str:
+def generate_event_embed_text(event: dict[str, Any]) -> str:
     """Generate the text to embed for an event (mirrors _generate_event_embedding logic)."""
-    segments: List[str] = []
+    segments: list[str] = []
 
     title = event.get("title")
     if isinstance(title, str) and title.strip():
@@ -93,9 +96,9 @@ def generate_event_embed_text(event: Dict[str, Any]) -> str:
     return combined[:MAX_EVENT_EMBED_CHARS] or "event"
 
 
-def generate_document_embed_text(document: Dict[str, Any]) -> str:
+def generate_document_embed_text(document: dict[str, Any]) -> str:
     """Generate the text to embed for a document (mirrors _generate_document_embedding logic)."""
-    segments: List[str] = []
+    segments: list[str] = []
 
     tags = document.get("tags")
     if isinstance(tags, (list, tuple)):
@@ -131,7 +134,7 @@ def count_records(table: str, id_col: str) -> int:
         return row["cnt"] if row else 0
 
 
-def fetch_events_batch(offset: int, limit: int) -> List[Dict[str, Any]]:
+def fetch_events_batch(offset: int, limit: int) -> list[dict[str, Any]]:
     """Fetch a batch of events."""
     with get_conn() as conn, conn.cursor() as cur:
         cur.execute(
@@ -146,7 +149,7 @@ def fetch_events_batch(offset: int, limit: int) -> List[Dict[str, Any]]:
         return list(cur.fetchall())
 
 
-def fetch_documents_batch(offset: int, limit: int) -> List[Dict[str, Any]]:
+def fetch_documents_batch(offset: int, limit: int) -> list[dict[str, Any]]:
     """Fetch a batch of documents."""
     with get_conn() as conn, conn.cursor() as cur:
         cur.execute(
@@ -324,7 +327,7 @@ def main():
 
     elapsed = time.time() - start_time
     print("\n" + "=" * 60)
-    print(f"Migration complete!")
+    print("Migration complete!")
     print(f"Total records processed: {total_processed}")
     print(f"Time elapsed: {elapsed:.1f} seconds")
     print("=" * 60)

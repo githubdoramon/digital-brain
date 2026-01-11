@@ -10,7 +10,7 @@ Validates tool calls before execution:
 """
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Optional
 
 if TYPE_CHECKING:
     from tools.registry import ToolRegistry
@@ -22,12 +22,12 @@ class ValidationResult:
 
     valid: bool
     tool_name: str
-    original_params: Dict[str, Any]
-    errors: List[str] = field(default_factory=list)
-    suggestions: List[str] = field(default_factory=list)
-    repaired_params: Optional[Dict[str, Any]] = None
+    original_params: dict[str, Any]
+    errors: list[str] = field(default_factory=list)
+    suggestions: list[str] = field(default_factory=list)
+    repaired_params: Optional[dict[str, Any]] = None
 
-    def to_feedback(self) -> Dict[str, Any]:
+    def to_feedback(self) -> dict[str, Any]:
         """Convert to feedback format for the model."""
         if self.valid:
             return {"valid": True, "tool": self.tool_name}
@@ -78,7 +78,7 @@ class PreExecutionValidator:
     def validate(
         self,
         tool_name: str,
-        params: Dict[str, Any],
+        params: dict[str, Any],
     ) -> ValidationResult:
         """
         Validate a tool call against its contract.
@@ -125,8 +125,8 @@ class PreExecutionValidator:
     def validate_and_normalize(
         self,
         tool_name: str,
-        params: Dict[str, Any],
-    ) -> tuple[ValidationResult, Optional[Dict[str, Any]]]:
+        params: dict[str, Any],
+    ) -> tuple[ValidationResult, Optional[dict[str, Any]]]:
         """
         Validate and normalize parameters.
 
@@ -153,8 +153,8 @@ class PreExecutionValidator:
     def _generate_repair_hints(
         self,
         contract,
-        params: Dict[str, Any],
-    ) -> List[str]:
+        params: dict[str, Any],
+    ) -> list[str]:
         """Generate helpful hints for fixing validation errors."""
         hints = []
 
@@ -177,7 +177,7 @@ class PreExecutionValidator:
         self,
         result: ValidationResult,
         repair_attempt: int,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Create structured feedback for the model to repair invalid params.
 

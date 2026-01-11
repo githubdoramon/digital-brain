@@ -2,7 +2,6 @@
 Tests for AgentState dataclass.
 """
 
-import pytest
 from agent.state import AgentState, ToolCallRecord
 
 

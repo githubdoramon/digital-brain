@@ -9,7 +9,7 @@ This module contains:
 
 import json
 import re
-from typing import Any, Dict, Optional
+from typing import Any, Optional
 
 # Configuration
 MAX_ITERATIONS = 15  # Safety limit to prevent infinite loops
@@ -83,7 +83,7 @@ def looks_like_continuation(content: str) -> bool:
     return any(pattern in lower for pattern in CONTINUATION_PATTERNS)
 
 
-def create_continuation_nudge() -> Dict[str, str]:
+def create_continuation_nudge() -> dict[str, str]:
     """
     Create a system message to nudge the model to actually call a tool.
 
@@ -100,7 +100,7 @@ def create_continuation_nudge() -> Dict[str, str]:
     }
 
 
-def create_thinking_nudge() -> Dict[str, str]:
+def create_thinking_nudge() -> dict[str, str]:
     """
     Create a system message to nudge the model to provide a final answer.
 
@@ -144,7 +144,7 @@ EVENT_PROPOSAL_START = "<event_proposal>"
 EVENT_PROPOSAL_END = "</event_proposal>"
 
 
-def extract_event_proposal(content: str) -> Optional[Dict[str, Any]]:
+def extract_event_proposal(content: str) -> Optional[dict[str, Any]]:
     """
     Extract an event proposal from the model's response.
 
@@ -172,7 +172,7 @@ def extract_event_proposal(content: str) -> Optional[Dict[str, Any]]:
         return None
 
 
-def normalize_event_proposal(raw: Any) -> Optional[Dict[str, Any]]:
+def normalize_event_proposal(raw: Any) -> Optional[dict[str, Any]]:
     """
     Normalize an event proposal to a consistent format.
 
@@ -190,7 +190,7 @@ def normalize_event_proposal(raw: Any) -> Optional[Dict[str, Any]]:
     if not title or not isinstance(title, str):
         return None
 
-    proposal: Dict[str, Any] = {"title": title.strip()}
+    proposal: dict[str, Any] = {"title": title.strip()}
 
     # Optional fields with type coercion
     if "description" in raw and raw["description"]:
@@ -259,8 +259,8 @@ def finalize_bundle(
     state: Any,  # AgentState
     search_limit: int,
     session_id: Optional[str],
-    event_proposal: Optional[Dict[str, Any]] = None,
-) -> Dict[str, Any]:
+    event_proposal: Optional[dict[str, Any]] = None,
+) -> dict[str, Any]:
     """
     Create the final response bundle.
 
@@ -278,7 +278,7 @@ def finalize_bundle(
     # Strip event proposal from visible answer
     clean_answer = strip_event_proposal(answer) if event_proposal else answer
 
-    bundle: Dict[str, Any] = {
+    bundle: dict[str, Any] = {
         "question": question,
         "answer": clean_answer,
         "thread_id": session_id,

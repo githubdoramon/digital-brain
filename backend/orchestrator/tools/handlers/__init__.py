@@ -5,13 +5,13 @@ Each handler module contains functions that execute specific tools.
 These are extracted from the original llm_tools.py for better organization.
 """
 
-from .memory import handle_search_memories, handle_get_events, handle_get_document
-from .database import handle_execute_sql, handle_describe_schema
+from .database import handle_describe_schema, handle_execute_sql
+from .homeassistant import handle_home_assistant
+from .memory import handle_get_document, handle_get_events, handle_search_memories
 from .resolution import handle_resolve_query
-from .web import handle_web_search
 from .skills import handle_run_skill_script
 from .system import handle_bash
-from .homeassistant import handle_home_assistant
+from .web import handle_web_search
 
 # Handler dispatch table
 HANDLERS = {

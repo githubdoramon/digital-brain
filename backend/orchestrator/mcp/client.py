@@ -9,10 +9,8 @@ The client can be used with any MCP-compatible server, not just Home Assistant.
 
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass, field
-from time import perf_counter
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import httpx
 
@@ -22,9 +20,9 @@ class MCPTool:
     """Represents an MCP tool definition."""
     name: str
     description: str
-    input_schema: Dict[str, Any] = field(default_factory=dict)
+    input_schema: dict[str, Any] = field(default_factory=dict)
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary format."""
         return {
             "name": self.name,
@@ -38,10 +36,10 @@ class MCPToolResult:
     """Result from calling an MCP tool."""
     success: bool
     content: Any = None
-    error: Optional[str] = None
+    error: str | None = None
     is_error: bool = False
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary format."""
         if self.success:
             return {"success": True, "result": self.content}
@@ -108,7 +106,7 @@ class MCPClient:
         self.client_name = client_name
         self.client_version = client_version
         self._request_id = 0
-        self._tools_cache: Optional[List[MCPTool]] = None
+        self._tools_cache: list[MCPTool] | None = None
         self._initialized = False
 
         if not self.base_url:
@@ -121,7 +119,7 @@ class MCPClient:
         """Full URL to the MCP endpoint."""
         return f"{self.base_url}{self.endpoint}"
 
-    def _get_headers(self) -> Dict[str, str]:
+    def _get_headers(self) -> dict[str, str]:
         """Get HTTP headers for MCP requests."""
         return {
             "Authorization": f"Bearer {self.token}",
@@ -135,10 +133,10 @@ class MCPClient:
         return self._request_id
 
     def _build_jsonrpc_request(
-        self, method: str, params: Optional[Dict[str, Any]] = None
-    ) -> Dict[str, Any]:
+        self, method: str, params: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
         """Build a JSON-RPC 2.0 request payload."""
-        request: Dict[str, Any] = {
+        request: dict[str, Any] = {
             "jsonrpc": "2.0",
             "id": self._next_request_id(),
             "method": method,
@@ -147,7 +145,7 @@ class MCPClient:
             request["params"] = params
         return request
 
-    def _parse_jsonrpc_response(self, response: Dict[str, Any]) -> Any:
+    def _parse_jsonrpc_response(self, response: dict[str, Any]) -> Any:
         """Parse JSON-RPC 2.0 response, handling errors."""
         if "error" in response:
             error = response["error"]
@@ -161,7 +159,7 @@ class MCPClient:
         return response.get("result")
 
     async def _send_request_async(
-        self, method: str, params: Optional[Dict[str, Any]] = None
+        self, method: str, params: dict[str, Any] | None = None
     ) -> Any:
         """Send async JSON-RPC request to MCP server."""
         payload = self._build_jsonrpc_request(method, params)
@@ -188,7 +186,7 @@ class MCPClient:
                 raise MCPConnectionError(f"Request timeout after {self.timeout}s: {e}")
 
     def _send_request_sync(
-        self, method: str, params: Optional[Dict[str, Any]] = None
+        self, method: str, params: dict[str, Any] | None = None
     ) -> Any:
         """Send sync JSON-RPC request to MCP server."""
         payload = self._build_jsonrpc_request(method, params)
@@ -218,7 +216,7 @@ class MCPClient:
     # Initialization
     # -------------------------------------------------------------------------
 
-    async def initialize_async(self) -> Dict[str, Any]:
+    async def initialize_async(self) -> dict[str, Any]:
         """
         Initialize MCP session (async).
 
@@ -238,7 +236,7 @@ class MCPClient:
         self._initialized = True
         return result
 
-    def initialize_sync(self) -> Dict[str, Any]:
+    def initialize_sync(self) -> dict[str, Any]:
         """
         Initialize MCP session (sync).
 
@@ -262,7 +260,7 @@ class MCPClient:
     # Tools
     # -------------------------------------------------------------------------
 
-    async def list_tools_async(self, force_refresh: bool = False) -> List[MCPTool]:
+    async def list_tools_async(self, force_refresh: bool = False) -> list[MCPTool]:
         """
         List available MCP tools (async).
 
@@ -276,7 +274,7 @@ class MCPClient:
         self._tools_cache = tools
         return tools
 
-    def list_tools_sync(self, force_refresh: bool = False) -> List[MCPTool]:
+    def list_tools_sync(self, force_refresh: bool = False) -> list[MCPTool]:
         """
         List available MCP tools (sync).
 
@@ -290,7 +288,7 @@ class MCPClient:
         self._tools_cache = tools
         return tools
 
-    def _parse_tools_response(self, result: Dict[str, Any]) -> List[MCPTool]:
+    def _parse_tools_response(self, result: dict[str, Any]) -> list[MCPTool]:
         """Parse tools/list response into MCPTool objects."""
         tools = []
         for tool_data in result.get("tools", []):
@@ -302,7 +300,7 @@ class MCPClient:
         return tools
 
     async def call_tool_async(
-        self, tool_name: str, arguments: Optional[Dict[str, Any]] = None
+        self, tool_name: str, arguments: dict[str, Any] | None = None
     ) -> MCPToolResult:
         """
         Call an MCP tool (async).
@@ -330,7 +328,7 @@ class MCPClient:
             )
 
     def call_tool_sync(
-        self, tool_name: str, arguments: Optional[Dict[str, Any]] = None
+        self, tool_name: str, arguments: dict[str, Any] | None = None
     ) -> MCPToolResult:
         """
         Call an MCP tool (sync).
@@ -357,7 +355,7 @@ class MCPClient:
                 is_error=True,
             )
 
-    def _parse_tool_result(self, result: Dict[str, Any]) -> MCPToolResult:
+    def _parse_tool_result(self, result: dict[str, Any]) -> MCPToolResult:
         """Parse tools/call response into MCPToolResult."""
         # MCP returns content as a list of content blocks
         content = result.get("content", [])
@@ -390,7 +388,7 @@ class MCPClient:
         """Clear the tools cache."""
         self._tools_cache = None
 
-    def get_tools_for_llm(self, prefix: str = "") -> List[Dict[str, Any]]:
+    def get_tools_for_llm(self, prefix: str = "") -> list[dict[str, Any]]:
         """
         Get tools formatted for LLM function calling.
 

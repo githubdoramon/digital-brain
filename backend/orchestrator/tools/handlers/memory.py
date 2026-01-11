@@ -8,7 +8,7 @@ Handles:
 """
 
 from time import perf_counter
-from typing import Any, Dict, List, Optional, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Optional
 
 if TYPE_CHECKING:
     from agent.state import AgentState
@@ -25,11 +25,11 @@ def _log_timing(label: str, start_time: float, **metadata: Any) -> None:
 
 
 def handle_search_memories(
-    args: Dict[str, Any],
+    args: dict[str, Any],
     state: Optional["AgentState"] = None,
     question: str = "",
     search_limit: int = 5,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """
     Execute search_memories tool.
 
@@ -71,10 +71,10 @@ def handle_search_memories(
 
 
 def handle_get_events(
-    args: Dict[str, Any],
+    args: dict[str, Any],
     state: Optional["AgentState"] = None,
     **kwargs,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """
     Execute get_events tool.
 
@@ -106,10 +106,10 @@ def handle_get_events(
 
 
 def handle_get_document(
-    args: Dict[str, Any],
+    args: dict[str, Any],
     state: Optional["AgentState"] = None,
     **kwargs,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """
     Execute get_document tool.
 

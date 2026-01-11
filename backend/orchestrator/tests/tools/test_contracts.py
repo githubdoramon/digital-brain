@@ -3,11 +3,12 @@ Tests for ToolContract and ToolParameter.
 """
 
 import pytest
+
 from tools.contracts import (
     ToolContract,
     ToolParameter,
-    validate_sql_safe,
     validate_path_safe,
+    validate_sql_safe,
     validate_url_safe,
 )
 

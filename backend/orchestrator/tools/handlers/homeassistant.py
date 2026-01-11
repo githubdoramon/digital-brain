@@ -6,7 +6,7 @@ Handles:
 """
 
 from time import perf_counter
-from typing import Any, Dict, Optional, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Optional
 
 if TYPE_CHECKING:
     from agent.state import AgentState
@@ -23,10 +23,10 @@ def _log_timing(label: str, start_time: float, **metadata: Any) -> None:
 
 
 def handle_home_assistant(
-    args: Dict[str, Any],
+    args: dict[str, Any],
     state: Optional["AgentState"] = None,
     **kwargs,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """
     Execute home_assistant tool.
 
@@ -34,7 +34,7 @@ def handle_home_assistant(
     Requires listing tools first before calling them.
     """
     # Lazy import to avoid circular dependencies
-    from mcp import is_ha_configured, list_ha_tools, call_ha_tool
+    from mcp import call_ha_tool, is_ha_configured, list_ha_tools
 
     action = args.get("action")
     if not action or action not in ("list_tools", "call_tool"):

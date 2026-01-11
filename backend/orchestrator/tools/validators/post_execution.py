@@ -12,11 +12,12 @@ This is the key component that decides:
 - failed: Tool failed, handle error
 """
 
+import json
 import os
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Dict, List, Optional
-import json
+from typing import Any, Optional
+
 import requests
 
 from agent.router import TOOL_GROUPS
@@ -37,12 +38,12 @@ class PostExecutionResult:
 
     coverage: GoalCoverage
     reason: str
-    extracted_facts: List[str] = field(default_factory=list)
-    suggested_next_tools: List[str] = field(default_factory=list)
+    extracted_facts: list[str] = field(default_factory=list)
+    suggested_next_tools: list[str] = field(default_factory=list)
     confidence: float = 1.0
     was_llm_validated: bool = False
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "coverage": self.coverage.value,
             "reason": self.reason,
@@ -96,11 +97,11 @@ class PostExecutionValidator:
     def validate(
         self,
         tool_name: str,
-        params: Dict[str, Any],
-        result: Dict[str, Any],
+        params: dict[str, Any],
+        result: dict[str, Any],
         goal: str,
-        known_facts: List[str],
-        completed_actions: List[str] = None,
+        known_facts: list[str],
+        completed_actions: list[str] = None,
     ) -> PostExecutionResult:
         """
         Check if the tool result satisfies the goal.
@@ -137,8 +138,8 @@ class PostExecutionValidator:
     def _deterministic_check(
         self,
         tool_name: str,
-        params: Dict[str, Any],
-        result: Dict[str, Any],
+        params: dict[str, Any],
+        result: dict[str, Any],
     ) -> Optional[PostExecutionResult]:
         """
         Run deterministic validation checks.
@@ -215,11 +216,11 @@ class PostExecutionValidator:
     def _llm_check(
         self,
         tool_name: str,
-        params: Dict[str, Any],
-        result: Dict[str, Any],
+        params: dict[str, Any],
+        result: dict[str, Any],
         goal: str,
-        known_facts: List[str],
-        completed_actions: List[str] = None,
+        known_facts: list[str],
+        completed_actions: list[str] = None,
     ) -> PostExecutionResult:
         """
         Use LLM to assess goal coverage for ambiguous results.
@@ -245,11 +246,11 @@ class PostExecutionValidator:
     def _build_validation_prompt(
         self,
         tool_name: str,
-        params: Dict[str, Any],
-        result: Dict[str, Any],
+        params: dict[str, Any],
+        result: dict[str, Any],
         goal: str,
-        known_facts: List[str],
-        completed_actions: List[str] = None,
+        known_facts: list[str],
+        completed_actions: list[str] = None,
     ) -> str:
         """Build the prompt for LLM validation."""
         # Truncate result if too large
@@ -358,8 +359,8 @@ Rules:
     def _extract_facts_from_result(
         self,
         tool_name: str,
-        result: Dict[str, Any],
-    ) -> List[str]:
+        result: dict[str, Any],
+    ) -> list[str]:
         """Extract useful facts from tool results."""
         facts = []
 
@@ -396,7 +397,7 @@ Rules:
 
         return facts
 
-    def _suggest_alternative_tools(self, failed_tool: str) -> List[str]:
+    def _suggest_alternative_tools(self, failed_tool: str) -> list[str]:
         """
         Suggest alternative tools when one returns no results.
 

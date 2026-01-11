@@ -15,18 +15,20 @@ The controller:
 
 import json
 import os
+
+# Import with absolute paths to avoid circular imports
+import sys
+from collections.abc import AsyncGenerator
 from time import perf_counter
-from typing import Any, AsyncGenerator, Dict, List, Optional
+from typing import Any, Optional
 
 import httpx
 import requests
 
-from .state import AgentState, ToolCallRecord
 from .limits import AgentConfig, LimitChecker
-from .router import IntentRouter, IntentClassification
+from .router import IntentClassification, IntentRouter
+from .state import AgentState, ToolCallRecord
 
-# Import with absolute paths to avoid circular imports
-import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
@@ -111,10 +113,10 @@ class AgentController:
         user_id: str = "default_user",
         session_id: Optional[str] = None,
         user_email: Optional[str] = None,
-        conversation_history: Optional[List[Dict[str, str]]] = None,
+        conversation_history: Optional[list[dict[str, str]]] = None,
         search_limit: int = 5,
         event_capture_enabled: bool = False,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Run the agent loop for a question.
 
@@ -181,7 +183,7 @@ class AgentController:
                     )
 
                 state.step_count += 1
-                step_start = perf_counter()
+                perf_counter()
 
                 # Log step start
                 self.logger.start_step(run_id, state.step_count)
@@ -258,10 +260,10 @@ class AgentController:
         user_id: str = "default_user",
         session_id: Optional[str] = None,
         user_email: Optional[str] = None,
-        conversation_history: Optional[List[Dict[str, str]]] = None,
+        conversation_history: Optional[list[dict[str, str]]] = None,
         search_limit: int = 5,
         event_capture_enabled: bool = False,
-    ) -> AsyncGenerator[Dict[str, Any], None]:
+    ) -> AsyncGenerator[dict[str, Any], None]:
         """
         Stream agent responses with tool calling support.
 
@@ -414,7 +416,7 @@ class AgentController:
     async def _run_intent_router(
         self,
         question: str,
-        conversation_history: Optional[List[Dict[str, str]]],
+        conversation_history: Optional[list[dict[str, str]]],
         run_id: str,
     ) -> IntentClassification:
         """Run intent classification."""
@@ -440,17 +442,26 @@ class AgentController:
         self,
         question: str,
         state: AgentState,
-        conversation_history: Optional[List[Dict[str, str]]],
+        conversation_history: Optional[list[dict[str, str]]],
         user_email: Optional[str],
         search_limit: int,
         event_capture_enabled: bool,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """Build the message list for the LLM."""
-        from prompts.system import get_system_prompt, get_bounded_agent_protocol, get_event_capture_prompt
-        from prompts.context import get_time_context, get_tag_context, get_self_context, get_schema_hint
+        from prompts.context import (
+            get_schema_hint,
+            get_self_context,
+            get_tag_context,
+            get_time_context,
+        )
         from prompts.state_injection import build_state_message
+        from prompts.system import (
+            get_bounded_agent_protocol,
+            get_event_capture_prompt,
+            get_system_prompt,
+        )
 
-        messages: List[Dict[str, Any]] = []
+        messages: list[dict[str, Any]] = []
 
         # System prompts
         messages.append({"role": "system", "content": get_system_prompt(search_limit)})
@@ -499,9 +510,9 @@ class AgentController:
 
     def _inject_skills(
         self,
-        messages: List[Dict[str, Any]],
+        messages: list[dict[str, Any]],
         question: str,
-        conversation_history: Optional[List[Dict[str, str]]],
+        conversation_history: Optional[list[dict[str, str]]],
         state: AgentState,
     ) -> None:
         """Inject matching skills into messages."""
@@ -538,9 +549,9 @@ class AgentController:
 
     def _call_llm(
         self,
-        messages: List[Dict[str, Any]],
-        tools: List[Dict[str, Any]],
-    ) -> Dict[str, Any]:
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]],
+    ) -> dict[str, Any]:
         """Make synchronous LLM call."""
         headers = {"Content-Type": "application/json"}
         if self.llm_api_key:
@@ -569,9 +580,9 @@ class AgentController:
 
     async def _stream_llm(
         self,
-        messages: List[Dict[str, Any]],
-        tools: List[Dict[str, Any]],
-    ) -> AsyncGenerator[Dict[str, Any], None]:
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]],
+    ) -> AsyncGenerator[dict[str, Any], None]:
         """Stream LLM responses."""
         headers = {"Content-Type": "application/json"}
         if self.llm_api_key:
@@ -595,7 +606,7 @@ class AgentController:
                 json=payload,
             ) as response:
                 response.raise_for_status()
-                accumulated_tool_calls: Dict[int, Dict[str, Any]] = {}
+                accumulated_tool_calls: dict[int, dict[str, Any]] = {}
 
                 async for line in response.aiter_lines():
                     line = line.strip()
@@ -641,9 +652,9 @@ class AgentController:
 
     async def _handle_tool_calls(
         self,
-        tool_calls: List[Dict[str, Any]],
+        tool_calls: list[dict[str, Any]],
         state: AgentState,
-        messages: List[Dict[str, Any]],
+        messages: list[dict[str, Any]],
         question: str,
         search_limit: int,
         run_id: str,
@@ -669,12 +680,12 @@ class AgentController:
 
     async def _execute_tool_call(
         self,
-        call: Dict[str, Any],
+        call: dict[str, Any],
         state: AgentState,
         question: str,
         search_limit: int,
         run_id: str,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Execute a single tool call with validation."""
         func = call.get("function", {})
         tool_name = func.get("name", "")
@@ -744,11 +755,11 @@ class AgentController:
     def _execute_handler(
         self,
         tool_name: str,
-        args: Dict[str, Any],
+        args: dict[str, Any],
         state: AgentState,
         question: str,
         search_limit: int,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Execute tool handler."""
         from tools.handlers import get_handler
 
@@ -790,7 +801,7 @@ class AgentController:
         run_id: str,
         session_id: Optional[str],
         total_start: float,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Handle when a limit is violated."""
         message = self.limit_checker.format_stop_message(state, violation)
 
@@ -823,7 +834,7 @@ class AgentController:
         session_id: Optional[str],
         total_start: float,
         event_capture_enabled: bool,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Finalize the response."""
         # Extract event proposal if enabled
         event_proposal = None
@@ -858,7 +869,7 @@ class AgentController:
 
         return bundle
 
-    def _extract_event_proposal(self, content: str) -> Optional[Dict[str, Any]]:
+    def _extract_event_proposal(self, content: str) -> Optional[dict[str, Any]]:
         """Extract event proposal from content."""
         start = "<event_proposal>"
         end = "</event_proposal>"

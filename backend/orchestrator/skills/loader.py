@@ -12,7 +12,7 @@ import os
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import yaml
 
@@ -23,7 +23,7 @@ class SkillTool:
     name: str
     description: str
     script: str
-    parameters: Dict[str, Any] = field(default_factory=dict)
+    parameters: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -33,18 +33,18 @@ class Skill:
     description: str
     instructions: str
     path: Path
-    tools: List[SkillTool] = field(default_factory=list)
-    scripts: List[str] = field(default_factory=list)
-    references: List[str] = field(default_factory=list)
-    assets: List[str] = field(default_factory=list)
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    tools: list[SkillTool] = field(default_factory=list)
+    scripts: list[str] = field(default_factory=list)
+    references: list[str] = field(default_factory=list)
+    assets: list[str] = field(default_factory=list)
+    metadata: dict[str, Any] = field(default_factory=dict)
 
     @property
     def has_scripts(self) -> bool:
         """Check if skill has executable scripts."""
         return len(self.scripts) > 0 or len(self.tools) > 0
 
-    def to_index_entry(self) -> Dict[str, Any]:
+    def to_index_entry(self) -> dict[str, Any]:
         """Return minimal info for skill index (always in context)."""
         return {
             "name": self.name,
@@ -53,7 +53,7 @@ class Skill:
             "tool_count": len(self.tools),
         }
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Return full skill info."""
         return {
             "name": self.name,
@@ -84,7 +84,7 @@ FRONTMATTER_PATTERN = re.compile(
 )
 
 
-def _parse_frontmatter(content: str) -> tuple[Dict[str, Any], str]:
+def _parse_frontmatter(content: str) -> tuple[dict[str, Any], str]:
     """Parse YAML frontmatter from markdown content."""
     match = FRONTMATTER_PATTERN.match(content)
     if not match:
@@ -101,14 +101,14 @@ def _parse_frontmatter(content: str) -> tuple[Dict[str, Any], str]:
     return frontmatter, body.strip()
 
 
-def _list_files_in_dir(dir_path: Path) -> List[str]:
+def _list_files_in_dir(dir_path: Path) -> list[str]:
     """List files in a directory if it exists."""
     if not dir_path.exists() or not dir_path.is_dir():
         return []
     return [f.name for f in dir_path.iterdir() if f.is_file()]
 
 
-def _load_tools_md(skill_path: Path) -> List[SkillTool]:
+def _load_tools_md(skill_path: Path) -> list[SkillTool]:
     """Load custom tools from TOOLS.md if present."""
     tools_file = skill_path / "TOOLS.md"
     if not tools_file.exists():
@@ -150,7 +150,7 @@ def _load_tools_md(skill_path: Path) -> List[SkillTool]:
     return tools
 
 
-def load_skill(skill_path: Path) -> Optional[Skill]:
+def load_skill(skill_path: Path) -> Skill | None:
     """
     Load a skill from a directory.
 
@@ -221,7 +221,7 @@ def load_skill(skill_path: Path) -> Optional[Skill]:
     )
 
 
-def load_all_skills(skills_dir: Optional[Path] = None) -> List[Skill]:
+def load_all_skills(skills_dir: Path | None = None) -> list[Skill]:
     """
     Load all skills from a directory.
 

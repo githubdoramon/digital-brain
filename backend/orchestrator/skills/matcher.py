@@ -8,13 +8,14 @@ enabling automatic skill selection without loading all skills into context.
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
-from typing import Any, Dict, List, Optional
-
-from .loader import Skill
 
 # Import from parent package
 import sys
+from dataclasses import dataclass
+from typing import Any
+
+from .loader import Skill
+
 sys.path.insert(0, str(__file__).rsplit("/", 2)[0])
 import embeddings as embeddings_module
 
@@ -25,7 +26,7 @@ class SkillMatch:
     skill: Skill
     confidence: float
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "skill_name": self.skill.name,
             "description": self.skill.description,
@@ -34,7 +35,7 @@ class SkillMatch:
         }
 
 
-def _cosine_similarity(vec_a: List[float], vec_b: List[float]) -> float:
+def _cosine_similarity(vec_a: list[float], vec_b: list[float]) -> float:
     """Compute cosine similarity between two vectors."""
     if len(vec_a) != len(vec_b):
         return 0.0
@@ -58,7 +59,7 @@ class SkillMatcher:
 
     def __init__(
         self,
-        skills: List[Skill],
+        skills: list[Skill],
         cache_embeddings: bool = True,
     ):
         """
@@ -70,7 +71,7 @@ class SkillMatcher:
         """
         self.skills = {s.name: s for s in skills}
         self.cache_embeddings = cache_embeddings
-        self._embeddings_cache: Dict[str, List[float]] = {}
+        self._embeddings_cache: dict[str, list[float]] = {}
 
         # Pre-compute embeddings if caching is enabled
         if cache_embeddings and skills:
@@ -92,7 +93,7 @@ class SkillMatcher:
 
         print(f"[skills.matcher] Cached {len(self._embeddings_cache)} skill embeddings")
 
-    def _get_skill_embedding(self, skill: Skill) -> Optional[List[float]]:
+    def _get_skill_embedding(self, skill: Skill) -> list[float] | None:
         """Get embedding for a skill (from cache or compute)."""
         if skill.name in self._embeddings_cache:
             return self._embeddings_cache[skill.name]
@@ -108,41 +109,41 @@ class SkillMatcher:
             print(f"[skills.matcher] Failed to embed skill '{skill.name}': {e}")
             return None
 
-    def _get_query_embedding(self, query: str) -> Optional[List[float]]:
+    def _get_query_embedding(self, query: str) -> list[float] | None:
         """Get embedding for a user query."""
         try:
             return embeddings_module.embed_text(query)
         except Exception as e:
             print(f"[skills.matcher] Failed to embed query: {e}")
             return None
-    
+
     def _build_context_query(
         self,
         query: str,
-        conversation_history: Optional[List[Dict[str, str]]] = None,
+        conversation_history: list[dict[str, str]] | None = None,
     ) -> str:
         """
         Build a context-aware query string from conversation history.
-        
+
         Args:
             query: The current user query
             conversation_history: Optional list of previous messages
-            
+
         Returns:
             A formatted string combining recent history and current query
         """
         context_parts = []
-        
+
         if conversation_history:
             # Include last few messages for context (limit to avoid too long queries)
             recent_history = conversation_history[-5:]  # Last 5 messages
             for msg in recent_history:
                 role_prefix = "User: " if msg["role"] == "user" else "Assistant: "
                 context_parts.append(f"{role_prefix}{msg['content']}")
-        
+
         # Add current question
         context_parts.append(f"User: {query}")
-        
+
         return "\n".join(context_parts)
 
     def add_skill(self, skill: Skill) -> None:
@@ -161,8 +162,8 @@ class SkillMatcher:
         query: str,
         max_skills: int = 5,
         min_confidence: float = 0.6,
-        conversation_history: Optional[List[Dict[str, str]]] = None,
-    ) -> List[SkillMatch]:
+        conversation_history: list[dict[str, str]] | None = None,
+    ) -> list[SkillMatch]:
         """
         Find skills that match the user query.
 
@@ -184,12 +185,12 @@ class SkillMatcher:
 
         # Build context-aware query if history is provided
         context_query = self._build_context_query(query, conversation_history)
-        
+
         query_embedding = self._get_query_embedding(context_query)
         if not query_embedding:
             return []
 
-        matches: List[SkillMatch] = []
+        matches: list[SkillMatch] = []
 
         for _, skill in self.skills.items():
             skill_embedding = self._get_skill_embedding(skill)
@@ -220,10 +221,10 @@ class SkillMatcher:
 
         return "\n".join(lines)
 
-    def get_skill(self, name: str) -> Optional[Skill]:
+    def get_skill(self, name: str) -> Skill | None:
         """Get a skill by name."""
         return self.skills.get(name)
 
-    def list_skills(self) -> List[Skill]:
+    def list_skills(self) -> list[Skill]:
         """List all available skills."""
         return list(self.skills.values())

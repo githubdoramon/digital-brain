@@ -6,7 +6,7 @@ Handles:
 """
 
 from time import perf_counter
-from typing import Any, Dict, Optional, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Optional
 
 if TYPE_CHECKING:
     from agent.state import AgentState
@@ -23,10 +23,10 @@ def _log_timing(label: str, start_time: float, **metadata: Any) -> None:
 
 
 def handle_web_search(
-    args: Dict[str, Any],
+    args: dict[str, Any],
     state: Optional["AgentState"] = None,
     **kwargs,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """
     Execute web_search tool.
 

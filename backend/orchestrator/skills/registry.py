@@ -10,10 +10,10 @@ from __future__ import annotations
 import os
 from pathlib import Path
 from threading import Lock
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from .loader import Skill, load_all_skills
-from .matcher import SkillMatcher, SkillMatch
+from .matcher import SkillMatch, SkillMatcher
 
 
 class SkillRegistry:
@@ -24,7 +24,7 @@ class SkillRegistry:
     Thread-safe for concurrent access.
     """
 
-    def __init__(self, skills_dir: Optional[Path] = None):
+    def __init__(self, skills_dir: Path | None = None):
         """
         Initialize the skill registry.
 
@@ -33,12 +33,12 @@ class SkillRegistry:
                        Defaults to SKILLS_DIR env var or 'skill_definitions'
         """
         self._lock = Lock()
-        self._skills: Dict[str, Skill] = {}
-        self._matcher: Optional[SkillMatcher] = None
+        self._skills: dict[str, Skill] = {}
+        self._matcher: SkillMatcher | None = None
         self._skills_dir = skills_dir
 
         # Stats tracking
-        self._activation_counts: Dict[str, int] = {}
+        self._activation_counts: dict[str, int] = {}
 
     def load(self, force_reload: bool = False) -> int:
         """
@@ -64,12 +64,12 @@ class SkillRegistry:
             print(f"[skills.registry] Initialized registry with {len(self._skills)} skills")
             return len(self._skills)
 
-    def get_skill(self, name: str) -> Optional[Skill]:
+    def get_skill(self, name: str) -> Skill | None:
         """Get a skill by name."""
         with self._lock:
             return self._skills.get(name)
 
-    def list_skills(self) -> List[Skill]:
+    def list_skills(self) -> list[Skill]:
         """List all loaded skills."""
         with self._lock:
             return list(self._skills.values())
@@ -79,8 +79,8 @@ class SkillRegistry:
         query: str,
         max_skills: int = 5,
         min_confidence: float = 6,
-        conversation_history: Optional[List[Dict[str, Any]]] = None,
-    ) -> List[SkillMatch]:
+        conversation_history: list[dict[str, Any]] | None = None,
+    ) -> list[SkillMatch]:
         """
         Find skills that match the user query.
 
@@ -123,7 +123,7 @@ class SkillRegistry:
                 return ""
             return self._matcher.get_skill_index()
 
-    def get_stats(self) -> Dict[str, Any]:
+    def get_stats(self) -> dict[str, Any]:
         """Get registry statistics."""
         with self._lock:
             return {
@@ -152,11 +152,11 @@ class SkillRegistry:
 
 
 # Global registry instance (singleton)
-_registry: Optional[SkillRegistry] = None
+_registry: SkillRegistry | None = None
 _registry_lock = Lock()
 
 
-def get_registry(skills_dir: Optional[Path] = None) -> SkillRegistry:
+def get_registry(skills_dir: Path | None = None) -> SkillRegistry:
     """
     Get the global skill registry instance.
 

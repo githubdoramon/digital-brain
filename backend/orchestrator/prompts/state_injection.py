@@ -12,13 +12,13 @@ This ensures:
 - Easier debugging
 """
 
-from typing import Any, Dict, List, Optional, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Optional
 
 if TYPE_CHECKING:
     from agent.state import AgentState
 
 
-def build_state_message(state: "AgentState") -> Dict[str, str]:
+def build_state_message(state: "AgentState") -> dict[str, str]:
     """
     Build a system message containing the current state.
 
@@ -38,10 +38,10 @@ def build_state_message(state: "AgentState") -> Dict[str, str]:
 
 
 def inject_state_context(
-    messages: List[Dict[str, Any]],
+    messages: list[dict[str, Any]],
     state: "AgentState",
     position: str = "before_user",
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     """
     Inject state context into the message list.
 
@@ -76,11 +76,11 @@ def inject_state_context(
 
 def build_validation_feedback_message(
     tool_name: str,
-    errors: List[str],
-    suggestions: List[str],
+    errors: list[str],
+    suggestions: list[str],
     repair_attempt: int,
     max_repairs: int,
-) -> Dict[str, str]:
+) -> dict[str, str]:
     """
     Build a message providing validation feedback.
 
@@ -128,9 +128,9 @@ def build_validation_feedback_message(
 
 def build_tool_result_message(
     tool_call_id: str,
-    result: Dict[str, Any],
+    result: dict[str, Any],
     tool_name: str,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """
     Build a tool result message.
 
@@ -155,7 +155,7 @@ def build_limit_hit_message(
     limit_type: str,
     message: str,
     suggestion: Optional[str] = None,
-) -> Dict[str, str]:
+) -> dict[str, str]:
     """
     Build a message when a limit is hit.
 
@@ -190,8 +190,8 @@ def build_limit_hit_message(
 
 def build_no_progress_message(
     reason: str,
-    known_facts: List[str],
-) -> Dict[str, str]:
+    known_facts: list[str],
+) -> dict[str, str]:
     """
     Build a message when no progress is detected.
 

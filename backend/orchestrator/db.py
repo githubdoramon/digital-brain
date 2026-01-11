@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import os
+from collections.abc import Iterator
 from contextlib import contextmanager
-from typing import Iterator, List
 
 import psycopg
 from psycopg import sql
@@ -24,7 +24,7 @@ print(f"[db] Configured POSTGRES_SCHEMA={POSTGRES_SCHEMA!r}")
 
 def _set_search_path(conn: psycopg.Connection) -> None:
     if not POSTGRES_SCHEMA:
-        print(f"[db] WARNING: POSTGRES_SCHEMA is empty, using default search_path")
+        print("[db] WARNING: POSTGRES_SCHEMA is empty, using default search_path")
         return
     with conn.cursor() as cur:
         cur.execute(
@@ -45,7 +45,7 @@ def get_conn() -> Iterator[psycopg.Connection]:
         conn.close()
 
 
-def fetch_events(ids: List[str]):
+def fetch_events(ids: list[str]):
     if not ids:
         return []
     with get_conn() as conn, conn.cursor() as cur:

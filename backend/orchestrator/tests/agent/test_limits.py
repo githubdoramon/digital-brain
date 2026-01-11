@@ -2,9 +2,8 @@
 Tests for LimitChecker and AgentConfig.
 """
 
-import pytest
+from agent.limits import AgentConfig, LimitChecker, LimitType, LimitViolation
 from agent.state import AgentState, ToolCallRecord
-from agent.limits import LimitChecker, LimitViolation, AgentConfig, LimitType
 
 
 class TestAgentConfig:

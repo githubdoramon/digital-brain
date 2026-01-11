@@ -13,25 +13,26 @@ from __future__ import annotations
 
 import json
 import os
+from collections.abc import AsyncGenerator
 from time import perf_counter
-from typing import Any, AsyncGenerator, Dict, List, Optional
+from typing import Any
 
 import httpx
 import requests
 
 import conversations
 import skills
+from llm_agent import (
+    MAX_CONTINUATION_RETRIES,
+    MAX_ITERATIONS,
+    extract_event_proposal,
+    finalize_bundle,
+    looks_like_continuation,
+)
+from llm_prompts import build_messages, get_time_context
 
 # Import from refactored modules (legacy implementation)
 from llm_tools import TOOLS, AgentState, handle_tool_call
-from llm_prompts import build_messages, get_time_context
-from llm_agent import (
-    MAX_ITERATIONS,
-    MAX_CONTINUATION_RETRIES,
-    looks_like_continuation,
-    extract_event_proposal,
-    finalize_bundle,
-)
 
 # Configuration - OpenAI-compatible API (works with OpenAI, Ollama, etc.)
 LLM_BASE_URL = os.getenv("LLM_BASE_URL")
@@ -74,7 +75,7 @@ def _log_timing(label: str, start_time: float, **metadata: Any) -> None:
 # OpenAI-compatible API calls
 # ---------------------------------------------------------------------------
 
-def _get_headers() -> Dict[str, str]:
+def _get_headers() -> dict[str, str]:
     """Get headers for API requests."""
     headers = {"Content-Type": "application/json"}
     if LLM_API_KEY:
@@ -82,7 +83,7 @@ def _get_headers() -> Dict[str, str]:
     return headers
 
 
-def _llm_chat(messages: List[Dict[str, Any]]) -> Dict[str, Any]:
+def _llm_chat(messages: list[dict[str, Any]]) -> dict[str, Any]:
     """Make a synchronous chat request to OpenAI-compatible API."""
     payload = {
         "model": LLM_CHAT_MODEL,
@@ -108,9 +109,9 @@ def _llm_chat(messages: List[Dict[str, Any]]) -> Dict[str, Any]:
 
 
 async def _llm_chat_stream(
-    messages: List[Dict[str, Any]],
-    tools: List[Dict[str, Any]],
-) -> AsyncGenerator[Dict[str, Any], None]:
+    messages: list[dict[str, Any]],
+    tools: list[dict[str, Any]],
+) -> AsyncGenerator[dict[str, Any], None]:
     """Stream chat responses from OpenAI-compatible API."""
     payload = {
         "model": LLM_CHAT_MODEL,
@@ -130,7 +131,7 @@ async def _llm_chat_stream(
             json=payload,
         ) as response:
             response.raise_for_status()
-            accumulated_tool_calls: Dict[int, Dict[str, Any]] = {}
+            accumulated_tool_calls: dict[int, dict[str, Any]] = {}
             async for line in response.aiter_lines():
                 line = line.strip()
                 if not line or line == "data: [DONE]":
@@ -183,10 +184,10 @@ async def answer_question(
     question: str,
     search_limit: int = 3,
     user_id: str = "default_user",
-    session_id: Optional[str] = None,
-    user_email: Optional[str] = None,
+    session_id: str | None = None,
+    user_email: str | None = None,
     event_capture_enabled: bool = False,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """
     Answer a question using the LLM with tool calling.
 
@@ -211,7 +212,7 @@ async def answer_question(
         from agent.controller import get_controller
 
         # Load conversation history
-        conversation_history: List[Dict[str, str]] = []
+        conversation_history: list[dict[str, str]] = []
         if session_id and user_email:
             try:
                 conversation_history = conversations.get_conversation_history(session_id, user_email)
@@ -266,7 +267,7 @@ async def answer_question(
     state = AgentState()
 
     # Load conversation history
-    conversation_history: List[Dict[str, str]] = []
+    conversation_history: list[dict[str, str]] = []
     if session_id and user_email:
         history_start = perf_counter()
         try:
@@ -388,7 +389,7 @@ async def answer_question(
         event_proposal = extract_event_proposal(content) if event_capture_enabled else None
 
         # Persist conversation
-        new_thread_title: Optional[str] = None
+        new_thread_title: str | None = None
         if session_id and user_email:
             try:
                 assistant_metadata = {"event_proposal": event_proposal} if event_proposal else {}
@@ -436,10 +437,10 @@ async def answer_question_stream(
     question: str,
     search_limit: int = 3,
     user_id: str = "default_user",
-    session_id: Optional[str] = None,
-    user_email: Optional[str] = None,
+    session_id: str | None = None,
+    user_email: str | None = None,
     event_capture_enabled: bool = False,
-) -> AsyncGenerator[Dict[str, Any], None]:
+) -> AsyncGenerator[dict[str, Any], None]:
     """
     Stream LLM responses with tool calling support.
 
@@ -467,7 +468,7 @@ async def answer_question_stream(
         from agent.controller import get_controller
 
         # Load conversation history
-        conversation_history: List[Dict[str, str]] = []
+        conversation_history: list[dict[str, str]] = []
         if session_id and user_email:
             try:
                 conversation_history = conversations.get_conversation_history(session_id, user_email)
@@ -532,7 +533,7 @@ async def answer_question_stream(
     state = AgentState()
 
     # Load conversation history
-    conversation_history: List[Dict[str, str]] = []
+    conversation_history: list[dict[str, str]] = []
     if session_id and user_email:
         try:
             conversation_history = conversations.get_conversation_history(session_id, user_email)
@@ -675,7 +676,7 @@ async def answer_question_stream(
     event_proposal = extract_event_proposal(accumulated_content) if event_capture_enabled else None
 
     # Persist conversation
-    new_thread_title: Optional[str] = None
+    new_thread_title: str | None = None
     if session_id and user_email:
         try:
             assistant_metadata = {"event_proposal": event_proposal} if event_proposal else {}
@@ -721,9 +722,9 @@ async def answer_question_stream(
 # ---------------------------------------------------------------------------
 
 async def _run_skill_script_streaming(
-    tool_call: Dict[str, Any],
+    tool_call: dict[str, Any],
     state: AgentState,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """
     Run a skill script with streaming status support.
 
@@ -777,7 +778,7 @@ async def _run_skill_script_streaming(
     return result
 
 
-def _generate_thread_title(question: str) -> Optional[str]:
+def _generate_thread_title(question: str) -> str | None:
     """Generate a thread title from the first question."""
     messages = [
         {

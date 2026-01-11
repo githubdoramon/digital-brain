@@ -8,18 +8,19 @@ This module contains:
 
 import json
 from time import perf_counter
-from typing import Any, Dict, List, Optional
+from typing import Any
+
+import bash_tools
 
 # Import tool implementations
 import contacts
 import documents as documents_service
 import events as events_service
 import retrieval
+import skills
 import sql_tools
 import web_tools
-import skills
-import bash_tools
-from mcp import is_ha_configured, list_ha_tools, call_ha_tool
+from mcp import call_ha_tool, is_ha_configured, list_ha_tools
 
 
 def _log_timing(label: str, start_time: float, **metadata: Any) -> None:
@@ -33,7 +34,7 @@ def _log_timing(label: str, start_time: float, **metadata: Any) -> None:
 
 
 # Tool definitions for Ollama function calling
-TOOLS: List[Dict[str, Any]] = [
+TOOLS: list[dict[str, Any]] = [
     {
         "type": "function",
         "function": {
@@ -299,12 +300,12 @@ class AgentState:
     """Tracks state across tool calls within a single agent loop."""
 
     def __init__(self) -> None:
-        self.resolution: Dict[str, Any] = {}
-        self.search_results: List[Dict[str, Any]] = []
-        self.detailed_events: List[Dict[str, Any]] = []
-        self.activated_skills: List[Dict[str, Any]] = []
+        self.resolution: dict[str, Any] = {}
+        self.search_results: list[dict[str, Any]] = []
+        self.detailed_events: list[dict[str, Any]] = []
+        self.activated_skills: list[dict[str, Any]] = []
 
-    def to_metadata(self) -> Dict[str, Any]:
+    def to_metadata(self) -> dict[str, Any]:
         """Convert state to metadata for storage."""
         return {
             "resolution": self.resolution,
@@ -314,16 +315,16 @@ class AgentState:
         }
 
 
-def _normalize_sql_result(result: Dict[str, Any]) -> Dict[str, Any]:
+def _normalize_sql_result(result: dict[str, Any]) -> dict[str, Any]:
     """Normalize SQL results, converting date objects to ISO strings."""
     if "rows" in result and isinstance(result["rows"], list):
         result["rows"] = [_json_safe(row) for row in result["rows"]]
     return result
 
 
-def _json_safe(row: Dict[str, Any]) -> Dict[str, Any]:
+def _json_safe(row: dict[str, Any]) -> dict[str, Any]:
     """Convert a row dict to JSON-safe format."""
-    safe: Dict[str, Any] = {}
+    safe: dict[str, Any] = {}
     for key, value in row.items():
         if hasattr(value, "isoformat"):
             safe[key] = value.isoformat()
@@ -333,11 +334,11 @@ def _json_safe(row: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def handle_tool_call(
-    tool_call: Dict[str, Any],
+    tool_call: dict[str, Any],
     state: AgentState,
     question: str,
     search_limit: int,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """
     Execute a tool call and return the result.
 

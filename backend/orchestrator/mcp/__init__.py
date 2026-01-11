@@ -19,19 +19,19 @@ Usage:
 """
 
 from mcp.client import (
+    MCPAuthError,
     MCPClient,
+    MCPClientError,
+    MCPConnectionError,
     MCPTool,
     MCPToolResult,
-    MCPClientError,
-    MCPAuthError,
-    MCPConnectionError,
 )
 from mcp.registry import MCPRegistry, get_registry
 from mcp.servers.home_assistant import (
+    call_ha_tool,
     get_ha_client,
     is_ha_configured,
     list_ha_tools,
-    call_ha_tool,
 )
 
 __all__ = [

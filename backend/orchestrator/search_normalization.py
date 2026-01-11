@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import unicodedata
-from typing import Iterable, List
+from collections.abc import Iterable
 
 
 def _strip_accents(text: str) -> str:
@@ -18,8 +18,8 @@ def normalize_search_text(text: str) -> str:
     return compact.casefold()
 
 
-def normalize_search_list(values: Iterable[str] | None) -> List[str]:
-    normalized: List[str] = []
+def normalize_search_list(values: Iterable[str] | None) -> list[str]:
+    normalized: list[str] = []
     seen = set()
     for value in values or []:
         candidate = normalize_search_text(value)

@@ -7,13 +7,12 @@ This module contains:
 - Message list construction
 """
 
-import os
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Optional
 
+import skills
 import sql_tools
 import tags_manager
-import skills
 
 
 def get_system_prompt(search_limit: int) -> str:
@@ -127,12 +126,12 @@ def get_self_context(email: str) -> Optional[str]:
 def build_messages(
     question: str,
     search_limit: int,
-    conversation_history: Optional[List[Dict[str, str]]] = None,
+    conversation_history: Optional[list[dict[str, str]]] = None,
     user_email: Optional[str] = None,
     current_time_context: Optional[str] = None,
     event_capture_enabled: bool = False,
     state: Optional[Any] = None,  # AgentState
-) -> List[Dict[str, str]]:
+) -> list[dict[str, str]]:
     """
     Build the complete message list for the LLM.
 
@@ -148,7 +147,7 @@ def build_messages(
     Returns:
         List of message dicts for the LLM
     """
-    messages: List[Dict[str, str]] = []
+    messages: list[dict[str, str]] = []
 
     # Core system prompts
     messages.append({"role": "system", "content": get_system_prompt(search_limit)})

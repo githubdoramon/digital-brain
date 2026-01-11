@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any
 from uuid import uuid4
 
 from psycopg.rows import dict_row
@@ -18,7 +18,7 @@ def _generate_default_title() -> str:
     return f"{_DEFAULT_TITLE_PREFIX} - {timestamp} UTC"
 
 
-def is_default_title(title: Optional[str]) -> bool:
+def is_default_title(title: str | None) -> bool:
     if not title:
         return True
     return title.startswith(_DEFAULT_TITLE_PREFIX)
@@ -28,7 +28,7 @@ def _generate_thread_id() -> str:
     return f"thread_{uuid4().hex}"
 
 
-def _normalize_title_candidate(text: Optional[str]) -> Optional[str]:
+def _normalize_title_candidate(text: str | None) -> str | None:
     if not text:
         return None
     cleaned = re.sub(r"\s+", " ", text).strip()
@@ -41,10 +41,10 @@ def _normalize_title_candidate(text: Optional[str]) -> Optional[str]:
 
 
 def ensure_thread(
-    thread_id: Optional[str],
+    thread_id: str | None,
     user_email: str,
-    title: Optional[str] = None,
-) -> Dict[str, Any]:
+    title: str | None = None,
+) -> dict[str, Any]:
     """
     Ensure a thread exists for the given user. If thread_id is None, a new thread is created.
     Returns the thread row as a dict.
@@ -87,7 +87,7 @@ def ensure_thread(
         return row
 
 
-def list_threads(user_email: str) -> List[Dict[str, Any]]:
+def list_threads(user_email: str) -> list[dict[str, Any]]:
     if not user_email:
         return []
     with get_conn() as conn, conn.cursor(row_factory=dict_row) as cur:
@@ -115,7 +115,7 @@ def list_threads(user_email: str) -> List[Dict[str, Any]]:
     return rows
 
 
-def get_thread_with_messages(thread_id: str, user_email: str) -> Optional[Dict[str, Any]]:
+def get_thread_with_messages(thread_id: str, user_email: str) -> dict[str, Any] | None:
     if not thread_id or not user_email:
         return None
 
@@ -153,11 +153,11 @@ def get_thread_with_messages(thread_id: str, user_email: str) -> Optional[Dict[s
     return thread
 
 
-def get_conversation_history(thread_id: str, user_email: str) -> List[Dict[str, str]]:
+def get_conversation_history(thread_id: str, user_email: str) -> list[dict[str, str]]:
     thread = get_thread_with_messages(thread_id, user_email)
     if not thread:
         return []
-    history: List[Dict[str, str]] = []
+    history: list[dict[str, str]] = []
     for message in thread["messages"]:
         role = message.get("role")
         content = message.get("content")
@@ -172,9 +172,9 @@ def record_exchange(
     user_email: str,
     user_message: str,
     assistant_message: str,
-    user_metadata: Optional[Dict[str, Any]] = None,
-    assistant_metadata: Optional[Dict[str, Any]] = None,
-) -> Dict[str, Any]:
+    user_metadata: dict[str, Any] | None = None,
+    assistant_metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     if not thread_id or not user_email:
         raise ValueError("thread_id and user_email are required")
 
@@ -283,7 +283,7 @@ def delete_thread(thread_id: str, user_email: str) -> bool:
         return deleted
 
 
-def update_thread_title(thread_id: str, user_email: str, title: str) -> Optional[Dict[str, Any]]:
+def update_thread_title(thread_id: str, user_email: str, title: str) -> dict[str, Any] | None:
     normalized = _normalize_title_candidate(title)
     if not normalized:
         return None
@@ -329,7 +329,7 @@ def parse_session_command(message: str) -> tuple[bool, str]:
     return (False, body)
 
 
-def get_main_session(user_email: str) -> Optional[Dict[str, Any]]:
+def get_main_session(user_email: str) -> dict[str, Any] | None:
     """Get main session metadata for user, including the thread if it exists."""
     if not user_email:
         return None
@@ -397,7 +397,7 @@ def _touch_main_session(user_email: str) -> None:
         conn.commit()
 
 
-def _create_thread_for_main_session(user_email: str) -> Dict[str, Any]:
+def _create_thread_for_main_session(user_email: str) -> dict[str, Any]:
     """Create a new thread for the main session with a Quick Chat title."""
     new_thread_id = _generate_thread_id()
     title = f"Quick Chat - {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M')} UTC"
@@ -419,7 +419,7 @@ def resolve_main_session(
     user_email: str,
     message: str,
     idle_minutes: int = DEFAULT_IDLE_MINUTES,
-) -> tuple[Dict[str, Any], bool, str]:
+) -> tuple[dict[str, Any], bool, str]:
     """
     Resolve main session for user.
 

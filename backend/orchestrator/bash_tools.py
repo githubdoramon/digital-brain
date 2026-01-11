@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import os
 import subprocess
-from typing import Any, Dict, Optional
+from typing import Any
 
 # Default and maximum timeout in seconds
 DEFAULT_TIMEOUT = 30
@@ -39,10 +39,10 @@ BLOCKED_PATTERNS = [
 
 def execute_bash(
     command: str,
-    timeout: Optional[int] = None,
-    working_dir: Optional[str] = None,
-    env: Optional[Dict[str, str]] = None,
-) -> Dict[str, Any]:
+    timeout: int | None = None,
+    working_dir: str | None = None,
+    env: dict[str, str] | None = None,
+) -> dict[str, Any]:
     """
     Execute a shell command and return the result.
 
@@ -140,14 +140,14 @@ def execute_bash(
         # Always print stdout
         if stdout:
             print(stdout)
-        
+
         # Print debug info on non-zero return code
         if result.returncode != 0:
             print(f"[bash_tools] ERROR: Command exited with return code {result.returncode}")
             print(f"[bash_tools] Command was: {command!r}")
             if stderr:
                 print(f"[bash_tools] stderr: {stderr}")
-        
+
         return output
 
     except subprocess.TimeoutExpired:

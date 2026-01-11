@@ -26,7 +26,7 @@ from __future__ import annotations
 import threading
 from dataclasses import dataclass
 from time import perf_counter
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from mcp.client import MCPClient, MCPClientError, MCPTool
 
@@ -39,7 +39,7 @@ class RegisteredServer:
     description: str = ""
     enabled: bool = True
     call_count: int = 0
-    last_error: Optional[str] = None
+    last_error: str | None = None
 
 
 class MCPRegistry:
@@ -51,7 +51,7 @@ class MCPRegistry:
     """
 
     def __init__(self):
-        self._servers: Dict[str, RegisteredServer] = {}
+        self._servers: dict[str, RegisteredServer] = {}
         self._lock = threading.RLock()
 
     def register(
@@ -96,17 +96,17 @@ class MCPRegistry:
                 return True
             return False
 
-    def get_server(self, name: str) -> Optional[RegisteredServer]:
+    def get_server(self, name: str) -> RegisteredServer | None:
         """Get a registered server by name."""
         with self._lock:
             return self._servers.get(name)
 
-    def get_client(self, name: str) -> Optional[MCPClient]:
+    def get_client(self, name: str) -> MCPClient | None:
         """Get the client for a registered server."""
         server = self.get_server(name)
         return server.client if server else None
 
-    def list_servers(self) -> List[Dict[str, Any]]:
+    def list_servers(self) -> list[dict[str, Any]]:
         """
         List all registered servers.
 
@@ -126,7 +126,7 @@ class MCPRegistry:
                 for server in self._servers.values()
             ]
 
-    def list_tools(self, server_name: str, force_refresh: bool = False) -> List[MCPTool]:
+    def list_tools(self, server_name: str, force_refresh: bool = False) -> list[MCPTool]:
         """
         List tools from a specific server.
 
@@ -145,7 +145,7 @@ class MCPRegistry:
 
         return server.client.list_tools_sync(force_refresh=force_refresh)
 
-    def list_all_tools(self, force_refresh: bool = False) -> Dict[str, List[MCPTool]]:
+    def list_all_tools(self, force_refresh: bool = False) -> dict[str, list[MCPTool]]:
         """
         List tools from all enabled servers.
 
@@ -155,7 +155,7 @@ class MCPRegistry:
         Returns:
             Dict mapping server names to their tool lists
         """
-        result: Dict[str, List[MCPTool]] = {}
+        result: dict[str, list[MCPTool]] = {}
 
         with self._lock:
             for name, server in self._servers.items():
@@ -174,8 +174,8 @@ class MCPRegistry:
         self,
         server_name: str,
         tool_name: str,
-        arguments: Optional[Dict[str, Any]] = None,
-    ) -> Dict[str, Any]:
+        arguments: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         """
         Call a tool on a specific server.
 
@@ -220,8 +220,8 @@ class MCPRegistry:
         self,
         server_name: str,
         tool_name: str,
-        arguments: Optional[Dict[str, Any]] = None,
-    ) -> Dict[str, Any]:
+        arguments: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         """
         Call a tool on a specific server (async).
 
@@ -280,7 +280,7 @@ class MCPRegistry:
             return True
         return False
 
-    def get_stats(self) -> Dict[str, Any]:
+    def get_stats(self) -> dict[str, Any]:
         """Get registry statistics."""
         with self._lock:
             total_calls = sum(s.call_count for s in self._servers.values())
@@ -302,7 +302,7 @@ class MCPRegistry:
 
 
 # Module-level singleton
-_registry: Optional[MCPRegistry] = None
+_registry: MCPRegistry | None = None
 _registry_lock = threading.Lock()
 
 

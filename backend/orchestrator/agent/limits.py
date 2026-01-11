@@ -13,7 +13,7 @@ When limits are hit, the agent stops cleanly and returns a partial answer.
 import os
 from dataclasses import dataclass
 from enum import Enum
-from typing import TYPE_CHECKING, List, Optional
+from typing import TYPE_CHECKING, Optional
 
 if TYPE_CHECKING:
     from .state import AgentState

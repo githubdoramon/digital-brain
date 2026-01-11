@@ -6,11 +6,12 @@ Full end-to-end tests with LLM calls require additional infrastructure.
 """
 
 import pytest
+
 from agent.controller import AgentController
-from agent.state import AgentState, ToolCallRecord
 from agent.limits import AgentConfig, LimitChecker, LimitType
-from agent.router import IntentRouter, IntentType, TOOL_GROUPS
-from tools.registry import ToolRegistry, get_registry
+from agent.router import TOOL_GROUPS, IntentRouter, IntentType
+from agent.state import AgentState, ToolCallRecord
+from tools.registry import get_registry
 
 
 class TestAgentControllerIntegration:

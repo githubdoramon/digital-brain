@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import re
-from typing import Any, Dict, List, Set
+from typing import Any
 
 from psycopg.rows import dict_row
 
@@ -48,12 +48,12 @@ _AGGREGATE_UNCLOSED_PATTERNS = [
 ]
 
 _SCHEMA_HINT_CACHE: str | None = None
-_SCHEMA_SNAPSHOT: Dict[str, Any] | None = None
+_SCHEMA_SNAPSHOT: dict[str, Any] | None = None
 
 _TABLE_REF_REGEX = re.compile(r"\b(?:from|join|into)\s+([a-zA-Z_][\w.]*)", re.IGNORECASE)
 
 
-def describe_schema() -> Dict[str, Any]:
+def describe_schema() -> dict[str, Any]:
     schema = POSTGRES_SCHEMA or "public"
     with get_conn() as conn, conn.cursor(row_factory=dict_row) as cur:
         cur.execute(
@@ -72,7 +72,7 @@ def describe_schema() -> Dict[str, Any]:
         )
         columns = cur.fetchall()
 
-    tables: Dict[str, Dict[str, Any]] = {}
+    tables: dict[str, dict[str, Any]] = {}
     for col in columns:
         table = col["table_name"]
         tables.setdefault(table, {"columns": []})
@@ -98,12 +98,12 @@ def load_schema_hint() -> str:
         _SCHEMA_HINT_CACHE = ""
         return ""
 
-    lines: List[str] = [
+    lines: list[str] = [
         "Database schema snapshot (read-only):",
     ]
     for table_name in sorted(snapshot):
         columns = snapshot[table_name].get("columns") or []
-        column_bits: List[str] = []
+        column_bits: list[str] = []
         for col in columns:
             name = col.get("name")
             dtype = col.get("type")
@@ -123,7 +123,7 @@ def load_schema_hint() -> str:
     return hint
 
 
-def get_schema_snapshot() -> Dict[str, Any]:
+def get_schema_snapshot() -> dict[str, Any]:
     """Return cached schema snapshot keyed by table name."""
     global _SCHEMA_SNAPSHOT
     if _SCHEMA_SNAPSHOT is not None:
@@ -140,7 +140,7 @@ def get_schema_snapshot() -> Dict[str, Any]:
     return tables
 
 
-def find_unknown_tables(query: str) -> Set[str]:
+def find_unknown_tables(query: str) -> set[str]:
     snapshot = get_schema_snapshot()
     if not snapshot:
         return set()
@@ -149,8 +149,8 @@ def find_unknown_tables(query: str) -> Set[str]:
     return {table for table in referenced if table not in known_tables}
 
 
-def extract_table_names(query: str) -> Set[str]:
-    tables: Set[str] = set()
+def extract_table_names(query: str) -> set[str]:
+    tables: set[str] = set()
     if not query:
         return tables
     for match in _TABLE_REF_REGEX.findall(query):
@@ -171,7 +171,7 @@ def extract_table_names(query: str) -> Set[str]:
     return tables
 
 
-def execute_sql(query: str, limit: int = 200) -> Dict[str, Any]:
+def execute_sql(query: str, limit: int = 200) -> dict[str, Any]:
     clean_query = _ensure_read_only(query)
     limit = max(1, min(limit, 1000))
 

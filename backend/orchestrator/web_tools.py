@@ -1,11 +1,10 @@
 from __future__ import annotations
 
 import os
-from typing import Any, Dict, List, Optional
+from typing import Any
 from urllib.parse import urlparse
 
 import requests
-
 
 DEFAULT_TAVILY_URL = "https://api.tavily.com/search"
 DEFAULT_TAVILY_EXTRACT_URL = "https://api.tavily.com/extract"
@@ -14,7 +13,7 @@ MAX_RESULTS = 10
 DEFAULT_MAX_CHARACTERS = 20000
 
 
-def internet_search(query: str, max_results: Optional[int] = None) -> Dict[str, Any]:
+def internet_search(query: str, max_results: int | None = None) -> dict[str, Any]:
     """Perform an internet search using the Tavily API.
 
     Returns a dictionary with the normalized results or an error structure that the
@@ -48,7 +47,7 @@ def internet_search(query: str, max_results: Optional[int] = None) -> Dict[str, 
     limit = max_results if isinstance(max_results, int) else default_limit
     limit = max(1, min(limit or 5, MAX_RESULTS))
 
-    payload: Dict[str, Any] = {
+    payload: dict[str, Any] = {
         "api_key": api_key,
         "query": normalized_query,
         "max_results": limit,
@@ -100,11 +99,11 @@ def internet_search(query: str, max_results: Optional[int] = None) -> Dict[str, 
 def fetch_web_page(
     url: str,
     *,
-    include_links: Optional[bool] = None,
-    include_images: Optional[bool] = None,
-    max_characters: Optional[int] = None,
-    include_raw_html: Optional[bool] = None,
-) -> Dict[str, Any]:
+    include_links: bool | None = None,
+    include_images: bool | None = None,
+    max_characters: int | None = None,
+    include_raw_html: bool | None = None,
+) -> dict[str, Any]:
     """Retrieve the textual contents of a web page using Tavily's extract API."""
 
     normalized_url = (url or "").strip()
@@ -160,7 +159,7 @@ def fetch_web_page(
     if max_chars <= 0:
         max_chars = DEFAULT_MAX_CHARACTERS
 
-    payload: Dict[str, Any] = {
+    payload: dict[str, Any] = {
         "api_key": api_key,
         "urls": [normalized_url],
         "include_links": include_links_flag,
@@ -228,9 +227,9 @@ def fetch_web_page(
     return normalized
 
 
-def _normalize_tavily_response(data: Dict[str, Any]) -> Dict[str, Any]:
+def _normalize_tavily_response(data: dict[str, Any]) -> dict[str, Any]:
     results_raw = data.get("results")
-    results: List[Dict[str, Any]] = []
+    results: list[dict[str, Any]] = []
     if isinstance(results_raw, list):
         for item in results_raw:
             if not isinstance(item, dict):
@@ -242,7 +241,7 @@ def _normalize_tavily_response(data: Dict[str, Any]) -> Dict[str, Any]:
             score = item.get("score")
             published = item.get("published_date") or item.get("published_time")
 
-            entry: Dict[str, Any] = {}
+            entry: dict[str, Any] = {}
             if title:
                 entry["title"] = title
             if url:
@@ -268,7 +267,7 @@ def _normalize_tavily_response(data: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def _coerce_int(value: Optional[str], fallback: int) -> int:
+def _coerce_int(value: str | None, fallback: int) -> int:
     if value is None:
         return fallback
     try:
@@ -295,11 +294,11 @@ def _coerce_bool(value: Any, fallback: bool = False) -> bool:
 
 
 def _normalize_tavily_extract_response(
-    data: Dict[str, Any],
+    data: dict[str, Any],
     fallback_url: str,
     max_characters: int,
-) -> Dict[str, Any]:
-    documents: List[Dict[str, Any]] = []
+) -> dict[str, Any]:
+    documents: list[dict[str, Any]] = []
 
     raw_results = data.get("results")
     if isinstance(raw_results, list):
@@ -325,7 +324,7 @@ def _normalize_tavily_extract_response(
             if isinstance(raw_content, str) and max_characters and len(raw_content) > max_characters:
                 raw_content = raw_content[:max_characters]
 
-            doc: Dict[str, Any] = {"url": doc_url}
+            doc: dict[str, Any] = {"url": doc_url}
             if title:
                 doc["title"] = title
             if raw_content:
@@ -341,12 +340,12 @@ def _normalize_tavily_extract_response(
 
             links_field = item.get("links")
             if isinstance(links_field, list):
-                cleaned_links: List[Dict[str, Any]] = []
+                cleaned_links: list[dict[str, Any]] = []
                 for link in links_field:
                     if isinstance(link, dict):
                         link_url = link.get("url") or link.get("href")
                         link_text = link.get("text") or link.get("title")
-                        entry: Dict[str, Any] = {}
+                        entry: dict[str, Any] = {}
                         if link_url:
                             entry["url"] = link_url
                         if link_text:
@@ -361,7 +360,7 @@ def _normalize_tavily_extract_response(
             if doc:
                 documents.append(doc)
 
-    response: Dict[str, Any] = {
+    response: dict[str, Any] = {
         "documents": documents,
     }
 

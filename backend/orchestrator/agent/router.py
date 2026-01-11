@@ -14,7 +14,7 @@ import json
 import os
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Dict, List, Optional
+from typing import Any, Optional
 
 import requests
 
@@ -40,12 +40,12 @@ class IntentClassification:
 
     intent: IntentType
     confidence: float
-    allowed_tool_groups: List[str]
-    constraints: List[str] = field(default_factory=list)
-    skill_hints: List[str] = field(default_factory=list)
+    allowed_tool_groups: list[str]
+    constraints: list[str] = field(default_factory=list)
+    skill_hints: list[str] = field(default_factory=list)
     reasoning: Optional[str] = None
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "intent": self.intent.value,
             "confidence": self.confidence,
@@ -137,7 +137,7 @@ class IntentRouter:
     async def classify(
         self,
         question: str,
-        conversation_history: Optional[List[Dict[str, str]]] = None,
+        conversation_history: Optional[list[dict[str, str]]] = None,
     ) -> IntentClassification:
         """
         Classify the user's intent.
@@ -300,7 +300,7 @@ class IntentRouter:
     def _llm_classify(
         self,
         question: str,
-        conversation_history: Optional[List[Dict[str, str]]] = None,
+        conversation_history: Optional[list[dict[str, str]]] = None,
     ) -> IntentClassification:
         """Use LLM to classify the intent."""
         prompt = self._build_classification_prompt(question, conversation_history)
@@ -331,7 +331,7 @@ class IntentRouter:
     def _build_classification_prompt(
         self,
         question: str,
-        conversation_history: Optional[List[Dict[str, str]]] = None,
+        conversation_history: Optional[list[dict[str, str]]] = None,
     ) -> str:
         """Build the prompt for LLM classification."""
         context = ""
@@ -402,14 +402,14 @@ Respond with JSON only:
                 reasoning="LLM response parsing failed",
             )
 
-    def get_allowed_tools(self, classification: IntentClassification) -> List[str]:
+    def get_allowed_tools(self, classification: IntentClassification) -> list[str]:
         """Get flat list of allowed tool names from classification."""
         tools = []
         for group in classification.allowed_tool_groups:
             tools.extend(TOOL_GROUPS.get(group, []))
         return list(set(tools))  # Deduplicate
 
-    def get_all_tools(self) -> List[str]:
+    def get_all_tools(self) -> list[str]:
         """Get all available tools across all groups."""
         tools = []
         for group_tools in TOOL_GROUPS.values():

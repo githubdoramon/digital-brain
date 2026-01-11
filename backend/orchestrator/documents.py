@@ -4,10 +4,11 @@ import json
 import mimetypes
 import os
 import shutil
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any
 from uuid import uuid4
 
 import requests
@@ -48,7 +49,7 @@ class StoredFileInfo:
     document_id: str
     path: Path
     file_name: str
-    mime_type: Optional[str]
+    mime_type: str | None
     size: int
 
 
@@ -56,24 +57,24 @@ class StoredFileInfo:
 class DocumentPrepared:
     title: str
     description: str
-    tags: List[str]
-    document_date: Optional[datetime]
+    tags: list[str]
+    document_date: datetime | None
     embedding: Sequence[float]
-    raw_metadata: Dict[str, Any]
-    suggested_tags: List[str]
-    generated_title: Optional[str]
-    generated_description: Optional[str]
-    inferred_date: Optional[datetime]
+    raw_metadata: dict[str, Any]
+    suggested_tags: list[str]
+    generated_title: str | None
+    generated_description: str | None
+    inferred_date: datetime | None
 
 
 def ingest_document(
     *,
-    title: Optional[str],
+    title: str | None,
     tags: Sequence[str] | None,
-    description: Optional[str],
+    description: str | None,
     upload: UploadFile,
-    document_date: Optional[datetime] = None,
-) -> Dict[str, Any]:
+    document_date: datetime | None = None,
+) -> dict[str, Any]:
     """Persist a new document, extracting text, embeddings, and tags."""
     provided_title = (title or "").strip()
     if not upload:
@@ -123,7 +124,7 @@ def ingest_document(
     return _row_to_document(row, include_metadata=True, include_content=True)
 
 
-def list_documents(limit: int = 200, offset: int = 0) -> List[Dict[str, Any]]:
+def list_documents(limit: int = 200, offset: int = 0) -> list[dict[str, Any]]:
     limit = max(1, min(limit, 200))
     offset = max(0, offset)
     with get_conn() as conn, conn.cursor() as cur:
@@ -151,7 +152,7 @@ def list_documents(limit: int = 200, offset: int = 0) -> List[Dict[str, Any]]:
     return [_row_to_document(row) for row in rows]
 
 
-def get_document(document_id: str) -> Optional[Dict[str, Any]]:
+def get_document(document_id: str) -> dict[str, Any] | None:
     if not document_id:
         return None
     with get_conn() as conn, conn.cursor() as cur:
@@ -184,11 +185,11 @@ def get_document(document_id: str) -> Optional[Dict[str, Any]]:
 def update_document_metadata(
     document_id: str,
     *,
-    title: Optional[str] = None,
+    title: str | None = None,
     tags: Sequence[str] | None = None,
-    description: Optional[str] = None,
-    document_date: Optional[datetime] = None,
-) -> Optional[Dict[str, Any]]:
+    description: str | None = None,
+    document_date: datetime | None = None,
+) -> dict[str, Any] | None:
     if not document_id:
         return None
 
@@ -245,7 +246,7 @@ def update_document_metadata(
 
     content_text = (row.get("content") or "")[:MAX_CONTENT_CHARS]
     if not content_text:
-        fallback_parts: List[str] = []
+        fallback_parts: list[str] = []
         for candidate in (
             provided_description,
             row.get("description"),
@@ -293,11 +294,11 @@ def search_documents(
     *,
     tags: Sequence[str] | None = None,
     limit: int = 20,
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     search_query = normalize_search_text(query)
     normalized_tags = normalize_search_list(tags)
 
-    scores: Dict[str, float] = {}
+    scores: dict[str, float] = {}
     if search_query:
         vec_scores = _vector_search_documents(search_query, 50)
         bm_scores = _bm25_search_documents(search_query, 50)
@@ -359,7 +360,7 @@ def delete_document(document_id: str) -> bool:
     return True
 
 
-def get_document_file(document_id: str) -> Optional[Dict[str, Any]]:
+def get_document_file(document_id: str) -> dict[str, Any] | None:
     if not document_id:
         return None
     with get_conn() as conn, conn.cursor() as cur:
@@ -409,7 +410,7 @@ def _store_upload(upload: UploadFile, document_id: str) -> StoredFileInfo:
     )
 
 
-def _extract_text(path: Path, mime_type: Optional[str]) -> str:
+def _extract_text(path: Path, mime_type: str | None) -> str:
     suffix = path.suffix.lower()
     try:
         if suffix == ".pdf" or mime_type == "application/pdf":
@@ -420,7 +421,7 @@ def _extract_text(path: Path, mime_type: Optional[str]) -> str:
             doc = DocxDocument(path)
             return "\n".join(paragraph.text for paragraph in doc.paragraphs)
         if suffix in {".txt", ".md"} or (mime_type and mime_type.startswith("text/")):
-            with open(path, "r", encoding="utf-8", errors="ignore") as handle:
+            with open(path, encoding="utf-8", errors="ignore") as handle:
                 return handle.read()
     except Exception as exc:
         print(f"[documents] Failed to extract text from {path}: {exc}")
@@ -434,7 +435,7 @@ def _extract_text(path: Path, mime_type: Optional[str]) -> str:
         return ""
 
 
-def _suggest_document_date(content: str, fallback: Optional[str]) -> Optional[datetime]:
+def _suggest_document_date(content: str, fallback: str | None) -> datetime | None:
     cleaned = (content or fallback or "").strip()
     if not cleaned or not OLLAMA_CHAT_MODEL:
         return None
@@ -452,9 +453,9 @@ def _suggest_document_date(content: str, fallback: Optional[str]) -> Optional[da
             {
                 "role": "user",
                 "content": (
-                    "Document excerpt:\n{excerpt}\n\n"
+                    f"Document excerpt:\n{excerpt}\n\n"
                     "If a clear date is present, respond with it in ISO-8601 (YYYY-MM-DD or YYYY-MM-DDTHH:MM)."
-                ).format(excerpt=excerpt),
+                ),
             },
         ],
         "stream": False,
@@ -477,7 +478,7 @@ def _suggest_document_date(content: str, fallback: Optional[str]) -> Optional[da
     return None
 
 
-def _parse_date_response(raw_content: str) -> Optional[datetime]:
+def _parse_date_response(raw_content: str) -> datetime | None:
     try:
         loaded = json.loads(raw_content)
         if isinstance(loaded, dict):
@@ -501,14 +502,14 @@ def _parse_date_response(raw_content: str) -> Optional[datetime]:
     return None
 
 
-def _parse_iso_datetime(value: str) -> Optional[datetime]:
+def _parse_iso_datetime(value: str) -> datetime | None:
     try:
         return datetime.fromisoformat(value.replace("Z", "+00:00"))
     except Exception:
         return None
 
 
-def _parse_flexible_date(value: str) -> Optional[datetime]:
+def _parse_flexible_date(value: str) -> datetime | None:
     try:
         return datetime.strptime(value, "%Y-%m-%d")
     except Exception:
@@ -522,9 +523,9 @@ def _build_document_fields(
     tags: Sequence[str],
     provided_title: str,
     provided_description: str,
-    document_date: Optional[datetime],
-    file_name: Optional[str],
-    raw_metadata: Dict[str, Any],
+    document_date: datetime | None,
+    file_name: str | None,
+    raw_metadata: dict[str, Any],
 ) -> DocumentPrepared:
     print(f"[documents] tags={tags}")
     normalized_tags = _normalize_strings(tags)
@@ -537,7 +538,7 @@ def _build_document_fields(
     print(f"[documents] merged_tags={merged_tags}")
 
     final_description = provided_description
-    generated_description: Optional[str] = None
+    generated_description: str | None = None
     if not final_description:
         generated_description = _summarize_description(content_text)
         final_description = generated_description or _default_description(
@@ -546,7 +547,7 @@ def _build_document_fields(
         )
 
     final_title = provided_title
-    generated_title: Optional[str] = None
+    generated_title: str | None = None
     if not final_title:
         generated_title = _suggest_title(content_text, fallback=file_name or document_id)
         final_title = (
@@ -556,7 +557,7 @@ def _build_document_fields(
         )
 
     final_date = document_date
-    inferred_date: Optional[datetime] = None
+    inferred_date: datetime | None = None
     if not final_date:
         inferred_date = _suggest_document_date(content_text, fallback=final_description)
         final_date = inferred_date
@@ -636,7 +637,7 @@ def _translate_text_to_english(text: str, max_chars: int) -> str:
         return text
 
 
-def _translate_tags_to_english(tags: Sequence[str]) -> List[str]:
+def _translate_tags_to_english(tags: Sequence[str]) -> list[str]:
     normalized = [t for t in tags if t]
     if not normalized or not OLLAMA_CHAT_MODEL:
         return normalized
@@ -677,7 +678,7 @@ def _translate_tags_to_english(tags: Sequence[str]) -> List[str]:
     return normalized
 
 
-def _summarize_description(content: str) -> Optional[str]:
+def _summarize_description(content: str) -> str | None:
     cleaned = (content or "").strip()
     if not cleaned or not OLLAMA_CHAT_MODEL:
         return None
@@ -716,13 +717,13 @@ def _upsert_document(
     document_id: str,
     title: str,
     tags: Sequence[str],
-    description: Optional[str],
+    description: str | None,
     stored: StoredFileInfo,
     content: str,
     embedding: Sequence[float],
-    document_date: Optional[datetime],
-    raw_metadata: Dict[str, Any],
-) -> Dict[str, Any]:
+    document_date: datetime | None,
+    raw_metadata: dict[str, Any],
+) -> dict[str, Any]:
     with get_conn() as conn, conn.cursor() as cur:
         cur.execute(
             """
@@ -790,7 +791,7 @@ def _upsert_document(
     return row
 
 
-def _vector_search_documents(query: str, k: int) -> Dict[str, float]:
+def _vector_search_documents(query: str, k: int) -> dict[str, float]:
     cleaned_query = normalize_search_text(query)
     if not cleaned_query:
         return {}
@@ -808,7 +809,7 @@ def _vector_search_documents(query: str, k: int) -> Dict[str, float]:
         return {row["document_id"]: float(row["score"]) for row in cur.fetchall()}
 
 
-def _bm25_search_documents(query: str, k: int) -> Dict[str, float]:
+def _bm25_search_documents(query: str, k: int) -> dict[str, float]:
     cleaned_query = normalize_search_text(query)
     if not cleaned_query:
         return {}
@@ -826,7 +827,7 @@ def _bm25_search_documents(query: str, k: int) -> Dict[str, float]:
         return {row["document_id"]: float(row["score"]) for row in cur.fetchall()}
 
 
-def _tag_search_documents(tags: Sequence[str]) -> Dict[str, float]:
+def _tag_search_documents(tags: Sequence[str]) -> dict[str, float]:
     normalized_tags = normalize_search_list(tags)
     if not normalized_tags:
         return {}
@@ -845,7 +846,7 @@ def _tag_search_documents(tags: Sequence[str]) -> Dict[str, float]:
         )
         rows = cur.fetchall()
 
-    scores: Dict[str, float] = {}
+    scores: dict[str, float] = {}
     for row in rows:
         doc_tags = row.get("tags") or []
         doc_normalized = set(normalize_search_list(doc_tags))
@@ -857,7 +858,7 @@ def _tag_search_documents(tags: Sequence[str]) -> Dict[str, float]:
     return scores
 
 
-def _load_document_row(document_id: str) -> Optional[Dict[str, Any]]:
+def _load_document_row(document_id: str) -> dict[str, Any] | None:
     if not document_id:
         return None
     with get_conn() as conn, conn.cursor() as cur:
@@ -883,7 +884,7 @@ def _load_document_row(document_id: str) -> Optional[Dict[str, Any]]:
         return cur.fetchone()
 
 
-def _fetch_documents(document_ids: Sequence[str]) -> List[Dict[str, Any]]:
+def _fetch_documents(document_ids: Sequence[str]) -> list[dict[str, Any]]:
     if not document_ids:
         return []
     with get_conn() as conn, conn.cursor() as cur:
@@ -910,13 +911,13 @@ def _fetch_documents(document_ids: Sequence[str]) -> List[Dict[str, Any]]:
 
 
 def _row_to_document(
-    row: Dict[str, Any],
+    row: dict[str, Any],
     *,
     include_metadata: bool = False,
     include_content: bool = False,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     snippet_source = row.get("description") or row.get("content") or ""
-    document: Dict[str, Any] = {
+    document: dict[str, Any] = {
         "document_id": row["document_id"],
         "title": row["title"],
         "tags": row.get("tags") or [],
@@ -953,14 +954,14 @@ def _make_snippet(text: str, length: int = 160) -> str:
     return cleaned[: length - 1] + "…"
 
 
-def _default_description(content: str, fallback: Optional[str]) -> str:
+def _default_description(content: str, fallback: str | None) -> str:
     snippet = _make_snippet(content, 200)
     if snippet:
         return snippet
     return fallback or "Document description unavailable"
 
 
-def _preferred_extension(filename: str, mime_type: Optional[str]) -> Optional[str]:
+def _preferred_extension(filename: str, mime_type: str | None) -> str | None:
     if mime_type == "application/pdf":
         return ".pdf"
     if mime_type in {
@@ -978,8 +979,8 @@ def _sanitize_filename(name: str) -> str:
     return "".join(ch for ch in name if ch.isalnum() or ch in {"-", "_", "."}).strip()
 
 
-def _generate_document_embedding(document: Dict[str, Any]) -> Sequence[float]:
-    segments: List[str] = []
+def _generate_document_embedding(document: dict[str, Any]) -> Sequence[float]:
+    segments: list[str] = []
 
     tags = document.get("tags")
     if isinstance(tags, (list, tuple)):
@@ -1027,7 +1028,7 @@ def _generate_document_embedding(document: Dict[str, Any]) -> Sequence[float]:
     return embed_text(embed_input)
 
 
-def _derive_title_from_filename(filename: Optional[str]) -> Optional[str]:
+def _derive_title_from_filename(filename: str | None) -> str | None:
     if not filename:
         return None
     stem = Path(filename).stem
@@ -1040,7 +1041,7 @@ def _derive_title_from_filename(filename: Optional[str]) -> Optional[str]:
     return " ".join(word.capitalize() for word in parts)
 
 
-def _suggest_title(content: str, fallback: Optional[str]) -> Optional[str]:
+def _suggest_title(content: str, fallback: str | None) -> str | None:
     cleaned = (content or "").strip()
     if not cleaned or not OLLAMA_CHAT_MODEL:
         return _derive_title_from_filename(fallback)
@@ -1059,8 +1060,8 @@ def _suggest_title(content: str, fallback: Optional[str]) -> Optional[str]:
                 "role": "user",
                 "content": (
                     "Suggest a short title for the following document excerpt:\n\n"
-                    "{excerpt}"
-                ).format(excerpt=excerpt),
+                    f"{excerpt}"
+                ),
             },
         ],
         "stream": False,

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import os
-from typing import List
 
 import requests
 
@@ -10,7 +9,7 @@ OLLAMA_EMBED_MODEL = os.getenv("OLLAMA_EMBED_MODEL", "nomic-embed-text")
 EMBED_DIM = int(os.getenv("OLLAMA_EMBED_DIM", "768"))
 
 
-def embed_text(text: str) -> List[float]:
+def embed_text(text: str) -> list[float]:
     text = (text or "").strip()
     if not text:
         return [0.0] * EMBED_DIM

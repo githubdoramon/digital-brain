@@ -8,8 +8,8 @@ SKILL.md files with YAML frontmatter and Markdown instructions.
 
 from __future__ import annotations
 
-from .loader import load_skill, load_all_skills, Skill, SkillTool
-from .matcher import SkillMatcher, SkillMatch
+from .loader import Skill, SkillTool, load_all_skills, load_skill
+from .matcher import SkillMatch, SkillMatcher
 from .registry import SkillRegistry, get_registry
 from .runner import SkillScriptRunner, get_runner_for_skill
 

@@ -12,7 +12,7 @@ import json
 import os
 import subprocess
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable
 
 
 class SkillScriptRunner:
@@ -27,7 +27,7 @@ class SkillScriptRunner:
         self,
         skill_path: Path,
         timeout: int = 30,
-        allowed_extensions: Optional[List[str]] = None,
+        allowed_extensions: list[str] | None = None,
     ):
         """
         Initialize the script runner.
@@ -42,7 +42,7 @@ class SkillScriptRunner:
         self.timeout = timeout
         self.allowed_extensions = allowed_extensions or [".py", ".sh"]
 
-    def list_scripts(self) -> List[str]:
+    def list_scripts(self) -> list[str]:
         """List available scripts in the skill's scripts/ folder."""
         if not self.scripts_dir.exists() or not self.scripts_dir.is_dir():
             return []
@@ -54,7 +54,7 @@ class SkillScriptRunner:
 
         return sorted(scripts)
 
-    def _get_interpreter(self, script_name: str) -> Optional[List[str]]:
+    def _get_interpreter(self, script_name: str) -> list[str] | None:
         """Get the interpreter command for a script type."""
         if script_name.endswith(".py"):
             return ["python", "-u"]  # -u for unbuffered output
@@ -65,9 +65,9 @@ class SkillScriptRunner:
     def run_script(
         self,
         script_name: str,
-        args: Optional[Dict[str, Any]] = None,
-        env: Optional[Dict[str, str]] = None,
-    ) -> Dict[str, Any]:
+        args: dict[str, Any] | None = None,
+        env: dict[str, str] | None = None,
+    ) -> dict[str, Any]:
         """
         Execute a script synchronously.
 
@@ -158,11 +158,11 @@ class SkillScriptRunner:
     async def run_script_streaming(
         self,
         script_name: str,
-        args: Optional[Dict[str, Any]] = None,
-        env: Optional[Dict[str, str]] = None,
-        on_output: Optional[Callable[[str], None]] = None,
-        on_output_async: Optional[Callable[[str], Any]] = None,
-    ) -> Dict[str, Any]:
+        args: dict[str, Any] | None = None,
+        env: dict[str, str] | None = None,
+        on_output: Callable[[str], None] | None = None,
+        on_output_async: Callable[[str], Any] | None = None,
+    ) -> dict[str, Any]:
         """
         Execute a script with streaming output.
 
@@ -298,7 +298,7 @@ class SkillScriptRunner:
                 "returncode": -1,
             }
 
-    def _parse_result(self, stdout: str) -> Optional[Any]:
+    def _parse_result(self, stdout: str) -> Any | None:
         """
         Try to parse a structured result from stdout.
 
