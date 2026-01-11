@@ -5,6 +5,8 @@ This is the main entry point for LLM interactions. It coordinates:
 - llm_tools: Tool definitions and handlers
 - llm_prompts: Message building and context injection
 - llm_agent: Agent loop logic and response finalization
+
+When USE_BOUNDED_AGENT=true, uses the new bounded agent architecture from agent/.
 """
 
 from __future__ import annotations
@@ -20,7 +22,7 @@ import requests
 import conversations
 import skills
 
-# Import from refactored modules
+# Import from refactored modules (legacy implementation)
 from llm_tools import TOOLS, AgentState, handle_tool_call
 from llm_prompts import build_messages, get_time_context
 from llm_agent import (
@@ -37,11 +39,17 @@ LLM_API_KEY = os.getenv("LLM_API_KEY", "")  # Optional for Ollama
 LLM_CHAT_MODEL = os.getenv("LLM_CHAT_MODEL")
 LLM_TIMEOUT = int(os.getenv("LLM_TIMEOUT", "120"))
 
+# Feature flag for bounded agent
+USE_BOUNDED_AGENT = os.getenv("USE_BOUNDED_AGENT", "false").lower() == "true"
+
 # Validate required configuration
 if not LLM_BASE_URL:
     raise RuntimeError("LLM_BASE_URL environment variable is required")
 if not LLM_CHAT_MODEL:
     raise RuntimeError("LLM_CHAT_MODEL environment variable is required")
+
+if USE_BOUNDED_AGENT:
+    print("[llm] Bounded agent architecture ENABLED")
 
 
 def _log_timing(label: str, start_time: float, **metadata: Any) -> None:
@@ -184,6 +192,9 @@ async def answer_question(
 
     This is the main non-streaming entry point.
 
+    When USE_BOUNDED_AGENT=true, delegates to the new AgentController.
+    Otherwise, uses the legacy implementation.
+
     Args:
         question: The user's question
         search_limit: Maximum search results to return
@@ -195,6 +206,61 @@ async def answer_question(
     Returns:
         Response bundle with answer and metadata
     """
+    # Use bounded agent if enabled
+    if USE_BOUNDED_AGENT:
+        from agent.controller import get_controller
+
+        # Load conversation history
+        conversation_history: List[Dict[str, str]] = []
+        if session_id and user_email:
+            try:
+                conversation_history = conversations.get_conversation_history(session_id, user_email)
+            except Exception as exc:
+                print(f"[session] Failed to load history: {exc}")
+
+        controller = get_controller()
+        result = await controller.run(
+            question=question,
+            user_id=user_id,
+            session_id=session_id,
+            user_email=user_email,
+            conversation_history=conversation_history,
+            search_limit=search_limit,
+            event_capture_enabled=event_capture_enabled,
+        )
+
+        # Persist conversation (bounded agent doesn't do this internally)
+        if session_id and user_email and result.get("answer"):
+            try:
+                assistant_metadata = {}
+                if result.get("event_proposal"):
+                    assistant_metadata["event_proposal"] = result["event_proposal"]
+
+                persist_result = conversations.record_exchange(
+                    thread_id=session_id,
+                    user_email=user_email,
+                    user_message=question,
+                    assistant_message=result["answer"],
+                    user_metadata={},
+                    assistant_metadata=assistant_metadata,
+                )
+
+                # Generate title for new threads
+                if (
+                    persist_result.get("message_count_before", 0) == 0
+                    and conversations.is_default_title(persist_result.get("previous_title"))
+                ):
+                    generated_title = _generate_thread_title(question)
+                    if generated_title:
+                        updated = conversations.update_thread_title(session_id, user_email, generated_title)
+                        if updated:
+                            result["thread_title"] = updated.get("title")
+            except Exception as exc:
+                print(f"[session] Failed to persist exchange: {exc}")
+
+        return result
+
+    # Legacy implementation below
     total_start = perf_counter()
     time_context = get_time_context()
     state = AgentState()
@@ -377,6 +443,9 @@ async def answer_question_stream(
     """
     Stream LLM responses with tool calling support.
 
+    When USE_BOUNDED_AGENT=true, delegates to the new AgentController.
+    Otherwise, uses the legacy implementation.
+
     Yields events:
     - {"type": "token", "content": "..."} - Text chunks
     - {"type": "clear_content"} - Clear previous content (tool call starting)
@@ -393,6 +462,71 @@ async def answer_question_stream(
         user_email: User's email for context
         event_capture_enabled: Whether to extract event proposals
     """
+    # Use bounded agent if enabled
+    if USE_BOUNDED_AGENT:
+        from agent.controller import get_controller
+
+        # Load conversation history
+        conversation_history: List[Dict[str, str]] = []
+        if session_id and user_email:
+            try:
+                conversation_history = conversations.get_conversation_history(session_id, user_email)
+            except Exception as exc:
+                print(f"[session] Failed to load history: {exc}")
+
+        controller = get_controller()
+        final_bundle = None
+
+        async for event in controller.run_stream(
+            question=question,
+            user_id=user_id,
+            session_id=session_id,
+            user_email=user_email,
+            conversation_history=conversation_history,
+            search_limit=search_limit,
+            event_capture_enabled=event_capture_enabled,
+        ):
+            if event.get("type") == "done":
+                final_bundle = event.get("bundle", {})
+
+            yield event
+
+        # Persist conversation after streaming completes
+        if final_bundle and session_id and user_email and final_bundle.get("answer"):
+            try:
+                assistant_metadata = {}
+                if final_bundle.get("event_proposal"):
+                    assistant_metadata["event_proposal"] = final_bundle["event_proposal"]
+
+                persist_result = conversations.record_exchange(
+                    thread_id=session_id,
+                    user_email=user_email,
+                    user_message=question,
+                    assistant_message=final_bundle["answer"],
+                    user_metadata={},
+                    assistant_metadata=assistant_metadata,
+                )
+
+                # Generate title for new threads
+                if (
+                    persist_result.get("message_count_before", 0) == 0
+                    and conversations.is_default_title(persist_result.get("previous_title"))
+                ):
+                    generated_title = _generate_thread_title(question)
+                    if generated_title:
+                        updated = conversations.update_thread_title(session_id, user_email, generated_title)
+                        if updated:
+                            # Yield title update event
+                            yield {
+                                "type": "title_update",
+                                "title": updated.get("title"),
+                            }
+            except Exception as exc:
+                print(f"[session] Failed to persist exchange: {exc}")
+
+        return
+
+    # Legacy implementation below
     total_start = perf_counter()
     time_context = get_time_context()
     state = AgentState()

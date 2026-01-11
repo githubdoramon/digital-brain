@@ -32,11 +32,6 @@ def _set_search_path(conn: psycopg.Connection) -> None:
                 sql.Identifier(POSTGRES_SCHEMA)
             )
         )
-        # Verify the search path was set correctly
-        cur.execute("SHOW search_path")
-        result = cur.fetchone()
-        print(f"[db] search_path set to: {result}")
-
 
 @contextmanager
 def get_conn() -> Iterator[psycopg.Connection]:
