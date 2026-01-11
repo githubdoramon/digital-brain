@@ -8,8 +8,8 @@ Provides:
 """
 
 from .post_execution import (
-    GoalCoverage,
     GoalCompletionValidator,
+    GoalCoverage,
     PostExecutionResult,
     PostExecutionValidator,
 )
