@@ -5,21 +5,66 @@ Handles:
 - home_assistant: Control smart home devices via MCP protocol
 """
 
+import os
+import sys
 from time import perf_counter
 from typing import TYPE_CHECKING, Any, Optional
+
+# Add parent directory to path for imports
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+
+from observability import trace
 
 if TYPE_CHECKING:
     from agent.state import AgentState
 
 
-def _log_timing(label: str, start_time: float, **metadata: Any) -> None:
-    """Log timing information for performance monitoring."""
-    elapsed_ms = (perf_counter() - start_time) * 1000
-    parts = [f"[timing] {label}: {elapsed_ms:.1f}ms"]
-    if metadata:
-        meta_str = ", ".join(f"{k}={v}" for k, v in metadata.items())
-        parts.append(f"({meta_str})")
-    print(" ".join(parts))
+def _detect_common_mistakes(
+    tool_name: str,
+    tool_args: dict[str, Any],
+    state: Optional["AgentState"],
+) -> Optional[str]:
+    """
+    Detect common mistakes in Home Assistant tool usage.
+
+    Returns a hint string if a likely mistake is detected, None otherwise.
+    """
+    # Check if using entity_id instead of name
+    if "entity_id" in tool_args and "name" not in tool_args:
+        return (
+            "You used 'entity_id' but Home Assistant MCP tools expect 'name' "
+            "with the device's friendly name (e.g., 'office lights', not 'light.office'). "
+            "Use 'name' parameter instead."
+        )
+
+    # Check if using HassLightSet when user goal suggests turn off
+    if state and tool_name == "HassLightSet":
+        goal_lower = state.goal.lower()
+        turn_off_keywords = ["turn off", "switch off", "shut off", "lights off", "off the"]
+        if any(kw in goal_lower for kw in turn_off_keywords):
+            # Check if brightness is 0 (acceptable) or not set / high
+            brightness = tool_args.get("brightness")
+            if brightness is None or brightness > 0:
+                return (
+                    "The user wants to TURN OFF the device, but you used HassLightSet. "
+                    "To turn off a device, use 'HassTurnOff' tool with arguments={'name': 'device name'}. "
+                    "HassLightSet is for adjusting brightness/color, not for turning off."
+                )
+
+    # Check if using HassLightSet when user goal suggests turn on
+    if state and tool_name == "HassLightSet":
+        goal_lower = state.goal.lower()
+        turn_on_keywords = ["turn on", "switch on", "lights on", "on the light"]
+        if any(kw in goal_lower for kw in turn_on_keywords):
+            # If only brightness is set (no name), it's probably wrong usage
+            if "brightness" in tool_args and len(tool_args) <= 2:
+                return (
+                    "The user wants to TURN ON the device. Use 'HassTurnOn' with "
+                    "arguments={'name': 'device name'}. HassLightSet is for adjusting "
+                    "properties after a light is already on."
+                )
+
+    return None
 
 
 def handle_home_assistant(
@@ -45,25 +90,45 @@ def handle_home_assistant(
     step_start = perf_counter()
 
     if not is_ha_configured():
-        _log_timing("tool.home_assistant", step_start, error="not_configured")
+        trace.trace_tool_error("home_assistant", "Home Assistant MCP client not configured")
         return {
             "error": "Home Assistant MCP client not configured. Set HA_URL and HA_TOKEN environment variables.",
             "hint": "HA_URL should be your Home Assistant URL (e.g., http://homeassistant.local:8123)",
         }
 
     if action == "list_tools":
-        print("[tool.homeassistant] home_assistant(action=list_tools)")
         tools = list_ha_tools()
+        duration_ms = (perf_counter() - step_start) * 1000
+        trace.trace_ha_list_tools(len(tools), duration_ms)
 
         # Update state if provided
         if state is not None:
             state.add_fact(f"Listed {len(tools)} Home Assistant tools")
-
-        _log_timing("tool.home_assistant.list_tools", step_start, tool_count=len(tools))
         return {
             "tools": tools,
             "count": len(tools),
-            "hint": "Use action='call_tool' with tool_name and arguments to execute a tool.",
+            "action_mapping": {
+                "turn_off": "HassTurnOff - use 'name' parameter with device friendly name (e.g., 'office lights')",
+                "turn_on": "HassTurnOn - use 'name' parameter with device friendly name",
+                "set_brightness": "HassLightSet - use 'name' and 'brightness' (0-100) parameters",
+                "set_color": "HassLightSet - use 'name' and 'rgb_color' or 'color_temp' parameters",
+                "set_temperature": "HassClimateSetTemperature - use 'name' and 'temperature' parameters",
+            },
+            "usage_guide": (
+                "CRITICAL ACTION MAPPING - Read carefully:\n"
+                "- To TURN OFF a device: Use 'HassTurnOff' with arguments={'name': 'device name'}\n"
+                "- To TURN ON a device: Use 'HassTurnOn' with arguments={'name': 'device name'}\n"
+                "- To SET BRIGHTNESS: Use 'HassLightSet' with arguments={'name': 'device name', 'brightness': 0-100}\n"
+                "- To SET COLOR: Use 'HassLightSet' with arguments={'name': 'device name', 'rgb_color': [r,g,b]}\n"
+                "\n"
+                "COMMON MISTAKES TO AVOID:\n"
+                "- Do NOT use HassLightSet to turn off - use HassTurnOff instead\n"
+                "- Do NOT use entity_id - use 'name' with the friendly name (e.g., 'office lights', 'bedroom lamp')\n"
+                "- Do NOT guess entity IDs like 'light.living_room' - use friendly names\n"
+                "\n"
+                "The 'name' parameter accepts friendly device names as shown in Home Assistant UI."
+            ),
+            "hint": "Use action='call_tool' with tool_name set to one of the above tools and arguments matching its inputSchema.",
         }
 
     if action == "call_tool":
@@ -72,12 +137,21 @@ def handle_home_assistant(
             return {"error": "call_tool action requires a tool_name string"}
 
         tool_args = args.get("arguments") or {}
-        print(
-            f"[tool.homeassistant] home_assistant(action=call_tool, "
-            f"tool={tool_name}, args={tool_args})"
-        )
+
+        # Detect common mistakes before calling
+        mistake_hint = _detect_common_mistakes(tool_name, tool_args, state)
+        if mistake_hint:
+            trace.trace_ha_mistake_detected("Incorrect tool usage", mistake_hint)
+            return {
+                "success": False,
+                "error": "Likely incorrect tool usage detected",
+                "hint": mistake_hint,
+                "suggestion": "Please review the action_mapping from list_tools and try again with the correct tool.",
+            }
 
         result = call_ha_tool(tool_name, tool_args)
+        duration_ms = (perf_counter() - step_start) * 1000
+        trace.trace_ha_call_tool(tool_name, tool_args, result.get("success", False), duration_ms)
 
         # Update state if provided
         if state is not None:
@@ -85,13 +159,6 @@ def handle_home_assistant(
                 state.add_action(f"Called Home Assistant tool: {tool_name}")
             else:
                 state.add_fact(f"Home Assistant call failed: {result.get('error')}")
-
-        _log_timing(
-            "tool.home_assistant.call_tool",
-            step_start,
-            tool=tool_name,
-            success=result.get("success"),
-        )
 
         # If the tool call failed, provide helpful guidance
         if not result.get("success"):

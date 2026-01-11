@@ -14,13 +14,18 @@ This is the key component that decides:
 
 import json
 import os
+import sys
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Optional
 
 import requests
 
+# Add parent directory to path for imports
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+
 from agent.router import TOOL_GROUPS
+from observability import trace
 
 
 class GoalCoverage(str, Enum):
@@ -245,7 +250,7 @@ class PostExecutionValidator:
             response = self._call_llm(prompt)
             return self._parse_llm_response(response)
         except Exception as e:
-            print(f"[post_validator] LLM check failed: {e}")
+            trace.trace_tool_error("post_validator", f"LLM check failed: {e}")
             # Default to needs_more_tools on failure
             return PostExecutionResult(
                 coverage=GoalCoverage.NEEDS_MORE_TOOLS,
@@ -359,7 +364,7 @@ Rules:
             )
 
         except (json.JSONDecodeError, KeyError) as e:
-            print(f"[post_validator] Failed to parse LLM response: {e}")
+            trace.trace_tool_error("post_validator", f"Failed to parse LLM response: {e}")
             return PostExecutionResult(
                 coverage=GoalCoverage.NEEDS_MORE_TOOLS,
                 reason="Validation response parsing failed",

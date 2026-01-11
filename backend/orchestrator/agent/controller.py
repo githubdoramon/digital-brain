@@ -31,6 +31,9 @@ from .state import AgentState, ToolCallRecord
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+# Import tracing
+from observability import trace
+
 
 class AgentController:
     """
@@ -140,6 +143,9 @@ class AgentController:
         # Initialize state
         state = AgentState(goal=question)
 
+        # Trace run start
+        trace.trace_run_start(question, run_id)
+
         try:
             # Phase 1: Intent routing
             if self.config.enable_intent_routing:
@@ -176,6 +182,14 @@ class AgentController:
             # Phase 2: Agent loop
             while True:
                 # Check limits
+                trace.trace_limit_check(
+                    state.step_count,
+                    self.config.max_steps,
+                    state.tool_calls_count,
+                    self.config.max_tool_calls,
+                    state.repair_count,
+                    self.config.max_repairs,
+                )
                 should_stop, violation = self.limit_checker.should_stop(state)
                 if should_stop:
                     return self._handle_limit_violation(
@@ -183,12 +197,17 @@ class AgentController:
                     )
 
                 state.step_count += 1
-                perf_counter()
 
-                # Log step start
+                # Trace step start
+                trace.trace_step_start(
+                    state.step_count,
+                    state.tool_calls_count,
+                    len(state.known_facts),
+                )
                 self.logger.start_step(run_id, state.step_count)
 
                 # Call LLM
+                trace.trace_llm_request(len(tools))
                 llm_start = perf_counter()
                 response = self._call_llm(messages, tools)
                 llm_duration = (perf_counter() - llm_start) * 1000
@@ -197,7 +216,13 @@ class AgentController:
                 content = (message.get("content") or "").strip()
                 tool_calls = message.get("tool_calls") or []
 
-                # Log LLM call
+                # Trace LLM response
+                trace.trace_llm_response(
+                    llm_duration,
+                    has_tool_calls=bool(tool_calls),
+                    tool_count=len(tool_calls),
+                    content_preview=content if not tool_calls else None,
+                )
                 self.logger.log_llm_call(
                     run_id,
                     state.step_count,
@@ -220,6 +245,7 @@ class AgentController:
 
                 # Handle empty content
                 if not content:
+                    trace.trace_empty_response(state.step_count)
                     if state.step_count < 3:
                         messages.append({
                             "role": "user",
@@ -231,6 +257,8 @@ class AgentController:
 
                 # Check if this is a continuation intent
                 if self._looks_like_continuation(content) and state.step_count < self.config.max_steps - 1:
+                    trace.trace_continuation_detected(content)
+                    self.logger.log_continuation_detected(content)
                     messages.append({
                         "role": "user",
                         "content": "You expressed intent to perform an action but didn't call any tool. Please actually invoke the tool now.",
@@ -239,6 +267,8 @@ class AgentController:
 
                 # Check for malformed tool call (JSON in content instead of proper tool call)
                 if self._looks_like_malformed_tool_call(content) and state.step_count < self.config.max_steps - 1:
+                    trace.trace_malformed_output(content, "JSON tool call in text output")
+                    self.logger.log_malformed_output(content, "JSON tool call in text output")
                     messages.append({
                         "role": "user",
                         "content": "You output JSON instead of making a proper tool call. Do NOT output raw JSON. "
@@ -260,7 +290,7 @@ class AgentController:
                 )
 
         except Exception as e:
-            print(f"[controller] Error in agent loop: {e}")
+            trace.trace_run_error(run_id, str(e))
             self.logger.complete_run(run_id, success=False, error=str(e))
             raise
 
@@ -283,6 +313,9 @@ class AgentController:
         run_id = self.logger.start_run(question, user_id, session_id)
 
         state = AgentState(goal=question)
+
+        # Trace run start
+        trace.trace_run_start(question, run_id)
 
         try:
             # Intent routing
@@ -316,8 +349,22 @@ class AgentController:
             accumulated_content = ""
 
             while True:
+                # Check limits
+                trace.trace_limit_check(
+                    state.step_count,
+                    self.config.max_steps,
+                    state.tool_calls_count,
+                    self.config.max_tool_calls,
+                    state.repair_count,
+                    self.config.max_repairs,
+                )
                 should_stop, violation = self.limit_checker.should_stop(state)
                 if should_stop:
+                    trace.trace_limit_violation(
+                        violation.limit_type.value,
+                        violation.message,
+                        {"steps": state.step_count, "tool_calls": state.tool_calls_count},
+                    )
                     yield {
                         "type": "status",
                         "message": f"Limit reached: {violation.message}",
@@ -325,6 +372,11 @@ class AgentController:
                     break
 
                 state.step_count += 1
+                trace.trace_step_start(
+                    state.step_count,
+                    state.tool_calls_count,
+                    len(state.known_facts),
+                )
                 yield {"type": "status", "message": f"Thinking (step {state.step_count})..."}
 
                 tool_calls = []
@@ -394,6 +446,8 @@ class AgentController:
                     continue
 
                 if self._looks_like_continuation(current_content) and state.step_count < self.config.max_steps - 1:
+                    trace.trace_continuation_detected(current_content)
+                    self.logger.log_continuation_detected(current_content)
                     if streamed_any:
                         yield {"type": "clear_content"}
                     messages.append({
@@ -404,6 +458,8 @@ class AgentController:
 
                 # Check for malformed tool call (JSON in content instead of proper tool call)
                 if self._looks_like_malformed_tool_call(current_content) and state.step_count < self.config.max_steps - 1:
+                    trace.trace_malformed_output(current_content, "JSON tool call in text output")
+                    self.logger.log_malformed_output(current_content, "JSON tool call in text output")
                     if streamed_any:
                         yield {"type": "clear_content"}
                     messages.append({
@@ -431,7 +487,7 @@ class AgentController:
             yield {"type": "done", "bundle": bundle}
 
         except Exception as e:
-            print(f"[controller] Stream error: {e}")
+            trace.trace_run_error(run_id, str(e))
             self.logger.complete_run(run_id, success=False, error=str(e))
             yield {"type": "error", "message": str(e)}
 
@@ -716,13 +772,19 @@ class AgentController:
         try:
             args = json.loads(raw_args) if isinstance(raw_args, str) else raw_args
         except json.JSONDecodeError:
+            trace.trace_tool_error(tool_name, f"Invalid JSON arguments: {raw_args}")
             return {"error": f"Invalid JSON arguments: {raw_args}"}
+
+        # Trace tool call start
+        trace.trace_tool_call_start(tool_name, args)
 
         # Pre-execution validation
         if self.config.enable_validation:
+            trace.trace_pre_validation_start(tool_name)
             validation = self.pre_validator.validate(tool_name, args)
             if not validation.valid:
                 state.repair_count += 1
+                trace.trace_pre_validation_fail(tool_name, validation.errors, state.repair_count)
                 self.logger.log_tool_call(
                     run_id,
                     state.step_count,
@@ -733,11 +795,31 @@ class AgentController:
                     repair_attempt=state.repair_count,
                 )
                 return validation.to_feedback()
+            trace.trace_pre_validation_pass(tool_name)
 
         # Execute tool
         step_start = perf_counter()
         result = self._execute_handler(tool_name, args, state, question, search_limit)
         duration_ms = (perf_counter() - step_start) * 1000
+
+        # Determine result summary for tracing
+        success = "error" not in result and result.get("success") is not False
+        if result.get("error"):
+            result_summary = f"Error: {result.get('error')}"
+        elif "count" in result:
+            result_summary = f"{result['count']} items"
+        elif "tools" in result:
+            result_summary = f"Listed {len(result['tools'])} tools"
+        elif "rows" in result:
+            result_summary = f"{len(result['rows'])} rows"
+        elif "results" in result:
+            result_summary = f"{len(result['results'])} results"
+        else:
+            result_summary = "OK" if success else "Failed"
+
+        trace.trace_tool_execution_result(tool_name, duration_ms, success, result_summary)
+        if not success:
+            trace.trace_tool_error(tool_name, result.get("error", "Unknown error"))
 
         # Record tool call
         record = ToolCallRecord(
@@ -745,7 +827,7 @@ class AgentController:
             arguments=args,
             result=result,
             duration_ms=duration_ms,
-            success="error" not in result,
+            success=success,
             error=result.get("error"),
         )
         state.record_tool_call(record)
@@ -764,6 +846,7 @@ class AgentController:
         if self.config.enable_validation:
             from tools.validators.post_execution import GoalCoverage
 
+            trace.trace_post_validation_start(tool_name)
             post_result = self.post_validator.validate(
                 tool_name,
                 args,
@@ -772,16 +855,40 @@ class AgentController:
                 state.known_facts,
             )
 
+            # Trace post-validation result
+            trace.trace_post_validation_result(
+                tool_name,
+                coverage=post_result.coverage.value if post_result.coverage else "unknown",
+                passed=post_result.coverage != GoalCoverage.FAILED,
+                reason=post_result.reason,
+                suggested_tools=post_result.suggested_next_tools,
+            )
+            self.logger.log_validation_result(
+                validation_type="Post-execution",
+                passed=post_result.coverage != GoalCoverage.FAILED,
+                coverage=post_result.coverage.value if post_result.coverage else None,
+                reason=post_result.reason,
+                suggested_tools=post_result.suggested_next_tools,
+            )
+
             # Extract facts from result
             for fact in post_result.extracted_facts:
                 state.add_fact(fact)
+                trace.trace_fact_extracted(fact)
+                self.logger.log_state_update("Fact added", fact)
 
             # If tool failed, enhance the result with guidance
             if post_result.coverage == GoalCoverage.FAILED:
+                guidance = self._get_failure_guidance(tool_name, result, post_result)
+                self.logger.log_decision(
+                    decision="Tool call failed - injecting recovery guidance",
+                    reason=post_result.reason,
+                    details={"guidance": guidance[:100] + "..." if len(guidance) > 100 else guidance},
+                )
                 result["_validation"] = {
                     "status": "failed",
                     "reason": post_result.reason,
-                    "guidance": self._get_failure_guidance(tool_name, result, post_result),
+                    "guidance": guidance,
                 }
                 # Add suggested alternatives if available
                 if post_result.suggested_next_tools:
@@ -857,6 +964,14 @@ class AgentController:
         """Check if content looks like a malformed tool call (JSON output instead of proper tool call)."""
         stripped = content.strip()
 
+        # Remove common LLM artifacts that prefix JSON
+        for prefix in ["<|python_tag|>", "```json", "```", "<tool_call>", "<function_call>"]:
+            if stripped.startswith(prefix):
+                stripped = stripped[len(prefix):].strip()
+        for suffix in ["```", "</tool_call>", "</function_call>"]:
+            if stripped.endswith(suffix):
+                stripped = stripped[:-len(suffix)].strip()
+
         # Check for JSON-like tool call patterns
         if stripped.startswith("{") and stripped.endswith("}"):
             # Quick check for common tool call indicators
@@ -867,10 +982,12 @@ class AgentController:
                 '"parameters":',
                 '"arguments":',
                 '"tool_call"',
+                '"action":',
                 "HassLightSet",
                 "HassClimateSet",
                 "HassTurnOn",
                 "HassTurnOff",
+                "home_assistant",
             ]
             return any(indicator in stripped for indicator in tool_indicators)
 
@@ -886,6 +1003,30 @@ class AgentController:
     ) -> dict[str, Any]:
         """Handle when a limit is violated."""
         message = self.limit_checker.format_stop_message(state, violation)
+        duration_ms = (perf_counter() - total_start) * 1000
+
+        # Trace limit violation
+        trace.trace_limit_violation(
+            violation.limit_type.value,
+            violation.message,
+            {
+                "steps_taken": state.step_count,
+                "tool_calls_made": state.tool_calls_count,
+                "repairs_attempted": state.repair_count,
+            },
+        )
+
+        # Log the limit violation decision
+        self.logger.log_decision(
+            decision="Stopping due to limit violation",
+            reason=violation.message,
+            details={
+                "limit_type": violation.limit_type.value,
+                "steps_taken": state.step_count,
+                "tool_calls_made": state.tool_calls_count,
+                "repairs_attempted": state.repair_count,
+            },
+        )
 
         self.logger.complete_run(
             run_id,
@@ -894,8 +1035,13 @@ class AgentController:
             limit_hit=violation.limit_type.value,
         )
 
-        duration_ms = (perf_counter() - total_start) * 1000
-        print(f"[controller] Limit hit: {violation.limit_type.value} after {duration_ms:.1f}ms")
+        trace.trace_run_complete(
+            run_id,
+            success=False,
+            duration_ms=duration_ms,
+            steps=state.step_count,
+            tool_calls=state.tool_calls_count,
+        )
 
         return {
             "question": state.goal,
@@ -929,9 +1075,15 @@ class AgentController:
         self.logger.complete_run(run_id, success=True, final_answer=answer)
 
         duration_ms = (perf_counter() - total_start) * 1000
-        print(
-            f"[controller] Completed in {duration_ms:.1f}ms, "
-            f"steps={state.step_count}, tool_calls={state.tool_calls_count}"
+
+        # Trace run completion
+        trace.trace_run_complete(
+            run_id,
+            success=True,
+            duration_ms=duration_ms,
+            steps=state.step_count,
+            tool_calls=state.tool_calls_count,
+            answer_preview=answer[:200] if answer else None,
         )
 
         bundle = {

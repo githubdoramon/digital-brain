@@ -3,23 +3,15 @@ System-related tool handlers.
 
 Handles:
 - bash: Execute shell commands
+
+Note: Tracing/logging is handled at the controller level via the centralized
+trace module. Handlers focus purely on execution logic.
 """
 
-from time import perf_counter
 from typing import TYPE_CHECKING, Any, Optional
 
 if TYPE_CHECKING:
     from agent.state import AgentState
-
-
-def _log_timing(label: str, start_time: float, **metadata: Any) -> None:
-    """Log timing information for performance monitoring."""
-    elapsed_ms = (perf_counter() - start_time) * 1000
-    parts = [f"[timing] {label}: {elapsed_ms:.1f}ms"]
-    if metadata:
-        meta_str = ", ".join(f"{k}={v}" for k, v in metadata.items())
-        parts.append(f"({meta_str})")
-    print(" ".join(parts))
 
 
 def handle_bash(
@@ -45,9 +37,6 @@ def handle_bash(
     except (TypeError, ValueError):
         timeout = None
 
-    print(f"[tool.system] bash(command={command!r}, timeout={timeout})")
-    step_start = perf_counter()
-
     result = bash_tools.execute_bash(command, timeout=timeout)
 
     # Update state if provided
@@ -58,11 +47,4 @@ def handle_bash(
         else:
             state.add_fact(f"Command failed with code {returncode}")
 
-    _log_timing(
-        "tool.bash",
-        step_start,
-        returncode=result.get("returncode"),
-        stdout_len=len(result.get("stdout", "")),
-        stderr_len=len(result.get("stderr", "")),
-    )
     return result

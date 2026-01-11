@@ -140,6 +140,7 @@ export async function ask(
     thread_id: options.threadId,
     limit: options.limit ?? 5,
     event_capture_enabled: options.eventCaptureEnabled ?? false,
+    timeout: 60000,
   });
 }
 

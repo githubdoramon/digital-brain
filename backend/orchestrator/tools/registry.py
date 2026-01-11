@@ -424,9 +424,14 @@ def _register_all_tools(registry: ToolRegistry) -> None:
             name="home_assistant",
             description=(
                 "Control Home Assistant smart home/office devices via MCP protocol. "
-                "CRITICAL: You MUST call with action='list_tools' FIRST to discover available tools - "
-                "NEVER guess tool names or entity IDs. Tool names and entity IDs vary per installation. "
-                "Only after listing tools can you use action='call_tool' with a valid tool_name from the list."
+                "TWO-STEP PROCESS REQUIRED:\n"
+                "1. FIRST call with action='list_tools' to discover available HA tools\n"
+                "2. THEN use action='call_tool' with the correct tool from the list\n\n"
+                "TOOL SELECTION GUIDE (after listing):\n"
+                "- To TURN OFF: Use 'HassTurnOff' with arguments={'name': 'device name'}\n"
+                "- To TURN ON: Use 'HassTurnOn' with arguments={'name': 'device name'}\n"
+                "- To SET BRIGHTNESS: Use 'HassLightSet' with name and brightness\n"
+                "NEVER guess tool names. NEVER use entity_id - use friendly 'name' instead."
             ),
             parameters=[
                 ToolParameter(
@@ -439,13 +444,13 @@ def _register_all_tools(registry: ToolRegistry) -> None:
                 ToolParameter(
                     name="tool_name",
                     type="string",
-                    description="Name of the MCP tool to call - MUST be a tool name returned by 'list_tools'. Required when action is 'call_tool'.",
+                    description="Name of the MCP tool to call (e.g., 'HassTurnOff', 'HassTurnOn', 'HassLightSet'). MUST be from the list_tools response.",
                     required=False,
                 ),
                 ToolParameter(
                     name="arguments",
                     type="object",
-                    description="Arguments to pass to the MCP tool (when action is 'call_tool').",
+                    description="Arguments for the MCP tool. Most tools use 'name' (friendly device name like 'office lights') - NOT entity_id.",
                     required=False,
                 ),
             ],

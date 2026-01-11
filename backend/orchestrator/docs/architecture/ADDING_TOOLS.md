@@ -293,3 +293,76 @@ See `tools/handlers/memory.py` for `search_memories` as a reference implementati
 - Async handler with error handling
 - Proper result format with counts
 - Registration with group assignment
+
+## Advanced Pattern: Multi-Step Tools (Home Assistant Example)
+
+Some tools require a discovery step before the main action. The `home_assistant` tool demonstrates this pattern:
+
+### 1. Two-Step Process
+
+```python
+# First call: discover available actions
+home_assistant(action="list_tools")
+# Returns: {"tools": [...], "action_mapping": {...}, "usage_guide": "..."}
+
+# Second call: perform the action
+home_assistant(action="call_tool", tool_name="HassTurnOff", arguments={"name": "office lights"})
+```
+
+### 2. Include Action Mapping in Discovery Response
+
+When listing available sub-tools, include explicit guidance on which tool to use for common actions:
+
+```python
+return {
+    "tools": tools,
+    "count": len(tools),
+    "action_mapping": {
+        "turn_off": "HassTurnOff - use 'name' parameter",
+        "turn_on": "HassTurnOn - use 'name' parameter",
+        "set_brightness": "HassLightSet - use 'name' and 'brightness'",
+    },
+    "usage_guide": "CRITICAL: To TURN OFF, use HassTurnOff, NOT HassLightSet",
+}
+```
+
+### 3. Detect Common Mistakes Before Execution
+
+Add pre-execution checks that catch likely misuse based on the user's goal:
+
+```python
+def _detect_common_mistakes(tool_name: str, tool_args: dict, state: AgentState) -> Optional[str]:
+    """Return hint if a common mistake is detected."""
+    if state and tool_name == "HassLightSet":
+        goal_lower = state.goal.lower()
+        if "turn off" in goal_lower:
+            return "User wants to TURN OFF but you used HassLightSet. Use HassTurnOff instead."
+    return None
+```
+
+### 4. Update Tool Description with Clear Guidance
+
+The tool description in the registry should include:
+
+- The two-step process requirement
+- A quick reference for common actions
+- Common mistakes to avoid
+
+```python
+ToolContract(
+    name="home_assistant",
+    description=(
+        "Control Home Assistant devices. "
+        "TWO-STEP PROCESS REQUIRED:\n"
+        "1. FIRST call action='list_tools'\n"
+        "2. THEN call action='call_tool' with correct tool\n\n"
+        "QUICK GUIDE:\n"
+        "- TURN OFF: Use 'HassTurnOff' with name\n"
+        "- TURN ON: Use 'HassTurnOn' with name\n"
+        "NEVER use entity_id - use friendly 'name' instead."
+    ),
+    ...
+)
+```
+
+This pattern helps LLMs avoid hallucinating tool names and guides them to the correct action.

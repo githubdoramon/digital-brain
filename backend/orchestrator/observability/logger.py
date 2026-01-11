@@ -154,6 +154,7 @@ class AgentLogger:
         self,
         max_logs: int = 1000,
         enable_state_snapshots: bool = False,
+        verbose: bool = True,
     ):
         """
         Initialize the logger.
@@ -161,11 +162,26 @@ class AgentLogger:
         Args:
             max_logs: Maximum number of logs to keep in memory
             enable_state_snapshots: Whether to capture state snapshots at each step
+            verbose: Whether to print detailed logs to console
         """
         self._logs: dict[str, AgentRunLog] = {}
         self._lock = threading.Lock()
         self._max_logs = max_logs
         self._enable_state_snapshots = enable_state_snapshots
+        self._verbose = verbose
+
+    def _log(self, message: str, level: str = "INFO") -> None:
+        """Print a log message if verbose mode is enabled."""
+        if self._verbose:
+            prefix = {
+                "INFO": "[agent]",
+                "DECISION": "[agent.decision]",
+                "TOOL": "[agent.tool]",
+                "VALIDATION": "[agent.validation]",
+                "STATE": "[agent.state]",
+                "ERROR": "[agent.ERROR]",
+            }.get(level, "[agent]")
+            print(f"{prefix} {message}")
 
     def start_run(
         self,
@@ -221,6 +237,11 @@ class AgentLogger:
                 log.allowed_tool_groups = allowed_tool_groups
                 log.skill_hints = skill_hints
 
+        self._log(f"Intent classified: {intent}", "DECISION")
+        self._log(f"  Allowed tool groups: {allowed_tool_groups}", "DECISION")
+        if skill_hints:
+            self._log(f"  Skill hints: {skill_hints}", "DECISION")
+
     def start_step(
         self,
         run_id: str,
@@ -248,6 +269,8 @@ class AgentLogger:
                 self._logs[run_id].steps.append(step)
                 self._logs[run_id].total_steps = step_number
 
+        self._log(f"--- Step {step_number} ---", "INFO")
+
         return step
 
     def log_llm_call(
@@ -274,6 +297,13 @@ class AgentLogger:
                     step.model_content = content
                     step.had_tool_calls = had_tool_calls
                     break
+
+        self._log(f"LLM response ({duration_ms:.0f}ms)", "INFO")
+        if had_tool_calls:
+            self._log("  LLM requested tool calls", "DECISION")
+        elif content:
+            preview = content[:100].replace("\n", " ")
+            self._log(f"  LLM text response: {preview}...", "INFO")
 
     def log_tool_call(
         self,
@@ -317,6 +347,101 @@ class AgentLogger:
                     step.tool_calls.append(tool_log)
                     step.had_tool_calls = True
                     break
+
+        # Log tool call details
+        args_str = json.dumps(arguments, default=str)[:100]
+        self._log(f"Tool: {tool_name}({args_str})", "TOOL")
+
+        if not pre_validation_passed:
+            self._log(f"  PRE-VALIDATION FAILED: {validation_errors}", "VALIDATION")
+            if repair_attempt > 0:
+                self._log(f"  Repair attempt #{repair_attempt}", "VALIDATION")
+        elif duration_ms > 0:
+            self._log(f"  Executed in {duration_ms:.0f}ms", "TOOL")
+
+            # Log result summary
+            if result:
+                if result.get("error"):
+                    self._log(f"  FAILED: {result.get('error')}", "ERROR")
+                elif result.get("success") is False:
+                    self._log(f"  FAILED: {result.get('error', 'success=False')}", "ERROR")
+                else:
+                    # Success - summarize result
+                    if "count" in result:
+                        self._log(f"  Result: {result['count']} items returned", "TOOL")
+                    elif "tools" in result:
+                        self._log(f"  Result: Listed {len(result['tools'])} tools", "TOOL")
+                    elif "rows" in result:
+                        self._log(f"  Result: {len(result['rows'])} rows", "TOOL")
+                    elif "results" in result:
+                        self._log(f"  Result: {len(result['results'])} results", "TOOL")
+                    else:
+                        self._log("  Result: OK", "TOOL")
+
+        # Log post-validation
+        if goal_coverage:
+            self._log(f"  Goal coverage: {goal_coverage}", "VALIDATION")
+        if extracted_facts:
+            for fact in extracted_facts[:3]:  # Limit to first 3
+                self._log(f"  + Fact: {fact}", "STATE")
+
+    def log_decision(
+        self,
+        decision: str,
+        reason: str,
+        details: Optional[dict[str, Any]] = None,
+    ) -> None:
+        """Log an agent decision point."""
+        self._log(f"DECISION: {decision}", "DECISION")
+        self._log(f"  Reason: {reason}", "DECISION")
+        if details:
+            for key, value in details.items():
+                self._log(f"  {key}: {value}", "DECISION")
+
+    def log_validation_result(
+        self,
+        validation_type: str,
+        passed: bool,
+        coverage: Optional[str] = None,
+        reason: Optional[str] = None,
+        suggested_tools: Optional[list[str]] = None,
+    ) -> None:
+        """Log a validation result."""
+        status = "PASSED" if passed else "FAILED"
+        self._log(f"{validation_type} validation: {status}", "VALIDATION")
+        if coverage:
+            self._log(f"  Coverage: {coverage}", "VALIDATION")
+        if reason:
+            self._log(f"  Reason: {reason}", "VALIDATION")
+        if suggested_tools:
+            self._log(f"  Suggested tools: {suggested_tools}", "VALIDATION")
+
+    def log_state_update(
+        self,
+        update_type: str,
+        value: str,
+    ) -> None:
+        """Log a state update."""
+        self._log(f"{update_type}: {value}", "STATE")
+
+    def log_malformed_output(
+        self,
+        content_preview: str,
+        detected_pattern: str,
+    ) -> None:
+        """Log detection of malformed LLM output."""
+        self._log(f"MALFORMED OUTPUT DETECTED: {detected_pattern}", "ERROR")
+        self._log(f"  Content preview: {content_preview[:100]}...", "ERROR")
+        self._log("  Requesting LLM to retry with proper tool call format", "DECISION")
+
+    def log_continuation_detected(
+        self,
+        content_preview: str,
+    ) -> None:
+        """Log detection of continuation intent without tool call."""
+        self._log("CONTINUATION INTENT WITHOUT TOOL CALL", "DECISION")
+        self._log(f"  Content: {content_preview[:80]}...", "DECISION")
+        self._log("  Prompting LLM to actually invoke the tool", "DECISION")
 
     def complete_run(
         self,

@@ -12,11 +12,18 @@ It can use a smaller/faster model for efficiency.
 
 import json
 import os
+import sys
 from dataclasses import dataclass, field
 from enum import Enum
+from time import perf_counter
 from typing import Any, Optional
 
 import requests
+
+# Add parent directory to path for imports
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from observability import trace
 
 
 class IntentType(str, Enum):
@@ -151,25 +158,45 @@ class IntentRouter:
         Returns:
             IntentClassification with intent, tool groups, and constraints
         """
+        start_time = trace.trace_router_start(question)
+
         # Try rule-based classification first
         rule_result = self._rule_based_classify(question)
         if rule_result and rule_result.confidence >= 0.8:
-            print(f"[router] Rule-based classification: {rule_result.intent.value} ({rule_result.confidence:.2f})")
+            duration_ms = (perf_counter() - start_time) * 1000
+            trace.trace_router_rule_match(
+                rule_result.intent.value,
+                rule_result.confidence,
+                rule_result.reasoning or "",
+                rule_result.allowed_tool_groups,
+                duration_ms,
+            )
             return rule_result
 
         # Use LLM for ambiguous cases
         if self.enable_llm_routing and self.llm_base_url and self.llm_model:
+            trace.trace_router_llm_start()
             try:
+                llm_start = perf_counter()
                 llm_result = self._llm_classify(question, conversation_history)
-                print(f"[router] LLM classification: {llm_result.intent.value} ({llm_result.confidence:.2f})")
+                llm_duration = (perf_counter() - llm_start) * 1000
+                trace.trace_router_llm_result(
+                    llm_result.intent.value,
+                    llm_result.confidence,
+                    llm_result.reasoning,
+                    llm_result.allowed_tool_groups,
+                    llm_duration,
+                )
                 return llm_result
             except Exception as e:
-                print(f"[router] LLM classification failed: {e}")
+                trace.trace_router_llm_error(str(e))
 
         # Fallback to rule-based result or unknown
         if rule_result:
+            trace.trace_router_fallback(rule_result.intent.value, "Using rule-based result")
             return rule_result
 
+        trace.trace_router_fallback(IntentType.UNKNOWN.value, "No classification match")
         return IntentClassification(
             intent=IntentType.UNKNOWN,
             confidence=0.5,
@@ -394,7 +421,7 @@ Respond with JSON only:
             )
 
         except (json.JSONDecodeError, KeyError) as e:
-            print(f"[router] Failed to parse LLM response: {e}")
+            trace.trace_router_llm_error(f"Failed to parse LLM response: {e}. Raw: {response[:200]}...")
             return IntentClassification(
                 intent=IntentType.UNKNOWN,
                 confidence=0.5,

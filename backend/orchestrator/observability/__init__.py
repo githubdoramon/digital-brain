@@ -8,6 +8,7 @@ Provides structured logging and tracing for:
 - Debugging and evaluation
 """
 
+from . import trace
 from .logger import AgentLogger, AgentRunLog, StepLog, ToolCallLog
 
 __all__ = [
@@ -15,4 +16,5 @@ __all__ = [
     "AgentRunLog",
     "StepLog",
     "ToolCallLog",
+    "trace",
 ]

@@ -3,23 +3,15 @@ Skills-related tool handlers.
 
 Handles:
 - run_skill_script: Execute scripts from active skills
+
+Note: Tracing/logging is handled at the controller level via the centralized
+trace module. Handlers focus purely on execution logic.
 """
 
-from time import perf_counter
 from typing import TYPE_CHECKING, Any, Optional
 
 if TYPE_CHECKING:
     from agent.state import AgentState
-
-
-def _log_timing(label: str, start_time: float, **metadata: Any) -> None:
-    """Log timing information for performance monitoring."""
-    elapsed_ms = (perf_counter() - start_time) * 1000
-    parts = [f"[timing] {label}: {elapsed_ms:.1f}ms"]
-    if metadata:
-        meta_str = ", ".join(f"{k}={v}" for k, v in metadata.items())
-        parts.append(f"({meta_str})")
-    print(" ".join(parts))
 
 
 def handle_run_skill_script(
@@ -58,12 +50,6 @@ def handle_run_skill_script(
     if not skill:
         return {"error": f"Skill '{skill_name}' not found in registry"}
 
-    print(
-        f"[tool.skills] run_skill_script(skill={skill_name}, "
-        f"script={script_name}, args={script_args})"
-    )
-    step_start = perf_counter()
-
     runner = skills.get_runner_for_skill(skill.path)
     result = runner.run_script(script_name, script_args)
 
@@ -71,13 +57,6 @@ def handle_run_skill_script(
     if state is not None:
         state.add_action(f"Ran skill script: {skill_name}/{script_name}")
 
-    _log_timing(
-        "tool.run_skill_script",
-        step_start,
-        skill=skill_name,
-        script=script_name,
-        returncode=result.get("returncode"),
-    )
     return result
 
 
@@ -113,9 +92,6 @@ async def handle_run_skill_script_streaming(
     if not skill:
         return {"error": f"Skill '{skill_name}' not found"}
 
-    print(f"[tool.skills] running skill script: {skill_name}/{script_name}")
-    step_start = perf_counter()
-
     runner = skills.get_runner_for_skill(skill.path)
     status_messages = []
 
@@ -132,13 +108,6 @@ async def handle_run_skill_script_streaming(
     # Update state if provided
     if state is not None:
         state.add_action(f"Ran skill script: {skill_name}/{script_name}")
-
-    _log_timing(
-        "tool.run_skill_script",
-        step_start,
-        skill=skill_name,
-        script=script_name,
-    )
 
     result["_status_messages"] = status_messages
     return result
