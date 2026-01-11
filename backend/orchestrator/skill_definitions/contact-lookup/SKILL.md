@@ -5,85 +5,219 @@ description: Find and analyze contact information, map relationships between peo
 
 # Contact Lookup
 
-When the user asks about people, contacts, or relationships, use this skill to provide detailed information.
+When the user asks about people, contacts, or relationships, use the `lookup_contact` tool. It handles fuzzy matching, name variations, aliases, and returns relationship data for you to interpret.
 
-## Step 1: Resolve the Contact
+## Primary Tool: `lookup_contact`
 
-- Use `resolve_query` to identify contacts mentioned in the question
-- Handle variations: first names, last names, nicknames, partial matches
-- If multiple matches exist, clarify with the user or show all options
+### Action: `search`
 
-## Step 2: Fetch Contact Details
+Find contacts by name, email, or phone with intelligent fuzzy matching.
 
-Use `execute_sql` to query the contacts table:
-
-```sql
-SELECT
-    contact_id, display_name, aliases, emails, phones,
-    tags, notes, created_at
-FROM contacts
-WHERE display_name ILIKE '%name%'
-   OR EXISTS (SELECT 1 FROM unnest(aliases) AS a WHERE a ILIKE '%name%')
+```json
+{
+  "action": "search",
+  "query": "John Smith"
+}
 ```
 
-## Step 3: Map Relationships
+Parameters:
 
-Query the `contact_relationships` table to understand connections:
+- `query` (required): Name, email, phone, or partial match
+- `search_by`: "name", "email", "phone", or "any" (default)
+- `fuzzy_threshold`: 0-100, lower is more lenient (default 75)
+- `limit`: Max results to return (default 10)
 
-```sql
-SELECT
-    cr.from_contact_id, cr.to_contact_id, cr.relationship_type,
-    c1.display_name AS from_name, c2.display_name AS to_name
-FROM contact_relationships cr
-JOIN contacts c1 ON cr.from_contact_id = c1.contact_id
-JOIN contacts c2 ON cr.to_contact_id = c2.contact_id
-WHERE cr.from_contact_id = 'target_id' OR cr.to_contact_id = 'target_id'
+**Handles automatically:**
+
+- Partial names ("John" finds "John Smith")
+- Nicknames and aliases
+- Typos and variations via fuzzy matching
+- Case-insensitive matching
+- Email/phone lookups
+
+### Action: `get_relationships`
+
+Get a contact's relationships with full details.
+
+```json
+{
+  "action": "get_relationships",
+  "query": "John Smith"
+}
 ```
 
-Relationship types might include: colleague, friend, family, manager, report, etc.
+Or with contact_id if you have it:
 
-## Step 4: Find Shared Context
+```json
+{
+  "action": "get_relationships",
+  "contact_id": "contact:john-smith"
+}
+```
 
-- Search for events where this contact appears in the people array
-- Look for documents that mention or are associated with the contact
-- Identify common tags or categories
+Parameters:
 
-Use `search_memories` to find both events and documents
+- `contact_id` or `query` (one required)
+- `relationship_types`: Optional array to filter (e.g., `["father", "mother"]`)
 
-## Formatting Guidelines
+### Action: `find_related`
 
-When presenting contact information:
-- Lead with the display name
-- Show relationships in human-readable form ("John is Sarah's manager")
-- Include recent interactions if asked
-- Never expose raw IDs to the user
+Find a contact AND their related contacts in one call.
+
+```json
+{
+  "action": "find_related",
+  "query": "John"
+}
+```
+
+Parameters:
+
+- `query` (required): Search for the primary contact
+- `relationship_types`: Optional filter for specific types
 
 ## Examples
 
-**User**: "Who is John Smith?"
-- Search contacts for "John Smith"
-- Return profile with relationships and recent activity
+### "Who is John Smith?"
 
-**User**: "Show me my colleagues"
-- Query contacts with "colleague" relationship type or tag
-- List with their roles/relationships
+```json
+{
+  "action": "search",
+  "query": "John Smith"
+}
+```
 
-**User**: "How do I know Maria?"
-- Find Maria's contact
-- Query relationship table
-- Search events for shared history
+### "How do I know Maria?"
 
-**User**: "Who reports to David?"
-- Query relationships where David is in manager/supervisor role
-- Return list of direct reports
+```json
+{
+  "action": "get_relationships",
+  "query": "Maria"
+}
+```
 
-**User**: "List me Paula's family?"
-- Query relationships where Paula has any family tags (mother, father, daugther, parent, etc)
-- Return list of contacts that are her family
+Returns all relationships for Maria - inspect the `type` field to understand how she's connected.
+
+### "Who reports to David?"
+
+```json
+{
+  "action": "find_related",
+  "query": "David",
+  "relationship_types": ["report", "direct-report"]
+}
+```
+
+### "List Paula's family"
+
+```json
+{
+  "action": "find_related",
+  "query": "Paula"
+}
+```
+
+Then filter the results by relationship types that indicate family (father, mother, son, daughter, spouse, sibling, etc.).
+
+### "Find John's phone number"
+
+```json
+{
+  "action": "search",
+  "query": "John"
+}
+```
+
+The response includes `phones` array for each matching contact.
+
+### "Who has this email: john@example.com?"
+
+```json
+{
+  "action": "search",
+  "query": "john@example.com",
+  "search_by": "email"
+}
+```
+
+## Response Format
+
+### Search Response
+
+```json
+{
+  "action": "search",
+  "found": true,
+  "count": 2,
+  "contacts": [
+    {
+      "contact_id": "contact:john-smith",
+      "display_name": "John Smith",
+      "aliases": ["Johnny", "JS"],
+      "emails": ["john@example.com"],
+      "phones": ["+1-555-0100"],
+      "tags": ["colleague", "engineering"],
+      "relationships": [...],
+      "match_score": 100,
+      "match_reason": "exact name match: john smith"
+    }
+  ]
+}
+```
+
+### Find Related Response
+
+```json
+{
+  "action": "find_related",
+  "found": true,
+  "primary_contact": {
+    "contact_id": "contact:paula",
+    "display_name": "Paula",
+    "match_score": 100,
+    "match_reason": "exact name match: paula"
+  },
+  "related_contacts": [
+    {
+      "type": "daughter",
+      "contact_id": "contact:maria",
+      "related_contact": {
+        "display_name": "Maria",
+        "emails": ["maria@example.com"]
+      }
+    },
+    {
+      "type": "husband",
+      "contact_id": "contact:carlos",
+      "related_contact": {
+        "display_name": "Carlos"
+      }
+    }
+  ],
+  "relationship_count": 5
+}
+```
 
 ## Tips
 
-- People may have multiple aliases (nicknames, maiden names)
-- Relationships are directional: "A manages B" is different from "B managed by A" (or "A is mother of B" is different than "B is mother of A")
-- Tags on contacts often indicate their role, how you know them, or even special attributes
-- Check the notes field for additional context
+- Use `find_related` for "X's family/colleagues" questions - it does search + relationship lookup in one call
+- The tool handles name variations automatically - "Jon" will match "John" with fuzzy matching
+- Aliases are searched too - if someone goes by "Mike" but their display name is "Michael", both work
+- Lower `fuzzy_threshold` (e.g., 50) for more lenient matching if initial search fails
+- Relationships include a `type` field - use this to filter relevant ones based on the user's question
+- Check `match_reason` to understand why a contact was matched
+- Never expose raw contact_ids to users - use display names
+
+## Fallback: SQL Queries
+
+For complex queries not covered by `lookup_contact`, use `execute_sql`:
+
+```sql
+-- Find contacts with specific tags
+SELECT display_name, emails, tags
+FROM contacts
+WHERE 'engineering' = ANY(tags)
+ORDER BY display_name;
+```
+
+Use `describe_schema` first to validate column names.

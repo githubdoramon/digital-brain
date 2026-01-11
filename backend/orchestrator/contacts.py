@@ -24,6 +24,10 @@ __all__ = [
     "upsert_contact_relationship",
     "ensure_contact_for_email",
     "normalize_email",
+    # Smart contact lookup functions
+    "search_contacts",
+    "get_contact_relationships",
+    "find_related_contacts",
 ]
 
 
@@ -783,6 +787,280 @@ def resolve_query(query: str) -> dict[str, Any]:
         "places": places_found,
         "time_range": None,
     }
+
+
+def search_contacts(
+    query: str,
+    *,
+    search_by: str = "any",
+    fuzzy_threshold: int = 75,
+    limit: int = 10,
+) -> list[dict[str, Any]]:
+    """
+    Smart contact search with fuzzy matching and multiple search modes.
+
+    Handles:
+    - Partial names, nicknames, aliases
+    - Case-insensitive matching
+    - Fuzzy matching for typos and variations
+    - Email and phone lookups
+
+    Args:
+        query: Search string (name, email, phone, or any)
+        search_by: "name", "email", "phone", or "any" (default)
+        fuzzy_threshold: Minimum fuzzy match score (0-100, default 75)
+        limit: Maximum results to return
+
+    Returns:
+        List of matching contacts with match_score and match_reason
+    """
+    from rapidfuzz import fuzz
+
+    query_lower = query.strip().lower()
+    if not query_lower:
+        return []
+
+    all_contacts = list_contacts()
+    matches: list[tuple[dict[str, Any], int, str]] = []
+
+    for contact in all_contacts:
+        best_score = 0
+        match_reason = ""
+
+        # Search by email
+        if search_by in ("email", "any"):
+            emails = contact.get("emails") or []
+            for email in emails:
+                email_lower = email.lower()
+                if query_lower in email_lower:
+                    score = 100 if query_lower == email_lower else 90
+                    if score > best_score:
+                        best_score = score
+                        match_reason = f"email match: {email}"
+
+        # Search by phone
+        if search_by in ("phone", "any"):
+            phones = contact.get("phones") or []
+            query_digits = "".join(c for c in query_lower if c.isdigit())
+            if query_digits:
+                for phone in phones:
+                    phone_digits = "".join(c for c in phone if c.isdigit())
+                    if query_digits in phone_digits:
+                        score = 100 if query_digits == phone_digits else 85
+                        if score > best_score:
+                            best_score = score
+                            match_reason = f"phone match: {phone}"
+
+        # Search by name (display_name + aliases)
+        if search_by in ("name", "any"):
+            display_name = (contact.get("display_name") or "").lower()
+            aliases = [a.lower() for a in (contact.get("aliases") or [])]
+            all_names = [display_name] + aliases
+
+            for name in all_names:
+                if not name:
+                    continue
+
+                # Exact match
+                if query_lower == name:
+                    if 100 > best_score:
+                        best_score = 100
+                        match_reason = f"exact name match: {name}"
+                    continue
+
+                # Substring match (name contains query or query contains name)
+                if query_lower in name:
+                    score = 95
+                    if score > best_score:
+                        best_score = score
+                        match_reason = f"name contains: {name}"
+                    continue
+
+                if name in query_lower:
+                    score = 90
+                    if score > best_score:
+                        best_score = score
+                        match_reason = f"query contains name: {name}"
+                    continue
+
+                # First name / last name partial match
+                name_parts = name.split()
+                query_parts = query_lower.split()
+                for qpart in query_parts:
+                    for npart in name_parts:
+                        if qpart == npart:
+                            score = 88
+                            if score > best_score:
+                                best_score = score
+                                match_reason = f"name part match: {npart}"
+
+                # Fuzzy match
+                fuzzy_score = fuzz.token_sort_ratio(query_lower, name)
+                if fuzzy_score >= fuzzy_threshold and fuzzy_score > best_score:
+                    best_score = fuzzy_score
+                    match_reason = f"fuzzy match ({fuzzy_score}%): {name}"
+
+        if best_score >= fuzzy_threshold:
+            matches.append((contact, best_score, match_reason))
+
+    # Sort by score descending, then by display_name
+    matches.sort(key=lambda x: (-x[1], x[0].get("display_name", "")))
+
+    # Return top matches with score and reason
+    results = []
+    for contact, score, reason in matches[:limit]:
+        result = dict(contact)
+        result["match_score"] = score
+        result["match_reason"] = reason
+        results.append(result)
+
+    return results
+
+
+def get_contact_relationships(
+    contact_id: str,
+    *,
+    relationship_types: list[str] | None = None,
+    include_contact_details: bool = True,
+) -> dict[str, Any]:
+    """
+    Get a contact's relationships with optional filtering.
+
+    Args:
+        contact_id: The contact to get relationships for
+        relationship_types: Filter by specific relationship types (optional - LLM decides what's relevant)
+        include_contact_details: Include full contact info for related contacts
+
+    Returns:
+        Dict with contact info and all relationships (LLM filters based on context)
+    """
+    contact = get_contact(contact_id)
+    if not contact:
+        return {"error": f"Contact not found: {contact_id}", "found": False}
+
+    relationships = contact.get("relationships") or []
+
+    # Build filter set if specific types requested
+    allowed_types: set[str] | None = None
+    if relationship_types:
+        allowed_types = {t.lower() for t in relationship_types}
+
+    # Process relationships
+    result_relationships = []
+    for rel in relationships:
+        rel_type = (rel.get("type") or "").lower()
+        other_type = (rel.get("other_type") or "").lower()
+
+        # Check if any type matches the filter (if filter provided)
+        if allowed_types is not None:
+            if rel_type not in allowed_types and other_type not in allowed_types:
+                continue
+
+        filtered_rel = dict(rel)
+
+        # Include related contact details if requested
+        if include_contact_details:
+            related_contact_id = rel.get("contact_id")
+            if related_contact_id:
+                related_contact = get_contact(related_contact_id)
+                if related_contact:
+                    filtered_rel["related_contact"] = {
+                        "display_name": related_contact.get("display_name"),
+                        "emails": related_contact.get("emails"),
+                        "phones": related_contact.get("phones"),
+                        "tags": related_contact.get("tags"),
+                    }
+
+        result_relationships.append(filtered_rel)
+
+    return {
+        "found": True,
+        "contact": {
+            "contact_id": contact["contact_id"],
+            "display_name": contact["display_name"],
+            "aliases": contact.get("aliases", []),
+            "emails": contact.get("emails", []),
+            "phones": contact.get("phones", []),
+            "tags": contact.get("tags", []),
+        },
+        "relationships": result_relationships,
+        "relationship_count": len(result_relationships),
+        "filter_applied": relationship_types if relationship_types else None,
+    }
+
+
+def find_related_contacts(
+    query: str,
+    *,
+    relationship_types: list[str] | None = None,
+    fuzzy_threshold: int = 75,
+) -> dict[str, Any]:
+    """
+    Find a contact by query and return their related contacts.
+
+    This is a high-level function that:
+    1. Searches for the contact using fuzzy matching
+    2. Finds all related contacts
+    3. Optionally filters by relationship types (LLM decides based on user query)
+
+    Args:
+        query: Search string to find the primary contact
+        relationship_types: Specific relationship types to filter (optional)
+        fuzzy_threshold: Minimum match score for contact search
+
+    Returns:
+        Dict with primary contact and their related contacts
+    """
+    # First, find the primary contact
+    matches = search_contacts(query, fuzzy_threshold=fuzzy_threshold, limit=1)
+
+    if not matches:
+        return {
+            "found": False,
+            "error": f"No contact found matching '{query}'",
+            "suggestions": _get_search_suggestions(query),
+        }
+
+    primary_contact = matches[0]
+    contact_id = primary_contact["contact_id"]
+
+    # Get relationships with optional filtering
+    relationships_result = get_contact_relationships(
+        contact_id,
+        relationship_types=relationship_types,
+        include_contact_details=True,
+    )
+
+    return {
+        "found": True,
+        "primary_contact": {
+            "contact_id": primary_contact["contact_id"],
+            "display_name": primary_contact["display_name"],
+            "match_score": primary_contact.get("match_score"),
+            "match_reason": primary_contact.get("match_reason"),
+        },
+        "related_contacts": relationships_result.get("relationships", []),
+        "relationship_count": relationships_result.get("relationship_count", 0),
+        "filter_applied": relationships_result.get("filter_applied"),
+    }
+
+
+def _get_search_suggestions(query: str) -> list[str]:
+    """Generate suggestions when no contacts match."""
+    query_lower = query.lower()
+    all_contacts = list_contacts()
+
+    # Get contacts that partially match
+    partial_matches = []
+    for contact in all_contacts:
+        display_name = (contact.get("display_name") or "").lower()
+        if any(part in display_name for part in query_lower.split()):
+            partial_matches.append(contact["display_name"])
+
+    if partial_matches:
+        return [f"Did you mean: {', '.join(partial_matches[:3])}?"]
+
+    return ["Try searching with a different name or check the spelling."]
 
 
 def _collect_contact_relationships(contact_ids: Iterable[str] | None = None) -> dict[str, list[dict[str, Any]]]:

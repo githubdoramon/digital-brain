@@ -22,7 +22,7 @@ from .contracts import (
 TOOL_GROUPS = {
     "memory": ["search_memories", "get_events", "get_document"],
     "database": ["execute_sql", "describe_schema"],
-    "resolution": ["resolve_query"],
+    "resolution": ["resolve_query", "lookup_contact"],
     "web": ["web_search"],
     "home": ["home_assistant"],
     "skills": ["run_skill_script"],
@@ -454,6 +454,80 @@ def _register_all_tools(registry: ToolRegistry) -> None:
                     required=False,
                 ),
             ],
+        )
+    )
+
+    # lookup_contact - Smart contact search and relationship lookup
+    registry.register(
+        ToolContract(
+            name="lookup_contact",
+            description=(
+                "Smart contact lookup with fuzzy matching. "
+                "Use this instead of raw SQL queries for contact-related questions.\n\n"
+                "ACTIONS:\n"
+                "- 'search': Find contacts by name, email, or phone (handles typos, partial names, nicknames, aliases)\n"
+                "- 'get_relationships': Get a contact's relationships with full details\n"
+                "- 'find_related': Find a contact AND their related contacts in one call\n\n"
+                "EXAMPLES:\n"
+                "- 'Who is John Smith?' → action='search', query='John Smith'\n"
+                "- 'List Maria's family' → action='find_related', query='Maria' (then filter results by family-type relationships)\n"
+                "- 'Who reports to David?' → action='find_related', query='David', relationship_types=['report', 'direct-report']"
+            ),
+            parameters=[
+                ToolParameter(
+                    name="action",
+                    type="string",
+                    description="Action: 'search' to find contacts, 'get_relationships' for a contact's connections, 'find_related' to find contact + their relationships.",
+                    required=True,
+                    enum=["search", "get_relationships", "find_related"],
+                ),
+                ToolParameter(
+                    name="query",
+                    type="string",
+                    description="Search query - can be a name (partial, full, nickname, alias), email, or phone number.",
+                    required=False,
+                ),
+                ToolParameter(
+                    name="contact_id",
+                    type="string",
+                    description="Contact ID for get_relationships action. If not provided, query will be used to find the contact.",
+                    required=False,
+                ),
+                ToolParameter(
+                    name="search_by",
+                    type="string",
+                    description="Search mode for 'search' action: 'name', 'email', 'phone', or 'any' (default).",
+                    required=False,
+                    enum=["name", "email", "phone", "any"],
+                ),
+                ToolParameter(
+                    name="relationship_types",
+                    type="array",
+                    description="Filter by specific relationship types. Optional - if not provided, all relationships are returned and you can filter based on context.",
+                    required=False,
+                    items_type="string",
+                ),
+                ToolParameter(
+                    name="fuzzy_threshold",
+                    type="integer",
+                    description="Minimum fuzzy match score (0-100). Lower = more lenient. Default 75.",
+                    required=False,
+                    default=75,
+                    minimum=0,
+                    maximum=100,
+                ),
+                ToolParameter(
+                    name="limit",
+                    type="integer",
+                    description="Maximum contacts to return for search action. Default 10.",
+                    required=False,
+                    default=10,
+                    minimum=1,
+                    maximum=50,
+                    validator=validate_limit,
+                ),
+            ],
+            constraints=["read_only"],
         )
     )
 

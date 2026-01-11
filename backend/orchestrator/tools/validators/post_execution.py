@@ -225,6 +225,64 @@ class PostExecutionValidator:
                 extracted_facts=facts,
             )
 
+        # Check lookup_contact - extract contact search/relationship results
+        if tool_name == "lookup_contact":
+            action = params.get("action", "search")
+            facts = []
+
+            if result.get("error"):
+                return PostExecutionResult(
+                    coverage=GoalCoverage.FAILED,
+                    reason=f"Contact lookup failed: {result['error']}",
+                    suggested_next_tools=["execute_sql"],
+                )
+
+            if action == "search":
+                count = result.get("count", 0)
+                contacts = result.get("contacts", [])
+                if contacts:
+                    names = [c.get("display_name", "Unknown") for c in contacts[:3]]
+                    facts.append(f"Found {count} contacts: {', '.join(names)}")
+                    return PostExecutionResult(
+                        coverage=GoalCoverage.NEEDS_MORE_TOOLS,
+                        reason=f"Found {count} matching contacts",
+                        extracted_facts=facts,
+                    )
+                else:
+                    return PostExecutionResult(
+                        coverage=GoalCoverage.NEEDS_MORE_TOOLS,
+                        reason="No contacts found, may need different search",
+                        suggested_next_tools=["execute_sql"],
+                    )
+
+            elif action in ("get_relationships", "find_related"):
+                if result.get("found"):
+                    rel_count = result.get("relationship_count", 0)
+                    contact_name = result.get("primary_contact", result.get("contact", {})).get("display_name", "Unknown")
+                    facts.append(f"Found {rel_count} relationships for {contact_name}")
+
+                    # If we found relationships, this might be the final answer
+                    if rel_count > 0:
+                        related = result.get("related_contacts", result.get("relationships", []))
+                        if related:
+                            rel_names = [
+                                r.get("related_contact", {}).get("display_name", "Unknown")
+                                for r in related[:3]
+                            ]
+                            facts.append(f"Related contacts: {', '.join(rel_names)}")
+
+                    return PostExecutionResult(
+                        coverage=GoalCoverage.NEEDS_MORE_TOOLS,
+                        reason=f"Retrieved relationships for {contact_name}",
+                        extracted_facts=facts,
+                    )
+                else:
+                    return PostExecutionResult(
+                        coverage=GoalCoverage.NEEDS_MORE_TOOLS,
+                        reason="Contact not found for relationship lookup",
+                        suggested_next_tools=["lookup_contact", "execute_sql"],
+                    )
+
         # For other tools, return None to trigger LLM check
         return None
 
@@ -413,6 +471,20 @@ Rules:
                 facts.append("Home Assistant command executed successfully")
                 # This is the completion step - mark as achieved
                 facts.append("GOAL_ACHIEVED: Device command completed")
+
+        elif tool_name == "lookup_contact":
+            action = result.get("action", "search")
+            if action == "search":
+                count = result.get("count", 0)
+                if count > 0:
+                    contacts = result.get("contacts", [])
+                    names = [c.get("display_name", "Unknown") for c in contacts[:3]]
+                    facts.append(f"Found {count} contacts: {', '.join(names)}")
+            elif action in ("get_relationships", "find_related"):
+                if result.get("found"):
+                    rel_count = result.get("relationship_count", 0)
+                    contact_name = result.get("primary_contact", result.get("contact", {})).get("display_name", "Unknown")
+                    facts.append(f"Found {rel_count} relationships for {contact_name}")
 
         return facts
 
@@ -680,7 +752,7 @@ class GoalCompletionValidator:
             return (True, "Query returned results", [])
 
         # Check for successful query tools
-        query_tools = ["search_memories", "execute_sql", "get_events", "get_document", "web_search"]
+        query_tools = ["search_memories", "execute_sql", "get_events", "get_document", "web_search", "lookup_contact"]
         successful_query_calls = [
             tc for tc in tool_calls
             if tc.tool_name in query_tools and tc.success
