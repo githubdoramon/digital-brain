@@ -13,7 +13,7 @@ All output follows a consistent format:
 
 import json
 import os
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum
 from time import perf_counter
 from typing import Any, Optional
@@ -200,9 +200,9 @@ def trace_continuation_detected(content: str) -> None:
     """Log continuation intent without tool call."""
     if _should_log(LogLevel.DECISION):
         preview = _truncate(content.replace("\n", " "), 80)
-        print(f"[agent.decision] ⚠ Continuation intent detected (no tool call)")
+        print("[agent.decision] ⚠ Continuation intent detected (no tool call)")
         print(f"[agent.decision]   Content: \"{preview}\"")
-        print(f"[agent.decision]   → Prompting LLM to invoke tool")
+        print("[agent.decision]   → Prompting LLM to invoke tool")
 
 
 def trace_malformed_output(content: str, pattern: str) -> None:
@@ -211,7 +211,7 @@ def trace_malformed_output(content: str, pattern: str) -> None:
         preview = _truncate(content.replace("\n", " "), 100)
         print(f"[agent.decision] ✗ Malformed output: {pattern}")
         print(f"[agent.decision]   Content: \"{preview}\"")
-        print(f"[agent.decision]   → Requesting proper tool call format")
+        print("[agent.decision]   → Requesting proper tool call format")
 
 
 # =============================================================================
