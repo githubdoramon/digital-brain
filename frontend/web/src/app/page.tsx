@@ -46,6 +46,21 @@ type AssistantMetadata = {
   };
 } & Record<string, unknown>;
 
+type EventClarificationData = {
+  type: "clarification_needed";
+  questions: string[];
+  partial_extraction: Record<string, unknown>;
+  original_message: string;
+};
+
+type EventConfirmationData = {
+  type: "event_confirmation";
+  preview_id: string;
+  extracted: Record<string, unknown>;
+  resolution: Record<string, unknown>;
+  message: string;
+};
+
 type ChatMode = "quick" | "threads";
 
 type MarkdownCodeProps = HTMLAttributes<HTMLElement> & {
@@ -695,10 +710,10 @@ export default function Home() {
                   {commandResult && commandResult.type === "clarification_needed" && (
                     <div style={{ maxWidth: "80%", alignSelf: "stretch" }}>
                       <EventClarificationCard
-                        clarificationData={commandResult as any}
+                        clarificationData={commandResult as EventClarificationData}
                         onSubmit={async (answers) => {
                           // Re-submit with additional information
-                          const originalMessage = (commandResult as any).original_message || "";
+                          const originalMessage = (commandResult as EventClarificationData).original_message || "";
                           const combinedMessage = `/event ${originalMessage}\n\nAdditional details: ${answers}`;
                           setInput(combinedMessage);
                           // Trigger form submit
@@ -714,7 +729,7 @@ export default function Home() {
                   {commandResult && commandResult.type === "event_confirmation" && (
                     <div style={{ maxWidth: "80%", alignSelf: "stretch" }}>
                       <EventCommandCard
-                        commandData={commandResult as any}
+                        commandData={commandResult as EventConfirmationData}
                         onConfirm={async (previewId, modifications) => {
                           try {
                             const result = await api.post("/commands/event/confirm", {
@@ -743,9 +758,10 @@ export default function Home() {
 
                             // Refresh threads list
                             await refreshThreads();
-                          } catch (error: any) {
+                          } catch (error: unknown) {
                             console.error("Failed to create event:", error);
-                            alert(`Failed to create event: ${error.message || "Unknown error"}`);
+                            const errorMessage = error instanceof Error ? error.message : "Unknown error";
+                            alert(`Failed to create event: ${errorMessage}`);
                           }
                         }}
                         onCancel={() => {

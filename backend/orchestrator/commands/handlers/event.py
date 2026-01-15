@@ -24,8 +24,8 @@ def _extract_event_entities_with_llm(message: str, context: dict) -> dict[str, A
     Returns:
         Dict with extracted entities or needs_clarification flag
     """
-    from llm_prompts import get_time_context
     from llm_helpers import call_llm_json
+    from llm_prompts import get_time_context
     from tags_manager import MAJOR_TAGS
 
     # Get current time context

@@ -5,8 +5,8 @@ Uses in-memory storage with expiration for pending command confirmations.
 """
 
 import time
-from typing import Any, Optional
 from threading import Lock
+from typing import Any, Optional
 
 # In-memory storage for command previews
 # In production, this should use Redis or a database

@@ -509,8 +509,9 @@ def confirm_event_command(
         )
 
     # Retrieve stored command data
-    from commands.storage import get_command_data, delete_command_data
     from datetime import datetime
+
+    from commands.storage import delete_command_data, get_command_data
 
     command_data = get_command_data(payload.preview_id)
     if not command_data:
@@ -768,7 +769,7 @@ def _handle_command(question: str, user_email: str, user: dict) -> dict[str, Any
 
     Returns command result dict if it's a command, None otherwise.
     """
-    from commands import parse_command, get_command_registry
+    from commands import get_command_registry, parse_command
 
     parsed_cmd = parse_command(question)
     if not parsed_cmd or parsed_cmd.command == "new":

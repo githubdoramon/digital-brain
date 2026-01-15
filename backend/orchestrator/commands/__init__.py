@@ -5,7 +5,7 @@ This module provides infrastructure for parsing and routing commands that start 
 Commands bypass the normal LLM flow and execute specialized handlers.
 """
 
-from .parser import parse_command, is_command
+from .parser import is_command, parse_command
 from .registry import CommandRegistry, get_command_registry
 
 __all__ = [

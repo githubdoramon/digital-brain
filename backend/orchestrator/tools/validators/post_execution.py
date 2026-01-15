@@ -19,8 +19,6 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Optional
 
-import requests
-
 # Add parent directory to path for imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
