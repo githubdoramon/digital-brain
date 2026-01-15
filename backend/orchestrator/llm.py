@@ -25,7 +25,6 @@ import skills
 from llm_agent import (
     MAX_CONTINUATION_RETRIES,
     MAX_ITERATIONS,
-    extract_event_proposal,
     finalize_bundle,
     looks_like_continuation,
 )
@@ -75,16 +74,13 @@ def _log_timing(label: str, start_time: float, **metadata: Any) -> None:
 # OpenAI-compatible API calls
 # ---------------------------------------------------------------------------
 
-def _get_headers() -> dict[str, str]:
-    """Get headers for API requests."""
-    headers = {"Content-Type": "application/json"}
-    if LLM_API_KEY:
-        headers["Authorization"] = f"Bearer {LLM_API_KEY}"
-    return headers
+# Removed: _get_headers() - now using llm_helpers.get_llm_headers()
 
 
 def _llm_chat(messages: list[dict[str, Any]]) -> dict[str, Any]:
     """Make a synchronous chat request to OpenAI-compatible API."""
+    from llm_helpers import get_llm_headers
+
     payload = {
         "model": LLM_CHAT_MODEL,
         "messages": messages,
@@ -94,7 +90,7 @@ def _llm_chat(messages: list[dict[str, Any]]) -> dict[str, Any]:
     }
     resp = requests.post(
         f"{LLM_BASE_URL}/chat/completions",
-        headers=_get_headers(),
+        headers=get_llm_headers(),
         json=payload,
         timeout=LLM_TIMEOUT,
     )
@@ -113,6 +109,8 @@ async def _llm_chat_stream(
     tools: list[dict[str, Any]],
 ) -> AsyncGenerator[dict[str, Any], None]:
     """Stream chat responses from OpenAI-compatible API."""
+    from llm_helpers import get_llm_headers
+
     payload = {
         "model": LLM_CHAT_MODEL,
         "messages": messages,
@@ -127,7 +125,7 @@ async def _llm_chat_stream(
         async with client.stream(
             "POST",
             f"{LLM_BASE_URL}/chat/completions",
-            headers=_get_headers(),
+            headers=get_llm_headers(),
             json=payload,
         ) as response:
             response.raise_for_status()
@@ -186,7 +184,6 @@ async def answer_question(
     user_id: str = "default_user",
     session_id: str | None = None,
     user_email: str | None = None,
-    event_capture_enabled: bool = False,
 ) -> dict[str, Any]:
     """
     Answer a question using the LLM with tool calling.
@@ -202,7 +199,6 @@ async def answer_question(
         user_id: User identifier
         session_id: Conversation session ID
         user_email: User's email for context
-        event_capture_enabled: Whether to extract event proposals
 
     Returns:
         Response bundle with answer and metadata
@@ -227,7 +223,6 @@ async def answer_question(
             user_email=user_email,
             conversation_history=conversation_history,
             search_limit=search_limit,
-            event_capture_enabled=event_capture_enabled,
         )
 
         # Persist conversation (bounded agent doesn't do this internally)
@@ -286,7 +281,6 @@ async def answer_question(
         conversation_history,
         user_email=user_id,
         current_time_context=time_context,
-        event_capture_enabled=event_capture_enabled,
         state=state,
     )
     _log_timing("agent.build_messages", build_start, message_count=len(messages))
@@ -386,13 +380,13 @@ async def answer_question(
 
         # Finalize response
         messages.append(message)
-        event_proposal = extract_event_proposal(content) if event_capture_enabled else None
+        # Removed: event_proposal extraction (use /event command instead)
 
         # Persist conversation
         new_thread_title: str | None = None
         if session_id and user_email:
             try:
-                assistant_metadata = {"event_proposal": event_proposal} if event_proposal else {}
+                assistant_metadata = {}
                 persist_result = conversations.record_exchange(
                     thread_id=session_id,
                     user_email=user_email,
@@ -421,7 +415,6 @@ async def answer_question(
             state,
             search_limit,
             session_id,
-            event_proposal=event_proposal,
         )
         if new_thread_title:
             bundle["thread_title"] = new_thread_title
@@ -439,7 +432,6 @@ async def answer_question_stream(
     user_id: str = "default_user",
     session_id: str | None = None,
     user_email: str | None = None,
-    event_capture_enabled: bool = False,
 ) -> AsyncGenerator[dict[str, Any], None]:
     """
     Stream LLM responses with tool calling support.
@@ -461,7 +453,6 @@ async def answer_question_stream(
         user_id: User identifier
         session_id: Conversation session ID
         user_email: User's email for context
-        event_capture_enabled: Whether to extract event proposals
     """
     # Use bounded agent if enabled
     if USE_BOUNDED_AGENT:
@@ -485,7 +476,6 @@ async def answer_question_stream(
             user_email=user_email,
             conversation_history=conversation_history,
             search_limit=search_limit,
-            event_capture_enabled=event_capture_enabled,
         ):
             if event.get("type") == "done":
                 final_bundle = event.get("bundle", {})
@@ -496,8 +486,6 @@ async def answer_question_stream(
         if final_bundle and session_id and user_email and final_bundle.get("answer"):
             try:
                 assistant_metadata = {}
-                if final_bundle.get("event_proposal"):
-                    assistant_metadata["event_proposal"] = final_bundle["event_proposal"]
 
                 persist_result = conversations.record_exchange(
                     thread_id=session_id,
@@ -548,7 +536,6 @@ async def answer_question_stream(
         conversation_history,
         user_email=user_id,
         current_time_context=time_context,
-        event_capture_enabled=event_capture_enabled,
         state=state,
     )
 
@@ -673,13 +660,13 @@ async def answer_question_stream(
         break
 
     # Finalize
-    event_proposal = extract_event_proposal(accumulated_content) if event_capture_enabled else None
+    # Removed: event_proposal extraction (use /event command instead)
 
     # Persist conversation
     new_thread_title: str | None = None
     if session_id and user_email:
         try:
-            assistant_metadata = {"event_proposal": event_proposal} if event_proposal else {}
+            assistant_metadata = {}
             persist_result = conversations.record_exchange(
                 thread_id=session_id,
                 user_email=user_email,
@@ -707,7 +694,6 @@ async def answer_question_stream(
         state,
         search_limit,
         session_id,
-        event_proposal=event_proposal,
     )
     if new_thread_title:
         bundle["thread_title"] = new_thread_title
@@ -780,34 +766,17 @@ async def _run_skill_script_streaming(
 
 def _generate_thread_title(question: str) -> str | None:
     """Generate a thread title from the first question."""
-    messages = [
-        {
-            "role": "user",
-            "content": (
-                "Generate a very short title (3-6 words) for a conversation that starts with this question. "
-                "Return ONLY the title, no quotes or explanation.\n\n"
-                f"Question: {question}"
-            ),
-        }
-    ]
+    from llm_helpers import call_llm
+
+    prompt = (
+        "Generate a very short title (3-6 words) for a conversation that starts with this question. "
+        "Return ONLY the title, no quotes or explanation.\n\n"
+        f"Question: {question}"
+    )
 
     try:
-        response = requests.post(
-            f"{LLM_BASE_URL}/chat/completions",
-            headers=_get_headers(),
-            json={
-                "model": LLM_CHAT_MODEL,
-                "messages": messages,
-                "stream": False,
-            },
-            timeout=30,
-        )
-        response.raise_for_status()
-        data = response.json()
-        title = data.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
+        title = call_llm(prompt, timeout=30).strip().strip('"\'')
 
-        # Clean up the title
-        title = title.strip('"\'')
         if len(title) > 100:
             title = title[:97] + "..."
 

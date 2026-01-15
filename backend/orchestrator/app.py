@@ -45,6 +45,8 @@ from schemas import (
     DocumentDetailOut,
     DocumentSearchIn,
     DocumentUpdateIn,
+    EventCommandConfirmation,
+    EventCommandResult,
     EventIn,
     EventProposalCreate,
     ExternalContactWebhook,
@@ -482,6 +484,154 @@ def ingest_external_event(
     return {"ok": True, "id": event_id}
 
 
+@api.post("/commands/event/confirm", response_model=EventCommandResult)
+def confirm_event_command(
+    payload: EventCommandConfirmation,
+    user: dict = Depends(get_current_user),
+):
+    """
+    Confirm and create an event from /event command.
+
+    This endpoint receives the user's confirmation of the extracted event data,
+    creates any new entities (contacts, places), and stores the event.
+    """
+    user_email = user.get("email")
+    if not user_email:
+        raise HTTPException(status_code=400, detail="Authenticated user email missing")
+
+    if not payload.confirmed:
+        from commands.storage import delete_command_data
+
+        delete_command_data(payload.preview_id)
+        return EventCommandResult(
+            success=False,
+            error="Event creation cancelled by user",
+        )
+
+    # Retrieve stored command data
+    from commands.storage import get_command_data, delete_command_data
+    from datetime import datetime
+
+    command_data = get_command_data(payload.preview_id)
+    if not command_data:
+        raise HTTPException(
+            status_code=404,
+            detail="Event preview not found or expired. Please try the /event command again.",
+        )
+
+    extracted = command_data["extracted"]
+    resolution = command_data["resolution"]
+
+    # Apply modifications to extracted data
+    if payload.modifications:
+        mods = payload.modifications
+        if "title" in mods:
+            extracted["title"] = mods["title"]
+        if "summary" in mods:
+            extracted["summary"] = mods["summary"]
+        if "when" in mods:
+            extracted["when"] = datetime.fromisoformat(mods["when"].replace("Z", "+00:00")) if mods["when"] else None
+        if "where" in mods:
+            extracted["where"] = mods["where"]
+        if "tags" in mods:
+            extracted["tags"] = mods["tags"]
+
+    try:
+        # 1. Create new contacts
+        created_contacts = []
+        contact_id_map = {}
+
+        for new_contact in resolution["new_entities"]["contacts"]:
+            display_name = new_contact["display_name"]
+            contact_id = f"contact:{display_name.lower().replace(' ', '_')}#{uuid4().hex[:6]}"
+
+            contact_in = ContactIn(
+                contact_id=contact_id,
+                display_name=display_name,
+                aliases=[],
+                emails=[],
+                phones=[],
+                links=[],
+                tags=[],
+            )
+
+            contacts_service.ingest_contact(contact_in)
+            created_contacts.append(
+                {"contact_id": contact_id, "display_name": display_name}
+            )
+            contact_id_map[display_name] = contact_id
+
+        # 2. Create new places
+        created_places = []
+        place_id_map = {}
+
+        for new_place in resolution["new_entities"]["places"]:
+            place_name = new_place["name"]
+            place_id = f"plc_{place_name.lower().replace(' ', '_')}_{uuid4().hex[:6]}"
+
+            place_in = PlaceIn(
+                place_id=place_id,
+                name=place_name,
+                city=None,
+                country=None,
+                lat=None,
+                lon=None,
+                geohash=None,
+            )
+
+            places_service.ingest_place(place_in)
+            created_places.append({"place_id": place_id, "name": place_name})
+            place_id_map[place_name] = place_id
+
+        # 3. Build list of all contact IDs (existing + new)
+        all_contact_ids = []
+        for existing_contact in resolution["contacts"]:
+            all_contact_ids.append(existing_contact["contact_id"])
+        for created_contact in created_contacts:
+            all_contact_ids.append(created_contact["contact_id"])
+
+        # 4. Get place_id (existing or newly created)
+        place_id = None
+        where = extracted.get("where")
+        if where:
+            place_id = place_id_map.get(where)
+
+        # 5. Create the event
+        event_id = f"event:{uuid4().hex}"
+        when = extracted.get("when")
+
+        event_in = EventIn(
+            id=event_id,
+            startDate=when if when else datetime.now(),
+            endDate=None,
+            placeId=place_id,
+            people=all_contact_ids,
+            tags=extracted.get("tags", []),
+            types=extracted.get("types", ["generic"]),
+            title=extracted.get("title", ""),
+            summary=extracted.get("summary", ""),
+            raw={"source": "event_command"},
+        )
+
+        events_service.ingest_event(event_in)
+
+        # Clean up stored data
+        delete_command_data(payload.preview_id)
+
+        return EventCommandResult(
+            success=True,
+            event_id=event_id,
+            created_contacts=created_contacts,
+            created_places=created_places,
+        )
+
+    except Exception as e:
+        print(f"[event_confirm] Failed to create event: {e}")
+        raise HTTPException(
+            status_code=500, detail=f"Failed to create event: {str(e)}"
+        )
+
+
 @api.post("/access/gate")
 def validate_gate_access(
     image: UploadFile = File(...),
@@ -612,12 +762,50 @@ def _make_reset_bundle(ctx: _SessionContext) -> dict[str, Any]:
     }
 
 
+def _handle_command(question: str, user_email: str, user: dict) -> dict[str, Any] | None:
+    """
+    Check if the question is a command and handle it.
+
+    Returns command result dict if it's a command, None otherwise.
+    """
+    from commands import parse_command, get_command_registry
+
+    parsed_cmd = parse_command(question)
+    if not parsed_cmd or parsed_cmd.command == "new":
+        # /new is handled in session resolution, not here
+        return None
+
+    # Handle non-/new commands (like /event)
+    registry = get_command_registry()
+    context = {"user_email": user_email, "user": user}
+    return registry.execute(parsed_cmd, context)
+
+
 @api.post("/ask", response_model=AskOut)
 async def ask(payload: AskIn, user: dict = Depends(get_current_user)):
     start_time = perf_counter()
     user_email = user.get("email")
     if not user_email:
         raise HTTPException(status_code=400, detail="Authenticated user email missing")
+
+    # Check for commands before session resolution
+    try:
+        command_result = _handle_command(payload.question, user_email, user)
+        if command_result:
+            # Return command result
+            return AskOut(
+                question=payload.question,
+                answer="",
+                resolution={},
+                search_results=[],
+                detailed_events=[],
+                thread_id=payload.thread_id or "",
+                session_id=payload.session_id or "",
+                is_new_session=False,
+                command_result=command_result,
+            )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
     ctx = _resolve_session_context(payload, user_email)
 
@@ -626,7 +814,6 @@ async def ask(payload: AskIn, user: dict = Depends(get_current_user)):
         print(f"[ask] session reset session={ctx.session_id} user={user_email}")
         return AskOut(**_make_reset_bundle(ctx))
 
-    event_capture_enabled = bool(payload.event_capture_enabled)
     limit = payload.limit or 3
     preview = ctx.question.strip().replace("\n", " ")
     if len(preview) > 120:
@@ -643,7 +830,6 @@ async def ask(payload: AskIn, user: dict = Depends(get_current_user)):
         user_id=user_email,
         session_id=ctx.session_id,
         user_email=user_email,
-        event_capture_enabled=event_capture_enabled,
     )
     bundle["thread_id"] = ctx.session_id
     bundle["session_id"] = ctx.session_id
@@ -677,6 +863,33 @@ async def ask_stream(payload: AskIn, user: dict = Depends(get_current_user)):
     if not user_email:
         raise HTTPException(status_code=400, detail="Authenticated user email missing")
 
+    # Check for commands before session resolution
+    try:
+        command_result = _handle_command(payload.question, user_email, user)
+        if command_result:
+            # Return command result as SSE stream
+            async def command_generator():
+                bundle = {
+                    "question": payload.question,
+                    "answer": "",
+                    "resolution": {},
+                    "search_results": [],
+                    "detailed_events": [],
+                    "thread_id": payload.thread_id or "",
+                    "session_id": payload.session_id or "",
+                    "is_new_session": False,
+                    "command_result": command_result,
+                }
+                yield f"data: {json.dumps({'type': 'done', 'bundle': bundle})}\n\n"
+
+            return StreamingResponse(
+                command_generator(),
+                media_type="text/event-stream",
+                headers={"Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no"},
+            )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
     ctx = _resolve_session_context(payload, user_email)
 
     # Handle /new command with no actual message
@@ -695,7 +908,6 @@ async def ask_stream(payload: AskIn, user: dict = Depends(get_current_user)):
             headers={"Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no"},
         )
 
-    event_capture_enabled = bool(payload.event_capture_enabled)
     limit = payload.limit or 3
 
     preview = ctx.question.strip().replace("\n", " ")
@@ -714,7 +926,6 @@ async def ask_stream(payload: AskIn, user: dict = Depends(get_current_user)):
                 user_id=user_email,
                 session_id=ctx.session_id,
                 user_email=user_email,
-                event_capture_enabled=event_capture_enabled,
             ):
                 if event.get("type") == "done":
                     bundle = event.get("bundle", {})

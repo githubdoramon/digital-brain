@@ -129,7 +129,6 @@ def build_messages(
     conversation_history: Optional[list[dict[str, str]]] = None,
     user_email: Optional[str] = None,
     current_time_context: Optional[str] = None,
-    event_capture_enabled: bool = False,
     state: Optional[Any] = None,  # AgentState
 ) -> list[dict[str, str]]:
     """
@@ -141,7 +140,6 @@ def build_messages(
         conversation_history: Previous messages in the session
         user_email: User's email for context
         current_time_context: Time context string (or auto-generated)
-        event_capture_enabled: Whether to include event capture prompt
         state: AgentState to track activated skills
 
     Returns:
@@ -174,10 +172,6 @@ def build_messages(
     # Time context
     time_ctx = current_time_context or get_time_context()
     messages.append({"role": "system", "content": time_ctx})
-
-    # Event capture prompt
-    if event_capture_enabled:
-        messages.append({"role": "system", "content": get_event_capture_prompt()})
 
     # Skills integration
     try:

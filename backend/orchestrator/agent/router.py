@@ -330,30 +330,23 @@ class IntentRouter:
         conversation_history: Optional[list[dict[str, str]]] = None,
     ) -> IntentClassification:
         """Use LLM to classify the intent."""
+        sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        from llm_helpers import call_llm
+
         prompt = self._build_classification_prompt(question, conversation_history)
 
-        headers = {"Content-Type": "application/json"}
-        if self.llm_api_key:
-            headers["Authorization"] = f"Bearer {self.llm_api_key}"
-
-        payload = {
-            "model": self.llm_model,
-            "messages": [{"role": "user", "content": prompt}],
-            "stream": False,
-        }
-
-        response = requests.post(
-            f"{self.llm_base_url}/chat/completions",
-            headers=headers,
-            json=payload,
-            timeout=self.llm_timeout,
-        )
-        response.raise_for_status()
-
-        data = response.json()
-        content = data.get("choices", [{}])[0].get("message", {}).get("content", "")
-
-        return self._parse_llm_response(content)
+        try:
+            content = call_llm(prompt, timeout=self.llm_timeout)
+            return self._parse_llm_response(content)
+        except Exception as e:
+            trace.trace_router_llm_error(f"LLM call failed: {e}")
+            # Fall back to unknown classification
+            return IntentClassification(
+                intent=IntentType.UNKNOWN,
+                confidence=0.5,
+                allowed_tool_groups=list(TOOL_GROUPS.keys()),
+                reasoning=f"LLM call failed: {e}",
+            )
 
     def _build_classification_prompt(
         self,

@@ -259,7 +259,6 @@ def finalize_bundle(
     state: Any,  # AgentState
     search_limit: int,
     session_id: Optional[str],
-    event_proposal: Optional[dict[str, Any]] = None,
 ) -> dict[str, Any]:
     """
     Create the final response bundle.
@@ -270,26 +269,19 @@ def finalize_bundle(
         state: The agent state
         search_limit: The search limit used
         session_id: The session/thread ID
-        event_proposal: Optional extracted event proposal
 
     Returns:
         The response bundle dict
     """
-    # Strip event proposal from visible answer
-    clean_answer = strip_event_proposal(answer) if event_proposal else answer
-
     bundle: dict[str, Any] = {
         "question": question,
-        "answer": clean_answer,
+        "answer": answer,
         "thread_id": session_id,
         # Required fields from AgentState
         "resolution": state.resolution,
         "search_results": state.search_results,
         "detailed_events": state.detailed_events,
     }
-
-    if event_proposal:
-        bundle["event_proposal"] = event_proposal
 
     if state.activated_skills:
         bundle["activated_skills"] = [s.get("name") for s in state.activated_skills]

@@ -43,26 +43,7 @@ class EventIn(BaseModel):
     external_id: str | None = Field(default=None, alias="externalId")
 
 
-class EventProposal(BaseModel):
-    title: str | None = None
-    start_date: datetime | None = Field(default=None, alias="startDate")
-    end_date: datetime | None = Field(default=None, alias="endDate")
-    summary: str | None = None
-    people: list[str] = Field(default_factory=list)
-    tags: list[str] = Field(default_factory=list)
-    types: list[str] = Field(default_factory=list)
-    place: str | None = None
-    place_id: str | None = Field(default=None, alias="placeId")
-    confidence: float | None = None
-    missing: list[str] = Field(default_factory=list)
-    raw: dict[str, Any] = Field(default_factory=dict)
-
-    class Config:
-        allow_population_by_field_name = True
-
-
-class EventProposalCreate(EventProposal):
-    start_date: datetime = Field(alias="startDate")
+# Removed: EventProposal and EventProposalCreate classes (old event capture system)
 
 
 class ExternalEventPayload(BaseModel):
@@ -203,7 +184,6 @@ class AskIn(BaseModel):
     limit: int | None = 3
     session_id: str | None = None  # kept for backward compatibility
     thread_id: str | None = None
-    event_capture_enabled: bool | None = False
 
 
 class AskOut(BaseModel):
@@ -217,7 +197,7 @@ class AskOut(BaseModel):
     thread_id: str | None = None
     thread_title: str | None = None
     is_new_session: bool = False
-    event_proposal: EventProposal | None = None
+    # Removed: event_proposal (old event capture system)
     web_results: list[dict[str, Any]] = Field(default_factory=list)
     web_summary: str | None = None
     web_follow_up_questions: list[str] | None = Field(default_factory=list)
@@ -225,6 +205,7 @@ class AskOut(BaseModel):
     web_provider: str | None = None
     web_response_id: str | None = None
     web_documents: list[dict[str, Any]] = Field(default_factory=list)
+    command_result: dict[str, Any] | None = None
 
 
 class ThreadCreate(BaseModel):
@@ -274,3 +255,22 @@ class ServiceVersionCollection(BaseModel):
     manifest_metadata: dict[str, Any] = Field(default_factory=dict)
     env_entry_count: int = 0
     fallback_count: int = 0
+
+
+class EventCommandConfirmation(BaseModel):
+    """Schema for confirming and creating an event from /event command."""
+
+    preview_id: str
+    confirmed: bool
+    modifications: dict[str, Any] | None = Field(default_factory=dict)
+    skip_entities: dict[str, list[str]] | None = Field(default_factory=dict)
+
+
+class EventCommandResult(BaseModel):
+    """Result of creating an event via /event command."""
+
+    success: bool
+    event_id: str | None = None
+    created_contacts: list[dict[str, Any]] = Field(default_factory=list)
+    created_places: list[dict[str, Any]] = Field(default_factory=list)
+    error: str | None = None

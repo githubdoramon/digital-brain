@@ -368,26 +368,10 @@ Rules:
 
     def _call_llm(self, prompt: str) -> str:
         """Make LLM API call for validation."""
-        headers = {"Content-Type": "application/json"}
-        if self.llm_api_key:
-            headers["Authorization"] = f"Bearer {self.llm_api_key}"
+        sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+        from llm_helpers import call_llm
 
-        payload = {
-            "model": self.llm_model,
-            "messages": [{"role": "user", "content": prompt}],
-            "stream": False,
-        }
-
-        response = requests.post(
-            f"{self.llm_base_url}/chat/completions",
-            headers=headers,
-            json=payload,
-            timeout=self.llm_timeout,
-        )
-        response.raise_for_status()
-
-        data = response.json()
-        return data.get("choices", [{}])[0].get("message", {}).get("content", "")
+        return call_llm(prompt, timeout=self.llm_timeout)
 
     def _parse_llm_response(self, response: str) -> PostExecutionResult:
         """Parse LLM response into PostExecutionResult."""

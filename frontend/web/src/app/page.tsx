@@ -8,7 +8,8 @@ import ReactMarkdown from "react-markdown";
 import type { Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { api, ask, StreamBundle } from "@/lib/api";
-import EventProposalCard, { EventProposal } from "@/components/EventProposalCard";
+import { EventCommandCard } from "@/components/EventCommandCard";
+import { EventClarificationCard } from "@/components/EventClarificationCard";
 
 type Message = {
   id?: number;
@@ -39,7 +40,10 @@ type ThreadDetail = ThreadSummary & {
 };
 
 type AssistantMetadata = {
-  event_proposal?: EventProposal;
+  command_result?: {
+    type: string;
+    [key: string]: unknown;
+  };
 } & Record<string, unknown>;
 
 type ChatMode = "quick" | "threads";
@@ -243,32 +247,7 @@ export default function Home() {
     [threads, selectedThreadId, loadThread]
   );
 
-  const handleInsertEvent = useCallback(
-    async (proposal: EventProposal) => {
-      if (!selectedThreadId) {
-        throw new Error("Select a conversation before inserting an event.");
-      }
-      if (!proposal.start_date) {
-        throw new Error("Event start time is missing.");
-      }
-
-      await api.post(`/threads/${selectedThreadId}/events`, {
-        title: proposal.title,
-        startDate: proposal.start_date,
-        endDate: proposal.end_date,
-        summary: proposal.summary,
-        people: proposal.people ?? [],
-        tags: proposal.tags ?? [],
-        types: proposal.types ?? [],
-        place: proposal.place,
-        placeId: proposal.place_id,
-        confidence: proposal.confidence,
-        missing: proposal.missing ?? [],
-        raw: proposal.raw ?? {},
-      });
-    },
-    [selectedThreadId]
-  );
+  // Removed: handleInsertEvent - old event proposal system removed
 
   useEffect(() => {
     scrollToBottom();
@@ -325,8 +304,9 @@ export default function Home() {
 
         const sessionIsNew = data.is_new_session ?? false;
 
-        const metadata: AssistantMetadata | undefined = data.event_proposal
-          ? { event_proposal: data.event_proposal as EventProposal }
+        // Handle command results
+        const metadata: AssistantMetadata | undefined = data.command_result
+          ? { command_result: data.command_result }
           : undefined;
 
         const assistantMessage: Message = {
@@ -403,9 +383,7 @@ export default function Home() {
           }
         }
 
-        const metadata: AssistantMetadata | undefined = data.event_proposal
-          ? { event_proposal: data.event_proposal as EventProposal }
-          : undefined;
+        const metadata: AssistantMetadata | undefined = undefined;
 
         const assistantMessage: Message = {
           id: undefined,
@@ -681,7 +659,8 @@ export default function Home() {
             )}
 
             {displayMessages.map((message, index) => {
-              const eventProposal = (message.metadata as AssistantMetadata | undefined)?.event_proposal;
+              const metadata = message.metadata as AssistantMetadata | undefined;
+              const commandResult = metadata?.command_result;
               return (
                 <div
                   key={message.id ?? index}
@@ -713,9 +692,66 @@ export default function Home() {
                       {message.content}
                     </ReactMarkdown>
                   </div>
-                  {eventProposal && (
+                  {commandResult && commandResult.type === "clarification_needed" && (
                     <div style={{ maxWidth: "80%", alignSelf: "stretch" }}>
-                      <EventProposalCard proposal={eventProposal} onInsert={handleInsertEvent} />
+                      <EventClarificationCard
+                        clarificationData={commandResult as any}
+                        onSubmit={async (answers) => {
+                          // Re-submit with additional information
+                          const originalMessage = (commandResult as any).original_message || "";
+                          const combinedMessage = `/event ${originalMessage}\n\nAdditional details: ${answers}`;
+                          setInput(combinedMessage);
+                          // Trigger form submit
+                          const form = document.querySelector('form');
+                          if (form) form.requestSubmit();
+                        }}
+                        onCancel={() => {
+                          console.log("Cancelled event creation");
+                        }}
+                      />
+                    </div>
+                  )}
+                  {commandResult && commandResult.type === "event_confirmation" && (
+                    <div style={{ maxWidth: "80%", alignSelf: "stretch" }}>
+                      <EventCommandCard
+                        commandData={commandResult as any}
+                        onConfirm={async (previewId, modifications) => {
+                          try {
+                            const result = await api.post("/commands/event/confirm", {
+                              preview_id: previewId,
+                              confirmed: true,
+                              modifications: modifications || {},
+                              skip_entities: {},
+                            });
+
+                            // Show success message
+                            const eventId = result.event_id;
+                            const createdCount =
+                              (result.created_contacts?.length || 0) +
+                              (result.created_places?.length || 0);
+
+                            // Add success message to chat
+                            const successMessage: Message = {
+                              role: "assistant",
+                              content: `✓ Event created successfully! ${createdCount > 0 ? `Created ${createdCount} new entities.` : ""}\n\nEvent ID: ${eventId}`,
+                              timestamp: new Date(),
+                            };
+
+                            if (chatMode === "quick") {
+                              setQuickChatMessages((prev) => [...prev, successMessage]);
+                            }
+
+                            // Refresh threads list
+                            await refreshThreads();
+                          } catch (error: any) {
+                            console.error("Failed to create event:", error);
+                            alert(`Failed to create event: ${error.message || "Unknown error"}`);
+                          }
+                        }}
+                        onCancel={() => {
+                          console.log("Cancelled event creation");
+                        }}
+                      />
                     </div>
                   )}
                   <div

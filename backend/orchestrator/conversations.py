@@ -318,6 +318,9 @@ def parse_session_command(message: str) -> tuple[bool, str]:
     """
     Parse message for session commands like /new.
     Returns (is_reset, stripped_body).
+
+    DEPRECATED: Use commands.parser.parse_command instead.
+    This function is maintained for backward compatibility with /new command.
     """
     body = message.strip()
     body_lower = body.lower()

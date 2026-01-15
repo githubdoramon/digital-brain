@@ -119,8 +119,12 @@ export type StreamBundle = {
   thread_id?: string;
   thread_title?: string | null;
   is_new_session?: boolean;
-  event_proposal?: unknown;
+  // Removed: event_proposal (old event capture system)
   activated_skills?: string[];
+  command_result?: {
+    type: string;
+    [key: string]: unknown;
+  };
 };
 
 /**
@@ -132,14 +136,12 @@ export async function ask(
   options: {
     threadId?: string | null;
     limit?: number;
-    eventCaptureEnabled?: boolean;
   }
 ): Promise<StreamBundle> {
   return api.post<StreamBundle>("/ask", {
     question,
     thread_id: options.threadId,
     limit: options.limit ?? 5,
-    event_capture_enabled: options.eventCaptureEnabled ?? false,
     timeout: 60000,
   });
 }
@@ -163,7 +165,6 @@ export async function askWithStreaming(
   options: {
     threadId?: string | null;
     limit?: number;
-    eventCaptureEnabled?: boolean;
   },
   callbacks: StreamCallbacks
 ): Promise<StreamBundle> {
@@ -176,7 +177,6 @@ export async function askWithStreaming(
       question,
       thread_id: options.threadId,
       limit: options.limit ?? 5,
-      event_capture_enabled: options.eventCaptureEnabled ?? false,
     }),
   });
 

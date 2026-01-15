@@ -126,7 +126,6 @@ class AgentController:
         user_email: Optional[str] = None,
         conversation_history: Optional[list[dict[str, str]]] = None,
         search_limit: int = 5,
-        event_capture_enabled: bool = False,
     ) -> dict[str, Any]:
         """
         Run the agent loop for a question.
@@ -140,7 +139,6 @@ class AgentController:
             user_email: User's email for context
             conversation_history: Previous messages
             search_limit: Max search results
-            event_capture_enabled: Whether to extract event proposals
 
         Returns:
             Response bundle with answer and metadata
@@ -181,8 +179,7 @@ class AgentController:
                 conversation_history,
                 user_email,
                 search_limit,
-                event_capture_enabled,
-            )
+                )
 
             # Get tool definitions (filtered by intent)
             tools = self.tool_registry.get_tool_definitions(allowed_tools)
@@ -345,8 +342,7 @@ class AgentController:
                     run_id,
                     session_id,
                     total_start,
-                    event_capture_enabled,
-                )
+                        )
 
         except Exception as e:
             trace.trace_run_error(run_id, str(e))
@@ -361,7 +357,6 @@ class AgentController:
         user_email: Optional[str] = None,
         conversation_history: Optional[list[dict[str, str]]] = None,
         search_limit: int = 5,
-        event_capture_enabled: bool = False,
     ) -> AsyncGenerator[dict[str, Any], None]:
         """
         Stream agent responses with tool calling support.
@@ -401,8 +396,7 @@ class AgentController:
                 conversation_history,
                 user_email,
                 search_limit,
-                event_capture_enabled,
-            )
+                )
 
             tools = self.tool_registry.get_tool_definitions(allowed_tools)
             accumulated_content = ""
@@ -576,8 +570,7 @@ class AgentController:
                 run_id,
                 session_id,
                 total_start,
-                event_capture_enabled,
-            )
+                )
 
             yield {"type": "done", "bundle": bundle}
 
@@ -618,7 +611,6 @@ class AgentController:
         conversation_history: Optional[list[dict[str, str]]],
         user_email: Optional[str],
         search_limit: int,
-        event_capture_enabled: bool,
     ) -> list[dict[str, Any]]:
         """Build the message list for the LLM."""
         from prompts.context import (
@@ -630,7 +622,6 @@ class AgentController:
         from prompts.state_injection import build_state_message
         from prompts.system import (
             get_bounded_agent_protocol,
-            get_event_capture_prompt,
             get_system_prompt,
         )
 
@@ -660,10 +651,6 @@ class AgentController:
 
         # Time context
         messages.append({"role": "system", "content": get_time_context()})
-
-        # Event capture
-        if event_capture_enabled:
-            messages.append({"role": "system", "content": get_event_capture_prompt()})
 
         # Skills integration
         self._inject_skills(messages, question, conversation_history, state)
@@ -726,9 +713,9 @@ class AgentController:
         tools: list[dict[str, Any]],
     ) -> dict[str, Any]:
         """Make synchronous LLM call."""
-        headers = {"Content-Type": "application/json"}
-        if self.llm_api_key:
-            headers["Authorization"] = f"Bearer {self.llm_api_key}"
+        # Import at top of file would be better, but keeping local to minimize changes
+        sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        from llm_helpers import get_llm_headers
 
         payload = {
             "model": self.llm_model,
@@ -740,7 +727,7 @@ class AgentController:
 
         response = requests.post(
             f"{self.llm_base_url}/chat/completions",
-            headers=headers,
+            headers=get_llm_headers(),
             json=payload,
             timeout=self.llm_timeout,
         )
@@ -757,9 +744,8 @@ class AgentController:
         tools: list[dict[str, Any]],
     ) -> AsyncGenerator[dict[str, Any], None]:
         """Stream LLM responses."""
-        headers = {"Content-Type": "application/json"}
-        if self.llm_api_key:
-            headers["Authorization"] = f"Bearer {self.llm_api_key}"
+        sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        from llm_helpers import get_llm_headers
 
         payload = {
             "model": self.llm_model,
@@ -775,7 +761,7 @@ class AgentController:
             async with client.stream(
                 "POST",
                 f"{self.llm_base_url}/chat/completions",
-                headers=headers,
+                headers=get_llm_headers(),
                 json=payload,
             ) as response:
                 response.raise_for_status()
@@ -1297,15 +1283,9 @@ class AgentController:
         run_id: str,
         session_id: Optional[str],
         total_start: float,
-        event_capture_enabled: bool,
     ) -> dict[str, Any]:
         """Finalize the response."""
-        # Extract event proposal if enabled
-        event_proposal = None
-        if event_capture_enabled:
-            event_proposal = self._extract_event_proposal(answer)
-            if event_proposal:
-                answer = self._strip_event_proposal(answer)
+        # Removed: event_proposal extraction - use /event command instead
 
         duration_ms = (perf_counter() - total_start) * 1000
 
@@ -1364,9 +1344,6 @@ class AgentController:
                 "failed_tools": state.failed_tool_calls,
             },
         }
-
-        if event_proposal:
-            bundle["event_proposal"] = event_proposal
 
         if state.activated_skills:
             bundle["activated_skills"] = [s.get("name") for s in state.activated_skills]
