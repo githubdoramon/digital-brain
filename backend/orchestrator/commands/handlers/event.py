@@ -194,20 +194,42 @@ def _resolve_generic_terms_with_relationships(
         term_lower = term.lower().strip()
         print(f"[generic_resolution] Processing term: '{term}'")
 
-        # Extract relationship type from phrases like "my daughter", "the doctor"
-        # Remove possessives and articles
-        cleaned = term_lower.replace("my ", "").replace("the ", "").replace("a ", "").strip()
+        # Extract relationship type from phrases like "my daughter", "the doctor", "user's daughter"
+        # Remove possessives, articles, and "user's"
+        cleaned = (
+            term_lower
+            .replace("user's ", "")
+            .replace("my ", "")
+            .replace("the ", "")
+            .replace("a ", "")
+            .replace("an ", "")
+            .strip()
+        )
         print(f"[generic_resolution]   Cleaned to: '{cleaned}'")
 
-        # Check if this maps to a known relationship type
+        # Direct match first
         if cleaned in rel_map and rel_map[cleaned]:
-            # Use the first matching contact
             contact = rel_map[cleaned][0]
             resolved_name = contact.get("display_name", term)
             resolved[term] = resolved_name
-            print(f"[generic_resolution]   ✓ Resolved '{term}' -> '{resolved_name}'")
+            print(f"[generic_resolution]   ✓ Direct match: '{term}' -> '{resolved_name}'")
+            continue
+
+        # Smart matching: look for related relationship types
+        # For example: "daughter" should match "child", "father" should match "parent"
+        # Use the shared relationship type mappings from contacts module
+        possible_types = contacts_service.find_related_types(cleaned)
+        print(f"[generic_resolution]   Trying relationship types: {possible_types}")
+
+        for rel_type in possible_types:
+            if rel_type in rel_map and rel_map[rel_type]:
+                contact = rel_map[rel_type][0]
+                resolved_name = contact.get("display_name", term)
+                resolved[term] = resolved_name
+                print(f"[generic_resolution]   ✓ Smart match via '{rel_type}': '{term}' -> '{resolved_name}'")
+                break
         else:
-            print(f"[generic_resolution]   ✗ No match for '{cleaned}' in relationship types")
+            print(f"[generic_resolution]   ✗ No match for '{cleaned}' or related types")
 
     print(f"[generic_resolution] Resolution complete. Resolved {len(resolved)}/{len(terms)} terms")
     return resolved

@@ -141,121 +141,434 @@ export function EventCommandCard({
     }
   };
 
+  // Format date nicely
+  const formatDateTime = (dateStr: string) => {
+    const date = new Date(dateStr);
+    const today = new Date();
+    const tomorrow = new Date(today);
+    tomorrow.setDate(tomorrow.getDate() + 1);
+
+    const isToday = date.toDateString() === today.toDateString();
+    const isTomorrow = date.toDateString() === tomorrow.toDateString();
+
+    const timeStr = date.toLocaleTimeString('en-US', {
+      hour: 'numeric',
+      minute: '2-digit',
+      hour12: true
+    });
+
+    if (isToday) return `Today at ${timeStr}`;
+    if (isTomorrow) return `Tomorrow at ${timeStr}`;
+
+    return date.toLocaleDateString('en-US', {
+      weekday: 'short',
+      month: 'short',
+      day: 'numeric',
+      hour: 'numeric',
+      minute: '2-digit',
+      hour12: true
+    });
+  };
+
   return (
-    <div className="bg-white border border-gray-200 rounded-xl shadow-sm overflow-hidden">
-      {/* Header */}
-      <div className="bg-gradient-to-r from-blue-50 to-indigo-50 px-6 py-4 border-b border-gray-200">
-        <div className="flex items-start justify-between">
-          <div className="flex-1">
-            <div className="flex items-center gap-2">
-              <span className="text-2xl">📅</span>
-              <h3 className="text-lg font-semibold text-gray-900">Event Preview</h3>
+    <div style={{
+      background: 'linear-gradient(to bottom right, #ffffff, #f8fafc)',
+      border: '1px solid #e2e8f0',
+      borderRadius: '20px',
+      boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.05), 0 2px 4px -1px rgba(0, 0, 0, 0.03)',
+      overflow: 'hidden',
+      maxWidth: '700px',
+      margin: '0 auto',
+    }}>
+      {/* Modern Header with accent color */}
+      <div style={{
+        background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+        padding: '24px 28px',
+        position: 'relative',
+      }}>
+        <div style={{
+          display: 'flex',
+          alignItems: 'flex-start',
+          justifyContent: 'space-between',
+          gap: '16px',
+        }}>
+          <div style={{ flex: 1 }}>
+            <div style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '10px',
+              marginBottom: '8px',
+            }}>
+              <span style={{
+                fontSize: '28px',
+                lineHeight: 1,
+              }}>📅</span>
+              <h3 style={{
+                fontSize: '20px',
+                fontWeight: '600',
+                color: '#ffffff',
+                margin: 0,
+                letterSpacing: '-0.01em',
+              }}>New Event</h3>
             </div>
-            <p className="text-sm text-gray-600 mt-1">{commandData.message}</p>
+            <p style={{
+              fontSize: '14px',
+              color: 'rgba(255, 255, 255, 0.9)',
+              margin: 0,
+              lineHeight: '1.5',
+            }}>{commandData.message}</p>
           </div>
           <button
             onClick={() => setIsEditing(!isEditing)}
-            className="px-3 py-1.5 text-sm font-medium text-blue-600 hover:text-blue-700 hover:bg-blue-50 rounded-lg transition-colors"
+            style={{
+              background: 'rgba(255, 255, 255, 0.2)',
+              backdropFilter: 'blur(10px)',
+              border: '1px solid rgba(255, 255, 255, 0.3)',
+              borderRadius: '10px',
+              padding: '8px 16px',
+              fontSize: '14px',
+              fontWeight: '500',
+              color: '#ffffff',
+              cursor: 'pointer',
+              transition: 'all 0.2s',
+              whiteSpace: 'nowrap',
+            }}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.background = 'rgba(255, 255, 255, 0.3)';
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.background = 'rgba(255, 255, 255, 0.2)';
+            }}
           >
-            {isEditing ? "📖 Preview" : "✏️ Edit"}
+            {isEditing ? '👁️ Preview' : '✏️ Edit'}
           </button>
         </div>
       </div>
 
-      {/* Content */}
-      <div className="px-6 py-5 space-y-5">
-        {/* Title & Summary */}
-        <div>
-          <label className="flex items-center gap-1.5 text-xs font-semibold text-gray-700 uppercase mb-2">
-            <span>📝</span>
-            <span>What</span>
-          </label>
+      {/* Content with better spacing */}
+      <div style={{ padding: '28px' }}>
+        {/* Title & Summary - Most prominent */}
+        <div style={{ marginBottom: '24px' }}>
           {isEditing ? (
-            <div className="space-y-2">
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
               <input
                 type="text"
                 value={title}
                 onChange={(e) => setTitle(e.target.value)}
-                className="w-full px-4 py-2.5 bg-white border border-gray-300 rounded-lg text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                 placeholder="Event title"
+                style={{
+                  width: '100%',
+                  padding: '14px 16px',
+                  fontSize: '18px',
+                  fontWeight: '600',
+                  color: '#1e293b',
+                  background: '#ffffff',
+                  border: '2px solid #e2e8f0',
+                  borderRadius: '12px',
+                  outline: 'none',
+                  transition: 'all 0.2s',
+                  boxSizing: 'border-box',
+                }}
+                onFocus={(e) => {
+                  e.currentTarget.style.borderColor = '#667eea';
+                  e.currentTarget.style.boxShadow = '0 0 0 3px rgba(102, 126, 234, 0.1)';
+                }}
+                onBlur={(e) => {
+                  e.currentTarget.style.borderColor = '#e2e8f0';
+                  e.currentTarget.style.boxShadow = 'none';
+                }}
               />
               <textarea
                 value={summary}
                 onChange={(e) => setSummary(e.target.value)}
-                className="w-full px-4 py-2.5 bg-white border border-gray-300 rounded-lg text-gray-900 placeholder-gray-400 resize-none focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                placeholder="Event description"
                 rows={3}
-                placeholder="Event summary"
+                style={{
+                  width: '100%',
+                  padding: '14px 16px',
+                  fontSize: '15px',
+                  color: '#475569',
+                  background: '#ffffff',
+                  border: '2px solid #e2e8f0',
+                  borderRadius: '12px',
+                  outline: 'none',
+                  resize: 'vertical',
+                  fontFamily: 'inherit',
+                  lineHeight: '1.6',
+                  transition: 'all 0.2s',
+                  boxSizing: 'border-box',
+                }}
+                onFocus={(e) => {
+                  e.currentTarget.style.borderColor = '#667eea';
+                  e.currentTarget.style.boxShadow = '0 0 0 3px rgba(102, 126, 234, 0.1)';
+                }}
+                onBlur={(e) => {
+                  e.currentTarget.style.borderColor = '#e2e8f0';
+                  e.currentTarget.style.boxShadow = 'none';
+                }}
               />
             </div>
           ) : (
-            <div className="bg-gray-50 rounded-lg p-4">
-              <p className="text-gray-900 font-medium">{title}</p>
+            <div>
+              <h4 style={{
+                fontSize: '22px',
+                fontWeight: '600',
+                color: '#0f172a',
+                margin: '0 0 8px 0',
+                letterSpacing: '-0.01em',
+                lineHeight: '1.3',
+              }}>{title}</h4>
               {summary && summary !== title && (
-                <p className="text-sm text-gray-600 mt-1">{summary}</p>
+                <p style={{
+                  fontSize: '15px',
+                  color: '#64748b',
+                  margin: 0,
+                  lineHeight: '1.6',
+                }}>{summary}</p>
               )}
             </div>
           )}
         </div>
 
-        {/* When */}
-        <div>
-          <label className="flex items-center gap-1.5 text-xs font-semibold text-gray-700 uppercase mb-2">
-            <span>🕐</span>
-            <span>When</span>
-          </label>
-          {isEditing ? (
-            <input
-              type="datetime-local"
-              value={when ? new Date(when).toISOString().slice(0, 16) : ""}
-              onChange={(e) => setWhen(e.target.value ? new Date(e.target.value).toISOString() : "")}
-              className="w-full px-4 py-2.5 bg-white border border-gray-300 rounded-lg text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-            />
-          ) : (
-            <div className="bg-gray-50 rounded-lg px-4 py-2.5">
-              <p className="text-gray-900">
-                {when ? new Date(when).toLocaleString() : "Not specified"}
-              </p>
+        {/* When & Where - Side by side cards */}
+        <div style={{
+          display: 'grid',
+          gridTemplateColumns: when || isEditing ? '1fr 1fr' : '1fr',
+          gap: '12px',
+          marginBottom: '24px',
+        }}>
+          {/* When */}
+          {(when || isEditing) && (
+            <div>
+              {isEditing ? (
+                <div>
+                  <label style={{
+                    display: 'block',
+                    fontSize: '12px',
+                    fontWeight: '600',
+                    color: '#64748b',
+                    textTransform: 'uppercase',
+                    letterSpacing: '0.05em',
+                    marginBottom: '8px',
+                  }}>
+                    🕐 When
+                  </label>
+                  <input
+                    type="datetime-local"
+                    value={when ? new Date(when).toISOString().slice(0, 16) : ""}
+                    onChange={(e) => setWhen(e.target.value ? new Date(e.target.value).toISOString() : "")}
+                    style={{
+                      width: '100%',
+                      padding: '12px 14px',
+                      fontSize: '14px',
+                      color: '#1e293b',
+                      background: '#ffffff',
+                      border: '2px solid #e2e8f0',
+                      borderRadius: '10px',
+                      outline: 'none',
+                      transition: 'all 0.2s',
+                      boxSizing: 'border-box',
+                    }}
+                    onFocus={(e) => {
+                      e.currentTarget.style.borderColor = '#667eea';
+                      e.currentTarget.style.boxShadow = '0 0 0 3px rgba(102, 126, 234, 0.1)';
+                    }}
+                    onBlur={(e) => {
+                      e.currentTarget.style.borderColor = '#e2e8f0';
+                      e.currentTarget.style.boxShadow = 'none';
+                    }}
+                  />
+                </div>
+              ) : (
+                <div style={{
+                  background: 'linear-gradient(135deg, #f0f9ff 0%, #e0f2fe 100%)',
+                  border: '1px solid #bae6fd',
+                  borderRadius: '12px',
+                  padding: '14px 16px',
+                }}>
+                  <div style={{
+                    fontSize: '11px',
+                    fontWeight: '600',
+                    color: '#0369a1',
+                    textTransform: 'uppercase',
+                    letterSpacing: '0.05em',
+                    marginBottom: '6px',
+                  }}>
+                    🕐 When
+                  </div>
+                  <div style={{
+                    fontSize: '14px',
+                    fontWeight: '500',
+                    color: '#0c4a6e',
+                  }}>
+                    {formatDateTime(when)}
+                  </div>
+                </div>
+              )}
             </div>
           )}
-        </div>
 
-        {/* Where */}
-        <div>
-          <label className="flex items-center gap-1.5 text-xs font-semibold text-gray-700 uppercase mb-2">
-            <span>📍</span>
-            <span>Where</span>
-          </label>
-          {isEditing ? (
-            <input
-              type="text"
-              value={where}
-              onChange={(e) => setWhere(e.target.value)}
-              className="w-full px-4 py-2.5 bg-white border border-gray-300 rounded-lg text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-              placeholder="Location"
-            />
-          ) : (
-            <div className="bg-gray-50 rounded-lg px-4 py-2.5">
-              <p className="text-gray-900">{where || "Not specified"}</p>
-            </div>
-          )}
-        </div>
-
-        {/* Existing Contacts */}
-        {resolution.contacts && resolution.contacts.length > 0 && (
+          {/* Where */}
           <div>
-            <label className="flex items-center gap-1.5 text-xs font-semibold text-gray-700 uppercase mb-2">
-              <span>👥</span>
-              <span>People (Found)</span>
-            </label>
-            <div className="bg-green-50 border border-green-200 rounded-lg p-3 space-y-2">
+            {isEditing ? (
+              <div>
+                <label style={{
+                  display: 'block',
+                  fontSize: '12px',
+                  fontWeight: '600',
+                  color: '#64748b',
+                  textTransform: 'uppercase',
+                  letterSpacing: '0.05em',
+                  marginBottom: '8px',
+                }}>
+                  📍 Where
+                </label>
+                <input
+                  type="text"
+                  value={where}
+                  onChange={(e) => setWhere(e.target.value)}
+                  placeholder="Add location"
+                  style={{
+                    width: '100%',
+                    padding: '12px 14px',
+                    fontSize: '14px',
+                    color: '#1e293b',
+                    background: '#ffffff',
+                    border: '2px solid #e2e8f0',
+                    borderRadius: '10px',
+                    outline: 'none',
+                    transition: 'all 0.2s',
+                    boxSizing: 'border-box',
+                  }}
+                  onFocus={(e) => {
+                    e.currentTarget.style.borderColor = '#667eea';
+                    e.currentTarget.style.boxShadow = '0 0 0 3px rgba(102, 126, 234, 0.1)';
+                  }}
+                  onBlur={(e) => {
+                    e.currentTarget.style.borderColor = '#e2e8f0';
+                    e.currentTarget.style.boxShadow = 'none';
+                  }}
+                />
+              </div>
+            ) : where ? (
+              <div style={{
+                background: 'linear-gradient(135deg, #fef3c7 0%, #fde68a 100%)',
+                border: '1px solid #fcd34d',
+                borderRadius: '12px',
+                padding: '14px 16px',
+              }}>
+                <div style={{
+                  fontSize: '11px',
+                  fontWeight: '600',
+                  color: '#92400e',
+                  textTransform: 'uppercase',
+                  letterSpacing: '0.05em',
+                  marginBottom: '6px',
+                }}>
+                  📍 Where
+                </div>
+                <div style={{
+                  fontSize: '14px',
+                  fontWeight: '500',
+                  color: '#78350f',
+                }}>
+                  {where}
+                </div>
+              </div>
+            ) : null}
+          </div>
+        </div>
+
+        {/* People - Clean list */}
+        {(resolution.contacts.length > 0 || resolution.new_entities?.contacts?.length > 0) && (
+          <div style={{ marginBottom: '24px' }}>
+            <div style={{
+              fontSize: '12px',
+              fontWeight: '600',
+              color: '#64748b',
+              textTransform: 'uppercase',
+              letterSpacing: '0.05em',
+              marginBottom: '10px',
+            }}>
+              👥 People
+            </div>
+            <div style={{
+              background: '#ffffff',
+              border: '1px solid #e2e8f0',
+              borderRadius: '12px',
+              padding: '4px',
+            }}>
               {resolution.contacts.map((contact, idx) => (
                 <div
                   key={idx}
-                  className="flex items-center justify-between"
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    padding: '10px 12px',
+                    borderRadius: '8px',
+                    transition: 'background 0.15s',
+                  }}
+                  onMouseEnter={(e) => {
+                    e.currentTarget.style.background = '#f8fafc';
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.background = 'transparent';
+                  }}
                 >
-                  <span className="text-gray-900 text-sm font-medium">{contact.display_name}</span>
-                  <span className="text-xs text-green-700 bg-green-100 px-2 py-0.5 rounded-full">
-                    {contact.confidence === "high" ? "✓ High confidence" : "~ Medium confidence"}
+                  <span style={{
+                    fontSize: '14px',
+                    fontWeight: '500',
+                    color: '#1e293b',
+                  }}>{contact.display_name}</span>
+                  <span style={{
+                    fontSize: '11px',
+                    fontWeight: '600',
+                    color: contact.confidence === 'high' ? '#059669' : '#d97706',
+                    background: contact.confidence === 'high' ? '#d1fae5' : '#fed7aa',
+                    padding: '4px 10px',
+                    borderRadius: '6px',
+                    textTransform: 'uppercase',
+                    letterSpacing: '0.03em',
+                  }}>
+                    {contact.confidence === 'high' ? '✓ High' : '~ Medium'}
+                  </span>
+                </div>
+              ))}
+              {resolution.new_entities?.contacts?.map((contact, idx) => (
+                <div
+                  key={`new-${idx}`}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    padding: '10px 12px',
+                    borderRadius: '8px',
+                    transition: 'background 0.15s',
+                  }}
+                  onMouseEnter={(e) => {
+                    e.currentTarget.style.background = '#f8fafc';
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.background = 'transparent';
+                  }}
+                >
+                  <span style={{
+                    fontSize: '14px',
+                    fontWeight: '500',
+                    color: '#1e293b',
+                  }}>{contact.display_name}</span>
+                  <span style={{
+                    fontSize: '11px',
+                    fontWeight: '600',
+                    color: '#7c3aed',
+                    background: '#ede9fe',
+                    padding: '4px 10px',
+                    borderRadius: '6px',
+                    textTransform: 'uppercase',
+                    letterSpacing: '0.03em',
+                  }}>
+                    ✨ New
                   </span>
                 </div>
               ))}
@@ -263,143 +576,280 @@ export function EventCommandCard({
           </div>
         )}
 
-        {/* New Contacts to Create */}
-        {resolution.new_entities?.contacts &&
-          resolution.new_entities.contacts.length > 0 && (
-            <div>
-              <label className="flex items-center gap-1.5 text-xs font-semibold text-gray-700 uppercase mb-2">
-                <span>👤</span>
-                <span>New People (Will Create)</span>
-              </label>
-              <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 space-y-2">
-                {resolution.new_entities.contacts.map((contact, idx) => (
-                  <div key={idx} className="flex items-center gap-2">
-                    <span className="text-amber-700 text-sm font-medium">{contact.display_name}</span>
-                    <span className="text-xs text-amber-600 bg-amber-100 px-2 py-0.5 rounded-full">New</span>
-                  </div>
-                ))}
-              </div>
+        {/* New Places */}
+        {resolution.new_entities?.places && resolution.new_entities.places.length > 0 && (
+          <div style={{ marginBottom: '24px' }}>
+            <div style={{
+              fontSize: '12px',
+              fontWeight: '600',
+              color: '#64748b',
+              textTransform: 'uppercase',
+              letterSpacing: '0.05em',
+              marginBottom: '10px',
+            }}>
+              🗺️ New Places
             </div>
-          )}
-
-        {/* New Places to Create */}
-        {resolution.new_entities?.places &&
-          resolution.new_entities.places.length > 0 && (
-            <div>
-              <label className="flex items-center gap-1.5 text-xs font-semibold text-gray-700 uppercase mb-2">
-                <span>🗺️</span>
-                <span>New Places (Will Create)</span>
-              </label>
-              <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 space-y-2">
-                {resolution.new_entities.places.map((place, idx) => (
-                  <div key={idx} className="flex items-center gap-2">
-                    <span className="text-amber-700 text-sm font-medium">{place.name}</span>
-                    <span className="text-xs text-amber-600 bg-amber-100 px-2 py-0.5 rounded-full">New</span>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-
-        {/* Tags */}
-        <div>
-          <label className="flex items-center gap-1.5 text-xs font-semibold text-gray-700 uppercase mb-2">
-            <span>🏷️</span>
-            <span>Tags</span>
-          </label>
-          {isEditing ? (
-            <input
-              type="text"
-              value={tags}
-              onChange={(e) => setTags(e.target.value)}
-              className="w-full px-4 py-2.5 bg-white border border-gray-300 rounded-lg text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-              placeholder="Comma-separated tags"
-            />
-          ) : tags ? (
-            <div className="flex flex-wrap gap-2">
-              {tags.split(",").map((tag, idx) => (
-                <span
+            <div style={{
+              background: '#ffffff',
+              border: '1px solid #e2e8f0',
+              borderRadius: '12px',
+              padding: '4px',
+            }}>
+              {resolution.new_entities.places.map((place, idx) => (
+                <div
                   key={idx}
-                  className="px-3 py-1 text-xs font-medium bg-gray-100 text-gray-700 rounded-full border border-gray-200"
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '8px',
+                    padding: '10px 12px',
+                    borderRadius: '8px',
+                  }}
                 >
-                  {tag.trim()}
-                </span>
+                  <span style={{
+                    fontSize: '14px',
+                    fontWeight: '500',
+                    color: '#1e293b',
+                  }}>{place.name}</span>
+                  <span style={{
+                    fontSize: '11px',
+                    fontWeight: '600',
+                    color: '#7c3aed',
+                    background: '#ede9fe',
+                    padding: '4px 10px',
+                    borderRadius: '6px',
+                    textTransform: 'uppercase',
+                    letterSpacing: '0.03em',
+                  }}>
+                    ✨ New
+                  </span>
+                </div>
               ))}
             </div>
-          ) : (
-            <p className="text-gray-400 text-sm italic">No tags</p>
-          )}
-        </div>
+          </div>
+        )}
 
-        {/* Relationship Suggestions */}
+        {/* Relationship Suggestions - Modern cards */}
         {commandData.relationship_suggestions && commandData.relationship_suggestions.length > 0 && (
-          <div>
-            <label className="flex items-center gap-1.5 text-xs font-semibold text-gray-700 uppercase mb-2">
-              <span>🔗</span>
-              <span>Suggested Relationships</span>
-            </label>
-            <div className="bg-purple-50 border border-purple-200 rounded-lg p-3 space-y-3">
-              <p className="text-xs text-purple-700 mb-2">
+          <div style={{ marginBottom: '24px' }}>
+            <div style={{
+              fontSize: '12px',
+              fontWeight: '600',
+              color: '#64748b',
+              textTransform: 'uppercase',
+              letterSpacing: '0.05em',
+              marginBottom: '10px',
+            }}>
+              🔗 Suggested Relationships
+            </div>
+            <div style={{
+              background: 'linear-gradient(135deg, #faf5ff 0%, #f3e8ff 100%)',
+              border: '1px solid #e9d5ff',
+              borderRadius: '12px',
+              padding: '16px',
+            }}>
+              <p style={{
+                fontSize: '13px',
+                color: '#6b21a8',
+                margin: '0 0 12px 0',
+                lineHeight: '1.5',
+              }}>
                 Based on this event, would you like to create these relationships?
               </p>
-              {commandData.relationship_suggestions.map((suggestion, idx) => (
-                <label
-                  key={idx}
-                  className="flex items-start gap-3 cursor-pointer hover:bg-purple-100 p-2 rounded transition-colors"
-                >
-                  <input
-                    type="checkbox"
-                    checked={selectedRelationships.has(idx)}
-                    onChange={() => toggleRelationship(idx)}
-                    className="mt-0.5 w-4 h-4 text-purple-600 rounded focus:ring-2 focus:ring-purple-500"
-                  />
-                  <div className="flex-1 text-sm">
-                    <div className="font-medium text-gray-900">
-                      <span className="text-purple-700">{suggestion.from_display_name}</span>
-                      {" → "}
-                      <span className="text-purple-700">{suggestion.to_display_name}</span>
-                    </div>
-                    <div className="text-xs text-gray-600 mt-0.5">
-                      {suggestion.from_display_name} is {suggestion.relationship_type} of {suggestion.to_display_name}
-                      {suggestion.reciprocal_type && suggestion.reciprocal_type !== suggestion.relationship_type && (
-                        <> ({suggestion.to_display_name} is {suggestion.reciprocal_type} of {suggestion.from_display_name})</>
-                      )}
-                    </div>
-                    {suggestion.reasoning && (
-                      <div className="text-xs text-gray-500 italic mt-1">
-                        {suggestion.reasoning}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                {commandData.relationship_suggestions.map((suggestion, idx) => (
+                  <label
+                    key={idx}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'flex-start',
+                      gap: '12px',
+                      background: '#ffffff',
+                      padding: '14px',
+                      borderRadius: '10px',
+                      cursor: 'pointer',
+                      border: '2px solid transparent',
+                      transition: 'all 0.2s',
+                    }}
+                    onMouseEnter={(e) => {
+                      e.currentTarget.style.borderColor = '#c084fc';
+                      e.currentTarget.style.boxShadow = '0 2px 8px rgba(192, 132, 252, 0.15)';
+                    }}
+                    onMouseLeave={(e) => {
+                      e.currentTarget.style.borderColor = 'transparent';
+                      e.currentTarget.style.boxShadow = 'none';
+                    }}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={selectedRelationships.has(idx)}
+                      onChange={() => toggleRelationship(idx)}
+                      style={{
+                        width: '18px',
+                        height: '18px',
+                        marginTop: '2px',
+                        cursor: 'pointer',
+                        accentColor: '#7c3aed',
+                      }}
+                    />
+                    <div style={{ flex: 1 }}>
+                      <div style={{
+                        fontSize: '14px',
+                        fontWeight: '600',
+                        color: '#1e293b',
+                        marginBottom: '4px',
+                      }}>
+                        <span style={{ color: '#7c3aed' }}>{suggestion.from_display_name}</span>
+                        {' → '}
+                        <span style={{ color: '#7c3aed' }}>{suggestion.to_display_name}</span>
                       </div>
-                    )}
-                    <div className="mt-1">
-                      <span className={`text-xs px-2 py-0.5 rounded-full ${
-                        suggestion.confidence === "high"
-                          ? "bg-green-100 text-green-700"
-                          : suggestion.confidence === "medium"
-                          ? "bg-yellow-100 text-yellow-700"
-                          : "bg-gray-100 text-gray-700"
-                      }`}>
-                        {suggestion.confidence} confidence
+                      <div style={{
+                        fontSize: '13px',
+                        color: '#64748b',
+                        marginBottom: '6px',
+                        lineHeight: '1.5',
+                      }}>
+                        {suggestion.from_display_name} is <strong>{suggestion.relationship_type}</strong> of {suggestion.to_display_name}
+                        {suggestion.reciprocal_type && suggestion.reciprocal_type !== suggestion.relationship_type && (
+                          <> ({suggestion.to_display_name} is <strong>{suggestion.reciprocal_type}</strong> of {suggestion.from_display_name})</>
+                        )}
+                      </div>
+                      {suggestion.reasoning && (
+                        <div style={{
+                          fontSize: '12px',
+                          color: '#94a3b8',
+                          fontStyle: 'italic',
+                          marginBottom: '6px',
+                          lineHeight: '1.4',
+                        }}>
+                          {suggestion.reasoning}
+                        </div>
+                      )}
+                      <span style={{
+                        display: 'inline-block',
+                        fontSize: '11px',
+                        fontWeight: '600',
+                        padding: '4px 10px',
+                        borderRadius: '6px',
+                        textTransform: 'uppercase',
+                        letterSpacing: '0.03em',
+                        background: suggestion.confidence === 'high' ? '#d1fae5' : suggestion.confidence === 'medium' ? '#fed7aa' : '#f1f5f9',
+                        color: suggestion.confidence === 'high' ? '#059669' : suggestion.confidence === 'medium' ? '#d97706' : '#64748b',
+                      }}>
+                        {suggestion.confidence}
                       </span>
                     </div>
-                  </div>
-                </label>
-              ))}
+                  </label>
+                ))}
+              </div>
             </div>
+          </div>
+        )}
+
+        {/* Tags */}
+        {(tags || isEditing) && (
+          <div style={{ marginBottom: '24px' }}>
+            <div style={{
+              fontSize: '12px',
+              fontWeight: '600',
+              color: '#64748b',
+              textTransform: 'uppercase',
+              letterSpacing: '0.05em',
+              marginBottom: '10px',
+            }}>
+              🏷️ Tags
+            </div>
+            {isEditing ? (
+              <input
+                type="text"
+                value={tags}
+                onChange={(e) => setTags(e.target.value)}
+                placeholder="work, meeting, important"
+                style={{
+                  width: '100%',
+                  padding: '12px 14px',
+                  fontSize: '14px',
+                  color: '#1e293b',
+                  background: '#ffffff',
+                  border: '2px solid #e2e8f0',
+                  borderRadius: '10px',
+                  outline: 'none',
+                  transition: 'all 0.2s',
+                  boxSizing: 'border-box',
+                }}
+                onFocus={(e) => {
+                  e.currentTarget.style.borderColor = '#667eea';
+                  e.currentTarget.style.boxShadow = '0 0 0 3px rgba(102, 126, 234, 0.1)';
+                }}
+                onBlur={(e) => {
+                  e.currentTarget.style.borderColor = '#e2e8f0';
+                  e.currentTarget.style.boxShadow = 'none';
+                }}
+              />
+            ) : tags ? (
+              <div style={{
+                display: 'flex',
+                flexWrap: 'wrap',
+                gap: '8px',
+              }}>
+                {tags.split(",").map((tag, idx) => (
+                  <span
+                    key={idx}
+                    style={{
+                      fontSize: '13px',
+                      fontWeight: '500',
+                      color: '#475569',
+                      background: '#f1f5f9',
+                      padding: '6px 14px',
+                      borderRadius: '8px',
+                      border: '1px solid #e2e8f0',
+                    }}
+                  >
+                    {tag.trim()}
+                  </span>
+                ))}
+              </div>
+            ) : (
+              <p style={{
+                fontSize: '14px',
+                color: '#94a3b8',
+                fontStyle: 'italic',
+                margin: 0,
+              }}>No tags</p>
+            )}
           </div>
         )}
 
         {/* Event Types */}
         {commandData.extracted.types && commandData.extracted.types.length > 0 && (
           <div>
-            <label className="flex items-center gap-1.5 text-xs font-semibold text-gray-700 uppercase mb-2">
-              <span>🔖</span>
-              <span>Event Types</span>
-            </label>
-            <div className="flex flex-wrap gap-2">
+            <div style={{
+              fontSize: '12px',
+              fontWeight: '600',
+              color: '#64748b',
+              textTransform: 'uppercase',
+              letterSpacing: '0.05em',
+              marginBottom: '10px',
+            }}>
+              🔖 Event Types
+            </div>
+            <div style={{
+              display: 'flex',
+              flexWrap: 'wrap',
+              gap: '8px',
+            }}>
               {commandData.extracted.types.map((type, idx) => (
                 <span
                   key={idx}
-                  className="px-3 py-1 text-xs font-medium bg-blue-50 text-blue-700 rounded-full border border-blue-200"
+                  style={{
+                    fontSize: '13px',
+                    fontWeight: '500',
+                    color: '#1e40af',
+                    background: 'linear-gradient(135deg, #dbeafe 0%, #bfdbfe 100%)',
+                    padding: '6px 14px',
+                    borderRadius: '8px',
+                    border: '1px solid #93c5fd',
+                  }}
                 >
                   {type}
                 </span>
@@ -409,19 +859,75 @@ export function EventCommandCard({
         )}
       </div>
 
-      {/* Actions */}
-      <div className="bg-gray-50 px-6 py-4 border-t border-gray-200 flex gap-3">
+      {/* Modern Action Buttons */}
+      <div style={{
+        background: '#f8fafc',
+        padding: '20px 28px',
+        borderTop: '1px solid #e2e8f0',
+        display: 'flex',
+        gap: '12px',
+      }}>
         <button
           onClick={handleConfirm}
           disabled={isSubmitting || !title.trim()}
-          className="flex-1 px-4 py-2.5 bg-blue-600 text-white font-medium rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors shadow-sm"
+          style={{
+            flex: 1,
+            background: isSubmitting || !title.trim()
+              ? '#cbd5e1'
+              : 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+            color: '#ffffff',
+            border: 'none',
+            borderRadius: '12px',
+            padding: '14px 24px',
+            fontSize: '15px',
+            fontWeight: '600',
+            cursor: isSubmitting || !title.trim() ? 'not-allowed' : 'pointer',
+            transition: 'all 0.2s',
+            boxShadow: isSubmitting || !title.trim()
+              ? 'none'
+              : '0 4px 12px rgba(102, 126, 234, 0.3)',
+            opacity: isSubmitting || !title.trim() ? 0.6 : 1,
+          }}
+          onMouseEnter={(e) => {
+            if (!isSubmitting && title.trim()) {
+              e.currentTarget.style.transform = 'translateY(-1px)';
+              e.currentTarget.style.boxShadow = '0 6px 16px rgba(102, 126, 234, 0.4)';
+            }
+          }}
+          onMouseLeave={(e) => {
+            e.currentTarget.style.transform = 'translateY(0)';
+            e.currentTarget.style.boxShadow = isSubmitting || !title.trim()
+              ? 'none'
+              : '0 4px 12px rgba(102, 126, 234, 0.3)';
+          }}
         >
-          {isSubmitting ? "Creating..." : "✓ Confirm & Create Event"}
+          {isSubmitting ? '✨ Creating...' : '✓ Create Event'}
         </button>
         <button
           onClick={onCancel}
           disabled={isSubmitting}
-          className="px-6 py-2.5 bg-white text-gray-700 font-medium rounded-lg hover:bg-gray-100 disabled:opacity-50 border border-gray-300 transition-colors"
+          style={{
+            background: '#ffffff',
+            color: '#64748b',
+            border: '2px solid #e2e8f0',
+            borderRadius: '12px',
+            padding: '14px 24px',
+            fontSize: '15px',
+            fontWeight: '600',
+            cursor: isSubmitting ? 'not-allowed' : 'pointer',
+            transition: 'all 0.2s',
+            opacity: isSubmitting ? 0.5 : 1,
+          }}
+          onMouseEnter={(e) => {
+            if (!isSubmitting) {
+              e.currentTarget.style.borderColor = '#cbd5e1';
+              e.currentTarget.style.background = '#f8fafc';
+            }
+          }}
+          onMouseLeave={(e) => {
+            e.currentTarget.style.borderColor = '#e2e8f0';
+            e.currentTarget.style.background = '#ffffff';
+          }}
         >
           Cancel
         </button>

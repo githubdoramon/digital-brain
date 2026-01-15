@@ -28,6 +28,9 @@ __all__ = [
     "search_contacts",
     "get_contact_relationships",
     "find_related_contacts",
+    # Relationship resolution functions
+    "get_relationship_type_mappings",
+    "find_related_types",
 ]
 
 
@@ -1128,3 +1131,114 @@ def _collect_contact_relationships(contact_ids: Iterable[str] | None = None) -> 
         )
 
     return dict(relationships_map)
+
+
+# ---------------------------------------------------------------------------
+# Relationship Type Mappings
+# ---------------------------------------------------------------------------
+
+
+def get_relationship_type_mappings() -> dict[str, list[str]]:
+    """
+    Get a mapping of relationship types to their related/equivalent types.
+
+    This is useful for resolving generic terms like "my daughter" to actual
+    relationship types in the database, which might be stored as "child".
+
+    Returns:
+        Dict mapping relationship terms to lists of related database types
+
+    Examples:
+        >>> mappings = get_relationship_type_mappings()
+        >>> mappings["daughter"]
+        ["child", "daughter"]
+        >>> mappings["wife"]
+        ["spouse", "partner", "wife"]
+    """
+    return {
+        # Family - children
+        "daughter": ["child", "daughter"],
+        "son": ["child", "son"],
+        "child": ["child", "daughter", "son"],
+
+        # Family - spouse/partner
+        "wife": ["spouse", "partner", "wife"],
+        "husband": ["spouse", "partner", "husband"],
+        "spouse": ["spouse", "partner", "wife", "husband"],
+        "partner": ["partner", "spouse"],
+
+        # Family - parents
+        "mother": ["parent", "mother"],
+        "father": ["parent", "father"],
+        "parent": ["parent", "mother", "father"],
+        "mom": ["parent", "mother"],
+        "dad": ["parent", "father"],
+
+        # Family - siblings
+        "brother": ["sibling", "brother"],
+        "sister": ["sibling", "sister"],
+        "sibling": ["sibling", "brother", "sister"],
+
+        # Family - extended
+        "grandmother": ["grandparent", "grandmother"],
+        "grandfather": ["grandparent", "grandfather"],
+        "grandparent": ["grandparent", "grandmother", "grandfather"],
+        "grandma": ["grandparent", "grandmother"],
+        "grandpa": ["grandparent", "grandfather"],
+        "granddaughter": ["grandchild", "granddaughter"],
+        "grandson": ["grandchild", "grandson"],
+        "grandchild": ["grandchild", "granddaughter", "grandson"],
+        "uncle": ["uncle", "aunt"],  # Sometimes people say uncle generically
+        "aunt": ["aunt", "uncle"],
+        "nephew": ["nephew", "niece"],
+        "niece": ["niece", "nephew"],
+        "cousin": ["cousin"],
+
+        # Professional
+        "doctor": ["doctor"],
+        "lawyer": ["lawyer"],
+        "therapist": ["therapist"],
+        "accountant": ["accountant"],
+        "colleague": ["colleague", "co-worker", "coworker"],
+        "coworker": ["colleague", "co-worker", "coworker"],
+        "co-worker": ["colleague", "co-worker", "coworker"],
+        "manager": ["manager", "boss"],
+        "boss": ["manager", "boss"],
+        "employee": ["employee"],
+        "client": ["client", "customer"],
+        "customer": ["client", "customer"],
+        "vendor": ["vendor", "supplier"],
+        "supplier": ["vendor", "supplier"],
+
+        # Social
+        "friend": ["friend"],
+        "neighbor": ["neighbor"],
+        "acquaintance": ["acquaintance"],
+        "roommate": ["roommate"],
+    }
+
+
+def find_related_types(relationship_type: str) -> list[str]:
+    """
+    Find all related relationship types for a given type.
+
+    This helps resolve generic relationship terms to their database equivalents.
+    For example, "daughter" might be stored as "child" in the database.
+
+    Args:
+        relationship_type: The relationship type to look up (e.g., "daughter", "wife")
+
+    Returns:
+        List of related types to try, with the original type included as fallback
+
+    Examples:
+        >>> find_related_types("daughter")
+        ["child", "daughter"]
+        >>> find_related_types("wife")
+        ["spouse", "partner", "wife"]
+        >>> find_related_types("unknown_type")
+        ["unknown_type"]
+    """
+    mappings = get_relationship_type_mappings()
+    cleaned = relationship_type.lower().strip()
+    return mappings.get(cleaned, [cleaned])

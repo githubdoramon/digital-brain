@@ -227,7 +227,6 @@ export default function Home() {
   const [selectedThreadId, setSelectedThreadId] = useState<string | null>(null);
   const [isLoadingThreads, setIsLoadingThreads] = useState(false);
   const [isLoadingMessages, setIsLoadingMessages] = useState(false);
-  const [eventCaptureEnabled, setEventCaptureEnabled] = useState(false);
   const [streamingContent, setStreamingContent] = useState<string>("");
   const [streamingStatus, setStreamingStatus] = useState<string>("");
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -260,7 +259,6 @@ export default function Home() {
     try {
       const thread = await api.get<ThreadDetail>(`/threads/${threadId}`);
       setSelectedThreadId(thread.id);
-      setEventCaptureEnabled(false);
       const mappedMessages = thread.messages.map((message) => {
         const metadata = (message.metadata ?? undefined) as AssistantMetadata | undefined;
         return {
@@ -303,8 +301,7 @@ export default function Home() {
           } else {
             setSelectedThreadId(null);
             setMessages([]);
-            setEventCaptureEnabled(false);
-          }
+                }
         }
       } catch (error) {
         console.error("Failed to delete conversation thread", error);
@@ -333,8 +330,7 @@ export default function Home() {
       } else {
         setMessages([]);
         setSelectedThreadId(null);
-        setEventCaptureEnabled(false);
-      }
+        }
     })();
     return () => {
       isMounted = false;
@@ -412,8 +408,7 @@ export default function Home() {
           threadId = created.id;
           setThreads((prev) => [created, ...prev]);
           setSelectedThreadId(threadId);
-          setEventCaptureEnabled(false);
-          setMessages([]);
+              setMessages([]);
         }
 
         const userMessage: Message = {
@@ -502,8 +497,7 @@ export default function Home() {
                 const created = await api.post<ThreadSummary>("/threads", {});
                 setThreads((prev) => [created, ...prev]);
                 setSelectedThreadId(created.id);
-                setEventCaptureEnabled(false);
-                setMessages([]);
+                          setMessages([]);
               } catch (error) {
                 console.error("Failed to create thread", error);
               } finally {
@@ -671,21 +665,6 @@ export default function Home() {
               <p style={{ fontSize: "0.875rem", color: "#666", marginTop: "4px" }}>
                 Ask about your contacts, meetings, documents, and more
               </p>
-            </div>
-            <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
-              <label style={{ display: "flex", alignItems: "center", gap: "8px", fontSize: "0.9rem", color: "#0f172a" }}>
-                <input
-                  type="checkbox"
-                  checked={eventCaptureEnabled}
-                  disabled={!selectedThreadId}
-                  onChange={(e) => setEventCaptureEnabled(e.target.checked)}
-                  style={{ width: "18px", height: "18px" }}
-                />
-                Enable event capture
-              </label>
-              <span style={{ fontSize: "0.85rem", color: "#475569" }}>
-                {eventCaptureEnabled ? "LLM will propose structured events" : "Disabled"}
-              </span>
             </div>
           </div>
           <div
