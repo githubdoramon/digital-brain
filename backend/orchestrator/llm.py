@@ -229,8 +229,7 @@ async def answer_question(
         if session_id and user_email and result.get("answer"):
             try:
                 assistant_metadata = {}
-                if result.get("event_proposal"):
-                    assistant_metadata["event_proposal"] = result["event_proposal"]
+                # Removed: event_proposal - use /event command instead
 
                 persist_result = conversations.record_exchange(
                     thread_id=session_id,
@@ -344,7 +343,6 @@ async def answer_question(
                     state,
                     search_limit,
                     session_id,
-                    event_proposal=None,
                 )
 
             if thinking:

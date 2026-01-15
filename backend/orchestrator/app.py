@@ -48,7 +48,6 @@ from schemas import (
     EventCommandConfirmation,
     EventCommandResult,
     EventIn,
-    EventProposalCreate,
     ExternalContactWebhook,
     ExternalEventPayload,
     MeetingIn,
@@ -275,61 +274,8 @@ def ingest_event(e: EventIn, user: dict = Depends(get_current_user)):
     return {"ok": True, "id": e.id}
 
 
-@api.post("/threads/{thread_id}/events")
-def ingest_thread_event(
-    thread_id: str,
-    payload: EventProposalCreate,
-    user: dict = Depends(get_current_user),
-):
-    user_email = user.get("email")
-    if not user_email:
-        raise HTTPException(status_code=400, detail="Authenticated user email missing")
-
-    try:
-        conversations.ensure_thread(thread_id, user_email)
-    except LookupError:
-        raise HTTPException(status_code=404, detail="Conversation thread not found")
-    except PermissionError:
-        raise HTTPException(status_code=403, detail="Conversation thread does not belong to user")
-
-    if not payload.start_date:
-        raise HTTPException(status_code=400, detail="startDate is required to ingest an event")
-
-    event_id = f"event:{uuid4().hex}"
-
-    raw_payload = dict(payload.raw or {})
-    raw_payload.update(
-        {
-            "source": "event_capture",
-            "thread_id": thread_id,
-            "confidence": payload.confidence,
-            "missing": payload.missing,
-            "place": payload.place,
-        }
-    )
-
-    event = EventIn(
-        id=event_id,
-        startDate=payload.start_date,
-        endDate=payload.end_date,
-        placeId=payload.place_id,
-        people=payload.people or [],
-        tags=payload.tags or [],
-        types=payload.types or [],
-        title=payload.title or "Untitled event",
-        summary=payload.summary or "",
-        raw=raw_payload,
-    )
-
-    try:
-        events_service.ingest_event(event)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"Failed to ingest event: {exc}") from exc
-
-    return {"ok": True, "id": event_id}
-
+# Removed: /threads/{thread_id}/events endpoint - part of old event_capture system
+# Use /event command instead
 
 # --------------------------- Document endpoints ---------------------------
 @api.post("/ingest/document", response_model=DocumentDetailOut)

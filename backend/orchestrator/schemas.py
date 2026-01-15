@@ -43,9 +43,6 @@ class EventIn(BaseModel):
     external_id: str | None = Field(default=None, alias="externalId")
 
 
-# Removed: EventProposal and EventProposalCreate classes (old event capture system)
-
-
 class ExternalEventPayload(BaseModel):
     event: EventIn
     external_type: Literal["google"] = Field(alias="externalType")
