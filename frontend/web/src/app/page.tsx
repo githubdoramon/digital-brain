@@ -56,9 +56,52 @@ type EventClarificationData = {
 type EventConfirmationData = {
   type: "event_confirmation";
   preview_id: string;
-  extracted: Record<string, unknown>;
-  resolution: Record<string, unknown>;
+  extracted: {
+    title: string;
+    summary: string;
+    when: string | null;
+    where: string | null;
+    who: string[];
+    documents: string[];
+    tags: string[];
+    types: string[];
+  };
+  resolution: {
+    contacts: Array<{
+      contact_id: string;
+      display_name: string;
+      query: string;
+      confidence: string;
+    }>;
+    places: Array<{
+      place_id: string;
+      name: string;
+    }>;
+    documents: Array<{
+      document_id: string;
+      title: string;
+    }>;
+    new_entities: {
+      contacts: Array<{
+        display_name: string;
+        query: string;
+      }>;
+      places: Array<{
+        name: string;
+        query: string;
+      }>;
+      documents: Array<{
+        reference: string;
+      }>;
+    };
+  };
   message: string;
+};
+
+type EventConfirmationResponse = {
+  event_id: string;
+  created_contacts?: Array<{ contact_id: string; display_name: string }>;
+  created_places?: Array<{ place_id: string; name: string }>;
 };
 
 type ChatMode = "quick" | "threads";
@@ -314,7 +357,6 @@ export default function Home() {
         const data: StreamBundle = await ask(pendingInput, {
           threadId: undefined, // Backend resolves main session
           limit: 5,
-          eventCaptureEnabled: false,
         });
 
         const sessionIsNew = data.is_new_session ?? false;
@@ -376,7 +418,6 @@ export default function Home() {
         const data: StreamBundle = await ask(pendingInput, {
           threadId,
           limit: 5,
-          eventCaptureEnabled,
         });
 
         if (data.thread_id && data.thread_id !== threadId) {
@@ -732,7 +773,7 @@ export default function Home() {
                         commandData={commandResult as EventConfirmationData}
                         onConfirm={async (previewId, modifications) => {
                           try {
-                            const result = await api.post("/commands/event/confirm", {
+                            const result = await api.post<EventConfirmationResponse>("/commands/event/confirm", {
                               preview_id: previewId,
                               confirmed: true,
                               modifications: modifications || {},
