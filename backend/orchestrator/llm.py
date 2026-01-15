@@ -96,12 +96,22 @@ def _llm_chat(messages: list[dict[str, Any]]) -> dict[str, Any]:
     )
     resp.raise_for_status()
     data = resp.json()
+
+    # Check for API errors in response body (some APIs return 200 with error)
+    if "error" in data:
+        error_msg = data.get("error", {})
+        if isinstance(error_msg, dict):
+            error_msg = error_msg.get("message", str(error_msg))
+        raise RuntimeError(f"LLM API error: {error_msg}")
+
     # Normalize OpenAI response format to match what the rest of the code expects
     # OpenAI: {"choices": [{"message": {...}}]}
     # We return: {"message": {...}}
     if "choices" in data and data["choices"]:
         return {"message": data["choices"][0].get("message", {})}
-    return data
+
+    # If response doesn't have expected structure, raise an error
+    raise ValueError(f"Unexpected LLM API response format: missing 'choices' field. Response: {data}")
 
 
 async def _llm_chat_stream(
@@ -138,6 +148,14 @@ async def _llm_chat_stream(
                     line = line[6:]
                 try:
                     chunk = json.loads(line)
+
+                    # Check for API errors in streaming response
+                    if "error" in chunk:
+                        error_msg = chunk.get("error", {})
+                        if isinstance(error_msg, dict):
+                            error_msg = error_msg.get("message", str(error_msg))
+                        raise RuntimeError(f"LLM API streaming error: {error_msg}")
+
                     delta = chunk.get("choices", [{}])[0].get("delta", {})
                     finish_reason = chunk.get("choices", [{}])[0].get("finish_reason")
 

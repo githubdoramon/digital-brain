@@ -95,6 +95,16 @@ type EventConfirmationData = {
       }>;
     };
   };
+  relationship_suggestions?: Array<{
+    from_contact_id: string;
+    from_display_name: string;
+    to_contact_id: string;
+    to_display_name: string;
+    relationship_type: string;
+    reciprocal_type: string;
+    confidence: string;
+    reasoning: string;
+  }>;
   message: string;
 };
 

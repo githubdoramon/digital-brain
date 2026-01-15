@@ -109,15 +109,192 @@ Return ONLY valid JSON in this exact format:
         }
 
 
-def _resolve_existing_entities(entities: dict[str, Any]) -> dict[str, Any]:
+def _resolve_generic_terms_with_relationships(
+    terms: list[str],
+    user_email: str,
+) -> dict[str, str]:
+    """
+    Resolve generic relational terms to actual contact names using relationship data.
+
+    Examples:
+    - "my daughter" -> "Emma" (if user has daughter relationship)
+    - "the doctor" -> "Dr. Smith" (if user has doctor relationship)
+    - "my wife" -> "Sarah" (if user has spouse relationship)
+
+    Args:
+        terms: List of terms that might be generic (e.g., ["my daughter", "the doctor"])
+        user_email: User's email to find their contact and relationships
+
+    Returns:
+        Dict mapping generic terms to actual names (e.g., {"my daughter": "Emma"})
+    """
+    import contacts as contacts_service
+
+    resolved = {}
+
+    # Find user's contact record
+    user_contact = contacts_service.find_self_contact(user_email)
+    if not user_contact:
+        return resolved
+
+    user_id = user_contact["contact_id"]
+
+    # Get all relationships for the user
+    relationships_result = contacts_service.get_contact_relationships(
+        user_id,
+        include_contact_details=True,
+    )
+
+    relationships = relationships_result.get("relationships", [])
+
+    # Build a map of relationship types to contacts
+    rel_map: dict[str, list[dict]] = {}
+    for rel in relationships:
+        rel_type = (rel.get("type") or "").lower()
+        if rel_type and "related_contact" in rel:
+            if rel_type not in rel_map:
+                rel_map[rel_type] = []
+            rel_map[rel_type].append(rel["related_contact"])
+
+    # Try to resolve each term
+    for term in terms:
+        term_lower = term.lower().strip()
+
+        # Extract relationship type from phrases like "my daughter", "the doctor"
+        # Remove possessives and articles
+        cleaned = term_lower.replace("my ", "").replace("the ", "").replace("a ", "").strip()
+
+        # Check if this maps to a known relationship type
+        if cleaned in rel_map and rel_map[cleaned]:
+            # Use the first matching contact
+            contact = rel_map[cleaned][0]
+            resolved[term] = contact.get("display_name", term)
+
+    return resolved
+
+
+def _replace_generic_terms_in_text(
+    text: str,
+    replacements: dict[str, str],
+) -> str:
+    """
+    Replace generic terms with actual names in text.
+
+    Args:
+        text: Original text with generic terms
+        replacements: Dict mapping generic terms to actual names
+
+    Returns:
+        Text with generic terms replaced
+    """
+    result = text
+    for generic, actual in replacements.items():
+        # Case-insensitive replacement that preserves case structure
+        import re
+        pattern = re.compile(re.escape(generic), re.IGNORECASE)
+        result = pattern.sub(actual, result)
+    return result
+
+
+def _suggest_relationships_from_context(
+    message: str,
+    extracted: dict[str, Any],
+    resolution: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """
+    Analyze the event context to suggest relationships between contacts.
+
+    Examples:
+    - "took my daughter to the doctor" -> suggest doctor-patient relationship
+    - "had lunch with my colleague John" -> suggest colleague relationship
+
+    Args:
+        message: Original event message
+        extracted: Extracted event data
+        resolution: Resolved entities
+
+    Returns:
+        List of suggested relationships with from/to contacts and type
+    """
+    from llm_helpers import call_llm_json
+
+    suggestions = []
+
+    # Get all resolved contacts
+    contacts = resolution.get("contacts", [])
+    if len(contacts) < 2:
+        # Need at least 2 contacts to suggest relationships
+        return suggestions
+
+    # Use LLM to detect implied relationships
+    contact_list = ", ".join(c["display_name"] for c in contacts)
+
+    prompt = f"""Analyze this event description and identify any implied relationships between the people mentioned.
+
+Event: "{message}"
+People involved: {contact_list}
+
+Common relationship types:
+- Family: parent, child, sibling, spouse, partner, grandparent, grandchild, cousin, uncle, aunt, nephew, niece
+- Professional: colleague, manager, employee, client, vendor, doctor, patient, lawyer, therapist, teacher, student
+- Social: friend, neighbor, acquaintance
+
+Return ONLY valid JSON with suggested relationships. If no clear relationships, return empty array:
+{{
+    "relationships": [
+        {{
+            "from_person": "exact name from list",
+            "to_person": "exact name from list",
+            "relationship_type": "type",
+            "reciprocal_type": "type from other perspective",
+            "confidence": "high|medium|low",
+            "reasoning": "brief explanation"
+        }}
+    ]
+}}"""
+
+    try:
+        result = call_llm_json(prompt, timeout=15)
+        llm_suggestions = result.get("relationships", [])
+
+        # Map names back to contact IDs
+        name_to_id = {c["display_name"]: c["contact_id"] for c in contacts}
+
+        for sug in llm_suggestions:
+            from_name = sug.get("from_person")
+            to_name = sug.get("to_person")
+
+            if from_name in name_to_id and to_name in name_to_id:
+                suggestions.append({
+                    "from_contact_id": name_to_id[from_name],
+                    "from_display_name": from_name,
+                    "to_contact_id": name_to_id[to_name],
+                    "to_display_name": to_name,
+                    "relationship_type": sug.get("relationship_type", ""),
+                    "reciprocal_type": sug.get("reciprocal_type", ""),
+                    "confidence": sug.get("confidence", "medium"),
+                    "reasoning": sug.get("reasoning", ""),
+                })
+    except Exception as e:
+        print(f"[event_command] Relationship suggestion failed: {e}")
+
+    return suggestions
+
+
+def _resolve_existing_entities(
+    entities: dict[str, Any],
+    user_email: str,
+) -> dict[str, Any]:
     """
     Search database for existing entities using existing resolution tools.
+    Also resolves generic terms to actual names using relationship data.
 
     Args:
         entities: Extracted entities from message
+        user_email: User's email for relationship context
 
     Returns:
-        Dict with matched and new entities
+        Dict with matched and new entities, plus name replacements
     """
     import contacts as contacts_service
 
@@ -130,15 +307,25 @@ def _resolve_existing_entities(entities: dict[str, Any]) -> dict[str, Any]:
             "places": [],
             "documents": [],
         },
+        "name_replacements": {},  # Maps generic terms to actual names
     }
+
+    # First, try to resolve generic terms using relationships
+    who_list = entities.get("who", [])
+    if who_list:
+        replacements = _resolve_generic_terms_with_relationships(who_list, user_email)
+        resolution["name_replacements"] = replacements
 
     # Resolve contacts using existing search_contacts function
     for person_name in entities.get("who", []):
         if not person_name or not isinstance(person_name, str):
             continue
 
+        # Use the actual name if we resolved a generic term
+        search_name = resolution["name_replacements"].get(person_name, person_name)
+
         matches = contacts_service.search_contacts(
-            person_name,
+            search_name,
             search_by="name",
             fuzzy_threshold=75,
             limit=3,
@@ -151,15 +338,16 @@ def _resolve_existing_entities(entities: dict[str, Any]) -> dict[str, Any]:
                 {
                     "contact_id": best_match["contact_id"],
                     "display_name": best_match["display_name"],
-                    "query": person_name,
-                    "confidence": "high" if best_match.get("similarity_score", 0) > 90 else "medium",
+                    "query": person_name,  # Original query
+                    "confidence": "high" if best_match.get("match_score", 0) > 90 else "medium",
                 }
             )
         else:
-            # Mark as new contact to create
+            # Mark as new contact to create (use resolved name if available)
+            display_name = resolution["name_replacements"].get(person_name, person_name)
             resolution["new_entities"]["contacts"].append(
                 {
-                    "display_name": person_name,
+                    "display_name": display_name,
                     "query": person_name,
                 }
             )
@@ -186,9 +374,11 @@ def handle_event(parsed: ParsedCommand, context: dict) -> dict[str, Any]:
     Flow:
     1. Extract entities using LLM
     2. Check if clarification is needed
-    3. Search for existing entities
-    4. Store data for confirmation
-    5. Return confirmation request or ask for clarification
+    3. Search for existing entities and resolve generic terms
+    4. Replace generic terms in titles/summaries with actual names
+    5. Suggest relationships between contacts
+    6. Store data for confirmation
+    7. Return confirmation request or ask for clarification
 
     Args:
         parsed: Parsed command with event description as args
@@ -203,6 +393,8 @@ def handle_event(parsed: ParsedCommand, context: dict) -> dict[str, Any]:
             "message": "Please provide an event description. Example: /event met with John at the cafe yesterday",
         }
 
+    user_email = context.get("user_email", "")
+
     # Extract entities using LLM with time context
     extracted = _extract_event_entities_with_llm(parsed.args, context)
 
@@ -215,8 +407,27 @@ def handle_event(parsed: ParsedCommand, context: dict) -> dict[str, Any]:
             "original_message": parsed.args,
         }
 
-    # Resolve existing entities
-    resolution = _resolve_existing_entities(extracted)
+    # Resolve existing entities and generic terms
+    resolution = _resolve_existing_entities(extracted, user_email)
+
+    # Replace generic terms with actual names in title and summary
+    name_replacements = resolution.get("name_replacements", {})
+    if name_replacements:
+        extracted["title"] = _replace_generic_terms_in_text(
+            extracted.get("title", ""),
+            name_replacements,
+        )
+        extracted["summary"] = _replace_generic_terms_in_text(
+            extracted.get("summary", ""),
+            name_replacements,
+        )
+
+    # Suggest relationships between contacts based on context
+    relationship_suggestions = _suggest_relationships_from_context(
+        parsed.args,
+        extracted,
+        resolution,
+    )
 
     # Generate a preview ID and store the data
     preview_id = f"event:preview:{uuid4().hex[:8]}"
@@ -228,7 +439,8 @@ def handle_event(parsed: ParsedCommand, context: dict) -> dict[str, Any]:
         {
             "extracted": extracted,
             "resolution": resolution,
-            "user_email": context.get("user_email"),
+            "user_email": user_email,
+            "relationship_suggestions": relationship_suggestions,
         },
     )
 
@@ -237,6 +449,7 @@ def handle_event(parsed: ParsedCommand, context: dict) -> dict[str, Any]:
         "preview_id": preview_id,
         "extracted": extracted,
         "resolution": resolution,
+        "relationship_suggestions": relationship_suggestions,
         "requires_confirmation": True,
         "message": "I've extracted the following information from your event. Please review and confirm:",
     }
