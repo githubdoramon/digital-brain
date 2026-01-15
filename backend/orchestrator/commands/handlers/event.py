@@ -77,7 +77,7 @@ Return ONLY valid JSON in this exact format:
         print("[event_extraction] Calling LLM for extraction...")
         extracted = call_llm_json(extraction_prompt, timeout=30)
 
-        print(f"[event_extraction] Raw LLM response:")
+        print("[event_extraction] Raw LLM response:")
         print(f"  - Title: {extracted.get('title')}")
         print(f"  - Summary: {extracted.get('summary')}")
         print(f"  - When: {extracted.get('when')}")
@@ -258,7 +258,7 @@ def _suggest_relationships_from_context(
     """
     from llm_helpers import call_llm_json
 
-    print(f"\n[relationship_suggestion] Analyzing event for relationship suggestions")
+    print("\n[relationship_suggestion] Analyzing event for relationship suggestions")
 
     suggestions = []
 
@@ -333,9 +333,9 @@ Return ONLY valid JSON with suggested relationships. If no clear relationships, 
                     "confidence": confidence or "medium",
                     "reasoning": sug.get("reasoning", ""),
                 })
-                print(f"[relationship_suggestion]     ✓ Added to suggestions")
+                print("[relationship_suggestion]     ✓ Added to suggestions")
             else:
-                print(f"[relationship_suggestion]     ✗ Names not found in contact list, skipping")
+                print("[relationship_suggestion]     ✗ Names not found in contact list, skipping")
 
         print(f"[relationship_suggestion] Suggestion complete. Created {len(suggestions)} suggestions")
 
@@ -364,7 +364,7 @@ def _resolve_existing_entities(
     """
     import contacts as contacts_service
 
-    print(f"\n[entity_resolution] Starting entity resolution")
+    print("\n[entity_resolution] Starting entity resolution")
 
     resolution = {
         "contacts": [],
@@ -446,7 +446,7 @@ def _resolve_existing_entities(
             }
         )
 
-    print(f"[entity_resolution] Resolution complete:")
+    print("[entity_resolution] Resolution complete:")
     print(f"[entity_resolution]   - Matched contacts: {len(resolution['contacts'])}")
     print(f"[entity_resolution]   - New contacts: {len(resolution['new_entities']['contacts'])}")
     print(f"[entity_resolution]   - New places: {len(resolution['new_entities']['places'])}")
@@ -475,7 +475,7 @@ def handle_event(parsed: ParsedCommand, context: dict) -> dict[str, Any]:
         Dict with event_confirmation or clarification_needed type
     """
     print(f"\n{'='*80}")
-    print(f"[handle_event] NEW EVENT COMMAND")
+    print("[handle_event] NEW EVENT COMMAND")
     print(f"{'='*80}")
 
     if not parsed.args:
@@ -489,12 +489,12 @@ def handle_event(parsed: ParsedCommand, context: dict) -> dict[str, Any]:
     print(f"[handle_event] Input: '{parsed.args}'")
 
     # Extract entities using LLM with time context
-    print(f"\n[handle_event] STEP 1: Extracting entities with LLM...")
+    print("\n[handle_event] STEP 1: Extracting entities with LLM...")
     extracted = _extract_event_entities_with_llm(parsed.args, context)
 
     # Check if clarification is needed
     if extracted.get("needs_clarification"):
-        print(f"[handle_event] ⚠️  Clarification needed, returning questions to user")
+        print("[handle_event] ⚠️  Clarification needed, returning questions to user")
         return {
             "type": "clarification_needed",
             "questions": extracted.get("clarification_questions", []),
@@ -503,13 +503,13 @@ def handle_event(parsed: ParsedCommand, context: dict) -> dict[str, Any]:
         }
 
     # Resolve existing entities and generic terms
-    print(f"\n[handle_event] STEP 2: Resolving entities and generic terms...")
+    print("\n[handle_event] STEP 2: Resolving entities and generic terms...")
     resolution = _resolve_existing_entities(extracted, user_email)
 
     # Replace generic terms with actual names in title and summary
     name_replacements = resolution.get("name_replacements", {})
     if name_replacements:
-        print(f"\n[handle_event] STEP 3: Replacing generic terms in text...")
+        print("\n[handle_event] STEP 3: Replacing generic terms in text...")
         original_title = extracted.get("title", "")
         original_summary = extracted.get("summary", "")
 
@@ -521,10 +521,10 @@ def handle_event(parsed: ParsedCommand, context: dict) -> dict[str, Any]:
         if extracted["summary"] != original_summary:
             print(f"[handle_event]   Summary: '{original_summary}' -> '{extracted['summary']}'")
     else:
-        print(f"\n[handle_event] STEP 3: No generic terms to replace")
+        print("\n[handle_event] STEP 3: No generic terms to replace")
 
     # Suggest relationships between contacts based on context
-    print(f"\n[handle_event] STEP 4: Suggesting relationships...")
+    print("\n[handle_event] STEP 4: Suggesting relationships...")
     relationship_suggestions = _suggest_relationships_from_context(
         parsed.args,
         extracted,
@@ -547,8 +547,8 @@ def handle_event(parsed: ParsedCommand, context: dict) -> dict[str, Any]:
         },
     )
 
-    print(f"\n[handle_event] ✓ Event processing complete!")
-    print(f"[handle_event] Summary:")
+    print("\n[handle_event] ✓ Event processing complete!")
+    print("[handle_event] Summary:")
     print(f"  - Title: {extracted.get('title')}")
     print(f"  - Contacts found: {len(resolution.get('contacts', []))}")
     print(f"  - New contacts: {len(resolution.get('new_entities', {}).get('contacts', []))}")
