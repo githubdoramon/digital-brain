@@ -64,10 +64,9 @@ mock_llm_helpers = MagicMock()
 mock_llm_helpers.call_llm_json = mock_call_llm_json
 sys.modules['llm_helpers'] = mock_llm_helpers
 
-# Mock orchestrator.contacts before importing
+# Mock contacts module before importing
 mock_contacts_module = MagicMock()
-sys.modules['orchestrator'] = MagicMock()
-sys.modules['orchestrator'].contacts = mock_contacts_module
+sys.modules['contacts'] = mock_contacts_module
 
 # Now import after mocking
 from agents.contacts.resolver import (  # noqa: E402

@@ -22,8 +22,8 @@ Design principles:
 
 from typing import Any, Optional
 
+import contacts as contacts_service
 from llm_helpers import call_llm_json
-from orchestrator import contacts as contacts_service
 
 
 def extract_people_from_text(text: str, user_email: Optional[str] = None) -> list[str]:
