@@ -147,8 +147,10 @@ def resolve_contact(
                 user_contact["contact_id"],
                 include_contact_details=True,
             )
+            print(f"[contact_resolver] Relationships: {relationships}")
 
             rel_result = _resolve_via_relationship(relationship_type, relationships)
+            print(f"[contact_resolver] Relationship result: {rel_result}")
             if rel_result["found"]:
                 result["status"] = "resolved"
                 result["confidence"] = rel_result["confidence"]
@@ -523,6 +525,7 @@ def _resolve_via_relationship(
     }
 
     relationships = relationship_context.get("relationships", [])
+    print(f"[contact_resolver] Relationships: {relationships}")
     if not relationships:
         return result
 
