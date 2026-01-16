@@ -139,8 +139,8 @@ def resolve_contact(
         print("[contact_resolver] Nested resolution failed, falling back")
 
     # Step 2: Check for simple relationship (e.g., "my daughter")
-    is_generic, relationship_type = _detect_relational_term(person_text)
-    if is_generic and relationship_type:
+    relationship_type = _detect_relational_term(person_text)
+    if relationship_type:
         # Get user's relationships
         user_contact = contacts_service.find_self_contact(user_email)
         if user_contact:
@@ -159,10 +159,21 @@ def resolve_contact(
                 result["matched_via"] = "relationship"
                 print(f"[contact_resolver] ✓ Resolved via relationship: {rel_result['display_name']}")
                 return result
+            elif rel_result["candidates"]:
+                # Multiple relationship matches - return candidates
+                result["status"] = "candidates"
+                result["candidates"] = rel_result["candidates"]
+                result["needs_clarification"] = True
+                result["clarification_prompt"] = (
+                    f"Multiple {relationship_type}s found. "
+                    f"Which one did you mean: {', '.join(c['display_name'] for c in rel_result['candidates'])}?"
+                )
+                print(f"[contact_resolver] ⚠️  Multiple {relationship_type}s, returning candidates")
+                return result
 
     # Step 3: Try direct fuzzy search
     search_name = person_text
-    if is_generic:
+    if relationship_type:
         # Strip generic markers for better search
         search_name = _strip_generic_markers(person_text)
 
@@ -445,9 +456,9 @@ def _resolve_nested_relationship(
 
     # Step 3: Resolve second part within those relationships
     second_part = parts[1]
-    is_generic, rel_type = _detect_relational_term(second_part)
+    rel_type = _detect_relational_term(second_part)
 
-    if is_generic and rel_type:
+    if rel_type:
         # Try relationship match
         rel_result = _resolve_via_relationship(rel_type, intermediate_rels)
         if rel_result["found"]:
@@ -459,7 +470,7 @@ def _resolve_nested_relationship(
             return result
 
     # Try fuzzy search among related contacts
-    search_name = _strip_generic_markers(second_part) if is_generic else second_part
+    search_name = _strip_generic_markers(second_part) if rel_type else second_part
     matches = contacts_service.search_contacts(search_name, search_by="name", fuzzy_threshold=75, limit=3)
 
     if matches:
@@ -481,12 +492,12 @@ def _resolve_nested_relationship(
     return result
 
 
-def _detect_relational_term(text: str) -> tuple[bool, Optional[str]]:
+def _detect_relational_term(text: str) -> Optional[str]:
     """
     Detect if text is a relational term like "my daughter", "the doctor".
 
     Returns:
-        (is_relational: bool, relationship_type: Optional[str])
+        relationship_type if detected, None otherwise
     """
     text_lower = text.lower().strip()
 
@@ -495,9 +506,9 @@ def _detect_relational_term(text: str) -> tuple[bool, Optional[str]]:
         if text_lower.startswith(marker):
             rel_type = text_lower.replace(marker, "").strip()
             if rel_type:
-                return True, rel_type
+                return rel_type
 
-    return False, None
+    return None
 
 
 def _strip_generic_markers(text: str) -> str:
@@ -517,54 +528,114 @@ def _resolve_via_relationship(
     Try to resolve person via relationship data.
 
     Returns:
-        {"found": bool, "contact_id": Optional[str], "display_name": Optional[str], "confidence": str}
+        {
+            "found": bool,
+            "contact_id": Optional[str],
+            "display_name": Optional[str],
+            "confidence": str,
+            "candidates": list[dict]  # Multiple matches if they exist
+        }
     """
     result = {
         "found": False,
         "contact_id": None,
         "display_name": None,
         "confidence": "low",
+        "candidates": [],
     }
 
-    print(f"[contact_resolver_inner] Relationship context: {relationship_context}")
     relationships = relationship_context.get("relationships", [])
     print(f"[contact_resolver_inner] Relationships: {relationships}")
     if not relationships:
         return result
 
     # Build map of relationship types to contacts
+    # Check both 'type' and 'other_type' fields for bi-directional relationships
     rel_map: dict[str, list[dict]] = {}
     for rel in relationships:
+        # Check 'type' field
         rel_type = (rel.get("type") or "").lower()
         if rel_type and "related_contact" in rel:
             if rel_type not in rel_map:
                 rel_map[rel_type] = []
-            # Add contact_id from relationship level to the contact data
+            # Use contact_id from related_contact (nested structure)
             contact_data = rel["related_contact"].copy()
-            contact_data["contact_id"] = rel.get("contact_id")
+            # Ensure contact_id is present (prefer from related_contact over relationship level)
+            if "contact_id" not in contact_data:
+                contact_data["contact_id"] = rel.get("contact_id")
             rel_map[rel_type].append(contact_data)
+
+        # Check 'other_type' field (bi-directional relationships)
+        other_type = (rel.get("other_type") or "").lower()
+        if other_type and "related_contact" in rel:
+            if other_type not in rel_map:
+                rel_map[other_type] = []
+            # Use contact_id from related_contact (nested structure)
+            contact_data = rel["related_contact"].copy()
+            # Ensure contact_id is present (prefer from related_contact over relationship level)
+            if "contact_id" not in contact_data:
+                contact_data["contact_id"] = rel.get("contact_id")
+            rel_map[other_type].append(contact_data)
+
+    print(f"[contact_resolver_inner] Relationship map: {rel_map}")
+    print(f"[contact_resolver_inner] Relationship type: {relationship_type}")
 
     # Direct match
     if relationship_type in rel_map and rel_map[relationship_type]:
-        contact = rel_map[relationship_type][0]
-        result["found"] = True
-        result["contact_id"] = contact["contact_id"]
-        result["display_name"] = contact["display_name"]
-        result["confidence"] = "high"
-        return result
+        matches = rel_map[relationship_type]
+        print(f"[contact_resolver_inner] Direct match found: {matches}")
+
+        if len(matches) == 1:
+            # Single match - resolved
+            contact = matches[0]
+            result["found"] = True
+            result["contact_id"] = contact["contact_id"]
+            result["display_name"] = contact["display_name"]
+            result["confidence"] = "high"
+            return result
+        else:
+            # Multiple matches - return candidates
+            result["found"] = False
+            result["candidates"] = [
+                {
+                    "contact_id": c["contact_id"],
+                    "display_name": c["display_name"],
+                }
+                for c in matches
+            ]
+            result["confidence"] = "low"
+            return result
 
     # Try related types (e.g., "daughter" -> "child")
     # Use the shared mapping from contacts module
     related_types = contacts_service.find_related_types(relationship_type)
 
+    print(f"[contact_resolver_inner] Related types: {related_types}")
+
     for related_type in related_types:
         if related_type in rel_map and rel_map[related_type]:
-            contact = rel_map[related_type][0]
-            result["found"] = True
-            result["contact_id"] = contact["contact_id"]
-            result["display_name"] = contact["display_name"]
-            result["confidence"] = "medium"
-            return result
+            matches = rel_map[related_type]
+
+            if len(matches) == 1:
+                # Single match - resolved
+                contact = matches[0]
+                result["found"] = True
+                result["contact_id"] = contact["contact_id"]
+                result["display_name"] = contact["display_name"]
+                result["confidence"] = "medium"
+                return result
+            else:
+                # Multiple matches - return candidates
+                result["found"] = False
+                result["candidates"] = [
+                    {
+                        "contact_id": c["contact_id"],
+                        "display_name": c["display_name"],
+                    }
+                    for c in matches
+                ]
+                result["confidence"] = "low"
+                return result
 
     return result
 

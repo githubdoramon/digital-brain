@@ -82,15 +82,12 @@ from agents.contacts.resolver import (  # noqa: E402
 def test_detect_relational_term():
     """Test detection of relational terms."""
     # Should detect
-    assert _detect_relational_term("my daughter")[0] is True
-    assert _detect_relational_term("my daughter")[1] == "daughter"
-
-    assert _detect_relational_term("the doctor")[0] is True
-    assert _detect_relational_term("the doctor")[1] == "doctor"
+    assert _detect_relational_term("my daughter") == "daughter"
+    assert _detect_relational_term("the doctor") == "doctor"
 
     # Should not detect proper names
-    assert _detect_relational_term("John Smith")[0] is False
-    assert _detect_relational_term("Dr. Jones")[0] is False
+    assert _detect_relational_term("John Smith") is None
+    assert _detect_relational_term("Dr. Jones") is None
 
 
 def test_parse_nested_relationship():
