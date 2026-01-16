@@ -14,7 +14,7 @@ from unittest.mock import MagicMock, patch
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../..'))
 
 
-def mock_call_llm_json(prompt: str) -> dict[str, Any]:
+def mock_call_llm_json(prompt: str, **kwargs) -> dict[str, Any]:
     """
     Mock LLM that returns reasonable responses based on prompt content.
 
@@ -70,7 +70,7 @@ sys.modules['orchestrator'] = MagicMock()
 sys.modules['orchestrator'].contacts = mock_contacts_module
 
 # Now import after mocking
-from agents.contacts.resolver import (
+from agents.contacts.resolver import (  # noqa: E402
     _detect_relational_term,
     _parse_nested_relationship,
     _strip_generic_markers,

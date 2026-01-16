@@ -4,12 +4,12 @@ HTTP endpoint for contact resolution.
 Thin wrapper that calls the resolver and formats the response.
 """
 
-from typing import Any, Dict
+from typing import Any
 
 from agents.contacts.resolver import resolve_contacts_from_text
 
 
-def handle_resolve_contacts_request(data: Dict[str, Any]) -> Dict[str, Any]:
+def handle_resolve_contacts_request(data: dict[str, Any]) -> dict[str, Any]:
     """
     Handle HTTP request for contact resolution.
 

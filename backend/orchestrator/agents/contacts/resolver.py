@@ -20,13 +20,13 @@ Design principles:
 4. Clear confidence scoring
 """
 
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Optional
 
 from llm_helpers import call_llm_json
 from orchestrator import contacts as contacts_service
 
 
-def extract_people_from_text(text: str, user_email: Optional[str] = None) -> List[str]:
+def extract_people_from_text(text: str, user_email: Optional[str] = None) -> list[str]:
     """
     Extract person mentions from text using LLM.
 
@@ -77,7 +77,7 @@ def resolve_contact(
     user_email: str,
     *,
     event_context: Optional[str] = None,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """
     Resolve a person mention to a specific contact.
 
@@ -107,7 +107,7 @@ def resolve_contact(
     """
     print(f"\n[contact_resolver] Resolving: '{person_text}'")
 
-    result: Dict[str, Any] = {
+    result: dict[str, Any] = {
         "status": "new",
         "confidence": "low",
         "contact_id": None,
@@ -234,7 +234,7 @@ def resolve_contact(
 def resolve_contacts_from_text(
     text: str,
     user_email: str,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """
     Complete pipeline: extract people from text and resolve them to contacts.
 
@@ -355,7 +355,7 @@ def resolve_contacts_from_text(
 # ---------------------------------------------------------------------------
 
 
-def _parse_nested_relationship(text: str) -> Optional[List[str]]:
+def _parse_nested_relationship(text: str) -> Optional[list[str]]:
     """
     Parse nested relationship like "my daughter's doctor" into ["my daughter", "doctor"].
 
@@ -385,9 +385,9 @@ def _parse_nested_relationship(text: str) -> Optional[List[str]]:
 
 
 def _resolve_nested_relationship(
-    parts: List[str],
+    parts: list[str],
     user_email: str,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """
     Resolve nested relationship like ["my daughter", "doctor"].
 
@@ -477,7 +477,7 @@ def _resolve_nested_relationship(
     return result
 
 
-def _detect_relational_term(text: str) -> Tuple[bool, Optional[str]]:
+def _detect_relational_term(text: str) -> tuple[bool, Optional[str]]:
     """
     Detect if text is a relational term like "my daughter", "the doctor".
 
@@ -507,8 +507,8 @@ def _strip_generic_markers(text: str) -> str:
 
 def _resolve_via_relationship(
     relationship_type: str,
-    relationship_context: Dict[str, Any],
-) -> Dict[str, Any]:
+    relationship_context: dict[str, Any],
+) -> dict[str, Any]:
     """
     Try to resolve person via relationship data.
 
@@ -527,7 +527,7 @@ def _resolve_via_relationship(
         return result
 
     # Build map of relationship types to contacts
-    rel_map: Dict[str, List[dict]] = {}
+    rel_map: dict[str, list[dict]] = {}
     for rel in relationships:
         rel_type = (rel.get("type") or "").lower()
         if rel_type and "related_contact" in rel:
@@ -562,10 +562,10 @@ def _resolve_via_relationship(
 
 def _llm_disambiguate_contact(
     person_text: str,
-    candidates: list[Dict[str, Any]],
+    candidates: list[dict[str, Any]],
     event_context: str,
     user_email: str,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """
     Use LLM to disambiguate between multiple contact candidates.
 
