@@ -121,6 +121,7 @@ def resolve_contact(
 
     # Step 1: Check for nested relationships (e.g., "my daughter's doctor")
     nested_parts = _parse_nested_relationship(person_text)
+    print(f"[contact_resolver] Nested parts: {nested_parts}")
     if nested_parts and len(nested_parts) > 1:
         print(f"[contact_resolver] Detected nested relationship: {nested_parts}")
         nested_result = _resolve_nested_relationship(nested_parts, user_email)
