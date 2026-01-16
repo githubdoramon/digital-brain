@@ -52,7 +52,7 @@ Text: "{text}"{user_context}
 Extract ONLY people - all person references including:
 - Proper names (e.g., "John Smith")
 - Relational terms (e.g., "my daughter", "the doctor")
-- Nested relationships (e.g., "my daughter's doctor", "my son's teacher", "my wife's family")
+- Nested relationships (e.g., "my daughter's doctor", "my son's teacher", "my wife's family") - Also correct any spelling if user mistyped (for example, daughters instead of daugther's)
 
 IMPORTANT:
 - Keep relationship phrases intact (e.g., "my daughter's doctor" as ONE entity)
@@ -65,7 +65,7 @@ Return ONLY valid JSON:
 }}"""
 
     try:
-        result = call_llm_json(prompt, timeout=15)
+        result = call_llm_json(prompt, timeout=30)
         return result.get("people", [])
     except Exception as e:
         print(f"[contact_resolver] Failed to extract people: {e}")
@@ -148,7 +148,6 @@ def resolve_contact(
                 user_contact["contact_id"],
                 include_contact_details=True,
             )
-            print(f"[contact_resolver] Relationships: {relationships}")
 
             rel_result = _resolve_via_relationship(relationship_type, relationships)
             print(f"[contact_resolver] Relationship result: {rel_result}")
@@ -195,7 +194,9 @@ def resolve_contact(
 
     else:
         # Multiple matches - need disambiguation
+        print(f"[contact_resolver] Matches: {matches}")
         print(f"[contact_resolver] Found {len(matches)} matches, attempting disambiguation")
+
         result["candidates"] = [
             {
                 "contact_id": m["contact_id"],
@@ -525,8 +526,9 @@ def _resolve_via_relationship(
         "confidence": "low",
     }
 
+    print(f"[contact_resolver_inner] Relationship context: {relationship_context}")
     relationships = relationship_context.get("relationships", [])
-    print(f"[contact_resolver] Relationships: {relationships}")
+    print(f"[contact_resolver_inner] Relationships: {relationships}")
     if not relationships:
         return result
 
@@ -537,7 +539,10 @@ def _resolve_via_relationship(
         if rel_type and "related_contact" in rel:
             if rel_type not in rel_map:
                 rel_map[rel_type] = []
-            rel_map[rel_type].append(rel["related_contact"])
+            # Add contact_id from relationship level to the contact data
+            contact_data = rel["related_contact"].copy()
+            contact_data["contact_id"] = rel.get("contact_id")
+            rel_map[rel_type].append(contact_data)
 
     # Direct match
     if relationship_type in rel_map and rel_map[relationship_type]:
@@ -615,7 +620,7 @@ Return ONLY valid JSON:
 }}"""
 
     try:
-        llm_response = call_llm_json(prompt, timeout=15)
+        llm_response = call_llm_json(prompt, timeout=30)
 
         decision = llm_response.get("decision")
         candidate_number = llm_response.get("candidate_number")
@@ -672,7 +677,7 @@ Return ONLY valid JSON:
 }}"""
 
     try:
-        result = call_llm_json(prompt, timeout=10)
+        result = call_llm_json(prompt, timeout=20)
         return result.get("profession")
     except Exception:
         return None
