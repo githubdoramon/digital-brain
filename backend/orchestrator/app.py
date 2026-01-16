@@ -1039,3 +1039,57 @@ def reload_skills(user: dict = Depends(get_current_user)):
     from skills.registry import reload_registry
     count = reload_registry()
     return {"reloaded": count, "message": f"Reloaded {count} skills"}
+
+
+# ---------------------------------------------------------------------------
+# Contact Resolution Endpoint
+# ---------------------------------------------------------------------------
+
+@api.post("/contacts/resolve")
+def resolve_contacts_endpoint(
+    request_data: dict[str, Any],
+    user: dict = Depends(get_current_user),
+):
+    """
+    Resolve person mentions in text to contacts.
+
+    Extracts people from text and resolves them to database contacts using:
+    - Direct name matching (fuzzy search)
+    - Relationship resolution ("my daughter" → Emma)
+    - Nested relationships ("my daughter's doctor" → Dr. Smith via Emma)
+    - LLM disambiguation when ambiguous
+
+    Request body:
+    {
+        "text": "visited my daughter's eye doctor"
+    }
+
+    Returns:
+    {
+        "status": "success" | "needs_clarification" | "no_people" | "error",
+        "text": str,
+        "people_mentioned": ["my daughter's eye doctor"],
+        "resolved_contacts": [
+            {
+                "original_text": "my daughter's eye doctor",
+                "contact_id": "...",
+                "display_name": "Dr. Smith",
+                "matched_via": "nested_relationship",
+                "confidence": "medium",
+                "resolution_path": ["user", "Emma", "Dr. Smith"]
+            }
+        ],
+        "new_contacts": [...],
+        "ambiguous_contacts": [...]
+    }
+    """
+    from agents.contacts.endpoint import handle_resolve_contacts_request
+
+    user_email = user.get("email")
+    if not user_email:
+        raise HTTPException(status_code=400, detail="Authenticated user email missing")
+
+    # Add user_email to request data
+    request_data["user_email"] = user_email
+
+    return handle_resolve_contacts_request(request_data)

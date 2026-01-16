@@ -97,6 +97,10 @@ def call_llm(
     if not content:
         raise RuntimeError(f"LLM returned empty content: {data}")
 
+    import json
+    print(f"[llm_helpers] LLM input: {json.dumps(messages, ensure_ascii=False)}")
+    print(f"[llm_helpers] LLM response: {content}")
+
     return content
 
 

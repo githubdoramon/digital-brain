@@ -1194,21 +1194,80 @@ def get_relationship_type_mappings() -> dict[str, list[str]]:
         "niece": ["niece", "nephew"],
         "cousin": ["cousin"],
 
-        # Professional
-        "doctor": ["doctor"],
-        "lawyer": ["lawyer"],
-        "therapist": ["therapist"],
+        # Family - step relationships
+        "stepfather": ["stepfather", "stepparent"],
+        "stepmother": ["stepmother", "stepparent"],
+        "stepparent": ["stepfather", "stepmother", "stepparent"],
+        "stepson": ["stepson", "stepchild"],
+        "stepdaughter": ["stepdaughter", "stepchild"],
+        "stepchild": ["stepson", "stepdaughter", "stepchild"],
+        "stepbrother": ["stepbrother", "stepsibling"],
+        "stepsister": ["stepsister", "stepsibling"],
+        "stepsibling": ["stepbrother", "stepsister", "stepsibling"],
+
+        # Family - in-laws
+        "father-in-law": ["father-in-law", "parent-in-law"],
+        "mother-in-law": ["mother-in-law", "parent-in-law"],
+        "parent-in-law": ["father-in-law", "mother-in-law", "parent-in-law"],
+        "son-in-law": ["son-in-law", "child-in-law"],
+        "daughter-in-law": ["daughter-in-law", "child-in-law"],
+        "child-in-law": ["son-in-law", "daughter-in-law", "child-in-law"],
+        "brother-in-law": ["brother-in-law", "sibling-in-law"],
+        "sister-in-law": ["sister-in-law", "sibling-in-law"],
+        "sibling-in-law": ["brother-in-law", "sister-in-law", "sibling-in-law"],
+
+        # Professional - medical
+        "doctor": ["doctor", "physician", "dr", "dr."],
+        "physician": ["doctor", "physician"],
+        "dentist": ["dentist"],
+        "orthodontist": ["orthodontist", "dentist"],
+        "nurse": ["nurse"],
+        "pharmacist": ["pharmacist"],
+        "optometrist": ["optometrist"],
+        "psychiatrist": ["psychiatrist", "therapist"],
+        "therapist": ["therapist", "psychiatrist"],
+
+        # Professional - legal/financial
+        "lawyer": ["lawyer", "attorney"],
+        "attorney": ["lawyer", "attorney"],
         "accountant": ["accountant"],
+
+        # Professional - work
         "colleague": ["colleague", "co-worker", "coworker"],
         "coworker": ["colleague", "co-worker", "coworker"],
         "co-worker": ["colleague", "co-worker", "coworker"],
-        "manager": ["manager", "boss"],
-        "boss": ["manager", "boss"],
+        "manager": ["manager", "boss", "supervisor"],
+        "boss": ["manager", "boss", "supervisor"],
+        "supervisor": ["manager", "boss", "supervisor"],
         "employee": ["employee"],
         "client": ["client", "customer"],
         "customer": ["client", "customer"],
         "vendor": ["vendor", "supplier"],
         "supplier": ["vendor", "supplier"],
+
+        # Professional - education
+        "teacher": ["teacher", "instructor"],
+        "professor": ["professor", "instructor"],
+        "instructor": ["teacher", "professor", "instructor"],
+        "tutor": ["tutor"],
+        "mentor": ["mentor"],
+        "student": ["student"],
+        "classmate": ["classmate"],
+
+        # Professional - service providers
+        "mechanic": ["mechanic"],
+        "plumber": ["plumber"],
+        "electrician": ["electrician"],
+        "contractor": ["contractor"],
+        "hairdresser": ["hairdresser", "barber", "stylist"],
+        "barber": ["barber", "hairdresser"],
+        "stylist": ["stylist", "hairdresser"],
+
+        # Caregivers
+        "babysitter": ["babysitter", "nanny"],
+        "nanny": ["nanny", "babysitter"],
+        "caregiver": ["caregiver", "aide"],
+        "aide": ["aide", "caregiver"],
 
         # Social
         "friend": ["friend"],
