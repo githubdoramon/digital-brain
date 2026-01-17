@@ -27,6 +27,7 @@ def handle_resolve_contacts_request(data: dict[str, Any]) -> dict[str, Any]:
         "resolved_contacts": [...],
         "new_contacts": [...],
         "ambiguous_contacts": [...]
+        "ambiguous_text": true | false
     }
     """
     text = data.get("text")

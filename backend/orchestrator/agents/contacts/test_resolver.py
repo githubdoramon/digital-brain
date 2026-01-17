@@ -145,12 +145,12 @@ def test_extract_people_from_text():
     """Test person extraction from text."""
     # Mock extraction - the mock returns people based on text content
     # Without user_email, "user" token will be converted to user's name
-    people = extract_people_from_text("I visited my daughter's doctor yesterday", "user@example.com")
+    people = extract_people_from_text("I visited my daughter's doctor yesterday")
     assert "Test User" in people  # User is participant
     assert "my daughter" in people
     assert "my daughter's doctor" in people
 
-    people = extract_people_from_text("Had lunch with John Smith", "user@example.com")
+    people = extract_people_from_text("Had lunch with John Smith")
     assert "Test User" in people  # User is participant
     assert "John Smith" in people
 
@@ -158,7 +158,7 @@ def test_extract_people_from_text():
     assert people == []
 
     # Test user as participant (should be included)
-    people = extract_people_from_text("I visited my daughter's mother", "user@example.com")
+    people = extract_people_from_text("I visited my daughter's mother")
     # Should convert "user" token to actual user name (Test User)
     assert "I" not in people
     assert "Test User" in people  # User is participant
@@ -167,7 +167,7 @@ def test_extract_people_from_text():
 
     # Test user as narrator (should NOT be included)
     # NEW: With pronoun resolution, "her mother" becomes "my daughter's mother"
-    people = extract_people_from_text("My daughter visited her mother", "user@example.com")
+    people = extract_people_from_text("My daughter visited her mother")
     # User is just narrator, not participant
     assert "Test User" not in people
     assert "my daughter" in people
@@ -176,7 +176,7 @@ def test_extract_people_from_text():
 
     # Test ambiguous pronoun that should NOT be resolved
     # "The doctor" owns the patient, not a nested relationship
-    people = extract_people_from_text("The doctor saw her patient", "user@example.com")
+    people = extract_people_from_text("The doctor saw her patient")
     # Should keep as separate entities, not resolve to "the doctor's patient"
     assert "the doctor" in people
     assert "her patient" in people or "the doctor's patient" not in people  # Should NOT nest

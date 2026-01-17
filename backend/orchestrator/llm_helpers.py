@@ -15,6 +15,7 @@ import requests
 LLM_BASE_URL = os.getenv("LLM_BASE_URL")
 LLM_API_KEY = os.getenv("LLM_API_KEY", "")
 LLM_CHAT_MODEL = os.getenv("LLM_CHAT_MODEL")
+LLM_CHAT_MODEL_SIMPLER = os.getenv("LLM_CHAT_MODEL_SIMPLER")
 LLM_TIMEOUT = int(os.getenv("LLM_TIMEOUT", "120"))
 
 # Validate configuration
@@ -42,6 +43,7 @@ def call_llm(
     *,
     system_prompt: Optional[str] = None,
     model: Optional[str] = None,
+    use_simpler_model: Optional[bool] = None,
     timeout: Optional[int] = None,
     max_tokens: Optional[int] = None,
     temperature: Optional[float] = None,
@@ -54,6 +56,7 @@ def call_llm(
         prompt: The user prompt/question
         system_prompt: Optional system prompt for instructions
         model: Override the default model
+        use_simpler_model: Use the simpler model when available
         timeout: Override the default timeout (seconds)
         max_tokens: Maximum tokens in response
         temperature: Sampling temperature (0-1, lower = more deterministic)
@@ -73,8 +76,12 @@ def call_llm(
 
     messages.append({"role": "user", "content": prompt})
 
+    resolved_model = model
+    if not resolved_model and use_simpler_model and LLM_CHAT_MODEL_SIMPLER:
+        resolved_model = LLM_CHAT_MODEL_SIMPLER
+
     payload: dict[str, Any] = {
-        "model": model or LLM_CHAT_MODEL,
+        "model": resolved_model or LLM_CHAT_MODEL,
         "messages": messages,
         "stream": False,
     }
@@ -114,6 +121,7 @@ def call_llm_json(
     *,
     system_prompt: Optional[str] = None,
     model: Optional[str] = None,
+    use_simpler_model: Optional[bool] = None,
     timeout: Optional[int] = None,
     max_tokens: Optional[int] = None,
     temperature: Optional[float] = None,
@@ -128,6 +136,7 @@ def call_llm_json(
         prompt: The user prompt/question
         system_prompt: Optional system prompt for instructions
         model: Override the default model
+        use_simpler_model: Use the simpler model when available
         timeout: Override the default timeout (seconds)
         max_tokens: Maximum tokens in response
         temperature: Sampling temperature (0-1, lower = more deterministic)
@@ -144,6 +153,7 @@ def call_llm_json(
         prompt,
         system_prompt=system_prompt,
         model=model,
+        use_simpler_model=use_simpler_model,
         timeout=timeout,
         max_tokens=max_tokens,
         temperature=temperature,
@@ -167,6 +177,7 @@ def call_llm_with_context(
     additional_context: Optional[dict[str, str]] = None,
     system_prompt: Optional[str] = None,
     model: Optional[str] = None,
+    use_simpler_model: Optional[bool] = None,
     timeout: Optional[int] = None,
 ) -> str:
     """
@@ -181,6 +192,7 @@ def call_llm_with_context(
         additional_context: Additional context key-value pairs
         system_prompt: Optional system prompt for instructions
         model: Override the default model
+        use_simpler_model: Use the simpler model when available
         timeout: Override the default timeout (seconds)
 
     Returns:
@@ -208,5 +220,6 @@ def call_llm_with_context(
         full_prompt,
         system_prompt=system_prompt,
         model=model,
+        use_simpler_model=use_simpler_model,
         timeout=timeout,
     )

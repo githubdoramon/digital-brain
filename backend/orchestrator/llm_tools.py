@@ -20,6 +20,7 @@ import retrieval
 import skills
 import sql_tools
 import web_tools
+from agents.contacts.executor import handle_resolve_contacts_request
 from mcp import call_ha_tool, is_ha_configured, list_ha_tools
 
 
@@ -134,6 +135,32 @@ TOOLS: list[dict[str, Any]] = [
                     },
                 },
                 "required": ["query"],
+                "additionalProperties": False,
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "resolve_contacts",
+            "description": (
+                "Extract people from free-form text and resolve them to existing contacts. "
+                "Handles relationships (e.g., 'my daughter'), nested relationships "
+                "('my daughter's doctor'), and returns candidates when ambiguous. Also returns a boolean flag indicating if the whole text is ambiguous."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "text": {
+                        "type": "string",
+                        "description": "The text to analyze for person mentions.",
+                    },
+                    "user_email": {
+                        "type": "string",
+                        "description": "User email for relationship context and self resolution.",
+                    },
+                },
+                "required": ["text", "user_email"],
                 "additionalProperties": False,
             },
         },
@@ -423,6 +450,27 @@ def handle_tool_call(
             places=len(resolution.get("places", [])),
         )
         return resolution
+
+    if name == "resolve_contacts":
+        text = args.get("text", "")
+        user_email = args.get("user_email", "")
+        if not text:
+            return {"error": "resolve_contacts requires a text string"}
+        if not user_email:
+            return {"error": "resolve_contacts requires a user_email string"}
+
+        print(f"[agent] calling resolve_contacts(text={text!r}, user_email={user_email!r})")
+        step_start = perf_counter()
+
+        result = handle_resolve_contacts_request({"text": text, "user_email": user_email})
+
+        _log_timing(
+            "tool.resolve_contacts",
+            step_start,
+            status=result.get("status"),
+            people=len(result.get("people_mentioned", [])),
+        )
+        return result
 
     if name == "get_events":
         event_ids = args.get("event_ids", [])

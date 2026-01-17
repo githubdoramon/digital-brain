@@ -26,7 +26,7 @@ import contacts as contacts_service
 from llm_helpers import call_llm_json
 
 
-def extract_people_from_text(text: str, user_email: Optional[str] = None) -> list[str]:
+def extract_people_from_text(text: str) -> list[str]:
     """
     Extract person mentions from text using LLM.
 
@@ -35,25 +35,29 @@ def extract_people_from_text(text: str, user_email: Optional[str] = None) -> lis
         user_email: User's email (used to get their name for LLM context)
 
     Returns:
-        List of person mentions (e.g., ["John", "my daughter", "my daughter's doctor"])
+        {
+            "people": ["John", "my daughter", "my daughter's doctor"],
+            "ambiguous_text": true | false
+        }
     """
-    # Get user's name for better LLM context
-    user_context = ""
-    if user_email:
-        user_contact = contacts_service.find_self_contact(user_email)
-        if user_contact:
-            user_name = user_contact.get("display_name", "User")
-            user_context = f"\nCurrent user asking about contacts: {user_name}. Only include this person if you can infer they are part of the action/text."
-
     prompt = f"""Extract all person references from this text.
 
-Text: "{text}"{user_context}
+Text: "{text}"
 
 Extract ONLY people - all person references including:
 - Proper names (e.g., "John Smith")
 - Relational terms (e.g., "my daughter", "the doctor")
 - Nested relationships (e.g., "my daughter's doctor", "my son's teacher", "my wife's family") - Also correct any spelling if user mistyped (for example, daughters instead of daugther's)
 - The current user IF they are a participant in the event (e.g., "I visited my daughter" - both "I" and "my daughter" are participants)
+
+SAME-PERSON APPOSITIVES (AVOID DUPLICATES):
+- If a proper name and a relationship/profession describe the SAME person in the same clause/sentence, return ONLY the proper name.
+- Do NOT add an extra relationship entry when it is clearly the same person.
+- Examples:
+  * "my daughter visited John, who is her eye doctor" → ["my daughter", "John"]
+  * "I met Sarah, my therapist" → ["user", "Sarah"]
+  * "John the plumber fixed the sink" → ["John"]
+  * "Dr. Smith, my mother's cardiologist" → ["Dr. Smith", "my mother's cardiologist"] (two people: Dr. Smith and my mother)
 
 CRITICAL RULES:
 - If the user is a participant/actor in the event (doing something or something happening to them), include "user" to represent them
@@ -71,7 +75,8 @@ PRONOUN RESOLUTION:
 - You MUST be able to identify WHO the pronoun refers to before resolving it. this is critical to the right outcome.
 - If unclear or ambiguous, you sohuld fail the resolution and return a JSON like this
 {{
-    "ambiguous": true
+    "people": [],
+    "ambiguous_text": true
 }}"
 
 Examples of CORRECT pronoun resolution:
@@ -97,7 +102,7 @@ IMPORTANT:
 - If a person is mentioned multiple ways, include all mentions
 - Use the special token "user" to represent the current user when they are a participant
 
-Return ONLY valid JSON:
+Return ONLY a valid JSON, nothing more, no other text or explanation:
 {{
     "people": ["person1", "my daughter", "person2's doctor"]
 }}"""
@@ -106,7 +111,7 @@ Return ONLY valid JSON:
     for attempt in range(max_retries):
         try:
             # Use low temperature for consistent structured output
-            result = call_llm_json(prompt, timeout=30, temperature=0.1, top_p=0.9)
+            result = call_llm_json(prompt, timeout=30, temperature=0.1, top_p=0.9, use_simpler_model=True)
             people = result.get("people", [])
 
             # Validate extraction: check for unresolved pronouns
@@ -148,17 +153,9 @@ Please extract again with proper pronoun resolution or omit unclear references."
                     print(f"[contact_resolver] Skipping invalid extraction: '{person}'")
                     continue
 
-                # Handle special "user" token - replace with actual user contact name
+                # Keep the special "user" token for direct email resolution later
                 if person_lower == "user":
-                    user_contact = contacts_service.find_self_contact(user_email)
-                    if user_contact:
-                        user_name = user_contact.get("display_name", "")
-                        if user_name:
-                            print(f"[contact_resolver] Converting 'user' token to: '{user_name}'")
-                            filtered_people.append(user_name)
-                            continue
-                    # If we can't find user, skip it
-                    print("[contact_resolver] Skipping 'user' token (user not found)")
+                    filtered_people.append("user")
                     continue
 
                 # Skip standalone first-person pronouns (these should be converted to "user" by LLM)
@@ -231,6 +228,22 @@ def resolve_contact(
         "needs_clarification": False,
         "clarification_prompt": None,
     }
+
+    # Short-circuit for the current user: resolve directly by email.
+    if person_text.lower().strip() == "user":
+        user_contact = contacts_service.find_self_contact(user_email)
+        if user_contact:
+            result["status"] = "resolved"
+            result["confidence"] = "high"
+            result["contact_id"] = user_contact["contact_id"]
+            result["display_name"] = user_contact.get("display_name")
+            result["matched_via"] = "user_email"
+            print(f"[contact_resolver] ✓ Resolved user via email: {result['display_name']}")
+            return result
+        print("[contact_resolver] User token provided but no contact found by email")
+        result["status"] = "new"
+        result["display_name"] = "user"
+        return result
 
     # Step 1: Check for nested relationships (e.g., "my daughter's doctor")
     nested_parts = _parse_nested_relationship(person_text)
@@ -447,6 +460,7 @@ def resolve_contacts_from_text(
                     "clarification_prompt": str
                 }
             ]
+            "ambiguous_text": true | false
         }
     """
     print(f"\n{'='*80}")
@@ -457,7 +471,7 @@ def resolve_contacts_from_text(
 
     # Step 1: Extract people
     print("\n[contact_resolver] Step 1: Extracting people...")
-    people = extract_people_from_text(text, user_email)
+    people = extract_people_from_text(text)
     print(f"[contact_resolver] Extracted {len(people)} people: {people}")
 
     if not people:
@@ -888,23 +902,25 @@ def _llm_disambiguate_contact(
         for i, c in enumerate(candidates)
     )
 
-    prompt = f"""Disambiguate a person reference using event context.
+    prompt = f"""Disambiguate a person reference from the list of candidates.
 
-Event: "{event_context}"
-Person reference: "{person_text}"
-User: {user_name}
+Person you are trying to find: "{person_text}"
 
 Candidates:
 {candidate_list}
 
+Event context (use only if it is relevant): "{event_context}"
+
 CRITICAL RULES:
 1. You MUST choose from the candidates above or say "cannot_decide"
 2. You MUST NOT invent or suggest any person not in the list
-3. If context is insufficient, return "cannot_decide"
+3. If there is a perfect match between person you are trying to find and a candidate in the list, return "resolved" and the candidate number.
+4. If additional context is needed, consider the Event context provided.
+5. If context is not enough, return "cannot_decide"
 
-Analyze which candidate is most likely based on the event context.
+Analyze which candidate is most likely based on the context.
 
-Return ONLY valid JSON:
+Return ONLY a valid JSON, nothing more, no other text or explanation:
 {{
     "decision": "resolved" | "cannot_decide",
     "candidate_number": 1 or 2 or null,
@@ -914,7 +930,7 @@ Return ONLY valid JSON:
 
     try:
         # Use low temperature for consistent disambiguation
-        llm_response = call_llm_json(prompt, timeout=30, temperature=0.1, top_p=0.9)
+        llm_response = call_llm_json(prompt, timeout=30, temperature=0.1, top_p=0.9, use_simpler_model=True)
 
         decision = llm_response.get("decision")
         candidate_number = llm_response.get("candidate_number")
@@ -965,14 +981,14 @@ Person: "{person_text}"
 CRITICAL: Only return profession if EXPLICITLY stated or STRONGLY implied (e.g., "Dr." prefix).
 Otherwise return null.
 
-Return ONLY valid JSON:
+Return ONLY a valid JSON, nothing more, no other text or explanation:
 {{
     "profession": str or null
 }}"""
 
     try:
         # Use low temperature for consistent profession inference
-        result = call_llm_json(prompt, timeout=20, temperature=0.1, top_p=0.9)
+        result = call_llm_json(prompt, timeout=20, temperature=0.1, top_p=0.9, use_simpler_model=True)
         return result.get("profession")
     except Exception:
         return None
