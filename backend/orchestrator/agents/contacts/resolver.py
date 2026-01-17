@@ -43,7 +43,7 @@ def extract_people_from_text(text: str, user_email: Optional[str] = None) -> lis
         user_contact = contacts_service.find_self_contact(user_email)
         if user_contact:
             user_name = user_contact.get("display_name", "User")
-            user_context = f"\nCurrent user asking about contacts: {user_name}"
+            user_context = f"\nCurrent user asking about contacts: {user_name}. Only include this person if you can infer they are part of the action/text."
 
     prompt = f"""Extract all person references from this text.
 
@@ -54,7 +54,13 @@ Extract ONLY people - all person references including:
 - Relational terms (e.g., "my daughter", "the doctor")
 - Nested relationships (e.g., "my daughter's doctor", "my son's teacher", "my wife's family") - Also correct any spelling if user mistyped (for example, daughters instead of daugther's)
 
+CRITICAL EXCLUSIONS:
+- Do NOT include standalone first-person pronouns BY THEMSELVES: "I", "me", "myself" (when alone, not part of a relationship phrase)
+- Do NOT include the current user themselves (they are the speaker, not a contact to resolve)
+- Do NOT include second-person pronouns: "you", "your", "yours"
+
 IMPORTANT:
+- ALWAYS keep possessive markers in relationship phrases: "my daughter" NOT "daughter"
 - Keep relationship phrases intact (e.g., "my daughter's doctor" as ONE entity)
 - Include both proper names and generic references
 - If a person is mentioned multiple ways, include all mentions
@@ -66,7 +72,26 @@ Return ONLY valid JSON:
 
     try:
         result = call_llm_json(prompt, timeout=30)
-        return result.get("people", [])
+        people = result.get("people", [])
+
+        # Post-process: Filter out first-person pronouns
+        filtered_people = []
+        for person in people:
+            person_lower = person.lower().strip()
+
+            # Skip first-person pronouns
+            if person_lower in ["i", "me", "my", "mine", "myself", "we", "us", "our", "ours"]:
+                print(f"[contact_resolver] Skipping first-person pronoun: '{person}'")
+                continue
+
+            # Skip second-person pronouns
+            if person_lower in ["you", "your", "yours", "yourself"]:
+                print(f"[contact_resolver] Skipping second-person pronoun: '{person}'")
+                continue
+
+            filtered_people.append(person)
+
+        return filtered_people
     except Exception as e:
         print(f"[contact_resolver] Failed to extract people: {e}")
         return []
@@ -77,6 +102,7 @@ def resolve_contact(
     user_email: str,
     *,
     event_context: Optional[str] = None,
+    resolution_cache: Optional[dict[str, dict[str, Any]]] = None,
 ) -> dict[str, Any]:
     """
     Resolve a person mention to a specific contact.
@@ -124,7 +150,7 @@ def resolve_contact(
     print(f"[contact_resolver] Nested parts: {nested_parts}")
     if nested_parts and len(nested_parts) > 1:
         print(f"[contact_resolver] Detected nested relationship: {nested_parts}")
-        nested_result = _resolve_nested_relationship(nested_parts, user_email)
+        nested_result = _resolve_nested_relationship(nested_parts, user_email, resolution_cache)
 
         if nested_result["found"]:
             result["status"] = "resolved"
@@ -205,7 +231,13 @@ def resolve_contact(
 
     else:
         # Multiple matches - need disambiguation
-        print(f"[contact_resolver] Matches: {matches}")
+        print(
+            "[contact_resolver] Matches found: "
+            + ", ".join(
+                f"{m['display_name']} ({m.get('match_reason', '')})"
+                for m in matches
+            )
+        )
         print(f"[contact_resolver] Found {len(matches)} matches, attempting disambiguation")
 
         result["candidates"] = [
@@ -318,8 +350,18 @@ def resolve_contacts_from_text(
     new_contacts = []
     ambiguous_contacts = []
 
+    # Cache to avoid re-resolving the same person text multiple times
+    # This is especially useful for nested relationships like "my daughter" and "my daughter's doctor"
+    resolution_cache: dict[str, dict[str, Any]] = {}
+
     for person_text in people:
-        resolution = resolve_contact(person_text, user_email, event_context=text)
+        # Check cache first
+        if person_text in resolution_cache:
+            print(f"[contact_resolver] Using cached resolution for: '{person_text}'")
+            resolution = resolution_cache[person_text]
+        else:
+            resolution = resolve_contact(person_text, user_email, event_context=text, resolution_cache=resolution_cache)
+            resolution_cache[person_text] = resolution
 
         if resolution["status"] == "resolved":
             resolved_contacts.append({
@@ -402,6 +444,7 @@ def _parse_nested_relationship(text: str) -> Optional[list[str]]:
 def _resolve_nested_relationship(
     parts: list[str],
     user_email: str,
+    resolution_cache: Optional[dict[str, dict[str, Any]]] = None,
 ) -> dict[str, Any]:
     """
     Resolve nested relationship like ["my daughter", "doctor"].
@@ -410,6 +453,11 @@ def _resolve_nested_relationship(
     1. Resolve first part ("my daughter") to a contact
     2. Get that contact's relationships
     3. Find the second part ("doctor") in those relationships
+
+    Args:
+        parts: List of relationship parts (e.g., ["my daughter", "doctor"])
+        user_email: User's email for relationship lookups
+        resolution_cache: Optional cache to avoid re-resolving same person text
 
     Returns:
         {
@@ -431,8 +479,15 @@ def _resolve_nested_relationship(
     if len(parts) < 2:
         return result
 
-    # Step 1: Resolve first part
-    first_resolution = resolve_contact(parts[0], user_email)
+    # Step 1: Resolve first part (check cache first)
+    first_part = parts[0]
+    if resolution_cache and first_part in resolution_cache:
+        print(f"[contact_resolver] Nested: Using cached resolution for first part: '{first_part}'")
+        first_resolution = resolution_cache[first_part]
+    else:
+        first_resolution = resolve_contact(first_part, user_email, resolution_cache=resolution_cache)
+        if resolution_cache is not None:
+            resolution_cache[first_part] = first_resolution
 
     if first_resolution["status"] != "resolved":
         print(f"[contact_resolver] Nested: Could not resolve first part '{parts[0]}'")
@@ -455,22 +510,37 @@ def _resolve_nested_relationship(
         return result
 
     # Step 3: Resolve second part within those relationships
+    # The second part is already the clean relationship type (e.g., "doctor")
+    # because _parse_nested_relationship already stripped articles
     second_part = parts[1]
-    rel_type = _detect_relational_term(second_part)
+    print(f"[contact_resolver] Nested: Second part (relationship type): {second_part}")
 
-    if rel_type:
-        # Try relationship match
-        rel_result = _resolve_via_relationship(rel_type, intermediate_rels)
-        if rel_result["found"]:
-            result["found"] = True
-            result["contact_id"] = rel_result["contact_id"]
-            result["display_name"] = rel_result["display_name"]
-            result["confidence"] = "medium"
-            result["path"].append(result["display_name"])
-            return result
+    # Try relationship match directly with the second part as the relationship type
+    rel_result = _resolve_via_relationship(second_part, intermediate_rels)
+    print(f"[contact_resolver] Nested: Relationship result: {rel_result}")
 
-    # Try fuzzy search among related contacts
-    search_name = _strip_generic_markers(second_part) if rel_type else second_part
+    if rel_result["found"]:
+        result["found"] = True
+        result["contact_id"] = rel_result["contact_id"]
+        result["display_name"] = rel_result["display_name"]
+        result["confidence"] = "medium"
+        result["path"].append(result["display_name"])
+        return result
+
+    if rel_result["candidates"]:
+        # Multiple matches found - for nested relationships, return first candidate
+        # (we could enhance this later to return candidates for disambiguation)
+        candidate = rel_result["candidates"][0]
+        result["found"] = True
+        result["contact_id"] = candidate["contact_id"]
+        result["display_name"] = candidate["display_name"]
+        result["confidence"] = "low"
+        result["path"].append(result["display_name"])
+        print(f"[contact_resolver] Nested: Multiple {second_part}s found, using first: {candidate['display_name']}")
+        return result
+
+    # Try fuzzy search among related contacts as fallback
+    search_name = second_part
     matches = contacts_service.search_contacts(search_name, search_by="name", fuzzy_threshold=75, limit=3)
 
     if matches:
@@ -545,7 +615,6 @@ def _resolve_via_relationship(
     }
 
     relationships = relationship_context.get("relationships", [])
-    print(f"[contact_resolver_inner] Relationships: {relationships}")
     if not relationships:
         return result
 
@@ -576,9 +645,6 @@ def _resolve_via_relationship(
             if "contact_id" not in contact_data:
                 contact_data["contact_id"] = rel.get("contact_id")
             rel_map[other_type].append(contact_data)
-
-    print(f"[contact_resolver_inner] Relationship map: {rel_map}")
-    print(f"[contact_resolver_inner] Relationship type: {relationship_type}")
 
     # Direct match
     if relationship_type in rel_map and rel_map[relationship_type]:
@@ -734,7 +800,7 @@ def _infer_profession_from_text(person_text: str, full_text: str) -> Optional[st
     Returns:
         Profession string or None
     """
-    prompt = f"""Infer profession from context.
+    prompt = f"""Infer profession from context. If a general term is provided, convert to a more offical term as well.
 
 Text: "{full_text}"
 Person: "{person_text}"

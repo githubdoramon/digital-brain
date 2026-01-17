@@ -27,6 +27,9 @@ def mock_call_llm_json(prompt: str, **kwargs) -> dict[str, Any]:
         # Be more specific about matching text patterns
         if "visited my daughter's doctor" in prompt_lower or "i visited my daughter's doctor" in prompt_lower:
             return {"people": ["my daughter", "my daughter's doctor"]}
+        elif "i visited my daughter's mother" in prompt_lower:
+            # LLM might incorrectly return these - the filter should remove them
+            return {"people": ["I", "my daughter", "my daughter's mother"]}
         elif "had lunch with john smith" in prompt_lower:
             return {"people": ["John Smith"]}
         elif "saw john smith" in prompt_lower:
@@ -131,6 +134,13 @@ def test_extract_people_from_text():
 
     people = extract_people_from_text("Went to the store")
     assert people == []
+
+    # Test filtering of first-person pronouns
+    people = extract_people_from_text("I visited my daughter's mother")
+    # Should filter out "I" but keep nested relationships
+    assert "I" not in people
+    assert "my daughter" in people
+    assert "my daughter's mother" in people
 
 
 @patch('agents.contacts.resolver.contacts_service')
