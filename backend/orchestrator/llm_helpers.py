@@ -45,6 +45,7 @@ def call_llm(
     timeout: Optional[int] = None,
     max_tokens: Optional[int] = None,
     temperature: Optional[float] = None,
+    top_p: Optional[float] = None,
 ) -> str:
     """
     Make a synchronous chat request to the LLM.
@@ -55,7 +56,8 @@ def call_llm(
         model: Override the default model
         timeout: Override the default timeout (seconds)
         max_tokens: Maximum tokens in response
-        temperature: Sampling temperature (0-1)
+        temperature: Sampling temperature (0-1, lower = more deterministic)
+        top_p: Nucleus sampling threshold (0-1, lower = more focused)
 
     Returns:
         The LLM response content as a string
@@ -82,6 +84,9 @@ def call_llm(
 
     if temperature is not None:
         payload["temperature"] = temperature
+
+    if top_p is not None:
+        payload["top_p"] = top_p
 
     response = requests.post(
         f"{LLM_BASE_URL}/chat/completions",
@@ -111,6 +116,8 @@ def call_llm_json(
     model: Optional[str] = None,
     timeout: Optional[int] = None,
     max_tokens: Optional[int] = None,
+    temperature: Optional[float] = None,
+    top_p: Optional[float] = None,
 ) -> dict[str, Any]:
     """
     Make an LLM request and parse the response as JSON.
@@ -123,6 +130,8 @@ def call_llm_json(
         model: Override the default model
         timeout: Override the default timeout (seconds)
         max_tokens: Maximum tokens in response
+        temperature: Sampling temperature (0-1, lower = more deterministic)
+        top_p: Nucleus sampling threshold (0-1, lower = more focused)
 
     Returns:
         Parsed JSON response as a dict
@@ -137,6 +146,8 @@ def call_llm_json(
         model=model,
         timeout=timeout,
         max_tokens=max_tokens,
+        temperature=temperature,
+        top_p=top_p,
     )
 
     # Extract JSON from potential markdown code blocks

@@ -24,22 +24,36 @@ def mock_call_llm_json(prompt: str, **kwargs) -> dict[str, Any]:
 
     # Mock person extraction
     if "extract all person references" in prompt_lower:
+        # Extract the actual text being analyzed from the prompt
+        # Look for Text: "..." pattern
+        import re
+        text_match = re.search(r'text:\s*"([^"]+)"', prompt_lower)
+        text_content = text_match.group(1) if text_match else prompt_lower
+
         # Be more specific about matching text patterns
-        if "visited my daughter's doctor" in prompt_lower or "i visited my daughter's doctor" in prompt_lower:
-            return {"people": ["my daughter", "my daughter's doctor"]}
-        elif "i visited my daughter's mother" in prompt_lower:
-            # LLM might incorrectly return these - the filter should remove them
-            return {"people": ["I", "my daughter", "my daughter's mother"]}
-        elif "had lunch with john smith" in prompt_lower:
-            return {"people": ["John Smith"]}
-        elif "saw john smith" in prompt_lower:
+        if "i visited my daughter's doctor" in text_content:
+            # User is participant, so include them
+            return {"people": ["user", "my daughter", "my daughter's doctor"]}
+        elif "i visited my daughter's mother" in text_content:
+            # User is participant, so include them (with "user" token)
+            return {"people": ["user", "my daughter", "my daughter's mother"]}
+        elif "my daughter visited her mother" in text_content:
+            # User is just narrator, not participant
+            # NEW: Apply pronoun resolution - "her mother" → "my daughter's mother"
+            return {"people": ["my daughter", "my daughter's mother"]}
+        elif "the doctor saw her patient" in text_content:
+            # Ambiguous case - "her" refers to doctor but this is ownership, not nested relationship
+            # Should NOT resolve to "the doctor's patient"
+            return {"people": ["the doctor", "her patient"]}
+        elif "had lunch with john smith" in text_content:
+            # User is participant (having lunch)
+            return {"people": ["user", "John Smith"]}
+        elif "saw john smith" in text_content:
             return {"people": ["John Smith", "Unknown Person", "Dr. Jones"]}
-        elif "went to the store" in prompt_lower:
+        elif "went to the store" in text_content:
             return {"people": []}
         else:
-            # Default: try to extract obvious patterns
-            if "john smith" in prompt_lower:
-                return {"people": ["John Smith"]}
+            # Default: return empty
             return {"people": []}
 
     # Mock disambiguation
@@ -69,6 +83,11 @@ sys.modules['llm_helpers'] = mock_llm_helpers
 
 # Mock contacts module before importing
 mock_contacts_module = MagicMock()
+# Set up find_self_contact to return a proper user contact
+mock_contacts_module.find_self_contact.return_value = {
+    "contact_id": "user-123",
+    "display_name": "Test User"
+}
 sys.modules['contacts'] = mock_contacts_module
 
 # Now import after mocking
@@ -125,22 +144,42 @@ def test_strip_generic_markers():
 def test_extract_people_from_text():
     """Test person extraction from text."""
     # Mock extraction - the mock returns people based on text content
-    people = extract_people_from_text("I visited my daughter's doctor yesterday")
+    # Without user_email, "user" token will be converted to user's name
+    people = extract_people_from_text("I visited my daughter's doctor yesterday", "user@example.com")
+    assert "Test User" in people  # User is participant
     assert "my daughter" in people
     assert "my daughter's doctor" in people
 
-    people = extract_people_from_text("Had lunch with John Smith")
+    people = extract_people_from_text("Had lunch with John Smith", "user@example.com")
+    assert "Test User" in people  # User is participant
     assert "John Smith" in people
 
     people = extract_people_from_text("Went to the store")
     assert people == []
 
-    # Test filtering of first-person pronouns
-    people = extract_people_from_text("I visited my daughter's mother")
-    # Should filter out "I" but keep nested relationships
+    # Test user as participant (should be included)
+    people = extract_people_from_text("I visited my daughter's mother", "user@example.com")
+    # Should convert "user" token to actual user name (Test User)
     assert "I" not in people
+    assert "Test User" in people  # User is participant
     assert "my daughter" in people
     assert "my daughter's mother" in people
+
+    # Test user as narrator (should NOT be included)
+    # NEW: With pronoun resolution, "her mother" becomes "my daughter's mother"
+    people = extract_people_from_text("My daughter visited her mother", "user@example.com")
+    # User is just narrator, not participant
+    assert "Test User" not in people
+    assert "my daughter" in people
+    # After pronoun resolution: "her mother" → "my daughter's mother"
+    assert "my daughter's mother" in people
+
+    # Test ambiguous pronoun that should NOT be resolved
+    # "The doctor" owns the patient, not a nested relationship
+    people = extract_people_from_text("The doctor saw her patient", "user@example.com")
+    # Should keep as separate entities, not resolve to "the doctor's patient"
+    assert "the doctor" in people
+    assert "her patient" in people or "the doctor's patient" not in people  # Should NOT nest
 
 
 @patch('agents.contacts.resolver.contacts_service')
@@ -274,6 +313,70 @@ def test_resolve_contact_nested_relationship(mock_contacts):
 
 
 @patch('agents.contacts.resolver.contacts_service')
+def test_resolve_contact_nested_directional(mock_contacts):
+    """Test that nested relationships respect directionality of type/other_type."""
+    # Mock user contact
+    mock_contacts.find_self_contact.return_value = {
+        "contact_id": "user-contact-123",
+        "display_name": "Test User"
+    }
+
+    # Mock user's relationships - has a wife
+    def mock_get_relationships(contact_id, include_contact_details=False):
+        if contact_id == "user-contact-123":
+            # User's relationships - has a wife
+            return {
+                "relationships": [
+                    {
+                        "type": "spouse",
+                        "related_contact": {
+                            "contact_id": "wife-123",
+                            "display_name": "Jane Doe"
+                        }
+                    }
+                ]
+            }
+        elif contact_id == "wife-123":
+            # Wife's relationships - has a mother (with bi-directional type/other_type)
+            return {
+                "relationships": [
+                    {
+                        "type": "child",  # Wife is child of her mother
+                        "other_type": "mother",  # Mother's perspective: she is mother of wife
+                        "related_contact": {
+                            "contact_id": "mother-in-law-456",
+                            "display_name": "Mary Johnson"
+                        }
+                    }
+                ]
+            }
+        return {"relationships": []}
+
+    mock_contacts.get_contact_relationships.side_effect = mock_get_relationships
+
+    # Mock the related types lookup
+    def mock_find_related_types(rel_type):
+        if rel_type == "wife":
+            return ["spouse", "wife"]
+        elif rel_type == "mother":
+            return ["mother", "parent"]
+        return [rel_type]
+
+    mock_contacts.find_related_types.side_effect = mock_find_related_types
+
+    # Mock search to return nothing (force relationship resolution)
+    mock_contacts.search_contacts.return_value = []
+
+    result = resolve_contact("my wife's mother", "user@example.com")
+
+    # Should resolve to wife's mother (Mary Johnson), NOT back to the wife herself
+    assert result["status"] == "resolved"
+    assert result["contact_id"] == "mother-in-law-456"
+    assert result["display_name"] == "Mary Johnson"
+    assert result["matched_via"] == "nested_relationship"
+
+
+@patch('agents.contacts.resolver.contacts_service')
 def test_resolve_contact_not_found(mock_contacts):
     """Test when contact cannot be resolved."""
     # Mock search returning no results
@@ -332,15 +435,23 @@ def test_resolve_contacts_from_text(mock_contacts):
         "display_name": "Test User"
     }
 
-    # Mock search for "John Smith"
-    mock_contacts.search_contacts.return_value = [
-        {
-            "contact_id": "contact-123",
-            "display_name": "John Smith",
-            "match_score": 95
-        }
-    ]
+    # Mock search - return different results based on query
+    def mock_search(query, **kwargs):
+        if "Test User" in query:
+            return [{
+                "contact_id": "user-contact-123",
+                "display_name": "Test User",
+                "match_score": 100
+            }]
+        elif "John Smith" in query:
+            return [{
+                "contact_id": "contact-123",
+                "display_name": "John Smith",
+                "match_score": 95
+            }]
+        return []
 
+    mock_contacts.search_contacts.side_effect = mock_search
     mock_contacts.get_contact_relationships.return_value = {"relationships": []}
 
     result = resolve_contacts_from_text(
@@ -349,9 +460,14 @@ def test_resolve_contacts_from_text(mock_contacts):
     )
 
     assert result["text"] == "Had lunch with John Smith yesterday"
+    # Should include both user (as participant) and John Smith
+    assert "Test User" in result["people_mentioned"]
     assert "John Smith" in result["people_mentioned"]
-    assert len(result["resolved_contacts"]) > 0
-    assert result["resolved_contacts"][0]["contact_id"] == "contact-123"
+    assert len(result["resolved_contacts"]) >= 1
+    # Find John Smith in resolved contacts
+    john_smith_resolved = [r for r in result["resolved_contacts"] if r["display_name"] == "John Smith"]
+    assert len(john_smith_resolved) == 1
+    assert john_smith_resolved[0]["contact_id"] == "contact-123"
 
 
 @patch('agents.contacts.resolver.contacts_service')
@@ -411,6 +527,7 @@ def run_manual_tests():
         ("Resolve contact by name", test_resolve_contact_direct_name),
         ("Resolve contact by relationship", test_resolve_contact_relationship),
         ("Resolve nested relationship", test_resolve_contact_nested_relationship),
+        ("Resolve nested directional", test_resolve_contact_nested_directional),
         ("Contact not found", test_resolve_contact_not_found),
         ("Ambiguous contact", test_resolve_contact_ambiguous),
         ("Full pipeline", test_resolve_contacts_from_text),

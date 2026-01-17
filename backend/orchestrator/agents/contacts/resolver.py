@@ -53,48 +53,135 @@ Extract ONLY people - all person references including:
 - Proper names (e.g., "John Smith")
 - Relational terms (e.g., "my daughter", "the doctor")
 - Nested relationships (e.g., "my daughter's doctor", "my son's teacher", "my wife's family") - Also correct any spelling if user mistyped (for example, daughters instead of daugther's)
+- The current user IF they are a participant in the event (e.g., "I visited my daughter" - both "I" and "my daughter" are participants)
 
-CRITICAL EXCLUSIONS:
-- Do NOT include standalone first-person pronouns BY THEMSELVES: "I", "me", "myself" (when alone, not part of a relationship phrase)
-- Do NOT include the current user themselves (they are the speaker, not a contact to resolve)
+CRITICAL RULES:
+- If the user is a participant/actor in the event (doing something or something happening to them), include "user" to represent them
+- Examples where user should be included:
+  * "I visited my daughter" → ["user", "my daughter"] (user is actively doing something)
+  * "John and I went to the store" → ["John", "user"] (user is part of the group)
+  * "My daughter visited me" → ["my daughter", "user"] (something happened to the user)
+- Examples where user should NOT be included:
+  * "My daughter visited her mother" → ["my daughter", "my daughter's mother"] (user is just narrator, not participant; note pronoun resolution)
+  * "John met with Mary" → ["John", "Mary"] (user is just narrator)
 - Do NOT include second-person pronouns: "you", "your", "yours"
+
+PRONOUN RESOLUTION:
+- Resolve possessive pronouns (her, his, their) when they refer to someone already mentioned
+- You MUST be able to identify WHO the pronoun refers to before resolving it. this is critical to the right outcome.
+- If unclear or ambiguous, you sohuld fail the resolution and return a JSON like this
+{{
+    "ambiguous": true
+}}"
+
+Examples of CORRECT pronoun resolution:
+- "my daughter met her mother" → ["my daughter", "my daughter's mother"]
+  * "her" clearly refers to "my daughter" (only one person mentioned before "her")
+- "John visited his doctor" → ["John", "John's doctor"]
+  * "his" clearly refers to "John" (only one person mentioned before "his")
+- "Emma and her sister went out" → ["Emma", "Emma's sister"]
+  * "her" clearly refers to "Emma" (closest preceding person)
+
+Examples of INCORRECT - do NOT resolve these:
+- "She met her mother" → ["she", "her mother"]
+  * "her" could refer to "she" but "she" is a pronoun, not a clear person reference
+- "The doctor saw her patient" → ["the doctor", "her patient"]
+  * "her" clearly refers to "the doctor", so keep separate (doctor's patient, not nested)
+
+CRITICAL: Only resolve pronouns when the referent is crystal clear and creates a valid nested relationship
 
 IMPORTANT:
 - ALWAYS keep possessive markers in relationship phrases: "my daughter" NOT "daughter"
 - Keep relationship phrases intact (e.g., "my daughter's doctor" as ONE entity)
 - Include both proper names and generic references
 - If a person is mentioned multiple ways, include all mentions
+- Use the special token "user" to represent the current user when they are a participant
 
 Return ONLY valid JSON:
 {{
     "people": ["person1", "my daughter", "person2's doctor"]
 }}"""
 
-    try:
-        result = call_llm_json(prompt, timeout=30)
-        people = result.get("people", [])
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            # Use low temperature for consistent structured output
+            result = call_llm_json(prompt, timeout=30, temperature=0.1, top_p=0.9)
+            people = result.get("people", [])
 
-        # Post-process: Filter out first-person pronouns
-        filtered_people = []
-        for person in people:
-            person_lower = person.lower().strip()
+            # Validate extraction: check for unresolved pronouns
+            invalid_extractions = []
+            for person in people:
+                person_lower = person.lower().strip()
 
-            # Skip first-person pronouns
-            if person_lower in ["i", "me", "my", "mine", "myself", "we", "us", "our", "ours"]:
-                print(f"[contact_resolver] Skipping first-person pronoun: '{person}'")
+                # Check for unresolved third-person possessive pronouns at the start
+                # These indicate failed extraction since we can only resolve "my/user" context
+                if person_lower.startswith(("her ", "his ", "their ")):
+                    invalid_extractions.append(person)
+
+            if invalid_extractions and attempt < max_retries - 1:
+                print(f"[contact_resolver] Attempt {attempt + 1}: Invalid extractions detected: {invalid_extractions}")
+                print(f"[contact_resolver] Retrying extraction with stricter guidance...")
+
+                # Add stricter guidance to the prompt
+                prompt += f"""
+
+CRITICAL ERROR CORRECTION:
+Your previous extraction contained unresolved pronouns: {', '.join(invalid_extractions)}
+
+These are INVALID because:
+- "her X", "his X", "their X" at the start means you failed to identify WHO "her/his/their" refers to
+- The ONLY person known in this system is the current user (use "user" token or "my")
+- If you see "her mother", you MUST find who "her" refers to in the text and resolve it to "X's mother"
+- If you cannot identify the referent, DO NOT include it
+
+Please extract again with proper pronoun resolution or omit unclear references."""
                 continue
 
-            # Skip second-person pronouns
-            if person_lower in ["you", "your", "yours", "yourself"]:
-                print(f"[contact_resolver] Skipping second-person pronoun: '{person}'")
+            # Post-process: Filter out first-person pronouns and handle "user" token
+            filtered_people = []
+            for person in people:
+                person_lower = person.lower().strip()
+
+                # Skip invalid third-person pronouns (last safety check)
+                if person_lower.startswith(("her ", "his ", "their ")):
+                    print(f"[contact_resolver] Skipping invalid extraction: '{person}'")
+                    continue
+
+                # Handle special "user" token - replace with actual user contact name
+                if person_lower == "user":
+                    user_contact = contacts_service.find_self_contact(user_email)
+                    if user_contact:
+                        user_name = user_contact.get("display_name", "")
+                        if user_name:
+                            print(f"[contact_resolver] Converting 'user' token to: '{user_name}'")
+                            filtered_people.append(user_name)
+                            continue
+                    # If we can't find user, skip it
+                    print("[contact_resolver] Skipping 'user' token (user not found)")
+                    continue
+
+                # Skip standalone first-person pronouns (these should be converted to "user" by LLM)
+                if person_lower in ["i", "me", "my", "mine", "myself", "we", "us", "our", "ours"]:
+                    print(f"[contact_resolver] Skipping first-person pronoun: '{person}'")
+                    continue
+
+                # Skip second-person pronouns
+                if person_lower in ["you", "your", "yours", "yourself"]:
+                    print(f"[contact_resolver] Skipping second-person pronoun: '{person}'")
+                    continue
+
+                filtered_people.append(person)
+
+            return filtered_people
+        except Exception as e:
+            if attempt < max_retries - 1:
+                print(f"[contact_resolver] Attempt {attempt + 1} failed: {e}, retrying...")
                 continue
+            print(f"[contact_resolver] Failed to extract people after {max_retries} attempts: {e}")
+            return []
 
-            filtered_people.append(person)
-
-        return filtered_people
-    except Exception as e:
-        print(f"[contact_resolver] Failed to extract people: {e}")
-        return []
+    return []
 
 
 def resolve_contact(
@@ -148,6 +235,7 @@ def resolve_contact(
     # Step 1: Check for nested relationships (e.g., "my daughter's doctor")
     nested_parts = _parse_nested_relationship(person_text)
     print(f"[contact_resolver] Nested parts: {nested_parts}")
+    print(f"[contact_resolver] User email: {user_email}")
     if nested_parts and len(nested_parts) > 1:
         print(f"[contact_resolver] Detected nested relationship: {nested_parts}")
         nested_result = _resolve_nested_relationship(nested_parts, user_email, resolution_cache)
@@ -162,10 +250,47 @@ def resolve_contact(
             print(f"[contact_resolver] ✓ Resolved via nested: {' → '.join(nested_result['path'])}")
             return result
 
+        # Check if first part couldn't be resolved
+        if nested_result.get("first_part_unresolved"):
+            first_part_status = nested_result.get("first_part_status")
+            print(f"[contact_resolver] Nested: First part unresolved (status: {first_part_status})")
+
+            # If first part is ambiguous, the whole nested relationship is ambiguous
+            if first_part_status == "candidates":
+                print(f"[contact_resolver] First part '{nested_parts[0]}' is ambiguous, cannot resolve nested relationship")
+                result["status"] = "candidates"
+                # We can't provide candidates for the nested relationship since we don't know which first part
+                result["needs_clarification"] = True
+                result["clarification_prompt"] = (
+                    f"Cannot resolve '{person_text}' because '{nested_parts[0]}' is ambiguous. "
+                    f"Please clarify who '{nested_parts[0]}' refers to first."
+                )
+                return result
+            # If first part is new, the whole nested relationship is unresolvable
+            elif first_part_status == "new":
+                print(f"[contact_resolver] First part '{nested_parts[0]}' is new, cannot resolve nested relationship")
+                result["status"] = "new"
+                return result
+
+        # Check if this is a user-related nested relationship (starts with "my", "user's", or equals "user")
+        first_part_lower = nested_parts[0].lower().strip()
+        is_user_nested = (
+            first_part_lower.startswith(("my ", "user's ")) or
+            first_part_lower == "user"
+        )
+
+        if not is_user_nested:
+            # Non-user nested relationship failed (e.g., "Pedro's doctor")
+            # Don't fall back to direct search as it will give wrong results
+            print(f"[contact_resolver] Nested resolution failed for non-user relationship, marking as new")
+            result["status"] = "new"
+            return result
+
         print("[contact_resolver] Nested resolution failed, falling back")
 
     # Step 2: Check for simple relationship (e.g., "my daughter")
     relationship_type = _detect_relational_term(person_text)
+    print(f"[contact_resolver] Relationship type: {relationship_type}")
     if relationship_type:
         # Get user's relationships
         user_contact = contacts_service.find_self_contact(user_email)
@@ -465,7 +590,9 @@ def _resolve_nested_relationship(
             "contact_id": Optional[str],
             "display_name": Optional[str],
             "confidence": str,
-            "path": List[str]
+            "path": List[str],
+            "first_part_unresolved": bool,  # True if first part couldn't be resolved
+            "first_part_status": Optional[str]  # Status of first part resolution
         }
     """
     result = {
@@ -474,6 +601,8 @@ def _resolve_nested_relationship(
         "display_name": None,
         "confidence": "low",
         "path": [],
+        "first_part_unresolved": False,
+        "first_part_status": None,
     }
 
     if len(parts) < 2:
@@ -490,7 +619,10 @@ def _resolve_nested_relationship(
             resolution_cache[first_part] = first_resolution
 
     if first_resolution["status"] != "resolved":
-        print(f"[contact_resolver] Nested: Could not resolve first part '{parts[0]}'")
+        print(f"[contact_resolver] Nested: Could not resolve first part '{parts[0]}' (status: {first_resolution['status']})")
+        # Mark that the first part couldn't be resolved
+        result["first_part_unresolved"] = True
+        result["first_part_status"] = first_resolution["status"]
         return result
 
     intermediate_contact_id = first_resolution["contact_id"]
@@ -516,7 +648,9 @@ def _resolve_nested_relationship(
     print(f"[contact_resolver] Nested: Second part (relationship type): {second_part}")
 
     # Try relationship match directly with the second part as the relationship type
-    rel_result = _resolve_via_relationship(second_part, intermediate_rels)
+    # Use for_nested_resolution=True to ONLY match on 'other_type'
+    # This ensures we find what the related contact IS to the intermediate person
+    rel_result = _resolve_via_relationship(second_part, intermediate_rels, for_nested_resolution=True)
     print(f"[contact_resolver] Nested: Relationship result: {rel_result}")
 
     if rel_result["found"]:
@@ -593,9 +727,16 @@ def _strip_generic_markers(text: str) -> str:
 def _resolve_via_relationship(
     relationship_type: str,
     relationship_context: dict[str, Any],
+    for_nested_resolution: bool = False,
 ) -> dict[str, Any]:
     """
     Try to resolve person via relationship data.
+
+    Args:
+        relationship_type: The type of relationship to look for (e.g., "mother", "doctor")
+        relationship_context: Dictionary containing relationships data
+        for_nested_resolution: If True, only match on 'other_type' (what the related contact IS).
+                             If False, match on both 'type' and 'other_type' for flexibility.
 
     Returns:
         {
@@ -605,6 +746,15 @@ def _resolve_via_relationship(
             "confidence": str,
             "candidates": list[dict]  # Multiple matches if they exist
         }
+
+    Relationship directionality:
+        - 'type': What THIS contact is TO the related contact
+        - 'other_type': What the RELATED CONTACT is TO this contact
+
+        Example: Jane has relationship {type: "child", other_type: "mother", related_contact: Mary}
+        - Jane is a "child" to Mary
+        - Mary is a "mother" to Jane
+        - When looking for "mother", we match on 'other_type' because Mary IS the mother
     """
     result = {
         "found": False,
@@ -619,32 +769,38 @@ def _resolve_via_relationship(
         return result
 
     # Build map of relationship types to contacts
-    # Check both 'type' and 'other_type' fields for bi-directional relationships
     rel_map: dict[str, list[dict]] = {}
     for rel in relationships:
-        # Check 'type' field
-        rel_type = (rel.get("type") or "").lower()
-        if rel_type and "related_contact" in rel:
-            if rel_type not in rel_map:
-                rel_map[rel_type] = []
-            # Use contact_id from related_contact (nested structure)
-            contact_data = rel["related_contact"].copy()
-            # Ensure contact_id is present (prefer from related_contact over relationship level)
-            if "contact_id" not in contact_data:
-                contact_data["contact_id"] = rel.get("contact_id")
-            rel_map[rel_type].append(contact_data)
+        # For nested resolution, ONLY use 'other_type' because we want to find
+        # what the related contact IS to the intermediate person
+        if for_nested_resolution:
+            other_type = (rel.get("other_type") or "").lower()
+            if other_type and "related_contact" in rel:
+                if other_type not in rel_map:
+                    rel_map[other_type] = []
+                contact_data = rel["related_contact"].copy()
+                if "contact_id" not in contact_data:
+                    contact_data["contact_id"] = rel.get("contact_id")
+                rel_map[other_type].append(contact_data)
+        else:
+            # For direct user relationships, check both type and other_type for flexibility
+            rel_type = (rel.get("type") or "").lower()
+            if rel_type and "related_contact" in rel:
+                if rel_type not in rel_map:
+                    rel_map[rel_type] = []
+                contact_data = rel["related_contact"].copy()
+                if "contact_id" not in contact_data:
+                    contact_data["contact_id"] = rel.get("contact_id")
+                rel_map[rel_type].append(contact_data)
 
-        # Check 'other_type' field (bi-directional relationships)
-        other_type = (rel.get("other_type") or "").lower()
-        if other_type and "related_contact" in rel:
-            if other_type not in rel_map:
-                rel_map[other_type] = []
-            # Use contact_id from related_contact (nested structure)
-            contact_data = rel["related_contact"].copy()
-            # Ensure contact_id is present (prefer from related_contact over relationship level)
-            if "contact_id" not in contact_data:
-                contact_data["contact_id"] = rel.get("contact_id")
-            rel_map[other_type].append(contact_data)
+            other_type = (rel.get("other_type") or "").lower()
+            if other_type and "related_contact" in rel:
+                if other_type not in rel_map:
+                    rel_map[other_type] = []
+                contact_data = rel["related_contact"].copy()
+                if "contact_id" not in contact_data:
+                    contact_data["contact_id"] = rel.get("contact_id")
+                rel_map[other_type].append(contact_data)
 
     # Direct match
     if relationship_type in rel_map and rel_map[relationship_type]:
@@ -757,7 +913,8 @@ Return ONLY valid JSON:
 }}"""
 
     try:
-        llm_response = call_llm_json(prompt, timeout=30)
+        # Use low temperature for consistent disambiguation
+        llm_response = call_llm_json(prompt, timeout=30, temperature=0.1, top_p=0.9)
 
         decision = llm_response.get("decision")
         candidate_number = llm_response.get("candidate_number")
@@ -814,7 +971,8 @@ Return ONLY valid JSON:
 }}"""
 
     try:
-        result = call_llm_json(prompt, timeout=20)
+        # Use low temperature for consistent profession inference
+        result = call_llm_json(prompt, timeout=20, temperature=0.1, top_p=0.9)
         return result.get("profession")
     except Exception:
         return None

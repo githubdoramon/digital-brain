@@ -30,7 +30,7 @@ class DocumentProcessingError(RuntimeError):
     """Raised when an uploaded document cannot be processed."""
 
 
-DOCUMENT_STORAGE_DIR = Path("/app/storage/documents")
+DOCUMENT_STORAGE_DIR = Path("./app/storage/documents")
 
 DOCUMENT_STORAGE_DIR.mkdir(parents=True, exist_ok=True)
 

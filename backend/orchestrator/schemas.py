@@ -48,7 +48,7 @@ class ExternalEventPayload(BaseModel):
     external_type: Literal["google"] = Field(alias="externalType")
 
     class Config:
-        allow_population_by_field_name = True
+        populate_by_name = True
 
 
 class MeetingIn(BaseModel):
@@ -84,7 +84,7 @@ class ExternalPerson(BaseModel):
     update_id: str | None = Field(default=None, alias="updateId")
 
     class Config:
-        allow_population_by_field_name = True
+        populate_by_name = True
         extra = "allow"
 
 
@@ -94,7 +94,7 @@ class ExternalContactPayload(BaseModel):
     actor_id: str | None = Field(default=None, alias="actorId")
 
     class Config:
-        allow_population_by_field_name = True
+        populate_by_name = True
         extra = "allow"
 
 
@@ -108,7 +108,7 @@ class ExternalWebhookInfo(BaseModel):
     backoff_ms: int | None = Field(default=None, alias="backoffMs")
 
     class Config:
-        allow_population_by_field_name = True
+        populate_by_name = True
         extra = "allow"
 
 
@@ -121,7 +121,7 @@ class ExternalContactWebhook(BaseModel):
 
     class Config:
         extra = "allow"
-        allow_population_by_field_name = True
+        populate_by_name = True
 
 
 class ContactMergeIn(BaseModel):

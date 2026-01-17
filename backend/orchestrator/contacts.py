@@ -871,7 +871,8 @@ def search_contacts(
                         match_reason = f"exact name match: {name}"
                     continue
 
-                # Substring match (name contains query or query contains name)
+                # Substring match: query in name (user searching "Ed", contact "Eduardo")
+                # This is always OK - the user is searching for part of the contact's name
                 if query_lower in name:
                     score = 95
                     if score > best_score:
@@ -879,12 +880,31 @@ def search_contacts(
                         match_reason = f"name contains: {name}"
                     continue
 
+                # Substring match: name in query (user searching "Pedro", contact "Ed")
+                # This is ONLY OK if the name is a complete word in a multi-word query
+                # We DON'T want "Ed" to match "Pedro" (random substring)
+                # We DO want "Ed" to match "Ed Smith" (complete word in multi-word query)
                 if name in query_lower:
-                    score = 90
-                    if score > best_score:
-                        best_score = score
-                        match_reason = f"query contains name: {name}"
-                    continue
+                    # Only match if query has spaces (multi-word) and name is a complete word
+                    if ' ' in query_lower:
+                        name_len = len(name)
+                        name_pos = query_lower.find(name)
+
+                        # Check if name appears as a complete word (surrounded by spaces or at edges)
+                        at_start = name_pos == 0
+                        at_end = name_pos + name_len == len(query_lower)
+                        preceded_by_space = name_pos > 0 and query_lower[name_pos - 1] == ' '
+                        followed_by_space = name_pos + name_len < len(query_lower) and query_lower[name_pos + name_len] == ' '
+
+                        # Must be at start/end with space on other side, or surrounded by spaces
+                        is_complete_word = (at_start and followed_by_space) or (at_end and preceded_by_space) or (preceded_by_space and followed_by_space)
+
+                        if is_complete_word:
+                            score = 90
+                            if score > best_score:
+                                best_score = score
+                                match_reason = f"query contains name: {name}"
+                            continue
 
                 # First name / last name partial match
                 name_parts = name.split()
