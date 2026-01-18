@@ -8,7 +8,11 @@ These are extracted from the original llm_tools.py for better organization.
 from .database import handle_describe_schema, handle_execute_sql
 from .homeassistant import handle_home_assistant
 from .memory import handle_get_document, handle_get_events, handle_search_memories
-from .resolution import handle_lookup_contact, handle_resolve_query
+from .resolution import (
+    handle_lookup_contact,
+    handle_resolve_contacts,
+    handle_resolve_query,
+)
 from .skills import handle_run_skill_script
 from .system import handle_bash
 from .web import handle_web_search
@@ -21,6 +25,7 @@ HANDLERS = {
     "execute_sql": handle_execute_sql,
     "describe_schema": handle_describe_schema,
     "resolve_query": handle_resolve_query,
+    "resolve_contacts": handle_resolve_contacts,
     "lookup_contact": handle_lookup_contact,
     "web_search": handle_web_search,
     "run_skill_script": handle_run_skill_script,
@@ -43,6 +48,7 @@ __all__ = [
     "handle_execute_sql",
     "handle_describe_schema",
     "handle_resolve_query",
+    "handle_resolve_contacts",
     "handle_lookup_contact",
     "handle_web_search",
     "handle_run_skill_script",

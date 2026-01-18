@@ -49,6 +49,36 @@ def handle_resolve_query(
     return resolution
 
 
+def handle_resolve_contacts(
+    args: dict[str, Any],
+    state: Optional["AgentState"] = None,
+    **kwargs,
+) -> dict[str, Any]:
+    """
+    Execute resolve_contacts tool.
+
+    Extracts and resolves people from free-form text using the contacts resolver pipeline.
+    """
+    from agents.contacts.executor import handle_resolve_contacts_request
+
+    text = args.get("text", "")
+    user_email = args.get("user_email", "")
+
+    if not text:
+        return {"error": "text is required"}
+    if not user_email:
+        return {"error": "user_email is required"}
+
+    result = handle_resolve_contacts_request({"text": text, "user_email": user_email})
+
+    if state is not None:
+        status = result.get("status", "unknown")
+        people_count = len(result.get("people_mentioned", []))
+        state.add_fact(f"Resolved {people_count} people from text (status: {status})")
+
+    return result
+
+
 def handle_lookup_contact(
     args: dict[str, Any],
     state: Optional["AgentState"] = None,

@@ -22,7 +22,7 @@ from .contracts import (
 TOOL_GROUPS = {
     "memory": ["search_memories", "get_events", "get_document"],
     "database": ["execute_sql", "describe_schema"],
-    "resolution": ["resolve_query", "lookup_contact"],
+    "resolution": ["resolve_query", "resolve_contacts", "lookup_contact"],
     "web": ["web_search"],
     "home": ["home_assistant"],
     "skills": ["run_skill_script"],
@@ -277,6 +277,36 @@ def _register_all_tools(registry: ToolRegistry) -> None:
                     name="query",
                     type="string",
                     description="The user's natural-language query to parse.",
+                    required=True,
+                    min_length=1,
+                ),
+            ],
+            constraints=["read_only"],
+        )
+    )
+
+    # resolve_contacts
+    registry.register(
+        ToolContract(
+            name="resolve_contacts",
+            description=(
+                "Extract people from free-form text and resolve them to existing contacts. "
+                "Handles relationships (e.g., 'my daughter') and nested relationships "
+                "('my daughter's doctor'), returns candidates when ambiguous, and "
+                "suggests missing relationships plus inferred professions for new contacts."
+            ),
+            parameters=[
+                ToolParameter(
+                    name="text",
+                    type="string",
+                    description="The text to analyze for person mentions.",
+                    required=True,
+                    min_length=1,
+                ),
+                ToolParameter(
+                    name="user_email",
+                    type="string",
+                    description="User email for relationship context and self resolution.",
                     required=True,
                     min_length=1,
                 ),

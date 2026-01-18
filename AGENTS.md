@@ -180,7 +180,6 @@ LLM_API_KEY=                           # Optional
 LLM_TIMEOUT=120
 
 # Agent Configuration
-USE_BOUNDED_AGENT=true
 AGENT_MAX_STEPS=15
 AGENT_MAX_TOOL_CALLS=20
 AGENT_MAX_REPAIRS=2

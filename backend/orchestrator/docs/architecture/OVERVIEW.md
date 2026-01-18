@@ -83,9 +83,6 @@ The LLM suggests tool calls, but the controller:
 ## Feature Flags
 
 ```bash
-# Enable bounded agent (vs legacy implementation)
-USE_BOUNDED_AGENT=true
-
 # Enable LLM-based intent routing
 AGENT_ENABLE_INTENT_ROUTING=true
 
