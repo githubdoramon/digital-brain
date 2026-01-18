@@ -145,8 +145,9 @@ TOOLS: list[dict[str, Any]] = [
             "name": "resolve_contacts",
             "description": (
                 "Extract people from free-form text and resolve them to existing contacts. "
-                "Handles relationships (e.g., 'my daughter'), nested relationships "
-                "('my daughter's doctor'), and returns candidates when ambiguous. Also returns a boolean flag indicating if the whole text is ambiguous."
+                "Handles relationships (e.g., 'my daughter') and nested relationships "
+                "('my daughter's doctor'), returns candidates when ambiguous, and "
+                "suggests missing relationships plus inferred professions for new contacts."
             ),
             "parameters": {
                 "type": "object",

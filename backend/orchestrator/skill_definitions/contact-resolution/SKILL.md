@@ -1,6 +1,6 @@
 ---
 name: contact-resolution
-description: Extract person mentions from text and resolve them to existing contacts, including relationships and nested relationships, returning candidates when ambiguous, and proposing new contacts if they don't exist.
+description: Extract person mentions from text, resolve them to existing contacts (including relationships and nested relationships), return candidates when ambiguous, and propose new contacts plus relationship suggestions.
 ---
 
 # Contact Resolution
@@ -10,7 +10,8 @@ Use this skill when the user provides a sentence or note and wants to identify w
 This agent performs a full pipeline:
 - Extracts person mentions from text (names, relationships, nested relationships)
 - Resolves each mention to an existing contact when possible
-- Returns candidates when ambiguous and marks new people when no match exists
+- Marks new people when no match exists and infers professions from context
+- Suggests missing relationships between mention pairs
 
 ## Primary Endpoint: `POST /contacts/resolve`
 
@@ -31,7 +32,6 @@ Notes:
 ```json
 {
   "status": "success" | "needs_clarification" | "no_people" | "error",
-  "ambiguous": "true" | undefined,
   "text": "visited my daughter's eye doctor",
   "people_mentioned": ["my daughter's eye doctor"],
   "resolved_contacts": [
@@ -59,6 +59,17 @@ Notes:
       ],
       "clarification_prompt": "Multiple contacts match 'John'. Which one did you mean: John Smith?"
     }
+  ],
+  "suggested_relationships": [
+    {
+      "from_text": "Dr. Smith",
+      "to_text": "my daughter",
+      "from_contact_id": "contact:dr-smith",
+      "to_contact_id": "contact:emma",
+      "type": "doctor",
+      "other_type": "patient",
+      "relationship_hint": "eye doctor"
+    }
   ]
 }
 ```
@@ -67,7 +78,7 @@ Key fields:
 - `status`: `needs_clarification` when any ambiguous people are found, `no_people` when none extracted.
 - `matched_via`: `direct_match`, `relationship`, `nested_relationship`, or `llm_disambiguation`.
 - `resolution_path`: for nested relationships, shows the chain (user -> intermediate -> target).
-- `ambiguous`: If the text by itself is ambiguous and the agent can't even start extracing people
+- `suggested_relationships`: only included when an explicit relationship is mentioned and the pair does not already have a relationship.
 
 ## Behavior Guarantees
 

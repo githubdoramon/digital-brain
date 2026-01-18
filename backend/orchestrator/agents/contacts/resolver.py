@@ -426,7 +426,9 @@ def resolve_contacts_from_text(
     This is the main entry point. It:
     1. Extracts person mentions from text (LLM)
     2. Resolves each mention to a contact (or marks as new/ambiguous)
-    3. Returns structured results
+    3. Infers professions for new contacts
+    4. Infers relationships between contacts and proposes missing ones
+    5. Returns structured results
 
     Args:
         text: The text to analyze
@@ -460,6 +462,17 @@ def resolve_contacts_from_text(
                     "clarification_prompt": str
                 }
             ]
+            "suggested_relationships": [
+                {
+                    "from_text": str,
+                    "to_text": str,
+                    "from_contact_id": Optional[str],
+                    "to_contact_id": Optional[str],
+                    "type": str,
+                    "other_type": str,
+                    "relationship_hint": Optional[str]
+                }
+            ]
             "ambiguous_text": true | false
         }
     """
@@ -483,11 +496,63 @@ def resolve_contacts_from_text(
             "ambiguous_contacts": [],
         }
 
-    # Step 2: Resolve each person
+    # Step 2: Resolve each person (DB lookup or mark as new)
     print(f"\n[contact_resolver] Step 2: Resolving {len(people)} people...")
-    resolved_contacts = []
-    new_contacts = []
-    ambiguous_contacts = []
+    (
+        resolved_contacts,
+        new_contacts,
+        ambiguous_contacts,
+        resolution_cache,
+    ) = _resolve_people_mentions(people, user_email, text)
+
+    # Step 3: Infer professions for new contacts
+    print(f"\n[contact_resolver] Step 3: Inferring professions for new contacts...")
+    profession_by_text = _infer_professions_for_new_contacts(new_contacts, text)
+
+    # Step 4: Infer relationship pairs from text (deduped)
+    print(f"\n[contact_resolver] Step 4: Inferring relationship pairs...")
+    relationship_pairs = _infer_relationship_pairs(people, text)
+
+    # Step 5: Suggest missing relationships (only when none exist yet)
+    print(f"\n[contact_resolver] Step 5: Suggesting missing relationships...")
+    suggested_relationships = _suggest_missing_relationships(
+        pairs=relationship_pairs,
+        full_text=text,
+        user_email=user_email,
+        resolution_cache=resolution_cache,
+        profession_by_text=profession_by_text,
+    )
+
+    print("\n[contact_resolver] ✓ Resolution complete:")
+    print(f"[contact_resolver]   - Resolved: {len(resolved_contacts)}")
+    print(f"[contact_resolver]   - New: {len(new_contacts)}")
+    print(f"[contact_resolver]   - Ambiguous: {len(ambiguous_contacts)}")
+    print(f"[contact_resolver]   - Suggested relationships: {len(suggested_relationships)}")
+    print(f"{'='*80}\n")
+
+    return {
+        "text": text,
+        "people_mentioned": people,
+        "resolved_contacts": resolved_contacts,
+        "new_contacts": new_contacts,
+        "ambiguous_contacts": ambiguous_contacts,
+        "suggested_relationships": suggested_relationships,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Private helper functions
+# ---------------------------------------------------------------------------
+
+
+def _resolve_people_mentions(
+    people: list[str],
+    user_email: str,
+    full_text: str,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]], dict[str, dict[str, Any]]]:
+    resolved_contacts: list[dict[str, Any]] = []
+    new_contacts: list[dict[str, Any]] = []
+    ambiguous_contacts: list[dict[str, Any]] = []
 
     # Cache to avoid re-resolving the same person text multiple times
     # This is especially useful for nested relationships like "my daughter" and "my daughter's doctor"
@@ -499,18 +564,24 @@ def resolve_contacts_from_text(
             print(f"[contact_resolver] Using cached resolution for: '{person_text}'")
             resolution = resolution_cache[person_text]
         else:
-            resolution = resolve_contact(person_text, user_email, event_context=text, resolution_cache=resolution_cache)
+            resolution = resolve_contact(
+                person_text,
+                user_email,
+                event_context=full_text,
+                resolution_cache=resolution_cache,
+            )
             resolution_cache[person_text] = resolution
 
         if resolution["status"] == "resolved":
-            resolved_contacts.append({
+            resolved_contact = {
                 "original_text": person_text,
                 "contact_id": resolution["contact_id"],
                 "display_name": resolution["display_name"],
                 "matched_via": resolution["matched_via"],
                 "confidence": resolution["confidence"],
                 "resolution_path": resolution.get("resolution_path"),
-            })
+            }
+            resolved_contacts.append(resolved_contact)
             print(f"[contact_resolver]   ✓ '{person_text}' → {resolution['display_name']}")
 
         elif resolution["status"] == "candidates":
@@ -522,33 +593,39 @@ def resolve_contacts_from_text(
             print(f"[contact_resolver]   ⚠️  '{person_text}' → ambiguous ({len(resolution['candidates'])} candidates)")
 
         elif resolution["status"] == "new":
-            # Infer profession if mentioned
-            profession = _infer_profession_from_text(person_text, text)
-            new_contacts.append({
+            new_contact = {
                 "original_text": person_text,
                 "display_name": person_text,
-                "inferred_profession": profession,
-            })
+            }
+            new_contacts.append(new_contact)
             print(f"[contact_resolver]   ✗ '{person_text}' → new contact")
 
-    print("\n[contact_resolver] ✓ Resolution complete:")
-    print(f"[contact_resolver]   - Resolved: {len(resolved_contacts)}")
-    print(f"[contact_resolver]   - New: {len(new_contacts)}")
-    print(f"[contact_resolver]   - Ambiguous: {len(ambiguous_contacts)}")
-    print(f"{'='*80}\n")
-
-    return {
-        "text": text,
-        "people_mentioned": people,
-        "resolved_contacts": resolved_contacts,
-        "new_contacts": new_contacts,
-        "ambiguous_contacts": ambiguous_contacts,
-    }
+    return resolved_contacts, new_contacts, ambiguous_contacts, resolution_cache
 
 
-# ---------------------------------------------------------------------------
-# Private helper functions
-# ---------------------------------------------------------------------------
+def _infer_professions_for_new_contacts(
+    new_contacts: list[dict[str, Any]],
+    full_text: str,
+) -> dict[str, Optional[str]]:
+    profession_by_text: dict[str, Optional[str]] = {}
+    for new_contact in new_contacts:
+        person_text = new_contact["original_text"]
+        profession = _infer_profession_from_text(person_text, full_text)
+        new_contact["inferred_profession"] = profession
+        profession_by_text[person_text] = profession
+    return profession_by_text
+
+
+def _normalize_person_key(text: str) -> str:
+    return text.lower().strip()
+
+
+def _unordered_text_pair_key(person_text: str, anchor_text: str) -> Optional[tuple[str, str]]:
+    person_key = _normalize_person_key(person_text)
+    anchor_key = _normalize_person_key(anchor_text)
+    if not person_key or not anchor_key or person_key == anchor_key:
+        return None
+    return tuple(sorted([person_key, anchor_key]))
 
 
 def _parse_nested_relationship(text: str) -> Optional[list[str]]:
@@ -976,9 +1053,9 @@ def _infer_profession_from_text(person_text: str, full_text: str) -> Optional[st
     prompt = f"""Infer profession from context. If a general term is provided, convert to a more offical term as well.
 
 Text: "{full_text}"
-Person: "{person_text}"
+Person in the text you should infer the profession for: "{person_text}"
 
-CRITICAL: Only return profession if EXPLICITLY stated or STRONGLY implied (e.g., "Dr." prefix).
+CRITICAL: Only return profession for the person in context if EXPLICITLY stated or STRONGLY implied (e.g., "Dr." prefix).
 Otherwise return null.
 
 Return ONLY a valid JSON, nothing more, no other text or explanation:
@@ -992,3 +1069,269 @@ Return ONLY a valid JSON, nothing more, no other text or explanation:
         return result.get("profession")
     except Exception:
         return None
+
+
+def _normalize_relationship_type(value: Optional[str]) -> Optional[str]:
+    if not value:
+        return None
+    cleaned = value.strip()
+    return cleaned.lower() if cleaned else None
+
+
+def _infer_relationship_pairs(people: list[str], full_text: str) -> list[dict[str, str]]:
+    """
+    Infer explicit relationship pairs between people mentioned in text.
+
+    Returns:
+        [{"person_text": "John", "anchor_text": "my daughter", "relationship_hint": "eye doctor"}]
+    """
+    if not people:
+        return []
+
+    people_list = "\n".join(f"- {p}" for p in people)
+    prompt = f"""Infer explicit relationship pairs between mentioned people.
+
+Text: "{full_text}"
+People mentions (exact strings):
+{people_list}
+
+Rules:
+- Only include relationships explicitly stated in the text.
+- "person_text" and "anchor_text" must be in the list above or "user".
+- "relationship_hint" should be the role/profession/relationship term (e.g., "neurologist", "teacher", "mother", "personal trainer").
+- Prefer specific types over general terms WHEN POSSIBLE (e.g., "Electric Engineer" over "Engineer", "Orthopedist" over "Doctor").
+- Do NOT include self-relations.
+- Do NOT include duplicate pairs.
+
+Return ONLY valid JSON:
+{{
+  "relationships": [
+    {{
+      "person_text": str,
+      "anchor_text": str,
+      "relationship_hint": str
+    }}
+  ]
+}}"""
+
+    try:
+        result = call_llm_json(prompt, timeout=20, temperature=0.1, top_p=0.9, use_simpler_model=True)
+    except Exception:
+        return []
+
+    relationships = result.get("relationships", [])
+    pairs: list[dict[str, str]] = []
+    seen_pairs: set[tuple[str, str]] = set()
+    for item in relationships:
+        person_text = item.get("person_text")
+        anchor_text = item.get("anchor_text")
+        relationship_hint = item.get("relationship_hint")
+        if not person_text or not anchor_text or not relationship_hint:
+            continue
+        if person_text == anchor_text:
+            continue
+        if person_text not in people and person_text.lower().strip() != "user":
+            continue
+        if anchor_text not in people and anchor_text.lower().strip() != "user":
+            continue
+        pair_key = _unordered_text_pair_key(person_text, anchor_text)
+        if not pair_key or pair_key in seen_pairs:
+            continue
+        seen_pairs.add(pair_key)
+        pairs.append(
+            {
+                "person_text": person_text,
+                "anchor_text": anchor_text,
+                "relationship_hint": relationship_hint,
+            }
+        )
+
+    return pairs
+
+
+def _infer_relationship_types(
+    person_text: str,
+    anchor_text: str,
+    relationship_hint: str,
+    full_text: str,
+    *,
+    person_profession: Optional[str] = None,
+    anchor_profession: Optional[str] = None,
+) -> Optional[dict[str, str]]:
+    prompt = f"""Suggest relationship types between two people.
+
+Person A: "{person_text}"
+Person B: "{anchor_text}"
+Relationship hint: "{relationship_hint}"
+Person A profession (if known): "{person_profession}"
+Person B profession (if known): "{anchor_profession}"
+Full context: "{full_text}"
+
+Rules:
+- If the relationship hint does not indicate a relationship, return nulls.
+- "type" is what Person A is to Person B.
+- "other_type" is what Person B is to Person A.
+- Use concise, lowercase terms.
+- NEVER return self-relations (no "self", "same person", or equivalent).
+- Prefer more offical term over general term WHEN POSSIBLE (e.g., "Orthopedist" over "bone doctor").
+
+Return ONLY a valid JSON:
+{{
+    "type": str or null,
+    "other_type": str or null
+}}"""
+
+    try:
+        result = call_llm_json(prompt, timeout=20, temperature=0.1, top_p=0.9, use_simpler_model=True)
+    except Exception:
+        return None
+
+    rel_type = _normalize_relationship_type(result.get("type"))
+    other_type = _normalize_relationship_type(result.get("other_type"))
+
+    invalid_types = {"self", "same", "same person", "identical", "me"}
+    if not rel_type or not other_type or rel_type in invalid_types or other_type in invalid_types:
+        return None
+
+    return {"type": rel_type, "other_type": other_type}
+
+
+def _relationship_exists_between_contacts(
+    from_contact_id: str,
+    to_contact_id: str,
+) -> bool:
+    return (
+        _relationship_exists_one_way(from_contact_id, to_contact_id)
+        or _relationship_exists_one_way(to_contact_id, from_contact_id)
+    )
+
+
+def _relationship_exists_one_way(
+    from_contact_id: str,
+    to_contact_id: str,
+) -> bool:
+    try:
+        rels = contacts_service.get_contact_relationships(
+            from_contact_id,
+            include_contact_details=False,
+        )
+    except Exception:
+        return False
+
+    if not rels.get("found"):
+        return False
+
+    relationships = rels.get("relationships", [])
+    for rel in relationships:
+        if rel.get("contact_id") == to_contact_id:
+            return True
+    return False
+
+def _suggest_missing_relationships(
+    *,
+    pairs: list[dict[str, str]],
+    full_text: str,
+    user_email: str,
+    resolution_cache: dict[str, dict[str, Any]],
+    profession_by_text: dict[str, Optional[str]],
+) -> list[dict[str, Any]]:
+    if not pairs:
+        return []
+
+    user_contact_id = None
+    user_contact = contacts_service.find_self_contact(user_email)
+    if user_contact:
+        user_contact_id = user_contact.get("contact_id")
+
+    suggestions: list[dict[str, Any]] = []
+    seen_pairs: set[tuple[str, str]] = set()
+    relationship_cache: dict[tuple[str, str], bool] = {}
+
+    def _resolution_for(text: str) -> Optional[dict[str, Any]]:
+        if text.lower().strip() == "user":
+            if user_contact_id:
+                display_name = user_contact.get("display_name") if user_contact else "user"
+                return {"status": "resolved", "contact_id": user_contact_id, "display_name": display_name}
+            return {"status": "new", "contact_id": None, "display_name": "user"}
+        return resolution_cache.get(text)
+
+    def _entity_key(text: str, resolution: dict[str, Any]) -> Optional[str]:
+        status = resolution.get("status")
+        if status == "resolved" and resolution.get("contact_id"):
+            return resolution["contact_id"]
+        if status == "new":
+            return f"new:{text}"
+        return None
+
+    def _relationship_exists_cached(
+        person_contact_id: str,
+        anchor_contact_id: str,
+    ) -> bool:
+        key = tuple(sorted([person_contact_id, anchor_contact_id]))
+        if key in relationship_cache:
+            return relationship_cache[key]
+        exists = _relationship_exists_between_contacts(person_contact_id, anchor_contact_id)
+        relationship_cache[key] = exists
+        return exists
+
+    def _profession_for(text: str) -> Optional[str]:
+        if text not in profession_by_text or profession_by_text[text] is None:
+            profession_by_text[text] = _infer_profession_from_text(text, full_text)
+        return profession_by_text[text]
+
+    for pair in pairs:
+        person_text = pair.get("person_text")
+        anchor_text = pair.get("anchor_text")
+        relationship_hint = pair.get("relationship_hint")
+        if not person_text or not anchor_text or not relationship_hint:
+            continue
+
+        person_resolution = _resolution_for(person_text)
+        anchor_resolution = _resolution_for(anchor_text)
+        if not person_resolution or not anchor_resolution:
+            continue
+        if person_resolution.get("status") == "candidates" or anchor_resolution.get("status") == "candidates":
+            continue
+
+        person_key = _entity_key(person_text, person_resolution)
+        anchor_key = _entity_key(anchor_text, anchor_resolution)
+        if not person_key or not anchor_key or person_key == anchor_key:
+            continue
+
+        pair_key = tuple(sorted([person_key, anchor_key]))
+        if pair_key in seen_pairs:
+            continue
+        seen_pairs.add(pair_key)
+
+        person_contact_id = person_resolution.get("contact_id")
+        anchor_contact_id = anchor_resolution.get("contact_id")
+        if person_contact_id and anchor_contact_id:
+            if _relationship_exists_cached(person_contact_id, anchor_contact_id):
+                continue
+
+        person_profession = _profession_for(person_text)
+        anchor_profession = _profession_for(anchor_text)
+        rel_types = _infer_relationship_types(
+            person_text,
+            anchor_text,
+            relationship_hint,
+            full_text,
+            person_profession=person_profession,
+            anchor_profession=anchor_profession,
+        )
+        if not rel_types:
+            continue
+
+        suggestions.append(
+            {
+                "from_text": person_text,
+                "to_text": anchor_text,
+                "from_contact_id": person_contact_id,
+                "to_contact_id": anchor_contact_id,
+                "type": rel_types["type"],
+                "other_type": rel_types["other_type"],
+                "relationship_hint": relationship_hint,
+            }
+        )
+
+    return suggestions
