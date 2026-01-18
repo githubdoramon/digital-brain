@@ -1,4 +1,5 @@
 .env
+.env.local
 **/.venv/*
 **/__pycache__/*
 .python-version

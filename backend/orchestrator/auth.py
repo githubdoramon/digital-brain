@@ -6,10 +6,19 @@ from fastapi import Header, HTTPException, status
 from google.auth.transport import requests
 from google.oauth2 import id_token
 
+def _env_flag(name: str) -> bool:
+    return os.environ.get(name, "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+DEV_BYPASS_AUTH = _env_flag("DEV_BYPASS_AUTH")
+DEV_USER_EMAIL = os.environ.get("DEV_USER_EMAIL", "").strip()
+
 # Get Google Client ID from environment
 GOOGLE_CLIENT_ID = os.environ.get("GOOGLE_CLIENT_ID")
-if not GOOGLE_CLIENT_ID:
+if not GOOGLE_CLIENT_ID and not DEV_BYPASS_AUTH:
     raise ValueError("GOOGLE_CLIENT_ID is not set")
+if DEV_BYPASS_AUTH and not DEV_USER_EMAIL:
+    raise ValueError("DEV_USER_EMAIL is required when DEV_BYPASS_AUTH is enabled")
 
 # Parse allowed users from environment
 def get_allowed_users() -> Optional[set[str]]:
@@ -94,6 +103,13 @@ async def get_current_user(authorization: Optional[str] = Header(None)) -> dict:
     Raises:
         HTTPException: If token is missing, invalid, or user not allowed
     """
+    if DEV_BYPASS_AUTH:
+        return {
+            "email": DEV_USER_EMAIL,
+            "user_email": DEV_USER_EMAIL,
+            "name": DEV_USER_EMAIL.split("@")[0],
+        }
+
     if not authorization:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,

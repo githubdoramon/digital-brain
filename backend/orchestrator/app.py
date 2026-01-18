@@ -1048,7 +1048,7 @@ def reload_skills(user: dict = Depends(get_current_user)):
 @api.post("/contacts/resolve")
 def resolve_contacts_endpoint(
     request_data: dict[str, Any],
-    # user: dict = Depends(get_current_user),
+    user: dict = Depends(get_current_user),
 ):
     """
     Resolve person mentions in text to contacts.
@@ -1083,10 +1083,9 @@ def resolve_contacts_endpoint(
         "ambiguous_contacts": [...]
     }
     """
-    from agents.contacts.endpoint import handle_resolve_contacts_request
+    from agents.contacts.executor import handle_resolve_contacts_request
 
-    # user_email = user.get("email")
-    user_email = "REDACTED-EMAIL"
+    user_email = user.get("email")
     if not user_email:
         raise HTTPException(status_code=400, detail="Authenticated user email missing")
 
