@@ -92,9 +92,10 @@ def ingest_contact(contact: ContactIn) -> None:
               phones,
               links,
               tags,
+              comments,
               external_id
             )
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT (contact_id) DO UPDATE
               SET display_name = EXCLUDED.display_name,
                   aliases = EXCLUDED.aliases,
@@ -103,6 +104,7 @@ def ingest_contact(contact: ContactIn) -> None:
                   phones = EXCLUDED.phones,
                   links = EXCLUDED.links,
                   tags = EXCLUDED.tags,
+                  comments = COALESCE(EXCLUDED.comments, contacts.comments),
                   external_id = COALESCE(EXCLUDED.external_id, contacts.external_id)
             """,
             (
@@ -114,6 +116,7 @@ def ingest_contact(contact: ContactIn) -> None:
                 contact.phones or [],
                 contact.links or [],
                 contact.tags or [],
+                contact.comments,
                 getattr(contact, "external_id", None),
             ),
         )
@@ -129,7 +132,7 @@ def list_contacts() -> list[dict[str, Any]]:
     with get_conn() as conn, conn.cursor() as cur:
         cur.execute(
             """
-            SELECT contact_id, display_name, aliases, birthday, emails, phones, links, tags, external_id
+            SELECT contact_id, display_name, aliases, birthday, emails, phones, links, tags, comments, external_id
             FROM contacts
             ORDER BY display_name
             """
@@ -149,6 +152,7 @@ def list_contacts() -> list[dict[str, Any]]:
                     "phones": row["phones"] or [],
                     "links": row["links"] or [],
                     "tags": row["tags"] or [],
+                    "comments": row["comments"] or "",
                     "external_id": row["external_id"],
                     "relationships": relationships_map.get(contact_id, []),
                 }
@@ -160,7 +164,7 @@ def get_contact(contact_id: str) -> dict[str, Any] | None:
     with get_conn() as conn, conn.cursor() as cur:
         cur.execute(
             """
-            SELECT contact_id, display_name, aliases, birthday, emails, phones, links, tags, external_id
+            SELECT contact_id, display_name, aliases, birthday, emails, phones, links, tags, comments, external_id
             FROM contacts
             WHERE contact_id = %s
             """,
@@ -179,6 +183,7 @@ def get_contact(contact_id: str) -> dict[str, Any] | None:
             "phones": row["phones"] or [],
             "links": row["links"] or [],
             "tags": row["tags"] or [],
+            "comments": row["comments"] or "",
             "external_id": row["external_id"],
             "relationships": relationships_map.get(contact_id, []),
         }
@@ -191,7 +196,7 @@ def get_contact_by_email(email: str) -> dict[str, Any] | None:
     with get_conn() as conn, conn.cursor() as cur:
         cur.execute(
             """
-            SELECT contact_id, display_name, aliases, birthday, emails, phones, links, tags, external_id
+            SELECT contact_id, display_name, aliases, birthday, emails, phones, links, tags, comments, external_id
             FROM contacts
             WHERE %s = ANY(emails)
             LIMIT 1
@@ -212,6 +217,7 @@ def get_contact_by_email(email: str) -> dict[str, Any] | None:
             "phones": row["phones"] or [],
             "links": row["links"] or [],
             "tags": row["tags"] or [],
+            "comments": row["comments"] or "",
             "external_id": row["external_id"],
             "relationships": relationships_map.get(contact_id, []),
         }
@@ -251,7 +257,7 @@ def _contact_exists(cur, contact_id: str) -> bool:
 def _fetch_contact_row(cur, contact_id: str):
     cur.execute(
         """
-        SELECT contact_id, display_name, aliases, birthday, emails, phones, links, tags, external_id
+        SELECT contact_id, display_name, aliases, birthday, emails, phones, links, tags, comments, external_id
         FROM contacts
         WHERE contact_id = %s
         """,
@@ -288,6 +294,20 @@ def _merge_emails(*lists: Iterable[str] | None) -> list[str]:
             if normalized not in merged:
                 merged.append(normalized)
     return merged
+
+
+def _merge_comments(primary: str | None, duplicate: str | None) -> str | None:
+    primary_text = (primary or "").strip()
+    duplicate_text = (duplicate or "").strip()
+    if not primary_text and not duplicate_text:
+        return None
+    if not primary_text:
+        return duplicate_text
+    if not duplicate_text:
+        return primary_text
+    if primary_text == duplicate_text:
+        return primary_text
+    return f"{primary_text}\n\n{duplicate_text}"
 
 
 def _generate_external_contact_id(external_id: str) -> str:
@@ -366,6 +386,7 @@ def sync_external_contact(record: ExternalPerson, previous: ExternalPerson | Non
         existing_phones = (existing_row["phones"] if existing_row else []) or []
         existing_links = (existing_row["links"] if existing_row else []) or []
         existing_tags = (existing_row["tags"] if existing_row else []) or []
+        existing_comments = existing_row["comments"] if existing_row else None
         existing_display = existing_row["display_name"] if existing_row else None
         existing_birthday = existing_row["birthday"] if existing_row else None
 
@@ -399,6 +420,7 @@ def sync_external_contact(record: ExternalPerson, previous: ExternalPerson | Non
             phones=merged_phones,
             links=merged_links,
             tags=merged_tags,
+            comments=existing_comments,
             external_id=external_id,
         )
     )
@@ -434,7 +456,7 @@ def merge_contacts(primary_contact_id: str, duplicate_contact_id: str) -> dict[s
     with get_conn() as conn, conn.cursor() as cur:
         cur.execute(
             """
-            SELECT contact_id, display_name, aliases, birthday, emails, phones, links, tags, external_id
+            SELECT contact_id, display_name, aliases, birthday, emails, phones, links, tags, comments, external_id
             FROM contacts
             WHERE contact_id = ANY(%s)
             """,
@@ -455,6 +477,7 @@ def merge_contacts(primary_contact_id: str, duplicate_contact_id: str) -> dict[s
         merged_phones = _merge_lists(primary["phones"], duplicate["phones"])
         merged_links = _merge_lists(primary["links"], duplicate["links"])
         merged_tags = _merge_lists(primary["tags"], duplicate["tags"])
+        merged_comments = _merge_comments(primary.get("comments"), duplicate.get("comments"))
 
         final_display_name = primary["display_name"] or duplicate["display_name"]
         final_birthday = primary["birthday"] or duplicate["birthday"]
@@ -480,6 +503,7 @@ def merge_contacts(primary_contact_id: str, duplicate_contact_id: str) -> dict[s
                 phones = %s,
                 links = %s,
                 tags = %s,
+                comments = %s,
                 external_id = %s
             WHERE contact_id = %s
             """,
@@ -491,6 +515,7 @@ def merge_contacts(primary_contact_id: str, duplicate_contact_id: str) -> dict[s
                 merged_phones,
                 merged_links,
                 merged_tags,
+                merged_comments,
                 final_external_id,
                 primary_contact_id,
             ),
@@ -778,11 +803,14 @@ def resolve_query(query: str) -> dict[str, Any]:
     for contact in all_contacts:
         display_name = (contact.get("display_name") or "").lower()
         aliases = [a.lower() for a in (contact.get("aliases") or [])]
+        comments = (contact.get("comments") or "").lower()
 
         # Check if any name appears in the query
         if display_name and display_name in query_lower:
             contacts_found.append(contact)
         elif any(alias in query_lower for alias in aliases):
+            contacts_found.append(contact)
+        elif comments and query_lower in comments:
             contacts_found.append(contact)
 
     return {
@@ -923,6 +951,14 @@ def search_contacts(
                     best_score = fuzzy_score
                     match_reason = f"fuzzy match ({fuzzy_score}%): {name}"
 
+        if search_by == "any":
+            comments = (contact.get("comments") or "").lower()
+            if comments and query_lower in comments:
+                score = 80
+                if score > best_score:
+                    best_score = score
+                    match_reason = "comment match"
+
         if best_score >= fuzzy_threshold:
             matches.append((contact, best_score, match_reason))
 
@@ -1005,6 +1041,7 @@ def get_contact_relationships(
             "emails": contact.get("emails", []),
             "phones": contact.get("phones", []),
             "tags": contact.get("tags", []),
+            "comments": contact.get("comments", ""),
         },
         "relationships": result_relationships,
         "relationship_count": len(result_relationships),

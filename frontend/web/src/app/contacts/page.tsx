@@ -13,6 +13,7 @@ type Contact = {
   phones: string[];
   links: string[];
   tags: string[];
+  comments: string;
   relationships: ContactRelationship[];
   external_id?: string | null;
 };
@@ -111,6 +112,7 @@ export default function ContactsPage() {
     phones: string;
     links: string;
     tags: string;
+    comments: string;
     relationships: RelationshipDraft[];
     external_id: string;
   }>({
@@ -122,6 +124,7 @@ export default function ContactsPage() {
     phones: "",
     links: "",
     tags: "",
+    comments: "",
     relationships: [],
     external_id: "",
   });
@@ -145,7 +148,8 @@ export default function ContactsPage() {
             const aliasMatch = contact.aliases.some((alias) =>
               normalizeText(alias).includes(query)
             );
-            return nameMatch || aliasMatch;
+            const commentMatch = normalizeText(contact.comments || "").includes(query);
+            return nameMatch || aliasMatch || commentMatch;
           });
 
     return [...matches].sort((a, b) => {
@@ -182,18 +186,19 @@ export default function ContactsPage() {
 
   function openAddModal() {
     setEditingContact(null);
-    setFormState({
-      contact_id: generateContactId(),
-      display_name: "",
-      aliases: "",
-      birthday: "",
-      emails: "",
-      phones: "",
-      links: "",
-      tags: "",
-      relationships: [],
-      external_id: "",
-    });
+      setFormState({
+        contact_id: generateContactId(),
+        display_name: "",
+        aliases: "",
+        birthday: "",
+        emails: "",
+        phones: "",
+        links: "",
+        tags: "",
+        comments: "",
+        relationships: [],
+        external_id: "",
+      });
     setShowModal(true);
     setStatus({ kind: "idle" });
   }
@@ -209,6 +214,7 @@ export default function ContactsPage() {
       phones: formatList(contact.phones),
       links: formatList(contact.links),
       tags: formatList(contact.tags),
+      comments: contact.comments || "",
       relationships: (contact.relationships || [])
         .map((rel) => ({
           relationship_id: rel.relationship_id,
@@ -228,7 +234,7 @@ export default function ContactsPage() {
   }
 
   const handleChange = (field: string) =>
-    (event: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
+    (event: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) => {
       setFormState((prev) => ({ ...prev, [field]: event.target.value }));
     };
 
@@ -425,6 +431,7 @@ export default function ContactsPage() {
       phones: parseList(formState.phones),
       links: parseList(formState.links),
       tags: parseList(formState.tags),
+      comments: formState.comments.trim(),
       external_id: formState.external_id.trim() || null,
       relationships: formState.relationships
         .filter((rel) => rel.contact_id && rel.type)
@@ -576,8 +583,8 @@ export default function ContactsPage() {
           type="search"
           value={searchQuery}
           onChange={(event) => setSearchQuery(event.target.value)}
-          placeholder="Search by name or alias"
-          aria-label="Search contacts by name or alias"
+          placeholder="Search by name, alias, or notes"
+          aria-label="Search contacts by name, alias, or notes"
           style={{
             border: "1px solid #d0d0d0",
             borderRadius: "8px",
@@ -748,6 +755,13 @@ export default function ContactsPage() {
                       {contact.aliases.length > 0 && (
                         <div style={{ fontSize: "0.8rem", color: "#666", marginTop: "2px" }}>
                           {contact.aliases.join(", ")}
+                        </div>
+                      )}
+                      {contact.comments && (
+                        <div style={{ fontSize: "0.8rem", color: "#6b7280", marginTop: "6px" }}>
+                          {contact.comments.length > 120
+                            ? `${contact.comments.slice(0, 120)}...`
+                            : contact.comments}
                         </div>
                       )}
                     </td>
@@ -1084,6 +1098,23 @@ export default function ContactsPage() {
                   />
                 </label>
 
+                <label style={{ display: "grid", gap: "6px" }}>
+                  <span style={{ fontWeight: 600, fontSize: "0.9rem" }}>Comments</span>
+                  <textarea
+                    value={formState.comments}
+                    onChange={handleChange("comments")}
+                    placeholder="Notes, context, reminders..."
+                    rows={4}
+                    style={{
+                      border: "1px solid #d0d0d0",
+                      borderRadius: "8px",
+                      padding: "10px 12px",
+                      fontSize: "0.95rem",
+                      resize: "vertical",
+                    }}
+                  />
+                </label>
+
                 {status.kind === "error" && (
                   <div
                     role="alert"
@@ -1170,4 +1201,3 @@ export default function ContactsPage() {
     </section>
   );
 }
-

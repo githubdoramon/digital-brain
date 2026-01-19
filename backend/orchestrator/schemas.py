@@ -15,6 +15,7 @@ class ContactIn(BaseModel):
     phones: list[str] | None = []
     links: list[str] | None = []
     tags: list[str] | None = []
+    comments: str | None = None
     external_id: str | None = None
     relationships: list[ContactRelationshipIn] | None = []
 

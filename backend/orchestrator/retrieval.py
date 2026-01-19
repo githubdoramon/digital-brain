@@ -18,7 +18,7 @@ from search_normalization import normalize_search_text
 def resolve_query(text: str, need_contacts: bool = True, need_places: bool = True) -> dict[str, Any]:
     q = (text or "").strip()
     people = (
-        resolve_entities(q, "contacts", "contact_id", "display_name", "aliases")
+        resolve_entities(q, "contacts", "contact_id", "display_name", "aliases", extra_cols=["comments"])
         if need_contacts
         else []
     )
@@ -49,27 +49,44 @@ def resolve_entities(
     key_col: str,
     label_col: str,
     alias_col: str | None = None,
+    extra_cols: Sequence[str] | None = None,
     limit: int = 3,
 ) -> list[str]:
     query_text = normalize_search_text(q)
     if not query_text:
         return []
     with get_conn() as conn, conn.cursor() as cur:
+        extra_cols = list(extra_cols or [])
         if alias_col:
-            cur.execute(f"SELECT {key_col} AS id, {label_col} AS label, {alias_col} AS aliases FROM {table}")
+            columns = [key_col, label_col, alias_col, *extra_cols]
         else:
-            cur.execute(f"SELECT {key_col} AS id, {label_col} AS label FROM {table}")
+            columns = [key_col, label_col, *extra_cols]
+        select_cols = ", ".join(columns)
+        cur.execute(f"SELECT {select_cols} FROM {table}")
         rows = cur.fetchall()
     choices: list[tuple[str, str]] = []
     for r in rows:
-        base_label = normalize_search_text(r["label"])
+        base_label = normalize_search_text(r[label_col])
         if base_label:
-            choices.append((r["id"], base_label))
-        if alias_col and r.get("aliases"):
-            for a in r["aliases"]:
+            choices.append((r[key_col], base_label))
+        if alias_col and r.get(alias_col):
+            for a in r[alias_col]:
                 alias_label = normalize_search_text(a)
                 if alias_label:
-                    choices.append((r["id"], alias_label))
+                    choices.append((r[key_col], alias_label))
+        for col in extra_cols:
+            value = r.get(col)
+            if not value:
+                continue
+            if isinstance(value, (list, tuple, set)):
+                for item in value:
+                    extra_label = normalize_search_text(str(item))
+                    if extra_label:
+                        choices.append((r[key_col], extra_label))
+            else:
+                extra_label = normalize_search_text(str(value))
+                if extra_label:
+                    choices.append((r[key_col], extra_label))
     if not choices:
         return []
     labels = [c[1] for c in choices]
