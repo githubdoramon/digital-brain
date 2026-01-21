@@ -29,6 +29,7 @@ def get_user_settings(user_email: str) -> dict:
             (user_email, user_email),
         )
         row = cur.fetchone()
+        conn.commit()
     return row or {
         "user_email": user_email,
         "push_notifications_enabled": False,
@@ -55,4 +56,5 @@ def update_push_notifications(user_email: str, enabled: bool) -> dict:
             (user_email, enabled),
         )
         row = cur.fetchone()
+        conn.commit()
     return row

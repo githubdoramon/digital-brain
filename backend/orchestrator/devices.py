@@ -58,6 +58,7 @@ def register_device(
             ),
         )
         row = cur.fetchone()
+        conn.commit()
     return row
 
 
@@ -70,4 +71,6 @@ def unregister_device(user_email: str, expo_push_token: str) -> bool:
             """,
             (user_email, expo_push_token),
         )
-        return cur.rowcount > 0
+        deleted = cur.rowcount > 0
+        conn.commit()
+        return deleted
