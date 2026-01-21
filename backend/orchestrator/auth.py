@@ -6,6 +6,7 @@ from fastapi import Header, HTTPException, status
 from google.auth.transport import requests
 from google.oauth2 import id_token
 
+
 def _env_flag(name: str) -> bool:
     return os.environ.get(name, "").strip().lower() in {"1", "true", "yes", "on"}
 
@@ -142,4 +143,3 @@ async def get_current_user(authorization: Optional[str] = Header(None)) -> dict:
     check_user_allowed(email)
 
     return user_info
-

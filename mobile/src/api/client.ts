@@ -1,0 +1,30 @@
+const API_BASE_URL = process.env.EXPO_PUBLIC_BACKEND_URL ?? 'http://localhost:8000';
+
+type FetchOptions = RequestInit & { token?: string | null };
+
+export async function apiFetch(path: string, options: FetchOptions = {}) {
+  const { token, headers, ...rest } = options;
+  const response = await fetch(`${API_BASE_URL}${path}`, {
+    ...rest,
+    headers: {
+      'Content-Type': 'application/json',
+      ...(headers ?? {}),
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
+  });
+
+  if (!response.ok) {
+    const message = await response.text();
+    const error = new Error(message || `Request failed with ${response.status}`);
+    (error as Error & { status?: number }).status = response.status;
+    throw error;
+  }
+
+  if (response.status === 204) {
+    return null;
+  }
+
+  return response.json();
+}
+
+export { API_BASE_URL };

@@ -300,6 +300,30 @@ CREATE TABLE IF NOT EXISTS main_sessions (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+-- User settings (mobile + web preferences)
+CREATE TABLE IF NOT EXISTS user_settings (
+  user_email TEXT PRIMARY KEY,
+  push_notifications_enabled BOOLEAN NOT NULL DEFAULT FALSE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS user_devices (
+  device_id TEXT PRIMARY KEY,
+  user_email TEXT NOT NULL,
+  expo_push_token TEXT NOT NULL UNIQUE,
+  platform TEXT NOT NULL,
+  device_name TEXT,
+  app_version TEXT,
+  os_version TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  last_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_user_devices_user_email
+  ON user_devices (user_email, updated_at DESC);
+
 -- Action logs (system actions such as gate access)
 DO $$
 BEGIN

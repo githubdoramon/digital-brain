@@ -177,6 +177,30 @@ class DocumentSearchIn(BaseModel):
     limit: int | None = 20
 
 
+class PushNotificationsUpdateIn(BaseModel):
+    enabled: bool
+
+
+class UserSettingsOut(BaseModel):
+    push_notifications_enabled: bool = Field(alias="pushNotificationsEnabled")
+    created_at: datetime | None = Field(alias="createdAt")
+    updated_at: datetime | None = Field(alias="updatedAt")
+
+    class Config:
+        populate_by_name = True
+
+
+class DeviceRegisterIn(BaseModel):
+    expo_push_token: str = Field(alias="expoPushToken")
+    platform: str
+    device_name: str | None = Field(default=None, alias="deviceName")
+    app_version: str | None = Field(default=None, alias="appVersion")
+    os_version: str | None = Field(default=None, alias="osVersion")
+
+    class Config:
+        populate_by_name = True
+
+
 class AskIn(BaseModel):
     question: str
     limit: int | None = 3

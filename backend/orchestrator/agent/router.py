@@ -66,7 +66,7 @@ TOOL_GROUPS = {
     "memory": ["search_memories", "get_events", "get_document"],
     "database": ["execute_sql", "describe_schema"],
     "resolution": ["resolve_query"],
-    "web": ["web_search"],
+    "web": ["web_search", "fetch_web_page"],
     "home": ["home_assistant"],
     "skills": ["run_skill_script"],
     "system": ["bash"],

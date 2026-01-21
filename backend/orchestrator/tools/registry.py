@@ -23,7 +23,7 @@ TOOL_GROUPS = {
     "memory": ["search_memories", "get_events", "get_document"],
     "database": ["execute_sql", "describe_schema"],
     "resolution": ["resolve_query", "resolve_contacts", "lookup_contact"],
-    "web": ["web_search"],
+    "web": ["web_search", "fetch_web_page"],
     "home": ["home_assistant"],
     "skills": ["run_skill_script"],
     "system": ["bash"],
@@ -384,6 +384,52 @@ def _register_all_tools(registry: ToolRegistry) -> None:
                 ),
             ],
             constraints=["read_only"],
+        )
+    )
+
+    # fetch_web_page
+    registry.register(
+        ToolContract(
+            name="fetch_web_page",
+            description=(
+                "Fetch a web page and extract its main content using the configured web "
+                "extraction service."
+            ),
+            parameters=[
+                ToolParameter(
+                    name="url",
+                    type="string",
+                    description="The URL to fetch (http/https).",
+                    required=True,
+                    min_length=1,
+                ),
+                ToolParameter(
+                    name="include_links",
+                    type="boolean",
+                    description="Whether to include extracted links (default false).",
+                    required=False,
+                ),
+                ToolParameter(
+                    name="include_images",
+                    type="boolean",
+                    description="Whether to include extracted image URLs (default false).",
+                    required=False,
+                ),
+                ToolParameter(
+                    name="include_raw_html",
+                    type="boolean",
+                    description="Whether to include raw HTML in the response (default false).",
+                    required=False,
+                ),
+                ToolParameter(
+                    name="max_characters",
+                    type="integer",
+                    description="Maximum characters to return (default 20000).",
+                    required=False,
+                    minimum=100,
+                    maximum=20000,
+                ),
+            ],
         )
     )
 

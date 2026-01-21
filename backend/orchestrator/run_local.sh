@@ -24,4 +24,4 @@ fi
 set +a
 
 cd "${BACKEND_DIR}"
-uvicorn app:api --host 0.0.0.0 --port 8000
+uvicorn app:api --host 0.0.0.0 --port 8000 --reload

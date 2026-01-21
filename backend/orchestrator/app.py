@@ -26,11 +26,13 @@ from fastapi.responses import FileResponse, StreamingResponse
 import action_logs
 import contacts as contacts_service
 import conversations
+import devices as devices_service
 import documents
 import events as events_service
 import immich_client
 import llm
 import places as places_service
+import settings as settings_service
 import skills
 import telegram_bot
 import todos as todos_service
@@ -42,6 +44,7 @@ from schemas import (
     ContactIn,
     ContactMergeIn,
     ContactRelationshipIn,
+    DeviceRegisterIn,
     DocumentCollection,
     DocumentDetailOut,
     DocumentSearchIn,
@@ -53,12 +56,14 @@ from schemas import (
     ExternalEventPayload,
     MeetingIn,
     PlaceIn,
+    PushNotificationsUpdateIn,
     ServiceVersionCollection,
     ThreadCreate,
     ThreadDetailOut,
     ThreadOut,
     ThreadUpdate,
     TodoIn,
+    UserSettingsOut,
 )
 from versioning import get_service_versions
 
@@ -126,6 +131,50 @@ api.add_middleware(
 @api.get("/system/versions", response_model=ServiceVersionCollection)
 def read_service_versions(user: dict = Depends(get_current_user)):
     return get_service_versions()
+
+@api.get("/settings", response_model=UserSettingsOut)
+def read_user_settings(user: dict = Depends(get_current_user)):
+    email = user.get("email") or user.get("user_email")
+    if not email:
+        raise HTTPException(status_code=400, detail="User email is missing")
+    return settings_service.get_user_settings(email)
+
+
+@api.put("/settings/push-notifications", response_model=UserSettingsOut)
+def update_push_notifications(
+    payload: PushNotificationsUpdateIn,
+    user: dict = Depends(get_current_user),
+):
+    email = user.get("email") or user.get("user_email")
+    if not email:
+        raise HTTPException(status_code=400, detail="User email is missing")
+    return settings_service.update_push_notifications(email, payload.enabled)
+
+
+@api.post("/devices/register")
+def register_device(payload: DeviceRegisterIn, user: dict = Depends(get_current_user)):
+    email = user.get("email") or user.get("user_email")
+    if not email:
+        raise HTTPException(status_code=400, detail="User email is missing")
+    return devices_service.register_device(
+        user_email=email,
+        expo_push_token=payload.expo_push_token,
+        platform=payload.platform,
+        device_name=payload.device_name,
+        app_version=payload.app_version,
+        os_version=payload.os_version,
+    )
+
+
+@api.delete("/devices/unregister")
+def unregister_device(expo_push_token: str = Query(..., alias="expoPushToken"), user: dict = Depends(get_current_user)):
+    email = user.get("email") or user.get("user_email")
+    if not email:
+        raise HTTPException(status_code=400, detail="User email is missing")
+    deleted = devices_service.unregister_device(email, expo_push_token)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Device not found")
+    return {"ok": True}
 
 
 # --------------------------- Ingest endpoints ---------------------------

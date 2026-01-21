@@ -15,7 +15,7 @@ from .resolution import (
 )
 from .skills import handle_run_skill_script
 from .system import handle_bash
-from .web import handle_web_search
+from .web import handle_fetch_web_page, handle_web_search
 
 # Handler dispatch table
 HANDLERS = {
@@ -28,6 +28,7 @@ HANDLERS = {
     "resolve_contacts": handle_resolve_contacts,
     "lookup_contact": handle_lookup_contact,
     "web_search": handle_web_search,
+    "fetch_web_page": handle_fetch_web_page,
     "run_skill_script": handle_run_skill_script,
     "bash": handle_bash,
     "home_assistant": handle_home_assistant,
@@ -51,6 +52,7 @@ __all__ = [
     "handle_resolve_contacts",
     "handle_lookup_contact",
     "handle_web_search",
+    "handle_fetch_web_page",
     "handle_run_skill_script",
     "handle_bash",
     "handle_home_assistant",

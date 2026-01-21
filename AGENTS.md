@@ -195,7 +195,7 @@ DATABASE_URL=postgresql://user:pass@localhost/db
 
 # Auth
 GOOGLE_CLIENT_ID=xxx.apps.googleusercontent.com
-ALLOWLIST=user@example.com
+ALLOWED_USERS=user@example.com
 
 # Optional: Home Assistant
 HA_URL=http://homeassistant.local:8123

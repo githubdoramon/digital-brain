@@ -11,6 +11,7 @@ from collections.abc import AsyncGenerator
 from typing import Any
 
 import conversations
+
 LLM_BASE_URL = os.getenv("LLM_BASE_URL")
 LLM_CHAT_MODEL = os.getenv("LLM_CHAT_MODEL")
 
