@@ -33,12 +33,12 @@ import immich_client
 import llm
 import places as places_service
 import settings as settings_service
-from notifications import send_push_notification
 import skills
 import telegram_bot
 import todos as todos_service
 from auth import get_current_user
 from db import get_conn
+from notifications import send_push_notification
 from schemas import (
     AskIn,
     AskOut,
@@ -58,7 +58,6 @@ from schemas import (
     MeetingIn,
     PlaceIn,
     PushNotificationsUpdateIn,
-    PushNotificationTestIn,
     ServiceVersionCollection,
     ThreadCreate,
     ThreadDetailOut,
