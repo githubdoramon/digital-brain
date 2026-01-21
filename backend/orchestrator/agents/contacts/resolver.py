@@ -126,7 +126,7 @@ Return ONLY a valid JSON, nothing more, no other text or explanation:
 
             if invalid_extractions and attempt < max_retries - 1:
                 print(f"[contact_resolver] Attempt {attempt + 1}: Invalid extractions detected: {invalid_extractions}")
-                print(f"[contact_resolver] Retrying extraction with stricter guidance...")
+                print("[contact_resolver] Retrying extraction with stricter guidance...")
 
                 # Add stricter guidance to the prompt
                 prompt += f"""
@@ -295,7 +295,7 @@ def resolve_contact(
         if not is_user_nested:
             # Non-user nested relationship failed (e.g., "Pedro's doctor")
             # Don't fall back to direct search as it will give wrong results
-            print(f"[contact_resolver] Nested resolution failed for non-user relationship, marking as new")
+            print("[contact_resolver] Nested resolution failed for non-user relationship, marking as new")
             result["status"] = "new"
             return result
 
@@ -392,8 +392,7 @@ def resolve_contact(
             llm_result = _llm_disambiguate_contact(
                 person_text=person_text,
                 candidates=result["candidates"],
-                event_context=event_context,
-                user_email=user_email,
+                event_context=event_context
             )
 
             if llm_result["resolved"]:
@@ -506,15 +505,15 @@ def resolve_contacts_from_text(
     ) = _resolve_people_mentions(people, user_email, text)
 
     # Step 3: Infer professions for new contacts
-    print(f"\n[contact_resolver] Step 3: Inferring professions for new contacts...")
+    print("\n[contact_resolver] Step 3: Inferring professions for new contacts...")
     profession_by_text = _infer_professions_for_new_contacts(new_contacts, text)
 
     # Step 4: Infer relationship pairs from text (deduped)
-    print(f"\n[contact_resolver] Step 4: Inferring relationship pairs...")
+    print("\n[contact_resolver] Step 4: Inferring relationship pairs...")
     relationship_pairs = _infer_relationship_pairs(people, text)
 
     # Step 5: Suggest missing relationships (only when none exist yet)
-    print(f"\n[contact_resolver] Step 5: Suggesting missing relationships...")
+    print("\n[contact_resolver] Step 5: Suggesting missing relationships...")
     suggested_relationships = _suggest_missing_relationships(
         pairs=relationship_pairs,
         full_text=text,
@@ -957,7 +956,6 @@ def _llm_disambiguate_contact(
     person_text: str,
     candidates: list[dict[str, Any]],
     event_context: str,
-    user_email: str,
 ) -> dict[str, Any]:
     """
     Use LLM to disambiguate between multiple contact candidates.
@@ -968,11 +966,6 @@ def _llm_disambiguate_contact(
     Returns:
         {"resolved": bool, "contact_id": Optional[str], "display_name": Optional[str], "confidence": str}
     """
-    # Get user's name for context
-    user_name = "User"
-    user_contact = contacts_service.find_self_contact(user_email)
-    if user_contact:
-        user_name = user_contact.get("display_name", "User")
 
     candidate_list = "\n".join(
         f"- {i+1}. {c['display_name']} (ID: {c['contact_id']})"
