@@ -45,6 +45,7 @@ type EventCommandData = {
       contacts: Array<{
         display_name: string;
         query: string;
+        inferred_profession?: string | null;
       }>;
       places: Array<{
         name: string;
@@ -553,11 +554,21 @@ export function EventCommandCard({
                     e.currentTarget.style.background = 'transparent';
                   }}
                 >
-                  <span style={{
-                    fontSize: '14px',
-                    fontWeight: '500',
-                    color: '#1e293b',
-                  }}>{contact.display_name}</span>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                    <span style={{
+                      fontSize: '14px',
+                      fontWeight: '500',
+                      color: '#1e293b',
+                    }}>{contact.display_name}</span>
+                    {contact.inferred_profession && (
+                      <span style={{
+                        fontSize: '12px',
+                        color: '#64748b',
+                      }}>
+                        {contact.inferred_profession}
+                      </span>
+                    )}
+                  </div>
                   <span style={{
                     fontSize: '11px',
                     fontWeight: '600',

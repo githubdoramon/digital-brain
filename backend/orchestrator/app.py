@@ -41,6 +41,7 @@ from schemas import (
     AskOut,
     ContactIn,
     ContactMergeIn,
+    ContactRelationshipIn,
     DocumentCollection,
     DocumentDetailOut,
     DocumentSearchIn,
@@ -490,6 +491,10 @@ def confirm_event_command(
 
         for new_contact in resolution["new_entities"]["contacts"]:
             display_name = new_contact["display_name"]
+            inferred_profession = new_contact.get("inferred_profession")
+            comments = None
+            if inferred_profession:
+                comments = f"Inferred profession: {inferred_profession}"
             contact_id = f"contact:{display_name.lower().replace(' ', '_')}#{uuid4().hex[:6]}"
 
             contact_in = ContactIn(
@@ -500,6 +505,7 @@ def confirm_event_command(
                 phones=[],
                 links=[],
                 tags=[],
+                comments=comments,
             )
 
             contacts_service.ingest_contact(contact_in)
@@ -507,6 +513,52 @@ def confirm_event_command(
                 {"contact_id": contact_id, "display_name": display_name}
             )
             contact_id_map[display_name] = contact_id
+
+        # 1b. Create confirmed relationships (after contacts exist)
+        confirmed_relationships = []
+        if payload.modifications:
+            confirmed_relationships = payload.modifications.get("confirmed_relationships") or []
+
+        if confirmed_relationships:
+            existing_contact_map = {
+                contact["display_name"]: contact["contact_id"]
+                for contact in resolution.get("contacts", [])
+                if contact.get("display_name") and contact.get("contact_id")
+            }
+            all_contact_map = {**existing_contact_map, **contact_id_map}
+
+            def _resolve_relationship_contact_id(
+                rel: dict[str, Any],
+                key_prefix: str,
+            ) -> str | None:
+                contact_id = rel.get(f"{key_prefix}_contact_id")
+                if contact_id:
+                    return contact_id
+                display_name = rel.get(f"{key_prefix}_display_name")
+                if display_name:
+                    return all_contact_map.get(display_name)
+                return None
+
+            for relationship in confirmed_relationships:
+                if not isinstance(relationship, dict):
+                    continue
+
+                from_contact_id = _resolve_relationship_contact_id(relationship, "from")
+                to_contact_id = _resolve_relationship_contact_id(relationship, "to")
+                relationship_type = relationship.get("relationship_type") or relationship.get("type")
+                reciprocal_type = relationship.get("reciprocal_type") or relationship.get("other_type")
+
+                if not from_contact_id or not to_contact_id or not relationship_type:
+                    continue
+
+                rel_in = ContactRelationshipIn(
+                    relationship_id=f"rel:{uuid4().hex}",
+                    from_contact_id=from_contact_id,
+                    to_contact_id=to_contact_id,
+                    relationship_type=relationship_type,
+                    reciprocal_type=reciprocal_type,
+                )
+                contacts_service.upsert_contact_relationship(rel_in)
 
         # 2. Create new places
         created_places = []
@@ -1093,3 +1145,22 @@ def resolve_contacts_endpoint(
     request_data["user_email"] = user_email
 
     return handle_resolve_contacts_request(request_data)
+
+
+# ---------------------------------------------------------------------------
+# Emergency Stock Endpoint
+# ---------------------------------------------------------------------------
+
+@api.get("/agents/emergency-stock/run")
+def run_emergency_stock_endpoint(
+    _: dict = Depends(get_current_user),
+):
+    """
+    Run the emergency stock check against a Google Sheet.
+    """
+    from agents.emergency_stock.executor import handle_emergency_stock_request
+
+    result = handle_emergency_stock_request()
+    if result.get("status") == "error":
+        raise HTTPException(status_code=500, detail=result.get("message", "Unknown error"))
+    return result

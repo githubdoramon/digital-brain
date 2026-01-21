@@ -258,6 +258,129 @@ def _replace_generic_terms_in_text(
     return result
 
 
+def _resolve_contacts_with_agent(
+    message: str,
+    user_email: str,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """
+    Resolve contacts for the event using the contact resolution agent.
+
+    Returns:
+        Tuple of:
+        - resolution dict in /event shape
+        - raw contact agent result
+    """
+    from agents.contacts import resolve_contacts_from_text
+
+    contact_result = resolve_contacts_from_text(message, user_email)
+
+    resolution = {
+        "contacts": [],
+        "places": [],
+        "documents": [],
+        "new_entities": {
+            "contacts": [],
+            "places": [],
+            "documents": [],
+        },
+        "name_replacements": {},
+    }
+
+    for resolved in contact_result.get("resolved_contacts", []):
+        resolution["contacts"].append(
+            {
+                "contact_id": resolved.get("contact_id"),
+                "display_name": resolved.get("display_name"),
+                "query": resolved.get("original_text"),
+                "confidence": resolved.get("confidence", "medium"),
+            }
+        )
+
+        original_text = resolved.get("original_text")
+        display_name = resolved.get("display_name")
+        if original_text and display_name and original_text.lower() != display_name.lower():
+            if original_text.lower() != "user":
+                resolution["name_replacements"][original_text] = display_name
+
+    for new_contact in contact_result.get("new_contacts", []):
+        original_text = new_contact.get("original_text")
+        display_name = new_contact.get("display_name") or original_text
+        resolution["new_entities"]["contacts"].append(
+            {
+                "display_name": display_name,
+                "query": original_text or display_name,
+                "inferred_profession": new_contact.get("inferred_profession"),
+            }
+        )
+
+        if original_text and display_name and original_text.lower() != display_name.lower():
+            if original_text.lower() != "user":
+                resolution["name_replacements"][original_text] = display_name
+
+    return resolution, contact_result
+
+
+def _format_relationship_suggestions(
+    suggestions: list[dict[str, Any]],
+    resolution: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """
+    Map contact agent relationship suggestions into /event UI shape.
+    """
+    if not suggestions:
+        return []
+
+    id_by_text: dict[str, str] = {}
+    name_by_text: dict[str, str] = {}
+
+    for contact in resolution.get("contacts", []):
+        display_name = contact.get("display_name")
+        query = contact.get("query")
+        contact_id = contact.get("contact_id")
+        if query and display_name:
+            name_by_text[query] = display_name
+        if display_name:
+            name_by_text[display_name] = display_name
+        if contact_id:
+            if query:
+                id_by_text[query] = contact_id
+            if display_name:
+                id_by_text[display_name] = contact_id
+
+    for contact in resolution.get("new_entities", {}).get("contacts", []):
+        display_name = contact.get("display_name")
+        query = contact.get("query")
+        if query and display_name:
+            name_by_text[query] = display_name
+        if display_name:
+            name_by_text[display_name] = display_name
+
+    formatted: list[dict[str, Any]] = []
+    for suggestion in suggestions:
+        from_text = suggestion.get("from_text")
+        to_text = suggestion.get("to_text")
+        if not from_text or not to_text:
+            continue
+
+        from_display = name_by_text.get(from_text, from_text)
+        to_display = name_by_text.get(to_text, to_text)
+
+        formatted.append(
+            {
+                "from_contact_id": suggestion.get("from_contact_id") or id_by_text.get(from_text),
+                "from_display_name": from_display,
+                "to_contact_id": suggestion.get("to_contact_id") or id_by_text.get(to_text),
+                "to_display_name": to_display,
+                "relationship_type": suggestion.get("type") or "",
+                "reciprocal_type": suggestion.get("other_type") or "",
+                "confidence": "medium",
+                "reasoning": suggestion.get("relationship_hint") or "",
+            }
+        )
+
+    return formatted
+
+
 def _suggest_relationships_from_context(
     message: str,
     extracted: dict[str, Any],
@@ -525,8 +648,35 @@ def handle_event(parsed: ParsedCommand, context: dict) -> dict[str, Any]:
         }
 
     # Resolve existing entities and generic terms
-    print("\n[handle_event] STEP 2: Resolving entities and generic terms...")
-    resolution = _resolve_existing_entities(extracted, user_email)
+    print("\n[handle_event] STEP 2: Resolving contacts with agent...")
+    resolution, contact_result = _resolve_contacts_with_agent(parsed.args, user_email)
+
+    ambiguous_contacts = contact_result.get("ambiguous_contacts", [])
+    if ambiguous_contacts:
+        print("[handle_event] ⚠️  Contact disambiguation needed")
+        questions = [
+            contact.get("clarification_prompt")
+            for contact in ambiguous_contacts
+            if contact.get("clarification_prompt")
+        ]
+        if not questions:
+            questions = ["I found multiple matching contacts. Can you clarify who you meant?"]
+        return {
+            "type": "clarification_needed",
+            "questions": questions,
+            "partial_extraction": extracted,
+            "original_message": parsed.args,
+        }
+
+    # Keep place handling aligned with existing flow
+    where = extracted.get("where")
+    if where:
+        resolution["new_entities"]["places"].append(
+            {
+                "name": where,
+                "query": where,
+            }
+        )
 
     # Replace generic terms with actual names in title and summary
     name_replacements = resolution.get("name_replacements", {})
@@ -547,11 +697,21 @@ def handle_event(parsed: ParsedCommand, context: dict) -> dict[str, Any]:
 
     # Suggest relationships between contacts based on context
     print("\n[handle_event] STEP 4: Suggesting relationships...")
-    relationship_suggestions = _suggest_relationships_from_context(
-        parsed.args,
-        extracted,
+    relationship_suggestions = _format_relationship_suggestions(
+        contact_result.get("suggested_relationships", []),
         resolution,
     )
+
+    # Update extracted "who" from contact agent results
+    extracted["who"] = [
+        contact["display_name"]
+        for contact in resolution.get("contacts", [])
+        if contact.get("display_name")
+    ] + [
+        contact["display_name"]
+        for contact in resolution.get("new_entities", {}).get("contacts", [])
+        if contact.get("display_name")
+    ]
 
     # Generate a preview ID and store the data
     preview_id = f"event:preview:{uuid4().hex[:8]}"
