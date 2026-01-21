@@ -6,6 +6,7 @@ import * as SplashScreen from 'expo-splash-screen';
 import { useEffect } from 'react';
 import 'react-native-reanimated';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
+import * as Notifications from 'expo-notifications';
 
 import { AuthProvider, useAuth } from '@/src/auth/AuthContext';
 
@@ -21,6 +22,14 @@ export const unstable_settings = {
 
 // Prevent the splash screen from auto-hiding before asset loading is complete.
 SplashScreen.preventAutoHideAsync();
+
+Notifications.setNotificationHandler({
+  handleNotification: async () => ({
+    shouldShowAlert: true,
+    shouldPlaySound: true,
+    shouldSetBadge: false,
+  }),
+});
 
 export default function RootLayout() {
   const [loaded, error] = useFonts({
@@ -67,6 +76,32 @@ function RootLayoutNav() {
       router.replace('/(tabs)');
     }
   }, [token, segments, isLoading, router]);
+
+  useEffect(() => {
+    let responseListener: Notifications.Subscription | undefined;
+    let receivedListener: Notifications.Subscription | undefined;
+
+    (async () => {
+      await Notifications.setNotificationChannelAsync('default', {
+        name: 'Default',
+        importance: Notifications.AndroidImportance.MAX,
+        vibrationPattern: [0, 250, 250, 250],
+        lightColor: '#FF231F7C',
+      });
+    })();
+
+    receivedListener = Notifications.addNotificationReceivedListener(() => {
+      // Foreground notifications are handled by the global handler.
+    });
+    responseListener = Notifications.addNotificationResponseReceivedListener(() => {
+      router.push('/(tabs)');
+    });
+
+    return () => {
+      receivedListener?.remove();
+      responseListener?.remove();
+    };
+  }, [router]);
 
   return (
     <ThemeProvider

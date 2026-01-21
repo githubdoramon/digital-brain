@@ -17,7 +17,7 @@ export async function apiFetch(path: string, options: FetchOptions = {}) {
     const message = await response.text();
     const error = new Error(message || `Request failed with ${response.status}`);
     (error as Error & { status?: number; authExpired?: boolean }).status = response.status;
-    if (response.status === 401 && message.toLowerCase().includes("token expired")) {
+    if (response.status === 401 && message.toLowerCase().includes('token expired')) {
       (error as Error & { authExpired?: boolean }).authExpired = true;
     }
     console.error('[apiFetch] error', {

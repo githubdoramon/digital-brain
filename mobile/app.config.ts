@@ -8,7 +8,7 @@ function withSystemDebugKeystore(config: ExpoConfig) {
     if (mod.modResults.contents) {
       mod.modResults.contents = mod.modResults.contents.replace(
         /storeFile file\('debug\.keystore'\)/,
-        "storeFile file(\"${System.getProperty('user.home')}/.android/debug.keystore\")",
+        'storeFile file("${System.getProperty(\'user.home\')}/.android/debug.keystore")',
       );
     }
     return mod;

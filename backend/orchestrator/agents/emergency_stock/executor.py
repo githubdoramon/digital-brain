@@ -539,12 +539,8 @@ def _build_notification_message(
     consume_actions = [action for action in actions if action.action_type == "consume"]
     buy_actions = [action for action in actions if action.action_type == "buy"]
 
-    consume_amount = len(consume_actions)
-    total_amount_to_purchase = _sum_purchase_quantities(
-        buy_actions,
-        rows,
-        header_info,
-    )
+    consume_amount = _count_unique_items(consume_actions)
+    total_amount_to_purchase = _count_unique_items(buy_actions)
 
     seen: set[str] = set()
     buy_items: list[str] = []
@@ -563,32 +559,5 @@ def _build_notification_message(
     )
 
 
-def _sum_purchase_quantities(
-    buy_actions: list[StockAction],
-    rows: list[list[str]],
-    header_info: dict[str, Any] | None,
-) -> int:
-    if not header_info:
-        return 0
-    indices = header_info.get("indices") or {}
-    reorder_qty_idx = indices.get("reorder_quantity")
-    if reorder_qty_idx is None:
-        return 0
-
-    total = 0
-    for action in buy_actions:
-        raw = _get_row_cell(rows, action.item.row_number, reorder_qty_idx)
-        total += _parse_int_value(raw)
-    return total
-
-
-def _parse_int_value(raw: str) -> int:
-    if not raw:
-        return 0
-    match = re.search(r"-?\d+", raw.replace(",", ""))
-    if not match:
-        return 0
-    try:
-        return int(match.group(0))
-    except ValueError:
-        return 0
+def _count_unique_items(actions: list[StockAction]) -> int:
+    return len({action.item.name for action in actions})

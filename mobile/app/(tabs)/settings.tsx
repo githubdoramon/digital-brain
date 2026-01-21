@@ -6,7 +6,10 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { apiFetch } from '@/src/api/client';
 import { useAuth } from '@/src/auth/AuthContext';
-import { getDeviceRegistrationIfGranted, registerForPushNotifications } from '@/src/notifications/register';
+import {
+  getDeviceRegistrationIfGranted,
+  registerForPushNotifications,
+} from '@/src/notifications/register';
 import { theme } from '@/src/theme';
 
 type SettingsResponse = {
@@ -21,6 +24,16 @@ export default function SettingsScreen() {
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [pushEnabled, setPushEnabled] = useState(false);
+
+  const unregisterDevice = async () => {
+    const existing = await SecureStore.getItemAsync(TOKEN_KEY);
+    if (!existing) return;
+    await apiFetch(`/mobile/devices/unregister?expoPushToken=${encodeURIComponent(existing)}`, {
+      method: 'DELETE',
+      token,
+    });
+    await SecureStore.deleteItemAsync(TOKEN_KEY);
+  };
 
   const reconcilePushState = useCallback(
     async (backendEnabled: boolean) => {
@@ -77,8 +90,6 @@ export default function SettingsScreen() {
         if (mounted) {
           await reconcilePushState(Boolean(response?.pushNotificationsEnabled));
         }
-      } catch (error) {
-        // noop: keep defaults
       } finally {
         if (mounted) {
           setIsLoading(false);
@@ -89,16 +100,6 @@ export default function SettingsScreen() {
       mounted = false;
     };
   }, [token, reconcilePushState]);
-
-  const unregisterDevice = async () => {
-    const existing = await SecureStore.getItemAsync(TOKEN_KEY);
-    if (!existing) return;
-    await apiFetch(`/mobile/devices/unregister?expoPushToken=${encodeURIComponent(existing)}`, {
-      method: 'DELETE',
-      token,
-    });
-    await SecureStore.deleteItemAsync(TOKEN_KEY);
-  };
 
   const togglePush = async (value: boolean) => {
     const previous = pushEnabled;
@@ -162,9 +163,7 @@ export default function SettingsScreen() {
       <View style={styles.header}>
         <Text style={styles.kicker}>Configuration</Text>
         <Text style={styles.title}>Control your signal</Text>
-        <Text style={styles.subtitle}>
-          Personalize how the Digital Brain reaches you.
-        </Text>
+        <Text style={styles.subtitle}>Personalize how the Digital Brain reaches you.</Text>
       </View>
 
       <View style={styles.card}>

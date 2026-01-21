@@ -1,8 +1,8 @@
 import { LinearGradient } from 'expo-linear-gradient';
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   FlatList,
-  KeyboardAvoidingView,
+  Keyboard,
   Platform,
   Pressable,
   StyleSheet,
@@ -38,17 +38,33 @@ export default function ChatScreen() {
   const [input, setInput] = useState('');
   const [isSending, setIsSending] = useState(false);
   const [threadId, setThreadId] = useState<string | null>(null);
+  const [keyboardHeight, setKeyboardHeight] = useState(0);
 
   const canSend = input.trim().length > 0 && !isSending;
+
+  useEffect(() => {
+    const showEvent = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
+    const hideEvent = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
+
+    const showSub = Keyboard.addListener(showEvent, (event) => {
+      setKeyboardHeight(event.endCoordinates?.height ?? 0);
+    });
+    const hideSub = Keyboard.addListener(hideEvent, () => {
+      setKeyboardHeight(0);
+    });
+
+    return () => {
+      showSub.remove();
+      hideSub.remove();
+    };
+  }, []);
 
   const header = useMemo(
     () => (
       <View style={styles.header}>
         <Text style={styles.kicker}>Focus Mode</Text>
         <Text style={styles.title}>Ask your memory vault</Text>
-        <Text style={styles.subtitle}>
-          Chat with your LLM in a calm, chat-first space.
-        </Text>
+        <Text style={styles.subtitle}>Chat with your LLM in a calm, chat-first space.</Text>
       </View>
     ),
     [],
@@ -118,18 +134,17 @@ export default function ChatScreen() {
 
   return (
     <LinearGradient colors={theme.gradients.dusk} style={styles.container}>
-      <KeyboardAvoidingView
-        style={styles.container}
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-        keyboardVerticalOffset={90}
-      >
+      <View style={styles.container}>
         <FlatList
           data={messages}
           keyExtractor={(item) => item.id}
           ListHeaderComponent={header}
           contentContainerStyle={[
             styles.list,
-            { paddingTop: insets.top + 16, paddingBottom: 140 + insets.bottom },
+            {
+              paddingTop: insets.top + 16,
+              paddingBottom: 140,
+            },
           ]}
           renderItem={({ item }) => (
             <View
@@ -150,7 +165,15 @@ export default function ChatScreen() {
           )}
         />
 
-        <View style={[styles.composer, { paddingBottom: 14 + insets.bottom }]}>
+        <View
+          style={[
+            styles.composer,
+            {
+              paddingBottom: 14 + (keyboardHeight > 0 ? 0 : insets.bottom),
+              bottom: Math.max(0, keyboardHeight - insets.bottom),
+            },
+          ]}
+        >
           <TextInput
             value={input}
             onChangeText={setInput}
@@ -171,7 +194,7 @@ export default function ChatScreen() {
             <Text style={styles.sendText}>{isSending ? '...' : 'Send'}</Text>
           </Pressable>
         </View>
-      </KeyboardAvoidingView>
+      </View>
     </LinearGradient>
   );
 }
