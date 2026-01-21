@@ -13,6 +13,7 @@ def register_device(
     app_version: str | None,
     os_version: str | None,
 ) -> dict:
+    print("register_device", user_email, expo_push_token, platform, device_name, app_version, os_version)
     with get_conn() as conn, conn.cursor() as cur:
         cur.execute(
             """

@@ -1,12 +1,12 @@
 import { LinearGradient } from 'expo-linear-gradient';
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import * as SecureStore from 'expo-secure-store';
 import { ActivityIndicator, Alert, Pressable, StyleSheet, Switch, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { apiFetch } from '@/src/api/client';
 import { useAuth } from '@/src/auth/AuthContext';
-import { registerForPushNotifications } from '@/src/notifications/register';
+import { getDeviceRegistrationIfGranted, registerForPushNotifications } from '@/src/notifications/register';
 import { theme } from '@/src/theme';
 
 type SettingsResponse = {
@@ -22,16 +22,60 @@ export default function SettingsScreen() {
   const [isSaving, setIsSaving] = useState(false);
   const [pushEnabled, setPushEnabled] = useState(false);
 
+  const reconcilePushState = useCallback(
+    async (backendEnabled: boolean) => {
+      const registration = await getDeviceRegistrationIfGranted();
+      if (registration) {
+        try {
+          if (!backendEnabled) {
+            const settingsResponse = await apiFetch('/mobile/settings/push-notifications', {
+              method: 'PUT',
+              body: JSON.stringify({ enabled: true }),
+              token,
+            });
+            console.log('push settings reconciled', settingsResponse);
+          }
+          const deviceResponse = await apiFetch('/mobile/devices/register', {
+            method: 'POST',
+            body: JSON.stringify(registration),
+            token,
+          });
+          console.log('device registered', deviceResponse);
+          await SecureStore.setItemAsync(TOKEN_KEY, registration.expoPushToken);
+          setPushEnabled(true);
+          return;
+        } catch (error) {
+          console.error('push reconciliation failed', error);
+          // fall through to disable below
+        }
+      }
+
+      if (backendEnabled) {
+        try {
+          const settingsResponse = await apiFetch('/mobile/settings/push-notifications', {
+            method: 'PUT',
+            body: JSON.stringify({ enabled: false }),
+            token,
+          });
+          console.log('push settings disabled', settingsResponse);
+        } catch (error) {
+          console.error('failed to disable push settings', error);
+          // noop: keep state if backend update fails
+        }
+        await unregisterDevice();
+      }
+      setPushEnabled(false);
+    },
+    [token],
+  );
+
   useEffect(() => {
     let mounted = true;
     (async () => {
       try {
         const response = (await apiFetch('/mobile/settings', { token })) as SettingsResponse;
         if (mounted) {
-          setPushEnabled(Boolean(response?.pushNotificationsEnabled));
-          if (response?.pushNotificationsEnabled) {
-            await ensureDeviceRegistered();
-          }
+          await reconcilePushState(Boolean(response?.pushNotificationsEnabled));
         }
       } catch (error) {
         // noop: keep defaults
@@ -44,25 +88,7 @@ export default function SettingsScreen() {
     return () => {
       mounted = false;
     };
-  }, [token]);
-
-  const ensureDeviceRegistered = async () => {
-    const existing = await SecureStore.getItemAsync(TOKEN_KEY);
-    if (existing) {
-      return;
-    }
-    const registration = await registerForPushNotifications();
-    if (!registration) {
-      Alert.alert('Notifications disabled', 'Enable notifications in system settings to continue.');
-      return;
-    }
-    await apiFetch('/mobile/devices/register', {
-      method: 'POST',
-      body: JSON.stringify(registration),
-      token,
-    });
-    await SecureStore.setItemAsync(TOKEN_KEY, registration.expoPushToken);
-  };
+  }, [token, reconcilePushState]);
 
   const unregisterDevice = async () => {
     const existing = await SecureStore.getItemAsync(TOKEN_KEY);
@@ -75,21 +101,54 @@ export default function SettingsScreen() {
   };
 
   const togglePush = async (value: boolean) => {
+    const previous = pushEnabled;
     setPushEnabled(value);
     setIsSaving(true);
     try {
-      await apiFetch('/mobile/settings/push-notifications', {
-        method: 'PUT',
-        body: JSON.stringify({ enabled: value }),
-        token,
-      });
       if (value) {
-        await ensureDeviceRegistered();
+        const registration = await registerForPushNotifications();
+        if (!registration) {
+          Alert.alert(
+            'Notifications unavailable',
+            'Enable notifications in system settings or use a physical device to register.',
+          );
+          setPushEnabled(false);
+          return;
+        }
+        const settingsResponse = await apiFetch('/mobile/settings/push-notifications', {
+          method: 'PUT',
+          body: JSON.stringify({ enabled: true }),
+          token,
+        });
+        const deviceResponse = await apiFetch('/mobile/devices/register', {
+          method: 'POST',
+          body: JSON.stringify(registration),
+          token,
+        });
+        console.log('push settings saved', settingsResponse);
+        console.log('device registered', deviceResponse);
+        await SecureStore.setItemAsync(TOKEN_KEY, registration.expoPushToken);
+        setPushEnabled(true);
       } else {
+        const settingsResponse = await apiFetch('/mobile/settings/push-notifications', {
+          method: 'PUT',
+          body: JSON.stringify({ enabled: false }),
+          token,
+        });
         await unregisterDevice();
+        console.log('push settings saved', settingsResponse);
+        setPushEnabled(false);
       }
     } catch (error) {
-      setPushEnabled((prev) => !prev);
+      const authExpired = (error as Error & { authExpired?: boolean }).authExpired;
+      if (authExpired) {
+        await signOut();
+        Alert.alert('Session expired', 'Please sign in again.');
+        return;
+      }
+      console.error('togglePush error', error);
+      Alert.alert('Update failed', 'We could not update push settings. Please try again.');
+      setPushEnabled(previous);
     } finally {
       setIsSaving(false);
     }

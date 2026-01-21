@@ -33,6 +33,7 @@ import immich_client
 import llm
 import places as places_service
 import settings as settings_service
+from notifications import send_push_notification
 import skills
 import telegram_bot
 import todos as todos_service
@@ -57,6 +58,7 @@ from schemas import (
     MeetingIn,
     PlaceIn,
     PushNotificationsUpdateIn,
+    PushNotificationTestIn,
     ServiceVersionCollection,
     ThreadCreate,
     ThreadDetailOut,
@@ -126,14 +128,12 @@ api.add_middleware(
     allow_headers=["*"],
 )
 
-
-# --------------------------- System endpoints ---------------------------
 @api.get("/system/versions", response_model=ServiceVersionCollection)
 @api.get("/mobile/system/versions", response_model=ServiceVersionCollection)
 def read_service_versions(user: dict = Depends(get_current_user)):
     return get_service_versions()
+# --------------------------- Mobile endpoints ---------------------------
 
-@api.get("/settings", response_model=UserSettingsOut)
 @api.get("/mobile/settings", response_model=UserSettingsOut)
 def read_user_settings(user: dict = Depends(get_current_user)):
     email = user.get("email") or user.get("user_email")
@@ -142,7 +142,6 @@ def read_user_settings(user: dict = Depends(get_current_user)):
     return settings_service.get_user_settings(email)
 
 
-@api.put("/settings/push-notifications", response_model=UserSettingsOut)
 @api.put("/mobile/settings/push-notifications", response_model=UserSettingsOut)
 def update_push_notifications(
     payload: PushNotificationsUpdateIn,
@@ -154,9 +153,9 @@ def update_push_notifications(
     return settings_service.update_push_notifications(email, payload.enabled)
 
 
-@api.post("/devices/register")
 @api.post("/mobile/devices/register")
 def register_device(payload: DeviceRegisterIn, user: dict = Depends(get_current_user)):
+    print("register_device", payload)
     email = user.get("email") or user.get("user_email")
     if not email:
         raise HTTPException(status_code=400, detail="User email is missing")
@@ -170,7 +169,6 @@ def register_device(payload: DeviceRegisterIn, user: dict = Depends(get_current_
     )
 
 
-@api.delete("/devices/unregister")
 @api.delete("/mobile/devices/unregister")
 def unregister_device(expo_push_token: str = Query(..., alias="expoPushToken"), user: dict = Depends(get_current_user)):
     email = user.get("email") or user.get("user_email")
@@ -180,6 +178,12 @@ def unregister_device(expo_push_token: str = Query(..., alias="expoPushToken"), 
     if not deleted:
         raise HTTPException(status_code=404, detail="Device not found")
     return {"ok": True}
+
+
+@api.post("/mobile/notifications/test")
+def send_test_notification():
+    result = send_push_notification("test", "me")
+    return {"ok": True, "result": result}
 
 
 # --------------------------- Ingest endpoints ---------------------------

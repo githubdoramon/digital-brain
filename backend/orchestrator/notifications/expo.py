@@ -71,7 +71,6 @@ def _fetch_active_expo_tokens() -> list[str]:
               ON us.user_email = ud.user_email
             WHERE us.push_notifications_enabled = TRUE
               AND ud.expo_push_token IS NOT NULL
-            ORDER BY ud.updated_at DESC
             """
         )
         rows = cur.fetchall() or []

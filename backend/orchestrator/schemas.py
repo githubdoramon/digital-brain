@@ -201,6 +201,11 @@ class DeviceRegisterIn(BaseModel):
         populate_by_name = True
 
 
+class PushNotificationTestIn(BaseModel):
+    title: str
+    message: str
+
+
 class AskIn(BaseModel):
     question: str
     limit: int | None = 3

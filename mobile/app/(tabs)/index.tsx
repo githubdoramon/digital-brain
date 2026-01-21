@@ -32,7 +32,7 @@ const starterMessages: Message[] = [
 ];
 
 export default function ChatScreen() {
-  const { token } = useAuth();
+  const { token, signOut } = useAuth();
   const insets = useSafeAreaInsets();
   const [messages, setMessages] = useState<Message[]>(starterMessages);
   const [input, setInput] = useState('');
@@ -84,6 +84,22 @@ export default function ChatScreen() {
         ),
       );
     } catch (error) {
+      const authExpired = (error as Error & { authExpired?: boolean }).authExpired;
+      if (authExpired) {
+        await signOut();
+        setMessages((prev) =>
+          prev.map((message) =>
+            message.id === pendingId
+              ? {
+                  ...message,
+                  content: 'Session expired. Please sign in again.',
+                  pending: false,
+                }
+              : message,
+          ),
+        );
+        return;
+      }
       setMessages((prev) =>
         prev.map((message) =>
           message.id === pendingId

@@ -58,9 +58,20 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       try {
         await apiFetch('/mobile/system/versions', { token: idToken });
       } catch (error) {
-        const status = (error as Error & { status?: number }).status;
+        const status = (error as Error & { status?: number; authExpired?: boolean }).status;
+        const authExpired = (error as Error & { authExpired?: boolean }).authExpired;
         if (status === 403) {
+          await GoogleSignin.revokeAccess();
+          await GoogleSignin.signOut();
+          await SecureStore.deleteItemAsync(TOKEN_KEY);
+          setToken(null);
           Alert.alert('Access denied', 'Your account is not authorized to use this app.');
+        } else if (authExpired) {
+          await GoogleSignin.revokeAccess();
+          await GoogleSignin.signOut();
+          await SecureStore.deleteItemAsync(TOKEN_KEY);
+          setToken(null);
+          Alert.alert('Session expired', 'Please sign in again.');
         }
         throw error;
       }
