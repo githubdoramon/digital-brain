@@ -69,7 +69,7 @@ export default function ChatScreen() {
     setIsSending(true);
     try {
       const payload = { question: trimmed, thread_id: threadId };
-      const response = await apiFetch('/ask', {
+      const response = await apiFetch('/mobile/ask', {
         method: 'POST',
         body: JSON.stringify(payload),
         token,

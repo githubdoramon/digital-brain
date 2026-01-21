@@ -26,7 +26,7 @@ export default function SettingsScreen() {
     let mounted = true;
     (async () => {
       try {
-        const response = (await apiFetch('/settings', { token })) as SettingsResponse;
+        const response = (await apiFetch('/mobile/settings', { token })) as SettingsResponse;
         if (mounted) {
           setPushEnabled(Boolean(response?.pushNotificationsEnabled));
           if (response?.pushNotificationsEnabled) {
@@ -56,7 +56,7 @@ export default function SettingsScreen() {
       Alert.alert('Notifications disabled', 'Enable notifications in system settings to continue.');
       return;
     }
-    await apiFetch('/devices/register', {
+    await apiFetch('/mobile/devices/register', {
       method: 'POST',
       body: JSON.stringify(registration),
       token,
@@ -67,7 +67,7 @@ export default function SettingsScreen() {
   const unregisterDevice = async () => {
     const existing = await SecureStore.getItemAsync(TOKEN_KEY);
     if (!existing) return;
-    await apiFetch(`/devices/unregister?expoPushToken=${encodeURIComponent(existing)}`, {
+    await apiFetch(`/mobile/devices/unregister?expoPushToken=${encodeURIComponent(existing)}`, {
       method: 'DELETE',
       token,
     });
@@ -78,7 +78,7 @@ export default function SettingsScreen() {
     setPushEnabled(value);
     setIsSaving(true);
     try {
-      await apiFetch('/settings/push-notifications', {
+      await apiFetch('/mobile/settings/push-notifications', {
         method: 'PUT',
         body: JSON.stringify({ enabled: value }),
         token,

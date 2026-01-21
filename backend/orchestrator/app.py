@@ -129,10 +129,12 @@ api.add_middleware(
 
 # --------------------------- System endpoints ---------------------------
 @api.get("/system/versions", response_model=ServiceVersionCollection)
+@api.get("/mobile/system/versions", response_model=ServiceVersionCollection)
 def read_service_versions(user: dict = Depends(get_current_user)):
     return get_service_versions()
 
 @api.get("/settings", response_model=UserSettingsOut)
+@api.get("/mobile/settings", response_model=UserSettingsOut)
 def read_user_settings(user: dict = Depends(get_current_user)):
     email = user.get("email") or user.get("user_email")
     if not email:
@@ -141,6 +143,7 @@ def read_user_settings(user: dict = Depends(get_current_user)):
 
 
 @api.put("/settings/push-notifications", response_model=UserSettingsOut)
+@api.put("/mobile/settings/push-notifications", response_model=UserSettingsOut)
 def update_push_notifications(
     payload: PushNotificationsUpdateIn,
     user: dict = Depends(get_current_user),
@@ -152,6 +155,7 @@ def update_push_notifications(
 
 
 @api.post("/devices/register")
+@api.post("/mobile/devices/register")
 def register_device(payload: DeviceRegisterIn, user: dict = Depends(get_current_user)):
     email = user.get("email") or user.get("user_email")
     if not email:
@@ -167,6 +171,7 @@ def register_device(payload: DeviceRegisterIn, user: dict = Depends(get_current_
 
 
 @api.delete("/devices/unregister")
+@api.delete("/mobile/devices/unregister")
 def unregister_device(expo_push_token: str = Query(..., alias="expoPushToken"), user: dict = Depends(get_current_user)):
     email = user.get("email") or user.get("user_email")
     if not email:
@@ -830,6 +835,7 @@ def _handle_command(question: str, user_email: str, user: dict) -> dict[str, Any
 
 
 @api.post("/ask", response_model=AskOut)
+@api.post("/mobile/ask", response_model=AskOut)
 async def ask(payload: AskIn, user: dict = Depends(get_current_user)):
     start_time = perf_counter()
     user_email = user.get("email")
@@ -894,6 +900,7 @@ async def ask(payload: AskIn, user: dict = Depends(get_current_user)):
 
 
 @api.post("/ask/stream")
+@api.post("/mobile/ask/stream")
 async def ask_stream(payload: AskIn, user: dict = Depends(get_current_user)):
     """
     Stream LLM responses as Server-Sent Events (SSE).

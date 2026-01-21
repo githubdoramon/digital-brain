@@ -27,6 +27,7 @@ from agents.emergency_stock.sheets_client import (
     fetch_sheet_values,
     update_sheet_values,
 )
+from notifications import send_push_notification
 
 
 def handle_emergency_stock_request() -> dict[str, Any]:
@@ -506,8 +507,10 @@ def _notify_user_about_actions(
     TODO: Send notification to user when actions are required.
     """
     message = _build_notification_message(actions, rows, header_info)
-    _ = message
-    print("message", message)
+    try:
+        send_push_notification("Estoque de emergência", message)
+    except Exception:
+        return
     return
 
 

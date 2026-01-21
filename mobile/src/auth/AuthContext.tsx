@@ -56,7 +56,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         throw new Error('Google sign-in did not return an ID token.');
       }
       try {
-        await apiFetch('/system/versions', { token: idToken });
+        await apiFetch('/mobile/system/versions', { token: idToken });
       } catch (error) {
         const status = (error as Error & { status?: number }).status;
         if (status === 403) {

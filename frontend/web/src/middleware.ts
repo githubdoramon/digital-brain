@@ -74,6 +74,13 @@ export default function middleware(request: NextRequest, event: NextFetchEvent) 
     return NextResponse.next();
   }
 
+  if (pathname.startsWith("/api/orchestrator/mobile")) {
+    const authHeader = request.headers.get("authorization");
+    if (authHeader?.toLowerCase().startsWith("bearer ")) {
+      return NextResponse.next();
+    }
+  }
+
   return authMiddleware(request as NextRequestWithAuth, event);
 }
 
