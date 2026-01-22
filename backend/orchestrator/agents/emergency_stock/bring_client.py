@@ -127,7 +127,6 @@ def get_list_items(
     if response.status_code >= 400:
         raise RuntimeError(f"Bring list fetch failed: {response.status_code} {response.text}")
     data = response.json()
-    print("data", data)
     items = data.get("items") or {}
     purchase = items.get("purchase") or []
     entries: list[dict[str, str]] = []
