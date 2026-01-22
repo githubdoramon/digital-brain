@@ -15,7 +15,7 @@ export default function SignInScreen() {
       <View style={styles.content}>
         <View style={styles.hero}>
           <Text style={styles.kicker}>Digital Brain</Text>
-          <Text style={styles.title}>Your memory, orchestrated.</Text>
+          <Text style={styles.title}>Your memory, but better.</Text>
           <Text style={styles.subtitle}>
             Capture, search, and chat with the moments that matter. Sign in to sync your personal
             brain.
@@ -25,7 +25,7 @@ export default function SignInScreen() {
         <View style={styles.card}>
           <Text style={styles.cardTitle}>Continue with Google</Text>
           <Text style={styles.cardCopy}>
-            We use your Google account to securely personalize your memory vault.
+            We use your Google account to hack your memory.
           </Text>
           <Pressable
             onPress={signInWithGoogle}

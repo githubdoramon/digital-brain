@@ -162,8 +162,8 @@ export default function SettingsScreen() {
     >
       <View style={styles.header}>
         <Text style={styles.kicker}>Configuration</Text>
-        <Text style={styles.title}>Control your signal</Text>
-        <Text style={styles.subtitle}>Personalize how the Digital Brain reaches you.</Text>
+        <Text style={styles.title}>Control your brain</Text>
+        <Text style={styles.subtitle}>Personalize how the Digital Brain works for you.</Text>
       </View>
 
       <View style={styles.card}>
@@ -258,19 +258,18 @@ const styles = StyleSheet.create({
   },
   signOutButton: {
     marginTop: 20,
-    alignSelf: 'flex-start',
+    alignSelf: 'stretch',
     borderRadius: theme.radius.md,
-    borderWidth: 1,
-    borderColor: theme.colors.line,
     paddingVertical: 12,
     paddingHorizontal: 18,
-    backgroundColor: theme.colors.card,
+    backgroundColor: theme.colors.ink,
+    alignItems: 'center',
   },
   signOutPressed: {
     transform: [{ scale: 0.98 }],
   },
   signOutText: {
-    color: theme.colors.mutedInk,
+    color: '#fff',
     fontWeight: '600',
   },
 });

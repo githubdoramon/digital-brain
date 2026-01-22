@@ -222,7 +222,7 @@ export default function Home() {
   const { data: session } = useSession();
   
   // Check if user has access to agent chat
-  const hasAgentAccess = session?.user?.email === "apenasparaspamail.com";
+
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
@@ -611,37 +611,33 @@ export default function Home() {
           <div style={{ display: "flex", gap: "4px", background: "#f1f5f9", borderRadius: "8px", padding: "4px" }}>
             <button
               onClick={() => setChatMode("quick")}
-              disabled={!hasAgentAccess}
               style={{
                 padding: "8px 16px",
                 borderRadius: "6px",
                 border: "none",
                 background: chatMode === "quick" ? "#fff" : "transparent",
-                color: hasAgentAccess ? (chatMode === "quick" ? "#0b6bcb" : "#64748b") : "#999",
+                color: chatMode === "quick" ? "#0b6bcb" : "#64748b",
                 fontWeight: chatMode === "quick" ? 600 : 400,
-                cursor: hasAgentAccess ? "pointer" : "not-allowed",
+                cursor:"pointer",
                 boxShadow: chatMode === "quick" ? "0 1px 3px rgba(0,0,0,0.1)" : "none",
-                opacity: hasAgentAccess ? 1 : 0.6,
+                opacity: 1,
               }}
-              title={!hasAgentAccess ? "Access restricted to apenasparaspamail.com" : ""}
             >
               Quick Chat
             </button>
             <button
               onClick={() => setChatMode("threads")}
-              disabled={!hasAgentAccess}
               style={{
                 padding: "8px 16px",
                 borderRadius: "6px",
                 border: "none",
                 background: chatMode === "threads" ? "#fff" : "transparent",
-                color: hasAgentAccess ? (chatMode === "threads" ? "#0b6bcb" : "#64748b") : "#999",
+                color: chatMode === "threads" ? "#0b6bcb" : "#64748b",
                 fontWeight: chatMode === "threads" ? 600 : 400,
-                cursor: hasAgentAccess ? "pointer" : "not-allowed",
+                cursor:"pointer",
                 boxShadow: chatMode === "threads" ? "0 1px 3px rgba(0,0,0,0.1)" : "none",
-                opacity: hasAgentAccess ? 1 : 0.6,
+                opacity:  1,
               }}
-              title={!hasAgentAccess ? "Access restricted to apenasparaspamail.com" : ""}
             >
               Threads
             </button>
@@ -671,11 +667,8 @@ export default function Home() {
               <h2 style={{ fontSize: "1.25rem", fontWeight: 600 }}>
                 Chat with your Digital Brain
               </h2>
-              <p style={{ fontSize: "0.875rem", color: hasAgentAccess ? "#666" : "#ef4444", marginTop: "4px" }}>
-                {hasAgentAccess 
-                  ? "Ask about your contacts, meetings, documents, and more"
-                  : "Access restricted - Available only to apenasparaspamail.com"
-                }
+              <p style={{ fontSize: "0.875rem", color: "#666", marginTop: "4px" }}>
+                Ask about your contacts, meetings, documents, and more
               </p>
             </div>
           </div>
@@ -706,26 +699,12 @@ export default function Home() {
                 }}
               >
                 <div style={{ fontSize: "2.5rem" }}>💬</div>
-                {hasAgentAccess ? (
-                  <>
-                    <p style={{ fontSize: "0.95rem" }}>
-                      Start a conversation by asking a question below
-                    </p>
-                    <div style={{ fontSize: "0.85rem", color: "#aaa", maxWidth: "400px" }}>
-                      Examples: &quot;What meetings did I have last week?&quot; or &quot;Tell me about my conversations with Monica&quot;
-                    </div>
-                  </>
-                ) : (
-                  <>
-                    <p style={{ fontSize: "0.95rem", color: "#ef4444", fontWeight: 600 }}>
-                      Access Restricted
-                    </p>
-                    <div style={{ fontSize: "0.85rem", color: "#666", maxWidth: "400px" }}>
-                      The AI chat interface is only available to apenasparaspamail.com. 
-                      Other features like Contacts, Documents, and Meetings are accessible to all users.
-                    </div>
-                  </>
-                )}
+                  <p style={{ fontSize: "0.95rem" }}>
+                    Start a conversation by asking a question below
+                  </p>
+                  <div style={{ fontSize: "0.85rem", color: "#aaa", maxWidth: "400px" }}>
+                    Examples: &quot;What meetings did I have last week?&quot; or &quot;Tell me about my conversations with Monica&quot;
+                  </div>
               </div>
             )}
 
@@ -917,8 +896,8 @@ export default function Home() {
                 type="text"
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
-                placeholder={hasAgentAccess ? "Ask a question about your data..." : "Access restricted"}
-                disabled={isLoading || !hasAgentAccess}
+                placeholder="Ask a question about your data..."
+                disabled={isLoading}
                 style={{
                   flex: 1,
                   border: "1px solid #d0d0d0",
@@ -926,25 +905,24 @@ export default function Home() {
                   padding: "12px 16px",
                   fontSize: "0.95rem",
                   outline: "none",
-                  background: hasAgentAccess ? "#fff" : "#f5f5f5",
-                  cursor: hasAgentAccess ? "text" : "not-allowed",
+                  background: "#fff",
+                  cursor: "text",
                 }}
               />
               <button
                 type="submit"
-                disabled={isLoading || !input.trim() || !hasAgentAccess}
+                disabled={isLoading || !input.trim()}
                 style={{
-                  background: hasAgentAccess ? "#0b6bcb" : "#999",
+                  background: "#0b6bcb",
                   color: "#fff",
                   border: "none",
                   borderRadius: "8px",
                   padding: "12px 24px",
                   fontWeight: 600,
-                  cursor: (isLoading || !input.trim() || !hasAgentAccess) ? "not-allowed" : "pointer",
-                  opacity: (isLoading || !input.trim() || !hasAgentAccess) ? 0.6 : 1,
+                  cursor: (isLoading || !input.trim()) ? "not-allowed" : "pointer",
+                  opacity: (isLoading || !input.trim()) ? 0.6 : 1,
                   whiteSpace: "nowrap",
                 }}
-                title={!hasAgentAccess ? "Access restricted to apenasparaspamail.com" : ""}
               >
                 {isLoading ? "Sending..." : "Send"}
               </button>

@@ -3,6 +3,8 @@ import React, { useEffect, useMemo, useState } from 'react';
 import {
   FlatList,
   Keyboard,
+  KeyboardAvoidingView,
+  KeyboardAvoidingViewProps,
   Platform,
   Pressable,
   StyleSheet,
@@ -23,47 +25,53 @@ type Message = {
   pending?: boolean;
 };
 
-const starterMessages: Message[] = [
-  {
-    id: 'welcome',
-    role: 'assistant',
-    content: 'Good to see you. What are we exploring today?',
-  },
-];
-
-export default function ChatScreen() {
-  const { token, signOut } = useAuth();
-  const insets = useSafeAreaInsets();
-  const [messages, setMessages] = useState<Message[]>(starterMessages);
-  const [input, setInput] = useState('');
-  const [isSending, setIsSending] = useState(false);
-  const [threadId, setThreadId] = useState<string | null>(null);
-  const [keyboardHeight, setKeyboardHeight] = useState(0);
-
-  const canSend = input.trim().length > 0 && !isSending;
+const useKeyboardBehavior = () => {
+  const defaultBehavior: KeyboardAvoidingViewProps['behavior'] =
+    Platform.OS === 'ios' ? 'padding' : 'height';
+  const [behavior, setBehavior] = useState<KeyboardAvoidingViewProps['behavior']>(defaultBehavior);
 
   useEffect(() => {
-    const showEvent = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
-    const hideEvent = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
-
-    const showSub = Keyboard.addListener(showEvent, (event) => {
-      setKeyboardHeight(event.endCoordinates?.height ?? 0);
+    const showListener = Keyboard.addListener('keyboardDidShow', () => {
+      setBehavior(defaultBehavior);
     });
-    const hideSub = Keyboard.addListener(hideEvent, () => {
-      setKeyboardHeight(0);
+    const hideListener = Keyboard.addListener('keyboardDidHide', () => {
+      setBehavior(undefined);
     });
 
     return () => {
-      showSub.remove();
-      hideSub.remove();
+      showListener.remove();
+      hideListener.remove();
     };
-  }, []);
+  }, [defaultBehavior]);
+
+  return behavior;
+};
+
+export default function ChatScreen() {
+  const { token, signOut, email } = useAuth();
+  const insets = useSafeAreaInsets();
+  const [input, setInput] = useState('');
+  const [isSending, setIsSending] = useState(false);
+  const [threadId, setThreadId] = useState<string | null>(null);
+  const keyboardBehavior = useKeyboardBehavior();
+
+  const allowed = email === 'REDACTED-EMAIL';
+  const canSend = input.trim().length > 0 && !isSending && allowed;
+
+  const starterMessages: Message[] = [
+    {
+      id: 'welcome',
+      role: 'assistant',
+      content: allowed ? 'Good to see you. What are we exploring today?' : 'Access restricted. Please contact the administrator.',
+    },
+  ];
+  const [messages, setMessages] = useState<Message[]>(starterMessages);
 
   const header = useMemo(
     () => (
       <View style={styles.header}>
-        <Text style={styles.kicker}>Focus Mode</Text>
-        <Text style={styles.title}>Ask your memory vault</Text>
+        <Text style={styles.kicker}>Chat</Text>
+        <Text style={styles.title}>Ask your memory</Text>
         <Text style={styles.subtitle}>Chat with your LLM in a calm, chat-first space.</Text>
       </View>
     ),
@@ -134,16 +142,21 @@ export default function ChatScreen() {
 
   return (
     <LinearGradient colors={theme.gradients.dusk} style={styles.container}>
-      <View style={styles.container}>
+      <KeyboardAvoidingView
+        style={styles.screen}
+        behavior={keyboardBehavior}
+        keyboardVerticalOffset={Platform.OS === 'ios' ? insets.top : 0}
+      >
         <FlatList
+          style={styles.list}
           data={messages}
           keyExtractor={(item) => item.id}
           ListHeaderComponent={header}
           contentContainerStyle={[
-            styles.list,
+            styles.listContent,
             {
               paddingTop: insets.top + 16,
-              paddingBottom: 140,
+              paddingBottom: 24,
             },
           ]}
           renderItem={({ item }) => (
@@ -165,21 +178,26 @@ export default function ChatScreen() {
           )}
         />
 
+
         <View
           style={[
             styles.composer,
             {
-              paddingBottom: 14 + (keyboardHeight > 0 ? 0 : insets.bottom),
-              bottom: Math.max(0, keyboardHeight - insets.bottom),
+              paddingBottom: 14 + (Platform.OS === 'ios' ? insets.bottom : 0),
             },
           ]}
         >
           <TextInput
             value={input}
+            editable={allowed}
+            style={[
+              styles.input,
+              !allowed && {
+                backgroundColor: '#eee',
+              },
+            ]}
             onChangeText={setInput}
             placeholder="Send a message..."
-            placeholderTextColor={theme.colors.mutedInk}
-            style={styles.input}
             multiline
           />
           <Pressable
@@ -194,7 +212,7 @@ export default function ChatScreen() {
             <Text style={styles.sendText}>{isSending ? '...' : 'Send'}</Text>
           </Pressable>
         </View>
-      </View>
+      </KeyboardAvoidingView>
     </LinearGradient>
   );
 }
@@ -203,9 +221,14 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
   },
+  screen: {
+    flex: 1,
+  },
   list: {
+    flex: 1,
+  },
+  listContent: {
     paddingHorizontal: 20,
-    paddingBottom: 140,
   },
   header: {
     marginTop: 24,
@@ -257,10 +280,6 @@ const styles = StyleSheet.create({
     color: theme.colors.ink,
   },
   composer: {
-    position: 'absolute',
-    left: 0,
-    right: 0,
-    bottom: 0,
     paddingHorizontal: 16,
     paddingVertical: 14,
     backgroundColor: '#fff',

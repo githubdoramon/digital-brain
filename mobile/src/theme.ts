@@ -11,8 +11,8 @@ export const theme = {
     line: '#e7ded4',
   },
   gradients: {
-    sunrise: ['#f7f2ec', '#f0e6db', '#e2f0ef'],
-    dusk: ['#fff2e8', '#f6dcd1', '#e7f2f1'],
+    sunrise: ['#f7f2ec', '#f0e6db', '#e2f0ef'] as const,
+    dusk: ['#fff2e8', '#f6dcd1', '#e7f2f1'] as const,
   },
   radius: {
     xl: 28,
