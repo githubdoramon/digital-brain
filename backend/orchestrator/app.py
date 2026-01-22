@@ -32,13 +32,13 @@ import events as events_service
 import immich_client
 import llm
 import places as places_service
-import settings as settings_service
 import skills
 import telegram_bot
 import todos as todos_service
 from auth import get_current_user
 from db import get_conn
-from notifications import send_push_notification
+from notifications import EMERGENCY_STOCK_NOTIFICATION_TYPE, send_notification
+from notifications.preferences import get_push_settings, update_push_settings
 from schemas import (
     AskIn,
     AskOut,
@@ -56,6 +56,7 @@ from schemas import (
     ExternalContactWebhook,
     ExternalEventPayload,
     MeetingIn,
+    NotificationSettingsOut,
     PlaceIn,
     PushNotificationsUpdateIn,
     ServiceVersionCollection,
@@ -64,14 +65,15 @@ from schemas import (
     ThreadOut,
     ThreadUpdate,
     TodoIn,
-    UserSettingsOut,
 )
 from versioning import get_service_versions
 
 ORCHESTRATOR_API_KEY = os.getenv("ORCHESTRATOR_API_KEY")
 
 
-def require_service_api_key(x_service_api_key: str = Header(default="", alias="x-service-api-key")) -> None:
+def require_service_api_key(
+    x_service_api_key: str = Header(default="", alias="x-service-api-key"),
+) -> None:
     if not ORCHESTRATOR_API_KEY:
         raise HTTPException(status_code=500, detail="Service API key is not configured")
     if x_service_api_key != ORCHESTRATOR_API_KEY:
@@ -127,21 +129,25 @@ api.add_middleware(
     allow_headers=["*"],
 )
 
+
 @api.get("/system/versions", response_model=ServiceVersionCollection)
 @api.get("/mobile/system/versions", response_model=ServiceVersionCollection)
 def read_service_versions(user: dict = Depends(get_current_user)):
     return get_service_versions()
+
+
 # --------------------------- Mobile endpoints ---------------------------
 
-@api.get("/mobile/settings", response_model=UserSettingsOut)
+
+@api.get("/mobile/settings", response_model=NotificationSettingsOut)
 def read_user_settings(user: dict = Depends(get_current_user)):
     email = user.get("email") or user.get("user_email")
     if not email:
         raise HTTPException(status_code=400, detail="User email is missing")
-    return settings_service.get_user_settings(email)
+    return get_push_settings(email)
 
 
-@api.put("/mobile/settings/push-notifications", response_model=UserSettingsOut)
+@api.put("/mobile/settings/push-notifications", response_model=NotificationSettingsOut)
 def update_push_notifications(
     payload: PushNotificationsUpdateIn,
     user: dict = Depends(get_current_user),
@@ -149,7 +155,7 @@ def update_push_notifications(
     email = user.get("email") or user.get("user_email")
     if not email:
         raise HTTPException(status_code=400, detail="User email is missing")
-    return settings_service.update_push_notifications(email, payload.enabled)
+    return update_push_settings(email, payload.enabled)
 
 
 @api.post("/mobile/devices/register")
@@ -168,7 +174,9 @@ def register_device(payload: DeviceRegisterIn, user: dict = Depends(get_current_
 
 
 @api.delete("/mobile/devices/unregister")
-def unregister_device(expo_push_token: str = Query(..., alias="expoPushToken"), user: dict = Depends(get_current_user)):
+def unregister_device(
+    expo_push_token: str = Query(..., alias="expoPushToken"), user: dict = Depends(get_current_user)
+):
     email = user.get("email") or user.get("user_email")
     if not email:
         raise HTTPException(status_code=400, detail="User email is missing")
@@ -180,7 +188,9 @@ def unregister_device(expo_push_token: str = Query(..., alias="expoPushToken"), 
 
 @api.post("/mobile/notifications/test")
 def send_test_notification():
-    result = send_push_notification("test", "me")
+    result = send_notification(
+        EMERGENCY_STOCK_NOTIFICATION_TYPE, "Emergency stock test", "This is a test alert"
+    )
     return {"ok": True, "result": result}
 
 
@@ -195,6 +205,7 @@ def ingest_contact(c: ContactIn, user: dict = Depends(get_current_user)):
 def list_contacts(user: dict = Depends(get_current_user)):
     return {"contacts": contacts_service.list_contacts()}
 
+
 @api.get("/contacts/merge-candidates")
 def list_merge_candidates(user: dict = Depends(get_current_user)):
     return contacts_service.list_contact_merge_candidates()
@@ -203,12 +214,15 @@ def list_merge_candidates(user: dict = Depends(get_current_user)):
 @api.post("/contacts/merge")
 def merge_contacts_endpoint(payload: ContactMergeIn, user: dict = Depends(get_current_user)):
     try:
-        contact = contacts_service.merge_contacts(payload.primary_contact_id, payload.duplicate_contact_id)
+        contact = contacts_service.merge_contacts(
+            payload.primary_contact_id, payload.duplicate_contact_id
+        )
     except LookupError:
         raise HTTPException(status_code=404, detail="One or both contacts not found")
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {"ok": True, "contact": contact}
+
 
 @api.get("/contacts/{contact_id}")
 def get_contact(contact_id: str, user: dict = Depends(get_current_user)):
@@ -247,7 +261,9 @@ def receive_contact_webhook(
                 try:
                     deleted = contacts_service.delete_contact(existing["contact_id"])
                 except Exception as exc:
-                    raise HTTPException(status_code=500, detail=f"Failed to delete hidden contact: {exc}") from exc
+                    raise HTTPException(
+                        status_code=500, detail=f"Failed to delete hidden contact: {exc}"
+                    ) from exc
                 if deleted:
                     # Stop early so we do not re-create the hidden contact later in this handler.
                     return {"ok": True, "action": "deleted"}
@@ -257,16 +273,22 @@ def receive_contact_webhook(
         try:
             updated = contacts_service.unlink_external_contact(external_id)
         except Exception as exc:
-            raise HTTPException(status_code=500, detail=f"Failed to unlink external contact: {exc}") from exc
+            raise HTTPException(
+                status_code=500, detail=f"Failed to unlink external contact: {exc}"
+            ) from exc
         return {"ok": True, "action": "unlinked" if updated else "ignored"}
 
     if event_name in {"personcreate", "personupdate"}:
         try:
-            contact = contacts_service.sync_external_contact(person, payload_body.previous if payload_body else None)
+            contact = contacts_service.sync_external_contact(
+                person, payload_body.previous if payload_body else None
+            )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         except Exception as exc:
-            raise HTTPException(status_code=500, detail=f"Failed to process contact webhook: {exc}") from exc
+            raise HTTPException(
+                status_code=500, detail=f"Failed to process contact webhook: {exc}"
+            ) from exc
         return {"ok": True, "contact": contact}
 
     raise HTTPException(status_code=400, detail=f"Unsupported eventName: {payload.event_name}")
@@ -291,6 +313,7 @@ async def handle_telegram_messages(
     except telegram_bot.TelegramUploadError as exc:
         print(f"[telegram_bot] upload error={exc}")
         raise HTTPException(status_code=502, detail=str(exc)) from exc
+
 
 @api.post("/ingest/place")
 def ingest_place(p: PlaceIn, user: dict = Depends(get_current_user)):
@@ -334,6 +357,7 @@ def ingest_event(e: EventIn, user: dict = Depends(get_current_user)):
 # Removed: /threads/{thread_id}/events endpoint - part of old event_capture system
 # Use /event command instead
 
+
 # --------------------------- Document endpoints ---------------------------
 @api.post("/ingest/document", response_model=DocumentDetailOut)
 async def upload_document(
@@ -372,6 +396,7 @@ async def upload_document(
 
     return DocumentDetailOut(**document)
 
+
 @api.post("/ingest/document/external")
 def ingest_external_document(
     file: UploadFile = File(...),
@@ -392,7 +417,6 @@ def ingest_external_document(
         raise HTTPException(status_code=500, detail="Failed to ingest document")
 
     return DocumentDetailOut(**document)
-
 
 
 @api.get("/documents", response_model=DocumentCollection)
@@ -534,7 +558,11 @@ def confirm_event_command(
         if "summary" in mods:
             extracted["summary"] = mods["summary"]
         if "when" in mods:
-            extracted["when"] = datetime.fromisoformat(mods["when"].replace("Z", "+00:00")) if mods["when"] else None
+            extracted["when"] = (
+                datetime.fromisoformat(mods["when"].replace("Z", "+00:00"))
+                if mods["when"]
+                else None
+            )
         if "where" in mods:
             extracted["where"] = mods["where"]
         if "tags" in mods:
@@ -565,9 +593,7 @@ def confirm_event_command(
             )
 
             contacts_service.ingest_contact(contact_in)
-            created_contacts.append(
-                {"contact_id": contact_id, "display_name": display_name}
-            )
+            created_contacts.append({"contact_id": contact_id, "display_name": display_name})
             contact_id_map[display_name] = contact_id
 
         # 1b. Create confirmed relationships (after contacts exist)
@@ -601,8 +627,12 @@ def confirm_event_command(
 
                 from_contact_id = _resolve_relationship_contact_id(relationship, "from")
                 to_contact_id = _resolve_relationship_contact_id(relationship, "to")
-                relationship_type = relationship.get("relationship_type") or relationship.get("type")
-                reciprocal_type = relationship.get("reciprocal_type") or relationship.get("other_type")
+                relationship_type = relationship.get("relationship_type") or relationship.get(
+                    "type"
+                )
+                reciprocal_type = relationship.get("reciprocal_type") or relationship.get(
+                    "other_type"
+                )
 
                 if not from_contact_id or not to_contact_id or not relationship_type:
                     continue
@@ -682,9 +712,7 @@ def confirm_event_command(
 
     except Exception as e:
         print(f"[event_confirm] Failed to create event: {e}")
-        raise HTTPException(
-            status_code=500, detail=f"Failed to create event: {str(e)}"
-        )
+        raise HTTPException(status_code=500, detail=f"Failed to create event: {str(e)}")
 
 
 @api.post("/access/gate")
@@ -726,7 +754,12 @@ def validate_gate_access(
                 {"name": contact_name, "location": "gate"},
             )
 
-    contact_names = ", ".join([contact.get("display_name") or contact.get("contact_id") or "unknown" for contact in contacts])
+    contact_names = ", ".join(
+        [
+            contact.get("display_name") or contact.get("contact_id") or "unknown"
+            for contact in contacts
+        ]
+    )
 
     return {"contact_names": contact_names, "open_gate": open_gate}
 
@@ -741,9 +774,18 @@ def get_meeting(meeting_id: str, user: dict = Depends(get_current_user)):
 
 # --------------------------- Ask endpoint (LLM-powered) ---------------------------
 
+
 class _SessionContext:
     """Context for a resolved session, used by both /ask and /ask/stream."""
-    __slots__ = ("session_id", "question", "is_new_session", "is_reset_only", "user_email", "original_question")
+
+    __slots__ = (
+        "session_id",
+        "question",
+        "is_new_session",
+        "is_reset_only",
+        "user_email",
+        "original_question",
+    )
 
     def __init__(
         self,
@@ -780,12 +822,12 @@ def _resolve_session_context(payload: AskIn, user_email: str) -> _SessionContext
         except LookupError:
             raise HTTPException(status_code=404, detail="Conversation thread not found")
         except PermissionError:
-            raise HTTPException(status_code=403, detail="Conversation thread does not belong to user")
+            raise HTTPException(
+                status_code=403, detail="Conversation thread does not belong to user"
+            )
     else:
         # Main session mode - resolve with timeout and command parsing
-        thread, is_new_session, question = conversations.resolve_main_session(
-            user_email, question
-        )
+        thread, is_new_session, question = conversations.resolve_main_session(user_email, question)
 
     session_id = thread["id"]
     is_reset_only = is_new_session and not question.strip()
@@ -942,7 +984,11 @@ async def ask_stream(payload: AskIn, user: dict = Depends(get_current_user)):
             return StreamingResponse(
                 command_generator(),
                 media_type="text/event-stream",
-                headers={"Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no"},
+                headers={
+                    "Cache-Control": "no-cache",
+                    "Connection": "keep-alive",
+                    "X-Accel-Buffering": "no",
+                },
             )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -962,7 +1008,11 @@ async def ask_stream(payload: AskIn, user: dict = Depends(get_current_user)):
         return StreamingResponse(
             reset_generator(),
             media_type="text/event-stream",
-            headers={"Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no"},
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no",
+            },
         )
 
     limit = payload.limit or 3
@@ -971,7 +1021,9 @@ async def ask_stream(payload: AskIn, user: dict = Depends(get_current_user)):
     if len(preview) > 120:
         preview = preview[:117] + "..."
     mode = "main_session" if not (payload.thread_id or payload.session_id) else "thread"
-    print(f"[ask/stream] start session={ctx.session_id} user={user_email} limit={limit} mode={mode} is_new={ctx.is_new_session} question={preview!r}")
+    print(
+        f"[ask/stream] start session={ctx.session_id} user={user_email} limit={limit} mode={mode} is_new={ctx.is_new_session} question={preview!r}"
+    )
 
     async def event_generator():
         try:
@@ -995,7 +1047,9 @@ async def ask_stream(payload: AskIn, user: dict = Depends(get_current_user)):
 
                 if event.get("type") == "done":
                     elapsed = perf_counter() - start_time
-                    print(f"[ask/stream] complete session={ctx.session_id} user={user_email} elapsed={elapsed:.3f}s")
+                    print(
+                        f"[ask/stream] complete session={ctx.session_id} user={user_email} elapsed={elapsed:.3f}s"
+                    )
         except Exception as exc:
             print(f"[ask/stream] error session={ctx.session_id}: {exc}")
             yield f"data: {json.dumps({'type': 'error', 'message': str(exc)})}\n\n"
@@ -1003,7 +1057,11 @@ async def ask_stream(payload: AskIn, user: dict = Depends(get_current_user)):
     return StreamingResponse(
         event_generator(),
         media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no"},
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
     )
 
 
@@ -1147,6 +1205,7 @@ def get_skills_stats(user: dict = Depends(get_current_user)):
 def reload_skills(user: dict = Depends(get_current_user)):
     """Force reload all skills from disk."""
     from skills.registry import reload_registry
+
     count = reload_registry()
     return {"reloaded": count, "message": f"Reloaded {count} skills"}
 
@@ -1154,6 +1213,7 @@ def reload_skills(user: dict = Depends(get_current_user)):
 # ---------------------------------------------------------------------------
 # Contact Resolution Endpoint
 # ---------------------------------------------------------------------------
+
 
 @api.post("/contacts/resolve")
 def resolve_contacts_endpoint(
@@ -1209,9 +1269,10 @@ def resolve_contacts_endpoint(
 # Emergency Stock Endpoint
 # ---------------------------------------------------------------------------
 
+
 @api.get("/agents/emergency-stock/run")
 def run_emergency_stock_endpoint(
-    _ = Depends(require_service_api_key),
+    _=Depends(require_service_api_key),
 ):
     """
     Run the emergency stock check against a Google Sheet.

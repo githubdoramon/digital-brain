@@ -1,0 +1,1 @@
+EMERGENCY_STOCK_NOTIFICATION_TYPE = "emergency-stock"

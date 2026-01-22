@@ -300,14 +300,6 @@ CREATE TABLE IF NOT EXISTS main_sessions (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
--- User settings (mobile + web preferences)
-CREATE TABLE IF NOT EXISTS user_settings (
-  user_email TEXT PRIMARY KEY,
-  push_notifications_enabled BOOLEAN NOT NULL DEFAULT FALSE,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
 CREATE TABLE IF NOT EXISTS user_devices (
   device_id TEXT PRIMARY KEY,
   user_email TEXT NOT NULL,
@@ -323,6 +315,18 @@ CREATE TABLE IF NOT EXISTS user_devices (
 
 CREATE INDEX IF NOT EXISTS idx_user_devices_user_email
   ON user_devices (user_email, updated_at DESC);
+
+CREATE TABLE IF NOT EXISTS notification_subscriptions (
+  user_email TEXT NOT NULL,
+  notification_type TEXT NOT NULL,
+  notification_channels TEXT[] NOT NULL DEFAULT '{}',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (user_email, notification_type)
+);
+
+CREATE INDEX IF NOT EXISTS idx_notification_subscriptions_type
+  ON notification_subscriptions (notification_type);
 
 -- Action logs (system actions such as gate access)
 DO $$

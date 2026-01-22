@@ -1,7 +1,3 @@
-"""
-Expo push notification helper.
-"""
-
 from __future__ import annotations
 
 from typing import Any
@@ -14,8 +10,7 @@ EXPO_PUSH_URL = "https://exp.host/--/api/v2/push/send"
 EXPO_BATCH_SIZE = 100
 
 
-def send_push_notification(title: str, message: str) -> dict[str, Any]:
-    tokens = _fetch_active_expo_tokens()
+def send_push_notification(title: str, message: str, tokens: list[str]) -> dict[str, Any]:
     if not tokens:
         return {"sent": 0, "success": 0, "errors": []}
 
@@ -61,21 +56,34 @@ def send_push_notification(title: str, message: str) -> dict[str, Any]:
     }
 
 
-def _fetch_active_expo_tokens() -> list[str]:
+def fetch_push_tokens(user_email: str) -> list[str]:
     with get_conn() as conn, conn.cursor() as cur:
         cur.execute(
             """
-            SELECT DISTINCT ud.expo_push_token
-            FROM user_devices ud
-            JOIN user_settings us
-              ON us.user_email = ud.user_email
-            WHERE us.push_notifications_enabled = TRUE
-              AND ud.expo_push_token IS NOT NULL
-            """
+            SELECT DISTINCT expo_push_token
+            FROM user_devices
+            WHERE user_email = %s
+              AND expo_push_token IS NOT NULL
+            """,
+            (user_email,),
         )
         rows = cur.fetchall() or []
-
     return [row["expo_push_token"] for row in rows if row.get("expo_push_token")]
+
+
+def has_push_device(user_email: str) -> bool:
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT 1
+            FROM user_devices
+            WHERE user_email = %s
+              AND expo_push_token IS NOT NULL
+            LIMIT 1
+            """,
+            (user_email,),
+        )
+        return cur.fetchone() is not None
 
 
 def _chunk(items: list[dict[str, Any]], size: int) -> list[list[dict[str, Any]]]:

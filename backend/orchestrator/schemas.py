@@ -181,10 +181,10 @@ class PushNotificationsUpdateIn(BaseModel):
     enabled: bool
 
 
-class UserSettingsOut(BaseModel):
+class NotificationSettingsOut(BaseModel):
     push_notifications_enabled: bool = Field(alias="pushNotificationsEnabled")
-    created_at: datetime | None = Field(alias="createdAt")
-    updated_at: datetime | None = Field(alias="updatedAt")
+    created_at: datetime | None = Field(default=None, alias="createdAt")
+    updated_at: datetime | None = Field(default=None, alias="updatedAt")
 
     class Config:
         populate_by_name = True

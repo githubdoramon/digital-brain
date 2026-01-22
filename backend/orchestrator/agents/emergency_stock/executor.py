@@ -27,7 +27,7 @@ from agents.emergency_stock.sheets_client import (
     fetch_sheet_values,
     update_sheet_values,
 )
-from notifications import send_push_notification
+from notifications import EMERGENCY_STOCK_NOTIFICATION_TYPE, send_notification
 
 
 def handle_emergency_stock_request() -> dict[str, Any]:
@@ -242,7 +242,9 @@ def _resolve_update_columns(
         date_idx = _override_index(normalized, date_idx, column_map.get("reorder_date"))
         move_idx = _override_index(normalized, move_idx, column_map.get("move_to_consumption"))
         quantity_idx = _override_index(normalized, quantity_idx, column_map.get("quantity"))
-        item_number_idx = _override_index(normalized, item_number_idx, column_map.get("item_number"))
+        item_number_idx = _override_index(
+            normalized, item_number_idx, column_map.get("item_number")
+        )
 
     if (
         flag_idx is None
@@ -458,9 +460,7 @@ def _prepare_bring_context() -> dict[str, Any]:
     )
     if not matching_list:
         available = [
-            str(lst.get("name"))
-            for lst in lists
-            if isinstance(lst, dict) and lst.get("name")
+            str(lst.get("name")) for lst in lists if isinstance(lst, dict) and lst.get("name")
         ]
         raise RuntimeError(
             "Bring list name not found. Available lists: "
@@ -479,7 +479,10 @@ def _prepare_bring_context() -> dict[str, Any]:
         country=country,
     )
     existing_items = {
-        (_normalize_item_name(entry.get("itemId", "")), _normalize_item_spec(entry.get("specification", "")))
+        (
+            _normalize_item_name(entry.get("itemId", "")),
+            _normalize_item_spec(entry.get("specification", "")),
+        )
         for entry in list_items
         if entry.get("itemId")
     }
@@ -530,10 +533,9 @@ def _notify_user_about_actions(
     """
     message = _build_notification_message(actions, rows, header_info)
     try:
-        send_push_notification("Estoque de emergência", message)
+        send_notification(EMERGENCY_STOCK_NOTIFICATION_TYPE, "Estoque de emergência", message)
     except Exception:
         return
-    return
 
 
 def _format_bring_note(quantity: str, item_number: str | None) -> str:
@@ -608,9 +610,17 @@ def _action_note_for(
 ) -> str:
     row_number = action.item.row_number
     if action.action_type == "consume":
-        quantity = _get_row_cell(rows, row_number, indices.get("quantity")) if indices.get("quantity") is not None else ""
+        quantity = (
+            _get_row_cell(rows, row_number, indices.get("quantity"))
+            if indices.get("quantity") is not None
+            else ""
+        )
     else:
-        quantity = _get_row_cell(rows, row_number, indices.get("reorder_quantity")) if indices.get("reorder_quantity") is not None else ""
+        quantity = (
+            _get_row_cell(rows, row_number, indices.get("reorder_quantity"))
+            if indices.get("reorder_quantity") is not None
+            else ""
+        )
     return _format_bring_note(quantity, action.item.item_number)
 
 
