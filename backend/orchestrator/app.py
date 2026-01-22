@@ -37,7 +37,6 @@ import telegram_bot
 import todos as todos_service
 from auth import get_current_user
 from db import get_conn
-from notifications import EMERGENCY_STOCK_NOTIFICATION_TYPE, send_notification
 from notifications.preferences import get_push_settings, update_push_settings
 from schemas import (
     AskIn,
@@ -184,14 +183,6 @@ def unregister_device(
     if not deleted:
         raise HTTPException(status_code=404, detail="Device not found")
     return {"ok": True}
-
-
-@api.post("/mobile/notifications/test")
-def send_test_notification():
-    result = send_notification(
-        EMERGENCY_STOCK_NOTIFICATION_TYPE, "Emergency stock test", "This is a test alert"
-    )
-    return {"ok": True, "result": result}
 
 
 # --------------------------- Ingest endpoints ---------------------------
