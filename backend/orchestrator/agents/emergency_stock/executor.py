@@ -486,7 +486,6 @@ def _prepare_bring_context() -> dict[str, Any]:
         for entry in list_items
         if entry.get("itemId")
     }
-    print("existing_items", existing_items)
 
     return {
         "access_token": access_token,
