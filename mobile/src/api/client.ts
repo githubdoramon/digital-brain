@@ -32,6 +32,15 @@ export async function apiFetch(path: string, options: FetchOptions = {}) {
     return null;
   }
 
+  const contentType = response.headers.get('content-type') ?? '';
+  if (!contentType.includes('application/json')) {
+    const text = await response.text();
+    console.log("path", path, "text", text);
+    throw new Error(
+      `Expected JSON response but got ${contentType || 'unknown content type'}: ${text.slice(0, 200)}`
+    );
+  }
+
   return response.json();
 }
 

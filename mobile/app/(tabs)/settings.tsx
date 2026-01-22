@@ -38,22 +38,26 @@ export default function SettingsScreen() {
   const reconcilePushState = useCallback(
     async (backendEnabled: boolean) => {
       const registration = await getDeviceRegistrationIfGranted();
-      if (registration) {
+      if (registration && backendEnabled) {
+        setPushEnabled(true);
+        return;
+      }
+      if (!registration && !backendEnabled) {
+        setPushEnabled(false);
+        return;
+      }
+      if (registration && !backendEnabled) {
         try {
-          if (!backendEnabled) {
             const settingsResponse = await apiFetch('/mobile/settings/push-notifications', {
               method: 'PUT',
               body: JSON.stringify({ enabled: true }),
               token,
             });
-            console.log('push settings reconciled', settingsResponse);
-          }
-          const deviceResponse = await apiFetch('/mobile/devices/register', {
+          await apiFetch('/mobile/devices/register', {
             method: 'POST',
             body: JSON.stringify(registration),
             token,
           });
-          console.log('device registered', deviceResponse);
           await SecureStore.setItemAsync(TOKEN_KEY, registration.expoPushToken);
           setPushEnabled(true);
           return;
@@ -63,14 +67,13 @@ export default function SettingsScreen() {
         }
       }
 
-      if (backendEnabled) {
+      if (backendEnabled && !registration) {
         try {
           const settingsResponse = await apiFetch('/mobile/settings/push-notifications', {
             method: 'PUT',
             body: JSON.stringify({ enabled: false }),
             token,
           });
-          console.log('push settings disabled', settingsResponse);
         } catch (error) {
           console.error('failed to disable push settings', error);
           // noop: keep state if backend update fails
@@ -84,7 +87,7 @@ export default function SettingsScreen() {
 
   useEffect(() => {
     let mounted = true;
-    (async () => {
+    token && (async () => {
       try {
         const response = (await apiFetch('/mobile/settings', { token })) as SettingsResponse;
         if (mounted) {
@@ -121,13 +124,11 @@ export default function SettingsScreen() {
           body: JSON.stringify({ enabled: true }),
           token,
         });
-        const deviceResponse = await apiFetch('/mobile/devices/register', {
+        await apiFetch('/mobile/devices/register', {
           method: 'POST',
           body: JSON.stringify(registration),
           token,
         });
-        console.log('push settings saved', settingsResponse);
-        console.log('device registered', deviceResponse);
         await SecureStore.setItemAsync(TOKEN_KEY, registration.expoPushToken);
         setPushEnabled(true);
       } else {
@@ -137,7 +138,6 @@ export default function SettingsScreen() {
           token,
         });
         await unregisterDevice();
-        console.log('push settings saved', settingsResponse);
         setPushEnabled(false);
       }
     } catch (error) {

@@ -72,9 +72,18 @@ def handle_emergency_stock_request() -> dict[str, Any]:
     header_info = _resolve_header_info(rows, column_map)
     buy_actions = _collect_buy_actions(rows, items, header_info)
     actions = consume_actions + buy_actions
-
+    bring_context = None
+    filtered_actions: list[StockAction] = []
     if actions:
-        _notify_user_about_actions(actions, rows, header_info)
+        bring_context = _prepare_bring_context()
+        filtered_actions = _filter_actions_for_notification(
+            actions,
+            rows,
+            header_info,
+            bring_context,
+        )
+        if filtered_actions:
+            _notify_user_about_actions(filtered_actions, rows, header_info)
 
     updates = _build_sheet_updates(
         rows,
@@ -82,6 +91,7 @@ def handle_emergency_stock_request() -> dict[str, Any]:
         sheet_range=sheet_range,
         sheet_name_override=sheet_name,
         header_info=header_info,
+        bring_context=bring_context,
     )
 
     update_result = {"updatedCells": 0}
@@ -91,7 +101,7 @@ def handle_emergency_stock_request() -> dict[str, Any]:
     return {
         "status": "success",
         "items_checked": len(items),
-        "actions_found": len(actions),
+        "actions_found": len(filtered_actions),
         "sheet_updates": len(updates),
         "updated_cells": update_result.get("totalUpdatedCells")
         or update_result.get("updatedCells"),
@@ -102,7 +112,7 @@ def handle_emergency_stock_request() -> dict[str, Any]:
                 "row_number": action.item.row_number,
                 "item": action.item.name,
             }
-            for action in actions
+            for action in filtered_actions
         ],
     }
 
@@ -113,6 +123,7 @@ def _build_sheet_updates(
     sheet_range: str,
     sheet_name_override: str | None,
     header_info: dict[str, Any] | None,
+    bring_context: dict[str, Any] | None,
 ) -> list[dict[str, Any]]:
     if not rows:
         return []
@@ -131,9 +142,6 @@ def _build_sheet_updates(
     quantity_idx = indices.get("quantity")
 
     updates: list[dict[str, Any]] = []
-    bring_context = None
-    if any(action.action_type in {"consume", "buy"} for action in actions):
-        bring_context = _prepare_bring_context()
 
     for action in actions:
         row_number = action.item.row_number
@@ -142,9 +150,16 @@ def _build_sheet_updates(
             if _is_already_marked(rows, row_number, move_to_consumption_idx):
                 continue
 
-            quantity = _get_row_cell(rows, row_number, quantity_idx) if quantity_idx is not None else ""
-            note = _format_bring_note(quantity, action.item.item_number)
-            _maybe_add_to_bring(bring_context, action.item.name, note)
+            note = _action_note_for(
+                action,
+                rows,
+                {
+                    "quantity": quantity_idx,
+                    "reorder_quantity": reorder_qty_idx,
+                },
+            )
+            if not _already_in_bring(bring_context, action.item.name, note):
+                _maybe_add_to_bring(bring_context, action.item.name, note)
             consume_updates = _build_cell_updates(
                 sheet_name,
                 row_number,
@@ -154,9 +169,16 @@ def _build_sheet_updates(
             )
             updates.extend(consume_updates)
         elif action.action_type == "buy":
-            quantity = _get_row_cell(rows, row_number, reorder_qty_idx) if reorder_qty_idx is not None else ""
-            note = _format_bring_note(quantity, action.item.item_number)
-            _maybe_add_to_bring(bring_context, action.item.name, note)
+            note = _action_note_for(
+                action,
+                rows,
+                {
+                    "quantity": quantity_idx,
+                    "reorder_quantity": reorder_qty_idx,
+                },
+            )
+            if not _already_in_bring(bring_context, action.item.name, note):
+                _maybe_add_to_bring(bring_context, action.item.name, note)
 
     return updates
 
@@ -531,6 +553,67 @@ def _normalize_item_spec(spec: str) -> str:
     return _strip_accents(spec).strip().lower()
 
 
+def _filter_actions_for_notification(
+    actions: list[StockAction],
+    rows: list[list[str]],
+    header_info: dict[str, Any] | None,
+    bring_context: dict[str, Any] | None,
+) -> list[StockAction]:
+    if not header_info:
+        return actions
+
+    indices = header_info.get("indices") or {}
+    move_to_consumption_idx = indices.get("move_to_consumption")
+    reorder_qty_idx = indices.get("reorder_quantity")
+    quantity_idx = indices.get("quantity")
+
+    filtered: list[StockAction] = []
+    for action in actions:
+        row_number = action.item.row_number
+        if action.action_type == "consume":
+            if _is_already_marked(rows, row_number, move_to_consumption_idx):
+                continue
+            filtered.append(action)
+            continue
+
+        note = _action_note_for(
+            action,
+            rows,
+            {
+                "quantity": quantity_idx,
+                "reorder_quantity": reorder_qty_idx,
+            },
+        )
+        if _already_in_bring(bring_context, action.item.name, note):
+            continue
+        filtered.append(action)
+    return filtered
+
+
+def _already_in_bring(
+    bring_context: dict[str, Any] | None,
+    item_name: str,
+    note: str,
+) -> bool:
+    if not bring_context:
+        return False
+    normalized = (_normalize_item_name(item_name), _normalize_item_spec(note))
+    return normalized in bring_context["existing_items"]
+
+
+def _action_note_for(
+    action: StockAction,
+    rows: list[list[str]],
+    indices: dict[str, int | None],
+) -> str:
+    row_number = action.item.row_number
+    if action.action_type == "consume":
+        quantity = _get_row_cell(rows, row_number, indices.get("quantity")) if indices.get("quantity") is not None else ""
+    else:
+        quantity = _get_row_cell(rows, row_number, indices.get("reorder_quantity")) if indices.get("reorder_quantity") is not None else ""
+    return _format_bring_note(quantity, action.item.item_number)
+
+
 def _build_notification_message(
     actions: list[StockAction],
     rows: list[list[str]],
@@ -550,13 +633,15 @@ def _build_notification_message(
             buy_items.append(name)
             seen.add(name)
 
-    return (
-        "Estoque de emergência precisa de alguns ajustes:\n"
-        f"- Mover {consume_amount} items para consumo\n"
-        f"- Comprar {total_amount_to_purchase} items\n"
-        "\n"
-        f"Items para comprar: {', '.join(buy_items)}\n"
-    )
+    lines = ["Estoque de emergência precisa de alguns ajustes:"]
+    if consume_amount:
+        lines.append(f"- Mover {consume_amount} items para consumo")
+    if total_amount_to_purchase:
+        lines.append(f"- Comprar {total_amount_to_purchase} items")
+    if buy_items:
+        lines.append("")
+        lines.append(f"Items para comprar: {', '.join(buy_items)}")
+    return "\n".join(lines) + "\n"
 
 
 def _count_unique_items(actions: list[StockAction]) -> int:

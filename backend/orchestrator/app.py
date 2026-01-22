@@ -154,7 +154,6 @@ def update_push_notifications(
 
 @api.post("/mobile/devices/register")
 def register_device(payload: DeviceRegisterIn, user: dict = Depends(get_current_user)):
-    print("register_device", payload)
     email = user.get("email") or user.get("user_email")
     if not email:
         raise HTTPException(status_code=400, detail="User email is missing")
@@ -1212,7 +1211,7 @@ def resolve_contacts_endpoint(
 
 @api.get("/agents/emergency-stock/run")
 def run_emergency_stock_endpoint(
-    _: dict = Depends(get_current_user),
+    _ = Depends(require_service_api_key),
 ):
     """
     Run the emergency stock check against a Google Sheet.

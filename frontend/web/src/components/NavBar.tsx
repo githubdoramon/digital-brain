@@ -6,6 +6,9 @@ import Image from "next/image";
 export async function NavBar() {
   const session = await getServerSession(authOptions);
   
+  // Check if user has access to agent chat
+  const hasAgentAccess = session?.user?.email === "apenasparaspamail.com";
+  
   return (
     <header
       style={{
@@ -43,14 +46,27 @@ export async function NavBar() {
               fontSize: "0.95rem",
             }}
           >
-            <Link
-              href="/"
-              style={{
-                color: "#444",
-              }}
-            >
-              Home
-            </Link>
+            {hasAgentAccess ? (
+              <Link
+                href="/"
+                style={{
+                  color: "#444",
+                }}
+              >
+                Home
+              </Link>
+            ) : (
+              <div
+                style={{
+                  color: "#999",
+                  cursor: "not-allowed",
+                  textDecoration: "none",
+                }}
+                title="Access restricted to apenasparaspamail.com"
+              >
+                Home
+              </div>
+            )}
             <Link
               href="/contacts"
               style={{
