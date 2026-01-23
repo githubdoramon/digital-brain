@@ -24,4 +24,17 @@ fi
 set +a
 
 cd "${BACKEND_DIR}"
-uvicorn app:api --host 0.0.0.0 --port 8000 --reload
+PYTHON_BIN="python"
+if [[ -n "${VIRTUAL_ENV:-}" ]]; then
+  PYTHON_BIN="${VIRTUAL_ENV}/bin/python"
+elif [[ -x "${BACKEND_DIR}/.venv/bin/python" ]]; then
+  PYTHON_BIN="${BACKEND_DIR}/.venv/bin/python"
+fi
+
+if [[ $# -gt 0 ]]; then
+  SCRIPT_PATH="$1"
+  shift
+  "${PYTHON_BIN}" "${SCRIPT_PATH}" "$@"
+else
+  "${PYTHON_BIN}" -m uvicorn app:api --host 0.0.0.0 --port 8000 --reload
+fi

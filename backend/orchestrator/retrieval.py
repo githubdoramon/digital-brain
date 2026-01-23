@@ -15,13 +15,21 @@ from search_normalization import normalize_search_text
 
 
 # --------------------------- Resolution helpers ---------------------------
-def resolve_query(text: str, need_contacts: bool = True, need_places: bool = True) -> dict[str, Any]:
+def resolve_query(
+    text: str, need_contacts: bool = True, need_places: bool = True
+) -> dict[str, Any]:
     q = (text or "").strip()
     people = (
-        resolve_entities(q, "contacts", "contact_id", "display_name", "aliases", extra_cols=["comments"])
+        resolve_entities(
+            q, "contacts", "contact_id", "display_name", "aliases", extra_cols=["comments"]
+        )
         if need_contacts
         else []
     )
+    if need_contacts:
+        vector_people = resolve_contact_embeddings(q)
+        if vector_people:
+            people = list(dict.fromkeys([*people, *vector_people]))
     places = resolve_entities(q, "places", "place_id", "name") if need_places else []
     span = parse_timespan_text(q)
     return {
@@ -95,6 +103,18 @@ def resolve_entities(
     return list(out_ids)
 
 
+def resolve_contact_embeddings(
+    query: str,
+    *,
+    limit: int = 3,
+    score_threshold: float = 0.72,
+) -> list[str]:
+    if not query:
+        return []
+    matches = vector_search_contacts(query, limit)
+    return [contact_id for contact_id, score in matches if score >= score_threshold]
+
+
 # --------------------------- Search helpers ---------------------------
 def search_memories(
     query: str,
@@ -114,6 +134,7 @@ def search_memories(
 
     vec_events = vector_search(normalized_query, 50) if normalized_query else {}
     bm_events = bm25_search(normalized_query, 50) if normalized_query else {}
+    vec_contacts = vector_search_contacts(normalized_query, 50) if normalized_query else []
     st_events = structured_candidates(span, list(people or []), list(place_ids or []), 200)
 
     vec_docs = vector_search_documents(normalized_query, 50) if normalized_query else {}
@@ -138,9 +159,14 @@ def search_memories(
         print(f"[retrieval] doc_id={doc_id} score={score}")
         doc_scores[doc_id] = score
 
+    contact_scores = dict(vec_contacts)
+
     combined: list[tuple[str, str, float]] = []
     combined.extend((event_id, "event", event_scores[event_id]) for event_id in event_scores)
     combined.extend((doc_id, "document", doc_scores[doc_id]) for doc_id in doc_scores)
+    combined.extend(
+        (contact_id, "contact", contact_scores[contact_id]) for contact_id in contact_scores
+    )
     combined.sort(key=lambda item: item[2], reverse=True)
 
     if not combined:
@@ -151,11 +177,13 @@ def search_memories(
 
     event_ids_ordered = [item_id for item_id, kind, _ in top_combined if kind == "event"]
     doc_ids_ordered = [item_id for item_id, kind, _ in top_combined if kind == "document"]
+    contact_ids_ordered = [item_id for item_id, kind, _ in top_combined if kind == "contact"]
 
     event_rows = fetch_events(event_ids_ordered) if event_ids_ordered else []
     event_lookup = {row["id"]: row for row in event_rows}
 
     doc_lookup = fetch_document_summaries(doc_ids_ordered) if doc_ids_ordered else {}
+    contact_lookup = fetch_contact_summaries(contact_ids_ordered) if contact_ids_ordered else {}
 
     results: list[dict[str, Any]] = []
     for item_id, kind, _ in top_combined:
@@ -187,7 +215,7 @@ def search_memories(
                     "snippet": make_snippet(row.get("summary") or row.get("title")),
                 }
             )
-        else:
+        elif kind == "document":
             doc = doc_lookup.get(item_id)
             if not doc:
                 continue
@@ -206,6 +234,21 @@ def search_memories(
                     "file_mime": doc.get("file_mime"),
                     "file_size": doc.get("file_size"),
                     "snippet": doc.get("snippet", ""),
+                }
+            )
+        else:
+            contact = contact_lookup.get(item_id)
+            if not contact:
+                continue
+            results.append(
+                {
+                    "id": contact["contact_id"],
+                    "kind": "contact",
+                    "display_name": contact.get("display_name"),
+                    "aliases": contact.get("aliases", []),
+                    "tags": contact.get("tags", []),
+                    "comments": contact.get("comments", ""),
+                    "snippet": contact.get("snippet", ""),
                 }
             )
 
@@ -229,6 +272,26 @@ def vector_search(query: str, k: int = 50):
             (qvec, qvec, k),
         )
         return {r["id"]: float(r["vscore"]) for r in cur.fetchall()}
+
+
+def vector_search_contacts(query: str, k: int = 20) -> list[tuple[str, float]]:
+    print(f"[retrieval] vector_search contacts (query={query!r}, k={k})")
+    cleaned_query = normalize_search_text(query)
+    if not cleaned_query:
+        return []
+    qvec = embed_text(cleaned_query)
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT contact_id, 1 - (comments_embed <=> %s::vector) AS vscore
+            FROM contacts
+            WHERE comments_embed IS NOT NULL
+            ORDER BY comments_embed <=> %s::vector
+            LIMIT %s
+            """,
+            (qvec, qvec, k),
+        )
+        return [(row["contact_id"], float(row["vscore"])) for row in cur.fetchall()]
 
 
 def bm25_search(query: str, k: int = 50):
@@ -348,6 +411,34 @@ def fetch_document_summaries(document_ids: Sequence[str]) -> dict[str, dict[str,
     return summaries
 
 
+def fetch_contact_summaries(contact_ids: Sequence[str]) -> dict[str, dict[str, Any]]:
+    if not contact_ids:
+        return {}
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT contact_id, display_name, aliases, tags, comments
+            FROM contacts
+            WHERE contact_id = ANY(%s)
+            """,
+            (list(contact_ids),),
+        )
+        rows = cur.fetchall()
+
+    summaries: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        snippet_source = row.get("comments") or ""
+        summaries[row["contact_id"]] = {
+            "contact_id": row["contact_id"],
+            "display_name": row.get("display_name"),
+            "aliases": row.get("aliases") or [],
+            "tags": row.get("tags") or [],
+            "comments": row.get("comments") or "",
+            "snippet": make_snippet(snippet_source, length=200),
+        }
+    return summaries
+
+
 def _isoformat(value: Any | None) -> str | None:
     if isinstance(value, datetime):
         return value.isoformat()
@@ -376,9 +467,7 @@ def run_pipeline(question: str, search_limit: int = 3) -> dict[str, Any]:
     ]
     detailed = events_service.get_events(event_ids)
     document_results = [
-        row
-        for row in results
-        if isinstance(row, dict) and row.get("kind") == "document"
+        row for row in results if isinstance(row, dict) and row.get("kind") == "document"
     ]
     return {
         "question": question,

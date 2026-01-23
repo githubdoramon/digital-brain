@@ -8,6 +8,7 @@ from typing import Any
 from uuid import uuid4
 
 from db import get_conn
+from embeddings import embed_text
 from schemas import ContactIn, ContactRelationshipIn, ExternalPerson
 
 __all__ = [
@@ -32,6 +33,8 @@ __all__ = [
     "get_relationship_type_mappings",
     "find_related_types",
 ]
+
+MAX_CONTACT_EMBED_CHARS = 4000
 
 
 def _upsert_contact_relationships(cur, contact_id: str, relationships: Sequence[Any]) -> None:
@@ -79,8 +82,76 @@ def _upsert_contact_relationships(cur, contact_id: str, relationships: Sequence[
         )
 
 
+def _generate_contact_embedding(contact: Any) -> list[float]:
+    def _get(field: str) -> Any:
+        if isinstance(contact, dict):
+            return contact.get(field)
+        return getattr(contact, field, None)
+
+    segments: list[str] = []
+
+    display_name = _get("display_name")
+    if isinstance(display_name, str):
+        cleaned = display_name.strip()
+        if cleaned:
+            segments.append(cleaned)
+
+    aliases = _get("aliases")
+    if isinstance(aliases, (list, tuple)):
+        formatted = ", ".join(
+            str(alias).strip() for alias in aliases if isinstance(alias, str) and alias.strip()
+        )
+        if formatted:
+            segments.append(f"aliases: {formatted}")
+
+    tags = _get("tags")
+    if isinstance(tags, (list, tuple)):
+        formatted = ", ".join(
+            str(tag).strip() for tag in tags if isinstance(tag, str) and tag.strip()
+        )
+        if formatted:
+            segments.append(f"tags: {formatted}")
+
+    comments = _get("comments")
+    if isinstance(comments, str):
+        cleaned = comments.strip()
+        if cleaned:
+            segments.append(cleaned)
+
+    if not segments:
+        fallback = _get("contact_id") or display_name or "contact"
+        segments.append(str(fallback))
+
+    combined = " ".join(segments).strip()
+    embed_source = (combined[:MAX_CONTACT_EMBED_CHARS] or "contact").strip()
+    return embed_text(embed_source)
+
+
 def ingest_contact(contact: ContactIn) -> None:
     with get_conn() as conn, conn.cursor() as cur:
+        effective_comments = contact.comments
+        if effective_comments is None:
+            cur.execute(
+                """
+                SELECT comments
+                FROM contacts
+                WHERE contact_id = %s
+                """,
+                (contact.contact_id,),
+            )
+            row = cur.fetchone()
+            if row:
+                effective_comments = row.get("comments")
+
+        embedding = _generate_contact_embedding(
+            {
+                "contact_id": contact.contact_id,
+                "display_name": contact.display_name,
+                "aliases": contact.aliases or [],
+                "tags": contact.tags or [],
+                "comments": effective_comments,
+            }
+        )
         cur.execute(
             """
             INSERT INTO contacts (
@@ -93,9 +164,10 @@ def ingest_contact(contact: ContactIn) -> None:
               links,
               tags,
               comments,
-              external_id
+              external_id,
+              comments_embed
             )
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT (contact_id) DO UPDATE
               SET display_name = EXCLUDED.display_name,
                   aliases = EXCLUDED.aliases,
@@ -105,7 +177,8 @@ def ingest_contact(contact: ContactIn) -> None:
                   links = EXCLUDED.links,
                   tags = EXCLUDED.tags,
                   comments = COALESCE(EXCLUDED.comments, contacts.comments),
-                  external_id = COALESCE(EXCLUDED.external_id, contacts.external_id)
+                  external_id = COALESCE(EXCLUDED.external_id, contacts.external_id),
+                  comments_embed = EXCLUDED.comments_embed
             """,
             (
                 contact.contact_id,
@@ -118,6 +191,7 @@ def ingest_contact(contact: ContactIn) -> None:
                 contact.tags or [],
                 contact.comments,
                 getattr(contact, "external_id", None),
+                embedding,
             ),
         )
         _upsert_contact_relationships(
@@ -323,7 +397,9 @@ def _is_default_external_display(name: str | None, external_id: str) -> bool:
     return name.strip().lower() == expected
 
 
-def sync_external_contact(record: ExternalPerson, previous: ExternalPerson | None = None) -> dict[str, Any]:
+def sync_external_contact(
+    record: ExternalPerson, previous: ExternalPerson | None = None
+) -> dict[str, Any]:
     external_id = str(record.id).strip()
     if not external_id:
         raise ValueError("External contact id is required")
@@ -482,6 +558,15 @@ def merge_contacts(primary_contact_id: str, duplicate_contact_id: str) -> dict[s
         final_display_name = primary["display_name"] or duplicate["display_name"]
         final_birthday = primary["birthday"] or duplicate["birthday"]
         final_external_id = primary["external_id"] or duplicate["external_id"]
+        merged_embedding = _generate_contact_embedding(
+            {
+                "contact_id": primary_contact_id,
+                "display_name": final_display_name,
+                "aliases": merged_aliases,
+                "tags": merged_tags,
+                "comments": merged_comments,
+            }
+        )
 
         if final_external_id and duplicate["external_id"] == final_external_id:
             cur.execute(
@@ -504,7 +589,8 @@ def merge_contacts(primary_contact_id: str, duplicate_contact_id: str) -> dict[s
                 links = %s,
                 tags = %s,
                 comments = %s,
-                external_id = %s
+                external_id = %s,
+                comments_embed = %s
             WHERE contact_id = %s
             """,
             (
@@ -517,6 +603,7 @@ def merge_contacts(primary_contact_id: str, duplicate_contact_id: str) -> dict[s
                 merged_tags,
                 merged_comments,
                 final_external_id,
+                merged_embedding,
                 primary_contact_id,
             ),
         )
@@ -914,18 +1001,25 @@ def search_contacts(
                 # We DO want "Ed" to match "Ed Smith" (complete word in multi-word query)
                 if name in query_lower:
                     # Only match if query has spaces (multi-word) and name is a complete word
-                    if ' ' in query_lower:
+                    if " " in query_lower:
                         name_len = len(name)
                         name_pos = query_lower.find(name)
 
                         # Check if name appears as a complete word (surrounded by spaces or at edges)
                         at_start = name_pos == 0
                         at_end = name_pos + name_len == len(query_lower)
-                        preceded_by_space = name_pos > 0 and query_lower[name_pos - 1] == ' '
-                        followed_by_space = name_pos + name_len < len(query_lower) and query_lower[name_pos + name_len] == ' '
+                        preceded_by_space = name_pos > 0 and query_lower[name_pos - 1] == " "
+                        followed_by_space = (
+                            name_pos + name_len < len(query_lower)
+                            and query_lower[name_pos + name_len] == " "
+                        )
 
                         # Must be at start/end with space on other side, or surrounded by spaces
-                        is_complete_word = (at_start and followed_by_space) or (at_end and preceded_by_space) or (preceded_by_space and followed_by_space)
+                        is_complete_word = (
+                            (at_start and followed_by_space)
+                            or (at_end and preceded_by_space)
+                            or (preceded_by_space and followed_by_space)
+                        )
 
                         if is_complete_word:
                             score = 90
@@ -1123,7 +1217,9 @@ def _get_search_suggestions(query: str) -> list[str]:
     return ["Try searching with a different name or check the spelling."]
 
 
-def _collect_contact_relationships(contact_ids: Iterable[str] | None = None) -> dict[str, list[dict[str, Any]]]:
+def _collect_contact_relationships(
+    contact_ids: Iterable[str] | None = None,
+) -> dict[str, list[dict[str, Any]]]:
     conditions = []
     params: list[Any] = []
     if contact_ids:
@@ -1217,25 +1313,21 @@ def get_relationship_type_mappings() -> dict[str, list[str]]:
         "daughter": ["child", "daughter"],
         "son": ["child", "son"],
         "child": ["child", "daughter", "son"],
-
         # Family - spouse/partner
         "wife": ["spouse", "partner", "wife"],
         "husband": ["spouse", "partner", "husband"],
         "spouse": ["spouse", "partner", "wife", "husband"],
         "partner": ["partner", "spouse"],
-
         # Family - parents
         "mother": ["parent", "mother"],
         "father": ["parent", "father"],
         "parent": ["parent", "mother", "father"],
         "mom": ["parent", "mother"],
         "dad": ["parent", "father"],
-
         # Family - siblings
         "brother": ["sibling", "brother"],
         "sister": ["sibling", "sister"],
         "sibling": ["sibling", "brother", "sister"],
-
         # Family - extended
         "grandmother": ["grandparent", "grandmother"],
         "grandfather": ["grandparent", "grandfather"],
@@ -1250,7 +1342,6 @@ def get_relationship_type_mappings() -> dict[str, list[str]]:
         "nephew": ["nephew", "niece"],
         "niece": ["niece", "nephew"],
         "cousin": ["cousin"],
-
         # Family - step relationships
         "stepfather": ["stepfather", "stepparent"],
         "stepmother": ["stepmother", "stepparent"],
@@ -1261,7 +1352,6 @@ def get_relationship_type_mappings() -> dict[str, list[str]]:
         "stepbrother": ["stepbrother", "stepsibling"],
         "stepsister": ["stepsister", "stepsibling"],
         "stepsibling": ["stepbrother", "stepsister", "stepsibling"],
-
         # Family - in-laws
         "father-in-law": ["father-in-law", "parent-in-law"],
         "mother-in-law": ["mother-in-law", "parent-in-law"],
@@ -1272,7 +1362,6 @@ def get_relationship_type_mappings() -> dict[str, list[str]]:
         "brother-in-law": ["brother-in-law", "sibling-in-law"],
         "sister-in-law": ["sister-in-law", "sibling-in-law"],
         "sibling-in-law": ["brother-in-law", "sister-in-law", "sibling-in-law"],
-
         # Professional - medical
         "doctor": ["doctor", "physician", "dr", "dr."],
         "physician": ["doctor", "physician"],
@@ -1283,12 +1372,10 @@ def get_relationship_type_mappings() -> dict[str, list[str]]:
         "optometrist": ["optometrist"],
         "psychiatrist": ["psychiatrist", "therapist"],
         "therapist": ["therapist", "psychiatrist"],
-
         # Professional - legal/financial
         "lawyer": ["lawyer", "attorney"],
         "attorney": ["lawyer", "attorney"],
         "accountant": ["accountant"],
-
         # Professional - work
         "colleague": ["colleague", "co-worker", "coworker"],
         "coworker": ["colleague", "co-worker", "coworker"],
@@ -1301,7 +1388,6 @@ def get_relationship_type_mappings() -> dict[str, list[str]]:
         "customer": ["client", "customer"],
         "vendor": ["vendor", "supplier"],
         "supplier": ["vendor", "supplier"],
-
         # Professional - education
         "teacher": ["teacher", "instructor"],
         "professor": ["professor", "instructor"],
@@ -1310,7 +1396,6 @@ def get_relationship_type_mappings() -> dict[str, list[str]]:
         "mentor": ["mentor"],
         "student": ["student"],
         "classmate": ["classmate"],
-
         # Professional - service providers
         "mechanic": ["mechanic"],
         "plumber": ["plumber"],
@@ -1319,13 +1404,11 @@ def get_relationship_type_mappings() -> dict[str, list[str]]:
         "hairdresser": ["hairdresser", "barber", "stylist"],
         "barber": ["barber", "hairdresser"],
         "stylist": ["stylist", "hairdresser"],
-
         # Caregivers
         "babysitter": ["babysitter", "nanny"],
         "nanny": ["nanny", "babysitter"],
         "caregiver": ["caregiver", "aide"],
         "aide": ["aide", "caregiver"],
-
         # Social
         "friend": ["friend"],
         "neighbor": ["neighbor"],

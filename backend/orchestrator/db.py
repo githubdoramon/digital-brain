@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import os
-from collections.abc import Iterator
 from contextlib import contextmanager
+from typing import Any, cast
 
 import psycopg
 from psycopg import sql
@@ -28,16 +28,15 @@ def _set_search_path(conn: psycopg.Connection) -> None:
         return
     with conn.cursor() as cur:
         cur.execute(
-            sql.SQL("SET search_path TO {}, public").format(
-                sql.Identifier(POSTGRES_SCHEMA)
-            )
+            sql.SQL("SET search_path TO {}, public").format(sql.Identifier(POSTGRES_SCHEMA))
         )
 
+
 @contextmanager
-def get_conn() -> Iterator[psycopg.Connection]:
+def get_conn():
     if not POSTGRES_PASSWORD:
         raise RuntimeError("POSTGRES_PASSWORD environment variable is not set")
-    conn = psycopg.connect(DB_DSN, row_factory=dict_row)
+    conn = psycopg.connect(DB_DSN, row_factory=cast(Any, dict_row))  # type: ignore[arg-type]
     _set_search_path(conn)
     try:
         yield conn
@@ -67,7 +66,7 @@ def fetch_events(ids: list[str]):
             """,
             (ids,),
         )
-        rows = cur.fetchall()
+        rows: list[dict[str, Any]] = [dict(row) for row in cur.fetchall()]
     index = {id_: i for i, id_ in enumerate(ids)}
     rows.sort(key=lambda r: index[r["id"]])
     return rows

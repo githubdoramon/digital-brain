@@ -1,18 +1,19 @@
 #!/usr/bin/env python3
 """
-Re-embed all events and documents with the new nomic-embed-text-v2-moe model.
+Re-embed all events, documents, and contacts with the new nomic-embed-text-v2-moe model.
 
 This script regenerates embeddings for all records in the database using the
 new embedding model with proper task prefixes (search_document).
 
 Usage:
-    python scripts/reembed_all.py [--batch-size N] [--events-only] [--documents-only] [--dry-run]
+    python scripts/reembed_all.py [--batch-size N] [--events-only] [--documents-only] [--contacts-only] [--dry-run]
 
 Options:
     --batch-size N      Number of records to process per batch (default: 100)
     --events-only       Only re-embed events
     --documents-only    Only re-embed documents
     --dry-run           Show what would be done without making changes
+    --contacts-only     Only re-embed contacts
 """
 
 from __future__ import annotations
@@ -23,13 +24,9 @@ import os
 import sys
 import time
 from collections.abc import Sequence
-from typing import Any
+from typing import Any, cast
 
-from dotenv import load_dotenv
-
-load_dotenv('../.env')  # Load from backend/.env
-
-# Add parent directory to path for imports
+# Add paret directory to path for imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from db import get_conn  # noqa: E402
@@ -38,6 +35,7 @@ from embeddings import embed_text  # noqa: E402
 # Constants - nomic-embed-text v1 has 8192 token context
 MAX_EVENT_EMBED_CHARS = 6000
 MAX_DOCUMENT_EMBED_CHARS = 8000
+MAX_CONTACT_EMBED_CHARS = 4000
 
 
 def generate_event_embed_text(event: dict[str, Any]) -> str:
@@ -54,7 +52,9 @@ def generate_event_embed_text(event: dict[str, Any]) -> str:
 
     tags = event.get("tags")
     if isinstance(tags, (list, tuple)):
-        formatted = ", ".join(str(tag).strip() for tag in tags if isinstance(tag, str) and tag.strip())
+        formatted = ", ".join(
+            str(tag).strip() for tag in tags if isinstance(tag, str) and tag.strip()
+        )
         if formatted:
             segments.append(f"tags: {formatted}")
 
@@ -102,7 +102,9 @@ def generate_document_embed_text(document: dict[str, Any]) -> str:
 
     tags = document.get("tags")
     if isinstance(tags, (list, tuple)):
-        tag_text = " ".join(str(tag).strip() for tag in tags if isinstance(tag, str) and tag.strip())
+        tag_text = " ".join(
+            str(tag).strip() for tag in tags if isinstance(tag, str) and tag.strip()
+        )
         if tag_text:
             segments.append(tag_text)
 
@@ -126,12 +128,51 @@ def generate_document_embed_text(document: dict[str, Any]) -> str:
     return combined[:MAX_DOCUMENT_EMBED_CHARS] or "document"
 
 
+def generate_contact_embed_text(contact: dict[str, Any]) -> str:
+    """Generate the text to embed for a contact (mirrors contact embedding logic)."""
+    segments: list[str] = []
+
+    display_name = contact.get("display_name")
+    if isinstance(display_name, str) and display_name.strip():
+        segments.append(display_name.strip())
+
+    aliases = contact.get("aliases")
+    if isinstance(aliases, (list, tuple)):
+        alias_text = ", ".join(
+            str(alias).strip() for alias in aliases if isinstance(alias, str) and alias.strip()
+        )
+        if alias_text:
+            segments.append(f"aliases: {alias_text}")
+
+    tags = contact.get("tags")
+    if isinstance(tags, (list, tuple)):
+        tag_text = ", ".join(
+            str(tag).strip() for tag in tags if isinstance(tag, str) and tag.strip()
+        )
+        if tag_text:
+            segments.append(f"tags: {tag_text}")
+
+    comments = contact.get("comments")
+    if isinstance(comments, str) and comments.strip():
+        segments.append(comments.strip())
+
+    if not segments:
+        fallback = contact.get("contact_id") or "contact"
+        segments.append(str(fallback))
+
+    combined = " ".join(segments).strip()
+    return combined[:MAX_CONTACT_EMBED_CHARS] or "contact"
+
+
 def count_records(table: str, id_col: str) -> int:
     """Count total records in a table."""
     with get_conn() as conn, conn.cursor() as cur:
-        cur.execute(f"SELECT COUNT(*) as cnt FROM {table}")
+        cur.execute(cast(Any, f"SELECT COUNT(*) as cnt FROM {table}"))
         row = cur.fetchone()
-        return row["cnt"] if row else 0
+        if not row:
+            return 0
+        row_dict = cast(dict[str, Any], row)
+        return int(row_dict.get("cnt", 0))
 
 
 def fetch_events_batch(offset: int, limit: int) -> list[dict[str, Any]]:
@@ -146,7 +187,7 @@ def fetch_events_batch(offset: int, limit: int) -> list[dict[str, Any]]:
             """,
             (offset, limit),
         )
-        return list(cur.fetchall())
+        return [dict(row) for row in cur.fetchall()]
 
 
 def fetch_documents_batch(offset: int, limit: int) -> list[dict[str, Any]]:
@@ -161,7 +202,22 @@ def fetch_documents_batch(offset: int, limit: int) -> list[dict[str, Any]]:
             """,
             (offset, limit),
         )
-        return list(cur.fetchall())
+        return [dict(row) for row in cur.fetchall()]
+
+
+def fetch_contacts_batch(offset: int, limit: int) -> list[dict[str, Any]]:
+    """Fetch a batch of contacts."""
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT contact_id, display_name, aliases, tags, comments
+            FROM contacts
+            ORDER BY contact_id
+            OFFSET %s LIMIT %s
+            """,
+            (offset, limit),
+        )
+        return [dict(row) for row in cur.fetchall()]
 
 
 def update_event_embedding(event_id: str, embedding: Sequence[float]) -> None:
@@ -180,6 +236,16 @@ def update_document_embedding(document_id: str, embedding: Sequence[float]) -> N
         cur.execute(
             "UPDATE documents SET content_embed = %s::vector WHERE document_id = %s",
             (list(embedding), document_id),
+        )
+        conn.commit()
+
+
+def update_contact_embedding(contact_id: str, embedding: Sequence[float]) -> None:
+    """Update the embedding for a single contact."""
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            "UPDATE contacts SET comments_embed = %s::vector WHERE contact_id = %s",
+            (list(embedding), contact_id),
         )
         conn.commit()
 
@@ -215,7 +281,9 @@ def reembed_events(batch_size: int, dry_run: bool) -> int:
                 processed += 1
 
                 if processed % 10 == 0:
-                    print(f"  [events] Processed {processed}/{total} ({100*processed/total:.1f}%)")
+                    print(
+                        f"  [events] Processed {processed}/{total} ({100 * processed / total:.1f}%)"
+                    )
 
             except Exception as e:
                 print(f"  [events] ERROR processing event {event_id}: {e}")
@@ -262,7 +330,9 @@ def reembed_documents(batch_size: int, dry_run: bool) -> int:
                 processed += 1
 
                 if processed % 10 == 0:
-                    print(f"  [documents] Processed {processed}/{total} ({100*processed/total:.1f}%)")
+                    print(
+                        f"  [documents] Processed {processed}/{total} ({100 * processed / total:.1f}%)"
+                    )
 
             except Exception as e:
                 print(f"  [documents] ERROR processing document {doc_id}: {e}")
@@ -275,6 +345,57 @@ def reembed_documents(batch_size: int, dry_run: bool) -> int:
             time.sleep(0.1)
 
     print(f"[documents] Completed: {processed} processed, {failed} failed")
+    return processed
+
+
+def reembed_contacts(batch_size: int, dry_run: bool) -> int:
+    """Re-embed all contacts. Returns count of processed records."""
+    total = count_records("contacts", "contact_id")
+    print(f"\n[contacts] Found {total} contacts to re-embed")
+
+    if total == 0:
+        return 0
+
+    processed = 0
+    failed = 0
+    offset = 0
+
+    while offset < total:
+        batch = fetch_contacts_batch(offset, batch_size)
+        if not batch:
+            break
+
+        for contact in batch:
+            contact_id = contact["contact_id"]
+            try:
+                embed_text_str = generate_contact_embed_text(contact)
+
+                if dry_run:
+                    print(
+                        f"  [dry-run] Would re-embed contact {contact_id}: {embed_text_str[:80]}..."
+                    )
+                else:
+                    embedding = embed_text(embed_text_str)
+                    update_contact_embedding(contact_id, embedding)
+
+                processed += 1
+
+                if processed % 10 == 0:
+                    print(
+                        f"  [contacts] Processed {processed}/{total} ({100 * processed / total:.1f}%)"
+                    )
+
+            except Exception as e:
+                print(f"  [contacts] ERROR processing contact {contact_id}: {e}")
+                failed += 1
+
+        offset += batch_size
+
+        # Small delay to avoid overwhelming the embedding service
+        if not dry_run:
+            time.sleep(0.1)
+
+    print(f"[contacts] Completed: {processed} processed, {failed} failed")
     return processed
 
 
@@ -299,6 +420,11 @@ def main():
         help="Only re-embed documents",
     )
     parser.add_argument(
+        "--contacts-only",
+        action="store_true",
+        help="Only re-embed contacts",
+    )
+    parser.add_argument(
         "--dry-run",
         action="store_true",
         help="Show what would be done without making changes",
@@ -319,11 +445,17 @@ def main():
     start_time = time.time()
     total_processed = 0
 
-    if not args.documents_only:
-        total_processed += reembed_events(args.batch_size, args.dry_run)
+    if args.contacts_only:
+        total_processed += reembed_contacts(args.batch_size, args.dry_run)
+    else:
+        if not args.documents_only:
+            total_processed += reembed_events(args.batch_size, args.dry_run)
 
-    if not args.events_only:
-        total_processed += reembed_documents(args.batch_size, args.dry_run)
+        if not args.events_only:
+            total_processed += reembed_documents(args.batch_size, args.dry_run)
+
+        if not args.events_only and not args.documents_only:
+            total_processed += reembed_contacts(args.batch_size, args.dry_run)
 
     elapsed = time.time() - start_time
     print("\n" + "=" * 60)

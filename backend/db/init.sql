@@ -18,12 +18,17 @@ CREATE TABLE IF NOT EXISTS contacts (
   links TEXT[] DEFAULT '{}'::TEXT[],
   tags TEXT[] DEFAULT '{}'::TEXT[],
   comments TEXT,
-  external_id TEXT UNIQUE
+  external_id TEXT UNIQUE,
+  comments_embed VECTOR(768)
 );
 
 ALTER TABLE contacts
   ADD COLUMN IF NOT EXISTS comments TEXT,
-  ADD COLUMN IF NOT EXISTS external_id TEXT UNIQUE;
+  ADD COLUMN IF NOT EXISTS external_id TEXT UNIQUE,
+  ADD COLUMN IF NOT EXISTS comments_embed VECTOR(768);
+
+CREATE INDEX IF NOT EXISTS idx_contacts_comments_embed
+  ON contacts USING ivfflat (comments_embed) WITH (lists = 100);
 
 -- Contact relationships (flexible graph between contacts)
 CREATE TABLE IF NOT EXISTS contact_relationships (
