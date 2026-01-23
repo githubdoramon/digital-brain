@@ -11,7 +11,7 @@ from typing import Any
 from unittest.mock import MagicMock, patch
 
 # Add parent directory to path
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../..'))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../.."))
 
 
 def mock_call_llm_json(prompt: str, **kwargs) -> dict[str, Any]:
@@ -27,6 +27,7 @@ def mock_call_llm_json(prompt: str, **kwargs) -> dict[str, Any]:
         # Extract the actual text being analyzed from the prompt
         # Look for Text: "..." pattern
         import re
+
         text_match = re.search(r'text:\s*"([^"]+)"', prompt_lower)
         text_content = text_match.group(1) if text_match else prompt_lower
 
@@ -45,6 +46,8 @@ def mock_call_llm_json(prompt: str, **kwargs) -> dict[str, Any]:
             # Ambiguous case - "her" refers to doctor but this is ownership, not nested relationship
             # Should NOT resolve to "the doctor's patient"
             return {"people": ["the doctor", "her patient"]}
+        elif "i took mira to her eye doctor" in text_content and "dr. nash" in text_content:
+            return {"people": ["user", "Mira", "Dr. Nash"]}
         elif "had lunch with john smith" in text_content:
             # User is participant (having lunch)
             return {"people": ["user", "John Smith"]}
@@ -64,13 +67,13 @@ def mock_call_llm_json(prompt: str, **kwargs) -> dict[str, Any]:
                 "decision": "resolved",
                 "candidate_number": 1,
                 "confidence": "high",
-                "reasoning": "Test mock always picks first candidate"
+                "reasoning": "Test mock always picks first candidate",
             }
         return {
             "decision": "cannot_decide",
             "candidate_number": None,
             "confidence": "low",
-            "reasoning": "No candidates provided"
+            "reasoning": "No candidates provided",
         }
 
     return {}
@@ -79,16 +82,16 @@ def mock_call_llm_json(prompt: str, **kwargs) -> dict[str, Any]:
 # Patch the LLM helper module before importing anything
 mock_llm_helpers = MagicMock()
 mock_llm_helpers.call_llm_json = mock_call_llm_json
-sys.modules['llm_helpers'] = mock_llm_helpers
+sys.modules["llm_helpers"] = mock_llm_helpers
 
 # Mock contacts module before importing
 mock_contacts_module = MagicMock()
 # Set up find_self_contact to return a proper user contact
 mock_contacts_module.find_self_contact.return_value = {
     "contact_id": "user-123",
-    "display_name": "Test User"
+    "display_name": "Test User",
 }
-sys.modules['contacts'] = mock_contacts_module
+sys.modules["contacts"] = mock_contacts_module
 
 # Now import after mocking
 from agents.contacts.resolver import (  # noqa: E402
@@ -181,17 +184,23 @@ def test_extract_people_from_text():
     assert "the doctor" in people
     assert "her patient" in people or "the doctor's patient" not in people  # Should NOT nest
 
+    # Test generic role overridden by named person later in text
+    people = extract_people_from_text(
+        "Yesterday I took Mira to her eye doctor. Additional details: Ah, it was at 14:00, "
+        "and the doc name is Dr. Nash"
+    )
+    assert "Test User" in people
+    assert "Mira" in people
+    assert "Dr. Nash" in people
+    assert "Mira's eye doctor" not in people
 
-@patch('agents.contacts.resolver.contacts_service')
+
+@patch("agents.contacts.resolver.contacts_service")
 def test_resolve_contact_direct_name(mock_contacts):
     """Test resolving a contact by direct name match."""
     # Mock search returning a single match
     mock_contacts.search_contacts.return_value = [
-        {
-            "contact_id": "contact-123",
-            "display_name": "John Smith",
-            "match_score": 95
-        }
+        {"contact_id": "contact-123", "display_name": "John Smith", "match_score": 95}
     ]
     # Mock find_self_contact
     mock_contacts.find_self_contact.return_value = None
@@ -207,13 +216,13 @@ def test_resolve_contact_direct_name(mock_contacts):
     assert result["matched_via"] == "direct_match"
 
 
-@patch('agents.contacts.resolver.contacts_service')
+@patch("agents.contacts.resolver.contacts_service")
 def test_resolve_contact_relationship(mock_contacts):
     """Test resolving a contact by relationship."""
     # Mock user contact
     mock_contacts.find_self_contact.return_value = {
         "contact_id": "user-contact-123",
-        "display_name": "Test User"
+        "display_name": "Test User",
     }
 
     # Mock relationships - user has a daughter
@@ -222,10 +231,7 @@ def test_resolve_contact_relationship(mock_contacts):
         "relationships": [
             {
                 "type": "child",
-                "related_contact": {
-                    "contact_id": "child-123",
-                    "display_name": "Emma Smith"
-                }
+                "related_contact": {"contact_id": "child-123", "display_name": "Emma Smith"},
             }
         ]
     }
@@ -244,13 +250,13 @@ def test_resolve_contact_relationship(mock_contacts):
     assert result["matched_via"] == "relationship"
 
 
-@patch('agents.contacts.resolver.contacts_service')
+@patch("agents.contacts.resolver.contacts_service")
 def test_resolve_contact_nested_relationship(mock_contacts):
     """Test resolving nested relationships like 'my daughter's doctor'."""
     # Mock user contact
     mock_contacts.find_self_contact.return_value = {
         "contact_id": "user-contact-123",
-        "display_name": "Test User"
+        "display_name": "Test User",
     }
 
     # Mock user's relationships - has a daughter
@@ -264,8 +270,8 @@ def test_resolve_contact_nested_relationship(mock_contacts):
                         "type": "child",
                         "related_contact": {
                             "contact_id": "child-123",
-                            "display_name": "Emma Smith"
-                        }
+                            "display_name": "Emma Smith",
+                        },
                     }
                 ]
             }
@@ -277,8 +283,8 @@ def test_resolve_contact_nested_relationship(mock_contacts):
                         "type": "doctor",
                         "related_contact": {
                             "contact_id": "doctor-456",
-                            "display_name": "Dr. Jane Jones"
-                        }
+                            "display_name": "Dr. Jane Jones",
+                        },
                     }
                 ]
             }
@@ -312,13 +318,13 @@ def test_resolve_contact_nested_relationship(mock_contacts):
         assert result["matched_via"] == "nested_relationship"
 
 
-@patch('agents.contacts.resolver.contacts_service')
+@patch("agents.contacts.resolver.contacts_service")
 def test_resolve_contact_nested_directional(mock_contacts):
     """Test that nested relationships respect directionality of type/other_type."""
     # Mock user contact
     mock_contacts.find_self_contact.return_value = {
         "contact_id": "user-contact-123",
-        "display_name": "Test User"
+        "display_name": "Test User",
     }
 
     # Mock user's relationships - has a wife
@@ -329,10 +335,7 @@ def test_resolve_contact_nested_directional(mock_contacts):
                 "relationships": [
                     {
                         "type": "spouse",
-                        "related_contact": {
-                            "contact_id": "wife-123",
-                            "display_name": "Jane Doe"
-                        }
+                        "related_contact": {"contact_id": "wife-123", "display_name": "Jane Doe"},
                     }
                 ]
             }
@@ -345,8 +348,8 @@ def test_resolve_contact_nested_directional(mock_contacts):
                         "other_type": "mother",  # Mother's perspective: she is mother of wife
                         "related_contact": {
                             "contact_id": "mother-in-law-456",
-                            "display_name": "Mary Johnson"
-                        }
+                            "display_name": "Mary Johnson",
+                        },
                     }
                 ]
             }
@@ -376,14 +379,14 @@ def test_resolve_contact_nested_directional(mock_contacts):
     assert result["matched_via"] == "nested_relationship"
 
 
-@patch('agents.contacts.resolver.contacts_service')
+@patch("agents.contacts.resolver.contacts_service")
 def test_resolve_contact_not_found(mock_contacts):
     """Test when contact cannot be resolved."""
     # Mock search returning no results
     mock_contacts.search_contacts.return_value = []
     mock_contacts.find_self_contact.return_value = {
         "contact_id": "user-contact-123",
-        "display_name": "Test User"
+        "display_name": "Test User",
     }
     mock_contacts.get_contact_relationships.return_value = {"relationships": []}
 
@@ -395,26 +398,18 @@ def test_resolve_contact_not_found(mock_contacts):
     assert result["confidence"] == "low"
 
 
-@patch('agents.contacts.resolver.contacts_service')
+@patch("agents.contacts.resolver.contacts_service")
 def test_resolve_contact_ambiguous(mock_contacts):
     """Test when multiple contacts match and need disambiguation."""
     # Mock search returning multiple matches with similar scores
     mock_contacts.search_contacts.return_value = [
-        {
-            "contact_id": "contact-1",
-            "display_name": "John Smith",
-            "match_score": 85
-        },
-        {
-            "contact_id": "contact-2",
-            "display_name": "John Smithson",
-            "match_score": 83
-        }
+        {"contact_id": "contact-1", "display_name": "John Smith", "match_score": 85},
+        {"contact_id": "contact-2", "display_name": "John Smithson", "match_score": 83},
     ]
 
     mock_contacts.find_self_contact.return_value = {
         "contact_id": "user-contact-123",
-        "display_name": "Test User"
+        "display_name": "Test User",
     }
 
     mock_contacts.get_contact_relationships.return_value = {"relationships": []}
@@ -426,38 +421,29 @@ def test_resolve_contact_ambiguous(mock_contacts):
     assert len(result["candidates"]) == 2
 
 
-@patch('agents.contacts.resolver.contacts_service')
+@patch("agents.contacts.resolver.contacts_service")
 def test_resolve_contacts_from_text(mock_contacts):
     """Test the complete pipeline: extract + resolve."""
     # Mock user contact
     mock_contacts.find_self_contact.return_value = {
         "contact_id": "user-contact-123",
-        "display_name": "Test User"
+        "display_name": "Test User",
     }
 
     # Mock search - return different results based on query
     def mock_search(query, **kwargs):
         if "Test User" in query:
-            return [{
-                "contact_id": "user-contact-123",
-                "display_name": "Test User",
-                "match_score": 100
-            }]
+            return [
+                {"contact_id": "user-contact-123", "display_name": "Test User", "match_score": 100}
+            ]
         elif "John Smith" in query:
-            return [{
-                "contact_id": "contact-123",
-                "display_name": "John Smith",
-                "match_score": 95
-            }]
+            return [{"contact_id": "contact-123", "display_name": "John Smith", "match_score": 95}]
         return []
 
     mock_contacts.search_contacts.side_effect = mock_search
     mock_contacts.get_contact_relationships.return_value = {"relationships": []}
 
-    result = resolve_contacts_from_text(
-        "Had lunch with John Smith yesterday",
-        "user@example.com"
-    )
+    result = resolve_contacts_from_text("Had lunch with John Smith yesterday", "user@example.com")
 
     assert result["text"] == "Had lunch with John Smith yesterday"
     # Should include both user (as participant) and John Smith
@@ -465,18 +451,20 @@ def test_resolve_contacts_from_text(mock_contacts):
     assert "John Smith" in result["people_mentioned"]
     assert len(result["resolved_contacts"]) >= 1
     # Find John Smith in resolved contacts
-    john_smith_resolved = [r for r in result["resolved_contacts"] if r["display_name"] == "John Smith"]
+    john_smith_resolved = [
+        r for r in result["resolved_contacts"] if r["display_name"] == "John Smith"
+    ]
     assert len(john_smith_resolved) == 1
     assert john_smith_resolved[0]["contact_id"] == "contact-123"
 
 
-@patch('agents.contacts.resolver.contacts_service')
+@patch("agents.contacts.resolver.contacts_service")
 def test_resolve_contacts_mixed_results(mock_contacts):
     """Test resolution with mixed results: some resolved, some new, some ambiguous."""
     # Mock user contact
     mock_contacts.find_self_contact.return_value = {
         "contact_id": "user-contact-123",
-        "display_name": "Test User"
+        "display_name": "Test User",
     }
 
     mock_contacts.get_contact_relationships.return_value = {"relationships": []}
@@ -484,27 +472,22 @@ def test_resolve_contacts_mixed_results(mock_contacts):
     # Mock search - first call returns match, second returns nothing, third returns multiple
     mock_contacts.search_contacts.side_effect = [
         # First person: resolved
-        [{
-            "contact_id": "contact-123",
-            "display_name": "John Smith",
-            "match_score": 95
-        }],
+        [{"contact_id": "contact-123", "display_name": "John Smith", "match_score": 95}],
         # Second person: not found
         [],
         # Third person: ambiguous
         [
             {"contact_id": "c1", "display_name": "Dr. Jones", "match_score": 85},
-            {"contact_id": "c2", "display_name": "Dr. Johnson", "match_score": 83}
-        ]
+            {"contact_id": "c2", "display_name": "Dr. Johnson", "match_score": 83},
+        ],
     ]
 
     # Mock extraction to return 3 people
-    with patch('agents.contacts.resolver.extract_people_from_text') as mock_extract:
+    with patch("agents.contacts.resolver.extract_people_from_text") as mock_extract:
         mock_extract.return_value = ["John Smith", "Unknown Person", "Dr. Jones"]
 
         result = resolve_contacts_from_text(
-            "Saw John Smith, Unknown Person, and Dr. Jones",
-            "user@example.com"
+            "Saw John Smith, Unknown Person, and Dr. Jones", "user@example.com"
         )
 
         # Note: The LLM disambiguation works in tests because we have event context,
@@ -552,5 +535,6 @@ def run_manual_tests():
 
 if __name__ == "__main__":
     import sys
+
     success = run_manual_tests()
     sys.exit(0 if success else 1)

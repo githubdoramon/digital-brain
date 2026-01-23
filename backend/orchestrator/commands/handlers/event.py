@@ -108,7 +108,7 @@ Return ONLY valid JSON in this exact format:
 
     try:
         print("[event_extraction] Calling LLM for extraction...")
-        extracted = call_llm_json(extraction_prompt, timeout=30)
+        extracted = call_llm_json(extraction_prompt, timeout=60)
 
         print("[event_extraction] Raw LLM response:")
         print(f"  - Title: {extracted.get('title')}")
