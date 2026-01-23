@@ -328,7 +328,7 @@ def parse_session_command(message: str) -> tuple[bool, str]:
         if body_lower == trigger:
             return (True, "")
         if body_lower.startswith(f"{trigger} "):
-            return (True, body[len(trigger):].strip())
+            return (True, body[len(trigger) :].strip())
     return (False, body)
 
 
@@ -384,6 +384,13 @@ def _upsert_main_session(user_email: str, thread_id: str) -> None:
             (user_email, thread_id),
         )
         conn.commit()
+
+
+def set_main_session_thread(user_email: str, thread_id: str) -> None:
+    """Set the main session thread explicitly."""
+    if not user_email or not thread_id:
+        return
+    _upsert_main_session(user_email, thread_id)
 
 
 def _touch_main_session(user_email: str) -> None:
@@ -488,4 +495,3 @@ def resolve_main_session(
         return (thread, True, stripped_body)
 
     return (thread, False, stripped_body)
-

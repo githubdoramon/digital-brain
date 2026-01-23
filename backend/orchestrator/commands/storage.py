@@ -14,6 +14,7 @@ _command_storage: dict[str, tuple[dict[str, Any], float]] = {}
 _storage_lock = Lock()
 
 _pending_event_storage: dict[str, tuple[str, float]] = {}
+_command_thread_storage: dict[str, tuple[str, float]] = {}
 
 # Preview data expires after 30 minutes
 PREVIEW_EXPIRATION_SECONDS = 30 * 60
@@ -104,6 +105,51 @@ def clear_pending_event_by_preview_id(preview_id: str) -> None:
             _pending_event_storage.pop(key, None)
 
 
+def store_command_thread(key: str, thread_id: str) -> None:
+    with _storage_lock:
+        _clean_command_thread_expired()
+        _command_thread_storage[key] = (thread_id, time.time())
+
+
+def get_command_thread(key: str) -> Optional[str]:
+    with _storage_lock:
+        entry = _command_thread_storage.get(key)
+        if not entry:
+            return None
+
+        thread_id, stored_at = entry
+        if time.time() - stored_at > PREVIEW_EXPIRATION_SECONDS:
+            _command_thread_storage.pop(key, None)
+            return None
+
+        return thread_id
+
+
+def is_command_thread(thread_id: str) -> bool:
+    with _storage_lock:
+        _clean_command_thread_expired()
+        return any(
+            stored_thread_id == thread_id
+            for stored_thread_id, _ in _command_thread_storage.values()
+        )
+
+
+def clear_command_thread(key: str) -> None:
+    with _storage_lock:
+        _command_thread_storage.pop(key, None)
+
+
+def clear_command_thread_by_id(thread_id: str) -> None:
+    with _storage_lock:
+        keys_to_remove = [
+            key
+            for key, (stored_thread_id, _) in _command_thread_storage.items()
+            if stored_thread_id == thread_id
+        ]
+        for key in keys_to_remove:
+            _command_thread_storage.pop(key, None)
+
+
 def _clean_expired() -> None:
     """Clean up expired entries (call with lock held)."""
     current_time = time.time()
@@ -125,3 +171,14 @@ def _clean_pending_expired() -> None:
     ]
     for key in expired:
         del _pending_event_storage[key]
+
+
+def _clean_command_thread_expired() -> None:
+    current_time = time.time()
+    expired = [
+        key
+        for key, (_, stored_at) in _command_thread_storage.items()
+        if current_time - stored_at > PREVIEW_EXPIRATION_SECONDS
+    ]
+    for key in expired:
+        del _command_thread_storage[key]

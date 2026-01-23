@@ -833,6 +833,7 @@ def handle_event(parsed: ParsedCommand, context: dict) -> dict[str, Any]:
             "user_email": user_email,
             "relationship_suggestions": relationship_suggestions,
             "original_message": raw_message,
+            "thread_id": context.get("thread_id"),
         },
     )
 

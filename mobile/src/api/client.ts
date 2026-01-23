@@ -33,9 +33,6 @@ export async function apiFetch(path: string, options: FetchOptions = {}) {
     },
   });
 
-  console.log('[apiFetch] response', path);
-  console.log('[apiFetch] response', response);
-
   if (!response.ok) {
     const message = await response.text();
     const isExpired = response.status === 401 && message.toLowerCase().includes('token expired');

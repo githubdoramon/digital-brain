@@ -813,7 +813,12 @@ class _SessionContext:
         self.original_question = original_question
 
 
-def _resolve_session_context(payload: AskIn, user_email: str) -> _SessionContext:
+def _resolve_session_context(
+    payload: AskIn,
+    user_email: str,
+    *,
+    force_new_session: bool = False,
+) -> _SessionContext:
     """
     Resolve session context from payload. Handles both explicit thread_id
     and main session mode with timeout/command parsing.
@@ -836,6 +841,8 @@ def _resolve_session_context(payload: AskIn, user_email: str) -> _SessionContext
             )
     else:
         # Main session mode - resolve with timeout and command parsing
+        if force_new_session:
+            question = f"/new {question}".strip()
         thread, is_new_session, question = conversations.resolve_main_session(user_email, question)
 
     session_id = thread["id"]
@@ -873,13 +880,22 @@ def _event_pending_key(user_email: str, thread_id: str | None) -> str:
     return f"{user_email}:{resolved_thread}"
 
 
+def _command_response_text(command_result: dict[str, Any]) -> str:
+    result_type = command_result.get("type")
+    if result_type == "event_confirmation":
+        return command_result.get("message") or "Event proposal ready."
+    if result_type == "clarification_needed":
+        return "I need a few more details to continue."
+    return command_result.get("message") or "Command completed."
+
+
 def _handle_pending_event(
     question: str,
     user_email: str,
     user: dict,
     thread_id: str | None,
     pending_event_id: str | None,
-) -> dict[str, Any] | None:
+) -> tuple[dict[str, Any], str] | None:
     from uuid import uuid4
 
     from commands import get_command_registry, parse_command
@@ -889,6 +905,7 @@ def _handle_pending_event(
         get_command_data,
         get_pending_event,
         store_command_data,
+        store_command_thread,
     )
 
     if parse_command(question):
@@ -901,8 +918,13 @@ def _handle_pending_event(
 
     command_data = get_command_data(preview_id)
     if not command_data:
-        clear_pending_event(key)
+        if not pending_event_id:
+            clear_pending_event(key)
         return None
+
+    command_thread_id = command_data.get("thread_id") or thread_id
+    if command_thread_id:
+        key = _event_pending_key(user_email, command_thread_id)
 
     clarification_id = f"event:clarification:{uuid4().hex[:8]}"
     store_command_data(clarification_id, command_data)
@@ -919,14 +941,34 @@ def _handle_pending_event(
     if not parsed_cmd:
         return None
 
+    if not command_thread_id:
+        command_thread = conversations.ensure_thread(None, user_email, title="Command: /event")
+        command_thread_id = command_thread["id"]
+        store_command_thread(key, command_thread_id)
+    else:
+        store_command_thread(key, command_thread_id)
+
     registry = get_command_registry()
     context = {
         "user_email": user_email,
         "user": user,
-        "thread_id": thread_id,
+        "thread_id": command_thread_id,
         "event_pending_key": key,
     }
-    return registry.execute(parsed_cmd, context)
+    command_result = registry.execute(parsed_cmd, context)
+
+    try:
+        conversations.record_exchange(
+            command_thread_id,
+            user_email,
+            question,
+            _command_response_text(command_result),
+            assistant_metadata={"command_result": command_result},
+        )
+    except Exception as exc:
+        print(f"[command_thread] Failed to record exchange: {exc}")
+
+    return command_result, command_thread_id
 
 
 def _handle_command(
@@ -934,13 +976,14 @@ def _handle_command(
     user_email: str,
     user: dict,
     thread_id: str | None,
-) -> dict[str, Any] | None:
+) -> tuple[dict[str, Any], str] | None:
     """
     Check if the question is a command and handle it.
 
     Returns command result dict if it's a command, None otherwise.
     """
     from commands import get_command_registry, parse_command
+    from commands.storage import store_command_thread
 
     parsed_cmd = parse_command(question)
     if not parsed_cmd or parsed_cmd.command == "new":
@@ -948,14 +991,50 @@ def _handle_command(
         return None
 
     # Handle non-/new commands (like /event)
+    command_thread = conversations.ensure_thread(
+        None, user_email, title=f"Command: /{parsed_cmd.command}"
+    )
+    command_thread_id = command_thread["id"]
+    pending_key = _event_pending_key(user_email, command_thread_id)
+    store_command_thread(pending_key, command_thread_id)
+
     registry = get_command_registry()
     context = {
         "user_email": user_email,
         "user": user,
-        "thread_id": thread_id,
-        "event_pending_key": _event_pending_key(user_email, thread_id),
+        "thread_id": command_thread_id,
+        "event_pending_key": pending_key,
     }
-    return registry.execute(parsed_cmd, context)
+    command_result = registry.execute(parsed_cmd, context)
+
+    if thread_id is None:
+        conversations.set_main_session_thread(user_email, command_thread_id)
+
+    try:
+        conversations.record_exchange(
+            command_thread_id,
+            user_email,
+            question,
+            _command_response_text(command_result),
+            assistant_metadata={"command_result": command_result},
+        )
+    except Exception as exc:
+        print(f"[command_thread] Failed to record exchange: {exc}")
+
+    return command_result, command_thread_id
+
+
+def _should_reset_command_thread(
+    user_email: str,
+    thread_id: str | None,
+    pending_event_id: str | None,
+) -> bool:
+    if not user_email or not thread_id or pending_event_id:
+        return False
+
+    from commands.storage import is_command_thread
+
+    return is_command_thread(thread_id)
 
 
 @api.post("/ask", response_model=AskOut)
@@ -968,43 +1047,59 @@ async def ask(payload: AskIn, user: dict = Depends(get_current_user)):
 
     # Check for commands or pending event refinements before session resolution
     try:
-        command_result = _handle_pending_event(
+        command_payload = _handle_pending_event(
             payload.question,
             user_email,
             user,
             payload.thread_id or payload.session_id,
             payload.pending_event_id,
         )
-        if not command_result:
-            command_result = _handle_command(
+        if not command_payload:
+            command_payload = _handle_command(
                 payload.question,
                 user_email,
                 user,
                 payload.thread_id or payload.session_id,
             )
-        if command_result:
+        if command_payload:
+            command_result, command_thread_id = command_payload
             from commands.storage import get_pending_event
 
-            pending_event_id = get_pending_event(
-                _event_pending_key(user_email, payload.thread_id or payload.session_id)
-            )
+            pending_event_id = get_pending_event(_event_pending_key(user_email, command_thread_id))
             # Return command result
             return AskOut(
                 question=payload.question,
-                answer="",
+                answer=_command_response_text(command_result),
                 resolution={},
                 search_results=[],
                 detailed_events=[],
-                thread_id=payload.thread_id or "",
-                session_id=payload.session_id or "",
-                is_new_session=False,
+                thread_id=command_thread_id,
+                session_id=command_thread_id,
+                is_new_session=True,
                 command_result=command_result,
                 pending_event_id=pending_event_id,
             )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-    ctx = _resolve_session_context(payload, user_email)
+    from commands.storage import clear_command_thread_by_id
+
+    force_new_session = False
+    requested_thread_id = payload.thread_id or payload.session_id
+    if requested_thread_id and _should_reset_command_thread(
+        user_email, requested_thread_id, payload.pending_event_id
+    ):
+        clear_command_thread_by_id(requested_thread_id)
+        new_thread = conversations.ensure_thread(None, user_email)
+        payload = payload.copy(update={"thread_id": new_thread["id"], "session_id": None})
+    elif not requested_thread_id and payload.pending_event_id is None:
+        main_session = conversations.get_main_session(user_email)
+        main_thread_id = main_session.get("current_thread_id") if main_session else None
+        if main_thread_id and _should_reset_command_thread(user_email, main_thread_id, None):
+            clear_command_thread_by_id(main_thread_id)
+            force_new_session = True
+
+    ctx = _resolve_session_context(payload, user_email, force_new_session=force_new_session)
 
     # Handle /new command with no actual message
     if ctx.is_reset_only:
@@ -1068,38 +1163,37 @@ async def ask_stream(payload: AskIn, user: dict = Depends(get_current_user)):
 
     # Check for commands or pending event refinements before session resolution
     try:
-        command_result = _handle_pending_event(
+        command_payload = _handle_pending_event(
             payload.question,
             user_email,
             user,
             payload.thread_id or payload.session_id,
             payload.pending_event_id,
         )
-        if not command_result:
-            command_result = _handle_command(
+        if not command_payload:
+            command_payload = _handle_command(
                 payload.question,
                 user_email,
                 user,
                 payload.thread_id or payload.session_id,
             )
-        if command_result:
+        if command_payload:
+            command_result, command_thread_id = command_payload
             from commands.storage import get_pending_event
 
-            pending_event_id = get_pending_event(
-                _event_pending_key(user_email, payload.thread_id or payload.session_id)
-            )
+            pending_event_id = get_pending_event(_event_pending_key(user_email, command_thread_id))
 
             # Return command result as SSE stream
             async def command_generator():
                 bundle = {
                     "question": payload.question,
-                    "answer": "",
+                    "answer": _command_response_text(command_result),
                     "resolution": {},
                     "search_results": [],
                     "detailed_events": [],
-                    "thread_id": payload.thread_id or "",
-                    "session_id": payload.session_id or "",
-                    "is_new_session": False,
+                    "thread_id": command_thread_id,
+                    "session_id": command_thread_id,
+                    "is_new_session": True,
                     "command_result": command_result,
                     "pending_event_id": pending_event_id,
                 }
@@ -1117,7 +1211,24 @@ async def ask_stream(payload: AskIn, user: dict = Depends(get_current_user)):
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-    ctx = _resolve_session_context(payload, user_email)
+    from commands.storage import clear_command_thread_by_id
+
+    force_new_session = False
+    requested_thread_id = payload.thread_id or payload.session_id
+    if requested_thread_id and _should_reset_command_thread(
+        user_email, requested_thread_id, payload.pending_event_id
+    ):
+        clear_command_thread_by_id(requested_thread_id)
+        new_thread = conversations.ensure_thread(None, user_email)
+        payload = payload.copy(update={"thread_id": new_thread["id"], "session_id": None})
+    elif not requested_thread_id and payload.pending_event_id is None:
+        main_session = conversations.get_main_session(user_email)
+        main_thread_id = main_session.get("current_thread_id") if main_session else None
+        if main_thread_id and _should_reset_command_thread(user_email, main_thread_id, None):
+            clear_command_thread_by_id(main_thread_id)
+            force_new_session = True
+
+    ctx = _resolve_session_context(payload, user_email, force_new_session=force_new_session)
 
     # Handle /new command with no actual message
     if ctx.is_reset_only:
