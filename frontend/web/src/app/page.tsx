@@ -237,6 +237,7 @@ export default function Home() {
   const messagesContainerRef = useRef<HTMLDivElement>(null);
   const lastMessageRef = useRef<HTMLDivElement>(null);
   const [isAtBottom, setIsAtBottom] = useState(true);
+  const [forceScrollNext, setForceScrollNext] = useState(false);
 
   // Quick Chat mode state
   const [chatMode, setChatMode] = useState<ChatMode>("quick");
@@ -250,7 +251,7 @@ export default function Home() {
 
   const scrollToLatestMessage = useCallback(() => {
     const container = messagesContainerRef.current;
-    if (!container || !isAtBottom) return;
+    if (!container || (!isAtBottom && !forceScrollNext)) return;
 
     const lastMessage = lastMessageRef.current;
     const containerHeight = container.clientHeight;
@@ -269,7 +270,10 @@ export default function Home() {
     requestAnimationFrame(() => {
       container.scrollTo({ top: target, behavior: "smooth" });
     });
-  }, [displayMessages.length, streamingContent, isLoading, isAtBottom]);
+    if (forceScrollNext) {
+      setForceScrollNext(false);
+    }
+  }, [displayMessages.length, streamingContent, isLoading, isAtBottom, forceScrollNext]);
 
   const refreshThreads = useCallback(async () => {
     setIsLoadingThreads(true);
@@ -374,6 +378,8 @@ export default function Home() {
     if (!input.trim() || isLoading) return;
 
     const pendingInput = input.trim();
+
+    setForceScrollNext(true);
 
     setInput("");
     setIsLoading(true);

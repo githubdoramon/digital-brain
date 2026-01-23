@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from contextlib import asynccontextmanager
 from datetime import datetime
 from time import perf_counter
@@ -503,6 +504,7 @@ def ingest_external_event(
 
 
 @api.post("/commands/event/confirm", response_model=EventCommandResult)
+@api.post("/mobile/commands/event/confirm", response_model=EventCommandResult)
 def confirm_event_command(
     payload: EventCommandConfirmation,
     user: dict = Depends(get_current_user),
@@ -572,9 +574,19 @@ def confirm_event_command(
         for new_contact in resolution["new_entities"]["contacts"]:
             display_name = new_contact["display_name"]
             inferred_profession = new_contact.get("inferred_profession")
-            comments = None
+            comments = new_contact.get("comments")
             if inferred_profession:
-                comments = f"Inferred profession: {inferred_profession}"
+                has_profession = bool(comments) and re.search(
+                    r"\bprofession\b", comments, re.IGNORECASE
+                )
+                has_match = bool(comments) and re.search(
+                    rf"\b{re.escape(inferred_profession)}\b", comments, re.IGNORECASE
+                )
+                if not has_profession and not has_match:
+                    profession_line = f"Profession: {inferred_profession}"
+                    comments = (
+                        f"{comments}\n\n{profession_line}".strip() if comments else profession_line
+                    )
             contact_id = f"contact:{display_name.lower().replace(' ', '_')}#{uuid4().hex[:6]}"
 
             contact_in = ContactIn(

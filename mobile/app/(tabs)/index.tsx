@@ -20,6 +20,8 @@ import { theme } from '@/src/theme';
 import { EventClarificationCard } from '@/components/EventClarificationCard';
 import { EventProposalCard } from '@/components/EventProposalCard';
 import { SlashCommandPalette } from '@/components/SlashCommandPalette';
+import { loadChatSession, saveChatSession, StoredChatSession } from '@/src/chat/session';
+import { restoreChatHistory } from '@/src/chat/threads';
 
 type Message = {
   id: string;
@@ -132,6 +134,8 @@ export default function ChatScreen() {
   const [contentHeight, setContentHeight] = useState(0);
   const [lastMessageHeight, setLastMessageHeight] = useState(0);
   const [isAtBottom, setIsAtBottom] = useState(true);
+  const [forceScrollNext, setForceScrollNext] = useState(false);
+  const [isBootstrapping, setIsBootstrapping] = useState(true);
 
   const allowed = email === 'REDACTED-EMAIL';
   const canSend = input.trim().length > 0 && !isSending && allowed;
@@ -144,6 +148,48 @@ export default function ChatScreen() {
     },
   ];
   const [messages, setMessages] = useState<Message[]>(starterMessages);
+
+  useEffect(() => {
+    const restoreSession = async () => {
+      if (!token || !allowed) {
+        setIsBootstrapping(false);
+        return;
+      }
+
+      try {
+        const stored = await loadChatSession();
+        const restored = await restoreChatHistory(token, stored);
+
+        setThreadId(restored.threadId);
+        setPendingEventId(restored.pendingEventId);
+
+        if (restored.messages.length > 0) {
+          setForceScrollNext(true);
+          setMessages(restored.messages);
+        } else {
+          setMessages(starterMessages);
+        }
+      } catch (error) {
+        const authExpired = (error as Error & { authExpired?: boolean }).authExpired;
+        if (authExpired) {
+          await signOut();
+        }
+      } finally {
+        setIsBootstrapping(false);
+      }
+    };
+
+    void restoreSession();
+  }, [token, allowed]);
+
+  useEffect(() => {
+    if (isBootstrapping) return;
+    const stored: StoredChatSession = {
+      threadId,
+      pendingEventId,
+    };
+    void saveChatSession(stored);
+  }, [threadId, pendingEventId, isBootstrapping]);
 
   const header = useMemo(
     () => (
@@ -159,7 +205,7 @@ export default function ChatScreen() {
   const sendMessage = async (overrideMessage?: string) => {
     const draft = overrideMessage ?? input;
     const trimmed = draft.trim();
-    if (!trimmed || isSending || !allowed) return;
+    if (!trimmed || isSending || !allowed || isBootstrapping) return;
     setInput('');
     const pendingId = `${Date.now()}-pending`;
 
@@ -244,7 +290,7 @@ export default function ChatScreen() {
   const slashQuery = trimmedInput.slice(1).split(/\s/)[0];
 
   useEffect(() => {
-    if (!listRef.current || listHeight === 0 || !isAtBottom) return;
+    if (!listRef.current || listHeight === 0 || (!isAtBottom && !forceScrollNext)) return;
 
     const padding = listHeight * 0.1;
     const hasTallMessage = lastMessageHeight > listHeight;
@@ -255,7 +301,10 @@ export default function ChatScreen() {
     requestAnimationFrame(() => {
       listRef.current?.scrollToOffset({ offset, animated: true });
     });
-  }, [messages.length, contentHeight, listHeight, lastMessageHeight]);
+    if (forceScrollNext) {
+      setForceScrollNext(false);
+    }
+  }, [messages.length, contentHeight, listHeight, lastMessageHeight, isAtBottom, forceScrollNext]);
 
   return (
     <LinearGradient colors={theme.gradients.dusk} style={styles.container}>
@@ -320,7 +369,7 @@ export default function ChatScreen() {
                       if (isConfirmingEvent) return;
                       setIsConfirmingEvent(true);
                       try {
-                        const result = await apiFetch('/commands/event/confirm', {
+                        const result = await apiFetch('/mobile/commands/event/confirm', {
                           method: 'POST',
                           body: JSON.stringify({
                             preview_id: previewId,
@@ -342,7 +391,9 @@ export default function ChatScreen() {
                         setMessages((prev) => [...prev, successMessage]);
                         setPendingEventId(null);
                       } catch (error) {
-                        setMessages((prev) => [
+                        console.error('Failed to create event:', error);
+    setForceScrollNext(true);
+    setMessages((prev) => [
                           ...prev,
                           {
                             id: `${Date.now()}-event-error`,
@@ -358,7 +409,7 @@ export default function ChatScreen() {
                       if (isConfirmingEvent) return;
                       setIsConfirmingEvent(true);
                       try {
-                        await apiFetch('/commands/event/confirm', {
+                        await apiFetch('/mobile/commands/event/confirm', {
                           method: 'POST',
                           body: JSON.stringify({
                             preview_id: previewId,
