@@ -1150,10 +1150,9 @@ Return ONLY valid JSON:
 
     try:
         result = call_llm_json(
-            prompt, timeout=20, temperature=0.1, top_p=0.9, use_simpler_model=True
+            prompt, timeout=60, temperature=0.1, top_p=0.9, use_simpler_model=True
         )
-    except Exception as e:
-        print(f"[contact_resolver_inner] Error: {e}")
+    except Exception:
         return []
 
     relationships = result.get("relationships", [])
