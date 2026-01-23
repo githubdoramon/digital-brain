@@ -131,6 +131,7 @@ export default function ChatScreen() {
   const [listHeight, setListHeight] = useState(0);
   const [contentHeight, setContentHeight] = useState(0);
   const [lastMessageHeight, setLastMessageHeight] = useState(0);
+  const [isAtBottom, setIsAtBottom] = useState(true);
 
   const allowed = email === 'REDACTED-EMAIL';
   const canSend = input.trim().length > 0 && !isSending && allowed;
@@ -243,7 +244,7 @@ export default function ChatScreen() {
   const slashQuery = trimmedInput.slice(1).split(/\s/)[0];
 
   useEffect(() => {
-    if (!listRef.current || listHeight === 0) return;
+    if (!listRef.current || listHeight === 0 || !isAtBottom) return;
 
     const padding = listHeight * 0.1;
     const hasTallMessage = lastMessageHeight > listHeight;
@@ -282,6 +283,13 @@ export default function ChatScreen() {
           onContentSizeChange={(_, height) => {
             setContentHeight(height);
           }}
+          onScroll={(event) => {
+            const { contentOffset, layoutMeasurement, contentSize } = event.nativeEvent;
+            const distanceFromBottom =
+              contentSize.height - (contentOffset.y + layoutMeasurement.height);
+            setIsAtBottom(distanceFromBottom < 48);
+          }}
+          scrollEventThrottle={16}
           renderItem={({ item }) => (
             <View
               style={[
