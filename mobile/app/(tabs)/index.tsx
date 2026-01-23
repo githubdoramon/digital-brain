@@ -17,13 +17,84 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { apiFetch } from '@/src/api/client';
 import { useAuth } from '@/src/auth/AuthContext';
 import { theme } from '@/src/theme';
+import { EventClarificationCard } from '@/components/EventClarificationCard';
+import { EventProposalCard } from '@/components/EventProposalCard';
+import { SlashCommandPalette } from '@/components/SlashCommandPalette';
 
 type Message = {
   id: string;
   role: 'user' | 'assistant';
   content: string;
   pending?: boolean;
+  metadata?: {
+    command_result?: CommandResult;
+  };
 };
+
+type EventClarificationData = {
+  type: 'clarification_needed';
+  questions: string[];
+  partial_extraction: Record<string, unknown>;
+  original_message: string;
+  clarification_id?: string;
+};
+
+type EventConfirmationData = {
+  type: 'event_confirmation';
+  preview_id: string;
+  extracted: {
+    title: string;
+    summary: string;
+    when: string | null;
+    where: string | null;
+    who: string[];
+    documents: string[];
+    tags: string[];
+    types: string[];
+  };
+  resolution: {
+    contacts: {
+      contact_id: string;
+      display_name: string;
+      query: string;
+      confidence: string;
+    }[];
+    places: {
+      place_id: string;
+      name: string;
+    }[];
+    documents: {
+      document_id: string;
+      title: string;
+    }[];
+    new_entities: {
+      contacts: {
+        display_name: string;
+        query: string;
+      }[];
+      places: {
+        name: string;
+        query: string;
+      }[];
+      documents: {
+        reference: string;
+      }[];
+    };
+  };
+  relationship_suggestions?: {
+    from_contact_id: string;
+    from_display_name: string;
+    to_contact_id: string;
+    to_display_name: string;
+    relationship_type: string;
+    reciprocal_type: string;
+    confidence: string;
+    reasoning: string;
+  }[];
+  message: string;
+};
+
+type CommandResult = EventClarificationData | EventConfirmationData;
 
 const useKeyboardBehavior = () => {
   const defaultBehavior: KeyboardAvoidingViewProps['behavior'] =
@@ -54,6 +125,8 @@ export default function ChatScreen() {
   const [isSending, setIsSending] = useState(false);
   const [threadId, setThreadId] = useState<string | null>(null);
   const keyboardBehavior = useKeyboardBehavior();
+  const [isConfirmingEvent, setIsConfirmingEvent] = useState(false);
+  const [pendingEventId, setPendingEventId] = useState<string | null>(null);
 
   const allowed = email === 'REDACTED-EMAIL';
   const canSend = input.trim().length > 0 && !isSending && allowed;
@@ -78,9 +151,10 @@ export default function ChatScreen() {
     [],
   );
 
-  const sendMessage = async () => {
-    if (!canSend) return;
-    const trimmed = input.trim();
+  const sendMessage = async (overrideMessage?: string) => {
+    const draft = overrideMessage ?? input;
+    const trimmed = draft.trim();
+    if (!trimmed || isSending || !allowed) return;
     setInput('');
     const pendingId = `${Date.now()}-pending`;
 
@@ -92,7 +166,11 @@ export default function ChatScreen() {
 
     setIsSending(true);
     try {
-      const payload = { question: trimmed, thread_id: threadId };
+      const payload = {
+        question: trimmed,
+        thread_id: threadId,
+        pending_event_id: pendingEventId ?? undefined,
+      };
       const response = await apiFetch('/mobile/ask', {
         method: 'POST',
         body: JSON.stringify(payload),
@@ -100,10 +178,26 @@ export default function ChatScreen() {
       });
 
       setThreadId(response.thread_id ?? threadId);
+      const commandResult = response.command_result as CommandResult | undefined;
+      const assistantContent = commandResult
+        ? commandResult.type === 'clarification_needed'
+          ? 'I need a few more details to log that event.'
+          : 'Here is the event proposal.'
+        : response.answer ?? 'Ready when you are.';
+
+      if (response.pending_event_id !== undefined) {
+        setPendingEventId(response.pending_event_id ?? null);
+      }
+
       setMessages((prev) =>
         prev.map((message) =>
           message.id === pendingId
-            ? { ...message, content: response.answer ?? 'Ready when you are.', pending: false }
+            ? {
+                ...message,
+                content: assistantContent,
+                pending: false,
+                metadata: commandResult ? { command_result: commandResult } : undefined,
+              }
             : message,
         ),
       );
@@ -140,6 +234,10 @@ export default function ChatScreen() {
     }
   };
 
+  const trimmedInput = input.trimStart();
+  const showSlashPalette = trimmedInput.startsWith('/');
+  const slashQuery = trimmedInput.slice(1).split(/\s/)[0];
+
   return (
     <LinearGradient colors={theme.gradients.dusk} style={styles.container}>
       <KeyboardAvoidingView
@@ -174,10 +272,116 @@ export default function ChatScreen() {
               >
                 {item.content}
               </Text>
+              {item.metadata?.command_result?.type === 'event_confirmation' && (
+                <View style={styles.commandCardWrap}>
+                  <EventProposalCard
+                    data={item.metadata.command_result as EventConfirmationData}
+                    isSubmitting={isConfirmingEvent}
+                    onConfirm={async (previewId) => {
+                      if (isConfirmingEvent) return;
+                      setIsConfirmingEvent(true);
+                      try {
+                        const result = await apiFetch('/commands/event/confirm', {
+                          method: 'POST',
+                          body: JSON.stringify({
+                            preview_id: previewId,
+                            confirmed: true,
+                            modifications: {},
+                            skip_entities: {},
+                          }),
+                          token,
+                        });
+
+                        const createdCount =
+                          (result?.created_contacts?.length ?? 0) +
+                          (result?.created_places?.length ?? 0);
+                        const successMessage: Message = {
+                          id: `${Date.now()}-event-success`,
+                          role: 'assistant',
+                          content: `Event created. ${createdCount > 0 ? `Created ${createdCount} new entities.` : ''}`,
+                        };
+                        setMessages((prev) => [...prev, successMessage]);
+                        setPendingEventId(null);
+                      } catch (error) {
+                        setMessages((prev) => [
+                          ...prev,
+                          {
+                            id: `${Date.now()}-event-error`,
+                            role: 'assistant',
+                            content: 'I hit a snag creating that event. Try again in a moment.',
+                          },
+                        ]);
+                      } finally {
+                        setIsConfirmingEvent(false);
+                      }
+                    }}
+                    onCancel={async (previewId) => {
+                      if (isConfirmingEvent) return;
+                      setIsConfirmingEvent(true);
+                      try {
+                        await apiFetch('/commands/event/confirm', {
+                          method: 'POST',
+                          body: JSON.stringify({
+                            preview_id: previewId,
+                            confirmed: false,
+                          }),
+                          token,
+                        });
+                        setMessages((prev) => [
+                          ...prev,
+                          {
+                            id: `${Date.now()}-event-cancel`,
+                            role: 'assistant',
+                            content: 'Event creation canceled.',
+                          },
+                        ]);
+                        setPendingEventId(null);
+                      } catch (error) {
+                        setMessages((prev) => [
+                          ...prev,
+                          {
+                            id: `${Date.now()}-event-cancel-error`,
+                            role: 'assistant',
+                            content: 'I could not cancel the event just now.',
+                          },
+                        ]);
+                      } finally {
+                        setIsConfirmingEvent(false);
+                      }
+                    }}
+                  />
+                </View>
+              )}
+              {item.metadata?.command_result?.type === 'clarification_needed' && (
+                <View style={styles.commandCardWrap}>
+                  <EventClarificationCard
+                    data={item.metadata.command_result as EventClarificationData}
+                    onSubmit={(answer) => {
+                      const clarificationId =
+                        (item.metadata?.command_result as EventClarificationData).clarification_id;
+                      const clarificationToken = clarificationId
+                        ? `\n\n[clarification_id:${clarificationId}]`
+                        : '';
+                      const combinedMessage = `/event ${
+                        (item.metadata?.command_result as EventClarificationData).original_message
+                      }\n\nAdditional details: ${answer}${clarificationToken}`;
+                      void sendMessage(combinedMessage);
+                    }}
+                  />
+                </View>
+              )}
             </View>
           )}
         />
-
+        {showSlashPalette && (
+          <SlashCommandPalette
+            query={slashQuery}
+            onSelect={(command) => {
+              const nextInput = `/${command} `;
+              setInput(nextInput);
+            }}
+          />
+        )}
 
         <View
           style={[
@@ -201,7 +405,7 @@ export default function ChatScreen() {
             multiline
           />
           <Pressable
-            onPress={sendMessage}
+            onPress={() => sendMessage()}
             disabled={!canSend}
             style={({ pressed }) => [
               styles.sendButton,
@@ -278,6 +482,9 @@ const styles = StyleSheet.create({
   },
   assistantText: {
     color: theme.colors.ink,
+  },
+  commandCardWrap: {
+    marginTop: 12,
   },
   composer: {
     paddingHorizontal: 16,

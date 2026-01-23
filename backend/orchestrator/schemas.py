@@ -211,6 +211,7 @@ class AskIn(BaseModel):
     limit: int | None = 3
     session_id: str | None = None  # kept for backward compatibility
     thread_id: str | None = None
+    pending_event_id: str | None = None
 
 
 class AskOut(BaseModel):
@@ -233,6 +234,7 @@ class AskOut(BaseModel):
     web_response_id: str | None = None
     web_documents: list[dict[str, Any]] = Field(default_factory=list)
     command_result: dict[str, Any] | None = None
+    pending_event_id: str | None = None
 
 
 class ThreadCreate(BaseModel):

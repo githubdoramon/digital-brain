@@ -518,9 +518,10 @@ def confirm_event_command(
         raise HTTPException(status_code=400, detail="Authenticated user email missing")
 
     if not payload.confirmed:
-        from commands.storage import delete_command_data
+        from commands.storage import clear_pending_event_by_preview_id, delete_command_data
 
         delete_command_data(payload.preview_id)
+        clear_pending_event_by_preview_id(payload.preview_id)
         return EventCommandResult(
             success=False,
             error="Event creation cancelled by user",
@@ -529,7 +530,11 @@ def confirm_event_command(
     # Retrieve stored command data
     from datetime import datetime
 
-    from commands.storage import delete_command_data, get_command_data
+    from commands.storage import (
+        clear_pending_event_by_preview_id,
+        delete_command_data,
+        get_command_data,
+    )
 
     command_data = get_command_data(payload.preview_id)
     if not command_data:
@@ -693,6 +698,7 @@ def confirm_event_command(
 
         # Clean up stored data
         delete_command_data(payload.preview_id)
+        clear_pending_event_by_preview_id(payload.preview_id)
 
         return EventCommandResult(
             success=True,
@@ -850,7 +856,73 @@ def _make_reset_bundle(ctx: _SessionContext) -> dict[str, Any]:
     }
 
 
-def _handle_command(question: str, user_email: str, user: dict) -> dict[str, Any] | None:
+def _event_pending_key(user_email: str, thread_id: str | None) -> str:
+    resolved_thread = thread_id or "main"
+    return f"{user_email}:{resolved_thread}"
+
+
+def _handle_pending_event(
+    question: str,
+    user_email: str,
+    user: dict,
+    thread_id: str | None,
+    pending_event_id: str | None,
+) -> dict[str, Any] | None:
+    from uuid import uuid4
+
+    from commands import get_command_registry, parse_command
+    from commands.storage import (
+        clear_pending_event,
+        delete_command_data,
+        get_command_data,
+        get_pending_event,
+        store_command_data,
+    )
+
+    if parse_command(question):
+        return None
+
+    key = _event_pending_key(user_email, thread_id)
+    preview_id = pending_event_id or get_pending_event(key)
+    if not preview_id:
+        return None
+
+    command_data = get_command_data(preview_id)
+    if not command_data:
+        clear_pending_event(key)
+        return None
+
+    clarification_id = f"event:clarification:{uuid4().hex[:8]}"
+    store_command_data(clarification_id, command_data)
+    delete_command_data(preview_id)
+    clear_pending_event(key)
+
+    original_message = command_data.get("original_message") or question
+    combined_message = (
+        f"/event {original_message}\n\nAdditional details: {question}\n\n"
+        f"[clarification_id:{clarification_id}]"
+    )
+
+    parsed_cmd = parse_command(combined_message)
+    if not parsed_cmd:
+        return None
+
+    registry = get_command_registry()
+    context = {
+        "user_email": user_email,
+        "user": user,
+        "thread_id": thread_id,
+        "event_pending_key": key,
+    }
+    return registry.execute(parsed_cmd, context)
+
+
+def _handle_command(
+    question: str,
+    user_email: str,
+    user: dict,
+    thread_id: str | None,
+) -> dict[str, Any] | None:
     """
     Check if the question is a command and handle it.
 
@@ -865,7 +937,12 @@ def _handle_command(question: str, user_email: str, user: dict) -> dict[str, Any
 
     # Handle non-/new commands (like /event)
     registry = get_command_registry()
-    context = {"user_email": user_email, "user": user}
+    context = {
+        "user_email": user_email,
+        "user": user,
+        "thread_id": thread_id,
+        "event_pending_key": _event_pending_key(user_email, thread_id),
+    }
     return registry.execute(parsed_cmd, context)
 
 
@@ -877,10 +954,28 @@ async def ask(payload: AskIn, user: dict = Depends(get_current_user)):
     if not user_email:
         raise HTTPException(status_code=400, detail="Authenticated user email missing")
 
-    # Check for commands before session resolution
+    # Check for commands or pending event refinements before session resolution
     try:
-        command_result = _handle_command(payload.question, user_email, user)
+        command_result = _handle_pending_event(
+            payload.question,
+            user_email,
+            user,
+            payload.thread_id or payload.session_id,
+            payload.pending_event_id,
+        )
+        if not command_result:
+            command_result = _handle_command(
+                payload.question,
+                user_email,
+                user,
+                payload.thread_id or payload.session_id,
+            )
         if command_result:
+            from commands.storage import get_pending_event
+
+            pending_event_id = get_pending_event(
+                _event_pending_key(user_email, payload.thread_id or payload.session_id)
+            )
             # Return command result
             return AskOut(
                 question=payload.question,
@@ -892,6 +987,7 @@ async def ask(payload: AskIn, user: dict = Depends(get_current_user)):
                 session_id=payload.session_id or "",
                 is_new_session=False,
                 command_result=command_result,
+                pending_event_id=pending_event_id,
             )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -931,6 +1027,11 @@ async def ask(payload: AskIn, user: dict = Depends(get_current_user)):
         f"[ask] complete session={ctx.session_id} user={user_email} elapsed={elapsed:.3f}s search_results={search_count}"
     )
 
+    from commands.storage import get_pending_event
+
+    bundle["pending_event_id"] = get_pending_event(
+        _event_pending_key(user_email, payload.thread_id or payload.session_id)
+    )
     return AskOut(**bundle)
 
 
@@ -953,10 +1054,29 @@ async def ask_stream(payload: AskIn, user: dict = Depends(get_current_user)):
     if not user_email:
         raise HTTPException(status_code=400, detail="Authenticated user email missing")
 
-    # Check for commands before session resolution
+    # Check for commands or pending event refinements before session resolution
     try:
-        command_result = _handle_command(payload.question, user_email, user)
+        command_result = _handle_pending_event(
+            payload.question,
+            user_email,
+            user,
+            payload.thread_id or payload.session_id,
+            payload.pending_event_id,
+        )
+        if not command_result:
+            command_result = _handle_command(
+                payload.question,
+                user_email,
+                user,
+                payload.thread_id or payload.session_id,
+            )
         if command_result:
+            from commands.storage import get_pending_event
+
+            pending_event_id = get_pending_event(
+                _event_pending_key(user_email, payload.thread_id or payload.session_id)
+            )
+
             # Return command result as SSE stream
             async def command_generator():
                 bundle = {
@@ -969,6 +1089,7 @@ async def ask_stream(payload: AskIn, user: dict = Depends(get_current_user)):
                     "session_id": payload.session_id or "",
                     "is_new_session": False,
                     "command_result": command_result,
+                    "pending_event_id": pending_event_id,
                 }
                 yield f"data: {json.dumps({'type': 'done', 'bundle': bundle})}\n\n"
 
@@ -1028,10 +1149,15 @@ async def ask_stream(payload: AskIn, user: dict = Depends(get_current_user)):
                 user_email=user_email,
             ):
                 if event.get("type") == "done":
+                    from commands.storage import get_pending_event
+
                     bundle = event.get("bundle", {})
                     bundle["thread_id"] = ctx.session_id
                     bundle["session_id"] = ctx.session_id
                     bundle["is_new_session"] = ctx.is_new_session
+                    bundle["pending_event_id"] = get_pending_event(
+                        _event_pending_key(user_email, payload.thread_id or payload.session_id)
+                    )
                     event["bundle"] = bundle
 
                 yield f"data: {json.dumps(event, default=str)}\n\n"

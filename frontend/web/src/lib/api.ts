@@ -119,6 +119,7 @@ export type StreamBundle = {
   thread_id?: string;
   thread_title?: string | null;
   is_new_session?: boolean;
+  pending_event_id?: string | null;
   // Removed: event_proposal (old event capture system)
   activated_skills?: string[];
   command_result?: {
@@ -136,12 +137,14 @@ export async function ask(
   options: {
     threadId?: string | null;
     limit?: number;
+    pendingEventId?: string | null;
   }
 ): Promise<StreamBundle> {
   return api.post<StreamBundle>("/ask", {
     question,
     thread_id: options.threadId,
     limit: options.limit ?? 5,
+    pending_event_id: options.pendingEventId ?? undefined,
     timeout: 60000,
   });
 }
@@ -165,6 +168,7 @@ export async function askWithStreaming(
   options: {
     threadId?: string | null;
     limit?: number;
+    pendingEventId?: string | null;
   },
   callbacks: StreamCallbacks
 ): Promise<StreamBundle> {
@@ -177,6 +181,7 @@ export async function askWithStreaming(
       question,
       thread_id: options.threadId,
       limit: options.limit ?? 5,
+      pending_event_id: options.pendingEventId ?? undefined,
     }),
   });
 

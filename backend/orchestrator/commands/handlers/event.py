@@ -89,6 +89,8 @@ Extract the following information:
 
 People extraction is handled separately. Do NOT include any people/person list.
 
+Prefer specific types over general terms WHEN POSSIBLE (e.g., "Electric Engineer" over "Engineer", "Orthopedist" over "Doctor").
+
 If ANY critical information is missing or ambiguous, set "needs_clarification" to true and provide "clarification_questions".
 
 Return ONLY valid JSON in this exact format:
@@ -830,8 +832,15 @@ def handle_event(parsed: ParsedCommand, context: dict) -> dict[str, Any]:
             "resolution": resolution,
             "user_email": user_email,
             "relationship_suggestions": relationship_suggestions,
+            "original_message": raw_message,
         },
     )
+
+    pending_key = context.get("event_pending_key")
+    if pending_key:
+        from commands.storage import store_pending_event
+
+        store_pending_event(pending_key, preview_id)
 
     print("\n[handle_event] ✓ Event processing complete!")
     print("[handle_event] Summary:")

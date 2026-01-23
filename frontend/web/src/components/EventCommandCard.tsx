@@ -63,7 +63,7 @@ type EventCommandData = {
 type EventCommandCardProps = {
   commandData: EventCommandData;
   onConfirm: (previewId: string, modifications?: Record<string, unknown>) => void;
-  onCancel: () => void;
+  onCancel: (previewId: string) => void;
 };
 
 export function EventCommandCard({
@@ -915,7 +915,7 @@ export function EventCommandCard({
           {isSubmitting ? '✨ Creating...' : '✓ Create Event'}
         </button>
         <button
-          onClick={onCancel}
+          onClick={() => onCancel(commandData.preview_id)}
           disabled={isSubmitting}
           style={{
             background: '#ffffff',

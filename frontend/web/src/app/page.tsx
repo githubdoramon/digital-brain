@@ -233,11 +233,16 @@ export default function Home() {
   const [isLoadingMessages, setIsLoadingMessages] = useState(false);
   const [streamingContent, setStreamingContent] = useState<string>("");
   const [streamingStatus, setStreamingStatus] = useState<string>("");
+  const [pendingEventId, setPendingEventId] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   // Quick Chat mode state
   const [chatMode, setChatMode] = useState<ChatMode>("quick");
   const [quickChatMessages, setQuickChatMessages] = useState<Message[]>([]);
+
+  useEffect(() => {
+    setPendingEventId(null);
+  }, [chatMode, selectedThreadId]);
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -367,6 +372,7 @@ export default function Home() {
         const data: StreamBundle = await ask(pendingInput, {
           threadId: undefined, // Backend resolves main session
           limit: 5,
+          pendingEventId,
         });
 
         const sessionIsNew = data.is_new_session ?? false;
@@ -383,6 +389,10 @@ export default function Home() {
           timestamp: new Date(),
           metadata,
         };
+
+        if (data.pending_event_id !== undefined) {
+          setPendingEventId(data.pending_event_id ?? null);
+        }
 
         // If new session, clear previous messages and start fresh
         if (sessionIsNew) {
@@ -427,6 +437,7 @@ export default function Home() {
         const data: StreamBundle = await ask(pendingInput, {
           threadId,
           limit: 5,
+          pendingEventId,
         });
 
         if (data.thread_id && data.thread_id !== threadId) {
@@ -448,7 +459,9 @@ export default function Home() {
           }
         }
 
-        const metadata: AssistantMetadata | undefined = undefined;
+        const metadata: AssistantMetadata | undefined = data.command_result
+          ? { command_result: data.command_result }
+          : undefined;
 
         const assistantMessage: Message = {
           id: undefined,
@@ -457,6 +470,10 @@ export default function Home() {
           timestamp: new Date(),
           metadata,
         };
+
+        if (data.pending_event_id !== undefined) {
+          setPendingEventId(data.pending_event_id ?? null);
+        }
 
         setMessages((prev) => [...prev, assistantMessage]);
         await refreshThreads();
@@ -761,7 +778,7 @@ export default function Home() {
                           if (form) form.requestSubmit();
                         }}
                         onCancel={() => {
-                          console.log("Cancelled event creation");
+                          setPendingEventId(null);
                         }}
                       />
                     </div>
@@ -796,6 +813,8 @@ export default function Home() {
                               setQuickChatMessages((prev) => [...prev, successMessage]);
                             }
 
+                            setPendingEventId(null);
+
                             // Refresh threads list
                             await refreshThreads();
                           } catch (error: unknown) {
@@ -804,8 +823,17 @@ export default function Home() {
                             alert(`Failed to create event: ${errorMessage}`);
                           }
                         }}
-                        onCancel={() => {
-                          console.log("Cancelled event creation");
+                        onCancel={async (previewId) => {
+                          try {
+                            await api.post("/commands/event/confirm", {
+                              preview_id: previewId,
+                              confirmed: false,
+                            });
+                          } catch (error) {
+                            console.error("Failed to cancel event:", error);
+                          } finally {
+                            setPendingEventId(null);
+                          }
                         }}
                       />
                     </div>
