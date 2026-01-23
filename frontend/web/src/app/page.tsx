@@ -234,7 +234,8 @@ export default function Home() {
   const [streamingContent, setStreamingContent] = useState<string>("");
   const [streamingStatus, setStreamingStatus] = useState<string>("");
   const [pendingEventId, setPendingEventId] = useState<string | null>(null);
-  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const messagesContainerRef = useRef<HTMLDivElement>(null);
+  const lastMessageRef = useRef<HTMLDivElement>(null);
 
   // Quick Chat mode state
   const [chatMode, setChatMode] = useState<ChatMode>("quick");
@@ -244,9 +245,30 @@ export default function Home() {
     setPendingEventId(null);
   }, [chatMode, selectedThreadId]);
 
-  const scrollToBottom = () => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  };
+  const displayMessages = chatMode === "quick" ? quickChatMessages : messages;
+
+  const scrollToLatestMessage = useCallback(() => {
+    const container = messagesContainerRef.current;
+    if (!container) return;
+
+    const lastMessage = lastMessageRef.current;
+    const containerHeight = container.clientHeight;
+    if (!containerHeight) return;
+
+    const padding = containerHeight * 0.1;
+    let target = container.scrollHeight - containerHeight;
+
+    if (lastMessage) {
+      const messageHeight = lastMessage.offsetHeight;
+      if (messageHeight > containerHeight) {
+        target = Math.max(0, lastMessage.offsetTop - padding);
+      }
+    }
+
+    requestAnimationFrame(() => {
+      container.scrollTo({ top: target, behavior: "smooth" });
+    });
+  }, [displayMessages.length, streamingContent, isLoading]);
 
   const refreshThreads = useCallback(async () => {
     setIsLoadingThreads(true);
@@ -324,8 +346,8 @@ export default function Home() {
   // Removed: handleInsertEvent - old event proposal system removed
 
   useEffect(() => {
-    scrollToBottom();
-  }, [messages]);
+    scrollToLatestMessage();
+  }, [scrollToLatestMessage]);
 
   useEffect(() => {
     let isMounted = true;
@@ -489,9 +511,6 @@ export default function Home() {
       }
     }
   }
-
-  // Determine which messages to display based on mode
-  const displayMessages = chatMode === "quick" ? quickChatMessages : messages;
 
   return (
     <section style={{ display: "grid", gridTemplateColumns: chatMode === "threads" ? "280px 1fr" : "1fr", gap: "16px", alignItems: "start" }}>
@@ -691,6 +710,7 @@ export default function Home() {
             </div>
           </div>
           <div
+            ref={messagesContainerRef}
             style={{
               padding: "24px",
               overflowY: "auto",
@@ -729,9 +749,11 @@ export default function Home() {
             {displayMessages.map((message, index) => {
               const metadata = message.metadata as AssistantMetadata | undefined;
               const commandResult = metadata?.command_result;
+              const isLastMessage = index === displayMessages.length - 1 && !isLoading;
               return (
                 <div
                   key={message.id ?? index}
+                  ref={isLastMessage ? lastMessageRef : undefined}
                   style={{
                     display: "flex",
                     flexDirection: "column",
@@ -858,6 +880,7 @@ export default function Home() {
 
             {isLoading && (
               <div
+                ref={lastMessageRef}
                 style={{
                   display: "flex",
                   flexDirection: "column",
@@ -913,7 +936,6 @@ export default function Home() {
               </div>
             )}
 
-            <div ref={messagesEndRef} />
           </div>
           <form
             onSubmit={handleSubmit}

@@ -1,5 +1,5 @@
 import { LinearGradient } from 'expo-linear-gradient';
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   FlatList,
   Keyboard,
@@ -121,12 +121,16 @@ const useKeyboardBehavior = () => {
 export default function ChatScreen() {
   const { token, signOut, email } = useAuth();
   const insets = useSafeAreaInsets();
+  const listRef = useRef<FlatList<Message>>(null);
   const [input, setInput] = useState('');
   const [isSending, setIsSending] = useState(false);
   const [threadId, setThreadId] = useState<string | null>(null);
   const keyboardBehavior = useKeyboardBehavior();
   const [isConfirmingEvent, setIsConfirmingEvent] = useState(false);
   const [pendingEventId, setPendingEventId] = useState<string | null>(null);
+  const [listHeight, setListHeight] = useState(0);
+  const [contentHeight, setContentHeight] = useState(0);
+  const [lastMessageHeight, setLastMessageHeight] = useState(0);
 
   const allowed = email === 'REDACTED-EMAIL';
   const canSend = input.trim().length > 0 && !isSending && allowed;
@@ -238,6 +242,20 @@ export default function ChatScreen() {
   const showSlashPalette = trimmedInput.startsWith('/');
   const slashQuery = trimmedInput.slice(1).split(/\s/)[0];
 
+  useEffect(() => {
+    if (!listRef.current || listHeight === 0) return;
+
+    const padding = listHeight * 0.1;
+    const hasTallMessage = lastMessageHeight > listHeight;
+    const fallbackOffset = Math.max(0, contentHeight - listHeight);
+    const tallMessageOffset = Math.max(0, contentHeight - lastMessageHeight - padding);
+    const offset = hasTallMessage ? tallMessageOffset : fallbackOffset;
+
+    requestAnimationFrame(() => {
+      listRef.current?.scrollToOffset({ offset, animated: true });
+    });
+  }, [messages.length, contentHeight, listHeight, lastMessageHeight]);
+
   return (
     <LinearGradient colors={theme.gradients.dusk} style={styles.container}>
       <KeyboardAvoidingView
@@ -246,6 +264,7 @@ export default function ChatScreen() {
         keyboardVerticalOffset={Platform.OS === 'ios' ? insets.top : 0}
       >
         <FlatList
+          ref={listRef}
           style={styles.list}
           data={messages}
           keyExtractor={(item) => item.id}
@@ -257,18 +276,30 @@ export default function ChatScreen() {
               paddingBottom: 24,
             },
           ]}
+          onLayout={(event) => {
+            setListHeight(event.nativeEvent.layout.height);
+          }}
+          onContentSizeChange={(_, height) => {
+            setContentHeight(height);
+          }}
           renderItem={({ item }) => (
             <View
               style={[
                 styles.messageBubble,
                 item.role === 'user' ? styles.userBubble : styles.assistantBubble,
               ]}
+              onLayout={(event) => {
+                if (item.id === messages[messages.length - 1]?.id) {
+                  setLastMessageHeight(event.nativeEvent.layout.height);
+                }
+              }}
             >
               <Text
                 style={[
                   styles.messageText,
                   item.role === 'user' ? styles.userText : styles.assistantText,
                 ]}
+                selectable
               >
                 {item.content}
               </Text>

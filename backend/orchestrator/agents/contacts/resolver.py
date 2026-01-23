@@ -1122,6 +1122,7 @@ def _infer_relationship_pairs(people: list[str], full_text: str) -> list[dict[st
         return []
 
     people_list = "\n".join(f"- {p}" for p in people)
+    print(f"[contact_resolver_inner] People list: {people_list}")
     prompt = f"""Infer explicit relationship pairs between mentioned people.
 
 Text: "{full_text}"
@@ -1155,6 +1156,7 @@ Return ONLY valid JSON:
         return []
 
     relationships = result.get("relationships", [])
+    print(f"[contact_resolver_inner] Relationships: {relationships}")
     pairs: list[dict[str, str]] = []
     seen_pairs: set[tuple[str, str]] = set()
     for item in relationships:
@@ -1181,6 +1183,7 @@ Return ONLY valid JSON:
             }
         )
 
+    print(f"[contact_resolver_inner] Pairs: {pairs}")
     return pairs
 
 
@@ -1223,6 +1226,7 @@ Return ONLY a valid JSON:
     except Exception:
         return None
 
+    print(f"[contact_resolver_inner] Result: {result}")
     rel_type = _normalize_relationship_type(result.get("type"))
     other_type = _normalize_relationship_type(result.get("other_type"))
 
