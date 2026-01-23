@@ -3,16 +3,16 @@ repos:
     hooks:
       - id: ruff-backend
         name: ruff (backend/orchestrator)
-        entry: bash -lc "cd backend/orchestrator && python3 -m ruff check ."
+        entry: bash -lc "cd backend/orchestrator && python3 -m ruff check . --fix && git add -u"
         language: system
         pass_filenames: false
       - id: eslint-mobile
         name: eslint (mobile)
-        entry: bash -lc "cd mobile && npm run lint"
+        entry: bash -lc "cd mobile && npm run lint -- --fix && git add -u"
         language: system
         pass_filenames: false
       - id: eslint-web
         name: eslint (frontend/web)
-        entry: bash -lc "cd frontend/web && npm run lint"
+        entry: bash -lc "cd frontend/web && npm run lint -- --fix && git add -u"
         language: system
         pass_filenames: false

@@ -51,6 +51,7 @@ type EventClarificationData = {
   questions: string[];
   partial_extraction: Record<string, unknown>;
   original_message: string;
+  clarification_id?: string;
 };
 
 type EventConfirmationData = {
@@ -749,7 +750,11 @@ export default function Home() {
                         onSubmit={async (answers) => {
                           // Re-submit with additional information
                           const originalMessage = (commandResult as EventClarificationData).original_message || "";
-                          const combinedMessage = `/event ${originalMessage}\n\nAdditional details: ${answers}`;
+                          const clarificationId = (commandResult as EventClarificationData).clarification_id;
+                          const clarificationToken = clarificationId
+                            ? `\n\n[clarification_id:${clarificationId}]`
+                            : "";
+                          const combinedMessage = `/event ${originalMessage}\n\nAdditional details: ${answers}${clarificationToken}`;
                           setInput(combinedMessage);
                           // Trigger form submit
                           const form = document.querySelector('form');

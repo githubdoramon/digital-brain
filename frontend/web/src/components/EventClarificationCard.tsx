@@ -7,6 +7,7 @@ type ClarificationData = {
   questions: string[];
   partial_extraction: Record<string, unknown>;
   original_message: string;
+  clarification_id?: string;
 };
 
 type EventClarificationCardProps = {

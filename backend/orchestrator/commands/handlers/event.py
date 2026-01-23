@@ -5,6 +5,8 @@ The /event command allows users to add new memories/events to the database.
 It extracts entities, checks for existing ones, and asks for confirmation.
 """
 
+import re
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from typing import Any
 from uuid import uuid4
@@ -13,7 +15,32 @@ from commands.parser import ParsedCommand
 from commands.registry import CommandRegistry
 
 
-def _extract_event_entities_with_llm(message: str, context: dict) -> dict[str, Any]:
+def _format_existing_extraction_for_prompt(existing: dict[str, Any] | None) -> str:
+    if not existing:
+        return ""
+
+    when_value = existing.get("when")
+    if isinstance(when_value, datetime):
+        when_value = when_value.isoformat()
+
+    return (
+        "Existing extraction (use as base, update only if new details override):\n"
+        f"- title: {existing.get('title')!r}\n"
+        f"- summary: {existing.get('summary')!r}\n"
+        f"- when: {when_value!r}\n"
+        f"- where: {existing.get('where')!r}\n"
+        f"- documents: {existing.get('documents')!r}\n"
+        f"- tags: {existing.get('tags')!r}\n"
+        f"- types: {existing.get('types')!r}\n"
+        "\n"
+    )
+
+
+def _extract_event_entities_with_llm(
+    message: str,
+    context: dict,
+    existing_extraction: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     """
     Use the existing LLM infrastructure to extract event entities.
 
@@ -40,6 +67,8 @@ def _extract_event_entities_with_llm(message: str, context: dict) -> dict[str, A
     # Build tag context
     tag_examples = ", ".join(MAJOR_TAGS[:5])  # Show first 5 major tags as examples
 
+    existing_context = _format_existing_extraction_for_prompt(existing_extraction)
+
     extraction_prompt = f"""You are extracting structured information from a user's event description to create a memory entry.
 
 Current context:
@@ -48,14 +77,17 @@ Current context:
 
 Event description: "{message}"
 
+{existing_context}
+
 Extract the following information:
 1. **What happened**: A brief title (5-10 words) and detailed summary
 2. **When**: Parse date/time. If relative (e.g., "yesterday", "last Tuesday"), convert to actual datetime using current context. If not mentioned, use current time.
 3. **Where**: Location/place name (if mentioned)
-4. **Who**: Names of people involved (if mentioned)
-5. **Documents**: References to documents/files (if mentioned)
-6. **Tags**: Relevant tags for categorization. Consider major categories like: {tag_examples}, etc.
-7. **Event types**: Choose from: generic, meeting, communication, task, creation, consumption, travel, personal, system, financial, observation, interaction, education, celebration, purchase, health
+4. **Documents**: References to documents/files (if mentioned)
+5. **Tags**: Relevant tags for categorization. Consider major categories like: {tag_examples}, etc.
+6. **Event types**: Choose from: generic, meeting, communication, task, creation, consumption, travel, personal, system, financial, observation, interaction, education, celebration, purchase, health
+
+People extraction is handled separately. Do NOT include any people/person list.
 
 If ANY critical information is missing or ambiguous, set "needs_clarification" to true and provide "clarification_questions".
 
@@ -67,7 +99,6 @@ Return ONLY valid JSON in this exact format:
     "summary": "Detailed description",
     "when": "ISO 8601 datetime or null",
     "where": "Location name or null",
-    "who": ["person1", "person2"],
     "documents": [],
     "tags": ["tag1", "tag2"],
     "types": ["generic"]
@@ -82,7 +113,6 @@ Return ONLY valid JSON in this exact format:
         print(f"  - Summary: {extracted.get('summary')}")
         print(f"  - When: {extracted.get('when')}")
         print(f"  - Where: {extracted.get('where')}")
-        print(f"  - Who: {extracted.get('who')}")
         print(f"  - Tags: {extracted.get('tags')}")
         print(f"  - Types: {extracted.get('types')}")
         print(f"  - Needs clarification: {extracted.get('needs_clarification')}")
@@ -103,24 +133,32 @@ Return ONLY valid JSON in this exact format:
             "summary": extracted.get("summary", message),
             "when": when,
             "where": extracted.get("where"),
-            "who": extracted.get("who", []),
+            "who": [],
             "documents": extracted.get("documents", []),
             "tags": extracted.get("tags", []),
             "types": extracted.get("types", ["generic"]),
         }
 
-        print(f"[event_extraction] Extraction complete. Found {len(result['who'])} people")
+        if existing_extraction:
+            for key in ["title", "summary", "when", "where", "documents", "tags", "types"]:
+                if result.get(key) in (None, "", [], ["generic"]) and existing_extraction.get(key):
+                    result[key] = existing_extraction[key]
+
+        print("[event_extraction] Extraction complete")
         return result
 
     except Exception as e:
         print(f"[event_extraction] ERROR: LLM extraction failed: {e}")
         import traceback
+
         traceback.print_exc()
 
         # Fallback to basic extraction
         return {
             "needs_clarification": True,
-            "clarification_questions": ["Could you provide more details about what happened, when, and who was involved?"],
+            "clarification_questions": [
+                "Could you provide more details about what happened, when, and who was involved?"
+            ],
             "title": message[:100],
             "summary": message,
             "when": None,
@@ -130,6 +168,16 @@ Return ONLY valid JSON in this exact format:
             "tags": [],
             "types": ["generic"],
         }
+
+
+def _extract_clarification_token(message: str) -> tuple[str, str | None]:
+    token_pattern = re.compile(r"\[clarification_id:(?P<id>[\w:-]+)\]", re.IGNORECASE)
+    match = token_pattern.search(message)
+    if not match:
+        return message, None
+
+    cleaned = token_pattern.sub("", message).strip()
+    return cleaned, match.group("id")
 
 
 def _resolve_generic_terms_with_relationships(
@@ -197,8 +245,7 @@ def _resolve_generic_terms_with_relationships(
         # Extract relationship type from phrases like "my daughter", "the doctor", "user's daughter"
         # Remove possessives, articles, and "user's"
         cleaned = (
-            term_lower
-            .replace("user's ", "")
+            term_lower.replace("user's ", "")
             .replace("my ", "")
             .replace("the ", "")
             .replace("a ", "")
@@ -226,7 +273,9 @@ def _resolve_generic_terms_with_relationships(
                 contact = rel_map[rel_type][0]
                 resolved_name = contact.get("display_name", term)
                 resolved[term] = resolved_name
-                print(f"[generic_resolution]   ✓ Smart match via '{rel_type}': '{term}' -> '{resolved_name}'")
+                print(
+                    f"[generic_resolution]   ✓ Smart match via '{rel_type}': '{term}' -> '{resolved_name}'"
+                )
                 break
         else:
             print(f"[generic_resolution]   ✗ No match for '{cleaned}' or related types")
@@ -253,6 +302,7 @@ def _replace_generic_terms_in_text(
     for generic, actual in replacements.items():
         # Case-insensitive replacement that preserves case structure
         import re
+
         pattern = re.compile(re.escape(generic), re.IGNORECASE)
         result = pattern.sub(actual, result)
     return result
@@ -468,25 +518,30 @@ Return ONLY valid JSON with suggested relationships. If no clear relationships, 
             print(f"[relationship_suggestion]     Reasoning: {sug.get('reasoning')}")
 
             if from_name in name_to_id and to_name in name_to_id:
-                suggestions.append({
-                    "from_contact_id": name_to_id[from_name],
-                    "from_display_name": from_name,
-                    "to_contact_id": name_to_id[to_name],
-                    "to_display_name": to_name,
-                    "relationship_type": rel_type or "",
-                    "reciprocal_type": reciprocal or "",
-                    "confidence": confidence or "medium",
-                    "reasoning": sug.get("reasoning", ""),
-                })
+                suggestions.append(
+                    {
+                        "from_contact_id": name_to_id[from_name],
+                        "from_display_name": from_name,
+                        "to_contact_id": name_to_id[to_name],
+                        "to_display_name": to_name,
+                        "relationship_type": rel_type or "",
+                        "reciprocal_type": reciprocal or "",
+                        "confidence": confidence or "medium",
+                        "reasoning": sug.get("reasoning", ""),
+                    }
+                )
                 print("[relationship_suggestion]     ✓ Added to suggestions")
             else:
                 print("[relationship_suggestion]     ✗ Names not found in contact list, skipping")
 
-        print(f"[relationship_suggestion] Suggestion complete. Created {len(suggestions)} suggestions")
+        print(
+            f"[relationship_suggestion] Suggestion complete. Created {len(suggestions)} suggestions"
+        )
 
     except Exception as e:
         print(f"[relationship_suggestion] ERROR: Relationship suggestion failed: {e}")
         import traceback
+
         traceback.print_exc()
 
     return suggestions
@@ -541,7 +596,9 @@ def _resolve_existing_entities(
 
         # Use the actual name if we resolved a generic term
         search_name = resolution["name_replacements"].get(person_name, person_name)
-        print(f"[entity_resolution]   Person {idx}: '{person_name}' -> searching for '{search_name}'")
+        print(
+            f"[entity_resolution]   Person {idx}: '{person_name}' -> searching for '{search_name}'"
+        )
 
         matches = contacts_service.search_contacts(
             search_name,
@@ -566,7 +623,9 @@ def _resolve_existing_entities(
                     "confidence": confidence,
                 }
             )
-            print(f"[entity_resolution]     ✓ Matched to existing: {best_match['display_name']} (ID: {best_match['contact_id']}, score: {match_score}, confidence: {confidence})")
+            print(
+                f"[entity_resolution]     ✓ Matched to existing: {best_match['display_name']} (ID: {best_match['contact_id']}, score: {match_score}, confidence: {confidence})"
+            )
         else:
             # Mark as new contact to create (use resolved name if available)
             display_name = resolution["name_replacements"].get(person_name, person_name)
@@ -619,9 +678,9 @@ def handle_event(parsed: ParsedCommand, context: dict) -> dict[str, Any]:
     Returns:
         Dict with event_confirmation or clarification_needed type
     """
-    print(f"\n{'='*80}")
+    print(f"\n{'=' * 80}")
     print("[handle_event] NEW EVENT COMMAND")
-    print(f"{'='*80}")
+    print(f"{'=' * 80}")
 
     if not parsed.args:
         return {
@@ -631,42 +690,87 @@ def handle_event(parsed: ParsedCommand, context: dict) -> dict[str, Any]:
 
     user_email = context.get("user_email", "")
     print(f"[handle_event] User: {user_email}")
-    print(f"[handle_event] Input: '{parsed.args}'")
+    raw_message, clarification_id = _extract_clarification_token(parsed.args)
+    print(f"[handle_event] Input: '{raw_message}'")
+
+    clarification_context = None
+    if clarification_id:
+        from commands.storage import delete_command_data, get_command_data
+
+        clarification_context = get_command_data(clarification_id)
+        delete_command_data(clarification_id)
+        if clarification_context:
+            print(f"[handle_event] Found clarification context: {clarification_id}")
+        else:
+            print(f"[handle_event] Clarification context missing or expired: {clarification_id}")
 
     # Extract entities using LLM with time context
     print("\n[handle_event] STEP 1: Extracting entities with LLM...")
-    extracted = _extract_event_entities_with_llm(parsed.args, context)
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        extraction_future = executor.submit(
+            _extract_event_entities_with_llm,
+            raw_message,
+            context,
+            clarification_context.get("extracted") if clarification_context else None,
+        )
+        contact_future = executor.submit(
+            _resolve_contacts_with_agent,
+            raw_message,
+            user_email,
+        )
+
+        extracted = extraction_future.result()
+        resolution, contact_result = contact_future.result()
 
     # Check if clarification is needed
-    if extracted.get("needs_clarification"):
-        print("[handle_event] ⚠️  Clarification needed, returning questions to user")
-        return {
-            "type": "clarification_needed",
-            "questions": extracted.get("clarification_questions", []),
-            "partial_extraction": extracted,
-            "original_message": parsed.args,
-        }
-
-    # Resolve existing entities and generic terms
-    print("\n[handle_event] STEP 2: Resolving contacts with agent...")
-    resolution, contact_result = _resolve_contacts_with_agent(parsed.args, user_email)
+    clarification_questions = (
+        extracted.get("clarification_questions", []) if extracted.get("needs_clarification") else []
+    )
+    if extracted.get("needs_clarification") and not clarification_questions:
+        clarification_questions = [
+            "Could you clarify the missing details (what happened, when, and where)?",
+        ]
 
     ambiguous_contacts = contact_result.get("ambiguous_contacts", [])
     if ambiguous_contacts:
         print("[handle_event] ⚠️  Contact disambiguation needed")
-        questions = [
-            contact.get("clarification_prompt")
-            for contact in ambiguous_contacts
-            if contact.get("clarification_prompt")
-        ]
-        if not questions:
-            questions = ["I found multiple matching contacts. Can you clarify who you meant?"]
+        clarification_questions.extend(
+            [
+                contact.get("clarification_prompt")
+                for contact in ambiguous_contacts
+                if contact.get("clarification_prompt")
+            ]
+        )
+        if not clarification_questions:
+            clarification_questions.append(
+                "I found multiple matching contacts. Can you clarify who you meant?"
+            )
+
+    if clarification_questions:
+        print("[handle_event] ⚠️  Clarification needed, returning questions to user")
+        clarification_preview_id = f"event:clarification:{uuid4().hex[:8]}"
+        from commands.storage import store_command_data
+
+        store_command_data(
+            clarification_preview_id,
+            {
+                "extracted": extracted,
+                "resolution": resolution,
+                "contact_result": contact_result,
+                "user_email": user_email,
+                "original_message": raw_message,
+            },
+        )
         return {
             "type": "clarification_needed",
-            "questions": questions,
+            "questions": clarification_questions,
             "partial_extraction": extracted,
-            "original_message": parsed.args,
+            "original_message": raw_message,
+            "clarification_id": clarification_preview_id,
         }
+
+    # Resolve existing entities and generic terms
+    print("\n[handle_event] STEP 2: Contact resolution complete")
 
     # Keep place handling aligned with existing flow
     where = extracted.get("where")
@@ -735,7 +839,7 @@ def handle_event(parsed: ParsedCommand, context: dict) -> dict[str, Any]:
     print(f"  - Contacts found: {len(resolution.get('contacts', []))}")
     print(f"  - New contacts: {len(resolution.get('new_entities', {}).get('contacts', []))}")
     print(f"  - Relationship suggestions: {len(relationship_suggestions)}")
-    print(f"{'='*80}\n")
+    print(f"{'=' * 80}\n")
 
     return {
         "type": "event_confirmation",
