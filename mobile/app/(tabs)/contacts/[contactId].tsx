@@ -51,6 +51,7 @@ const textToList = (value: string) =>
 
 export default function ContactDetailScreen() {
   const { contactId } = useLocalSearchParams<{ contactId: string }>();
+  const contactParam = Array.isArray(contactId) ? contactId[0] : contactId;
   const { token } = useAuth();
   const router = useRouter();
   const insets = useSafeAreaInsets();
@@ -64,9 +65,14 @@ export default function ContactDetailScreen() {
 
   useEffect(() => {
     let mounted = true;
+    if (!contactParam) {
+      return () => {
+        mounted = false;
+      };
+    }
     (async () => {
       try {
-        const result = (await apiFetch(`/mobile/contacts/${contactId}`)) as Contact;
+        const result = (await apiFetch(`/mobile/contacts/${encodeURIComponent(contactParam)}`)) as Contact;
         if (mounted) {
           setContact(result);
           setDraft(result);
@@ -78,7 +84,7 @@ export default function ContactDetailScreen() {
     return () => {
       mounted = false;
     };
-  }, [contactId]);
+  }, [contactParam]);
 
   useEffect(() => {
     (async () => {
@@ -159,7 +165,7 @@ export default function ContactDetailScreen() {
           relationships: contact.relationships,
         }),
       });
-      const refreshed = (await apiFetch(`/mobile/contacts/${contact.contact_id}`)) as Contact;
+      const refreshed = (await apiFetch(`/mobile/contacts/${encodeURIComponent(contact.contact_id)}`)) as Contact;
       setContact(refreshed);
       setDraft(refreshed);
     } catch (error) {
@@ -195,7 +201,9 @@ export default function ContactDetailScreen() {
           <RelationshipChips chips={relationshipChips} />
           <Pressable
             style={styles.linkButton}
-            onPress={() => router.push(`/(tabs)/contacts/${contactId}/relationships`)}
+            onPress={() =>
+              router.push(`/(tabs)/contacts/${encodeURIComponent(contactParam ?? '')}/relationships`)
+            }
           >
             <Text style={styles.linkText}>Manage relationships</Text>
           </Pressable>

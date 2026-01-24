@@ -130,11 +130,14 @@ def fetch_person_thumbnail(
     try:
         response = requests.get(url, headers=headers, timeout=timeout)
     except requests.RequestException as exc:
+        print(f"[fetch_person_thumbnail] error={exc}")
         raise ImmichClientError(f"Immich thumbnail request failed: {exc}") from exc
 
     if response.status_code == 404:
+        print("[fetch_person_thumbnail] 404")
         return None
     if response.status_code >= 400:
+        print(f"[fetch_person_thumbnail] response={response.text}")
         snippet = response.text[:200]
         raise ImmichClientError(f"Immich thumbnail failed ({response.status_code}): {snippet}")
 

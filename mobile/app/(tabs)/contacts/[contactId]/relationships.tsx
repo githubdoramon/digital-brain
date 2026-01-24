@@ -40,7 +40,7 @@ const buildRelationshipId = (fromId: string, toId: string) => `rel_${fromId}_${t
 
 export default function RelationshipManagementScreen() {
   const { contactId } = useLocalSearchParams<{ contactId: string }>();
-  const authFetch = apiFetch;
+  const contactParam = Array.isArray(contactId) ? contactId[0] : contactId;
   const insets = useSafeAreaInsets();
   const [contact, setContact] = useState<Contact | null>(null);
   const [relationships, setRelationships] = useState<Relationship[]>([]);
@@ -52,15 +52,20 @@ export default function RelationshipManagementScreen() {
 
   useEffect(() => {
     let mounted = true;
+    if (!contactParam) {
+      return () => {
+        mounted = false;
+      };
+    }
     (async () => {
       try {
-        const result = (await authFetch(`/mobile/contacts/${contactId}`)) as Contact;
+        const result = (await apiFetch(`/mobile/contacts/${encodeURIComponent(contactParam)}`)) as Contact;
         if (mounted) {
           setContact(result);
           setRelationships(
             (result.relationships || []).map((rel) => ({
               relationship_id: rel.relationship_id,
-              from_contact_id: contactId,
+              from_contact_id: contactParam,
               to_contact_id: rel.contact_id,
               relationship_type: rel.type,
               reciprocal_type: rel.other_type ?? null,
@@ -74,12 +79,12 @@ export default function RelationshipManagementScreen() {
     return () => {
       mounted = false;
     };
-  }, [contactId]);
+  }, [contactParam]);
 
   useEffect(() => {
     (async () => {
       try {
-        const result = (await authFetch('/mobile/contacts')) as { contacts: Contact[] };
+        const result = (await apiFetch('/mobile/contacts')) as { contacts: Contact[] };
         setAllContacts(result.contacts ?? []);
       } catch (error) {
         console.warn('[relationships] contacts load failed', error);
@@ -103,9 +108,9 @@ export default function RelationshipManagementScreen() {
   const availableContacts = useMemo(() => {
     const lower = search.trim().toLowerCase();
     return allContacts
-      .filter((item) => item.contact_id !== contactId)
+      .filter((item) => item.contact_id !== contactParam)
       .filter((item) => item.display_name.toLowerCase().includes(lower));
-  }, [allContacts, contactId, search]);
+  }, [allContacts, contactParam, search]);
 
   const handleAddRelationship = () => {
     if (!selectedContactId || !newType || !contact) return;
@@ -130,7 +135,7 @@ export default function RelationshipManagementScreen() {
     if (!contact) return;
     setIsSaving(true);
     try {
-      await authFetch('/mobile/ingest/contact', {
+      await apiFetch('/mobile/ingest/contact', {
         method: 'POST',
         body: JSON.stringify({
           contact_id: contact.contact_id,
@@ -146,12 +151,12 @@ export default function RelationshipManagementScreen() {
           relationships,
         }),
       });
-      const refreshed = (await authFetch(`/mobile/contacts/${contact.contact_id}`)) as Contact;
+      const refreshed = (await apiFetch(`/mobile/contacts/${encodeURIComponent(contact.contact_id)}`)) as Contact;
       setContact(refreshed);
       setRelationships(
         (refreshed.relationships || []).map((rel) => ({
           relationship_id: rel.relationship_id,
-          from_contact_id: contactId,
+          from_contact_id: contactParam ?? '',
           to_contact_id: rel.contact_id,
           relationship_type: rel.type,
           reciprocal_type: rel.other_type ?? null,
