@@ -885,6 +885,13 @@ def _command_response_text(command_result: dict[str, Any]) -> str:
     return command_result.get("message") or "Command completed."
 
 
+def _sanitize_command_metadata(command_result: dict[str, Any]) -> dict[str, Any]:
+    try:
+        return json.loads(json.dumps(command_result, default=str))
+    except Exception:
+        return {"type": command_result.get("type", "command")}
+
+
 def _handle_pending_event(
     question: str,
     user_email: str,
@@ -959,7 +966,7 @@ def _handle_pending_event(
             user_email,
             question,
             _command_response_text(command_result),
-            assistant_metadata={"command_result": command_result},
+            assistant_metadata={"command_result": _sanitize_command_metadata(command_result)},
         )
     except Exception as exc:
         print(f"[command_thread] Failed to record exchange: {exc}")
@@ -1012,7 +1019,7 @@ def _handle_command(
             user_email,
             question,
             _command_response_text(command_result),
-            assistant_metadata={"command_result": command_result},
+            assistant_metadata={"command_result": _sanitize_command_metadata(command_result)},
         )
     except Exception as exc:
         print(f"[command_thread] Failed to record exchange: {exc}")
