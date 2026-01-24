@@ -36,10 +36,31 @@ def _format_existing_extraction_for_prompt(existing: dict[str, Any] | None) -> s
     )
 
 
+def _format_clarification_history(
+    clarification_messages: list[dict[str, str]] | None,
+) -> str:
+    if not clarification_messages:
+        return ""
+
+    formatted_lines = []
+    for entry in clarification_messages:
+        role = entry.get("role")
+        content = entry.get("content")
+        if not role or not content:
+            continue
+        formatted_lines.append(f"- {role}: {content}")
+
+    if not formatted_lines:
+        return ""
+
+    return "Clarification history (most recent last):\n" + "\n".join(formatted_lines) + "\n\n"
+
+
 def _extract_event_entities_with_llm(
     message: str,
     context: dict,
     existing_extraction: dict[str, Any] | None = None,
+    clarification_messages: list[dict[str, str]] | None = None,
 ) -> dict[str, Any]:
     """
     Use the existing LLM infrastructure to extract event entities.
@@ -68,6 +89,7 @@ def _extract_event_entities_with_llm(
     tag_examples = ", ".join(MAJOR_TAGS[:5])  # Show first 5 major tags as examples
 
     existing_context = _format_existing_extraction_for_prompt(existing_extraction)
+    clarification_context = _format_clarification_history(clarification_messages)
 
     extraction_prompt = f"""You are extracting structured information from a user's event description to create a memory entry.
 
@@ -77,7 +99,7 @@ Current context:
 
 Event description: "{message}"
 
-{existing_context}
+{existing_context}{clarification_context}
 
 Extract the following information:
 1. **What happened**: A brief title (5-10 words) and detailed summary
@@ -92,6 +114,7 @@ People extraction is handled separately. Do NOT include any people/person list.
 Prefer specific types over general terms WHEN POSSIBLE (e.g., "Electric Engineer" over "Engineer", "Orthopedist" over "Doctor").
 
 If ANY critical information is missing or ambiguous, set "needs_clarification" to true and provide "clarification_questions".
+Use the clarification history to avoid repeating questions that were already answered.
 
 Return ONLY valid JSON in this exact format:
 {{
@@ -706,6 +729,13 @@ def handle_event(parsed: ParsedCommand, context: dict) -> dict[str, Any]:
         else:
             print(f"[handle_event] Clarification context missing or expired: {clarification_id}")
 
+    clarification_messages = None
+    if clarification_context:
+        clarification_messages = clarification_context.get("clarification_messages")
+        if raw_message:
+            clarification_messages = list(clarification_messages or [])
+            clarification_messages.append({"role": "user", "content": raw_message})
+
     # Extract entities using LLM with time context
     print("\n[handle_event] STEP 1: Extracting entities with LLM...")
     with ThreadPoolExecutor(max_workers=2) as executor:
@@ -714,6 +744,7 @@ def handle_event(parsed: ParsedCommand, context: dict) -> dict[str, Any]:
             raw_message,
             context,
             clarification_context.get("extracted") if clarification_context else None,
+            clarification_messages,
         )
         contact_future = executor.submit(
             _resolve_contacts_with_agent,
@@ -753,6 +784,17 @@ def handle_event(parsed: ParsedCommand, context: dict) -> dict[str, Any]:
         clarification_preview_id = f"event:clarification:{uuid4().hex[:8]}"
         from commands.storage import store_command_data
 
+        if clarification_messages is None:
+            clarification_messages = [
+                {"role": "user", "content": raw_message},
+            ]
+        clarification_messages.append(
+            {
+                "role": "assistant",
+                "content": " ".join(clarification_questions),
+            }
+        )
+
         store_command_data(
             clarification_preview_id,
             {
@@ -761,6 +803,7 @@ def handle_event(parsed: ParsedCommand, context: dict) -> dict[str, Any]:
                 "contact_result": contact_result,
                 "user_email": user_email,
                 "original_message": raw_message,
+                "clarification_messages": clarification_messages,
             },
         )
         return {
@@ -834,6 +877,7 @@ def handle_event(parsed: ParsedCommand, context: dict) -> dict[str, Any]:
             "relationship_suggestions": relationship_suggestions,
             "original_message": raw_message,
             "thread_id": context.get("thread_id"),
+            "clarification_messages": clarification_messages,
         },
     )
 

@@ -802,12 +802,11 @@ export default function Home() {
                         clarificationData={commandResult as EventClarificationData}
                         onSubmit={async (answers) => {
                           // Re-submit with additional information
-                          const originalMessage = (commandResult as EventClarificationData).original_message || "";
                           const clarificationId = (commandResult as EventClarificationData).clarification_id;
                           const clarificationToken = clarificationId
                             ? `\n\n[clarification_id:${clarificationId}]`
                             : "";
-                          const combinedMessage = `/event ${originalMessage}\n\nAdditional details: ${answers}${clarificationToken}`;
+                          const combinedMessage = `/event ${answers}${clarificationToken}`;
                           setInput(combinedMessage);
                           // Trigger form submit
                           const form = document.querySelector('form');

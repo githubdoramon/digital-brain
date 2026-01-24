@@ -464,9 +464,7 @@ export default function ChatScreen() {
                       const clarificationToken = clarificationId
                         ? `\n\n[clarification_id:${clarificationId}]`
                         : '';
-                      const combinedMessage = `/event ${
-                        (item.metadata?.command_result as EventClarificationData).original_message
-                      }\n\nAdditional details: ${answer}${clarificationToken}`;
+                      const combinedMessage = `/event ${answer}${clarificationToken}`;
                       void sendMessage(combinedMessage);
                     }}
                   />
@@ -609,9 +607,6 @@ const styles = StyleSheet.create({
     color: theme.colors.ink,
   },
   sendButton: {
-    backgroundColor: theme.colors.accent,
-    borderRadius: theme.radius.md,
-    paddingVertical: 12,
-    paddingHorizontal: 18,
+    alignSelf: 'flex-end',
   },
 });
