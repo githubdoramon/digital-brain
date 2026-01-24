@@ -37,6 +37,12 @@ __all__ = [
 MAX_CONTACT_EMBED_CHARS = 4000
 
 
+def _avatar_url(contact_id: str, external_id: str | None) -> str | None:
+    if not external_id:
+        return None
+    return f"/mobile/contacts/{contact_id}/avatar"
+
+
 def _upsert_contact_relationships(cur, contact_id: str, relationships: Sequence[Any]) -> None:
     if not relationships:
         return
@@ -141,6 +147,7 @@ def ingest_contact(contact: ContactIn) -> None:
             )
             row = cur.fetchone()
             if row:
+                row = dict(row)
                 effective_comments = row.get("comments")
 
         embedding = _generate_contact_embedding(
@@ -211,11 +218,13 @@ def list_contacts() -> list[dict[str, Any]]:
             ORDER BY display_name
             """
         )
-        rows = cur.fetchall()
+        rows = [dict(row) for row in cur.fetchall()]
         relationships_map = _collect_contact_relationships()
         contacts: list[dict[str, Any]] = []
         for row in rows:
+            row = dict(row)
             contact_id = row["contact_id"]
+            external_id = row["external_id"]
             contacts.append(
                 {
                     "contact_id": contact_id,
@@ -227,7 +236,8 @@ def list_contacts() -> list[dict[str, Any]]:
                     "links": row["links"] or [],
                     "tags": row["tags"] or [],
                     "comments": row["comments"] or "",
-                    "external_id": row["external_id"],
+                    "external_id": external_id,
+                    "avatar_url": _avatar_url(contact_id, external_id),
                     "relationships": relationships_map.get(contact_id, []),
                 }
             )
@@ -247,7 +257,9 @@ def get_contact(contact_id: str) -> dict[str, Any] | None:
         row = cur.fetchone()
         if not row:
             return None
+        row = dict(row)
         relationships_map = _collect_contact_relationships([contact_id])
+        external_id = row["external_id"]
         return {
             "contact_id": row["contact_id"],
             "display_name": row["display_name"],
@@ -258,7 +270,8 @@ def get_contact(contact_id: str) -> dict[str, Any] | None:
             "links": row["links"] or [],
             "tags": row["tags"] or [],
             "comments": row["comments"] or "",
-            "external_id": row["external_id"],
+            "external_id": external_id,
+            "avatar_url": _avatar_url(contact_id, external_id),
             "relationships": relationships_map.get(contact_id, []),
         }
 
@@ -280,8 +293,10 @@ def get_contact_by_email(email: str) -> dict[str, Any] | None:
         row = cur.fetchone()
         if not row:
             return None
+        row = dict(row)
         contact_id = row["contact_id"]
         relationships_map = _collect_contact_relationships([contact_id])
+        external_id = row["external_id"]
         return {
             "contact_id": contact_id,
             "display_name": row["display_name"],
@@ -292,7 +307,8 @@ def get_contact_by_email(email: str) -> dict[str, Any] | None:
             "links": row["links"] or [],
             "tags": row["tags"] or [],
             "comments": row["comments"] or "",
-            "external_id": row["external_id"],
+            "external_id": external_id,
+            "avatar_url": _avatar_url(contact_id, external_id),
             "relationships": relationships_map.get(contact_id, []),
         }
 
@@ -313,6 +329,7 @@ def get_contact_by_external_id(external_id: str) -> dict[str, Any] | None:
         row = cur.fetchone()
         if not row:
             return None
+        row = dict(row)
         return get_contact(row["contact_id"])
 
 
@@ -337,7 +354,10 @@ def _fetch_contact_row(cur, contact_id: str):
         """,
         (contact_id,),
     )
-    return cur.fetchone()
+    row = cur.fetchone()
+    if not row:
+        return None
+    return dict(row)
 
 
 def _merge_lists(*lists: Iterable[Any] | None) -> list[str]:
@@ -399,7 +419,7 @@ def _is_default_external_display(name: str | None, external_id: str) -> bool:
 
 def sync_external_contact(
     record: ExternalPerson, previous: ExternalPerson | None = None
-) -> dict[str, Any]:
+) -> dict[str, Any] | None:
     external_id = str(record.id).strip()
     if not external_id:
         raise ValueError("External contact id is required")
@@ -429,7 +449,8 @@ def sync_external_contact(
         )
         row = cur.fetchone()
         if row:
-            contact_id = row["contact_id"]
+            row = dict(row)
+            contact_id = str(row["contact_id"])
             existing_row = _fetch_contact_row(cur, contact_id)
         else:
             normalized_display = display_name.lower()
@@ -445,7 +466,8 @@ def sync_external_contact(
             )
             match = cur.fetchone()
             if match:
-                contact_id = match["contact_id"]
+                match = dict(match)
+                contact_id = str(match["contact_id"])
                 existing_row = _fetch_contact_row(cur, contact_id)
 
         if not contact_id:
@@ -486,6 +508,9 @@ def sync_external_contact(
 
     final_birthday = existing_birthday or birthday
 
+    if not contact_id:
+        raise RuntimeError("Failed to resolve contact_id for external sync")
+
     ingest_contact(
         ContactIn(
             contact_id=contact_id,
@@ -525,7 +550,7 @@ def unlink_external_contact(external_id: str) -> bool:
         return updated
 
 
-def merge_contacts(primary_contact_id: str, duplicate_contact_id: str) -> dict[str, Any]:
+def merge_contacts(primary_contact_id: str, duplicate_contact_id: str) -> dict[str, Any] | None:
     if primary_contact_id == duplicate_contact_id:
         raise ValueError("Cannot merge a contact with itself")
 
@@ -538,10 +563,11 @@ def merge_contacts(primary_contact_id: str, duplicate_contact_id: str) -> dict[s
             """,
             ([primary_contact_id, duplicate_contact_id],),
         )
-        rows = cur.fetchall()
+        rows = [dict(row) for row in cur.fetchall()]
         if len(rows) < 2:
             raise LookupError("One or both contacts were not found for merge")
 
+        rows = [dict(row) for row in rows]
         row_map = {row["contact_id"]: row for row in rows}
         primary = row_map.get(primary_contact_id)
         duplicate = row_map.get(duplicate_contact_id)
@@ -635,7 +661,7 @@ def merge_contacts(primary_contact_id: str, duplicate_contact_id: str) -> dict[s
             """,
             (duplicate_contact_id,),
         )
-        todo_rows = cur.fetchall()
+        todo_rows = [dict(row) for row in cur.fetchall()]
         for todo_row in todo_rows:
             todo_id = todo_row["todo_id"]
             cur.execute(
@@ -690,7 +716,7 @@ def list_contact_merge_candidates() -> dict[str, Any]:
             ORDER BY display_name
             """
         )
-        rows = cur.fetchall()
+        rows = [dict(row) for row in cur.fetchall()]
 
     def _serialize(row) -> dict[str, Any]:
         return {
@@ -939,7 +965,7 @@ def search_contacts(
         return []
 
     all_contacts = list_contacts()
-    matches: list[tuple[dict[str, Any], int, str]] = []
+    matches: list[tuple[dict[str, Any], float, str]] = []
 
     for contact in all_contacts:
         best_score = 0
@@ -1251,7 +1277,7 @@ def _collect_contact_relationships(
 
     with get_conn() as conn, conn.cursor() as cur:
         cur.execute(query, tuple(params))
-        rows = cur.fetchall()
+        rows = [dict(row) for row in cur.fetchall()]
 
     relationships_map: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for row in rows:

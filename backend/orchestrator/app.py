@@ -224,6 +224,28 @@ def get_contact(contact_id: str, user: dict = Depends(get_current_user)):
     return contact
 
 
+@api.get("/mobile/contacts/{contact_id}/avatar")
+def get_contact_avatar(contact_id: str, user: dict = Depends(get_current_user)):
+    contact = contacts_service.get_contact(contact_id)
+    if contact is None:
+        raise HTTPException(status_code=404, detail="Contact not found")
+
+    external_id = contact.get("external_id")
+    if not external_id:
+        raise HTTPException(status_code=404, detail="Avatar not available")
+
+    try:
+        result = immich_client.fetch_person_thumbnail(external_id)
+    except immich_client.ImmichClientError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    if not result:
+        raise HTTPException(status_code=404, detail="Avatar not available")
+
+    content, content_type = result
+    return Response(content=content, media_type=content_type)
+
+
 @api.delete("/contacts/{contact_id}")
 def delete_contact(contact_id: str, user: dict = Depends(get_current_user)):
     deleted = contacts_service.delete_contact(contact_id)

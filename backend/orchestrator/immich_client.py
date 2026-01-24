@@ -10,6 +10,7 @@ from contacts import get_contact_by_external_id
 
 IMMICH_HTTP_TIMEOUT = int(os.getenv("IMMICH_HTTP_TIMEOUT", "45"))
 
+
 class ImmichClientError(RuntimeError):
     """Raised when the Immich client is not configured correctly."""
 
@@ -41,7 +42,9 @@ def get_immich_config(require_device: bool = False) -> ImmichConfig:
     device_id = (os.getenv("IMMICH_DEVICE_ID") or "").strip() or None
     if require_device and not device_id:
         device_id = "telegram-bot"
-    return ImmichConfig(base_url=base_url, api_key=api_key, face_api_key=face_api_key, device_id=device_id)
+    return ImmichConfig(
+        base_url=base_url, api_key=api_key, face_api_key=face_api_key, device_id=device_id
+    )
 
 
 def identify_contacts_from_image(
@@ -103,3 +106,33 @@ def identify_contacts_from_image(
             contacts.append(contact)
 
     return contacts, payload
+
+
+def fetch_person_thumbnail(
+    person_id: str,
+    config: ImmichConfig | None = None,
+) -> tuple[bytes, str] | None:
+    if not person_id:
+        return None
+
+    cfg = config or get_immich_config()
+    url = f"{cfg.base_url}/api/people/{person_id}/thumbnail"
+    headers = {
+        "x-api-key": cfg.api_key,
+        "accept": "image/*",
+    }
+    timeout = cfg.http_timeout or IMMICH_HTTP_TIMEOUT
+
+    try:
+        response = requests.get(url, headers=headers, timeout=timeout)
+    except requests.RequestException as exc:
+        raise ImmichClientError(f"Immich thumbnail request failed: {exc}") from exc
+
+    if response.status_code == 404:
+        return None
+    if response.status_code >= 400:
+        snippet = response.text[:200]
+        raise ImmichClientError(f"Immich thumbnail failed ({response.status_code}): {snippet}")
+
+    content_type = response.headers.get("content-type") or "image/jpeg"
+    return response.content, content_type
