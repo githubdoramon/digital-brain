@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
-import { Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import { StyleSheet, Text, TextInput, View } from 'react-native';
 
+import { Button } from '@/components/Button';
 import { theme } from '@/theme';
 
 type EventClarificationData = {
@@ -48,17 +49,13 @@ export function EventClarificationCard({ data, onSubmit }: EventClarificationCar
         style={styles.input}
         multiline
       />
-      <Pressable
+      <Button
+        label={isSubmitting ? 'Sending...' : 'Submit details'}
         onPress={handleSubmit}
         disabled={!answer.trim() || isSubmitting}
-        style={({ pressed }) => [
-          styles.submitButton,
-          (!answer.trim() || isSubmitting) && styles.submitDisabled,
-          pressed && styles.buttonPressed,
-        ]}
-      >
-        <Text style={styles.submitText}>{isSubmitting ? 'Sending...' : 'Submit details'}</Text>
-      </Pressable>
+        variant="primary"
+        style={styles.submitButton}
+      />
     </View>
   );
 }
@@ -100,19 +97,5 @@ const styles = StyleSheet.create({
   },
   submitButton: {
     marginTop: 12,
-    paddingVertical: 12,
-    borderRadius: theme.radius.md,
-    backgroundColor: theme.colors.accent,
-    alignItems: 'center',
-  },
-  submitDisabled: {
-    backgroundColor: theme.colors.line,
-  },
-  submitText: {
-    color: '#fff',
-    fontWeight: '600',
-  },
-  buttonPressed: {
-    transform: [{ scale: 0.98 }],
   },
 });

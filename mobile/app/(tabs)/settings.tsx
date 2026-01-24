@@ -1,11 +1,12 @@
 import { LinearGradient } from 'expo-linear-gradient';
 import React, { useCallback, useEffect, useState } from 'react';
 import * as SecureStore from 'expo-secure-store';
-import { ActivityIndicator, Alert, Pressable, StyleSheet, Switch, Text, View } from 'react-native';
+import { ActivityIndicator, Alert, StyleSheet, Switch, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { apiFetch } from '@/api/client';
 import { useAuth } from '@/auth/AuthContext';
+import { Button } from '@/components/Button';
 import {
   getDeviceRegistrationIfGranted,
   registerForPushNotifications,
@@ -189,12 +190,12 @@ export default function SettingsScreen() {
         {isSaving && <Text style={styles.saving}>Saving preference…</Text>}
       </View>
 
-      <Pressable
+      <Button
+        label="Sign out"
         onPress={signOut}
-        style={({ pressed }) => [styles.signOutButton, pressed && styles.signOutPressed]}
-      >
-        <Text style={styles.signOutText}>Sign out</Text>
-      </Pressable>
+        variant="primary"
+        style={styles.signOutButton}
+      />
     </LinearGradient>
   );
 }
@@ -260,16 +261,7 @@ const styles = StyleSheet.create({
     marginTop: 20,
     alignSelf: 'stretch',
     borderRadius: theme.radius.md,
-    paddingVertical: 12,
     paddingHorizontal: 18,
     backgroundColor: theme.colors.ink,
-    alignItems: 'center',
-  },
-  signOutPressed: {
-    transform: [{ scale: 0.98 }],
-  },
-  signOutText: {
-    color: '#fff',
-    fontWeight: '600',
   },
 });

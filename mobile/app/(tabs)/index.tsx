@@ -6,7 +6,6 @@ import {
   KeyboardAvoidingView,
   KeyboardAvoidingViewProps,
   Platform,
-  Pressable,
   StyleSheet,
   Text,
   TextInput,
@@ -17,6 +16,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { apiFetch } from '@/api/client';
 import { useAuth } from '@/auth/AuthContext';
 import { theme } from '@/theme';
+import { Button } from '@/components/Button';
 import { EventClarificationCard } from '@/components/EventClarificationCard';
 import { EventProposalCard } from '@/components/EventProposalCard';
 import { SlashCommandPalette } from '@/components/SlashCommandPalette';
@@ -162,7 +162,6 @@ export default function ChatScreen() {
 
   useEffect(() => {
     const restoreSession = async () => {
-      console.log('[chat] restoreSession init', { hasToken: Boolean(token), allowed });
       if (!token || !allowed) {
         setIsBootstrapping(false);
         return;
@@ -170,14 +169,7 @@ export default function ChatScreen() {
 
       try {
         const stored = await loadChatSession();
-        console.log('[chat] Stored session', stored);
-
         const restored = await restoreChatHistory(token, stored);
-        console.log('[chat] Restored thread', {
-          threadId: restored.threadId,
-          pendingEventId: restored.pendingEventId,
-          messageCount: restored.messages.length,
-        });
 
         setThreadId(restored.threadId);
         setPendingEventId(restored.pendingEventId);
@@ -189,7 +181,6 @@ export default function ChatScreen() {
           setMessages(starterMessages);
         }
       } catch (error) {
-        console.error('[chat] restoreSession error', error);
         const authExpired = (error as Error & { authExpired?: boolean }).authExpired;
         if (authExpired) {
           await signOut();
@@ -306,7 +297,8 @@ export default function ChatScreen() {
   };
 
   const trimmedInput = input.trimStart();
-  const showSlashPalette = trimmedInput.startsWith('/');
+  const hasCommandToken = /^\/\w+\s/.test(trimmedInput);
+  const showSlashPalette = trimmedInput.startsWith('/') && !hasCommandToken;
   const slashQuery = trimmedInput.slice(1).split(/\s/)[0];
 
   useEffect(() => {
@@ -376,8 +368,6 @@ export default function ChatScreen() {
                   styles.messageText,
                   item.role === 'user' ? styles.userText : styles.assistantText,
                 ]}
-                includeFontPadding={false}
-                textAlignVertical="top"
                 selectable
               >
                 {item.content}
@@ -516,17 +506,13 @@ export default function ChatScreen() {
             placeholder="Send a message..."
             multiline
           />
-          <Pressable
+          <Button
+            label={isSending ? '...' : 'Send'}
             onPress={() => sendMessage()}
             disabled={!canSend}
-            style={({ pressed }) => [
-              styles.sendButton,
-              !canSend && styles.sendDisabled,
-              pressed && canSend && styles.sendPressed,
-            ]}
-          >
-            <Text style={styles.sendText}>{isSending ? '...' : 'Send'}</Text>
-          </Pressable>
+            variant="primary"
+            style={styles.sendButton}
+          />
         </View>
       </KeyboardAvoidingView>
     </LinearGradient>
@@ -587,7 +573,9 @@ const styles = StyleSheet.create({
   },
   messageText: {
     fontSize: 15,
-    lineHeight: 21,
+    lineHeight: 24,
+    paddingTop: 2,
+    paddingBottom: 2,
   },
   userText: {
     color: '#fff',
@@ -625,15 +613,5 @@ const styles = StyleSheet.create({
     borderRadius: theme.radius.md,
     paddingVertical: 12,
     paddingHorizontal: 18,
-  },
-  sendDisabled: {
-    backgroundColor: theme.colors.line,
-  },
-  sendPressed: {
-    transform: [{ scale: 0.97 }],
-  },
-  sendText: {
-    color: '#fff',
-    fontWeight: '600',
   },
 });

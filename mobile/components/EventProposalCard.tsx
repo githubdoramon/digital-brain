@@ -1,6 +1,7 @@
-import React from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import React, { useState } from 'react';
+import { StyleSheet, Text, View } from 'react-native';
 
+import { Button } from '@/components/Button';
 import { theme } from '@/theme';
 
 type EventConfirmationData = {
@@ -55,10 +56,24 @@ const renderList = (items: string[], emptyLabel: string) => {
 };
 
 export function EventProposalCard({ data, onConfirm, onCancel, isSubmitting }: EventProposalCardProps) {
+  const [isFinalized, setIsFinalized] = useState(false);
   const { extracted, resolution, relationship_suggestions: relationships = [] } = data;
   const newContacts = resolution?.new_entities?.contacts ?? [];
   const newPlaces = resolution?.new_entities?.places ?? [];
   const newDocuments = resolution?.new_entities?.documents ?? [];
+  const disabled = isSubmitting || isFinalized;
+
+  const handleConfirm = () => {
+    if (disabled) return;
+    setIsFinalized(true);
+    onConfirm(data.preview_id);
+  };
+
+  const handleCancel = () => {
+    if (disabled) return;
+    setIsFinalized(true);
+    onCancel(data.preview_id);
+  };
 
   return (
     <View style={styles.card}>
@@ -119,20 +134,20 @@ export function EventProposalCard({ data, onConfirm, onCancel, isSubmitting }: E
       )}
 
       <View style={styles.actions}>
-        <Pressable
-          onPress={() => onCancel(data.preview_id)}
-          disabled={isSubmitting}
-          style={({ pressed }) => [styles.secondaryButton, pressed && styles.buttonPressed]}
-        >
-          <Text style={styles.secondaryButtonText}>{isSubmitting ? 'Working...' : 'Cancel'}</Text>
-        </Pressable>
-        <Pressable
-          onPress={() => onConfirm(data.preview_id)}
-          disabled={isSubmitting}
-          style={({ pressed }) => [styles.primaryButton, pressed && styles.buttonPressed]}
-        >
-          <Text style={styles.primaryButtonText}>{isSubmitting ? 'Creating...' : 'Create event'}</Text>
-        </Pressable>
+        <Button
+          label={isFinalized ? 'Canceled' : isSubmitting ? 'Working...' : 'Cancel'}
+          onPress={handleCancel}
+          disabled={disabled}
+          variant="secondary"
+          style={styles.secondaryButton}
+        />
+        <Button
+          label={isFinalized ? 'Submitted' : isSubmitting ? 'Creating...' : 'Create event'}
+          onPress={handleConfirm}
+          disabled={disabled}
+          variant="primary"
+          style={styles.primaryButton}
+        />
       </View>
     </View>
   );
@@ -146,6 +161,8 @@ const styles = StyleSheet.create({
     backgroundColor: theme.colors.background,
     borderWidth: 1,
     borderColor: theme.colors.line,
+    minWidth: 260,
+    alignSelf: 'stretch',
   },
   kicker: {
     fontSize: 12,
@@ -201,29 +218,8 @@ const styles = StyleSheet.create({
   },
   primaryButton: {
     flex: 1,
-    backgroundColor: theme.colors.accent,
-    paddingVertical: 12,
-    borderRadius: theme.radius.md,
-    alignItems: 'center',
   },
   secondaryButton: {
     flex: 1,
-    backgroundColor: theme.colors.card,
-    paddingVertical: 12,
-    borderRadius: theme.radius.md,
-    alignItems: 'center',
-    borderWidth: 1,
-    borderColor: theme.colors.line,
-  },
-  primaryButtonText: {
-    color: '#fff',
-    fontWeight: '600',
-  },
-  secondaryButtonText: {
-    color: theme.colors.ink,
-    fontWeight: '600',
-  },
-  buttonPressed: {
-    transform: [{ scale: 0.98 }],
   },
 });

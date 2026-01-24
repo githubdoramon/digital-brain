@@ -50,7 +50,6 @@ export async function restoreChatHistory(
   storedSession: StoredChatSession | null,
 ): Promise<RestoreResult> {
   const threads = await apiFetch('/mobile/threads', { token });
-  console.log('[chat] /mobile/threads response', threads);
   const resolvedThreads = Array.isArray(threads) ? (threads as ThreadSummary[]) : [];
 
   let threadId: string | null = storedSession?.threadId ?? null;
@@ -58,19 +57,35 @@ export async function restoreChatHistory(
     threadId = null;
   }
   if (!threadId && resolvedThreads.length > 0) {
-    threadId = resolvedThreads[0].id;
+    const preferred = resolvedThreads.find((thread) => thread.last_message_preview);
+    threadId = (preferred ?? resolvedThreads[0]).id;
   }
 
   let messages: ChatMessage[] = [];
   if (threadId) {
     const threadDetail = (await apiFetch(`/mobile/threads/${threadId}`, { token })) as ThreadDetail;
-    console.log('[chat] /mobile/threads detail response', threadDetail);
     messages = (threadDetail.messages || []).map((msg) => ({
       id: `${msg.message_id}`,
       role: msg.role,
       content: msg.content,
       metadata: msg.metadata ?? undefined,
     }));
+
+    if (messages.length === 0 && resolvedThreads.length > 1) {
+      const fallback = resolvedThreads.find(
+        (thread) => thread.id !== threadId && thread.last_message_preview,
+      );
+      if (fallback) {
+        threadId = fallback.id;
+        const fallbackDetail = (await apiFetch(`/mobile/threads/${threadId}`, { token })) as ThreadDetail;
+        messages = (fallbackDetail.messages || []).map((msg) => ({
+          id: `${msg.message_id}`,
+          role: msg.role,
+          content: msg.content,
+          metadata: msg.metadata ?? undefined,
+        }));
+      }
+    }
   }
 
   return {

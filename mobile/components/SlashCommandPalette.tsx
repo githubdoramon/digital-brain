@@ -34,6 +34,7 @@ export function SlashCommandPalette({ query, onSelect }: SlashCommandPaletteProp
         <Pressable
           key={command.command}
           onPress={() => onSelect(command.command)}
+          android_ripple={{ color: 'rgba(0,0,0,0.08)' }}
           style={({ pressed }) => [styles.row, pressed && styles.rowPressed]}
         >
           <View>
