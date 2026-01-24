@@ -1,7 +1,7 @@
 import React, { useMemo } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 
-import { theme } from '@/src/theme';
+import { theme } from '@/theme';
 
 type CommandOption = {
   command: string;

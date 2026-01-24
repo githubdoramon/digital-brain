@@ -12,7 +12,7 @@ export async function loadChatSession(): Promise<StoredChatSession | null> {
   if (!storedRaw) return null;
   try {
     return JSON.parse(storedRaw) as StoredChatSession;
-  } catch (error) {
+  } catch {
     return null;
   }
 }

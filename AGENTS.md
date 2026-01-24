@@ -2,9 +2,11 @@ Digital Brain – Quick Context
 
 ## Overview
 
-Personal memory orchestrator with a **bounded agent architecture**. Backend: FastAPI (`backend/orchestrator`) + PostgreSQL/pgvector. Frontend: Next.js App Router (`frontend/web`) with NextAuth Google OAuth. Supports OpenAI-compatible LLM APIs (local Ollama or cloud). Optional Tavily web search and Home Assistant integration.
+Personal memory orchestrator with a **bounded agent architecture**. Backend: FastAPI (`backend/orchestrator`) + PostgreSQL/pgvector. Frontend: Next.js App Router (`frontend/web`) with NextAuth Google OAuth. Mobile app: React Native/Expo (`mobile`). Supports OpenAI-compatible LLM APIs (local Ollama or cloud). Optional Tavily web search and Home Assistant integration.
 
 **Core principle**: "The model proposes. The controller validates, executes, and decides."
+
+**Terminology**: When a user says "app", they mean the mobile app in `mobile`, not the web frontend.
 
 ## Architecture Documentation
 
@@ -19,6 +21,8 @@ Detailed architecture docs live in `backend/orchestrator/docs/architecture/`:
 | [STATE_MANAGEMENT.md](backend/orchestrator/docs/architecture/STATE_MANAGEMENT.md) | AgentState guide with examples |
 | [VALIDATION.md](backend/orchestrator/docs/architecture/VALIDATION.md) | Pre/post validation system |
 | [AGENT_LIMITS.md](backend/orchestrator/docs/architecture/AGENT_LIMITS.md) | Limits and stop rules configuration |
+| [CLIENT_API_PROXY.md](CLIENT_API_PROXY.md) | Client API proxy requirements and routing |
+
 
 ## Services & Runtime
 
@@ -28,6 +32,11 @@ Docker Compose services: `db` (pgvector), `orchestrator` (FastAPI), `frontend` (
 - **Auth**: Google ID token (`Authorization: Bearer …`); email allowlist in `auth.py`
 - **CORS**: Allows `http://localhost:3000`
 - **Service-to-service**: `x-service-api-key` header (`ORCHESTRATOR_API_KEY`)
+
+## Client API Proxy
+
+All client API calls must go through the frontend proxy layer. See
+`CLIENT_API_PROXY.md` for required prefixes and routing behavior.
 
 ## Backend Structure
 

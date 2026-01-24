@@ -9,7 +9,7 @@ import 'react-native-reanimated';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import * as Notifications from 'expo-notifications';
 
-import { AuthProvider, useAuth } from '@/src/auth/AuthContext';
+import { AuthProvider, useAuth } from '@/auth/AuthContext';
 
 export {
   // Catch any errors thrown by the Layout component.

@@ -346,10 +346,6 @@ def ingest_event(e: EventIn, user: dict = Depends(get_current_user)):
     return {"ok": True, "id": e.id}
 
 
-# Removed: /threads/{thread_id}/events endpoint - part of old event_capture system
-# Use /event command instead
-
-
 # --------------------------- Document endpoints ---------------------------
 @api.post("/ingest/document", response_model=DocumentDetailOut)
 async def upload_document(
@@ -1306,6 +1302,7 @@ async def ask_stream(payload: AskIn, user: dict = Depends(get_current_user)):
 
 
 @api.get("/threads", response_model=list[ThreadOut])
+@api.get("/mobile/threads", response_model=list[ThreadOut])
 def list_conversation_threads(user: dict = Depends(get_current_user)):
     user_email = user.get("email")
     if not user_email:
@@ -1315,6 +1312,7 @@ def list_conversation_threads(user: dict = Depends(get_current_user)):
 
 
 @api.post("/threads", response_model=ThreadOut)
+@api.post("/mobile/threads", response_model=ThreadOut)
 def create_conversation_thread(payload: ThreadCreate, user: dict = Depends(get_current_user)):
     user_email = user.get("email")
     if not user_email:
@@ -1324,6 +1322,7 @@ def create_conversation_thread(payload: ThreadCreate, user: dict = Depends(get_c
 
 
 @api.get("/threads/{thread_id}", response_model=ThreadDetailOut)
+@api.get("/mobile/threads/{thread_id}", response_model=ThreadDetailOut)
 def get_conversation_thread(thread_id: str, user: dict = Depends(get_current_user)):
     user_email = user.get("email")
     if not user_email:
@@ -1340,6 +1339,7 @@ def get_conversation_thread(thread_id: str, user: dict = Depends(get_current_use
 
 
 @api.put("/threads/{thread_id}", response_model=ThreadOut)
+@api.put("/mobile/threads/{thread_id}", response_model=ThreadOut)
 def update_conversation_thread(
     thread_id: str,
     payload: ThreadUpdate,
@@ -1374,6 +1374,7 @@ def update_conversation_thread(
 
 
 @api.delete("/threads/{thread_id}", status_code=204)
+@api.delete("/mobile/threads/{thread_id}", status_code=204)
 def delete_conversation_thread(thread_id: str, user: dict = Depends(get_current_user)):
     user_email = user.get("email")
     if not user_email:

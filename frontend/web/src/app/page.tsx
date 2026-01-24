@@ -279,6 +279,7 @@ export default function Home() {
     setIsLoadingThreads(true);
     try {
       const data = await api.get<ThreadSummary[]>("/threads");
+      console.log('[refreshThreads] data', data);
       setThreads(data);
       return data;
     } catch (error) {

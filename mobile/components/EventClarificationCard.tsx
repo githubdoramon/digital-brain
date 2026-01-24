@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 
-import { theme } from '@/src/theme';
+import { theme } from '@/theme';
 
 type EventClarificationData = {
   type: 'clarification_needed';

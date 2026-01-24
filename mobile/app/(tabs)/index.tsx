@@ -14,14 +14,14 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { apiFetch } from '@/src/api/client';
-import { useAuth } from '@/src/auth/AuthContext';
-import { theme } from '@/src/theme';
+import { apiFetch } from '@/api/client';
+import { useAuth } from '@/auth/AuthContext';
+import { theme } from '@/theme';
 import { EventClarificationCard } from '@/components/EventClarificationCard';
 import { EventProposalCard } from '@/components/EventProposalCard';
 import { SlashCommandPalette } from '@/components/SlashCommandPalette';
-import { loadChatSession, saveChatSession, StoredChatSession } from '@/src/chat/session';
-import { restoreChatHistory } from '@/src/chat/threads';
+import { loadChatSession, saveChatSession, StoredChatSession } from '@/chat/session';
+import { restoreChatHistory } from '@/chat/threads';
 
 type Message = {
   id: string;
@@ -140,17 +140,29 @@ export default function ChatScreen() {
   const allowed = email === 'REDACTED-EMAIL';
   const canSend = input.trim().length > 0 && !isSending && allowed;
 
-  const starterMessages: Message[] = [
-    {
-      id: 'welcome',
-      role: 'assistant',
-      content: allowed ? 'Good to see you. What are we exploring today?' : 'Access restricted. Please contact the administrator.',
-    },
-  ];
+  const starterMessages = useMemo<Message[]>(
+    () => [
+      {
+        id: 'welcome',
+        role: 'assistant',
+        content: allowed
+          ? 'Good to see you. What are we exploring today?'
+          : 'Access restricted. Please contact the administrator.',
+      },
+    ],
+    [allowed],
+  );
   const [messages, setMessages] = useState<Message[]>(starterMessages);
 
   useEffect(() => {
+    if (messages.length === 1 && messages[0]?.id === 'welcome') {
+      setMessages(starterMessages);
+    }
+  }, [starterMessages, messages]);
+
+  useEffect(() => {
     const restoreSession = async () => {
+      console.log('[chat] restoreSession init', { hasToken: Boolean(token), allowed });
       if (!token || !allowed) {
         setIsBootstrapping(false);
         return;
@@ -158,7 +170,14 @@ export default function ChatScreen() {
 
       try {
         const stored = await loadChatSession();
+        console.log('[chat] Stored session', stored);
+
         const restored = await restoreChatHistory(token, stored);
+        console.log('[chat] Restored thread', {
+          threadId: restored.threadId,
+          pendingEventId: restored.pendingEventId,
+          messageCount: restored.messages.length,
+        });
 
         setThreadId(restored.threadId);
         setPendingEventId(restored.pendingEventId);
@@ -170,6 +189,7 @@ export default function ChatScreen() {
           setMessages(starterMessages);
         }
       } catch (error) {
+        console.error('[chat] restoreSession error', error);
         const authExpired = (error as Error & { authExpired?: boolean }).authExpired;
         if (authExpired) {
           await signOut();
@@ -180,7 +200,7 @@ export default function ChatScreen() {
     };
 
     void restoreSession();
-  }, [token, allowed]);
+  }, [token, allowed, signOut, starterMessages]);
 
   useEffect(() => {
     if (isBootstrapping) return;
@@ -356,6 +376,8 @@ export default function ChatScreen() {
                   styles.messageText,
                   item.role === 'user' ? styles.userText : styles.assistantText,
                 ]}
+                includeFontPadding={false}
+                textAlignVertical="top"
                 selectable
               >
                 {item.content}
@@ -426,7 +448,7 @@ export default function ChatScreen() {
                           },
                         ]);
                         setPendingEventId(null);
-                      } catch (error) {
+                      } catch {
                         setMessages((prev) => [
                           ...prev,
                           {

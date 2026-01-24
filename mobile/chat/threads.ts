@@ -1,4 +1,4 @@
-import { apiFetch } from '@/src/api/client';
+import { apiFetch } from '@/api/client';
 
 import { StoredChatSession } from './session';
 
@@ -49,11 +49,12 @@ export async function restoreChatHistory(
   token: string,
   storedSession: StoredChatSession | null,
 ): Promise<RestoreResult> {
-  const threads = await apiFetch('/threads', { token });
+  const threads = await apiFetch('/mobile/threads', { token });
+  console.log('[chat] /mobile/threads response', threads);
   const resolvedThreads = Array.isArray(threads) ? (threads as ThreadSummary[]) : [];
 
   let threadId: string | null = storedSession?.threadId ?? null;
-  if (threadId && !resolvedThreads.some((thread) => thread.id === threadId)) {
+  if (threadId && resolvedThreads.length > 0 && !resolvedThreads.some((thread) => thread.id === threadId)) {
     threadId = null;
   }
   if (!threadId && resolvedThreads.length > 0) {
@@ -62,7 +63,8 @@ export async function restoreChatHistory(
 
   let messages: ChatMessage[] = [];
   if (threadId) {
-    const threadDetail = (await apiFetch(`/threads/${threadId}`, { token })) as ThreadDetail;
+    const threadDetail = (await apiFetch(`/mobile/threads/${threadId}`, { token })) as ThreadDetail;
+    console.log('[chat] /mobile/threads detail response', threadDetail);
     messages = (threadDetail.messages || []).map((msg) => ({
       id: `${msg.message_id}`,
       role: msg.role,

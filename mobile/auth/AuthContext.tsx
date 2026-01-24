@@ -3,7 +3,7 @@ import React, { createContext, useCallback, useContext, useEffect, useMemo, useR
 import * as SecureStore from 'expo-secure-store';
 import { Alert } from 'react-native';
 
-import { apiFetch, setAuthRefreshHandler, setAuthTokenProvider } from '@/src/api/client';
+import { apiFetch, setAuthRefreshHandler, setAuthTokenProvider } from '@/api/client';
 
 const TOKEN_KEY = 'digitalbrain.googleIdToken';
 const EMAIL_KEY = 'digitalbrain.userEmail';
@@ -135,7 +135,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     } finally {
       setIsSigningIn(false);
     }
-  }, []);
+  }, [refreshToken]);
 
   const signOut = useCallback(async () => {
     setToken(null);

@@ -4,13 +4,13 @@ import * as SecureStore from 'expo-secure-store';
 import { ActivityIndicator, Alert, Pressable, StyleSheet, Switch, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { apiFetch } from '@/src/api/client';
-import { useAuth } from '@/src/auth/AuthContext';
+import { apiFetch } from '@/api/client';
+import { useAuth } from '@/auth/AuthContext';
 import {
   getDeviceRegistrationIfGranted,
   registerForPushNotifications,
-} from '@/src/notifications/register';
-import { theme } from '@/src/theme';
+} from '@/notifications/register';
+import { theme } from '@/theme';
 
 type SettingsResponse = {
   pushNotificationsEnabled: boolean;
@@ -25,7 +25,7 @@ export default function SettingsScreen() {
   const [isSaving, setIsSaving] = useState(false);
   const [pushEnabled, setPushEnabled] = useState(false);
 
-  const unregisterDevice = async () => {
+  const unregisterDevice = useCallback(async () => {
     const existing = await SecureStore.getItemAsync(TOKEN_KEY);
     if (!existing) return;
     await apiFetch(`/mobile/devices/unregister?expoPushToken=${encodeURIComponent(existing)}`, {
@@ -33,7 +33,7 @@ export default function SettingsScreen() {
       token,
     });
     await SecureStore.deleteItemAsync(TOKEN_KEY);
-  };
+  }, [token]);
 
   const reconcilePushState = useCallback(
     async (backendEnabled: boolean) => {
@@ -48,11 +48,11 @@ export default function SettingsScreen() {
       }
       if (registration && !backendEnabled) {
         try {
-            const settingsResponse = await apiFetch('/mobile/settings/push-notifications', {
-              method: 'PUT',
-              body: JSON.stringify({ enabled: true }),
-              token,
-            });
+          await apiFetch('/mobile/settings/push-notifications', {
+            method: 'PUT',
+            body: JSON.stringify({ enabled: true }),
+            token,
+          });
           await apiFetch('/mobile/devices/register', {
             method: 'POST',
             body: JSON.stringify(registration),
@@ -69,7 +69,7 @@ export default function SettingsScreen() {
 
       if (backendEnabled && !registration) {
         try {
-          const settingsResponse = await apiFetch('/mobile/settings/push-notifications', {
+          await apiFetch('/mobile/settings/push-notifications', {
             method: 'PUT',
             body: JSON.stringify({ enabled: false }),
             token,
@@ -82,7 +82,7 @@ export default function SettingsScreen() {
       }
       setPushEnabled(false);
     },
-    [token],
+    [token, unregisterDevice],
   );
 
   useEffect(() => {
@@ -119,7 +119,7 @@ export default function SettingsScreen() {
           setPushEnabled(false);
           return;
         }
-        const settingsResponse = await apiFetch('/mobile/settings/push-notifications', {
+        await apiFetch('/mobile/settings/push-notifications', {
           method: 'PUT',
           body: JSON.stringify({ enabled: true }),
           token,
@@ -132,7 +132,7 @@ export default function SettingsScreen() {
         await SecureStore.setItemAsync(TOKEN_KEY, registration.expoPushToken);
         setPushEnabled(true);
       } else {
-        const settingsResponse = await apiFetch('/mobile/settings/push-notifications', {
+        await apiFetch('/mobile/settings/push-notifications', {
           method: 'PUT',
           body: JSON.stringify({ enabled: false }),
           token,

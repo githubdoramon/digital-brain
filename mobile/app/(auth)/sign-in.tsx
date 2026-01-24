@@ -3,8 +3,8 @@ import React from 'react';
 import FontAwesome from '@expo/vector-icons/FontAwesome';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 
-import { useAuth } from '@/src/auth/AuthContext';
-import { theme } from '@/src/theme';
+import { useAuth } from '@/auth/AuthContext';
+import { theme } from '@/theme';
 
 export default function SignInScreen() {
   const { signInWithGoogle, isSigningIn } = useAuth();
