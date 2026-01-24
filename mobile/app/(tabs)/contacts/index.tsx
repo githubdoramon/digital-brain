@@ -11,6 +11,7 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 
+import { apiFetch } from '@/api/client';
 import { useAuth } from '@/auth/AuthContext';
 import { Avatar } from '@/components/Avatar';
 import { RelationshipChips } from '@/components/RelationshipChips';
@@ -89,7 +90,7 @@ function ContactCard({
 }
 
 export default function ContactsScreen() {
-  const { authFetch, token } = useAuth();
+  const { token } = useAuth();
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const [contacts, setContacts] = useState<Contact[]>([]);
@@ -100,7 +101,7 @@ export default function ContactsScreen() {
     let mounted = true;
     (async () => {
       try {
-        const result = (await authFetch('/contacts')) as { contacts: Contact[] };
+        const result = (await apiFetch('/mobile/contacts')) as { contacts: Contact[] };
         if (mounted) {
           setContacts(result.contacts ?? []);
         }
@@ -115,7 +116,7 @@ export default function ContactsScreen() {
     return () => {
       mounted = false;
     };
-  }, [authFetch]);
+  }, []);
 
   const contactMap = useMemo(() => {
     const map = new Map<string, string>();

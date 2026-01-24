@@ -3,7 +3,7 @@ import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-
 import { useLocalSearchParams } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { useAuth } from '@/auth/AuthContext';
+import { apiFetch } from '@/api/client';
 import { FloatingSaveButton } from '@/components/FloatingSaveButton';
 import { theme } from '@/theme';
 
@@ -40,7 +40,7 @@ const buildRelationshipId = (fromId: string, toId: string) => `rel_${fromId}_${t
 
 export default function RelationshipManagementScreen() {
   const { contactId } = useLocalSearchParams<{ contactId: string }>();
-  const { authFetch } = useAuth();
+  const authFetch = apiFetch;
   const insets = useSafeAreaInsets();
   const [contact, setContact] = useState<Contact | null>(null);
   const [relationships, setRelationships] = useState<Relationship[]>([]);
@@ -54,7 +54,7 @@ export default function RelationshipManagementScreen() {
     let mounted = true;
     (async () => {
       try {
-        const result = (await authFetch(`/contacts/${contactId}`)) as Contact;
+        const result = (await authFetch(`/mobile/contacts/${contactId}`)) as Contact;
         if (mounted) {
           setContact(result);
           setRelationships(
@@ -74,18 +74,18 @@ export default function RelationshipManagementScreen() {
     return () => {
       mounted = false;
     };
-  }, [authFetch, contactId]);
+  }, [contactId]);
 
   useEffect(() => {
     (async () => {
       try {
-        const result = (await authFetch('/contacts')) as { contacts: Contact[] };
+        const result = (await authFetch('/mobile/contacts')) as { contacts: Contact[] };
         setAllContacts(result.contacts ?? []);
       } catch (error) {
         console.warn('[relationships] contacts load failed', error);
       }
     })();
-  }, [authFetch]);
+  }, []);
 
   const relationshipSnapshot = useMemo(
     () => JSON.stringify(relationships.map((rel) => [rel.to_contact_id, rel.relationship_type])),
@@ -130,7 +130,7 @@ export default function RelationshipManagementScreen() {
     if (!contact) return;
     setIsSaving(true);
     try {
-      await authFetch('/ingest/contact', {
+      await authFetch('/mobile/ingest/contact', {
         method: 'POST',
         body: JSON.stringify({
           contact_id: contact.contact_id,
@@ -146,7 +146,7 @@ export default function RelationshipManagementScreen() {
           relationships,
         }),
       });
-      const refreshed = (await authFetch(`/contacts/${contact.contact_id}`)) as Contact;
+      const refreshed = (await authFetch(`/mobile/contacts/${contact.contact_id}`)) as Contact;
       setContact(refreshed);
       setRelationships(
         (refreshed.relationships || []).map((rel) => ({

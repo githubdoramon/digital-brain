@@ -194,6 +194,7 @@ def ingest_contact(c: ContactIn, user: dict = Depends(get_current_user)):
 
 
 @api.get("/contacts")
+@api.get("/mobile/contacts")
 def list_contacts(user: dict = Depends(get_current_user)):
     return {"contacts": contacts_service.list_contacts()}
 

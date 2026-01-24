@@ -11,6 +11,7 @@ import {
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import { apiFetch } from '@/api/client';
 import { useAuth } from '@/auth/AuthContext';
 import { Avatar } from '@/components/Avatar';
 import { ContactActionMenu } from '@/components/ContactActionMenu';
@@ -50,7 +51,7 @@ const textToList = (value: string) =>
 
 export default function ContactDetailScreen() {
   const { contactId } = useLocalSearchParams<{ contactId: string }>();
-  const { authFetch, token } = useAuth();
+  const { token } = useAuth();
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const [contact, setContact] = useState<Contact | null>(null);
@@ -65,7 +66,7 @@ export default function ContactDetailScreen() {
     let mounted = true;
     (async () => {
       try {
-        const result = (await authFetch(`/contacts/${contactId}`)) as Contact;
+        const result = (await apiFetch(`/mobile/contacts/${contactId}`)) as Contact;
         if (mounted) {
           setContact(result);
           setDraft(result);
@@ -77,12 +78,12 @@ export default function ContactDetailScreen() {
     return () => {
       mounted = false;
     };
-  }, [authFetch, contactId]);
+  }, [contactId]);
 
   useEffect(() => {
     (async () => {
       try {
-        const result = (await authFetch('/contacts')) as { contacts: Contact[] };
+        const result = (await apiFetch('/mobile/contacts')) as { contacts: Contact[] };
         const map = new Map<string, string>();
         result.contacts.forEach((item) => map.set(item.contact_id, item.display_name));
         setContactsIndex(map);
@@ -90,7 +91,7 @@ export default function ContactDetailScreen() {
         console.warn('[contacts] map load failed', error);
       }
     })();
-  }, [authFetch]);
+  }, []);
 
   useEffect(() => {
     Animated.parallel([
@@ -142,7 +143,7 @@ export default function ContactDetailScreen() {
     if (!draft || !contact) return;
     setIsSaving(true);
     try {
-      await authFetch('/ingest/contact', {
+      await apiFetch('/mobile/ingest/contact', {
         method: 'POST',
         body: JSON.stringify({
           contact_id: contact.contact_id,
@@ -158,7 +159,7 @@ export default function ContactDetailScreen() {
           relationships: contact.relationships,
         }),
       });
-      const refreshed = (await authFetch(`/contacts/${contact.contact_id}`)) as Contact;
+      const refreshed = (await apiFetch(`/mobile/contacts/${contact.contact_id}`)) as Contact;
       setContact(refreshed);
       setDraft(refreshed);
     } catch (error) {
