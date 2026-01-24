@@ -23,22 +23,24 @@ class ImmichIdentifyError(RuntimeError):
 class ImmichConfig:
     base_url: str
     api_key: str
-    face_api_key: str
+    face_api_key: str | None
     device_id: str | None = None
     http_timeout: int = IMMICH_HTTP_TIMEOUT
 
 
-def _load_base_auth() -> tuple[str, str, str]:
+def _load_base_auth(require_face: bool = True) -> tuple[str, str, str | None]:
     base_url = (os.getenv("IMMICH_SERVER_URL") or "").strip().rstrip("/")
     api_key = (os.getenv("IMMICH_API_KEY") or "").strip()
     face_api_key = (os.getenv("IMMICH_FACE_API_KEY") or "").strip()
-    if not base_url or not api_key or not face_api_key:
+    if not base_url or not api_key:
         raise ImmichClientError("IMMICH_SERVER_URL and IMMICH_API_KEY must be configured")
+    if require_face and not face_api_key:
+        raise ImmichClientError("IMMICH_FACE_API_KEY must be configured")
     return base_url, api_key, face_api_key
 
 
-def get_immich_config(require_device: bool = False) -> ImmichConfig:
-    base_url, api_key, face_api_key = _load_base_auth()
+def get_immich_config(require_device: bool = False, require_face: bool = True) -> ImmichConfig:
+    base_url, api_key, face_api_key = _load_base_auth(require_face=require_face)
     device_id = (os.getenv("IMMICH_DEVICE_ID") or "").strip() or None
     if require_device and not device_id:
         device_id = "telegram-bot"
@@ -62,7 +64,9 @@ def identify_contacts_from_image(
     if not image_bytes:
         raise ImmichIdentifyError("Image payload is empty")
 
-    cfg = config or get_immich_config()
+    cfg = config or get_immich_config(require_face=True)
+    if not cfg.face_api_key:
+        raise ImmichIdentifyError("IMMICH_FACE_API_KEY must be configured")
     url = f"{cfg.base_url}/api/faces/identify"
     headers = {
         "x-api-key": cfg.face_api_key,
@@ -115,7 +119,7 @@ def fetch_person_thumbnail(
     if not person_id:
         return None
 
-    cfg = config or get_immich_config()
+    cfg = config or get_immich_config(require_face=False)
     url = f"{cfg.base_url}/api/people/{person_id}/thumbnail"
     headers = {
         "x-api-key": cfg.api_key,

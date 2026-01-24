@@ -218,6 +218,7 @@ def merge_contacts_endpoint(payload: ContactMergeIn, user: dict = Depends(get_cu
 
 
 @api.get("/contacts/{contact_id}")
+@api.get("/mobile/contacts/{contact_id}")
 def get_contact(contact_id: str, user: dict = Depends(get_current_user)):
     contact = contacts_service.get_contact(contact_id)
     if contact is None:

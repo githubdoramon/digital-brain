@@ -5,6 +5,7 @@ from collections import defaultdict
 from collections.abc import Iterable, Sequence
 from datetime import date
 from typing import Any
+from urllib.parse import quote
 from uuid import uuid4
 
 from db import get_conn
@@ -40,7 +41,8 @@ MAX_CONTACT_EMBED_CHARS = 4000
 def _avatar_url(contact_id: str, external_id: str | None) -> str | None:
     if not external_id:
         return None
-    return f"/mobile/contacts/{contact_id}/avatar"
+    encoded = quote(contact_id, safe="")
+    return f"/mobile/contacts/{encoded}/avatar"
 
 
 def _upsert_contact_relationships(cur, contact_id: str, relationships: Sequence[Any]) -> None:
