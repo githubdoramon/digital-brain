@@ -115,6 +115,7 @@ Prefer specific types over general terms WHEN POSSIBLE (e.g., "Electric Engineer
 
 If ANY critical information is missing or ambiguous, set "needs_clarification" to true and provide "clarification_questions".
 Use the clarification history to avoid repeating questions that were already answered.
+Never drop previously confirmed facts from the existing extraction or clarification history; only override if the user explicitly corrects them.
 
 Return ONLY valid JSON in this exact format:
 {{
@@ -730,25 +731,30 @@ def handle_event(parsed: ParsedCommand, context: dict) -> dict[str, Any]:
             print(f"[handle_event] Clarification context missing or expired: {clarification_id}")
 
     clarification_messages = None
+    event_message = raw_message
+    contact_message = raw_message
     if clarification_context:
         clarification_messages = clarification_context.get("clarification_messages")
         if raw_message:
             clarification_messages = list(clarification_messages or [])
             clarification_messages.append({"role": "user", "content": raw_message})
+        original_message = clarification_context.get("original_message") or raw_message
+        event_message = original_message
+        contact_message = f"{original_message} {raw_message}".strip()
 
     # Extract entities using LLM with time context
     print("\n[handle_event] STEP 1: Extracting entities with LLM...")
     with ThreadPoolExecutor(max_workers=2) as executor:
         extraction_future = executor.submit(
             _extract_event_entities_with_llm,
-            raw_message,
+            event_message,
             context,
             clarification_context.get("extracted") if clarification_context else None,
             clarification_messages,
         )
         contact_future = executor.submit(
             _resolve_contacts_with_agent,
-            raw_message,
+            contact_message,
             user_email,
         )
 
