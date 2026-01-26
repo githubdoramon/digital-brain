@@ -228,10 +228,11 @@ People extraction is handled separately. Do NOT include any people/person list.
 
 Prefer specific types over general terms WHEN POSSIBLE (e.g., "Electric Engineer" over "Engineer", "Orthopedist" over "Doctor").
 
-If ANY critical information is missing or ambiguous, set "needs_clarification" to true and provide "clarification_questions".
+If ANY critical information is missing or ambiguous (excluding people), set "needs_clarification" to true and provide "clarification_questions".
 Use the clarification history to avoid repeating questions that were already answered.
 Never drop previously confirmed facts from the existing extraction or clarification history; only override if the user explicitly corrects them.
 Assistant questions are prompts only and are NOT facts; only treat user-provided details as facts.
+Do NOT ask clarification questions about people; contact resolution handles that separately.
 
 Return ONLY valid JSON in this exact format:
 {{
@@ -448,6 +449,40 @@ def _replace_generic_terms_in_text(
         pattern = re.compile(re.escape(generic), re.IGNORECASE)
         result = pattern.sub(actual, result)
     return result
+
+
+def _dedupe_preserve_order(items: list[str]) -> list[str]:
+    seen: set[str] = set()
+    deduped: list[str] = []
+    for item in items:
+        normalized = item.strip()
+        if not normalized:
+            continue
+        key = normalized.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(normalized)
+    return deduped
+
+
+def _dedupe_contacts(contacts: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    seen_ids: set[str] = set()
+    seen_names: set[str] = set()
+    deduped: list[dict[str, Any]] = []
+    for contact in contacts:
+        contact_id = str(contact.get("contact_id") or "")
+        display_name = (contact.get("display_name") or "").strip()
+        if contact_id and contact_id in seen_ids:
+            continue
+        if display_name and display_name.lower() in seen_names:
+            continue
+        if contact_id:
+            seen_ids.add(contact_id)
+        if display_name:
+            seen_names.add(display_name.lower())
+        deduped.append(contact)
+    return deduped
 
 
 def _resolve_contacts_with_agent(
@@ -1031,15 +1066,23 @@ def handle_event(parsed: ParsedCommand, context: dict) -> dict[str, Any]:
     )
 
     # Update extracted "who" from contact agent results
-    extracted["who"] = [
-        contact["display_name"]
-        for contact in resolution.get("contacts", [])
-        if contact.get("display_name")
-    ] + [
-        contact["display_name"]
-        for contact in resolution.get("new_entities", {}).get("contacts", [])
-        if contact.get("display_name")
-    ]
+    resolution["contacts"] = _dedupe_contacts(resolution.get("contacts", []))
+    resolution["new_entities"]["contacts"] = _dedupe_contacts(
+        resolution.get("new_entities", {}).get("contacts", [])
+    )
+
+    extracted["who"] = _dedupe_preserve_order(
+        [
+            contact["display_name"]
+            for contact in resolution.get("contacts", [])
+            if contact.get("display_name")
+        ]
+        + [
+            contact["display_name"]
+            for contact in resolution.get("new_entities", {}).get("contacts", [])
+            if contact.get("display_name")
+        ]
+    )
 
     # Generate a preview ID and store the data
     preview_id = f"event:preview:{uuid4().hex[:8]}"
