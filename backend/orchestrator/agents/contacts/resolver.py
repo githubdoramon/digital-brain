@@ -891,6 +891,24 @@ def _resolve_via_relationship(
         "candidates": [],
     }
 
+    def _dedupe_candidates(candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        seen_ids: set[str] = set()
+        seen_names: set[str] = set()
+        deduped: list[dict[str, Any]] = []
+        for candidate in candidates:
+            contact_id = str(candidate.get("contact_id") or "")
+            display_name = (candidate.get("display_name") or "").strip()
+            if contact_id and contact_id in seen_ids:
+                continue
+            if display_name and display_name.lower() in seen_names:
+                continue
+            if contact_id:
+                seen_ids.add(contact_id)
+            if display_name:
+                seen_names.add(display_name.lower())
+            deduped.append(candidate)
+        return deduped
+
     relationships = relationship_context.get("relationships", [])
     if not relationships:
         return result
@@ -945,13 +963,15 @@ def _resolve_via_relationship(
         else:
             # Multiple matches - return candidates
             result["found"] = False
-            result["candidates"] = [
-                {
-                    "contact_id": c["contact_id"],
-                    "display_name": c["display_name"],
-                }
-                for c in matches
-            ]
+            result["candidates"] = _dedupe_candidates(
+                [
+                    {
+                        "contact_id": c["contact_id"],
+                        "display_name": c["display_name"],
+                    }
+                    for c in matches
+                ]
+            )
             result["confidence"] = "low"
             return result
 
@@ -976,13 +996,15 @@ def _resolve_via_relationship(
             else:
                 # Multiple matches - return candidates
                 result["found"] = False
-                result["candidates"] = [
-                    {
-                        "contact_id": c["contact_id"],
-                        "display_name": c["display_name"],
-                    }
-                    for c in matches
-                ]
+                result["candidates"] = _dedupe_candidates(
+                    [
+                        {
+                            "contact_id": c["contact_id"],
+                            "display_name": c["display_name"],
+                        }
+                        for c in matches
+                    ]
+                )
                 result["confidence"] = "low"
                 return result
 

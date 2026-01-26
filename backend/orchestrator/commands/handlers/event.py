@@ -42,18 +42,109 @@ def _format_clarification_history(
     if not clarification_messages:
         return ""
 
-    formatted_lines = []
+    user_lines = []
+    assistant_lines = []
     for entry in clarification_messages:
         role = entry.get("role")
         content = entry.get("content")
         if not role or not content:
             continue
-        formatted_lines.append(f"- {role}: {content}")
+        if role == "assistant":
+            assistant_lines.append(f"- {content}")
+        else:
+            user_lines.append(f"- {content}")
 
-    if not formatted_lines:
+    sections = []
+    if user_lines:
+        sections.append("User-provided details (most recent last):\n" + "\n".join(user_lines))
+    if assistant_lines:
+        sections.append("Assistant questions asked (not facts):\n" + "\n".join(assistant_lines))
+
+    if not sections:
         return ""
 
-    return "Clarification history (most recent last):\n" + "\n".join(formatted_lines) + "\n\n"
+    return "\n\n".join(sections) + "\n\n"
+
+
+def _build_contact_context_message(
+    original_message: str,
+    clarification_messages: list[dict[str, str]] | None,
+) -> str:
+    user_messages = [original_message]
+    if clarification_messages:
+        for entry in clarification_messages:
+            if entry.get("role") != "user":
+                continue
+            content = entry.get("content")
+            if not content:
+                continue
+            user_messages.append(content)
+
+    combined: list[str] = []
+    for msg in user_messages:
+        normalized = msg.strip()
+        if not normalized:
+            continue
+        if any(normalized.lower() in existing.lower() for existing in combined):
+            continue
+        combined.append(normalized)
+
+    return " ".join(combined).strip()
+
+
+def _resolve_ambiguous_contacts_from_answer(
+    ambiguous_contacts: list[dict[str, Any]],
+    answer: str,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    resolved: list[dict[str, Any]] = []
+    remaining: list[dict[str, Any]] = []
+    answer_lower = answer.lower()
+
+    for item in ambiguous_contacts:
+        candidates = item.get("candidates", [])
+        matches = [
+            candidate
+            for candidate in candidates
+            if (candidate.get("display_name") or "").lower() in answer_lower
+        ]
+        if len(matches) == 1:
+            candidate = matches[0]
+            resolved.append(
+                {
+                    "original_text": item.get("original_text"),
+                    "contact_id": candidate.get("contact_id"),
+                    "display_name": candidate.get("display_name"),
+                    "matched_via": "clarification",
+                    "confidence": "high",
+                }
+            )
+        else:
+            remaining.append(item)
+
+    return resolved, remaining
+
+
+def _should_skip_contact_resolution(
+    answer: str,
+    ambiguous_contacts: list[dict[str, Any]],
+) -> bool:
+    if not ambiguous_contacts:
+        return False
+
+    answer_lower = answer.lower()
+    candidate_names: list[str] = []
+    for item in ambiguous_contacts:
+        for candidate in item.get("candidates", []):
+            name = (candidate.get("display_name") or "").strip()
+            if name:
+                candidate_names.append(name.lower())
+
+    if not candidate_names:
+        return False
+
+    has_candidate = any(name in answer_lower for name in candidate_names)
+    short_answer = len(answer.strip()) <= 48
+    return has_candidate and short_answer
 
 
 def _extract_event_entities_with_llm(
@@ -116,6 +207,7 @@ Prefer specific types over general terms WHEN POSSIBLE (e.g., "Electric Engineer
 If ANY critical information is missing or ambiguous, set "needs_clarification" to true and provide "clarification_questions".
 Use the clarification history to avoid repeating questions that were already answered.
 Never drop previously confirmed facts from the existing extraction or clarification history; only override if the user explicitly corrects them.
+Assistant questions are prompts only and are NOT facts; only treat user-provided details as facts.
 
 Return ONLY valid JSON in this exact format:
 {{
@@ -733,6 +825,11 @@ def handle_event(parsed: ParsedCommand, context: dict) -> dict[str, Any]:
     clarification_messages = None
     event_message = raw_message
     contact_message = raw_message
+    contact_result = None
+    resolution = None
+    previous_contact_result: dict[str, Any] = {}
+    previous_resolution: dict[str, Any] = {}
+    skip_contact_resolution = False
     if clarification_context:
         clarification_messages = clarification_context.get("clarification_messages")
         if raw_message:
@@ -740,7 +837,45 @@ def handle_event(parsed: ParsedCommand, context: dict) -> dict[str, Any]:
             clarification_messages.append({"role": "user", "content": raw_message})
         original_message = clarification_context.get("original_message") or raw_message
         event_message = original_message
-        contact_message = f"{original_message} {raw_message}".strip()
+        contact_message = _build_contact_context_message(
+            original_message,
+            clarification_messages,
+        )
+        previous_contact_result = clarification_context.get("contact_result") or {}
+        previous_resolution = clarification_context.get("resolution") or {}
+        ambiguous_contacts = previous_contact_result.get("ambiguous_contacts", [])
+
+        if raw_message and ambiguous_contacts:
+            resolved_contacts, remaining_contacts = _resolve_ambiguous_contacts_from_answer(
+                ambiguous_contacts,
+                raw_message,
+            )
+            if resolved_contacts:
+                previous_contact_result = {
+                    **previous_contact_result,
+                    "resolved_contacts": previous_contact_result.get("resolved_contacts", [])
+                    + resolved_contacts,
+                    "ambiguous_contacts": remaining_contacts,
+                }
+                resolved_entries = previous_resolution.get("contacts", [])
+                for resolved_contact in resolved_contacts:
+                    if not resolved_contact.get("contact_id"):
+                        continue
+                    resolved_entries.append(
+                        {
+                            "contact_id": resolved_contact.get("contact_id"),
+                            "display_name": resolved_contact.get("display_name"),
+                            "query": resolved_contact.get("original_text"),
+                            "confidence": resolved_contact.get("confidence", "high"),
+                        }
+                    )
+                previous_resolution["contacts"] = resolved_entries
+                resolution = previous_resolution
+                contact_result = previous_contact_result
+                skip_contact_resolution = _should_skip_contact_resolution(
+                    raw_message,
+                    ambiguous_contacts,
+                )
 
     # Extract entities using LLM with time context
     print("\n[handle_event] STEP 1: Extracting entities with LLM...")
@@ -752,14 +887,20 @@ def handle_event(parsed: ParsedCommand, context: dict) -> dict[str, Any]:
             clarification_context.get("extracted") if clarification_context else None,
             clarification_messages,
         )
-        contact_future = executor.submit(
-            _resolve_contacts_with_agent,
-            contact_message,
-            user_email,
-        )
+        contact_future = None
+        if not skip_contact_resolution:
+            contact_future = executor.submit(
+                _resolve_contacts_with_agent,
+                contact_message,
+                user_email,
+            )
 
         extracted = extraction_future.result()
-        resolution, contact_result = contact_future.result()
+        if contact_future:
+            resolution, contact_result = contact_future.result()
+        else:
+            resolution = resolution or previous_resolution
+            contact_result = contact_result or previous_contact_result
 
     # Check if clarification is needed
     clarification_questions = (
@@ -770,7 +911,7 @@ def handle_event(parsed: ParsedCommand, context: dict) -> dict[str, Any]:
             "Could you clarify the missing details (what happened, when, and where)?",
         ]
 
-    ambiguous_contacts = contact_result.get("ambiguous_contacts", [])
+    ambiguous_contacts = contact_result.get("ambiguous_contacts", []) if contact_result else []
     if ambiguous_contacts:
         print("[handle_event] ⚠️  Contact disambiguation needed")
         clarification_questions.extend(
