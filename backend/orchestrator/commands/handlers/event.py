@@ -66,6 +66,26 @@ def _format_clarification_history(
     return "\n\n".join(sections) + "\n\n"
 
 
+def _format_conversation_json(
+    original_message: str,
+    clarification_messages: list[dict[str, str]] | None,
+) -> str:
+    import json
+
+    messages: list[dict[str, str]] = [{"role": "user", "content": original_message}]
+    if clarification_messages:
+        for entry in clarification_messages:
+            role = entry.get("role")
+            content = entry.get("content")
+            if not role or not content:
+                continue
+            if role == "user" and content.strip().lower() == original_message.strip().lower():
+                continue
+            messages.append({"role": role, "content": content})
+
+    return json.dumps(messages, ensure_ascii=True)
+
+
 def _build_contact_context_message(
     original_message: str,
     clarification_messages: list[dict[str, str]] | None,
@@ -181,6 +201,10 @@ def _extract_event_entities_with_llm(
 
     existing_context = _format_existing_extraction_for_prompt(existing_extraction)
     clarification_context = _format_clarification_history(clarification_messages)
+    conversation_json = _format_conversation_json(message, clarification_messages)
+    conversation_context = (
+        f"Conversation messages (JSON array, most recent last):\n{conversation_json}\n\n"
+    )
 
     extraction_prompt = f"""You are extracting structured information from a user's event description to create a memory entry.
 
@@ -190,7 +214,7 @@ Current context:
 
 Event description: "{message}"
 
-{existing_context}{clarification_context}
+{existing_context}{conversation_context}{clarification_context}
 
 Extract the following information:
 1. **What happened**: A brief title (5-10 words) and detailed summary
@@ -429,6 +453,7 @@ def _replace_generic_terms_in_text(
 def _resolve_contacts_with_agent(
     message: str,
     user_email: str,
+    conversation_messages: list[dict[str, str]] | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """
     Resolve contacts for the event using the contact resolution agent.
@@ -440,7 +465,11 @@ def _resolve_contacts_with_agent(
     """
     from agents.contacts import resolve_contacts_from_text
 
-    contact_result = resolve_contacts_from_text(message, user_email)
+    contact_result = resolve_contacts_from_text(
+        message,
+        user_email,
+        conversation_messages=conversation_messages,
+    )
 
     resolution = {
         "contacts": [],
@@ -830,12 +859,14 @@ def handle_event(parsed: ParsedCommand, context: dict) -> dict[str, Any]:
     previous_contact_result: dict[str, Any] = {}
     previous_resolution: dict[str, Any] = {}
     skip_contact_resolution = False
+    original_message_to_store = raw_message
     if clarification_context:
         clarification_messages = clarification_context.get("clarification_messages")
         if raw_message:
             clarification_messages = list(clarification_messages or [])
             clarification_messages.append({"role": "user", "content": raw_message})
         original_message = clarification_context.get("original_message") or raw_message
+        original_message_to_store = original_message
         event_message = original_message
         contact_message = _build_contact_context_message(
             original_message,
@@ -893,6 +924,7 @@ def handle_event(parsed: ParsedCommand, context: dict) -> dict[str, Any]:
                 _resolve_contacts_with_agent,
                 contact_message,
                 user_email,
+                clarification_messages,
             )
 
         extracted = extraction_future.result()
@@ -949,7 +981,7 @@ def handle_event(parsed: ParsedCommand, context: dict) -> dict[str, Any]:
                 "resolution": resolution,
                 "contact_result": contact_result,
                 "user_email": user_email,
-                "original_message": raw_message,
+                "original_message": original_message_to_store,
                 "clarification_messages": clarification_messages,
             },
         )
@@ -1022,7 +1054,7 @@ def handle_event(parsed: ParsedCommand, context: dict) -> dict[str, Any]:
             "resolution": resolution,
             "user_email": user_email,
             "relationship_suggestions": relationship_suggestions,
-            "original_message": raw_message,
+            "original_message": original_message_to_store,
             "thread_id": context.get("thread_id"),
             "clarification_messages": clarification_messages,
         },

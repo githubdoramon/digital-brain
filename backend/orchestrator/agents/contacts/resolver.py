@@ -26,7 +26,27 @@ import contacts as contacts_service
 from llm_helpers import call_llm_json
 
 
-def extract_people_from_text(text: str) -> list[str]:
+def _format_conversation_for_prompt(conversation_messages: list[dict[str, str]]) -> str:
+    import json
+
+    sanitized = []
+    for entry in conversation_messages:
+        role = entry.get("role")
+        content = entry.get("content")
+        if not role or not content:
+            continue
+        sanitized.append({"role": role, "content": content})
+
+    if not sanitized:
+        return ""
+
+    return json.dumps(sanitized, ensure_ascii=True)
+
+
+def extract_people_from_text(
+    text: str,
+    conversation_messages: list[dict[str, str]] | None = None,
+) -> list[str]:
     """
     Extract person mentions from text using LLM.
 
@@ -40,9 +60,19 @@ def extract_people_from_text(text: str) -> list[str]:
             "ambiguous_text": true | false
         }
     """
+    conversation_block = ""
+    if conversation_messages:
+        conversation_json = _format_conversation_for_prompt(conversation_messages)
+        if conversation_json:
+            conversation_block = (
+                f"Conversation messages (JSON array, most recent last):\n{conversation_json}\n\n"
+            )
+
     prompt = f"""Extract all person references from this text.
 
 Text: "{text}"
+
+{conversation_block}
 
 Extract ONLY people - all person references including:
 - Proper names (e.g., "John Smith")
@@ -108,6 +138,7 @@ IMPORTANT:
 - Include both proper names and generic references
 - If a person is mentioned multiple ways, include all mentions
 - Use the special token "user" to represent the current user when they are a participant
+- Only extract people mentioned by the user. Assistant questions are NOT facts.
 
 Return ONLY a valid JSON, nothing more, no other text or explanation:
 {{
@@ -435,6 +466,7 @@ def resolve_contact(
 def resolve_contacts_from_text(
     text: str,
     user_email: str,
+    conversation_messages: list[dict[str, str]] | None = None,
 ) -> dict[str, Any]:
     """
     Complete pipeline: extract people from text and resolve them to contacts.
@@ -500,12 +532,31 @@ def resolve_contacts_from_text(
 
     # Step 1: Extract people
     print("\n[contact_resolver] Step 1: Extracting people...")
-    people = extract_people_from_text(text)
+    effective_text = text
+    if conversation_messages:
+        user_only = [
+            entry.get("content", "")
+            for entry in conversation_messages
+            if entry.get("role") == "user"
+        ]
+        combined: list[str] = []
+        for chunk in user_only:
+            normalized = chunk.strip()
+            if not normalized:
+                continue
+            if any(normalized.lower() in existing.lower() for existing in combined):
+                continue
+            combined.append(normalized)
+        compact = " ".join(combined)
+        if compact:
+            effective_text = compact
+
+    people = extract_people_from_text(effective_text, conversation_messages=conversation_messages)
     print(f"[contact_resolver] Extracted {len(people)} people: {people}")
 
     if not people:
         return {
-            "text": text,
+            "text": effective_text,
             "people_mentioned": [],
             "resolved_contacts": [],
             "new_contacts": [],
@@ -519,21 +570,21 @@ def resolve_contacts_from_text(
         new_contacts,
         ambiguous_contacts,
         resolution_cache,
-    ) = _resolve_people_mentions(people, user_email, text)
+    ) = _resolve_people_mentions(people, user_email, effective_text)
 
     # Step 3: Infer professions for new contacts
     print("\n[contact_resolver] Step 3: Inferring professions for new contacts...")
-    profession_by_text = _infer_professions_for_new_contacts(new_contacts, text)
+    profession_by_text = _infer_professions_for_new_contacts(new_contacts, effective_text)
 
     # Step 4: Infer relationship pairs from text (deduped)
     print("\n[contact_resolver] Step 4: Inferring relationship pairs...")
-    relationship_pairs = _infer_relationship_pairs(people, text)
+    relationship_pairs = _infer_relationship_pairs(people, effective_text)
 
     # Step 5: Suggest missing relationships (only when none exist yet)
     print("\n[contact_resolver] Step 5: Suggesting missing relationships...")
     suggested_relationships = _suggest_missing_relationships(
         pairs=relationship_pairs,
-        full_text=text,
+        full_text=effective_text,
         user_email=user_email,
         resolution_cache=resolution_cache,
         profession_by_text=profession_by_text,
@@ -547,7 +598,7 @@ def resolve_contacts_from_text(
     print(f"{'=' * 80}\n")
 
     return {
-        "text": text,
+        "text": effective_text,
         "people_mentioned": people,
         "resolved_contacts": resolved_contacts,
         "new_contacts": new_contacts,
@@ -647,7 +698,8 @@ def _unordered_text_pair_key(person_text: str, anchor_text: str) -> Optional[tup
     anchor_key = _normalize_person_key(anchor_text)
     if not person_key or not anchor_key or person_key == anchor_key:
         return None
-    return tuple(sorted([person_key, anchor_key]))
+    sorted_keys = sorted([person_key, anchor_key])
+    return (sorted_keys[0], sorted_keys[1])
 
 
 def _parse_nested_relationship(text: str) -> Optional[list[str]]:
@@ -1334,7 +1386,8 @@ def _suggest_missing_relationships(
         person_contact_id: str,
         anchor_contact_id: str,
     ) -> bool:
-        key = tuple(sorted([person_contact_id, anchor_contact_id]))
+        sorted_ids = sorted([str(person_contact_id), str(anchor_contact_id)])
+        key = (sorted_ids[0], sorted_ids[1])
         if key in relationship_cache:
             return relationship_cache[key]
         exists = _relationship_exists_between_contacts(person_contact_id, anchor_contact_id)
@@ -1368,7 +1421,8 @@ def _suggest_missing_relationships(
         if not person_key or not anchor_key or person_key == anchor_key:
             continue
 
-        pair_key = tuple(sorted([person_key, anchor_key]))
+        sorted_keys = sorted([person_key, anchor_key])
+        pair_key = (sorted_keys[0], sorted_keys[1])
         if pair_key in seen_pairs:
             continue
         seen_pairs.add(pair_key)
