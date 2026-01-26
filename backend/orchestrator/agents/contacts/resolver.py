@@ -570,7 +570,12 @@ def resolve_contacts_from_text(
         new_contacts,
         ambiguous_contacts,
         resolution_cache,
-    ) = _resolve_people_mentions(people, user_email, effective_text)
+    ) = _resolve_people_mentions(
+        people,
+        user_email,
+        effective_text,
+        conversation_messages=conversation_messages,
+    )
 
     # Step 3: Infer professions for new contacts
     print("\n[contact_resolver] Step 3: Inferring professions for new contacts...")
@@ -616,6 +621,7 @@ def _resolve_people_mentions(
     people: list[str],
     user_email: str,
     full_text: str,
+    conversation_messages: list[dict[str, str]] | None = None,
 ) -> tuple[
     list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]], dict[str, dict[str, Any]]
 ]:
@@ -654,6 +660,25 @@ def _resolve_people_mentions(
             print(f"[contact_resolver]   ✓ '{person_text}' → {resolution['display_name']}")
 
         elif resolution["status"] == "candidates":
+            llm_result = _llm_disambiguate_contact(
+                person_text,
+                resolution["candidates"],
+                full_text,
+                conversation_messages=conversation_messages,
+            )
+            if llm_result.get("resolved"):
+                resolved_contact = {
+                    "original_text": person_text,
+                    "contact_id": llm_result.get("contact_id"),
+                    "display_name": llm_result.get("display_name"),
+                    "matched_via": "llm_disambiguation",
+                    "confidence": llm_result.get("confidence", "medium"),
+                    "resolution_path": None,
+                }
+                resolved_contacts.append(resolved_contact)
+                print(f"[contact_resolver]   ✓ LLM resolved: {llm_result['display_name']}")
+                continue
+
             ambiguous_contacts.append(
                 {
                     "original_text": person_text,
@@ -1067,6 +1092,7 @@ def _llm_disambiguate_contact(
     person_text: str,
     candidates: list[dict[str, Any]],
     event_context: str,
+    conversation_messages: list[dict[str, str]] | None = None,
 ) -> dict[str, Any]:
     """
     Use LLM to disambiguate between multiple contact candidates.
@@ -1082,6 +1108,14 @@ def _llm_disambiguate_contact(
         f"- {i + 1}. {c['display_name']} (ID: {c['contact_id']})" for i, c in enumerate(candidates)
     )
 
+    conversation_block = ""
+    if conversation_messages:
+        conversation_json = _format_conversation_for_prompt(conversation_messages)
+        if conversation_json:
+            conversation_block = (
+                f"Conversation messages (JSON array, most recent last):\n{conversation_json}\n\n"
+            )
+
     prompt = f"""Disambiguate a person reference from the list of candidates.
 
 Person you are trying to find: "{person_text}"
@@ -1090,6 +1124,8 @@ Candidates:
 {candidate_list}
 
 Event context (use only if it is relevant): "{event_context}"
+
+{conversation_block}
 
 CRITICAL RULES:
 1. You MUST choose from the candidates above or say "cannot_decide"
