@@ -61,6 +61,25 @@ def _format_external_event_id(external_type: str, external_id: str) -> str:
     return f"{normalized_type}:{normalized_id}"
 
 
+def _guess_external_event_id(meeting_id: str | None, meeting_link: str | None) -> str | None:
+    if not meeting_id:
+        return None
+    normalized_id = meeting_id.strip()
+    if not normalized_id:
+        return None
+    if ":" in normalized_id:
+        prefix, raw = normalized_id.split(":", 1)
+        if prefix.strip().lower() == "google" and raw.strip():
+            return f"google:{raw.strip()}"
+    link = (meeting_link or "").lower()
+    if "google" in link or "@google" in normalized_id.lower():
+        try:
+            return _format_external_event_id("google", normalized_id)
+        except ValueError:
+            return None
+    return None
+
+
 def _load_current_user_from_env() -> dict | None:
     current_user_info = os.environ.get("CURRENT_USER_INFO")
     if not current_user_info:
@@ -216,6 +235,7 @@ def ingest_external_event(payload: ExternalEventPayload) -> str:
     ingest_event(event)
     return normalized_event_id
 
+
 def ingest_meeting_notes(
     meetings: Sequence[MeetingIn],
     *,
@@ -241,6 +261,8 @@ def ingest_meeting_notes(
         if provided_meeting_id is not None:
             normalized_meeting_id = str(provided_meeting_id).strip() or None
 
+        external_id_candidate = _guess_external_event_id(normalized_meeting_id, meeting.link)
+
         start_date = meeting.date
         title = meeting.title.strip()
         if not title:
@@ -257,6 +279,12 @@ def ingest_meeting_notes(
                 event_id = candidate
                 existing_event = True
 
+        if not event_id and external_id_candidate:
+            matched_external = _get_event_id_by_external_id(external_id_candidate)
+            if matched_external:
+                event_id = matched_external
+                existing_event = True
+
         if not event_id:
             matched = _find_matching_meeting_event(title, start_date, unique_contacts)
             if matched:
@@ -265,6 +293,10 @@ def ingest_meeting_notes(
 
         if not event_id:
             event_id = f"meeting:{meeting.date.strftime('%Y%m%dT%H%M%S')}-{_slugify(title)}-{uuid4().hex[:8]}"
+
+        event_external_id = external_id_candidate
+        if existing_event and not event_external_id:
+            event_external_id = _get_event_external_id(event_id)
 
         raw_payload = {
             "content": meeting.content,
@@ -287,6 +319,7 @@ def ingest_meeting_notes(
             title=title,
             summary=summary,
             raw=raw_payload,
+            externalId=event_external_id,
         )
 
         ingest_event(event)
@@ -596,19 +629,37 @@ def _get_event_id_by_external_id(external_id: str | None) -> str | None:
         return row["id"] if row else None
 
 
+def _get_event_external_id(event_id: str | None) -> str | None:
+    if not event_id:
+        return None
+    normalized = event_id.strip()
+    if not normalized:
+        return None
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT external_id
+            FROM events
+            WHERE id = %s
+            LIMIT 1
+            """,
+            (normalized,),
+        )
+        row = cur.fetchone()
+        return row["external_id"] if row else None
+
+
 def _find_matching_meeting_event(
     title: str | None,
     start_date: datetime | None,
     attendees: Sequence[str],
 ) -> str | None:
-    if not title or not start_date or not attendees:
+    if not title or not start_date:
         return None
     normalized_title = title.strip()
     if not normalized_title:
         return None
     attendee_set = {att for att in attendees if att}
-    if not attendee_set:
-        return None
 
     with get_conn() as conn, conn.cursor() as cur:
         cur.execute(
@@ -617,13 +668,14 @@ def _find_matching_meeting_event(
             FROM events
             WHERE title = %s
               AND start_date = %s
-              AND types @> ARRAY['meeting']
             """,
             (normalized_title, start_date),
         )
         rows = cur.fetchall()
 
     for row in rows:
+        if not attendee_set:
+            return row["id"]
         existing_people = set(row.get("people") or [])
         if existing_people == attendee_set:
             return row["id"]
@@ -661,7 +713,9 @@ def _generate_event_embedding(event: Any) -> Sequence[float]:
 
     tags = _get("tags")
     if isinstance(tags, (list, tuple)):
-        formatted = ", ".join(str(tag).strip() for tag in tags if isinstance(tag, str) and tag.strip())
+        formatted = ", ".join(
+            str(tag).strip() for tag in tags if isinstance(tag, str) and tag.strip()
+        )
         if formatted:
             segments.append(f"tags: {formatted}")
 
