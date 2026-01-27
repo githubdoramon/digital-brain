@@ -218,8 +218,13 @@ def ingest_external_event(payload: ExternalEventPayload) -> str:
         normalized_event_id = f"{external_identifier}:{uuid4().hex[:8]}"
         print("[external_event] new event id=%s", normalized_event_id)
 
-    event.id = normalized_event_id
+    if normalized_event_id and normalized_event_id != event.id:
+        event.id = normalized_event_id
     event.external_id = external_identifier
+
+    existing_event = _get_event_by_id(normalized_event_id)
+    if existing_event:
+        event = _merge_event(existing_event, event)
 
     contact_cache: dict[str, tuple[str | None, bool]] = {}
     current_user = _load_current_user_from_env()
@@ -339,6 +344,10 @@ def ingest_meeting_notes(
             raw=raw_payload,
             externalId=event_external_id,
         )
+
+        existing_event = _get_event_by_id(event_id)
+        if existing_event:
+            event = _merge_event(existing_event, event)
 
         ingest_event(event)
         event_ids.append(event_id)
@@ -645,6 +654,103 @@ def _get_event_id_by_external_id(external_id: str | None) -> str | None:
         )
         row = cur.fetchone()
         return row["id"] if row else None
+
+
+def _get_event_by_id(event_id: str | None) -> dict[str, Any] | None:
+    if not event_id:
+        return None
+    normalized = event_id.strip()
+    if not normalized:
+        return None
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT
+              id,
+              start_date,
+              end_date,
+              place_id,
+              people,
+              tags,
+              types,
+              title,
+              summary,
+              raw,
+              external_id
+            FROM events
+            WHERE id = %s
+            LIMIT 1
+            """,
+            (normalized,),
+        )
+        row = cur.fetchone()
+        if not row:
+            return None
+        raw_data = row["raw"] or {}
+        if isinstance(raw_data, str):
+            try:
+                raw_data = json.loads(raw_data)
+            except json.JSONDecodeError:
+                raw_data = {"content": raw_data}
+        return {
+            "id": row["id"],
+            "start_date": row["start_date"],
+            "end_date": row["end_date"],
+            "place_id": row["place_id"],
+            "people": row["people"] or [],
+            "tags": row["tags"] or [],
+            "types": row["types"] or [],
+            "title": row["title"],
+            "summary": row["summary"],
+            "raw": raw_data,
+            "external_id": row["external_id"],
+        }
+
+
+def _merge_text(existing: str | None, incoming: str | None) -> str:
+    existing_value = (existing or "").strip()
+    incoming_value = (incoming or "").strip()
+    if not existing_value:
+        return incoming_value
+    if not incoming_value:
+        return existing_value
+    if existing_value == incoming_value:
+        return existing_value
+    return f"{existing_value}\n\n{incoming_value}"
+
+
+def _merge_types(existing: Sequence[str], incoming: Sequence[str]) -> list[str]:
+    merged = list(dict.fromkeys(normalize_event_types(existing) + normalize_event_types(incoming)))
+    if any(item != "generic" for item in merged):
+        merged = [item for item in merged if item != "generic"]
+    return merged or ["generic"]
+
+
+def _merge_event(existing: dict[str, Any], incoming: EventIn) -> EventIn:
+    existing_end = existing.get("end_date")
+    incoming_end = incoming.end_date
+    merged_end = existing_end
+    if incoming_end and (not existing_end or incoming_end > existing_end):
+        merged_end = incoming_end
+
+    merged_people = list(dict.fromkeys((existing.get("people") or []) + (incoming.people or [])))
+    merged_tags = list(dict.fromkeys((existing.get("tags") or []) + (incoming.tags or [])))
+    merged_raw = dict(existing.get("raw") or {})
+    merged_raw.update(incoming.raw or {})
+
+    return EventIn(
+        id=existing.get("id") or incoming.id,
+        startDate=existing.get("start_date") or incoming.start_date,
+        endDate=merged_end,
+        placeId=incoming.place_id or existing.get("place_id"),
+        people=merged_people,
+        tags=merged_tags,
+        types=_merge_types(existing.get("types") or [], incoming.types or []),
+        title=incoming.title or existing.get("title") or "",
+        summary=_merge_text(existing.get("summary"), incoming.summary),
+        raw=merged_raw,
+        externalId=incoming.external_id or existing.get("external_id"),
+    )
 
 
 def _get_event_external_id(event_id: str | None) -> str | None:
