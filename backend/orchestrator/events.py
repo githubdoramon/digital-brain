@@ -248,6 +248,7 @@ def ingest_meeting_notes(
 
     user_tokens = _build_user_tokens(current_user)
     for meeting in meetings:
+        print("[meeting_ingest] start")
         attendee_emails = meeting.attendees or []
         unique_contacts, new_contacts_by_domain = _resolve_attendee_contacts(
             attendee_emails,
@@ -262,6 +263,12 @@ def ingest_meeting_notes(
             normalized_meeting_id = str(provided_meeting_id).strip() or None
 
         external_id_candidate = _guess_external_event_id(normalized_meeting_id, meeting.link)
+        print(
+            "[meeting_ingest] id=%s external_candidate=%s attendees=%s",
+            normalized_meeting_id,
+            external_id_candidate,
+            len(attendee_emails),
+        )
 
         start_date = meeting.date
         title = meeting.title.strip()
@@ -278,21 +285,25 @@ def ingest_meeting_notes(
             if _event_exists(candidate):
                 event_id = candidate
                 existing_event = True
+                print("[meeting_ingest] matched existing event id=%s", event_id)
 
         if not event_id and external_id_candidate:
             matched_external = _get_event_id_by_external_id(external_id_candidate)
             if matched_external:
                 event_id = matched_external
                 existing_event = True
+                print("[meeting_ingest] matched external id=%s", event_id)
 
         if not event_id:
             matched = _find_matching_meeting_event(title, start_date, unique_contacts)
             if matched:
                 event_id = matched
                 existing_event = True
+                print("[meeting_ingest] matched title/time id=%s", event_id)
 
         if not event_id:
             event_id = f"meeting:{meeting.date.strftime('%Y%m%dT%H%M%S')}-{_slugify(title)}-{uuid4().hex[:8]}"
+            print("[meeting_ingest] new event id=%s", event_id)
 
         event_external_id = external_id_candidate
         if existing_event and not event_external_id:
