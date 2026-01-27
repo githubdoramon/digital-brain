@@ -208,8 +208,15 @@ def ingest_external_event(payload: ExternalEventPayload) -> str:
     normalized_event_id = ""
     if existing_id:
         normalized_event_id = existing_id
+        print("[external_event] matched external id=%s", normalized_event_id)
+    if not normalized_event_id:
+        matched = _find_matching_meeting_event(event.title, event.start_date, event.people or [])
+        if matched:
+            normalized_event_id = matched
+            print("[external_event] matched title/time id=%s", normalized_event_id)
     if not normalized_event_id:
         normalized_event_id = f"{external_identifier}:{uuid4().hex[:8]}"
+        print("[external_event] new event id=%s", normalized_event_id)
 
     event.id = normalized_event_id
     event.external_id = external_identifier
@@ -670,7 +677,6 @@ def _find_matching_meeting_event(
     normalized_title = title.strip()
     if not normalized_title:
         return None
-    attendee_set = {att for att in attendees if att}
 
     with get_conn() as conn, conn.cursor() as cur:
         cur.execute(
@@ -679,17 +685,14 @@ def _find_matching_meeting_event(
             FROM events
             WHERE title = %s
               AND start_date = %s
+            ORDER BY id
             """,
             (normalized_title, start_date),
         )
         rows = cur.fetchall()
 
     for row in rows:
-        if not attendee_set:
-            return row["id"]
-        existing_people = set(row.get("people") or [])
-        if existing_people == attendee_set:
-            return row["id"]
+        return row["id"]
     return None
 
 
