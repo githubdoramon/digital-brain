@@ -37,8 +37,8 @@ def _load_base_auth() -> tuple[str, str, str | None]:
     return base_url, api_key, face_api_key
 
 
-def get_immich_config(require_device: bool = False, require_face: bool = True) -> ImmichConfig:
-    base_url, api_key, face_api_key = _load_base_auth(require_face=require_face)
+def get_immich_config(require_device: bool = False) -> ImmichConfig:
+    base_url, api_key, face_api_key = _load_base_auth()
     device_id = (os.getenv("IMMICH_DEVICE_ID") or "").strip() or None
     if require_device and not device_id:
         device_id = "telegram-bot"
@@ -62,7 +62,7 @@ def identify_contacts_from_image(
     if not image_bytes:
         raise ImmichIdentifyError("Image payload is empty")
 
-    cfg = config or get_immich_config(require_face=True)
+    cfg = config or get_immich_config()
     if not cfg.face_api_key:
         raise ImmichIdentifyError("IMMICH_FACE_API_KEY must be configured")
     url = f"{cfg.base_url}/api/faces/identify"
@@ -117,7 +117,7 @@ def fetch_person_thumbnail(
     if not person_id:
         return None
 
-    cfg = config or get_immich_config(require_face=False)
+    cfg = config or get_immich_config()
     url = f"{cfg.base_url}/api/people/{person_id}/thumbnail"
     headers = {
         "x-api-key": cfg.api_key,
