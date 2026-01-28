@@ -277,6 +277,30 @@ def get_contact_avatar(contact_id: str, _: dict = Depends(get_current_user)):
     return Response(content=content, media_type=content_type)
 
 
+@api.post("/mobile/contacts/{contact_id}/relationships")
+def upsert_contact_relationship_mobile(
+    contact_id: str,
+    rel: ContactRelationshipIn,
+    _: dict = Depends(get_current_user),
+):
+    if rel.from_contact_id != contact_id:
+        raise HTTPException(status_code=400, detail="from_contact_id must match contact_id")
+    contacts_service.upsert_contact_relationship(rel)
+    return {"ok": True}
+
+
+@api.delete("/mobile/contacts/{contact_id}/relationships/{relationship_id}")
+def delete_contact_relationship_mobile(
+    contact_id: str,
+    relationship_id: str,
+    _: dict = Depends(get_current_user),
+):
+    deleted = contacts_service.delete_contact_relationship(relationship_id, contact_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Relationship not found")
+    return {"ok": True}
+
+
 @api.delete("/contacts/{contact_id}")
 def delete_contact(contact_id: str, user: dict = Depends(get_current_user)):
     deleted = contacts_service.delete_contact(contact_id)

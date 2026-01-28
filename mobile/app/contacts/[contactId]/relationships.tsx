@@ -13,6 +13,8 @@ import {
 import { useLocalSearchParams } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import Ionicons from '@expo/vector-icons/Ionicons';
+
 import { apiFetch } from '@/api/client';
 import { FloatingSaveButton } from '@/components/FloatingSaveButton';
 import { theme } from '@/theme';
@@ -60,6 +62,8 @@ export default function RelationshipManagementScreen() {
   const [newType, setNewType] = useState('');
   const [isSaving, setIsSaving] = useState(false);
   const [keyboardVisible, setKeyboardVisible] = useState(false);
+  const [deletedRelationshipIds, setDeletedRelationshipIds] = useState<string[]>([]);
+  const [existingRelationshipIds, setExistingRelationshipIds] = useState<Set<string>>(new Set());
 
   useEffect(() => {
     let mounted = true;
@@ -81,6 +85,9 @@ export default function RelationshipManagementScreen() {
               relationship_type: rel.type,
               reciprocal_type: rel.other_type ?? null,
             })),
+          );
+          setExistingRelationshipIds(
+            new Set((result.relationships || []).map((rel) => rel.relationship_id)),
           );
         }
       } catch (error) {
@@ -159,23 +166,30 @@ export default function RelationshipManagementScreen() {
     if (!contact) return;
     setIsSaving(true);
     try {
-      await apiFetch('/mobile/ingest/contact', {
-        method: 'POST',
-        body: JSON.stringify({
-          contact_id: contact.contact_id,
-          display_name: contact.display_name,
-          aliases: contact.aliases ?? [],
-          birthday: contact.birthday,
-          emails: contact.emails,
-          phones: contact.phones,
-          links: contact.links,
-          tags: contact.tags,
-          comments: contact.comments,
-          external_id: contact.external_id,
-          relationships,
-        }),
-      });
-      const refreshed = (await apiFetch(`/mobile/contacts/${encodeURIComponent(contact.contact_id)}`)) as Contact;
+      const encodedContact = encodeURIComponent(contact.contact_id);
+      await Promise.all([
+        ...deletedRelationshipIds.map((relationshipId) =>
+          apiFetch(`/mobile/contacts/${encodedContact}/relationships/${encodeURIComponent(relationshipId)}`,
+            {
+              method: 'DELETE',
+            },
+          ),
+        ),
+        ...relationships.map((rel) =>
+          apiFetch(`/mobile/contacts/${encodedContact}/relationships`, {
+            method: 'POST',
+            body: JSON.stringify({
+              relationship_id: rel.relationship_id,
+              from_contact_id: contact.contact_id,
+              to_contact_id: rel.to_contact_id,
+              relationship_type: rel.relationship_type,
+              reciprocal_type: rel.reciprocal_type,
+            }),
+          }),
+        ),
+      ]);
+
+      const refreshed = (await apiFetch(`/mobile/contacts/${encodedContact}`)) as Contact;
       setContact(refreshed);
       setRelationships(
         (refreshed.relationships || []).map((rel) => ({
@@ -186,6 +200,10 @@ export default function RelationshipManagementScreen() {
           reciprocal_type: rel.other_type ?? null,
         })),
       );
+      setExistingRelationshipIds(
+        new Set((refreshed.relationships || []).map((rel) => rel.relationship_id)),
+      );
+      setDeletedRelationshipIds([]);
     } catch (error) {
       console.warn('[relationships] save failed', error);
     } finally {
@@ -226,7 +244,26 @@ export default function RelationshipManagementScreen() {
               const name = allContacts.find((item) => item.contact_id === rel.to_contact_id)?.display_name;
               return (
                 <View key={rel.relationship_id} style={styles.row}>
-                  <Text style={styles.rowTitle}>{name ?? 'Unknown contact'}</Text>
+                  <View style={styles.rowHeader}>
+                    <Text style={styles.rowTitle}>{name ?? 'Unknown contact'}</Text>
+                    <Pressable
+                      onPress={() => {
+                        setRelationships((prev) =>
+                          prev.filter((item) => item.relationship_id !== rel.relationship_id),
+                        );
+                        if (existingRelationshipIds.has(rel.relationship_id)) {
+                          setDeletedRelationshipIds((prev) =>
+                            prev.includes(rel.relationship_id)
+                              ? prev
+                              : [...prev, rel.relationship_id],
+                          );
+                        }
+                      }}
+                      style={styles.deleteButton}
+                    >
+                      <Ionicons name="trash-outline" size={18} color={theme.colors.mutedInk} />
+                    </Pressable>
+                  </View>
                   <TextInput
                     style={styles.input}
                     value={rel.relationship_type}
@@ -333,10 +370,18 @@ const styles = StyleSheet.create({
   row: {
     gap: 8,
   },
+  rowHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
   rowTitle: {
     fontSize: 13,
     fontWeight: '600',
     color: theme.colors.ink,
+  },
+  deleteButton: {
+    padding: 4,
   },
   input: {
     borderWidth: 1,

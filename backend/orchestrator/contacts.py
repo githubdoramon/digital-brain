@@ -24,6 +24,7 @@ __all__ = [
     "list_contact_merge_candidates",
     "delete_contact",
     "upsert_contact_relationship",
+    "delete_contact_relationship",
     "ensure_contact_for_email",
     "normalize_email",
     # Smart contact lookup functions
@@ -889,6 +890,21 @@ def upsert_contact_relationship(rel: ContactRelationshipIn) -> None:
             ),
         )
         conn.commit()
+
+
+def delete_contact_relationship(relationship_id: str, contact_id: str) -> bool:
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            DELETE FROM contact_relationships
+            WHERE relationship_id = %s
+              AND (from_contact_id = %s OR to_contact_id = %s)
+            """,
+            (relationship_id, contact_id, contact_id),
+        )
+        deleted = cur.rowcount > 0
+        conn.commit()
+        return deleted
 
 
 def find_self_contact(email: str) -> dict[str, Any] | None:

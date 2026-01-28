@@ -15,6 +15,7 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { apiFetch } from '@/api/client';
+import { useTopNotice } from '@/components/top-notice';
 import { theme } from '@/theme';
 
 type DailyBriefing = {
@@ -51,8 +52,8 @@ export default function DailyScreen() {
   const [todos, setTodos] = React.useState<TodoItem[]>([]);
   const [todosLoading, setTodosLoading] = React.useState(true);
   const [completingIds, setCompletingIds] = React.useState<Record<string, boolean>>({});
-  const [toastMessage, setToastMessage] = React.useState<string | null>(null);
-  const toastOpacity = React.useRef(new Animated.Value(0)).current;
+  const { showNotice } = useTopNotice();
+  const todoAnimations = React.useRef<Record<string, Animated.Value>>({}).current;
 
   React.useEffect(() => {
     if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
@@ -122,29 +123,14 @@ export default function DailyScreen() {
     };
   }, []);
 
-  const showToast = React.useCallback(
-    (message: string) => {
-      setToastMessage(message);
-      toastOpacity.setValue(0);
-      Animated.sequence([
-        Animated.timing(toastOpacity, {
-          toValue: 1,
-          duration: 180,
-          useNativeDriver: true,
-        }),
-        Animated.delay(1800),
-        Animated.timing(toastOpacity, {
-          toValue: 0,
-          duration: 220,
-          useNativeDriver: true,
-        }),
-      ]).start(({ finished }) => {
-        if (finished) {
-          setToastMessage(null);
-        }
-      });
+  const getTodoAnimation = React.useCallback(
+    (todoId: string) => {
+      if (!todoAnimations[todoId]) {
+        todoAnimations[todoId] = new Animated.Value(0);
+      }
+      return todoAnimations[todoId];
     },
-    [toastOpacity]
+    [todoAnimations]
   );
 
   const handleComplete = React.useCallback(
@@ -156,11 +142,28 @@ export default function DailyScreen() {
           method: 'PATCH',
           body: JSON.stringify({ status: 'completed' }),
         });
-        LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
-        setTodos((prev) => prev.filter((item) => item.todo_id !== todo.todo_id));
-        showToast('Todo marked as completed.');
+        const animation = getTodoAnimation(todo.todo_id);
+        Animated.timing(animation, {
+          toValue: 1,
+          duration: 220,
+          useNativeDriver: false,
+        }).start(() => {
+          LayoutAnimation.configureNext({
+            duration: 220,
+            update: {
+              type: LayoutAnimation.Types.easeInEaseOut,
+              property: LayoutAnimation.Properties.opacity,
+            },
+            delete: {
+              type: LayoutAnimation.Types.easeInEaseOut,
+              property: LayoutAnimation.Properties.opacity,
+            },
+          });
+          setTodos((prev) => prev.filter((item) => item.todo_id !== todo.todo_id));
+        });
+        showNotice('Todo marked as completed.', 'success');
       } catch (err) {
-        showToast('Unable to update todo.');
+        showNotice('Unable to update todo.', 'error');
       } finally {
         setCompletingIds((prev) => {
           const next = { ...prev };
@@ -169,7 +172,7 @@ export default function DailyScreen() {
         });
       }
     },
-    [completingIds, showToast]
+    [completingIds, getTodoAnimation, showNotice]
   );
 
   const summaryText = briefing?.summary ?? 'No briefing yet. Trigger today\'s brief to see it here.';
@@ -230,36 +233,63 @@ export default function DailyScreen() {
         </View>
         {!todosLoading && todos.length > 0 ? (
           <View style={styles.todoList}>
-            {todos.map((todo) => (
-              <View key={todo.todo_id} style={styles.todoCard}>
-                <View style={styles.todoContent}>
-                  <Text style={styles.todoText}>{todo.description}</Text>
-                  {todo.due_date ? (
-                    <Text style={styles.todoMeta}>Due {todo.due_date}</Text>
-                  ) : null}
-                </View>
-                <Pressable
-                  onPress={() => handleComplete(todo)}
-                  disabled={!!completingIds[todo.todo_id]}
-                  style={({ pressed }) => [
-                    styles.todoAction,
-                    pressed && styles.pressed,
-                    completingIds[todo.todo_id] && styles.todoActionDisabled,
+            {todos.map((todo) => {
+              const animation = getTodoAnimation(todo.todo_id);
+              const translateX = animation.interpolate({
+                inputRange: [0, 1],
+                outputRange: [0, 320],
+              });
+              const opacity = animation.interpolate({
+                inputRange: [0, 0.6, 1],
+                outputRange: [1, 1, 0],
+              });
+              const height = animation.interpolate({
+                inputRange: [0, 1],
+                outputRange: [0, 1],
+              });
+              return (
+                <Animated.View
+                  key={todo.todo_id}
+                  style={[
+                    styles.todoCard,
+                    {
+                      transform: [{ translateX }],
+                      opacity,
+                      maxHeight: height.interpolate({
+                        inputRange: [0, 1],
+                        outputRange: [120, 0],
+                      }),
+                      marginBottom: height.interpolate({
+                        inputRange: [0, 1],
+                        outputRange: [0, -12],
+                      }),
+                    },
                   ]}
                 >
-                  <Ionicons name="checkmark" size={18} color={theme.colors.accentDeep} />
-                  <Text style={styles.todoActionText}>Done</Text>
-                </Pressable>
-              </View>
-            ))}
+                  <View style={styles.todoContent}>
+                    <Text style={styles.todoText}>{todo.description}</Text>
+                    {todo.due_date ? (
+                      <Text style={styles.todoMeta}>Due {todo.due_date}</Text>
+                    ) : null}
+                  </View>
+                  <Pressable
+                    onPress={() => handleComplete(todo)}
+                    disabled={!!completingIds[todo.todo_id]}
+                    style={({ pressed }) => [
+                      styles.todoAction,
+                      pressed && styles.pressed,
+                      completingIds[todo.todo_id] && styles.todoActionDisabled,
+                    ]}
+                  >
+                    <Ionicons name="checkmark" size={18} color={theme.colors.accentDeep} />
+                    <Text style={styles.todoActionText}>Done</Text>
+                  </Pressable>
+                </Animated.View>
+              );
+            })}
           </View>
         ) : null}
       </ScrollView>
-      {toastMessage ? (
-        <Animated.View style={[styles.toast, { opacity: toastOpacity }]}>
-          <Text style={styles.toastText}>{toastMessage}</Text>
-        </Animated.View>
-      ) : null}
     </LinearGradient>
   );
 }
@@ -447,6 +477,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: theme.colors.line,
     gap: 10,
+    overflow: 'hidden',
   },
   todoContent: {
     gap: 6,
@@ -475,20 +506,5 @@ const styles = StyleSheet.create({
   },
   todoActionDisabled: {
     opacity: 0.6,
-  },
-  toast: {
-    position: 'absolute',
-    left: 20,
-    right: 20,
-    bottom: 24,
-    paddingVertical: 10,
-    paddingHorizontal: 14,
-    borderRadius: 18,
-    backgroundColor: 'rgba(20, 24, 33, 0.9)',
-  },
-  toastText: {
-    fontSize: 13,
-    color: '#fff',
-    textAlign: 'center',
   },
 });

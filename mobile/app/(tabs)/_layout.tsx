@@ -8,6 +8,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { theme } from '@/theme';
 import Digibrain from '@/assets/images/digibrain.svg';
+import { TopNoticeProvider } from '@/components/top-notice';
 
 const leftTabs = [
   {
@@ -164,23 +165,25 @@ function TabBar({ state, navigation }: BottomTabBarProps) {
 
 export default function TabLayout() {
   return (
-    <Tabs
-      initialRouteName="index"
-      screenOptions={{
-        headerShown: false,
-        tabBarHideOnKeyboard: true,
-        tabBarStyle: {
-          position: 'absolute',
-          backgroundColor: 'transparent',
-          borderTopWidth: 0,
-        },
-      }}
-      tabBar={(props) => <TabBar {...props} />}
-    >
-      <Tabs.Screen name="index" options={{ title: 'Chat' }} />
-      <Tabs.Screen name="daily" options={{ title: 'Daily' }} />
-      <Tabs.Screen name="contacts" options={{ title: 'Contacts' }} />
-    </Tabs>
+    <TopNoticeProvider>
+      <Tabs
+        initialRouteName="index"
+        screenOptions={{
+          headerShown: false,
+          tabBarHideOnKeyboard: true,
+          tabBarStyle: {
+            position: 'absolute',
+            backgroundColor: 'transparent',
+            borderTopWidth: 0,
+          },
+        }}
+        tabBar={(props) => <TabBar {...props} />}
+      >
+        <Tabs.Screen name="index" options={{ title: 'Chat' }} />
+        <Tabs.Screen name="daily" options={{ title: 'Daily' }} />
+        <Tabs.Screen name="contacts" options={{ title: 'Contacts' }} />
+      </Tabs>
+    </TopNoticeProvider>
   );
 }
 
