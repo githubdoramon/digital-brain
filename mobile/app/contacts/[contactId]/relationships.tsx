@@ -1,5 +1,15 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import {
+  Keyboard,
+  KeyboardAvoidingView,
+  Platform,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  View,
+} from 'react-native';
 import { useLocalSearchParams } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -49,6 +59,7 @@ export default function RelationshipManagementScreen() {
   const [selectedContactId, setSelectedContactId] = useState<string | null>(null);
   const [newType, setNewType] = useState('');
   const [isSaving, setIsSaving] = useState(false);
+  const [keyboardVisible, setKeyboardVisible] = useState(false);
 
   useEffect(() => {
     let mounted = true;
@@ -90,6 +101,19 @@ export default function RelationshipManagementScreen() {
         console.warn('[relationships] contacts load failed', error);
       }
     })();
+  }, []);
+
+  useEffect(() => {
+    const showSubscription = Keyboard.addListener('keyboardDidShow', () => {
+      setKeyboardVisible(true);
+    });
+    const hideSubscription = Keyboard.addListener('keyboardDidHide', () => {
+      setKeyboardVisible(false);
+    });
+    return () => {
+      showSubscription.remove();
+      hideSubscription.remove();
+    };
   }, []);
 
   const relationshipSnapshot = useMemo(
@@ -174,8 +198,22 @@ export default function RelationshipManagementScreen() {
   }
 
   return (
-    <View style={styles.container}>
-      <ScrollView contentContainerStyle={[styles.content, { paddingTop: insets.top + 16 }]}>
+    <KeyboardAvoidingView
+      style={styles.container}
+      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+      keyboardVerticalOffset={0}
+    >
+      <ScrollView
+        contentContainerStyle={[
+          styles.content,
+          {
+            paddingTop: insets.top + 56,
+            paddingBottom: insets.bottom + (keyboardVisible ? 16 : 32),
+          },
+        ]}
+        keyboardShouldPersistTaps="always"
+        keyboardDismissMode="none"
+      >
         <Text style={styles.title}>Relationships</Text>
         <Text style={styles.subtitle}>Keep the relationships for {contact.display_name} up to date.</Text>
 
@@ -257,7 +295,7 @@ export default function RelationshipManagementScreen() {
         onPress={handleSave}
         disabled={isSaving}
       />
-    </View>
+    </KeyboardAvoidingView>
   );
 }
 
@@ -268,7 +306,6 @@ const styles = StyleSheet.create({
   },
   content: {
     paddingHorizontal: 20,
-    paddingBottom: 120,
     gap: 16,
   },
   title: {

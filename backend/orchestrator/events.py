@@ -274,14 +274,6 @@ def ingest_meeting_notes(
         if provided_meeting_id is not None:
             normalized_meeting_id = str(provided_meeting_id).strip() or None
 
-        external_id_candidate = _guess_external_event_id(normalized_meeting_id, meeting.link)
-        print(
-            "[meeting_ingest] id=%s external_candidate=%s attendees=%s",
-            normalized_meeting_id,
-            external_id_candidate,
-            len(attendee_emails),
-        )
-
         start_date = meeting.date
         title = meeting.title.strip()
         if not title:
@@ -299,15 +291,8 @@ def ingest_meeting_notes(
                 existing_event = True
                 print("[meeting_ingest] matched existing event id=%s", event_id)
 
-        if not event_id and external_id_candidate:
-            matched_external = _get_event_id_by_external_id(external_id_candidate)
-            if matched_external:
-                event_id = matched_external
-                existing_event = True
-                print("[meeting_ingest] matched external id=%s", event_id)
-
         if not event_id:
-            matched = _find_matching_meeting_event(title, start_date, unique_contacts)
+            matched = _find_matching_meeting_event(title, start_date)
             if matched:
                 event_id = matched
                 existing_event = True
@@ -317,9 +302,8 @@ def ingest_meeting_notes(
             event_id = f"meeting:{meeting.date.strftime('%Y%m%dT%H%M%S')}-{_slugify(title)}-{uuid4().hex[:8]}"
             print("[meeting_ingest] new event id=%s", event_id)
 
-        event_external_id = external_id_candidate
-        if existing_event and not event_external_id:
-            event_external_id = _get_event_external_id(event_id)
+        # if existing_event and not event_external_id:
+        #     event_external_id = _get_event_external_id(event_id)
 
         raw_payload = {
             "content": meeting.content,
@@ -327,7 +311,7 @@ def ingest_meeting_notes(
             "attendees": attendee_emails,
             "attendee_contact_ids": unique_contacts,
             "source": "meeting_ingest",
-            "existing_event": existing_event,
+            "existing_event": None,
         }
 
         if normalized_meeting_id:
@@ -342,7 +326,7 @@ def ingest_meeting_notes(
             title=title,
             summary=summary,
             raw=raw_payload,
-            externalId=event_external_id,
+            externalId=None,
         )
 
         existing_event = _get_event_by_id(event_id)
@@ -776,7 +760,6 @@ def _get_event_external_id(event_id: str | None) -> str | None:
 def _find_matching_meeting_event(
     title: str | None,
     start_date: datetime | None,
-    attendees: Sequence[str],
 ) -> str | None:
     if not title or not start_date:
         return None
@@ -787,7 +770,7 @@ def _find_matching_meeting_event(
     with get_conn() as conn, conn.cursor() as cur:
         cur.execute(
             """
-            SELECT id, people
+            SELECT id
             FROM events
             WHERE title = %s
               AND start_date = %s
@@ -797,6 +780,7 @@ def _find_matching_meeting_event(
         )
         rows = cur.fetchall()
 
+    print(f"[find_matching_meeting_event] rows={rows}")
     for row in rows:
         return row["id"]
     return None

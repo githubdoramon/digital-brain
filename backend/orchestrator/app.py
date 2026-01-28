@@ -4,7 +4,7 @@ import json
 import os
 import re
 from contextlib import asynccontextmanager
-from datetime import datetime
+from datetime import date, datetime
 from time import perf_counter
 from typing import Any
 from uuid import uuid4
@@ -27,6 +27,7 @@ from fastapi.responses import FileResponse, StreamingResponse
 import action_logs
 import contacts as contacts_service
 import conversations
+import daily_briefings
 import devices as devices_service
 import documents
 import events as events_service
@@ -45,6 +46,8 @@ from schemas import (
     ContactIn,
     ContactMergeIn,
     ContactRelationshipIn,
+    DailyBriefingIn,
+    DailyBriefingOut,
     DeviceRegisterIn,
     DocumentCollection,
     DocumentDetailOut,
@@ -107,6 +110,27 @@ def _parse_iso_datetime(value: str | None) -> datetime | None:
         return datetime.fromisoformat(value.replace("Z", "+00:00"))
     except Exception as exc:
         raise HTTPException(status_code=400, detail=f"Invalid document_date: {value}") from exc
+
+
+def _parse_iso_date(value: str | None) -> date:
+    if not value:
+        raise HTTPException(status_code=400, detail="date is required")
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00")).date()
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid date: {value}") from exc
+
+
+def _format_briefing_response(briefing: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "briefing_id": briefing.get("briefing_id"),
+        "date": briefing.get("briefing_date"),
+        "timezone": briefing.get("timezone"),
+        "event_count": briefing.get("event_count") or 0,
+        "todo_count": briefing.get("todo_count") or 0,
+        "summary": briefing.get("summary") or "",
+        "markdown": briefing.get("markdown") or "",
+    }
 
 
 @asynccontextmanager
@@ -221,7 +245,7 @@ def merge_contacts_endpoint(payload: ContactMergeIn, user: dict = Depends(get_cu
 @api.get("/mobile/contacts/{contact_id}")
 def get_contact(contact_id: str, user: dict = Depends(get_current_user)):
     contact = contacts_service.get_contact(contact_id)
-    if contact is None:
+    if contact is None or contacts_service.is_external_placeholder(contact.get("display_name")):
         raise HTTPException(status_code=404, detail="Contact not found")
     return contact
 
@@ -231,7 +255,7 @@ def get_contact_avatar(contact_id: str, _: dict = Depends(get_current_user)):
     print(f"[get_contact_avatar] contact_id={contact_id}")
     contact = contacts_service.get_contact(contact_id)
     print(f"[get_contact_avatar] contact={contact}")
-    if contact is None:
+    if contact is None or contacts_service.is_external_placeholder(contact.get("display_name")):
         raise HTTPException(status_code=404, detail="Contact not found")
 
     external_id = contact.get("external_id")
@@ -348,8 +372,12 @@ def ingest_todo(todo: TodoIn, user: dict = Depends(get_current_user)):
 
 
 @api.get("/todos")
-def list_todos(user: dict = Depends(get_current_user)):
-    return {"todos": todos_service.list_todos()}
+def list_todos(
+    user: dict = Depends(get_current_user),
+    open_only: bool = Query(default=False),
+    order: str | None = Query(default=None),
+):
+    return {"todos": todos_service.list_todos(open_only=open_only, order=order)}
 
 
 @api.get("/todos/{todo_id}")
@@ -803,6 +831,45 @@ def get_meeting(meeting_id: str, user: dict = Depends(get_current_user)):
     if not meeting:
         raise HTTPException(status_code=404, detail="Meeting not found")
     return meeting
+
+
+@api.get("/briefings/daily", response_model=DailyBriefingOut)
+def get_daily_briefing(
+    date_value: str = Query(..., alias="date"),
+    timezone: str | None = Query(default=None),
+    user: dict = Depends(get_current_user),
+):
+    user_email = user.get("email")
+    if not user_email:
+        raise HTTPException(status_code=400, detail="Authenticated user email missing")
+    briefing_date = _parse_iso_date(date_value)
+    briefing = daily_briefings.get_daily_briefing(
+        user_email=user_email,
+        briefing_date=briefing_date,
+        timezone=timezone,
+    )
+    if not briefing:
+        briefing = daily_briefings.get_daily_briefing(
+            user_email="default_user",
+            briefing_date=briefing_date,
+            timezone=timezone,
+        )
+    if not briefing:
+        raise HTTPException(status_code=404, detail="Briefing not found")
+    return _format_briefing_response(briefing)
+
+
+@api.get("/briefings/latest", response_model=DailyBriefingOut)
+def get_latest_briefing(user: dict = Depends(get_current_user)):
+    user_email = user.get("email")
+    if not user_email:
+        raise HTTPException(status_code=400, detail="Authenticated user email missing")
+    briefing = daily_briefings.get_latest_daily_briefing(user_email=user_email)
+    if not briefing:
+        briefing = daily_briefings.get_latest_daily_briefing(user_email="default_user")
+    if not briefing:
+        raise HTTPException(status_code=404, detail="Briefing not found")
+    return _format_briefing_response(briefing)
 
 
 # --------------------------- Ask endpoint (LLM-powered) ---------------------------
@@ -1558,4 +1625,17 @@ def run_emergency_stock_endpoint(
     result = handle_emergency_stock_request()
     if result.get("status") == "error":
         raise HTTPException(status_code=500, detail=result.get("message", "Unknown error"))
+    return result
+
+
+@api.post("/agents/daily-briefing/run", response_model=DailyBriefingOut)
+def run_daily_briefing_agent(
+    payload: DailyBriefingIn,
+    _=Depends(require_service_api_key),
+):
+    from agents.daily_briefing.executor import handle_daily_briefing_request
+
+    result = handle_daily_briefing_request(payload.model_dump())
+    if result.get("status") == "error":
+        raise HTTPException(status_code=400, detail=result.get("message", "Invalid request"))
     return result

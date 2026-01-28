@@ -199,6 +199,24 @@ FOR EACH ROW EXECUTE FUNCTION events_tsv_update();
 
 -- Indices
 CREATE INDEX IF NOT EXISTS idx_events_start_date ON events (start_date);
+
+-- Daily briefings
+CREATE TABLE IF NOT EXISTS daily_briefings (
+  briefing_id TEXT PRIMARY KEY,
+  user_email TEXT,
+  briefing_date DATE NOT NULL,
+  timezone TEXT NOT NULL,
+  markdown TEXT NOT NULL,
+  summary TEXT NOT NULL,
+  event_count INT NOT NULL DEFAULT 0,
+  todo_count INT NOT NULL DEFAULT 0,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE (user_email, briefing_date, timezone)
+);
+
+CREATE INDEX IF NOT EXISTS idx_daily_briefings_user_date
+  ON daily_briefings (user_email, briefing_date);
 CREATE INDEX IF NOT EXISTS idx_events_people ON events USING GIN (people);
 CREATE INDEX IF NOT EXISTS idx_events_tags ON events USING GIN (tags);
 CREATE INDEX IF NOT EXISTS idx_events_what_tsv ON events USING GIN (what_tsv);

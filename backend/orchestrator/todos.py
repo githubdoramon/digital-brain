@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from db import get_conn
@@ -9,9 +10,14 @@ from schemas import TodoIn
 __all__ = [
     "ingest_todo",
     "list_todos",
+    "list_event_todos",
+    "list_unlinked_relevant_todos",
     "get_todo",
     "delete_todo",
 ]
+
+PENDING_STATUSES = ("", "pending", "open", "in_progress", "todo")
+COMPLETED_STATUSES = ("completed", "complete", "done", "accomplished", "closed")
 
 
 def ingest_todo(todo: TodoIn) -> None:
@@ -50,41 +56,137 @@ def ingest_todo(todo: TodoIn) -> None:
         conn.commit()
 
 
-def list_todos() -> list[dict[str, Any]]:
+def list_todos(*, open_only: bool = False, order: str | None = None) -> list[dict[str, Any]]:
+    where_clause = ""
+    params: list[Any] = []
+    if open_only:
+        where_clause = "WHERE lower(coalesce(status, '')) = ANY(%s)"
+        params.append(list(PENDING_STATUSES))
+
+    if order == "due":
+        order_clause = (
+            "ORDER BY "
+            "CASE "
+            "WHEN due_date = CURRENT_DATE THEN 0 "
+            "WHEN due_date IS NULL THEN 2 "
+            "ELSE 1 END, "
+            "due_date ASC NULLS LAST, "
+            "created_at DESC"
+        )
+    else:
+        order_clause = (
+            "ORDER BY "
+            "CASE WHEN due_date IS NULL THEN 1 ELSE 0 END, "
+            "due_date ASC NULLS LAST, "
+            "created_at DESC"
+        )
+
     with get_conn() as conn, conn.cursor() as cur:
         cur.execute(
-            """
+            f"""
             SELECT todo_id, description, status, due_date, created_at, updated_at
             FROM todos
-            ORDER BY
-              CASE WHEN due_date IS NULL THEN 1 ELSE 0 END,
-              due_date ASC NULLS LAST,
-              created_at DESC
-            """
+            {where_clause}
+            {order_clause}
+            """,
+            tuple(params),
         )
-        rows = cur.fetchall()
+        rows = [dict(row) for row in cur.fetchall()]
 
-        todo_ids = [row["todo_id"] for row in rows]
+        todo_ids: list[str] = [str(row.get("todo_id")) for row in rows if row.get("todo_id")]
         link_map = _collect_todo_links(conn, todo_ids)
 
         todos: list[dict[str, Any]] = []
         for row in rows:
-            todo_id = row["todo_id"]
+            todo_id = row.get("todo_id")
+            if not todo_id:
+                continue
             links = link_map.get(todo_id, {})
             todos.append(
                 {
                     "todo_id": todo_id,
-                    "description": row["description"],
-                    "status": row["status"],
-                    "due_date": row["due_date"].isoformat() if row["due_date"] else None,
-                    "created_at": row["created_at"].isoformat() if row["created_at"] else None,
-                    "updated_at": row["updated_at"].isoformat() if row["updated_at"] else None,
+                    "description": row.get("description"),
+                    "status": row.get("status"),
+                    "due_date": row["due_date"].isoformat() if row.get("due_date") else None,
+                    "created_at": row["created_at"].isoformat() if row.get("created_at") else None,
+                    "updated_at": row["updated_at"].isoformat() if row.get("updated_at") else None,
                     "contacts": links.get("contacts", []),
                     "events": links.get("events", []),
                     "places": links.get("places", []),
                 }
             )
         return todos
+
+
+def list_event_todos(event_id: str, days: int = 14) -> list[dict[str, Any]]:
+    if not event_id:
+        return []
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT
+              t.todo_id,
+              t.description,
+              t.status,
+              t.due_date,
+              t.created_at,
+              t.updated_at
+            FROM todos AS t
+            INNER JOIN todo_events AS te ON te.todo_id = t.todo_id
+            WHERE te.event_id = %s
+              AND (
+                lower(coalesce(t.status, '')) = ANY(%s)
+                OR (
+                  lower(coalesce(t.status, '')) = ANY(%s)
+                  AND (t.updated_at >= %s OR (t.updated_at IS NULL AND t.created_at >= %s))
+                )
+              )
+            ORDER BY
+              CASE WHEN t.due_date IS NULL THEN 1 ELSE 0 END,
+              t.due_date ASC NULLS LAST,
+              t.created_at DESC
+            """,
+            (event_id, list(PENDING_STATUSES), list(COMPLETED_STATUSES), cutoff, cutoff),
+        )
+        rows = [dict(row) for row in cur.fetchall()]
+    return _serialize_todo_rows(rows)
+
+
+def list_unlinked_relevant_todos(days: int = 14) -> list[dict[str, Any]]:
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT
+              t.todo_id,
+              t.description,
+              t.status,
+              t.due_date,
+              t.created_at,
+              t.updated_at
+            FROM todos AS t
+            WHERE NOT EXISTS (
+              SELECT 1
+              FROM todo_events AS te
+              WHERE te.todo_id = t.todo_id
+            )
+              AND (
+                lower(coalesce(t.status, '')) = ANY(%s)
+                OR (
+                  lower(coalesce(t.status, '')) = ANY(%s)
+                  AND (t.updated_at >= %s OR (t.updated_at IS NULL AND t.created_at >= %s))
+                )
+              )
+            ORDER BY
+              CASE WHEN t.due_date IS NULL THEN 1 ELSE 0 END,
+              t.due_date ASC NULLS LAST,
+              t.created_at DESC
+            """,
+            (list(PENDING_STATUSES), list(COMPLETED_STATUSES), cutoff, cutoff),
+        )
+        rows = [dict(row) for row in cur.fetchall()]
+    return _serialize_todo_rows(rows)
 
 
 def get_todo(todo_id: str) -> dict[str, Any] | None:
@@ -97,7 +199,8 @@ def get_todo(todo_id: str) -> dict[str, Any] | None:
             """,
             (todo_id,),
         )
-        row = cur.fetchone()
+        raw_row = cur.fetchone()
+        row = dict(raw_row) if raw_row else None
         if not row:
             return None
 
@@ -105,12 +208,12 @@ def get_todo(todo_id: str) -> dict[str, Any] | None:
         links = link_map.get(todo_id, {})
 
         return {
-            "todo_id": row["todo_id"],
-            "description": row["description"],
-            "status": row["status"],
-            "due_date": row["due_date"].isoformat() if row["due_date"] else None,
-            "created_at": row["created_at"].isoformat() if row["created_at"] else None,
-            "updated_at": row["updated_at"].isoformat() if row["updated_at"] else None,
+            "todo_id": row.get("todo_id"),
+            "description": row.get("description"),
+            "status": row.get("status"),
+            "due_date": row["due_date"].isoformat() if row.get("due_date") else None,
+            "created_at": row["created_at"].isoformat() if row.get("created_at") else None,
+            "updated_at": row["updated_at"].isoformat() if row.get("updated_at") else None,
             "contacts": links.get("contacts", []),
             "events": links.get("events", []),
             "places": links.get("places", []),
@@ -204,9 +307,9 @@ def _collect_todo_links(conn, todo_ids: Sequence[str]) -> dict[str, dict[str, An
             (list(todo_ids),),
         )
         for row in cur.fetchall():
-            events = link_map.setdefault(row["todo_id"], {"contacts": [], "events": [], "places": []})[
-                "events"
-            ]
+            events = link_map.setdefault(
+                row["todo_id"], {"contacts": [], "events": [], "places": []}
+            )["events"]
             event_id = row["event_id"]
             event_detail: dict[str, Any] = {"id": event_id}
             title = row.get("title") or None
@@ -230,3 +333,19 @@ def _collect_todo_links(conn, todo_ids: Sequence[str]) -> dict[str, dict[str, An
             ].append(row["place_id"])
 
     return link_map
+
+
+def _serialize_todo_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    todos: list[dict[str, Any]] = []
+    for row in rows:
+        todos.append(
+            {
+                "todo_id": row.get("todo_id"),
+                "description": row.get("description"),
+                "status": row.get("status"),
+                "due_date": row["due_date"].isoformat() if row.get("due_date") else None,
+                "created_at": row["created_at"].isoformat() if row.get("created_at") else None,
+                "updated_at": row["updated_at"].isoformat() if row.get("updated_at") else None,
+            }
+        )
+    return todos

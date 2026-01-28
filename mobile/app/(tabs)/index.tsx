@@ -1,22 +1,24 @@
 import { LinearGradient } from 'expo-linear-gradient';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
+  ActivityIndicator,
   FlatList,
   Keyboard,
   KeyboardAvoidingView,
   KeyboardAvoidingViewProps,
   Platform,
+  Pressable,
   StyleSheet,
   Text,
   TextInput,
   View,
 } from 'react-native';
+import Ionicons from '@expo/vector-icons/Ionicons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { apiFetch } from '@/api/client';
 import { useAuth } from '@/auth/AuthContext';
 import { theme } from '@/theme';
-import { Button } from '@/components/Button';
 import { EventClarificationCard } from '@/components/EventClarificationCard';
 import { EventProposalCard } from '@/components/EventProposalCard';
 import { SlashCommandPalette } from '@/components/SlashCommandPalette';
@@ -136,6 +138,8 @@ export default function ChatScreen() {
   const [isAtBottom, setIsAtBottom] = useState(true);
   const [forceScrollNext, setForceScrollNext] = useState(false);
   const [isBootstrapping, setIsBootstrapping] = useState(true);
+  const tabBarOffset = 64;
+  const composerInset = tabBarOffset + 96;
 
   const allowed = email === 'REDACTED-EMAIL';
   const canSend = input.trim().length > 0 && !isSending && allowed;
@@ -335,7 +339,7 @@ export default function ChatScreen() {
             styles.listContent,
             {
               paddingTop: insets.top + 16,
-              paddingBottom: 24,
+              paddingBottom: composerInset,
             },
           ]}
           onLayout={(event) => {
@@ -487,7 +491,7 @@ export default function ChatScreen() {
           style={[
             styles.composer,
             {
-              paddingBottom: 14 + (Platform.OS === 'ios' ? insets.bottom : 0),
+              paddingBottom: 18 + (Platform.OS === 'ios' ? insets.bottom : 0) + tabBarOffset,
             },
           ]}
         >
@@ -504,13 +508,21 @@ export default function ChatScreen() {
             placeholder="Send a message..."
             multiline
           />
-          <Button
-            label={isSending ? '...' : 'Send'}
+          <Pressable
             onPress={() => sendMessage()}
             disabled={!canSend}
-            variant="primary"
-            style={styles.sendButton}
-          />
+            style={({ pressed }) => [
+              styles.sendButton,
+              pressed && styles.sendButtonPressed,
+              !canSend && styles.sendButtonDisabled,
+            ]}
+          >
+            {isSending ? (
+              <ActivityIndicator size="small" color="#fff" />
+            ) : (
+              <Ionicons name="send" size={20} color="#fff" />
+            )}
+          </Pressable>
         </View>
       </KeyboardAvoidingView>
     </LinearGradient>
@@ -585,28 +597,54 @@ const styles = StyleSheet.create({
     marginTop: 12,
   },
   composer: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    bottom: 0,
     paddingHorizontal: 16,
     paddingVertical: 14,
-    backgroundColor: '#fff',
-    borderTopWidth: 1,
-    borderTopColor: theme.colors.line,
+    backgroundColor: 'transparent',
     flexDirection: 'row',
     gap: 10,
-    alignItems: 'flex-end',
+    alignItems: 'center',
   },
   input: {
     flex: 1,
-    minHeight: 44,
+    minHeight: 46,
     maxHeight: 120,
     paddingHorizontal: 14,
-    paddingVertical: 10,
-    borderRadius: theme.radius.md,
+    paddingVertical: 12,
+    borderRadius: theme.radius.xl,
     borderWidth: 1,
     borderColor: theme.colors.line,
     backgroundColor: '#fff',
     color: theme.colors.ink,
+    textAlignVertical: 'center',
+    shadowColor: theme.shadow.color,
+    shadowOpacity: 0.12,
+    shadowRadius: 12,
+    shadowOffset: { width: 0, height: 8 },
+    elevation: 3,
   },
   sendButton: {
     alignSelf: 'flex-end',
+    width: 46,
+    height: 46,
+    borderRadius: 23,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: theme.colors.accent,
+    shadowColor: theme.shadow.color,
+    shadowOpacity: 0.2,
+    shadowRadius: 12,
+    shadowOffset: { width: 0, height: 8 },
+    elevation: 4,
+  },
+  sendButtonPressed: {
+    opacity: 0.9,
+    transform: [{ scale: 0.98 }],
+  },
+  sendButtonDisabled: {
+    opacity: 0.6,
   },
 });

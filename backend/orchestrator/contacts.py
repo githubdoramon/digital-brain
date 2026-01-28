@@ -36,6 +36,13 @@ __all__ = [
 ]
 
 MAX_CONTACT_EMBED_CHARS = 4000
+EXTERNAL_CONTACT_PREFIX = "external contact"
+
+
+def is_external_placeholder(display_name: str | None) -> bool:
+    if not display_name:
+        return False
+    return display_name.strip().lower().startswith(EXTERNAL_CONTACT_PREFIX)
 
 
 def _avatar_url(contact_id: str, external_id: str | None) -> str | None:
@@ -217,8 +224,11 @@ def list_contacts() -> list[dict[str, Any]]:
             """
             SELECT contact_id, display_name, aliases, birthday, emails, phones, links, tags, comments, external_id
             FROM contacts
+            WHERE display_name IS NULL
+               OR LOWER(display_name) NOT LIKE %s
             ORDER BY display_name
-            """
+            """,
+            (f"{EXTERNAL_CONTACT_PREFIX}%",),
         )
         rows = [dict(row) for row in cur.fetchall()]
         relationships_map = _collect_contact_relationships()
@@ -719,6 +729,7 @@ def list_contact_merge_candidates() -> dict[str, Any]:
             """
         )
         rows = [dict(row) for row in cur.fetchall()]
+        rows = [row for row in rows if not is_external_placeholder(row.get("display_name"))]
 
     def _serialize(row) -> dict[str, Any]:
         return {

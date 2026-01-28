@@ -1,6 +1,9 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Animated,
+  Keyboard,
+  KeyboardAvoidingView,
+  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -59,6 +62,7 @@ export default function ContactDetailScreen() {
   const [draft, setDraft] = useState<Contact | null>(null);
   const [isSaving, setIsSaving] = useState(false);
   const [contactsIndex, setContactsIndex] = useState<Map<string, string>>(new Map());
+  const [keyboardVisible, setKeyboardVisible] = useState(false);
 
   const heroOpacity = useRef(new Animated.Value(0)).current;
   const heroTranslate = useRef(new Animated.Value(12)).current;
@@ -113,6 +117,19 @@ export default function ContactDetailScreen() {
       }),
     ]).start();
   }, [heroOpacity, heroTranslate]);
+
+  useEffect(() => {
+    const showSubscription = Keyboard.addListener('keyboardDidShow', () => {
+      setKeyboardVisible(true);
+    });
+    const hideSubscription = Keyboard.addListener('keyboardDidHide', () => {
+      setKeyboardVisible(false);
+    });
+    return () => {
+      showSubscription.remove();
+      hideSubscription.remove();
+    };
+  }, []);
 
   const relationshipChips = useMemo(() => {
     if (!contact) return [];
@@ -180,8 +197,22 @@ export default function ContactDetailScreen() {
   }
 
   return (
-    <View style={styles.container}>
-      <ScrollView contentContainerStyle={[styles.content, { paddingTop: insets.top + 16 }]}>
+    <KeyboardAvoidingView
+      style={styles.container}
+      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+      keyboardVerticalOffset={0}
+    >
+      <ScrollView
+        contentContainerStyle={[
+          styles.content,
+          {
+            paddingTop: insets.top + 56,
+            paddingBottom: insets.bottom + (keyboardVisible ? 16 : 32),
+          },
+        ]}
+        keyboardShouldPersistTaps="always"
+        keyboardDismissMode="none"
+      >
         <Animated.View style={[styles.hero, { opacity: heroOpacity, transform: [{ translateY: heroTranslate }] }]}>
           <Avatar name={draft.display_name} uri={draft.avatar_url ?? undefined} token={token} size={88} />
           <View style={styles.heroText}>
@@ -202,7 +233,7 @@ export default function ContactDetailScreen() {
           <Pressable
             style={styles.linkButton}
             onPress={() =>
-              router.push(`/(tabs)/contacts/${encodeURIComponent(contactParam ?? '')}/relationships`)
+              router.push(`/contacts/${encodeURIComponent(contactParam ?? '')}/relationships`)
             }
           >
             <Text style={styles.linkText}>Manage relationships</Text>
@@ -277,7 +308,7 @@ export default function ContactDetailScreen() {
         onPress={handleSave}
         disabled={isSaving}
       />
-    </View>
+    </KeyboardAvoidingView>
   );
 }
 
@@ -288,7 +319,6 @@ const styles = StyleSheet.create({
   },
   content: {
     paddingHorizontal: 20,
-    paddingBottom: 120,
     gap: 20,
   },
   hero: {

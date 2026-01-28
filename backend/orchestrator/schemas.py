@@ -206,6 +206,22 @@ class PushNotificationTestIn(BaseModel):
     message: str
 
 
+class DailyBriefingIn(BaseModel):
+    date: str
+    timezone: str
+    user_email: str | None = None
+
+
+class DailyBriefingOut(BaseModel):
+    briefing_id: str | None = None
+    date: str
+    timezone: str
+    event_count: int
+    todo_count: int
+    summary: str
+    markdown: str
+
+
 class AskIn(BaseModel):
     question: str
     limit: int | None = 3

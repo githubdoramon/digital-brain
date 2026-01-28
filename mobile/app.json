@@ -37,7 +37,9 @@
       "expo-router",
       "expo-notifications",
       "expo-secure-store",
-      "@react-native-google-signin/google-signin"
+      ["@react-native-google-signin/google-signin", {
+        "iosUrlScheme": "com.googleusercontent.apps.000000000000-redacted-oauth-ios-2"
+      }]
     ],
     "experiments": {
       "typedRoutes": true

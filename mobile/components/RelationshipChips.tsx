@@ -22,8 +22,8 @@ export function RelationshipChips({ chips }: RelationshipChipsProps) {
 
   return (
     <View style={styles.wrap}>
-      {chips.map((chip) => (
-        <View key={chip.label} style={styles.chip}>
+      {chips.map((chip, index) => (
+        <View key={index} style={styles.chip}>
           <Text style={styles.chipText}>{chip.label}</Text>
         </View>
       ))}

@@ -28,14 +28,12 @@ class ImmichConfig:
     http_timeout: int = IMMICH_HTTP_TIMEOUT
 
 
-def _load_base_auth(require_face: bool = True) -> tuple[str, str, str | None]:
+def _load_base_auth() -> tuple[str, str, str | None]:
     base_url = (os.getenv("IMMICH_SERVER_URL") or "").strip().rstrip("/")
     api_key = (os.getenv("IMMICH_API_KEY") or "").strip()
     face_api_key = (os.getenv("IMMICH_FACE_API_KEY") or "").strip()
-    if not base_url or not api_key:
+    if not base_url and not api_key:
         raise ImmichClientError("IMMICH_SERVER_URL and IMMICH_API_KEY must be configured")
-    if require_face and not face_api_key:
-        raise ImmichClientError("IMMICH_FACE_API_KEY must be configured")
     return base_url, api_key, face_api_key
 
 

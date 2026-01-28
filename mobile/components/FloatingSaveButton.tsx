@@ -1,5 +1,6 @@
 import React, { useEffect, useRef } from 'react';
 import { Animated, Pressable, StyleSheet, Text } from 'react-native';
+import Ionicons from '@expo/vector-icons/Ionicons';
 
 import { theme } from '@/theme';
 
@@ -30,9 +31,17 @@ export function FloatingSaveButton({ visible, label = 'Save changes', onPress, d
   }, [visible, opacity, translateY]);
 
   return (
-    <Animated.View style={[styles.container, { transform: [{ translateY }], opacity }]} pointerEvents={visible ? 'auto' : 'none'}>
-      <Pressable style={[styles.button, disabled && styles.disabled]} onPress={onPress} disabled={disabled}>
-        <Text style={styles.text}>{label}</Text>
+    <Animated.View
+      style={[styles.container, { transform: [{ translateY }], opacity }]}
+      pointerEvents={visible ? 'auto' : 'none'}
+    >
+      <Pressable
+        accessibilityLabel={label}
+        style={[styles.button, disabled && styles.disabled]}
+        onPress={onPress}
+        disabled={disabled}
+      >
+        <Ionicons name="checkmark" size={26} color="#fff" />
       </Pressable>
     </Animated.View>
   );
@@ -41,15 +50,16 @@ export function FloatingSaveButton({ visible, label = 'Save changes', onPress, d
 const styles = StyleSheet.create({
   container: {
     position: 'absolute',
-    left: 20,
     right: 20,
     bottom: 20,
   },
   button: {
     backgroundColor: theme.colors.accent,
-    paddingVertical: 14,
-    borderRadius: theme.radius.lg,
+    width: 56,
+    height: 56,
+    borderRadius: 28,
     alignItems: 'center',
+    justifyContent: 'center',
     shadowColor: theme.shadow.color,
     shadowOpacity: theme.shadow.opacity,
     shadowRadius: theme.shadow.radius,
@@ -58,11 +68,5 @@ const styles = StyleSheet.create({
   },
   disabled: {
     opacity: 0.6,
-  },
-  text: {
-    color: '#fff',
-    fontSize: 15,
-    fontWeight: '700',
-    letterSpacing: 0.3,
   },
 });

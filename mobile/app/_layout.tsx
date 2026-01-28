@@ -10,6 +10,7 @@ import { SafeAreaProvider } from 'react-native-safe-area-context';
 import * as Notifications from 'expo-notifications';
 
 import { AuthProvider, useAuth } from '@/auth/AuthContext';
+import { theme } from '@/theme';
 
 export {
   // Catch any errors thrown by the Layout component.
@@ -123,6 +124,34 @@ function RootLayoutNav() {
       <Stack>
         <Stack.Screen name="(auth)" options={{ headerShown: false }} />
         <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
+        <Stack.Screen
+          name="contacts/[contactId]"
+          options={{
+            headerShown: true,
+            headerTransparent: true,
+            headerTitle: '',
+            headerBackTitle: ' ',
+            headerBackTitleStyle: { fontSize: 1 },
+            headerBackButtonMenuEnabled: false,
+            headerShadowVisible: false,
+            headerTintColor: theme.colors.ink,
+            headerStyle: { backgroundColor: 'transparent' },
+          }}
+        />
+        <Stack.Screen
+          name="contacts/[contactId]/relationships"
+          options={{
+            headerShown: true,
+            headerTransparent: true,
+            headerTitle: '',
+            headerBackTitle: ' ',
+            headerBackTitleStyle: { fontSize: 0 },
+            headerBackButtonMenuEnabled: false,
+            headerShadowVisible: false,
+            headerTintColor: theme.colors.ink,
+            headerStyle: { backgroundColor: 'transparent' },
+          }}
+        />
         <Stack.Screen name="modal" options={{ presentation: 'modal' }} />
       </Stack>
     </ThemeProvider>
