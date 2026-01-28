@@ -210,10 +210,10 @@ def ingest_external_event(payload: ExternalEventPayload) -> str:
         normalized_event_id = existing_id
         print("[external_event] matched external id=%s", normalized_event_id)
     if not normalized_event_id:
-        matched = _find_matching_meeting_event(event.title, event.start_date, event.people or [])
+        matched = _find_matching_meeting_event(event.title, event.start_date)
         if matched:
             normalized_event_id = matched
-            print("[external_event] matched title/time id=%s", normalized_event_id)
+            print("[external_event] matched title/date id=%s", normalized_event_id)
     if not normalized_event_id:
         normalized_event_id = f"{external_identifier}:{uuid4().hex[:8]}"
         print("[external_event] new event id=%s", normalized_event_id)
@@ -296,7 +296,7 @@ def ingest_meeting_notes(
             if matched:
                 event_id = matched
                 existing_event = True
-                print("[meeting_ingest] matched title/time id=%s", event_id)
+                print("[meeting_ingest] matched title/date id=%s", event_id)
 
         if not event_id:
             event_id = f"meeting:{meeting.date.strftime('%Y%m%dT%H%M%S')}-{_slugify(title)}-{uuid4().hex[:8]}"
@@ -773,7 +773,7 @@ def _find_matching_meeting_event(
             SELECT id
             FROM events
             WHERE title = %s
-              AND start_date = %s
+              AND start_date::date = %s::date
             ORDER BY id
             """,
             (normalized_title, start_date),
