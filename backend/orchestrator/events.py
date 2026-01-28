@@ -208,15 +208,12 @@ def ingest_external_event(payload: ExternalEventPayload) -> str:
     normalized_event_id = ""
     if existing_id:
         normalized_event_id = existing_id
-        print("[external_event] matched external id=%s", normalized_event_id)
     if not normalized_event_id:
         matched = _find_matching_meeting_event(event.title, event.start_date)
         if matched:
             normalized_event_id = matched
-            print("[external_event] matched title/date id=%s", normalized_event_id)
     if not normalized_event_id:
         normalized_event_id = f"{external_identifier}:{uuid4().hex[:8]}"
-        print("[external_event] new event id=%s", normalized_event_id)
 
     if normalized_event_id and normalized_event_id != event.id:
         event.id = normalized_event_id
@@ -260,7 +257,6 @@ def ingest_meeting_notes(
 
     user_tokens = _build_user_tokens(current_user)
     for meeting in meetings:
-        print("[meeting_ingest] start")
         attendee_emails = meeting.attendees or []
         unique_contacts, new_contacts_by_domain = _resolve_attendee_contacts(
             attendee_emails,
@@ -289,18 +285,15 @@ def ingest_meeting_notes(
             if _event_exists(candidate):
                 event_id = candidate
                 existing_event = True
-                print("[meeting_ingest] matched existing event id=%s", event_id)
 
         if not event_id:
             matched = _find_matching_meeting_event(title, start_date)
             if matched:
                 event_id = matched
                 existing_event = True
-                print("[meeting_ingest] matched title/date id=%s", event_id)
 
         if not event_id:
             event_id = f"meeting:{meeting.date.strftime('%Y%m%dT%H%M%S')}-{_slugify(title)}-{uuid4().hex[:8]}"
-            print("[meeting_ingest] new event id=%s", event_id)
 
         # if existing_event and not event_external_id:
         #     event_external_id = _get_event_external_id(event_id)
@@ -780,7 +773,6 @@ def _find_matching_meeting_event(
         )
         rows = cur.fetchall()
 
-    print(f"[find_matching_meeting_event] rows={rows}")
     for row in rows:
         return row["id"]
     return None

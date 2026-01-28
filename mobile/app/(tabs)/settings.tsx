@@ -7,6 +7,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { apiFetch } from '@/api/client';
 import { useAuth } from '@/auth/AuthContext';
 import { Button } from '@/components/Button';
+import { Card } from '@/components/Card';
 import {
   getDeviceRegistrationIfGranted,
   registerForPushNotifications,
@@ -167,7 +168,7 @@ export default function SettingsScreen() {
         <Text style={styles.subtitle}>Personalize how the Digital Brain works for you.</Text>
       </View>
 
-      <View style={styles.card}>
+      <Card style={styles.card}>
         <View style={styles.row}>
           <View style={styles.textBlock}>
             <Text style={styles.rowTitle}>Push notifications</Text>
@@ -188,7 +189,7 @@ export default function SettingsScreen() {
           )}
         </View>
         {isSaving && <Text style={styles.saving}>Saving preference…</Text>}
-      </View>
+      </Card>
 
       <Button
         label="Sign out"
@@ -227,11 +228,8 @@ const styles = StyleSheet.create({
     color: theme.colors.mutedInk,
   },
   card: {
-    backgroundColor: theme.colors.card,
     borderRadius: theme.radius.xl,
     padding: 20,
-    borderWidth: 1,
-    borderColor: theme.colors.line,
   },
   row: {
     flexDirection: 'row',

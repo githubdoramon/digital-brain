@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 
 import { Button } from '@/components/Button';
+import { Card } from '@/components/Card';
 import { theme } from '@/theme';
 
 type EventConfirmationData = {
@@ -76,7 +77,7 @@ export function EventProposalCard({ data, onConfirm, onCancel, isSubmitting }: E
   };
 
   return (
-    <View style={styles.card}>
+    <Card style={styles.card} variant="surface">
       <Text style={styles.kicker}>Event proposal</Text>
       <Text style={styles.title}>{extracted.title || 'Untitled event'}</Text>
       <Text style={styles.summary}>{extracted.summary || 'No summary provided.'}</Text>
@@ -149,7 +150,7 @@ export function EventProposalCard({ data, onConfirm, onCancel, isSubmitting }: E
           style={styles.primaryButton}
         />
       </View>
-    </View>
+    </Card>
   );
 }
 
@@ -157,10 +158,6 @@ const styles = StyleSheet.create({
   card: {
     marginTop: 12,
     padding: 16,
-    borderRadius: theme.radius.md,
-    backgroundColor: theme.colors.background,
-    borderWidth: 1,
-    borderColor: theme.colors.line,
     minWidth: 260,
     alignSelf: 'stretch',
   },

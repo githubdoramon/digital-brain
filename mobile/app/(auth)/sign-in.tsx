@@ -4,6 +4,7 @@ import FontAwesome from '@expo/vector-icons/FontAwesome';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { useAuth } from '@/auth/AuthContext';
+import { Card } from '@/components/Card';
 import { theme } from '@/theme';
 
 export default function SignInScreen() {
@@ -22,7 +23,7 @@ export default function SignInScreen() {
           </Text>
         </View>
 
-        <View style={styles.card}>
+        <Card style={styles.card} variant="elevated">
           <Text style={styles.cardTitle}>Continue with Google</Text>
           <Text style={styles.cardCopy}>
             We use your Google account to hack your memory.
@@ -41,7 +42,7 @@ export default function SignInScreen() {
               {isSigningIn ? 'Signing in...' : 'Continue with Google'}
             </Text>
           </Pressable>
-        </View>
+        </Card>
       </View>
     </LinearGradient>
   );
@@ -90,14 +91,8 @@ const styles = StyleSheet.create({
     color: theme.colors.mutedInk,
   },
   card: {
-    backgroundColor: theme.colors.card,
     borderRadius: theme.radius.xl,
     padding: 24,
-    shadowColor: theme.shadow.color,
-    shadowOpacity: theme.shadow.opacity,
-    shadowRadius: theme.shadow.radius,
-    shadowOffset: theme.shadow.offset,
-    elevation: 6,
   },
   cardTitle: {
     fontSize: 18,

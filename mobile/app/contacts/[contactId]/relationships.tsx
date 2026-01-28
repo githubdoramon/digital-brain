@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import {
+  Alert,
   Keyboard,
   KeyboardAvoidingView,
   Platform,
@@ -10,12 +11,13 @@ import {
   TextInput,
   View,
 } from 'react-native';
-import { useLocalSearchParams } from 'expo-router';
+import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import Ionicons from '@expo/vector-icons/Ionicons';
 
 import { apiFetch } from '@/api/client';
+import { Card } from '@/components/Card';
 import { FloatingSaveButton } from '@/components/FloatingSaveButton';
 import { theme } from '@/theme';
 
@@ -53,6 +55,7 @@ const buildRelationshipId = (fromId: string, toId: string) => `rel_${fromId}_${t
 export default function RelationshipManagementScreen() {
   const { contactId } = useLocalSearchParams<{ contactId: string }>();
   const contactParam = Array.isArray(contactId) ? contactId[0] : contactId;
+  const router = useRouter();
   const insets = useSafeAreaInsets();
   const [contact, setContact] = useState<Contact | null>(null);
   const [relationships, setRelationships] = useState<Relationship[]>([]);
@@ -60,6 +63,7 @@ export default function RelationshipManagementScreen() {
   const [search, setSearch] = useState('');
   const [selectedContactId, setSelectedContactId] = useState<string | null>(null);
   const [newType, setNewType] = useState('');
+  const [newReciprocal, setNewReciprocal] = useState('');
   const [isSaving, setIsSaving] = useState(false);
   const [keyboardVisible, setKeyboardVisible] = useState(false);
   const [deletedRelationshipIds, setDeletedRelationshipIds] = useState<string[]>([]);
@@ -83,7 +87,7 @@ export default function RelationshipManagementScreen() {
               from_contact_id: contactParam,
               to_contact_id: rel.contact_id,
               relationship_type: rel.type,
-              reciprocal_type: rel.other_type ?? null,
+              reciprocal_type: rel.other_type ?? rel.type,
             })),
           );
           setExistingRelationshipIds(
@@ -124,13 +128,16 @@ export default function RelationshipManagementScreen() {
   }, []);
 
   const relationshipSnapshot = useMemo(
-    () => JSON.stringify(relationships.map((rel) => [rel.to_contact_id, rel.relationship_type])),
+    () =>
+      JSON.stringify(
+        relationships.map((rel) => [rel.to_contact_id, rel.relationship_type, rel.reciprocal_type ?? '']),
+      ),
     [relationships],
   );
 
   const originalSnapshot = useMemo(() => {
     if (!contact) return '';
-    const base = (contact.relationships || []).map((rel) => [rel.contact_id, rel.type]);
+    const base = (contact.relationships || []).map((rel) => [rel.contact_id, rel.type, rel.other_type ?? '']);
     return JSON.stringify(base);
   }, [contact]);
 
@@ -143,8 +150,15 @@ export default function RelationshipManagementScreen() {
       .filter((item) => item.display_name.toLowerCase().includes(lower));
   }, [allContacts, contactParam, search]);
 
+  const hasInvalidSelection = search.trim().length > 0 && !selectedContactId;
+
   const handleAddRelationship = () => {
-    if (!selectedContactId || !newType || !contact) return;
+    if (!selectedContactId || !newType || !contact) {
+      if (!selectedContactId && search.trim().length > 0) {
+        Alert.alert('Select a contact', 'Choose an existing contact from the list.');
+      }
+      return;
+    }
     const relationshipId = buildRelationshipId(contact.contact_id, selectedContactId);
     const updated = [
       ...relationships,
@@ -153,17 +167,22 @@ export default function RelationshipManagementScreen() {
         from_contact_id: contact.contact_id,
         to_contact_id: selectedContactId,
         relationship_type: newType,
-        reciprocal_type: null,
+        reciprocal_type: newReciprocal || newType,
       },
     ];
     setRelationships(updated);
     setSelectedContactId(null);
     setNewType('');
+    setNewReciprocal('');
     setSearch('');
   };
 
   const handleSave = async () => {
     if (!contact) return;
+    if (hasInvalidSelection) {
+      Alert.alert('Select a contact', 'Choose an existing contact before saving.');
+      return;
+    }
     setIsSaving(true);
     try {
       const encodedContact = encodeURIComponent(contact.contact_id);
@@ -183,7 +202,7 @@ export default function RelationshipManagementScreen() {
               from_contact_id: contact.contact_id,
               to_contact_id: rel.to_contact_id,
               relationship_type: rel.relationship_type,
-              reciprocal_type: rel.reciprocal_type,
+              reciprocal_type: rel.reciprocal_type ?? rel.relationship_type,
             }),
           }),
         ),
@@ -204,6 +223,7 @@ export default function RelationshipManagementScreen() {
         new Set((refreshed.relationships || []).map((rel) => rel.relationship_id)),
       );
       setDeletedRelationshipIds([]);
+      router.back();
     } catch (error) {
       console.warn('[relationships] save failed', error);
     } finally {
@@ -235,7 +255,7 @@ export default function RelationshipManagementScreen() {
         <Text style={styles.title}>Relationships</Text>
         <Text style={styles.subtitle}>Keep the relationships for {contact.display_name} up to date.</Text>
 
-        <View style={styles.section}>
+        <Card style={styles.section}>
           <Text style={styles.sectionTitle}>Existing</Text>
           {relationships.length === 0 ? (
             <Text style={styles.muted}>No relationships yet.</Text>
@@ -279,13 +299,28 @@ export default function RelationshipManagementScreen() {
                     placeholder="relationship type"
                     placeholderTextColor={theme.colors.mutedInk}
                   />
+                  <TextInput
+                    style={styles.input}
+                    value={rel.reciprocal_type ?? ''}
+                    onChangeText={(value) =>
+                      setRelationships((prev) =>
+                        prev.map((item) =>
+                          item.relationship_id === rel.relationship_id
+                            ? { ...item, reciprocal_type: value }
+                            : item,
+                        ),
+                      )
+                    }
+                    placeholder="reciprocal type"
+                    placeholderTextColor={theme.colors.mutedInk}
+                  />
                 </View>
               );
             })
           )}
-        </View>
+        </Card>
 
-        <View style={styles.section}>
+        <Card style={styles.section}>
           <Text style={styles.sectionTitle}>Add new</Text>
           <TextInput
             style={styles.input}
@@ -320,17 +355,25 @@ export default function RelationshipManagementScreen() {
             placeholder="Relationship type (friend, colleague, etc)"
             placeholderTextColor={theme.colors.mutedInk}
           />
+          <TextInput
+            style={styles.input}
+            value={newReciprocal}
+            onChangeText={setNewReciprocal}
+            placeholder="Reciprocal type (e.g., manager)"
+            placeholderTextColor={theme.colors.mutedInk}
+          />
           <Pressable style={styles.addButton} onPress={handleAddRelationship}>
             <Text style={styles.addButtonText}>Add relationship</Text>
           </Pressable>
-        </View>
+        </Card>
       </ScrollView>
 
       <FloatingSaveButton
         visible={isDirty}
         label={isSaving ? 'Saving...' : 'Save relationships'}
         onPress={handleSave}
-        disabled={isSaving}
+        disabled={isSaving || hasInvalidSelection}
+        loading={isSaving}
       />
     </KeyboardAvoidingView>
   );
@@ -356,10 +399,6 @@ const styles = StyleSheet.create({
   },
   section: {
     padding: 16,
-    borderRadius: theme.radius.lg,
-    borderWidth: 1,
-    borderColor: theme.colors.line,
-    backgroundColor: theme.colors.card,
     gap: 12,
   },
   sectionTitle: {

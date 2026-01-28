@@ -213,6 +213,7 @@ def unregister_device(
 
 # --------------------------- Ingest endpoints ---------------------------
 @api.post("/ingest/contact")
+@api.post("/mobile/ingest/contact")
 def ingest_contact(c: ContactIn, user: dict = Depends(get_current_user)):
     contacts_service.ingest_contact(c)
     return {"ok": True}
@@ -898,7 +899,7 @@ def get_daily_briefing(
     return _format_briefing_response(briefing)
 
 
-@api.get("mobile/briefings/latest", response_model=DailyBriefingOut)
+@api.get("/mobile/briefings/latest", response_model=DailyBriefingOut)
 def get_latest_briefing(user: dict = Depends(get_current_user)):
     user_email = user.get("email")
     if not user_email:

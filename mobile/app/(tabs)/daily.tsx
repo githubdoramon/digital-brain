@@ -3,10 +3,10 @@ import { LinearGradient } from 'expo-linear-gradient';
 import React from 'react';
 import {
   Animated,
+  FlatList,
   LayoutAnimation,
   Platform,
   Pressable,
-  ScrollView,
   StyleSheet,
   Text,
   UIManager,
@@ -15,6 +15,7 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { apiFetch } from '@/api/client';
+import { Card } from '@/components/Card';
 import { useTopNotice } from '@/components/top-notice';
 import { theme } from '@/theme';
 
@@ -54,6 +55,7 @@ export default function DailyScreen() {
   const [completingIds, setCompletingIds] = React.useState<Record<string, boolean>>({});
   const { showNotice } = useTopNotice();
   const todoAnimations = React.useRef<Record<string, Animated.Value>>({}).current;
+  const AnimatedCard = React.useMemo(() => Animated.createAnimatedComponent(Card), []);
 
   React.useEffect(() => {
     if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
@@ -182,7 +184,9 @@ export default function DailyScreen() {
 
   return (
     <LinearGradient colors={theme.gradients.sunrise} style={styles.container}>
-      <ScrollView
+      <FlatList
+        data={todos}
+        keyExtractor={(item) => item.todo_id}
         showsVerticalScrollIndicator={false}
         contentContainerStyle={[
           styles.content,
@@ -191,105 +195,106 @@ export default function DailyScreen() {
             paddingBottom: insets.bottom + 110,
           },
         ]}
-      >
-        <Text style={styles.kicker}>Daily</Text>
-        <Text style={styles.title}>Your day, scoped</Text>
-        <Text style={styles.subtitle}>Review the briefing before you dive in.</Text>
+        ListHeaderComponent={
+          <View>
+            <Text style={styles.kicker}>Daily</Text>
+            <Text style={styles.title}>Your day, scoped</Text>
+            <Text style={styles.subtitle}>Review the briefing before you dive in.</Text>
 
-        <View style={styles.summaryCard}>
-          <Pressable
-            onPress={() => setExpanded((prev) => !prev)}
-            style={({ pressed }) => [styles.summaryHeader, pressed && styles.pressed]}
-          >
-            <View>
-              <Text style={styles.summaryTitle}>Daily briefing</Text>
-              <Text style={styles.summaryMeta}>{metaText}</Text>
+            <Card style={styles.summaryCard}>
+              <Pressable
+                onPress={() => setExpanded((prev) => !prev)}
+                style={({ pressed }) => [styles.summaryHeader, pressed && styles.pressed]}
+              >
+                <View>
+                  <Text style={styles.summaryTitle}>Daily briefing</Text>
+                  <Text style={styles.summaryMeta}>{metaText}</Text>
+                </View>
+                <Ionicons
+                  name={expanded ? 'chevron-up' : 'chevron-down'}
+                  size={20}
+                  color={theme.colors.mutedInk}
+                />
+              </Pressable>
+              <Text style={styles.summaryBody}>{summaryText}</Text>
+              {expanded ? (
+                <View style={styles.briefingBlock}>
+                  <Text style={styles.briefingLabel}>Full briefing</Text>
+                  <View style={styles.markdownBlock}>
+                    {renderMarkdown(briefing?.markdown || 'No briefing yet.')}
+                  </View>
+                </View>
+              ) : null}
+              {loading ? <Text style={styles.statusText}>Loading briefing...</Text> : null}
+              {!loading && error ? <Text style={styles.statusText}>{error}</Text> : null}
+            </Card>
+
+            <View style={styles.todoHeader}>
+              <Text style={styles.todoTitle}>Open todos</Text>
+              {todosLoading ? <Text style={styles.todoMeta}>Loading todos...</Text> : null}
             </View>
-            <Ionicons
-              name={expanded ? 'chevron-up' : 'chevron-down'}
-              size={20}
-              color={theme.colors.mutedInk}
-            />
-          </Pressable>
-          <Text style={styles.summaryBody}>{summaryText}</Text>
-          {expanded ? (
-            <View style={styles.briefingBlock}>
-              <Text style={styles.briefingLabel}>Full briefing</Text>
-              <View style={styles.markdownBlock}>
-                {renderMarkdown(briefing?.markdown || 'No briefing yet.')}
+          </View>
+        }
+        renderItem={({ item }) => {
+          const animation = getTodoAnimation(item.todo_id);
+          const translateX = animation.interpolate({
+            inputRange: [0, 1],
+            outputRange: [0, 320],
+          });
+          const opacity = animation.interpolate({
+            inputRange: [0, 0.6, 1],
+            outputRange: [1, 1, 0],
+          });
+          const height = animation.interpolate({
+            inputRange: [0, 1],
+            outputRange: [0, 1],
+          });
+          return (
+            <AnimatedCard
+              variant="elevated"
+              style={[
+                styles.todoCard,
+                {
+                  transform: [{ translateX }],
+                  opacity,
+                  maxHeight: height.interpolate({
+                    inputRange: [0, 1],
+                    outputRange: [120, 0],
+                  }),
+                  marginBottom: height.interpolate({
+                    inputRange: [0, 1],
+                    outputRange: [0, -12],
+                  }),
+                },
+              ]}
+            >
+              <View style={styles.todoContent}>
+                <Text style={styles.todoText}>{item.description}</Text>
+                {item.due_date ? <Text style={styles.todoMeta}>Due {item.due_date}</Text> : null}
               </View>
-            </View>
-          ) : null}
-          {loading ? <Text style={styles.statusText}>Loading briefing...</Text> : null}
-          {!loading && error ? <Text style={styles.statusText}>{error}</Text> : null}
-        </View>
-
-        <View style={styles.todoHeader}>
-          <Text style={styles.todoTitle}>Open todos</Text>
-          {todosLoading ? <Text style={styles.todoMeta}>Loading todos...</Text> : null}
-          {!todosLoading && todos.length === 0 ? (
-            <Text style={styles.todoMeta}>No open todos right now.</Text>
-          ) : null}
-        </View>
-        {!todosLoading && todos.length > 0 ? (
-          <View style={styles.todoList}>
-            {todos.map((todo) => {
-              const animation = getTodoAnimation(todo.todo_id);
-              const translateX = animation.interpolate({
-                inputRange: [0, 1],
-                outputRange: [0, 320],
-              });
-              const opacity = animation.interpolate({
-                inputRange: [0, 0.6, 1],
-                outputRange: [1, 1, 0],
-              });
-              const height = animation.interpolate({
-                inputRange: [0, 1],
-                outputRange: [0, 1],
-              });
-              return (
-                <Animated.View
-                  key={todo.todo_id}
-                  style={[
-                    styles.todoCard,
-                    {
-                      transform: [{ translateX }],
-                      opacity,
-                      maxHeight: height.interpolate({
-                        inputRange: [0, 1],
-                        outputRange: [120, 0],
-                      }),
-                      marginBottom: height.interpolate({
-                        inputRange: [0, 1],
-                        outputRange: [0, -12],
-                      }),
-                    },
+              <View style={styles.todoActionRow}>
+                <Pressable
+                  onPress={() => handleComplete(item)}
+                  disabled={!!completingIds[item.todo_id]}
+                  style={({ pressed }) => [
+                    styles.todoAction,
+                    pressed && styles.pressed,
+                    completingIds[item.todo_id] && styles.todoActionDisabled,
                   ]}
                 >
-                  <View style={styles.todoContent}>
-                    <Text style={styles.todoText}>{todo.description}</Text>
-                    {todo.due_date ? (
-                      <Text style={styles.todoMeta}>Due {todo.due_date}</Text>
-                    ) : null}
-                  </View>
-                  <Pressable
-                    onPress={() => handleComplete(todo)}
-                    disabled={!!completingIds[todo.todo_id]}
-                    style={({ pressed }) => [
-                      styles.todoAction,
-                      pressed && styles.pressed,
-                      completingIds[todo.todo_id] && styles.todoActionDisabled,
-                    ]}
-                  >
-                    <Ionicons name="checkmark" size={18} color={theme.colors.accentDeep} />
-                    <Text style={styles.todoActionText}>Done</Text>
-                  </Pressable>
-                </Animated.View>
-              );
-            })}
-          </View>
-        ) : null}
-      </ScrollView>
+                  <Ionicons name="checkmark" size={18} color={theme.colors.accentDeep} />
+                  <Text style={styles.todoActionText}>Done</Text>
+                </Pressable>
+              </View>
+            </AnimatedCard>
+          );
+        }}
+        ListEmptyComponent={
+          !todosLoading ? (
+            <Text style={styles.todoMeta}>No open todos right now.</Text>
+          ) : null
+        }
+      />
     </LinearGradient>
   );
 }
@@ -363,10 +368,6 @@ const styles = StyleSheet.create({
   summaryCard: {
     marginTop: 10,
     padding: 18,
-    borderRadius: theme.radius.lg,
-    backgroundColor: theme.colors.card,
-    borderWidth: 1,
-    borderColor: theme.colors.line,
     gap: 10,
   },
   summaryHeader: {
@@ -466,21 +467,18 @@ const styles = StyleSheet.create({
     color: theme.colors.mutedInk,
     lineHeight: 20,
   },
-  todoList: {
-    marginTop: 12,
-    gap: 12,
-  },
   todoCard: {
+    marginTop: 12,
     padding: 16,
-    borderRadius: theme.radius.lg,
-    backgroundColor: theme.colors.card,
-    borderWidth: 1,
-    borderColor: theme.colors.line,
-    gap: 10,
-    overflow: 'hidden',
+    gap: 12,
+    flexDirection: 'column',
   },
   todoContent: {
     gap: 6,
+  },
+  todoActionRow: {
+    justifyContent: 'flex-end',
+    flexDirection: 'row',
   },
   todoText: {
     fontSize: 14,

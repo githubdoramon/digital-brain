@@ -1,5 +1,5 @@
 import React, { useEffect, useRef } from 'react';
-import { Animated, Pressable, StyleSheet, Text } from 'react-native';
+import { ActivityIndicator, Animated, Pressable, StyleSheet, Text } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
 
 import { theme } from '@/theme';
@@ -9,9 +9,16 @@ type FloatingSaveButtonProps = {
   label?: string;
   onPress: () => void;
   disabled?: boolean;
+  loading?: boolean;
 };
 
-export function FloatingSaveButton({ visible, label = 'Save changes', onPress, disabled }: FloatingSaveButtonProps) {
+export function FloatingSaveButton({
+  visible,
+  label = 'Save changes',
+  onPress,
+  disabled,
+  loading = false,
+}: FloatingSaveButtonProps) {
   const translateY = useRef(new Animated.Value(40)).current;
   const opacity = useRef(new Animated.Value(0)).current;
 
@@ -41,7 +48,11 @@ export function FloatingSaveButton({ visible, label = 'Save changes', onPress, d
         onPress={onPress}
         disabled={disabled}
       >
-        <Ionicons name="checkmark" size={26} color="#fff" />
+        {loading ? (
+          <ActivityIndicator color="#fff" />
+        ) : (
+          <Ionicons name="checkmark" size={26} color="#fff" />
+        )}
       </Pressable>
     </Animated.View>
   );

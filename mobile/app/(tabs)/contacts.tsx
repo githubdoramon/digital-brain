@@ -14,6 +14,7 @@ import { useRouter } from 'expo-router';
 import { apiFetch } from '@/api/client';
 import { useAuth } from '@/auth/AuthContext';
 import { Avatar } from '@/components/Avatar';
+import { Card } from '@/components/Card';
 import { RelationshipChips } from '@/components/RelationshipChips';
 import { theme } from '@/theme';
 
@@ -76,15 +77,17 @@ function ContactCard({
 
   return (
     <AnimatedPressable
-      style={[styles.card, { opacity, transform: [{ translateY }] }]}
+      style={[styles.cardPressable, { opacity, transform: [{ translateY }] }]}
       onPress={onPress}
     >
-      <Avatar name={contact.display_name} uri={contact.avatar_url ?? undefined} token={token} />
-      <View style={styles.cardBody}>
-        <Text style={styles.cardTitle}>{contact.display_name}</Text>
-        <Text style={styles.cardSubtitle}>{subtitle}</Text>
-        <RelationshipChips chips={chips} />
-      </View>
+      <Card style={styles.card} variant="elevated">
+        <Avatar name={contact.display_name} uri={contact.avatar_url ?? undefined} token={token} />
+        <View style={styles.cardBody}>
+          <Text style={styles.cardTitle}>{contact.display_name}</Text>
+          <Text style={styles.cardSubtitle}>{subtitle}</Text>
+          <RelationshipChips chips={chips} />
+        </View>
+      </Card>
     </AnimatedPressable>
   );
 }
@@ -228,15 +231,9 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     gap: 14,
     padding: 16,
-    borderRadius: theme.radius.lg,
-    backgroundColor: theme.colors.card,
-    borderWidth: 1,
-    borderColor: theme.colors.line,
-    shadowColor: theme.shadow.color,
-    shadowOpacity: theme.shadow.opacity,
-    shadowRadius: theme.shadow.radius,
-    shadowOffset: theme.shadow.offset,
-    elevation: 2,
+  },
+  cardPressable: {
+    alignSelf: 'stretch',
   },
   cardBody: {
     flex: 1,

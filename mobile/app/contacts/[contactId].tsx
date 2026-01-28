@@ -17,6 +17,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { apiFetch } from '@/api/client';
 import { useAuth } from '@/auth/AuthContext';
 import { Avatar } from '@/components/Avatar';
+import { Card } from '@/components/Card';
 import { ContactActionMenu } from '@/components/ContactActionMenu';
 import { FloatingSaveButton } from '@/components/FloatingSaveButton';
 import { RelationshipChips } from '@/components/RelationshipChips';
@@ -227,7 +228,7 @@ export default function ContactDetailScreen() {
           </View>
         </Animated.View>
 
-        <View style={styles.section}>
+        <Card style={styles.section}>
           <Text style={styles.sectionTitle}>Relationship overview</Text>
           <RelationshipChips chips={relationshipChips} />
           <Pressable
@@ -238,14 +239,14 @@ export default function ContactDetailScreen() {
           >
             <Text style={styles.linkText}>Manage relationships</Text>
           </Pressable>
-        </View>
+        </Card>
 
-        <View style={styles.section}>
+        <Card style={styles.section}>
           <Text style={styles.sectionTitle}>Contact</Text>
           <ContactActionMenu emails={draft.emails} phones={draft.phones} />
-        </View>
+        </Card>
 
-        <View style={styles.section}>
+        <Card style={styles.section}>
           <Text style={styles.sectionTitle}>Emails</Text>
           <TextInput
             style={styles.input}
@@ -254,9 +255,9 @@ export default function ContactDetailScreen() {
             placeholder="add emails, comma separated"
             placeholderTextColor={theme.colors.mutedInk}
           />
-        </View>
+        </Card>
 
-        <View style={styles.section}>
+        <Card style={styles.section}>
           <Text style={styles.sectionTitle}>Phones</Text>
           <TextInput
             style={styles.input}
@@ -265,9 +266,9 @@ export default function ContactDetailScreen() {
             placeholder="add phone numbers"
             placeholderTextColor={theme.colors.mutedInk}
           />
-        </View>
+        </Card>
 
-        <View style={styles.section}>
+        <Card style={styles.section}>
           <Text style={styles.sectionTitle}>Links</Text>
           <TextInput
             style={styles.input}
@@ -276,9 +277,9 @@ export default function ContactDetailScreen() {
             placeholder="websites, social, etc"
             placeholderTextColor={theme.colors.mutedInk}
           />
-        </View>
+        </Card>
 
-        <View style={styles.section}>
+        <Card style={styles.section}>
           <Text style={styles.sectionTitle}>Tags</Text>
           <TextInput
             style={styles.input}
@@ -287,9 +288,9 @@ export default function ContactDetailScreen() {
             placeholder="tags"
             placeholderTextColor={theme.colors.mutedInk}
           />
-        </View>
+        </Card>
 
-        <View style={styles.section}>
+        <Card style={styles.section}>
           <Text style={styles.sectionTitle}>Notes</Text>
           <TextInput
             style={[styles.input, styles.textArea]}
@@ -299,7 +300,7 @@ export default function ContactDetailScreen() {
             placeholderTextColor={theme.colors.mutedInk}
             multiline
           />
-        </View>
+        </Card>
       </ScrollView>
 
       <FloatingSaveButton
@@ -307,6 +308,7 @@ export default function ContactDetailScreen() {
         label={isSaving ? 'Saving...' : 'Save changes'}
         onPress={handleSave}
         disabled={isSaving}
+        loading={isSaving}
       />
     </KeyboardAvoidingView>
   );
@@ -342,10 +344,6 @@ const styles = StyleSheet.create({
   section: {
     gap: 10,
     padding: 16,
-    backgroundColor: theme.colors.card,
-    borderRadius: theme.radius.lg,
-    borderWidth: 1,
-    borderColor: theme.colors.line,
   },
   sectionTitle: {
     fontSize: 14,

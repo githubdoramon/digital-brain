@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { StyleSheet, Text, TextInput, View } from 'react-native';
 
 import { Button } from '@/components/Button';
+import { Card } from '@/components/Card';
 import { theme } from '@/theme';
 
 type EventClarificationData = {
@@ -33,7 +34,7 @@ export function EventClarificationCard({ data, onSubmit }: EventClarificationCar
   };
 
   return (
-    <View style={styles.card}>
+    <Card style={styles.card} variant="surface">
       <Text style={styles.kicker}>More details needed</Text>
       <View style={styles.questionList}>
         {data.questions.map((question, index) => (
@@ -56,7 +57,7 @@ export function EventClarificationCard({ data, onSubmit }: EventClarificationCar
         variant="primary"
         style={styles.submitButton}
       />
-    </View>
+    </Card>
   );
 }
 
@@ -64,10 +65,6 @@ const styles = StyleSheet.create({
   card: {
     marginTop: 12,
     padding: 16,
-    borderRadius: theme.radius.md,
-    backgroundColor: theme.colors.background,
-    borderWidth: 1,
-    borderColor: theme.colors.line,
   },
   kicker: {
     fontSize: 12,
