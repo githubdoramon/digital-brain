@@ -50,7 +50,7 @@ export default function DailyScreen() {
         const date = formatToday();
         const timezone = formatTimezone();
         const response = await apiFetch(
-          `/briefings/daily?date=${encodeURIComponent(date)}&timezone=${encodeURIComponent(
+          `/mobile/briefings/daily?date=${encodeURIComponent(date)}&timezone=${encodeURIComponent(
             timezone
           )}`
         );
@@ -84,7 +84,7 @@ export default function DailyScreen() {
     const fetchTodos = async () => {
       try {
         setTodosLoading(true);
-        const response = await apiFetch('/todos?open_only=true&order=due');
+        const response = await apiFetch('/mobile/todos?open_only=true&order=due');
         if (!isMounted) return;
         const items = Array.isArray(response?.todos) ? response.todos : [];
         setTodos(items);

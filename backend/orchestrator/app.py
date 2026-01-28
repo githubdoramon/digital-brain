@@ -372,6 +372,7 @@ def ingest_todo(todo: TodoIn, user: dict = Depends(get_current_user)):
 
 
 @api.get("/todos")
+@api.get("/mobile/todos")
 def list_todos(
     user: dict = Depends(get_current_user),
     open_only: bool = Query(default=False),
@@ -859,6 +860,15 @@ def get_daily_briefing(
     return _format_briefing_response(briefing)
 
 
+@api.get("/mobile/briefings/daily", response_model=DailyBriefingOut)
+def get_daily_briefing_mobile(
+    date_value: str = Query(..., alias="date"),
+    timezone: str | None = Query(default=None),
+    user: dict = Depends(get_current_user),
+):
+    return get_daily_briefing(date_value=date_value, timezone=timezone, user=user)
+
+
 @api.get("/briefings/latest", response_model=DailyBriefingOut)
 def get_latest_briefing(user: dict = Depends(get_current_user)):
     user_email = user.get("email")
@@ -870,6 +880,11 @@ def get_latest_briefing(user: dict = Depends(get_current_user)):
     if not briefing:
         raise HTTPException(status_code=404, detail="Briefing not found")
     return _format_briefing_response(briefing)
+
+
+@api.get("/mobile/briefings/latest", response_model=DailyBriefingOut)
+def get_latest_briefing_mobile(user: dict = Depends(get_current_user)):
+    return get_latest_briefing(user=user)
 
 
 # --------------------------- Ask endpoint (LLM-powered) ---------------------------
