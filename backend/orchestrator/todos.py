@@ -12,6 +12,7 @@ __all__ = [
     "list_todos",
     "list_event_todos",
     "list_unlinked_relevant_todos",
+    "update_todo_status",
     "get_todo",
     "delete_todo",
 ]
@@ -187,6 +188,25 @@ def list_unlinked_relevant_todos(days: int = 14) -> list[dict[str, Any]]:
         )
         rows = [dict(row) for row in cur.fetchall()]
     return _serialize_todo_rows(rows)
+
+
+def update_todo_status(todo_id: str, status: str) -> bool:
+    if not todo_id:
+        return False
+    cleaned_status = (status or "").strip() or "pending"
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            UPDATE todos
+            SET status = %s,
+                updated_at = NOW()
+            WHERE todo_id = %s
+            """,
+            (cleaned_status, todo_id),
+        )
+        updated = cur.rowcount > 0
+        conn.commit()
+    return updated
 
 
 def get_todo(todo_id: str) -> dict[str, Any] | None:

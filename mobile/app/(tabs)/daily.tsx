@@ -1,7 +1,17 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { LinearGradient } from 'expo-linear-gradient';
 import React from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import {
+  Animated,
+  LayoutAnimation,
+  Platform,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  UIManager,
+  View,
+} from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { apiFetch } from '@/api/client';
@@ -40,6 +50,15 @@ export default function DailyScreen() {
   const [error, setError] = React.useState<string | null>(null);
   const [todos, setTodos] = React.useState<TodoItem[]>([]);
   const [todosLoading, setTodosLoading] = React.useState(true);
+  const [completingIds, setCompletingIds] = React.useState<Record<string, boolean>>({});
+  const [toastMessage, setToastMessage] = React.useState<string | null>(null);
+  const toastOpacity = React.useRef(new Animated.Value(0)).current;
+
+  React.useEffect(() => {
+    if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
+      UIManager.setLayoutAnimationEnabledExperimental(true);
+    }
+  }, []);
 
   React.useEffect(() => {
     let isMounted = true;
@@ -103,6 +122,56 @@ export default function DailyScreen() {
     };
   }, []);
 
+  const showToast = React.useCallback(
+    (message: string) => {
+      setToastMessage(message);
+      toastOpacity.setValue(0);
+      Animated.sequence([
+        Animated.timing(toastOpacity, {
+          toValue: 1,
+          duration: 180,
+          useNativeDriver: true,
+        }),
+        Animated.delay(1800),
+        Animated.timing(toastOpacity, {
+          toValue: 0,
+          duration: 220,
+          useNativeDriver: true,
+        }),
+      ]).start(({ finished }) => {
+        if (finished) {
+          setToastMessage(null);
+        }
+      });
+    },
+    [toastOpacity]
+  );
+
+  const handleComplete = React.useCallback(
+    async (todo: TodoItem) => {
+      if (completingIds[todo.todo_id]) return;
+      setCompletingIds((prev) => ({ ...prev, [todo.todo_id]: true }));
+      try {
+        await apiFetch(`/mobile/todos/${todo.todo_id}/status`, {
+          method: 'PATCH',
+          body: JSON.stringify({ status: 'completed' }),
+        });
+        LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+        setTodos((prev) => prev.filter((item) => item.todo_id !== todo.todo_id));
+        showToast('Todo marked as completed.');
+      } catch (err) {
+        showToast('Unable to update todo.');
+      } finally {
+        setCompletingIds((prev) => {
+          const next = { ...prev };
+          delete next[todo.todo_id];
+          return next;
+        });
+      }
+    },
+    [completingIds, showToast]
+  );
+
   const summaryText = briefing?.summary ?? 'No briefing yet. Trigger today\'s brief to see it here.';
   const metaText = briefing
     ? `${briefing.event_count} events • ${briefing.todo_count} todos`
@@ -110,12 +179,13 @@ export default function DailyScreen() {
 
   return (
     <LinearGradient colors={theme.gradients.sunrise} style={styles.container}>
-      <View
-        style={[
+      <ScrollView
+        showsVerticalScrollIndicator={false}
+        contentContainerStyle={[
           styles.content,
           {
             paddingTop: insets.top + 18,
-            paddingBottom: insets.bottom + 90,
+            paddingBottom: insets.bottom + 110,
           },
         ]}
       >
@@ -142,38 +212,98 @@ export default function DailyScreen() {
           {expanded ? (
             <View style={styles.briefingBlock}>
               <Text style={styles.briefingLabel}>Full briefing</Text>
-              <Text style={styles.briefingText}>{briefing?.markdown || 'No briefing yet.'}</Text>
+              <View style={styles.markdownBlock}>
+                {renderMarkdown(briefing?.markdown || 'No briefing yet.')}
+              </View>
             </View>
           ) : null}
           {loading ? <Text style={styles.statusText}>Loading briefing...</Text> : null}
           {!loading && error ? <Text style={styles.statusText}>{error}</Text> : null}
         </View>
 
-        <View style={styles.todoCard}>
+        <View style={styles.todoHeader}>
           <Text style={styles.todoTitle}>Open todos</Text>
           {todosLoading ? <Text style={styles.todoMeta}>Loading todos...</Text> : null}
           {!todosLoading && todos.length === 0 ? (
             <Text style={styles.todoMeta}>No open todos right now.</Text>
           ) : null}
-          {!todosLoading && todos.length > 0 ? (
-            <View style={styles.todoList}>
-              {todos.map((todo) => (
-                <View key={todo.todo_id} style={styles.todoItem}>
-                  <Text style={styles.todoBullet}>•</Text>
-                  <View style={styles.todoTextWrap}>
-                    <Text style={styles.todoText}>{todo.description}</Text>
-                    {todo.due_date ? (
-                      <Text style={styles.todoMeta}>Due {todo.due_date}</Text>
-                    ) : null}
-                  </View>
-                </View>
-              ))}
-            </View>
-          ) : null}
         </View>
-      </View>
+        {!todosLoading && todos.length > 0 ? (
+          <View style={styles.todoList}>
+            {todos.map((todo) => (
+              <View key={todo.todo_id} style={styles.todoCard}>
+                <View style={styles.todoContent}>
+                  <Text style={styles.todoText}>{todo.description}</Text>
+                  {todo.due_date ? (
+                    <Text style={styles.todoMeta}>Due {todo.due_date}</Text>
+                  ) : null}
+                </View>
+                <Pressable
+                  onPress={() => handleComplete(todo)}
+                  disabled={!!completingIds[todo.todo_id]}
+                  style={({ pressed }) => [
+                    styles.todoAction,
+                    pressed && styles.pressed,
+                    completingIds[todo.todo_id] && styles.todoActionDisabled,
+                  ]}
+                >
+                  <Ionicons name="checkmark" size={18} color={theme.colors.accentDeep} />
+                  <Text style={styles.todoActionText}>Done</Text>
+                </Pressable>
+              </View>
+            ))}
+          </View>
+        ) : null}
+      </ScrollView>
+      {toastMessage ? (
+        <Animated.View style={[styles.toast, { opacity: toastOpacity }]}>
+          <Text style={styles.toastText}>{toastMessage}</Text>
+        </Animated.View>
+      ) : null}
     </LinearGradient>
   );
+}
+
+function renderMarkdown(markdown: string) {
+  return markdown.split('\n').map((line, index) => {
+    if (line.startsWith('# ')) {
+      return (
+        <Text key={`h1-${index}`} style={styles.markdownH1}>
+          {line.replace('# ', '')}
+        </Text>
+      );
+    }
+    if (line.startsWith('## ')) {
+      return (
+        <Text key={`h2-${index}`} style={styles.markdownH2}>
+          {line.replace('## ', '')}
+        </Text>
+      );
+    }
+    if (line.startsWith('### ')) {
+      return (
+        <Text key={`h3-${index}`} style={styles.markdownH3}>
+          {line.replace('### ', '')}
+        </Text>
+      );
+    }
+    if (line.startsWith('- ')) {
+      return (
+        <View key={`bullet-${index}`} style={styles.markdownBulletRow}>
+          <Text style={styles.markdownBullet}>•</Text>
+          <Text style={styles.markdownBulletText}>{line.replace('- ', '')}</Text>
+        </View>
+      );
+    }
+    if (!line.trim()) {
+      return <View key={`space-${index}`} style={styles.markdownSpacer} />;
+    }
+    return (
+      <Text key={`p-${index}`} style={styles.markdownParagraph}>
+        {line}
+      </Text>
+    );
+  });
 }
 
 const styles = StyleSheet.create({
@@ -242,10 +372,48 @@ const styles = StyleSheet.create({
     letterSpacing: 2,
     color: theme.colors.mutedInk,
   },
-  briefingText: {
+  markdownBlock: {
+    gap: 6,
+  },
+  markdownH1: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: theme.colors.ink,
+  },
+  markdownH2: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: theme.colors.ink,
+    marginTop: 6,
+  },
+  markdownH3: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: theme.colors.ink,
+    marginTop: 4,
+  },
+  markdownParagraph: {
     fontSize: 13,
     color: theme.colors.mutedInk,
     lineHeight: 19,
+  },
+  markdownBulletRow: {
+    flexDirection: 'row',
+    gap: 8,
+  },
+  markdownBullet: {
+    fontSize: 12,
+    color: theme.colors.accentDeep,
+    marginTop: 2,
+  },
+  markdownBulletText: {
+    flex: 1,
+    fontSize: 13,
+    color: theme.colors.mutedInk,
+    lineHeight: 19,
+  },
+  markdownSpacer: {
+    height: 6,
   },
   statusText: {
     fontSize: 12,
@@ -254,13 +422,8 @@ const styles = StyleSheet.create({
   pressed: {
     opacity: 0.7,
   },
-  todoCard: {
+  todoHeader: {
     marginTop: 12,
-    padding: 18,
-    borderRadius: theme.radius.lg,
-    backgroundColor: theme.colors.card,
-    borderWidth: 1,
-    borderColor: theme.colors.line,
   },
   todoTitle: {
     fontSize: 16,
@@ -274,23 +437,58 @@ const styles = StyleSheet.create({
     lineHeight: 20,
   },
   todoList: {
-    marginTop: 10,
+    marginTop: 12,
+    gap: 12,
+  },
+  todoCard: {
+    padding: 16,
+    borderRadius: theme.radius.lg,
+    backgroundColor: theme.colors.card,
+    borderWidth: 1,
+    borderColor: theme.colors.line,
     gap: 10,
   },
-  todoItem: {
-    flexDirection: 'row',
-    gap: 8,
-  },
-  todoBullet: {
-    fontSize: 16,
-    color: theme.colors.accentDeep,
-  },
-  todoTextWrap: {
-    flex: 1,
+  todoContent: {
+    gap: 6,
   },
   todoText: {
     fontSize: 14,
     color: theme.colors.ink,
     lineHeight: 20,
+  },
+  todoAction: {
+    alignSelf: 'flex-start',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: theme.colors.line,
+    backgroundColor: 'rgba(255, 255, 255, 0.7)',
+  },
+  todoActionText: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: theme.colors.ink,
+  },
+  todoActionDisabled: {
+    opacity: 0.6,
+  },
+  toast: {
+    position: 'absolute',
+    left: 20,
+    right: 20,
+    bottom: 24,
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+    borderRadius: 18,
+    backgroundColor: 'rgba(20, 24, 33, 0.9)',
+  },
+  toastText: {
+    fontSize: 13,
+    color: '#fff',
+    textAlign: 'center',
   },
 });

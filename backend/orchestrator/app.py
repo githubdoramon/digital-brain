@@ -68,6 +68,7 @@ from schemas import (
     ThreadOut,
     ThreadUpdate,
     TodoIn,
+    TodoStatusUpdateIn,
 )
 from versioning import get_service_versions
 
@@ -387,6 +388,19 @@ def get_todo(todo_id: str, user: dict = Depends(get_current_user)):
     if not todo:
         raise HTTPException(status_code=404, detail="Todo not found")
     return todo
+
+
+@api.patch("/todos/{todo_id}/status")
+@api.patch("/mobile/todos/{todo_id}/status")
+def update_todo_status(
+    todo_id: str,
+    payload: TodoStatusUpdateIn,
+    user: dict = Depends(get_current_user),
+):
+    updated = todos_service.update_todo_status(todo_id, payload.status)
+    if not updated:
+        raise HTTPException(status_code=404, detail="Todo not found")
+    return {"ok": True}
 
 
 @api.delete("/todos/{todo_id}")
@@ -834,7 +848,7 @@ def get_meeting(meeting_id: str, user: dict = Depends(get_current_user)):
     return meeting
 
 
-@api.get("/briefings/daily", response_model=DailyBriefingOut)
+@api.get("/mobile/briefings/daily", response_model=DailyBriefingOut)
 def get_daily_briefing(
     date_value: str = Query(..., alias="date"),
     timezone: str | None = Query(default=None),
@@ -860,16 +874,7 @@ def get_daily_briefing(
     return _format_briefing_response(briefing)
 
 
-@api.get("/mobile/briefings/daily", response_model=DailyBriefingOut)
-def get_daily_briefing_mobile(
-    date_value: str = Query(..., alias="date"),
-    timezone: str | None = Query(default=None),
-    user: dict = Depends(get_current_user),
-):
-    return get_daily_briefing(date_value=date_value, timezone=timezone, user=user)
-
-
-@api.get("/briefings/latest", response_model=DailyBriefingOut)
+@api.get("mobile/briefings/latest", response_model=DailyBriefingOut)
 def get_latest_briefing(user: dict = Depends(get_current_user)):
     user_email = user.get("email")
     if not user_email:
@@ -880,11 +885,6 @@ def get_latest_briefing(user: dict = Depends(get_current_user)):
     if not briefing:
         raise HTTPException(status_code=404, detail="Briefing not found")
     return _format_briefing_response(briefing)
-
-
-@api.get("/mobile/briefings/latest", response_model=DailyBriefingOut)
-def get_latest_briefing_mobile(user: dict = Depends(get_current_user)):
-    return get_latest_briefing(user=user)
 
 
 # --------------------------- Ask endpoint (LLM-powered) ---------------------------

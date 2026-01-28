@@ -140,6 +140,10 @@ class TodoIn(BaseModel):
     place_ids: list[str] | None = []
 
 
+class TodoStatusUpdateIn(BaseModel):
+    status: str
+
+
 class DocumentOut(BaseModel):
     document_id: str
     title: str
