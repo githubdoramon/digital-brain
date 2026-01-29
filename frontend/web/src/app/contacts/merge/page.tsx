@@ -16,10 +16,10 @@ type ContactSummary = {
 };
 
 type MergeSuggestion = {
-  external_contact_id: string;
-  external_display_name?: string | null;
-  candidate_contact_id: string;
-  candidate_display_name?: string | null;
+  contact_a_id: string;
+  contact_a_display_name?: string | null;
+  contact_b_id: string;
+  contact_b_display_name?: string | null;
   score: number;
   matched_on?: string | null;
 };
@@ -53,13 +53,15 @@ export default function MergeContactsPage() {
     try {
       const response = await api.get<MergeCandidatesResponse>("/contacts/merge-candidates");
       setData(response);
-      const hasPrimary = response.unlinked_contacts.some((contact) => contact.contact_id === primarySelection);
-      const hasExternal = response.external_contacts.some((contact) => contact.contact_id === externalSelection);
+      const orderedContacts = [...response.unlinked_contacts, ...response.external_contacts];
+      const hasPrimary = orderedContacts.some((contact) => contact.contact_id === primarySelection);
+      const hasExternal = orderedContacts.some((contact) => contact.contact_id === externalSelection);
       if (!hasPrimary) {
-        setPrimarySelection(response.unlinked_contacts[0]?.contact_id ?? "");
+        setPrimarySelection(orderedContacts[0]?.contact_id ?? "");
       }
       if (!hasExternal) {
-        setExternalSelection(response.external_contacts[0]?.contact_id ?? "");
+        const fallback = orderedContacts.find((contact) => contact.contact_id !== primarySelection);
+        setExternalSelection(fallback?.contact_id ?? "");
       }
     } catch (error) {
       setStatus({
@@ -108,6 +110,10 @@ export default function MergeContactsPage() {
   const suggestions = useMemo(() => data?.suggestions ?? [], [data]);
   const externalContacts = data?.external_contacts ?? [];
   const unlinkedContacts = data?.unlinked_contacts ?? [];
+  const allContacts = useMemo(
+    () => [...unlinkedContacts, ...externalContacts],
+    [externalContacts, unlinkedContacts]
+  );
 
   return (
     <section style={{ display: "grid", gap: "24px" }}>
@@ -115,7 +121,7 @@ export default function MergeContactsPage() {
         <div>
           <h1 style={{ fontSize: "2rem", fontWeight: 600 }}>Merge Contacts</h1>
           <p style={{ color: "#555", maxWidth: "720px" }}>
-            Link contacts imported from the media system with the contacts you created manually.
+            Combine duplicate entries across your contact list, including imported records.
             Suggested matches are based on name similarity and aliases.
           </p>
         </div>
@@ -183,13 +189,13 @@ export default function MergeContactsPage() {
             ) : (
               <div style={{ display: "grid", gap: "16px" }}>
                 {suggestions.map((suggestion) => {
-                  const external = externalContacts.find(
-                    (contact) => contact.contact_id === suggestion.external_contact_id
+                  const primary = allContacts.find(
+                    (contact) => contact.contact_id === suggestion.contact_a_id
                   );
-                  const candidate = unlinkedContacts.find(
-                    (contact) => contact.contact_id === suggestion.candidate_contact_id
+                  const duplicate = allContacts.find(
+                    (contact) => contact.contact_id === suggestion.contact_b_id
                   );
-                  const key = `${suggestion.candidate_contact_id}|${suggestion.external_contact_id}`;
+                  const key = `${suggestion.contact_a_id}|${suggestion.contact_b_id}`;
                   return (
                     <div
                       key={key}
@@ -206,10 +212,10 @@ export default function MergeContactsPage() {
                       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                         <div style={{ display: "grid", gap: "4px" }}>
                           <span style={{ fontWeight: 600, fontSize: "1.1rem" }}>
-                            {candidate?.display_name ?? suggestion.candidate_display_name ?? "Existing contact"}
+                            {primary?.display_name ?? suggestion.contact_a_display_name ?? "Contact"}
                           </span>
                           <span style={{ color: "#6b7280", fontSize: "0.9rem" }}>
-                            Merge with external: {external?.display_name ?? suggestion.external_display_name}
+                            Duplicate: {duplicate?.display_name ?? suggestion.contact_b_display_name}
                           </span>
                         </div>
                         <div
@@ -232,7 +238,7 @@ export default function MergeContactsPage() {
                       )}
                       <div style={{ display: "flex", gap: "12px", justifyContent: "flex-end" }}>
                         <button
-                          onClick={() => handleMerge(suggestion.candidate_contact_id, suggestion.external_contact_id)}
+                          onClick={() => handleMerge(suggestion.contact_a_id, suggestion.contact_b_id)}
                           disabled={activeMergeKey === key}
                           style={{
                             background: "#0b6bcb",
@@ -258,8 +264,7 @@ export default function MergeContactsPage() {
           <section style={{ display: "grid", gap: "16px" }}>
             <h2 style={{ fontSize: "1.5rem", fontWeight: 600, marginBottom: "4px" }}>Manual Merge</h2>
             <p style={{ color: "#6b7280", fontSize: "0.95rem" }}>
-              Choose an existing contact (without an external link) and merge it with a contact that has an external
-              identifier.
+              Choose any two contacts and merge the duplicate into the primary contact.
             </p>
             <form
               onSubmit={onManualMergeSubmit}
@@ -273,7 +278,7 @@ export default function MergeContactsPage() {
               }}
             >
               <label style={{ display: "grid", gap: "6px" }}>
-                <span style={{ fontWeight: 600, fontSize: "0.9rem" }}>Existing contact</span>
+                <span style={{ fontWeight: 600, fontSize: "0.9rem" }}>Primary contact</span>
                 <select
                   value={primarySelection}
                   onChange={(event) => setPrimarySelection(event.target.value)}
@@ -285,16 +290,17 @@ export default function MergeContactsPage() {
                   }}
                 >
                   <option value="">-- Select contact --</option>
-                  {unlinkedContacts.map((contact) => (
+                  {allContacts.map((contact) => (
                     <option key={contact.contact_id} value={contact.contact_id}>
                       {contact.display_name || contact.contact_id}
+                      {contact.external_id ? ` (external ${contact.external_id})` : ""}
                     </option>
                   ))}
                 </select>
               </label>
 
               <label style={{ display: "grid", gap: "6px" }}>
-                <span style={{ fontWeight: 600, fontSize: "0.9rem" }}>External contact</span>
+                <span style={{ fontWeight: 600, fontSize: "0.9rem" }}>Duplicate contact</span>
                 <select
                   value={externalSelection}
                   onChange={(event) => setExternalSelection(event.target.value)}
@@ -306,9 +312,10 @@ export default function MergeContactsPage() {
                   }}
                 >
                   <option value="">-- Select contact --</option>
-                  {externalContacts.map((contact) => (
+                  {allContacts.map((contact) => (
                     <option key={contact.contact_id} value={contact.contact_id}>
-                      {contact.display_name} ({contact.external_id ?? "external"})
+                      {contact.display_name || contact.contact_id}
+                      {contact.external_id ? ` (external ${contact.external_id})` : ""}
                     </option>
                   ))}
                 </select>
@@ -317,7 +324,12 @@ export default function MergeContactsPage() {
               <div style={{ display: "flex", justifyContent: "flex-end" }}>
                 <button
                   type="submit"
-                  disabled={!primarySelection || !externalSelection || activeMergeKey !== null}
+                  disabled={
+                    !primarySelection ||
+                    !externalSelection ||
+                    primarySelection === externalSelection ||
+                    activeMergeKey !== null
+                  }
                   style={{
                     background: "#0b6bcb",
                     color: "#fff",
@@ -325,8 +337,20 @@ export default function MergeContactsPage() {
                     borderRadius: "8px",
                     padding: "10px 20px",
                     fontWeight: 600,
-                    cursor: !primarySelection || !externalSelection || activeMergeKey !== null ? "not-allowed" : "pointer",
-                    opacity: !primarySelection || !externalSelection || activeMergeKey !== null ? 0.7 : 1,
+                    cursor:
+                      !primarySelection ||
+                      !externalSelection ||
+                      primarySelection === externalSelection ||
+                      activeMergeKey !== null
+                        ? "not-allowed"
+                        : "pointer",
+                    opacity:
+                      !primarySelection ||
+                      !externalSelection ||
+                      primarySelection === externalSelection ||
+                      activeMergeKey !== null
+                        ? 0.7
+                        : 1,
                   }}
                 >
                   {activeMergeKey ? "Merging…" : "Merge Selected"}
@@ -376,4 +400,3 @@ export default function MergeContactsPage() {
     </section>
   );
 }
-

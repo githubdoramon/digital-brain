@@ -756,42 +756,46 @@ def list_contact_merge_candidates() -> dict[str, Any]:
     from rapidfuzz import fuzz
 
     suggestions: list[dict[str, Any]] = []
-    for external in external_contacts:
-        source_name_candidates = [
-            external.get("display_name") or "",
-            *external.get("aliases", []),
-        ]
-        source_candidates = [name for name in source_name_candidates if name]
+    all_contacts = [*unlinked_contacts, *external_contacts]
+    seen_pairs: set[tuple[str, str]] = set()
+    for idx, contact in enumerate(all_contacts):
+        source_candidates = [contact.get("display_name") or "", *contact.get("aliases", [])]
+        source_candidates = [name for name in source_candidates if name]
         if not source_candidates:
             continue
 
-        best_score = -1
-        best_target: dict[str, Any] | None = None
-        best_match_name: str | None = None
+        for target in all_contacts[idx + 1 :]:
+            pair_key = tuple(sorted([contact["contact_id"], target["contact_id"]]))
+            if pair_key in seen_pairs:
+                continue
 
-        for candidate_name in source_candidates:
-            for target in unlinked_contacts:
-                target_names = [target.get("display_name") or "", *target.get("aliases", [])]
+            target_names = [target.get("display_name") or "", *target.get("aliases", [])]
+            best_score = -1
+            best_match_name: str | None = None
+            for candidate_name in source_candidates:
                 for target_name in target_names:
                     if not target_name:
                         continue
                     score = fuzz.token_sort_ratio(candidate_name, target_name)
                     if score > best_score:
                         best_score = score
-                        best_target = target
                         best_match_name = target_name
 
-        if best_target and best_score >= 78:
-            suggestions.append(
-                {
-                    "external_contact_id": external["contact_id"],
-                    "external_display_name": external.get("display_name"),
-                    "candidate_contact_id": best_target["contact_id"],
-                    "candidate_display_name": best_target.get("display_name"),
-                    "score": best_score,
-                    "matched_on": best_match_name,
-                }
-            )
+            if best_score >= 78:
+                seen_pairs.add(pair_key)
+                suggestions.append(
+                    {
+                        "contact_a_id": contact["contact_id"],
+                        "contact_a_display_name": contact.get("display_name"),
+                        "contact_b_id": target["contact_id"],
+                        "contact_b_display_name": target.get("display_name"),
+                        "score": best_score,
+                        "matched_on": best_match_name,
+                    }
+                )
+
+    suggestions.sort(key=lambda suggestion: suggestion["score"], reverse=True)
+    suggestions = suggestions[:20]
 
     return {
         "external_contacts": external_contacts,
