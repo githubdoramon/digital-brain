@@ -40,6 +40,12 @@ type Contact = {
 
 const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
 
+const normalizeSearch = (value: string) =>
+  value
+    .normalize('NFD')
+    .replace(/\p{Diacritic}/gu, '')
+    .toLowerCase();
+
 function ContactCard({
   contact,
   subtitle,
@@ -128,9 +134,11 @@ export default function ContactsScreen() {
   }, [contacts]);
 
   const filtered = useMemo(() => {
-    const trimmed = query.trim().toLowerCase();
+    const trimmed = normalizeSearch(query.trim());
     if (!trimmed) return contacts;
-    return contacts.filter((contact) => contact.display_name.toLowerCase().includes(trimmed));
+    return contacts.filter((contact) =>
+      normalizeSearch(contact.display_name).includes(trimmed),
+    );
   }, [contacts, query]);
 
   const listHeader = (

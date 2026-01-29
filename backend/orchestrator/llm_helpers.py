@@ -89,7 +89,13 @@ def _call_llm_raw(
         timeout=timeout or LLM_TIMEOUT,
     )
     response.raise_for_status()
-    return response.json()
+
+    content = response.json()
+
+    print(f"[llm_helpers] LLM input: {json.dumps(messages, ensure_ascii=False)}")
+    print(f"[llm_helpers] LLM response: {json.dumps(content, ensure_ascii=False)}")
+
+    return content
 
 
 def call_llm(
@@ -137,9 +143,6 @@ def call_llm(
 
     if not content:
         raise RuntimeError(f"LLM returned empty content: {data}")
-
-    print(f"[llm_helpers] LLM input: {json.dumps(messages, ensure_ascii=False)}")
-    print(f"[llm_helpers] LLM response: {content}")
 
     return content
 

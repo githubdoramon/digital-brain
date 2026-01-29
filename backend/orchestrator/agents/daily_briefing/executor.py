@@ -356,26 +356,48 @@ def _fetch_contact_summaries(contact_ids: list[str]) -> list[dict[str, Any]]:
 
 def _generate_markdown(context: dict[str, Any]) -> str:
     tools, tool_handlers = _build_tooling()
-    system_prompt = (
-        "You are a daily briefing assistant. Your job is to produce a DAILY BRIEFING in Markdown. "
-        "Output Markdown only. Do not mention JSON, do not explain what the data is, and do not ask "
-        "clarifying questions. Be direct and specific. Use ASCII characters only (no fancy quotes or "
-        "unicode bullets).\n"
+    system_prompt = "You are a precise writing engine. Follow the user instructions exactly."
+    prompt = _build_briefing_prompt(context)
+    result = call_llm_with_tools(
+        prompt,
+        tools=tools,
+        tool_handlers=tool_handlers,
+        system_prompt=system_prompt,
+        timeout=180,
+        temperature=0.1,
+        max_steps=8,
+        max_tool_calls=12,
+    )
+    content = result.get("content", "")
+    if _is_invalid_briefing(content):
+        retry_prompt = _build_rewrite_prompt(context, content)
+        content = call_llm(
+            retry_prompt,
+            system_prompt="Rewrite strictly to the required format.",
+            temperature=0.1,
+        )
+    return content
+
+
+def _build_briefing_prompt(context: dict[str, Any]) -> str:
+    return (
+        "DAILY BRIEFING TASK (PREP DOCUMENT)\n"
+        "You are preparing the user for upcoming events. Use future tense (will, upcoming, prepare, review).\n"
         "\n"
-        "You can call tools to look up additional context. Use search_memories to find related "
-        "documents or past events, then get_document for details if needed. Use web_search and "
-        "fetch_web_page when a todo or event benefits from external information. Only call tools "
-        "when it improves the briefing.\n"
+        "OUTPUT RULES (MANDATORY):\n"
+        "- Output Markdown only.\n"
+        "- Do not ask questions.\n"
+        "- Do not explain the input.\n"
+        "- Do not say 'you provided' or 'the text appears'.\n"
+        "- Focus ONLY on today's events (and their past context if any) and their linked todos.\n"
         "\n"
-        "Tool use cues:\n"
-        "- Use search_memories when an event or todo references prior discussions, meeting notes, "
-        "or a project name that likely has stored documents.\n"
-        "- Use get_document when a memory search returns a document that needs review.\n"
-        "- Use web_search for external prep: company research, meeting agenda context, travel "
-        "logistics, or unfamiliar terms.\n"
-        "- Use fetch_web_page only to extract details from a specific URL you found.\n"
+        "TOOL GUIDANCE:\n"
+        "- Use search_memories for event-specific past notes.\n"
+        "- Use get_document only when a document should be reviewed for a specific event.\n"
+        "- Use web_search for external prep (company background, agenda context, travel).\n"
+        "- Use fetch_web_page only for URLs discovered via web_search.\n"
         "\n"
-        "Required structure:\n"
+        "REQUIRED STRUCTURE:\n"
         "# Daily Briefing - <date> (<timezone>)\n"
         "## Day Overview\n"
         "- Summarize the day, key prep actions, and conflicts.\n"
@@ -383,42 +405,52 @@ def _generate_markdown(context: dict[str, Any]) -> str:
         "- One bullet per event: <local time> - <title> (location if available)\n"
         "## Event Prep\n"
         "### <local time> - <title>\n"
-        "- Past context (from similar events or documents)\n"
-        "- Open actions and pending todos\n"
-        "- Documents or materials to review\n"
-        "- Suggested prep focus\n"
+        "- Past context (from similar events or documents that match this event)\n"
+        "- Open actions and pending todos tied to this event\n"
+        "- Documents or materials to review for this event\n"
+        "- Suggested prep focus for this event\n"
         "## Outstanding Todos\n"
         "- List pending todos and recently completed ones (last 2 weeks).\n"
         "\n"
-        "Rules:\n"
-        "- If there are no events, say so in Day Overview and skip Schedule/Event Prep sections.\n"
-        "- If there are no relevant todos, still include Outstanding Todos with a short note.\n"
-        "- Prefer specifics: titles, times, people, and document names when present.\n"
-        "- Keep each bullet under 2 lines when possible.\n"
-        "- Never describe the input data, never summarize the dataset, never offer options."
-    )
-    prompt = (
-        "Task: Generate the daily briefing Markdown now.\n"
-        "Context:\n"
+        "If there are no events, say so in Day Overview and skip Schedule/Event Prep sections.\n"
+        "If there are no relevant todos, still include Outstanding Todos with a short note.\n"
+        "\n"
+        "CONTEXT FOR TODAY (already filtered; every event below is UPCOMING today):\n"
         f"{_format_context_text(context)}"
     )
-    result = call_llm_with_tools(
-        prompt,
-        tools=tools,
-        tool_handlers=tool_handlers,
-        system_prompt=system_prompt,
-        temperature=0.1,
-        max_steps=8,
-        max_tool_calls=12,
+
+
+def _build_rewrite_prompt(context: dict[str, Any], draft: str) -> str:
+    return (
+        "Rewrite the draft into the REQUIRED STRUCTURE. Output Markdown only.\n"
+        "Draft (do not include any of this meta text in output):\n"
+        f"{draft}\n\n"
+        "Context (use only for content):\n"
+        f"{_format_context_text(context)}"
     )
-    return result.get("content", "")
+
+
+def _is_invalid_briefing(content: str) -> bool:
+    if not content.strip().startswith("# Daily Briefing"):
+        return True
+    lower = content.lower()
+    banned = [
+        "it appears",
+        "you provided",
+        "the text",
+        "to help you",
+        "let me know",
+        "clarify",
+        "if you have",
+    ]
+    return any(phrase in lower for phrase in banned)
 
 
 def _generate_summary(context: dict[str, Any], markdown: str) -> str:
     system_prompt = (
-        "You summarize daily briefings into a single short paragraph. Output plain text only. "
-        "Keep it under 2 sentences. Use ASCII characters only. Mention meeting count and todo count "
-        "when available. Be practical and direct."
+        "You summarize daily briefings into a single short paragraph. This is future-oriented prep. "
+        "Output plain text only. Keep it under 2 sentences. Use ASCII characters only. Mention "
+        "meeting count and todo count when available. Be practical and direct."
     )
     prompt = (
         "Generate a daily summary for the user based on this information.\n"
@@ -452,8 +484,25 @@ def _build_tooling() -> tuple[list[dict[str, Any]], dict[str, Any]]:
     return tools, tool_handlers
 
 
+def _condense_notes(notes: str, limit: int = 12) -> str:
+    cleaned = notes.replace("\r\n", "\n")
+    lines = [line.strip() for line in cleaned.split("\n") if line.strip()]
+    condensed: list[str] = []
+    for line in lines:
+        if line.startswith("#"):
+            continue
+        if line.startswith("-"):
+            condensed.append(line)
+        else:
+            condensed.append(f"- {line}")
+        if len(condensed) >= limit:
+            break
+    return "\n".join(condensed)
+
+
 def _format_context_text(context: dict[str, Any]) -> str:
     lines: list[str] = []
+    lines.append("Context Overview (for upcoming events):")
     lines.append(f"Date: {context.get('date')}")
     lines.append(f"Timezone: {context.get('timezone')}")
     lines.append(f"Day Start: {context.get('day_start')}")
@@ -461,16 +510,15 @@ def _format_context_text(context: dict[str, Any]) -> str:
     lines.append("")
 
     events = context.get("events") or []
-    lines.append(f"Events ({len(events)}):")
+    lines.append(f"Events for Today ({len(events)}):")
     if not events:
         lines.append("- None")
     for idx, event in enumerate(events, start=1):
-        lines.append(f"Event {idx}:")
-        lines.append(f"- Title: {event.get('title')}")
-        lines.append(f"- Local Start: {event.get('local_start')}")
-        lines.append(f"- Local End: {event.get('local_end')}")
+        title = event.get("title") or "Untitled"
+        lines.append(f"Event {idx} of today: {title}")
+        lines.append(f"- Time: {event.get('local_start')} to {event.get('local_end') or 'TBD'}")
+        lines.append(f"- Type: {_format_list(event.get('types'))}")
         lines.append(f"- Tags: {_format_list(event.get('tags'))}")
-        lines.append(f"- Types: {_format_list(event.get('types'))}")
         place = event.get("place") or {}
         if place:
             place_bits = [place.get("name"), place.get("city"), place.get("country")]
@@ -479,13 +527,14 @@ def _format_context_text(context: dict[str, Any]) -> str:
                 lines.append(f"- Location: {location}")
         summary = event.get("summary") or ""
         if summary:
-            lines.append(f"- Summary: {summary}")
+            lines.append("- Context from prior notes (for prep):")
+            lines.append(_condense_notes(summary))
 
         contacts = event.get("contacts") or []
         lines.append(f"- People: {_format_contacts(contacts)}")
 
         similar = event.get("similar_events") or []
-        lines.append(f"- Similar Events ({len(similar)}):")
+        lines.append(f"- This event has context from {len(similar)} past events. Past event list:")
         if not similar:
             lines.append("  - None")
         for similar_event in similar:
@@ -496,7 +545,7 @@ def _format_context_text(context: dict[str, Any]) -> str:
             )
 
         todos = event.get("todos") or []
-        lines.append(f"- Event Todos ({len(todos)}):")
+        lines.append(f"- Event Todos (linked to this event) ({len(todos)}):")
         if not todos:
             lines.append("  - None")
         for todo in todos:
@@ -517,11 +566,13 @@ def _format_context_text(context: dict[str, Any]) -> str:
                 f"[{todo.get('status')}] {todo.get('description')}"
                 f" (from {source}, updated {todo.get('updated_at') or todo.get('created_at')})"
             )
-
+        lines.append(
+            "- Prep expectation: summarize past context and propose what the user should do."
+        )
         lines.append("")
 
     all_todos = context.get("all_todos") or []
-    lines.append(f"All Relevant Todos ({len(all_todos)}):")
+    lines.append(f"Unlinked Relevant Todos ({len(all_todos)}):")
     if not all_todos:
         lines.append("- None")
     for todo in all_todos:

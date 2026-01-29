@@ -259,7 +259,7 @@ export default function DailyScreen() {
                   opacity,
                   maxHeight: height.interpolate({
                     inputRange: [0, 1],
-                    outputRange: [120, 0],
+                  outputRange: [220, 0],
                   }),
                   marginBottom: height.interpolate({
                     inputRange: [0, 1],
