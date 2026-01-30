@@ -16,6 +16,7 @@ type Contact = {
   comments: string;
   relationships: ContactRelationship[];
   external_id?: string | null;
+  avatar_url?: string | null;
 };
 
 type ContactRelationship = {
@@ -57,6 +58,19 @@ function normalizeText(value: string): string {
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "")
     .toLowerCase();
+}
+
+function getInitials(name: string): string {
+  const parts = name.trim().split(/\s+/).filter(Boolean);
+  if (parts.length === 0) return "?";
+  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+  return `${parts[0][0]}${parts[parts.length - 1][0]}`.toUpperCase();
+}
+
+function resolveAvatarUrl(url: string | null | undefined): string | null {
+  if (!url) return null;
+  if (url.startsWith("http")) return url;
+  return `/api/orchestrator${url}`;
 }
 
 const RELATIONSHIP_SUGGESTIONS = [
@@ -746,24 +760,63 @@ export default function ContactsPage() {
                     }}
                   >
                     <td style={{ padding: "16px 20px" }}>
-                      <div style={{ fontWeight: 600 }}>{contact.display_name}</div>
-                    {contact.external_id && (
-                      <div style={{ fontSize: "0.75rem", color: "#2563eb", fontWeight: 500 }}>
-                        External ID: {contact.external_id}
+                      <div style={{ display: "flex", gap: "12px", alignItems: "flex-start" }}>
+                        <div
+                          style={{
+                            width: "44px",
+                            height: "44px",
+                            borderRadius: "999px",
+                            background: "#ecfeff",
+                            border: "1px solid #bae6fd",
+                            color: "#0284c7",
+                            fontWeight: 700,
+                            fontSize: "0.9rem",
+                            display: "grid",
+                            placeItems: "center",
+                            position: "relative",
+                            overflow: "hidden",
+                            flexShrink: 0,
+                          }}
+                        >
+                          <span>{getInitials(contact.display_name || contact.contact_id)}</span>
+                          {resolveAvatarUrl(contact.avatar_url) && (
+                            <img
+                              src={resolveAvatarUrl(contact.avatar_url) ?? ""}
+                              alt={contact.display_name}
+                              onError={(event) => {
+                                event.currentTarget.style.display = "none";
+                              }}
+                              style={{
+                                position: "absolute",
+                                inset: 0,
+                                width: "100%",
+                                height: "100%",
+                                objectFit: "cover",
+                              }}
+                            />
+                          )}
+                        </div>
+                        <div>
+                          <div style={{ fontWeight: 600 }}>{contact.display_name}</div>
+                          {contact.external_id && (
+                            <div style={{ fontSize: "0.75rem", color: "#2563eb", fontWeight: 500 }}>
+                              External ID: {contact.external_id}
+                            </div>
+                          )}
+                          {contact.aliases.length > 0 && (
+                            <div style={{ fontSize: "0.8rem", color: "#666", marginTop: "2px" }}>
+                              {contact.aliases.join(", ")}
+                            </div>
+                          )}
+                          {contact.comments && (
+                            <div style={{ fontSize: "0.8rem", color: "#6b7280", marginTop: "6px" }}>
+                              {contact.comments.length > 120
+                                ? `${contact.comments.slice(0, 120)}...`
+                                : contact.comments}
+                            </div>
+                          )}
+                        </div>
                       </div>
-                    )}
-                      {contact.aliases.length > 0 && (
-                        <div style={{ fontSize: "0.8rem", color: "#666", marginTop: "2px" }}>
-                          {contact.aliases.join(", ")}
-                        </div>
-                      )}
-                      {contact.comments && (
-                        <div style={{ fontSize: "0.8rem", color: "#6b7280", marginTop: "6px" }}>
-                          {contact.comments.length > 120
-                            ? `${contact.comments.slice(0, 120)}...`
-                            : contact.comments}
-                        </div>
-                      )}
                     </td>
                     <td style={{ padding: "16px 20px", color: "#555" }}>
                       {contact.relationships.length > 0 ? (
