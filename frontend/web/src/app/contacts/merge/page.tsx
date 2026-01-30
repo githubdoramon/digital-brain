@@ -196,6 +196,14 @@ export default function MergeContactsPage() {
                     (contact) => contact.contact_id === suggestion.contact_b_id
                   );
                   const key = `${suggestion.contact_a_id}|${suggestion.contact_b_id}`;
+                  const primaryDetails = [
+                    primary?.emails?.[0],
+                    primary?.phones?.[0],
+                  ].filter(Boolean);
+                  const duplicateDetails = [
+                    duplicate?.emails?.[0],
+                    duplicate?.phones?.[0],
+                  ].filter(Boolean);
                   return (
                     <div
                       key={key}
@@ -214,9 +222,19 @@ export default function MergeContactsPage() {
                           <span style={{ fontWeight: 600, fontSize: "1.1rem" }}>
                             {primary?.display_name ?? suggestion.contact_a_display_name ?? "Contact"}
                           </span>
+                          {primaryDetails.length > 0 && (
+                            <span style={{ color: "#6b7280", fontSize: "0.85rem" }}>
+                              {primaryDetails.join(" · ")}
+                            </span>
+                          )}
                           <span style={{ color: "#6b7280", fontSize: "0.9rem" }}>
                             Duplicate: {duplicate?.display_name ?? suggestion.contact_b_display_name}
                           </span>
+                          {duplicateDetails.length > 0 && (
+                            <span style={{ color: "#6b7280", fontSize: "0.85rem" }}>
+                              {duplicateDetails.join(" · ")}
+                            </span>
+                          )}
                         </div>
                         <div
                           style={{

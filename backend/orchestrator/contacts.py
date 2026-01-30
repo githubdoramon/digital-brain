@@ -781,7 +781,7 @@ def list_contact_merge_candidates() -> dict[str, Any]:
                         best_score = score
                         best_match_name = target_name
 
-            if best_score >= 78:
+            if best_score >= 85:
                 seen_pairs.add(pair_key)
                 suggestions.append(
                     {
