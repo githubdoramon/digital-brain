@@ -428,6 +428,47 @@ def update_todo_status(
     return {"ok": True}
 
 
+@api.get("/events/search")
+@api.get("/mobile/events/search")
+def search_events(
+    user: dict = Depends(get_current_user),
+    query: str | None = Query(default=None),
+    limit: int = Query(default=10, ge=1, le=50),
+):
+    trimmed = (query or "").strip()
+    with get_conn() as conn, conn.cursor() as cur:
+        if trimmed:
+            like = f"%{trimmed}%"
+            cur.execute(
+                """
+                SELECT e.id,
+                       e.title,
+                       e.start_date,
+                       e.end_date
+                FROM events e
+                WHERE e.title ILIKE %s OR e.summary ILIKE %s
+                ORDER BY e.start_date DESC
+                LIMIT %s
+                """,
+                (like, like, limit),
+            )
+        else:
+            cur.execute(
+                """
+                SELECT e.id,
+                       e.title,
+                       e.start_date,
+                       e.end_date
+                FROM events e
+                ORDER BY e.start_date DESC
+                LIMIT %s
+                """,
+                (limit,),
+            )
+        rows: list[dict[str, Any]] = [dict(row) for row in cur.fetchall()]
+    return {"events": rows}
+
+
 @api.delete("/todos/{todo_id}")
 def delete_todo(todo_id: str, user: dict = Depends(get_current_user)):
     deleted = todos_service.delete_todo(todo_id)
