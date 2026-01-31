@@ -68,9 +68,10 @@ def list_todos(*, open_only: bool = False, order: str | None = None) -> list[dic
         order_clause = (
             "ORDER BY "
             "CASE "
-            "WHEN due_date = CURRENT_DATE THEN 0 "
-            "WHEN due_date IS NULL THEN 2 "
-            "ELSE 1 END, "
+            "WHEN due_date IS NULL THEN 3 "
+            "WHEN due_date < CURRENT_DATE THEN 0 "
+            "WHEN due_date = CURRENT_DATE THEN 1 "
+            "ELSE 2 END, "
             "due_date ASC NULLS LAST, "
             "created_at DESC"
         )

@@ -399,13 +399,20 @@ def ingest_todo(todo: TodoIn, user: dict = Depends(get_current_user)):
 
 
 @api.get("/todos")
-@api.get("/mobile/todos")
 def list_todos(
     user: dict = Depends(get_current_user),
     open_only: bool = Query(default=False),
     order: str | None = Query(default=None),
 ):
     return {"todos": todos_service.list_todos(open_only=open_only, order=order)}
+
+
+@api.get("/mobile/todos")
+def list_mobile_todos(
+    user: dict = Depends(get_current_user),
+    order: str | None = Query(default=None),
+):
+    return {"todos": todos_service.list_todos(open_only=True, order=order)}
 
 
 @api.get("/todos/{todo_id}")
