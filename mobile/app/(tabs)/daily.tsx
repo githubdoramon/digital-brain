@@ -1,6 +1,7 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { LinearGradient } from 'expo-linear-gradient';
 import React from 'react';
+import { useFocusEffect } from '@react-navigation/native';
 import {
   Animated,
   FlatList,
@@ -13,6 +14,7 @@ import {
   View,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useRouter } from 'expo-router';
 
 import { apiFetch } from '@/api/client';
 import { Card } from '@/components/Card';
@@ -46,6 +48,7 @@ function formatTimezone(): string {
 
 export default function DailyScreen() {
   const insets = useSafeAreaInsets();
+  const router = useRouter();
   const [expanded, setExpanded] = React.useState(false);
   const [briefing, setBriefing] = React.useState<DailyBriefing | null>(null);
   const [loading, setLoading] = React.useState(true);
@@ -63,7 +66,7 @@ export default function DailyScreen() {
     }
   }, []);
 
-  React.useEffect(() => {
+  const loadBriefing = React.useCallback(() => {
     let isMounted = true;
     const fetchBriefing = async () => {
       try {
@@ -101,7 +104,7 @@ export default function DailyScreen() {
     };
   }, []);
 
-  React.useEffect(() => {
+  const loadTodos = React.useCallback(() => {
     let isMounted = true;
     const fetchTodos = async () => {
       try {
@@ -124,6 +127,17 @@ export default function DailyScreen() {
       isMounted = false;
     };
   }, []);
+
+  useFocusEffect(
+    React.useCallback(() => {
+      const briefingCleanup = loadBriefing();
+      const todosCleanup = loadTodos();
+      return () => {
+        briefingCleanup();
+        todosCleanup();
+      };
+    }, [loadBriefing, loadTodos])
+  );
 
   const getTodoAnimation = React.useCallback(
     (todoId: string) => {
@@ -295,6 +309,18 @@ export default function DailyScreen() {
           ) : null
         }
       />
+      <Pressable
+        onPress={() => router.push('/todos/new')}
+        accessibilityRole="button"
+        accessibilityLabel="Add a todo"
+        style={({ pressed }) => [
+          styles.fab,
+          { bottom: insets.bottom + 96 },
+          pressed && styles.fabPressed,
+        ]}
+      >
+        <Ionicons name="add" size={26} color="#fff" />
+      </Pressable>
     </LinearGradient>
   );
 }
@@ -504,5 +530,24 @@ const styles = StyleSheet.create({
   },
   todoActionDisabled: {
     opacity: 0.6,
+  },
+  fab: {
+    position: 'absolute',
+    right: 22,
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: theme.colors.accent,
+    shadowColor: '#0f1113',
+    shadowOpacity: 0.38,
+    shadowRadius: 24,
+    shadowOffset: { width: 0, height: 16 },
+    elevation: 14,
+  },
+  fabPressed: {
+    transform: [{ scale: 0.97 }],
+    shadowOpacity: 0.18,
   },
 });

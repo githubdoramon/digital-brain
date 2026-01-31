@@ -152,6 +152,20 @@ function RootLayoutNav() {
             headerStyle: { backgroundColor: 'transparent' },
           }}
         />
+        <Stack.Screen
+          name="todos/new"
+          options={{
+            headerShown: true,
+            headerTransparent: true,
+            headerTitle: 'New todo',
+            headerBackTitle: ' ',
+            headerBackTitleStyle: { fontSize: 0 },
+            headerBackButtonMenuEnabled: false,
+            headerShadowVisible: false,
+            headerTintColor: theme.colors.ink,
+            headerStyle: { backgroundColor: 'transparent' },
+          }}
+        />
         <Stack.Screen name="modal" options={{ presentation: 'modal' }} />
       </Stack>
     </ThemeProvider>

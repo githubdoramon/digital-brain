@@ -2,6 +2,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 import React from 'react';
 import { Animated, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useHeaderHeight } from '@react-navigation/elements';
 
 import { theme } from '@/theme';
 
@@ -21,6 +22,7 @@ type NoticeState = {
 
 export function TopNoticeProvider({ children }: { children: React.ReactNode }) {
   const insets = useSafeAreaInsets();
+  const headerHeight = useHeaderHeight();
   const [notice, setNotice] = React.useState<NoticeState>({
     message: '',
     visible: false,
@@ -78,7 +80,7 @@ export function TopNoticeProvider({ children }: { children: React.ReactNode }) {
           style={[
             styles.noticeWrapper,
             {
-              paddingTop: insets.top + 10,
+              paddingTop: insets.top + 40,
               transform: [{ translateY }],
               opacity,
             },
@@ -126,7 +128,8 @@ const styles = StyleSheet.create({
     left: 16,
     right: 16,
     top: 0,
-    zIndex: 20,
+    zIndex: 40,
+    elevation: 40,
     alignItems: 'center',
   },
   notice: {

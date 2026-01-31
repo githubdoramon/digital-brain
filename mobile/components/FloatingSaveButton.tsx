@@ -39,7 +39,10 @@ export function FloatingSaveButton({
 
   return (
     <Animated.View
-      style={[styles.container, { transform: [{ translateY }], opacity }]}
+      style={[
+        styles.container,
+        { transform: [{ translateY }], opacity },
+      ]}
       pointerEvents={visible ? 'auto' : 'none'}
     >
       <Pressable
@@ -63,6 +66,11 @@ const styles = StyleSheet.create({
     position: 'absolute',
     right: 20,
     bottom: 20,
+    shadowColor: '#0f1113',
+    shadowOpacity: 0.36,
+    shadowRadius: 22,
+    shadowOffset: { width: 0, height: 16 },
+    elevation: 14,
   },
   button: {
     backgroundColor: theme.colors.accent,
@@ -71,11 +79,11 @@ const styles = StyleSheet.create({
     borderRadius: 28,
     alignItems: 'center',
     justifyContent: 'center',
-    shadowColor: theme.shadow.color,
-    shadowOpacity: theme.shadow.opacity,
-    shadowRadius: theme.shadow.radius,
-    shadowOffset: theme.shadow.offset,
-    elevation: 4,
+    shadowColor: '#0f1113',
+    shadowOpacity: 0.12,
+    shadowRadius: 10,
+    shadowOffset: { width: 0, height: 8 },
+    elevation: 6,
   },
   disabled: {
     opacity: 0.6,

@@ -392,6 +392,7 @@ def ingest_place(p: PlaceIn, user: dict = Depends(get_current_user)):
 
 
 @api.post("/ingest/todo")
+@api.post("/mobile/ingest/todo")
 def ingest_todo(todo: TodoIn, user: dict = Depends(get_current_user)):
     todos_service.ingest_todo(todo)
     return {"ok": True, "id": todo.todo_id}
