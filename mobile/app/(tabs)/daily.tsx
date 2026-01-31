@@ -15,6 +15,7 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
+import Ionicons from '@expo/vector-icons/Ionicons';
 
 import { apiFetch } from '@/api/client';
 import { Card } from '@/components/Card';
@@ -36,6 +37,11 @@ type TodoItem = {
   description: string;
   status?: string | null;
   due_date?: string | null;
+  events?: {
+    id: string;
+    title?: string | null;
+    start_date?: string | null;
+  }[];
 };
 
 function formatToday(): string {
@@ -195,6 +201,8 @@ export default function DailyScreen() {
   const metaText = briefing
     ? `${briefing.event_count} events • ${briefing.todo_count} todos`
     : 'No summary metrics yet';
+  const formatEventTitle = (event: TodoItem['events'][number]) =>
+    event.title?.trim() || 'Linked event';
 
   return (
     <LinearGradient colors={theme.gradients.sunrise} style={styles.container}>
@@ -263,6 +271,8 @@ export default function DailyScreen() {
             inputRange: [0, 1],
             outputRange: [0, 1],
           });
+          const primaryEvent = item.events?.[0];
+          const eventCount = item.events?.length ?? 0;
           return (
             <AnimatedCard
               variant="elevated"
@@ -282,10 +292,27 @@ export default function DailyScreen() {
                 },
               ]}
             >
-              <View style={styles.todoContent}>
+              <Pressable
+                onPress={() => {
+                  if (primaryEvent?.id) {
+                    router.push(`/events/${encodeURIComponent(primaryEvent.id)}`);
+                  }
+                }}
+                disabled={!primaryEvent?.id}
+                style={({ pressed }) => [styles.todoContent, pressed && styles.pressed]}
+              >
                 <Text style={styles.todoText}>{item.description}</Text>
+                {primaryEvent ? (
+                  <View style={styles.todoEventRow}>
+                    <Ionicons name="calendar" size={14} color={theme.colors.accentDeep} />
+                    <Text style={styles.todoEventText}>{formatEventTitle(primaryEvent)}</Text>
+                    {eventCount > 1 ? (
+                      <Text style={styles.todoEventMeta}>+{eventCount - 1}</Text>
+                    ) : null}
+                  </View>
+                ) : null}
                 {item.due_date ? <Text style={styles.todoMeta}>Due {item.due_date}</Text> : null}
-              </View>
+              </Pressable>
               <View style={styles.todoActionRow}>
                 <Pressable
                   onPress={() => handleComplete(item)}
@@ -492,6 +519,22 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: theme.colors.mutedInk,
     lineHeight: 20,
+  },
+  todoEventRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginTop: 6,
+  },
+  todoEventText: {
+    fontSize: 13,
+    color: theme.colors.ink,
+    fontWeight: '600',
+    flex: 1,
+  },
+  todoEventMeta: {
+    fontSize: 11,
+    color: theme.colors.mutedInk,
   },
   todoCard: {
     marginTop: 12,

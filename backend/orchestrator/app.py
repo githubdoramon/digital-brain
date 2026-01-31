@@ -477,6 +477,15 @@ def search_events(
     return {"events": rows}
 
 
+@api.get("/events/{event_id}")
+@api.get("/mobile/events/{event_id}")
+def get_event_detail(event_id: str, user: dict = Depends(get_current_user)):
+    events = events_service.get_events([event_id])
+    if not events:
+        raise HTTPException(status_code=404, detail="Event not found")
+    return events[0]
+
+
 @api.delete("/todos/{todo_id}")
 def delete_todo(todo_id: str, user: dict = Depends(get_current_user)):
     deleted = todos_service.delete_todo(todo_id)

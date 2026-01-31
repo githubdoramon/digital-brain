@@ -166,6 +166,20 @@ function RootLayoutNav() {
             headerStyle: { backgroundColor: 'transparent' },
           }}
         />
+        <Stack.Screen
+          name="events/[eventId]"
+          options={{
+            headerShown: true,
+            headerTransparent: true,
+            headerTitle: '',
+            headerBackTitle: ' ',
+            headerBackTitleStyle: { fontSize: 0 },
+            headerBackButtonMenuEnabled: false,
+            headerShadowVisible: false,
+            headerTintColor: theme.colors.ink,
+            headerStyle: { backgroundColor: 'transparent' },
+          }}
+        />
         <Stack.Screen name="modal" options={{ presentation: 'modal' }} />
       </Stack>
     </ThemeProvider>
