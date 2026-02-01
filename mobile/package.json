@@ -10,7 +10,8 @@
     "lint": "eslint . --ext .ts,.tsx",
     "lint:fix": "eslint . --ext .ts,.tsx --fix",
     "format": "prettier . --write",
-    "format:check": "prettier . --check"
+    "format:check": "prettier . --check",
+    "eas:build:android:apk": "set -a; source .env; set +a; eas build -p android --profile preview --local"
   },
   "dependencies": {
     "@expo/vector-icons": "^15.0.3",

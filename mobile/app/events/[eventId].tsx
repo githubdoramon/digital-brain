@@ -150,7 +150,9 @@ export default function EventDetailScreen() {
             <Ionicons name="document-text" size={16} color={theme.colors.accentDeep} />
             <Text style={styles.sectionTitle}>Notes</Text>
           </View>
-          <Text style={styles.bodyText}>{summary || 'No notes captured yet.'}</Text>
+          {summary ? renderMarkdown(summary) : (
+            <Text style={styles.bodyText}>No notes captured yet.</Text>
+          )}
         </Card>
 
         {event?.place ? (
@@ -200,6 +202,71 @@ export default function EventDetailScreen() {
       </ScrollView>
     </LinearGradient>
   );
+}
+
+function renderMarkdown(markdown: string) {
+  return markdown.split('\n').map((line, index) => {
+    if (line.startsWith('# ')) {
+      return (
+        <Text key={`h1-${index}`} style={styles.markdownH1}>
+          {renderInline(line.replace('# ', ''), `h1-${index}`)}
+        </Text>
+      );
+    }
+    if (line.startsWith('## ')) {
+      return (
+        <Text key={`h2-${index}`} style={styles.markdownH2}>
+          {renderInline(line.replace('## ', ''), `h2-${index}`)}
+        </Text>
+      );
+    }
+    if (line.startsWith('### ')) {
+      return (
+        <Text key={`h3-${index}`} style={styles.markdownH3}>
+          {renderInline(line.replace('### ', ''), `h3-${index}`)}
+        </Text>
+      );
+    }
+    if (line.startsWith('- ')) {
+      return (
+        <View key={`bullet-${index}`} style={styles.markdownBulletRow}>
+          <Text style={styles.markdownBullet}>•</Text>
+          <Text style={styles.markdownBulletText}>
+            {renderInline(line.replace('- ', ''), `bullet-${index}`)}
+          </Text>
+        </View>
+      );
+    }
+    if (!line.trim()) {
+      return <View key={`space-${index}`} style={styles.markdownSpacer} />;
+    }
+    return (
+      <Text key={`p-${index}`} style={styles.markdownParagraph}>
+        {renderInline(line, `p-${index}`)}
+      </Text>
+    );
+  });
+}
+
+function renderInline(text: string, keyPrefix: string) {
+  const parts = text.split(/(\*\*[^*]+\*\*|\*[^*]+\*)/g).filter(Boolean);
+  return parts.map((part, index) => {
+    if (part.startsWith('**') && part.endsWith('**')) {
+      return (
+        <Text key={`${keyPrefix}-b-${index}`} style={styles.markdownBold}>
+          {part.slice(2, -2)}
+        </Text>
+      );
+    }
+    if (part.startsWith('*') && part.endsWith('*')) {
+      return (
+        <Text key={`${keyPrefix}-i-${index}`} style={styles.markdownItalic}>
+          {part.slice(1, -1)}
+        </Text>
+      );
+    }
+    return <Text key={`${keyPrefix}-t-${index}`}>{part}</Text>;
+  });
 }
 
 const styles = StyleSheet.create({
@@ -268,5 +335,53 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '600',
     color: theme.colors.ink,
+  },
+  markdownH1: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: theme.colors.ink,
+    marginBottom: 6,
+  },
+  markdownH2: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: theme.colors.ink,
+    marginBottom: 4,
+  },
+  markdownH3: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: theme.colors.ink,
+    marginBottom: 4,
+  },
+  markdownParagraph: {
+    fontSize: 14,
+    color: theme.colors.ink,
+    lineHeight: 20,
+  },
+  markdownBulletRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 8,
+  },
+  markdownBullet: {
+    fontSize: 14,
+    color: theme.colors.ink,
+    lineHeight: 20,
+  },
+  markdownBulletText: {
+    flex: 1,
+    fontSize: 14,
+    color: theme.colors.ink,
+    lineHeight: 20,
+  },
+  markdownSpacer: {
+    height: 10,
+  },
+  markdownBold: {
+    fontWeight: '700',
+  },
+  markdownItalic: {
+    fontStyle: 'italic',
   },
 });

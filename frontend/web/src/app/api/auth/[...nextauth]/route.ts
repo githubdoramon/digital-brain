@@ -15,6 +15,7 @@ type GoogleJWT = JWT & {
   accessToken?: string;
   refreshToken?: string;
   accessTokenExpires?: number;
+  idTokenExpires?: number;
   idToken?: string;
   error?: string;
 };
@@ -26,6 +27,25 @@ type GoogleTokenResponse = {
   id_token?: string;
   error?: string;
 };
+
+type JwtPayload = {
+  exp?: number;
+};
+
+function getJwtExpiry(token: string | undefined): number | undefined {
+  if (!token) return undefined;
+  const parts = token.split(".");
+  if (parts.length < 2) return undefined;
+
+  try {
+    const base64 = parts[1].replace(/-/g, "+").replace(/_/g, "/");
+    const padded = base64.padEnd(base64.length + ((4 - (base64.length % 4)) % 4), "=");
+    const payload = JSON.parse(Buffer.from(padded, "base64").toString("utf8")) as JwtPayload;
+    return payload.exp ? payload.exp * 1000 : undefined;
+  } catch {
+    return undefined;
+  }
+}
 
 async function refreshGoogleToken(token: GoogleJWT): Promise<GoogleJWT> {
   if (!token.refreshToken) {
@@ -55,9 +75,14 @@ async function refreshGoogleToken(token: GoogleJWT): Promise<GoogleJWT> {
     return {
       ...token,
       accessToken: refreshedTokens.access_token ?? token.accessToken,
-      accessTokenExpires: Date.now() + (refreshedTokens.expires_in ?? 0) * 1000,
+      accessTokenExpires: refreshedTokens.expires_in
+        ? Date.now() + refreshedTokens.expires_in * 1000
+        : token.accessTokenExpires,
       refreshToken: refreshedTokens.refresh_token ?? token.refreshToken,
       idToken: refreshedTokens.id_token ?? token.idToken,
+      idTokenExpires: refreshedTokens.id_token
+        ? getJwtExpiry(refreshedTokens.id_token)
+        : token.idTokenExpires,
       error: undefined,
     };
   } catch (error) {
@@ -95,6 +120,9 @@ export const authOptions: NextAuthOptions = {
     // Update session age on every request to keep it fresh
     updateAge: 24 * 60 * 60, // Update every 24 hours
   },
+  jwt: {
+    maxAge: 365 * 24 * 60 * 60,
+  },
   callbacks: {
     async signIn({ user }): Promise<boolean> {
       const userEmail = user.email;
@@ -125,6 +153,7 @@ export const authOptions: NextAuthOptions = {
       // Store the Google ID token when user first signs in
       if (account?.id_token) {
         token.idToken = account.id_token;
+        token.idTokenExpires = getJwtExpiry(account.id_token);
       }
       if (user) {
         token.id = user.id;
@@ -138,10 +167,16 @@ export const authOptions: NextAuthOptions = {
       }
       if (account?.expires_at) {
         token.accessTokenExpires = account.expires_at * 1000;
+      } else if (account?.expires_in) {
+        token.accessTokenExpires = Date.now() + account.expires_in * 1000;
       }
 
       const bufferTime = 60 * 1000; // 1 minute
-      if (token.accessTokenExpires && Date.now() < token.accessTokenExpires - bufferTime) {
+      const accessTokenFresh =
+        token.accessTokenExpires && Date.now() < token.accessTokenExpires - bufferTime;
+      const idTokenFresh = token.idTokenExpires && Date.now() < token.idTokenExpires - bufferTime;
+
+      if (accessTokenFresh && idTokenFresh) {
         return token;
       }
 

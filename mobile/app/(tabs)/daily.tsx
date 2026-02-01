@@ -1,4 +1,3 @@
-import Ionicons from '@expo/vector-icons/Ionicons';
 import { LinearGradient } from 'expo-linear-gradient';
 import React from 'react';
 import { useFocusEffect } from '@react-navigation/native';
@@ -274,60 +273,65 @@ export default function DailyScreen() {
           const primaryEvent = item.events?.[0];
           const eventCount = item.events?.length ?? 0;
           return (
-            <AnimatedCard
-              variant="elevated"
-              style={[
-                styles.todoCard,
-                {
-                  transform: [{ translateX }],
-                  opacity,
-                  maxHeight: height.interpolate({
-                    inputRange: [0, 1],
-                  outputRange: [220, 0],
-                  }),
-                  marginBottom: height.interpolate({
-                    inputRange: [0, 1],
-                    outputRange: [0, -12],
-                  }),
-                },
-              ]}
+            <Pressable
+              onPress={() => {
+                if (primaryEvent?.id) {
+                  router.push(`/events/${encodeURIComponent(primaryEvent.id)}`);
+                }
+              }}
+              disabled={!primaryEvent?.id}
+              style={({ pressed }) => [styles.todoPressable, pressed && styles.pressed]}
             >
-              <Pressable
-                onPress={() => {
-                  if (primaryEvent?.id) {
-                    router.push(`/events/${encodeURIComponent(primaryEvent.id)}`);
-                  }
-                }}
-                disabled={!primaryEvent?.id}
-                style={({ pressed }) => [styles.todoContent, pressed && styles.pressed]}
+              <AnimatedCard
+                variant="elevated"
+                style={[
+                  styles.todoCard,
+                  {
+                    transform: [{ translateX }],
+                    opacity,
+                    maxHeight: height.interpolate({
+                      inputRange: [0, 1],
+                    outputRange: [220, 0],
+                    }),
+                    marginBottom: height.interpolate({
+                      inputRange: [0, 1],
+                      outputRange: [0, -12],
+                    }),
+                  },
+                ]}
               >
-                <Text style={styles.todoText}>{item.description}</Text>
-                {primaryEvent ? (
-                  <View style={styles.todoEventRow}>
-                    <Ionicons name="calendar" size={14} color={theme.colors.accentDeep} />
-                    <Text style={styles.todoEventText}>{formatEventTitle(primaryEvent)}</Text>
-                    {eventCount > 1 ? (
-                      <Text style={styles.todoEventMeta}>+{eventCount - 1}</Text>
-                    ) : null}
-                  </View>
-                ) : null}
-                {item.due_date ? <Text style={styles.todoMeta}>Due {item.due_date}</Text> : null}
-              </Pressable>
-              <View style={styles.todoActionRow}>
-                <Pressable
-                  onPress={() => handleComplete(item)}
-                  disabled={!!completingIds[item.todo_id]}
-                  style={({ pressed }) => [
-                    styles.todoAction,
-                    pressed && styles.pressed,
-                    completingIds[item.todo_id] && styles.todoActionDisabled,
-                  ]}
-                >
-                  <Ionicons name="checkmark" size={18} color={theme.colors.accentDeep} />
-                  <Text style={styles.todoActionText}>Done</Text>
-                </Pressable>
-              </View>
-            </AnimatedCard>
+                <View style={styles.todoContent}>
+                  <Text style={styles.todoText}>{item.description}</Text>
+                  {primaryEvent ? (
+                    <View style={styles.todoEventRow}>
+                      <Ionicons name="calendar" size={14} color={theme.colors.accentDeep} />
+                      <Text style={styles.todoEventText}>{formatEventTitle(primaryEvent)}</Text>
+                      {eventCount > 1 ? (
+                        <Text style={styles.todoEventMeta}>+{eventCount - 1}</Text>
+                      ) : null}
+                    </View>
+                  ) : null}
+                  {item.due_date ? <Text style={styles.todoMeta}>Due {item.due_date}</Text> : null}
+                </View>
+                <View style={styles.todoActionRow}>
+                  <Pressable
+                    onPress={(event) => {
+                      event?.stopPropagation?.();
+                      handleComplete(item);
+                    }}
+                    disabled={!!completingIds[item.todo_id]}
+                    style={({ pressed }) => [
+                      styles.todoAction,
+                      pressed && styles.pressed,
+                      completingIds[item.todo_id] && styles.todoActionDisabled,
+                    ]}
+                  >
+                    <Ionicons name="checkmark" size={18} color={theme.colors.accentDeep} />
+                    <Text style={styles.todoActionText}>Done</Text>
+                  </Pressable>
+                </View>
+              </AnimatedCard>
+            </Pressable>
           );
         }}
         ListEmptyComponent={
@@ -541,6 +545,9 @@ const styles = StyleSheet.create({
     padding: 16,
     gap: 12,
     flexDirection: 'column',
+  },
+  todoPressable: {
+    alignSelf: 'stretch',
   },
   todoContent: {
     gap: 6,
