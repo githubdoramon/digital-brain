@@ -112,15 +112,18 @@ jobs:
       - name: Delete untagged ECR images
         if: ${{ github.event_name != 'pull_request' }}
         run: |
-          UNTAGGED_DIGESTS=$(aws ecr list-images \
+          mapfile -t UNTAGGED_DIGESTS < <(aws ecr list-images \
             --repository-name appcalipse/digital-brain-orchestrator \
             --filter tagStatus=UNTAGGED \
             --query 'imageIds[*].imageDigest' \
             --output text)
-          if [ -n "${UNTAGGED_DIGESTS}" ]; then
-            aws ecr batch-delete-image \
-              --repository-name appcalipse/digital-brain-orchestrator \
-              --image-ids $(printf 'imageDigest=%s ' ${UNTAGGED_DIGESTS})
+          if [ "${#UNTAGGED_DIGESTS[@]}" -gt 0 ]; then
+            for ((i=0; i<${#UNTAGGED_DIGESTS[@]}; i+=100)); do
+              CHUNK=("${UNTAGGED_DIGESTS[@]:i:100}")
+              aws ecr batch-delete-image \
+                --repository-name appcalipse/digital-brain-orchestrator \
+                --image-ids $(printf 'imageDigest=%s ' "${CHUNK[@]}")
+            done
           fi
 
   build-frontend:
@@ -188,14 +191,17 @@ jobs:
       - name: Delete untagged ECR images
         if: ${{ github.event_name != 'pull_request' }}
         run: |
-          UNTAGGED_DIGESTS=$(aws ecr list-images \
+          mapfile -t UNTAGGED_DIGESTS < <(aws ecr list-images \
             --repository-name appcalipse/digital-brain-frontend \
             --filter tagStatus=UNTAGGED \
             --query 'imageIds[*].imageDigest' \
             --output text)
-          if [ -n "${UNTAGGED_DIGESTS}" ]; then
-            aws ecr batch-delete-image \
-              --repository-name appcalipse/digital-brain-frontend \
-              --image-ids $(printf 'imageDigest=%s ' ${UNTAGGED_DIGESTS})
+          if [ "${#UNTAGGED_DIGESTS[@]}" -gt 0 ]; then
+            for ((i=0; i<${#UNTAGGED_DIGESTS[@]}; i+=100)); do
+              CHUNK=("${UNTAGGED_DIGESTS[@]:i:100}")
+              aws ecr batch-delete-image \
+                --repository-name appcalipse/digital-brain-frontend \
+                --image-ids $(printf 'imageDigest=%s ' "${CHUNK[@]}")
+            done
           fi
 
