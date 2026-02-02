@@ -126,12 +126,7 @@ jobs:
                 --filter tagStatus=UNTAGGED \
                 --max-results 100)
             fi
-            IMAGE_IDS=$(python - <<'PY'
-import json,sys
-data=json.load(sys.stdin)
-print(json.dumps(data.get("imageIds", [])))
-PY
-            <<< "${RESP}")
+            IMAGE_IDS=$(python -c 'import json,sys;print(json.dumps(json.load(sys.stdin).get("imageIds", [])))' <<< "${RESP}")
             if [ "${IMAGE_IDS}" != "[]" ]; then
               TMP_FILE="$(mktemp)"
               echo "${IMAGE_IDS}" > "${TMP_FILE}"
@@ -140,12 +135,7 @@ PY
                 --image-ids "file://${TMP_FILE}"
               rm -f "${TMP_FILE}"
             fi
-            NEXT_TOKEN=$(python - <<'PY'
-import json,sys
-data=json.load(sys.stdin)
-print(data.get("nextToken",""))
-PY
-            <<< "${RESP}")
+            NEXT_TOKEN=$(python -c 'import json,sys;print(json.load(sys.stdin).get("nextToken",""))' <<< "${RESP}")
             if [ -z "${NEXT_TOKEN}" ]; then
               break
             fi
@@ -230,12 +220,7 @@ PY
                 --filter tagStatus=UNTAGGED \
                 --max-results 100)
             fi
-            IMAGE_IDS=$(python - <<'PY'
-import json,sys
-data=json.load(sys.stdin)
-print(json.dumps(data.get("imageIds", [])))
-PY
-            <<< "${RESP}")
+            IMAGE_IDS=$(python -c 'import json,sys;print(json.dumps(json.load(sys.stdin).get("imageIds", [])))' <<< "${RESP}")
             if [ "${IMAGE_IDS}" != "[]" ]; then
               TMP_FILE="$(mktemp)"
               echo "${IMAGE_IDS}" > "${TMP_FILE}"
@@ -244,12 +229,7 @@ PY
                 --image-ids "file://${TMP_FILE}"
               rm -f "${TMP_FILE}"
             fi
-            NEXT_TOKEN=$(python - <<'PY'
-import json,sys
-data=json.load(sys.stdin)
-print(data.get("nextToken",""))
-PY
-            <<< "${RESP}")
+            NEXT_TOKEN=$(python -c 'import json,sys;print(json.load(sys.stdin).get("nextToken",""))' <<< "${RESP}")
             if [ -z "${NEXT_TOKEN}" ]; then
               break
             fi
