@@ -1,10 +1,14 @@
 """Authentication middleware for Google OAuth JWT validation."""
+
+import logging
 import os
 from typing import Optional
 
 from fastapi import Header, HTTPException, status
 from google.auth.transport import requests
 from google.oauth2 import id_token
+
+logger = logging.getLogger(__name__)
 
 
 def _env_flag(name: str) -> bool:
@@ -20,6 +24,7 @@ if not GOOGLE_CLIENT_ID and not DEV_BYPASS_AUTH:
     raise ValueError("GOOGLE_CLIENT_ID is not set")
 if DEV_BYPASS_AUTH and not DEV_USER_EMAIL:
     raise ValueError("DEV_USER_EMAIL is required when DEV_BYPASS_AUTH is enabled")
+
 
 # Parse allowed users from environment
 def get_allowed_users() -> Optional[set[str]]:
@@ -48,21 +53,29 @@ def verify_google_token(token: str) -> dict:
     """
     try:
         # Verify the token
-        idinfo = id_token.verify_oauth2_token(
-            token,
-            requests.Request(),
-            GOOGLE_CLIENT_ID
+        idinfo = id_token.verify_oauth2_token(token, requests.Request(), GOOGLE_CLIENT_ID)
+
+        logger.info(
+            "Auth token verified",
+            extra={
+                "email": idinfo.get("email"),
+                "exp": idinfo.get("exp"),
+                "aud": idinfo.get("aud"),
+                "iss": idinfo.get("iss"),
+            },
         )
 
         # Token is valid, return user info
         return idinfo
     except ValueError as e:
+        logger.warning("Invalid authentication token", extra={"error": str(e)})
         # Invalid token
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail=f"Invalid authentication token: {str(e)}",
         )
     except Exception as e:
+        logger.exception("Authentication failed")
         # Other errors
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -112,6 +125,7 @@ async def get_current_user(authorization: Optional[str] = Header(None)) -> dict:
         }
 
     if not authorization:
+        logger.warning("Missing authorization header")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Missing authorization header",
@@ -121,6 +135,7 @@ async def get_current_user(authorization: Optional[str] = Header(None)) -> dict:
     # Extract token from "Bearer <token>"
     parts = authorization.split()
     if len(parts) != 2 or parts[0].lower() != "bearer":
+        logger.warning("Invalid authorization header format")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid authorization header format. Expected: Bearer <token>",
@@ -135,6 +150,7 @@ async def get_current_user(authorization: Optional[str] = Header(None)) -> dict:
     # Check if user is allowed
     email = user_info.get("email")
     if not email:
+        logger.warning("Token missing email")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Token does not contain email",

@@ -24,6 +24,7 @@ export async function apiFetch(path: string, options: FetchOptions = {}) {
   const resolvedToken =
     token === undefined && authTokenProvider ? await authTokenProvider() : token;
   const resolvedOnAuthExpired = onAuthExpired ?? authRefreshHandler ?? undefined;
+  const startTime = Date.now();
   const response = await fetch(`${API_BASE_URL}${path}`, {
     ...rest,
     headers: {
@@ -37,14 +38,21 @@ export async function apiFetch(path: string, options: FetchOptions = {}) {
     const message = await response.text();
     const isExpired = response.status === 401;
     if (isExpired && resolvedOnAuthExpired && retryOnAuthExpired) {
+      console.warn('[apiFetch] auth expired, attempting refresh', {
+        path,
+        status: response.status,
+        retryOnAuthExpired,
+      });
       const refreshedToken = await resolvedOnAuthExpired();
       if (refreshedToken) {
+        console.warn('[apiFetch] retrying with refreshed token', { path });
         return apiFetch(path, {
           ...options,
           token: refreshedToken,
           retryOnAuthExpired: false,
         });
       }
+      console.warn('[apiFetch] refresh handler returned no token', { path });
     }
     const error = new Error(message || `Request failed with ${response.status}`);
     (error as Error & { status?: number; authExpired?: boolean }).status = response.status;
@@ -55,6 +63,9 @@ export async function apiFetch(path: string, options: FetchOptions = {}) {
       path,
       status: response.status,
       message: message || response.statusText,
+      durationMs: Date.now() - startTime,
+      tokenPresent: Boolean(resolvedToken),
+      retryOnAuthExpired,
     });
     throw error;
   }
@@ -71,7 +82,15 @@ export async function apiFetch(path: string, options: FetchOptions = {}) {
     );
   }
 
-  return response.json();
+  const data = await response.json();
+  if (response.status !== 204) {
+    console.info('[apiFetch] success', {
+      path,
+      status: response.status,
+      durationMs: Date.now() - startTime,
+    });
+  }
+  return data;
 }
 
 export { API_BASE_URL };

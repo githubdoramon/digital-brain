@@ -38,12 +38,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const refreshToken = useCallback(async () => {
     try {
+      console.info('[auth] refreshToken started');
       const userInfo = await GoogleSignin.signInSilently();
       const tokens = await GoogleSignin.getTokens();
       const idToken = tokens.idToken;
       if (!idToken) {
         throw new Error('Google sign-in did not return an ID token.');
       }
+      console.info('[auth] refreshToken success', {
+        hasEmail: Boolean(userInfo?.user?.email),
+      });
       setToken(idToken);
       await SecureStore.setItemAsync(TOKEN_KEY, idToken);
       if (userInfo?.user?.email) {
@@ -81,6 +85,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       if (mounted) {
         const storedToken = await SecureStore.getItemAsync(TOKEN_KEY);
         const storedEmail = await SecureStore.getItemAsync(EMAIL_KEY);
+        console.info('[auth] restore session', {
+          hasStoredToken: Boolean(storedToken),
+          hasStoredEmail: Boolean(storedEmail),
+        });
         setToken(storedToken);
         setEmail(storedEmail);
         setIsLoading(false);
@@ -97,6 +105,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const signInWithGoogle = useCallback(async () => {
     setIsSigningIn(true);
     try {
+      console.info('[auth] signInWithGoogle started');
       await GoogleSignin.hasPlayServices({ showPlayServicesUpdateDialog: true });
       const response = await GoogleSignin.signIn();
       const tokens = await GoogleSignin.getTokens();
@@ -109,6 +118,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       } catch (error) {
         const status = (error as Error & { status?: number; authExpired?: boolean }).status;
         const authExpired = (error as Error & { authExpired?: boolean }).authExpired;
+        console.warn('[auth] sign-in validation failed', {
+          status,
+          authExpired,
+        });
         if (status === 403) {
           await GoogleSignin.revokeAccess();
           await GoogleSignin.signOut();
@@ -124,6 +137,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         }
         throw error;
       }
+      console.info('[auth] signInWithGoogle success');
       setToken(idToken);
       const email = (response as SignInSuccessResponse)!.data!.user!.email;
       setEmail(email);
@@ -138,6 +152,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, [refreshToken]);
 
   const signOut = useCallback(async () => {
+    console.info('[auth] signOut');
     setToken(null);
     setEmail(null);
     await GoogleSignin.signOut();

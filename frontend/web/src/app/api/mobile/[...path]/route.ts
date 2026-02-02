@@ -41,6 +41,10 @@ export async function handler(
   if (authHeader) {
     headers.set("authorization", authHeader);
   } else {
+    console.warn("[mobile proxy] missing authorization header", {
+      path: `/${targetPath}`,
+      method: request.method,
+    });
     headers.delete("authorization");
   }
 
@@ -53,6 +57,12 @@ export async function handler(
 
   try {
     const backendResponse = await fetch(url, init);
+    if (backendResponse.status === 401) {
+      console.warn("[mobile proxy] backend returned 401", {
+        path: `/${targetPath}`,
+        method: request.method,
+      });
+    }
     const responseHeaders = new Headers(backendResponse.headers);
     responseHeaders.delete("content-encoding");
     responseHeaders.delete("transfer-encoding");
