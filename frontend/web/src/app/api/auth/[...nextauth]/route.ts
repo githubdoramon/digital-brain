@@ -32,6 +32,17 @@ type JwtPayload = {
   exp?: number;
 };
 
+function toFiniteNumber(value: unknown): number | undefined {
+  if (typeof value === "number") {
+    return Number.isFinite(value) ? value : undefined;
+  }
+  if (typeof value === "string" && value.trim() !== "") {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : undefined;
+  }
+  return undefined;
+}
+
 function getJwtExpiry(token: string | undefined): number | undefined {
   if (!token) return undefined;
   const parts = token.split(".");
@@ -168,13 +179,18 @@ export const authOptions: NextAuthOptions = {
       if (account?.expires_at) {
         token.accessTokenExpires = account.expires_at * 1000;
       } else if (account?.expires_in) {
-        token.accessTokenExpires = Date.now() + account.expires_in * 1000;
+        const expiresInSeconds = Number(account.expires_in);
+        if (Number.isFinite(expiresInSeconds)) {
+          token.accessTokenExpires = Date.now() + expiresInSeconds * 1000;
+        }
       }
 
       const bufferTime = 60 * 1000; // 1 minute
+      const accessTokenExpiresMs = toFiniteNumber(token.accessTokenExpires);
+      const idTokenExpiresMs = toFiniteNumber(token.idTokenExpires);
       const accessTokenFresh =
-        token.accessTokenExpires && Date.now() < token.accessTokenExpires - bufferTime;
-      const idTokenFresh = token.idTokenExpires && Date.now() < token.idTokenExpires - bufferTime;
+        accessTokenExpiresMs ? Date.now() < accessTokenExpiresMs - bufferTime : false;
+      const idTokenFresh = idTokenExpiresMs ? Date.now() < idTokenExpiresMs - bufferTime : false;
 
       if (accessTokenFresh && idTokenFresh) {
         return token;
