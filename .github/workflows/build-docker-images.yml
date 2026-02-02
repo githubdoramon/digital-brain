@@ -77,9 +77,6 @@ jobs:
         with:
           images: ${{ env.ECR_REGISTRY }}/appcalipse/digital-brain-orchestrator
           tags: |
-            type=ref,event=branch
-            type=ref,event=pr
-            type=sha,prefix={{branch}}-
             type=raw,value=latest,enable={{is_default_branch}}
 
       - name: Prepare version metadata
@@ -112,6 +109,20 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+      - name: Delete untagged ECR images
+        if: ${{ github.event_name != 'pull_request' }}
+        run: |
+          UNTAGGED_DIGESTS=$(aws ecr list-images \
+            --repository-name appcalipse/digital-brain-orchestrator \
+            --filter tagStatus=UNTAGGED \
+            --query 'imageIds[*].imageDigest' \
+            --output text)
+          if [ -n "${UNTAGGED_DIGESTS}" ]; then
+            aws ecr batch-delete-image \
+              --repository-name appcalipse/digital-brain-orchestrator \
+              --image-ids $(printf 'imageDigest=%s ' ${UNTAGGED_DIGESTS})
+          fi
+
   build-frontend:
     name: Build Frontend Image
     runs-on: ubuntu-latest
@@ -143,9 +154,6 @@ jobs:
         with:
           images: ${{ env.ECR_REGISTRY }}/appcalipse/digital-brain-frontend
           tags: |
-            type=ref,event=branch
-            type=ref,event=pr
-            type=sha,prefix={{branch}}-
             type=raw,value=latest,enable={{is_default_branch}}
 
       - name: Prepare version metadata
@@ -176,4 +184,18 @@ jobs:
             NEXT_PUBLIC_APP_BUILD_TIME=${{ env.SERVICE_BUILD_TIME }}
             NEXT_PUBLIC_APP_GIT_SHA=${{ env.SERVICE_GIT_SHA }}
             NEXT_PUBLIC_APP_DEPLOYMENT=${{ env.SERVICE_DEPLOYMENT }}
+
+      - name: Delete untagged ECR images
+        if: ${{ github.event_name != 'pull_request' }}
+        run: |
+          UNTAGGED_DIGESTS=$(aws ecr list-images \
+            --repository-name appcalipse/digital-brain-frontend \
+            --filter tagStatus=UNTAGGED \
+            --query 'imageIds[*].imageDigest' \
+            --output text)
+          if [ -n "${UNTAGGED_DIGESTS}" ]; then
+            aws ecr batch-delete-image \
+              --repository-name appcalipse/digital-brain-frontend \
+              --image-ids $(printf 'imageDigest=%s ' ${UNTAGGED_DIGESTS})
+          fi
 
