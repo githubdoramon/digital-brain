@@ -127,6 +127,7 @@ User Question → Intent Router → Tool-Set Narrowing → Agent Loop → Respon
 - **Controller context kwargs are global**: handlers are invoked with shared runtime context (`state`, `question`, `search_limit`, `user_email`, `conversation_history`). Every handler must accept these explicitly or via `**kwargs`.
 - **Regression guard**: keep `backend/orchestrator/tests/tools/test_handlers/test_handler_signatures.py` passing to prevent `unexpected keyword argument` runtime failures.
 - **`resolve_contacts` contract**: model-facing params should remain minimal (`text` only). Runtime identity/context (like `user_email`) is injected by the controller, not authored by the model.
+- **Keep code modular**: avoid bloated files that mix unrelated concerns. When a file starts owning multiple responsibilities (for example, controller loop + guardrails + tool execution internals), extract cohesive modules early.
 - **Contact-aware memory search flow**: if `search_memories` has no `contact_ids` and query is person-referential, controller attempts contact resolution first.
 - **Contact-aware memory search flow**: on unambiguous resolution, inject `contact_ids` into memory search.
 - **Contact-aware memory search flow**: on ambiguity, return a clarification-needed result instead of running unfiltered search.

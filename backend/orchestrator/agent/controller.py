@@ -15,7 +15,6 @@ The controller:
 
 import json
 import os
-import re
 
 # Import with absolute paths to avoid circular imports
 import sys
@@ -23,9 +22,15 @@ from collections.abc import AsyncGenerator
 from time import perf_counter
 from typing import Any, Optional
 
+from .guardrails import (
+    build_contact_scope_context,
+    detect_temporal_sort_order,
+    optimize_query_for_scoped_contacts,
+    sanitize_goal_text,
+)
 from .limits import AgentConfig, LimitChecker
 from .router import IntentClassification, IntentRouter
-from .state import AgentState, ToolCallRecord
+from .state import AgentState
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -73,6 +78,7 @@ class AgentController:
         self._pre_validator = None
         self._post_validator = None
         self._logger = None
+        self._tool_executor = None
 
     @property
     def tool_registry(self):
@@ -116,6 +122,15 @@ class AgentController:
             from observability.logger import get_logger
             self._logger = get_logger()
         return self._logger
+
+    @property
+    def tool_executor(self):
+        """Lazy-load tool execution coordinator."""
+        if self._tool_executor is None:
+            from .tool_executor import ToolExecutionCoordinator
+
+            self._tool_executor = ToolExecutionCoordinator(self)
+        return self._tool_executor
 
     async def run(
         self,
@@ -712,7 +727,9 @@ class AgentController:
         messages.append(build_state_message(state))
 
         # Explicit contact-scope injection for tool planning.
-        contact_scope_context = self._build_contact_scope_context(state)
+        contact_scope_context = build_contact_scope_context(
+            state.resolution.get("active_contact_scope") or []
+        )
         if contact_scope_context:
             messages.append({"role": "system", "content": contact_scope_context})
 
@@ -861,29 +878,16 @@ class AgentController:
         conversation_history: Optional[list[dict[str, str]]] = None,
     ) -> None:
         """Handle tool calls with validation."""
-        # Add assistant message with tool calls
-        messages.append({
-            "role": "assistant",
-            "content": "",
-            "tool_calls": tool_calls,
-        })
-
-        for call in tool_calls:
-            result = await self._execute_tool_call(
-                call,
-                state,
-                question,
-                search_limit,
-                run_id,
-                user_email=user_email,
-                conversation_history=conversation_history,
-            )
-
-            messages.append({
-                "role": "tool",
-                "tool_call_id": call.get("id"),
-                "content": json.dumps(result, ensure_ascii=False, default=str),
-            })
+        await self.tool_executor.handle_tool_calls(
+            tool_calls=tool_calls,
+            state=state,
+            messages=messages,
+            question=question,
+            search_limit=search_limit,
+            run_id=run_id,
+            user_email=user_email,
+            conversation_history=conversation_history,
+        )
 
     async def _execute_tool_call(
         self,
@@ -896,279 +900,15 @@ class AgentController:
         conversation_history: Optional[list[dict[str, str]]] = None,
     ) -> dict[str, Any]:
         """Execute a single tool call with validation."""
-        func = call.get("function", {})
-        tool_name = func.get("name", "")
-        raw_args = func.get("arguments", "{}")
-        call_id = call.get("id", "unknown")
-
-        try:
-            args = json.loads(raw_args) if isinstance(raw_args, str) else raw_args
-        except json.JSONDecodeError:
-            trace.trace_tool_error(tool_name, f"Invalid JSON arguments: {raw_args}")
-            return {"error": f"Invalid JSON arguments: {raw_args}"}
-
-        # Trace tool call start with lifecycle event
-        trace.trace_tool_call_start(tool_name, args)
-        trace.trace_tool_lifecycle_start(tool_name, call_id, args)
-
-        # Guard against repeated no-progress contact resolution loops.
-        if tool_name == "resolve_contacts":
-            blocked_result = self._block_redundant_contact_resolution(state, args)
-            if blocked_result is not None:
-                duration_ms = 0.0
-                success = "error" not in blocked_result and blocked_result.get("success") is not False
-                result_summary = blocked_result.get("message", "Blocked redundant contact resolution")
-                trace.trace_tool_execution_result(tool_name, duration_ms, success, result_summary)
-                trace.trace_tool_lifecycle_end(
-                    tool_name,
-                    call_id,
-                    success,
-                    duration_ms,
-                    result_summary,
-                )
-                record = ToolCallRecord(
-                    tool_name=tool_name,
-                    arguments=args,
-                    result=blocked_result,
-                    duration_ms=duration_ms,
-                    success=success,
-                    error=blocked_result.get("error"),
-                )
-                state.record_tool_call(record)
-                self.logger.log_tool_call(
-                    run_id,
-                    state.step_count,
-                    tool_name,
-                    args,
-                    duration_ms=duration_ms,
-                    result=blocked_result,
-                )
-                return blocked_result
-
-        # Optionally enrich memory search with resolved contact IDs.
-        if tool_name == "search_memories":
-            args, preempt_result = self._prepare_memory_search_arguments(
-                args=args,
-                state=state,
-                question=question,
-                user_email=user_email,
-                conversation_history=conversation_history,
-            )
-            trace.trace_tool_args_normalized(tool_name, args)
-            if preempt_result is not None:
-                result = preempt_result
-                prompt = result.get("clarification_prompt")
-                if prompt:
-                    state.add_question(prompt)
-                duration_ms = 0.0
-                success = "error" not in result and result.get("success") is not False
-                result_summary = result.get("clarification_prompt", "Preempted for clarification")
-                trace.trace_tool_execution_result(tool_name, duration_ms, success, result_summary)
-                trace.trace_tool_lifecycle_end(
-                    tool_name,
-                    call_id,
-                    success,
-                    duration_ms,
-                    result_summary,
-                )
-                record = ToolCallRecord(
-                    tool_name=tool_name,
-                    arguments=args,
-                    result=result,
-                    duration_ms=duration_ms,
-                    success=success,
-                    error=result.get("error"),
-                )
-                state.record_tool_call(record)
-                self.logger.log_tool_call(
-                    run_id,
-                    state.step_count,
-                    tool_name,
-                    args,
-                    duration_ms=duration_ms,
-                    result=result,
-                )
-                return result
-
-            blocked_search = self._block_redundant_memory_search(state, args)
-            if blocked_search is not None:
-                result = blocked_search
-                duration_ms = 0.0
-                success = "error" not in result and result.get("success") is not False
-                result_summary = result.get("message", "Blocked redundant memory search")
-                trace.trace_tool_execution_result(tool_name, duration_ms, success, result_summary)
-                trace.trace_tool_lifecycle_end(
-                    tool_name,
-                    call_id,
-                    success,
-                    duration_ms,
-                    result_summary,
-                )
-                record = ToolCallRecord(
-                    tool_name=tool_name,
-                    arguments=args,
-                    result=result,
-                    duration_ms=duration_ms,
-                    success=success,
-                    error=result.get("error"),
-                )
-                state.record_tool_call(record)
-                self.logger.log_tool_call(
-                    run_id,
-                    state.step_count,
-                    tool_name,
-                    args,
-                    duration_ms=duration_ms,
-                    result=result,
-                )
-                return result
-
-        # Pre-execution validation
-        if self.config.enable_validation:
-            trace.trace_pre_validation_start(tool_name)
-            validation = self.pre_validator.validate(tool_name, args)
-            if not validation.valid:
-                state.repair_count += 1
-                trace.trace_pre_validation_fail(tool_name, validation.errors, state.repair_count)
-                self.logger.log_tool_call(
-                    run_id,
-                    state.step_count,
-                    tool_name,
-                    args,
-                    pre_validation_passed=False,
-                    validation_errors=validation.errors,
-                    repair_attempt=state.repair_count,
-                )
-                return validation.to_feedback()
-            trace.trace_pre_validation_pass(tool_name)
-
-        # Execute tool
-        step_start = perf_counter()
-        result = self._execute_handler(
-            tool_name=tool_name,
-            args=args,
+        return await self.tool_executor.execute_tool_call(
+            call=call,
             state=state,
             question=question,
             search_limit=search_limit,
+            run_id=run_id,
             user_email=user_email,
             conversation_history=conversation_history,
         )
-        duration_ms = (perf_counter() - step_start) * 1000
-
-        if tool_name == "resolve_contacts":
-            self._update_contact_resolution_state(state, args, result)
-
-        # Determine result summary for tracing
-        success = "error" not in result and result.get("success") is not False
-        if result.get("error"):
-            result_summary = f"Error: {result.get('error')}"
-        elif "count" in result:
-            result_summary = f"{result['count']} items"
-        elif "tools" in result:
-            result_summary = f"Listed {len(result['tools'])} tools"
-        elif "rows" in result:
-            result_summary = f"{len(result['rows'])} rows"
-        elif "results" in result:
-            result_summary = f"{len(result['results'])} results"
-        else:
-            result_summary = "OK" if success else "Failed"
-
-        trace.trace_tool_execution_result(tool_name, duration_ms, success, result_summary)
-        trace.trace_tool_lifecycle_end(tool_name, call_id, success, duration_ms, result_summary)
-        if not success:
-            trace.trace_tool_error(tool_name, result.get("error", "Unknown error"))
-
-        # Record tool call
-        record = ToolCallRecord(
-            tool_name=tool_name,
-            arguments=args,
-            result=result,
-            duration_ms=duration_ms,
-            success=success,
-            error=result.get("error"),
-        )
-        state.record_tool_call(record)
-
-        # Log tool call
-        self.logger.log_tool_call(
-            run_id,
-            state.step_count,
-            tool_name,
-            args,
-            duration_ms=duration_ms,
-            result=result,
-        )
-
-        # Post-execution validation (for fact extraction AND failure detection)
-        if self.config.enable_validation:
-            from tools.validators.post_execution import GoalCoverage
-
-            trace.trace_post_validation_start(tool_name)
-            post_result = self.post_validator.validate(
-                tool_name,
-                args,
-                result,
-                state.goal,
-                state.known_facts,
-            )
-
-            # Trace post-validation result
-            trace.trace_post_validation_result(
-                tool_name,
-                coverage=post_result.coverage.value if post_result.coverage else "unknown",
-                passed=post_result.coverage != GoalCoverage.FAILED,
-                reason=post_result.reason,
-                suggested_tools=post_result.suggested_next_tools,
-            )
-            self.logger.log_validation_result(
-                validation_type="Post-execution",
-                passed=post_result.coverage != GoalCoverage.FAILED,
-                coverage=post_result.coverage.value if post_result.coverage else None,
-                reason=post_result.reason,
-                suggested_tools=post_result.suggested_next_tools,
-            )
-
-            # Extract facts from result
-            for fact in post_result.extracted_facts:
-                state.add_fact(fact)
-                trace.trace_fact_extracted(fact)
-                self.logger.log_state_update("Fact added", fact)
-
-            # If tool failed, enhance the result with guidance
-            if post_result.coverage == GoalCoverage.FAILED:
-                guidance = self._get_failure_guidance(tool_name, result, post_result)
-                self.logger.log_decision(
-                    decision="Tool call failed - injecting recovery guidance",
-                    reason=post_result.reason,
-                    details={"guidance": guidance[:100] + "..." if len(guidance) > 100 else guidance},
-                )
-                result["_validation"] = {
-                    "status": "failed",
-                    "reason": post_result.reason,
-                    "guidance": guidance,
-                }
-                # Add suggested alternatives if available
-                if post_result.suggested_next_tools:
-                    result["_validation"]["suggested_tools"] = post_result.suggested_next_tools
-
-                # Track failure for potential retry
-                state.add_fact(f"Tool {tool_name} failed: {post_result.reason}")
-            elif post_result.coverage == GoalCoverage.NEED_USER_INPUT:
-                clarification_prompt = post_result.reason.strip()
-                if clarification_prompt:
-                    state.add_question(clarification_prompt)
-                    state.add_fact("User clarification required before continuing")
-                    result.setdefault("_validation", {})
-                    result["_validation"]["status"] = "need_user_input"
-                    result["_validation"]["reason"] = clarification_prompt
-
-        # Track successful tool execution as completion evidence
-        if success:
-            evidence = self._get_completion_evidence(tool_name, args, result)
-            if evidence:
-                state.add_completion_evidence(evidence)
-
-        return result
 
     def _get_completion_evidence(
         self,
@@ -1177,46 +917,7 @@ class AgentController:
         result: dict[str, Any],
     ) -> Optional[str]:
         """Generate completion evidence string for successful tool execution."""
-        # Handle tools with discovery/execution actions
-        if tool_name == "home_assistant":
-            action = args.get("action")
-            if action == "list_tools":
-                return None  # Discovery, not completion
-            if action == "call_tool":
-                return f"Executed HA tool: {args.get('tool_name', 'unknown')}"
-
-        # Handle query tools
-        if tool_name in ("search_memories", "get_events", "web_search"):
-            count = result.get("count", 0)
-            if count > 0:
-                return f"{tool_name}: found {count} results"
-            rows = result.get("rows") or result.get("results") or result.get("events", [])
-            if rows:
-                return f"{tool_name}: retrieved {len(rows)} items"
-            return None
-
-        if tool_name == "get_document":
-            doc = result.get("document")
-            if doc:
-                return f"Retrieved document: {doc.get('title', 'untitled')}"
-            return None
-
-        if tool_name == "resolve_query":
-            contacts = len(result.get("contacts", []))
-            places = len(result.get("places", []))
-            if contacts or places:
-                return f"Resolved {contacts} contacts, {places} places"
-            return None
-
-        if tool_name == "resolve_contacts":
-            status = result.get("status")
-            resolved = len(result.get("resolved_contacts", []))
-            if status == "success" and resolved > 0:
-                return f"Resolved {resolved} contacts from natural language"
-            return None
-
-        # Default: generic successful execution
-        return f"Executed {tool_name}"
+        return self.tool_executor.get_completion_evidence(tool_name, args, result)
 
     def _get_failure_guidance(
         self,
@@ -1225,20 +926,7 @@ class AgentController:
         post_result,
     ) -> str:
         """Generate guidance message for failed tool calls."""
-        if tool_name == "home_assistant":
-            error = result.get("error", "")
-            if "not found" in error.lower() or "unknown" in error.lower():
-                return (
-                    "The Home Assistant tool call failed because the tool name was not recognized. "
-                    "You MUST call home_assistant with action='list_tools' FIRST to discover "
-                    "the actual available tool names for this installation. Do NOT guess tool names."
-                )
-            return (
-                "The Home Assistant call failed. Review the error and try again with "
-                "corrected arguments. If unsure, call action='list_tools' to see available tools."
-            )
-
-        return f"Tool '{tool_name}' failed: {post_result.reason}. Review and retry with corrected parameters."
+        return self.tool_executor.get_failure_guidance(tool_name, result, post_result)
 
     def _execute_handler(
         self,
@@ -1251,24 +939,15 @@ class AgentController:
         conversation_history: Optional[list[dict[str, str]]] = None,
     ) -> dict[str, Any]:
         """Execute tool handler."""
-        from tools.handlers import get_handler
-
-        handler = get_handler(tool_name)
-        if not handler:
-            return {"error": f"Unknown tool: {tool_name}"}
-
-        try:
-            return handler(
-                args,
-                state=state,
-                question=question,
-                search_limit=search_limit,
-                user_email=user_email,
-                conversation_history=conversation_history,
-            )
-        except Exception as e:
-            print(f"[controller] Tool execution error: {e}")
-            return {"error": str(e)}
+        return self.tool_executor.execute_handler(
+            tool_name=tool_name,
+            args=args,
+            state=state,
+            question=question,
+            search_limit=search_limit,
+            user_email=user_email,
+            conversation_history=conversation_history,
+        )
 
     def _block_redundant_contact_resolution(
         self,
@@ -1276,11 +955,11 @@ class AgentController:
         args: dict[str, Any],
     ) -> Optional[dict[str, Any]]:
         """Block repeated resolve_contacts calls that previously made no progress."""
-        text = self._sanitize_goal_text(str(args.get("text", "")).strip())
+        text = sanitize_goal_text(str(args.get("text", "")).strip())
         if not text:
             return None
 
-        scoped_text = self._sanitize_goal_text(
+        scoped_text = sanitize_goal_text(
             str(state.resolution.get("active_contact_scope_text", "")).strip()
         )
         scoped_ids = state.resolution.get("active_contact_scope_ids", [])
@@ -1292,7 +971,7 @@ class AgentController:
                 "message": "Contact scope is already resolved for this request.",
             }
 
-        pending_text = self._sanitize_goal_text(
+        pending_text = sanitize_goal_text(
             str(state.resolution.get("pending_contact_scope_text", "")).strip()
         )
         pending_prompt = state.resolution.get("pending_contact_clarification")
@@ -1310,7 +989,7 @@ class AgentController:
         if not last_call or last_call.tool_name != "resolve_contacts":
             return None
 
-        last_text = self._sanitize_goal_text(str(last_call.arguments.get("text", "")).strip())
+        last_text = sanitize_goal_text(str(last_call.arguments.get("text", "")).strip())
         last_status = (last_call.result or {}).get("status")
         if last_text.lower() != text.lower():
             return None
@@ -1351,17 +1030,17 @@ class AgentController:
               of running an unfiltered memory search.
         """
         normalized_args = dict(args)
-        goal_text = self._sanitize_goal_text(question)
+        goal_text = sanitize_goal_text(question)
 
         query_text = str(normalized_args.get("query") or "").strip()
         if not query_text:
             query_text = goal_text
-        query_text = self._sanitize_goal_text(query_text)
+        query_text = sanitize_goal_text(query_text)
         normalized_args["query"] = query_text
 
-        sort_order = self._detect_temporal_sort_order(query_text)
+        sort_order = detect_temporal_sort_order(query_text)
         if not sort_order:
-            sort_order = self._detect_temporal_sort_order(goal_text)
+            sort_order = detect_temporal_sort_order(goal_text)
         if sort_order and not normalized_args.get("sort_order"):
             normalized_args["sort_order"] = sort_order
         if sort_order:
@@ -1387,7 +1066,7 @@ class AgentController:
         active_scope = state.resolution.get("active_contact_scope") or []
 
         if normalized_args.get("contact_ids"):
-            normalized_args["query"] = self._optimize_query_for_scoped_contacts(
+            normalized_args["query"] = optimize_query_for_scoped_contacts(
                 query_text=query_text,
                 goal_text=goal_text,
                 active_scope=active_scope,
@@ -1397,7 +1076,7 @@ class AgentController:
         active_scope_ids = state.resolution.get("active_contact_scope_ids")
         if active_scope_ids:
             normalized_args["contact_ids"] = list(active_scope_ids)
-            normalized_args["query"] = self._optimize_query_for_scoped_contacts(
+            normalized_args["query"] = optimize_query_for_scoped_contacts(
                 query_text=query_text,
                 goal_text=goal_text,
                 active_scope=active_scope,
@@ -1476,7 +1155,7 @@ class AgentController:
         if state.resolution.get("active_contact_scope_ids"):
             return None
 
-        text = self._sanitize_goal_text(question)
+        text = sanitize_goal_text(question)
         if not text:
             return None
 
@@ -1510,79 +1189,6 @@ class AgentController:
             )
 
         return None
-
-    def _sanitize_goal_text(self, text: str) -> str:
-        """Normalize slash-prefixed command wrappers from user text."""
-        stripped = str(text or "").strip()
-        return re.sub(r"^/\w+\s+", "", stripped)
-
-    def _tokenize_text(self, text: str) -> list[str]:
-        """Tokenize text into lowercase lexical tokens."""
-        return re.findall(r"[A-Za-z0-9']+", str(text or "").lower())
-
-    def _extract_contact_scope_terms(self, active_scope: list[dict[str, Any]]) -> tuple[list[str], set[str]]:
-        """Extract phrase and token forms for resolved contact mentions."""
-        phrases: list[str] = []
-        tokens: set[str] = set()
-
-        for entry in active_scope:
-            if not isinstance(entry, dict):
-                continue
-            for field in ("mention_text", "display_name"):
-                raw_value = str(entry.get(field) or "").strip()
-                if not raw_value:
-                    continue
-                phrases.append(raw_value)
-                for token in self._tokenize_text(raw_value):
-                    tokens.add(token)
-
-        deduped_phrases = list(dict.fromkeys(phrases))
-        return deduped_phrases, tokens
-
-    def _optimize_query_for_scoped_contacts(
-        self,
-        query_text: str,
-        goal_text: str,
-        active_scope: list[dict[str, Any]],
-    ) -> str:
-        """
-        Keep query focused on semantic topic when contact_ids already scope the person.
-
-        Example:
-        - "when did I last meet Gio?" + contact_ids => "events"
-        - "when did I last meet Gio and we talked about birds?" => "birds"
-        """
-        base_query = (query_text or goal_text or "").strip()
-        if not base_query:
-            return "events"
-
-        phrases, mention_tokens = self._extract_contact_scope_terms(active_scope)
-        scrubbed = base_query
-        for phrase in phrases:
-            escaped = re.escape(phrase.strip())
-            if not escaped:
-                continue
-            escaped = escaped.replace(r"\ ", r"\s+")
-            scrubbed = re.sub(rf"\b{escaped}\b", " ", scrubbed, flags=re.IGNORECASE)
-
-        stop_words = {
-            "a", "an", "and", "about", "did", "do", "does", "event", "events",
-            "first", "i", "last", "latest", "meet", "meeting", "meetings", "met",
-            "most", "recent", "talk", "talked", "the", "time", "was", "we",
-            "when", "where", "who", "with",
-        }
-        semantic_terms: list[str] = []
-        seen_terms: set[str] = set()
-        for token in self._tokenize_text(scrubbed):
-            if token in mention_tokens or token in stop_words:
-                continue
-            if token not in seen_terms:
-                seen_terms.add(token)
-                semantic_terms.append(token)
-
-        if semantic_terms:
-            return " ".join(semantic_terms)
-        return "events"
 
     def _update_contact_resolution_state(
         self,
@@ -1655,61 +1261,6 @@ class AgentController:
             state.resolution.pop("pending_contact_ambiguous_contacts", None)
             state.resolution.pop("pending_contact_people", None)
             state.resolution.pop("pending_contact_scope_text", None)
-
-    def _build_contact_scope_context(self, state: AgentState) -> Optional[str]:
-        """Build explicit resolver context for the model when contact scope exists."""
-        entries = state.resolution.get("active_contact_scope") or []
-        if not entries:
-            return None
-
-        lines = ["RESOLVED CONTACT SCOPE (controller authoritative mapping):"]
-        for entry in entries[:8]:
-            mention = str(entry.get("mention_text") or "").strip() or "<unknown mention>"
-            display_name = str(entry.get("display_name") or "").strip() or "<unknown contact>"
-            contact_id = str(entry.get("contact_id") or "").strip()
-            lines.append(
-                f"- '{mention}' -> '{display_name}' (contact_id: {contact_id})"
-            )
-
-        lines.extend(
-            [
-                "",
-                "When calling `search_memories` with scoped contacts:",
-                "- Always pass the mapped IDs via `contact_ids`.",
-                "- Use `query` only for extra semantic topic terms (for example, 'birds').",
-                "- Do not repeat resolved person names in `query` unless the name itself is the topic.",
-                "- If no extra semantic topic exists, set query to 'events'.",
-            ]
-        )
-        return "\n".join(lines)
-
-    def _detect_temporal_sort_order(self, query: str) -> Optional[str]:
-        """Infer temporal ordering intent from query text."""
-        if not query:
-            return None
-
-        q = query.lower()
-        oldest_patterns = [
-            r"\bfirst time\b",
-            r"\bfirst meeting\b",
-            r"\bfirst event\b",
-            r"\bearliest\b",
-            r"\bwhen did i first\b",
-        ]
-        newest_patterns = [
-            r"\bmost recent\b",
-            r"\blatest\b",
-            r"\blast time\b",
-            r"\blast meeting\b",
-            r"\blast event\b",
-            r"\bwhen did i last\b",
-        ]
-
-        if any(re.search(pattern, q) for pattern in oldest_patterns):
-            return "oldest"
-        if any(re.search(pattern, q) for pattern in newest_patterns):
-            return "newest"
-        return None
 
     def _build_contact_clarification_result(
         self,

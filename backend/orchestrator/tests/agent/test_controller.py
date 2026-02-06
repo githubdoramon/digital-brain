@@ -8,6 +8,7 @@ Full integration tests would require mocking the LLM backend.
 import pytest
 
 from agent.controller import AgentController, get_controller
+from agent.guardrails import build_contact_scope_context
 from agent.limits import AgentConfig, LimitType
 from agent.state import AgentState, ToolCallRecord
 
@@ -533,7 +534,9 @@ class TestContactAwareMemorySearch:
             }
         ]
 
-        context = controller._build_contact_scope_context(state)
+        context = build_contact_scope_context(
+            state.resolution.get("active_contact_scope") or []
+        )
 
         assert context is not None
         assert "RESOLVED CONTACT SCOPE" in context
