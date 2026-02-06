@@ -14,7 +14,6 @@ Tool groups enable **tool-set narrowing** - restricting which tools the LLM can 
 | Group | Tools | Purpose |
 |-------|-------|---------|
 | `memory` | search_memories, get_events, get_document | Accessing stored memories and documents |
-| `database` | execute_sql, describe_schema | Direct database operations |
 | `resolution` | resolve_query | Entity resolution and lookup |
 | `web` | web_search | External web access |
 | `home` | home_assistant | Smart home control |
@@ -30,7 +29,6 @@ Groups are defined in two places that must stay in sync:
 ```python
 TOOL_GROUPS = {
     "memory": ["search_memories", "get_events", "get_document"],
-    "database": ["execute_sql", "describe_schema"],
     "resolution": ["resolve_query"],
     "web": ["web_search"],
     "home": ["home_assistant"],
@@ -56,8 +54,8 @@ Each intent is mapped to allowed groups:
 ```python
 INTENT_TOOL_MAP = {
     IntentType.MEMORY_SEARCH: ["memory", "resolution"],
-    IntentType.DATA_QUERY: ["database", "resolution"],
-    IntentType.CONTACT_LOOKUP: ["resolution", "database", "memory"],
+    IntentType.DATA_QUERY: ["memory", "resolution"],
+    IntentType.CONTACT_LOOKUP: ["resolution", "memory"],
     IntentType.WEB_SEARCH: ["web"],
     IntentType.HOME_CONTROL: ["home"],
     IntentType.SKILL_EXECUTION: ["skills", "memory"],
@@ -133,7 +131,7 @@ For standalone groups:
 3. **Map to intents**:
    ```python
    INTENT_TOOL_MAP = {
-       IntentType.DATA_QUERY: ["database", "resolution", "analytics"],
+       IntentType.DATA_QUERY: ["memory", "resolution", "analytics"],
        # ...
    }
    ```
@@ -146,7 +144,7 @@ Tools can belong to multiple groups:
 registry.register(
     contract=resolve_query_contract,
     handler=resolve_query_handler,
-    groups=["resolution", "memory", "database"],  # Available in multiple contexts
+    groups=["resolution", "memory", "analytics"],  # Available in multiple contexts
 )
 ```
 
@@ -231,7 +229,7 @@ def test_tool_in_correct_group(self):
     tool_names = [t.name for t in tools]
 
     assert "search_memories" in tool_names
-    assert "execute_sql" not in tool_names  # Not in memory group
+    assert "home_assistant" not in tool_names  # Not in memory group
 ```
 
 ## Quick Reference
@@ -241,7 +239,7 @@ def test_tool_in_correct_group(self):
 registry.get_tools_for_groups(["memory"])
 
 # Get tools for multiple groups (union)
-registry.get_tools_for_groups(["memory", "database"])
+registry.get_tools_for_groups(["memory", "resolution"])
 
 # Check if tool exists
 registry.has_tool("search_memories")

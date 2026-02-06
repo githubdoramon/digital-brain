@@ -293,23 +293,6 @@ class ToolContract:
 
 
 # Common validators for reuse
-def validate_sql_safe(sql: str) -> bool:
-    """Validate SQL is read-only (no writes, drops, etc.)."""
-    dangerous = [
-        "INSERT",
-        "UPDATE",
-        "DELETE",
-        "DROP",
-        "CREATE",
-        "ALTER",
-        "TRUNCATE",
-        "GRANT",
-        "REVOKE",
-    ]
-    sql_upper = sql.upper()
-    return not any(word in sql_upper for word in dangerous)
-
-
 def validate_path_safe(path: str) -> bool:
     """Validate path doesn't contain traversal attacks."""
     dangerous = ["..", "~", "$", "`", "|", ";", "&"]

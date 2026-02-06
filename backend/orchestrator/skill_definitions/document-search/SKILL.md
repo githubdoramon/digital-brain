@@ -23,19 +23,10 @@ Use `search_memories` with document-focused queries:
 - Documents have `kind: "document"` in results
 - Filter by time if a date range is mentioned
 
-For more specific searches, use `execute_sql`:
-
-```sql
-SELECT
-    document_id, title, description, tags,
-    file_name, file_mime, document_date, created_at
-FROM documents
-WHERE title ILIKE '%keyword%'
-   OR description ILIKE '%keyword%'
-   OR content ILIKE '%keyword%'
-ORDER BY document_date DESC
-LIMIT 10
-```
+For more specific searches:
+- First use `resolve_query` if the question includes people/places/time constraints
+- Then call `search_memories` with structured filters (`contact_ids`, time range, tags)
+- Keep `query` focused on the semantic topic (not the person's name when `contact_ids` is available)
 
 ## Step 3: Retrieve Full Content
 

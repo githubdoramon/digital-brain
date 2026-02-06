@@ -5,7 +5,6 @@ Each handler module contains functions that execute specific tools.
 These are extracted from the original llm_tools.py for better organization.
 """
 
-from .database import handle_describe_schema, handle_execute_sql
 from .homeassistant import handle_home_assistant
 from .memory import handle_get_document, handle_get_events, handle_search_memories
 from .resolution import (
@@ -22,8 +21,6 @@ HANDLERS = {
     "search_memories": handle_search_memories,
     "get_events": handle_get_events,
     "get_document": handle_get_document,
-    "execute_sql": handle_execute_sql,
-    "describe_schema": handle_describe_schema,
     "resolve_query": handle_resolve_query,
     "resolve_contacts": handle_resolve_contacts,
     "lookup_contact": handle_lookup_contact,
@@ -46,8 +43,6 @@ __all__ = [
     "handle_search_memories",
     "handle_get_events",
     "handle_get_document",
-    "handle_execute_sql",
-    "handle_describe_schema",
     "handle_resolve_query",
     "handle_resolve_contacts",
     "handle_lookup_contact",

@@ -417,7 +417,7 @@ class TestStateToolRecordIntegration:
             success=True,
         )
         failure = ToolCallRecord(
-            tool_name="execute_sql",
+            tool_name="get_events",
             arguments={"query": "SELECT *"},
             result=None,
             duration_ms=50,

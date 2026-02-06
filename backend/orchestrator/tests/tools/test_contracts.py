@@ -8,7 +8,6 @@ from tools.contracts import (
     ToolContract,
     ToolParameter,
     validate_path_safe,
-    validate_sql_safe,
     validate_url_safe,
 )
 
@@ -233,32 +232,6 @@ class TestToolContract:
 class TestCustomValidators:
     """Tests for custom validation functions."""
 
-    def test_validate_sql_safe_valid(self):
-        """Test SQL validation with safe queries."""
-        safe_queries = [
-            "SELECT * FROM users",
-            "SELECT name, email FROM contacts WHERE id = 1",
-            "SELECT COUNT(*) FROM events",
-        ]
-
-        for query in safe_queries:
-            result = validate_sql_safe(query)
-            assert result is True, f"Query should be safe: {query}"
-
-    def test_validate_sql_safe_dangerous(self):
-        """Test SQL validation catches dangerous patterns."""
-        dangerous_queries = [
-            "DROP TABLE users",
-            "DELETE FROM contacts",
-            "TRUNCATE events",
-            "INSERT INTO users VALUES (1, 'test')",
-            "UPDATE users SET admin = true",
-        ]
-
-        for query in dangerous_queries:
-            result = validate_sql_safe(query)
-            assert result is False, f"Query should be blocked: {query}"
-
     def test_validate_path_safe_valid(self):
         """Test path validation with safe paths."""
         safe_paths = [
@@ -310,28 +283,28 @@ class TestCustomValidators:
 class TestContractWithValidators:
     """Tests for contracts with custom validators."""
 
-    def test_sql_tool_contract(self):
-        """Test SQL tool contract with safety validation."""
+    def test_contract_with_path_validator(self):
+        """Test contract with custom path safety validator."""
         contract = ToolContract(
-            name="execute_sql",
-            description="Execute SQL query",
+            name="read_file",
+            description="Read a file",
             parameters=[
                 ToolParameter(
-                    name="query",
+                    name="path",
                     type="string",
-                    description="SQL query",
+                    description="File path",
                     required=True,
                 ),
             ],
-            value_validators={"query": validate_sql_safe},
+            value_validators={"path": validate_path_safe},
         )
 
-        # Safe query passes
-        is_valid, error, _ = contract.validate_params({"query": "SELECT * FROM users"})
+        # Safe path passes
+        is_valid, error, _ = contract.validate_params({"path": "/tmp/notes.txt"})
         assert is_valid is True
 
-        # Dangerous query fails
-        is_valid, error, _ = contract.validate_params({"query": "DROP TABLE users"})
+        # Dangerous path fails
+        is_valid, error, _ = contract.validate_params({"path": "../../../etc/passwd"})
         assert is_valid is False
 
 

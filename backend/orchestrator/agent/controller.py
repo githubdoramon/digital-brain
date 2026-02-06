@@ -686,7 +686,6 @@ class AgentController:
     ) -> list[dict[str, Any]]:
         """Build the message list for the LLM."""
         from prompts.context import (
-            get_schema_hint,
             get_self_context,
             get_tag_context,
             get_time_context,
@@ -701,11 +700,6 @@ class AgentController:
 
         # System prompts
         messages.append({"role": "system", "content": get_system_prompt(search_limit)})
-
-        # Schema hint
-        schema_hint = get_schema_hint()
-        if schema_hint:
-            messages.append({"role": "system", "content": schema_hint})
 
         # Tag context
         tags_context = get_tag_context()
@@ -1191,10 +1185,6 @@ class AgentController:
         result: dict[str, Any],
     ) -> Optional[str]:
         """Generate completion evidence string for successful tool execution."""
-        # Skip discovery-only tools
-        if tool_name == "describe_schema":
-            return None
-
         # Handle tools with discovery/execution actions
         if tool_name == "home_assistant":
             action = args.get("action")
@@ -1204,7 +1194,7 @@ class AgentController:
                 return f"Executed HA tool: {args.get('tool_name', 'unknown')}"
 
         # Handle query tools
-        if tool_name in ("search_memories", "execute_sql", "get_events", "web_search"):
+        if tool_name in ("search_memories", "get_events", "web_search"):
             count = result.get("count", 0)
             if count > 0:
                 return f"{tool_name}: found {count} results"

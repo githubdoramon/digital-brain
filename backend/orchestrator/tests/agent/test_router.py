@@ -67,14 +67,14 @@ class TestIntentClassification:
         classification = IntentClassification(
             intent=IntentType.DATA_QUERY,
             confidence=0.8,
-            allowed_tool_groups=["database"],
+            allowed_tool_groups=["memory", "resolution"],
         )
 
         data = classification.to_dict()
 
         assert data["intent"] == "data_query"
         assert data["confidence"] == 0.8
-        assert data["allowed_tool_groups"] == ["database"]
+        assert data["allowed_tool_groups"] == ["memory", "resolution"]
 
 
 class TestToolGroups:
@@ -84,7 +84,6 @@ class TestToolGroups:
         """Test all expected tool groups exist."""
         expected_groups = [
             "memory",
-            "database",
             "resolution",
             "web",
             "home",
@@ -100,12 +99,6 @@ class TestToolGroups:
         assert "search_memories" in TOOL_GROUPS["memory"]
         assert "get_events" in TOOL_GROUPS["memory"]
         assert "get_document" in TOOL_GROUPS["memory"]
-
-    def test_database_group_tools(self):
-        """Test database group contains expected tools."""
-        assert "execute_sql" in TOOL_GROUPS["database"]
-        assert "describe_schema" in TOOL_GROUPS["database"]
-
 
 class TestIntentToolMap:
     """Tests for intent to tool group mappings."""
@@ -177,9 +170,9 @@ class TestRuleBasedClassification:
     def test_data_query_keywords(self, router):
         """Test data query intent detection via rule-based."""
         questions = [
-            "How many emails did I send?",
-            "Query the database for records",
-            "Run a SQL statement to get totals",
+            "How many todos are completed?",
+            "Count all reminders created this week",
+            "Show aggregate totals for completed tasks",
         ]
 
         for question in questions:
@@ -273,7 +266,6 @@ class TestGetAllowedTools:
 
         # Should include tools from all groups
         assert "search_memories" in tools
-        assert "execute_sql" in tools
         assert "resolve_query" in tools
         assert "web_search" in tools
         assert "home_assistant" in tools

@@ -125,9 +125,9 @@ state.add_action("Retrieved event details")
 
 ```python
 record = ToolCallRecord(
-    tool_name="execute_sql",
-    arguments={"query": "SELECT * FROM events"},
-    result={"rows": [...]},
+    tool_name="search_memories",
+    arguments={"query": "events", "limit": 5},
+    result={"results": [...]},
     duration_ms=50.0,
     success=True,
 )

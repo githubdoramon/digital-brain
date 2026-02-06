@@ -74,7 +74,7 @@ If your intent needs tools not covered by existing groups:
 ```python
 TOOL_GROUPS = {
     "memory": ["search_memories", "get_events", "get_document"],
-    "database": ["execute_sql", "describe_schema"],
+    "resolution": ["resolve_query", "resolve_contacts", "lookup_contact"],
     # ... existing groups ...
 
     # Add your new group

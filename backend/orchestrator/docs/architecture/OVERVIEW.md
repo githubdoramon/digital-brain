@@ -33,7 +33,7 @@ The LLM suggests tool calls, but the controller:
                               ▼
 ┌─────────────────────────────────────────────────────────────────┐
 │                      Tool Handlers                              │
-│  memory.py │ database.py │ web.py │ homeassistant.py │ etc.    │
+│  memory.py │ resolution.py │ web.py │ homeassistant.py │ etc.  │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
@@ -94,6 +94,7 @@ AGENT_ENABLE_VALIDATION=true
 
 - [ADDING_TOOLS.md](./ADDING_TOOLS.md) - How to add new tools
 - [ADDING_INTENTS.md](./ADDING_INTENTS.md) - How to add new intent types
+- [MAIN_AGENT_FLOW.md](./MAIN_AGENT_FLOW.md) - Current runtime flow, guardrails, and decision points
 - [TOOL_GROUPS.md](./TOOL_GROUPS.md) - Tool group system reference
 - [AGENT_LIMITS.md](./AGENT_LIMITS.md) - Limit configuration
 - [STATE_MANAGEMENT.md](./STATE_MANAGEMENT.md) - Agent state guide

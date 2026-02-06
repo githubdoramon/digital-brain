@@ -15,13 +15,11 @@ from .contracts import (
     ToolContract,
     ToolParameter,
     validate_limit,
-    validate_sql_safe,
 )
 
 # Tool group definitions - maps group names to tool names
 TOOL_GROUPS = {
     "memory": ["search_memories", "get_events", "get_document"],
-    "database": ["execute_sql", "describe_schema"],
     "resolution": ["resolve_query", "resolve_contacts", "lookup_contact"],
     "web": ["web_search", "fetch_web_page"],
     "home": ["home_assistant"],
@@ -234,43 +232,6 @@ def _register_all_tools(registry: ToolRegistry) -> None:
                     items_type="string",
                 ),
             ],
-            constraints=["read_only"],
-        )
-    )
-
-    # execute_sql
-    registry.register(
-        ToolContract(
-            name="execute_sql",
-            description=(
-                "Run a read-only SQL query on the user's personal database. "
-                "Use for precise queries when you know the schema. "
-                "Always validate column names with describe_schema first."
-            ),
-            parameters=[
-                ToolParameter(
-                    name="sql",
-                    type="string",
-                    description="A valid PostgreSQL SELECT statement.",
-                    required=True,
-                    min_length=1,
-                    validator=validate_sql_safe,
-                ),
-            ],
-            constraints=["read_only"],
-            value_validators={"sql": validate_sql_safe},
-        )
-    )
-
-    # describe_schema
-    registry.register(
-        ToolContract(
-            name="describe_schema",
-            description=(
-                "Get the database schema with table names, columns, and types. "
-                "Call this before writing SQL to validate column names."
-            ),
-            parameters=[],
             constraints=["read_only"],
         )
     )

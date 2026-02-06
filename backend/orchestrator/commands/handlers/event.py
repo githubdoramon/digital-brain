@@ -184,7 +184,7 @@ def _extract_event_entities_with_llm(
         Dict with extracted entities or needs_clarification flag
     """
     from llm_helpers import call_llm_json
-    from llm_prompts import get_time_context
+    from prompts.context import get_time_context
     from tags_manager import MAJOR_TAGS
 
     print(f"\n[event_extraction] Starting extraction for: '{message}'")

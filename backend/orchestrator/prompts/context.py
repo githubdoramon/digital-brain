@@ -66,17 +66,6 @@ def get_self_context(email: str) -> Optional[str]:
     return f"You are assisting the user with email: {email}"
 
 
-def get_schema_hint() -> Optional[str]:
-    """Get the database schema hint if available."""
-    try:
-        import sql_tools
-
-        return sql_tools.load_schema_hint()
-    except Exception as exc:
-        print(f"[context] Failed to load schema hint: {exc}")
-        return None
-
-
 def get_skill_index() -> Optional[str]:
     """Get the lightweight skill index."""
     try:

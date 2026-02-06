@@ -208,16 +208,9 @@ The response includes `phones` array for each matching contact.
 - Check `match_reason` to understand why a contact was matched
 - Never expose raw contact_ids to users - use display names
 
-## Fallback: SQL Queries
+## Fallback: Structured Tool Chain
 
-For complex queries not covered by `lookup_contact`, use `execute_sql`:
-
-```sql
--- Find contacts with specific tags
-SELECT display_name, emails, tags
-FROM contacts
-WHERE 'engineering' = ANY(tags)
-ORDER BY display_name;
-```
-
-Use `describe_schema` first to validate column names.
+For complex queries not covered by `lookup_contact`, chain:
+1. `resolve_query` to extract entities/time hints
+2. `search_memories` with structured filters (`contact_ids`, time range, tags)
+3. `get_events` or `get_document` for full details on selected results

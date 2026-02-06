@@ -29,7 +29,7 @@ class IntentType(str, Enum):
     """Classified intent types."""
 
     MEMORY_SEARCH = "memory_search"  # Searching memories, events, documents
-    DATA_QUERY = "data_query"  # SQL queries, schema exploration
+    DATA_QUERY = "data_query"  # Structured retrieval/counting (non-SQL)
     CONTACT_LOOKUP = "contact_lookup"  # People, relationships
     WEB_SEARCH = "web_search"  # External information
     HOME_CONTROL = "home_control"  # Home Assistant actions
@@ -69,8 +69,8 @@ TOOL_GROUPS = dict(REGISTRY_TOOL_GROUPS)
 # Intent to tool group mappings
 INTENT_TOOL_MAP = {
     IntentType.MEMORY_SEARCH: ["memory", "resolution"],
-    IntentType.DATA_QUERY: ["database", "resolution"],
-    IntentType.CONTACT_LOOKUP: ["resolution", "database", "memory"],
+    IntentType.DATA_QUERY: ["memory", "resolution"],
+    IntentType.CONTACT_LOOKUP: ["resolution", "memory"],
     IntentType.WEB_SEARCH: ["web"],
     IntentType.HOME_CONTROL: ["home"],
     IntentType.SKILL_EXECUTION: ["skills", "memory"],
@@ -125,7 +125,7 @@ class IntentRouter:
             "INTENT_ROUTER_BASE_URL", os.getenv("LLM_BASE_URL", "")
         )
         self.llm_model = llm_model or os.getenv(
-            "INTENT_ROUTER_MODEL", os.getenv("LLM_CHAT_MODEL", "")
+            "INTENT_ROUTER_MODEL", os.getenv("LLM_CHAT_MODEL_SIMPLER", "")
         )
         self.llm_api_key = llm_api_key or os.getenv(
             "INTENT_ROUTER_API_KEY", os.getenv("LLM_API_KEY", "")
@@ -264,10 +264,9 @@ class IntentRouter:
                 reasoning="Memory search keywords detected",
             )
 
-        # SQL/data query patterns
+        # Data query/count patterns
         sql_keywords = [
             "how many", "count", "list all", "show all",
-            "database", "query", "sql", "table",
             "aggregate", "sum", "average", "total",
         ]
         if any(kw in q_lower for kw in sql_keywords):
@@ -360,7 +359,7 @@ QUESTION: {question}
 {context}
 INTENT TYPES:
 - memory_search: Searching memories, events, documents
-- data_query: SQL queries, counting, aggregation
+- data_query: Counting, aggregation, structured retrieval (no SQL tool)
 - contact_lookup: Finding people, relationships
 - web_search: External information from the internet
 - home_control: Smart home/Home Assistant actions

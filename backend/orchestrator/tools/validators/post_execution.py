@@ -177,7 +177,7 @@ class PostExecutionValidator:
             )
 
         # Check for empty results from search/query tools
-        if tool_name in ("search_memories", "web_search", "execute_sql", "get_events"):
+        if tool_name in ("search_memories", "web_search", "get_events"):
             if tool_name == "search_memories" and result.get("needs_clarification"):
                 return PostExecutionResult(
                     coverage=GoalCoverage.NEED_USER_INPUT,
@@ -188,7 +188,7 @@ class PostExecutionValidator:
                     extracted_facts=["Contact disambiguation required before memory search"],
                 )
 
-            results_key = "results" if tool_name != "execute_sql" else "rows"
+            results_key = "results"
             if tool_name == "get_events":
                 results_key = "events"
 
@@ -208,14 +208,6 @@ class PostExecutionValidator:
                     reason=f"Got {len(results)} results, evaluating",
                     extracted_facts=facts,
                 )
-
-        # Check describe_schema - always successful if no error
-        if tool_name == "describe_schema" and "schema" in result:
-            return PostExecutionResult(
-                coverage=GoalCoverage.NEEDS_MORE_TOOLS,
-                reason="Schema retrieved, ready for SQL queries",
-                extracted_facts=["Database schema available"],
-            )
 
         # Check resolve_query - extract entity info
         if tool_name == "resolve_query":
@@ -287,7 +279,7 @@ class PostExecutionValidator:
                 return PostExecutionResult(
                     coverage=GoalCoverage.FAILED,
                     reason=f"Contact lookup failed: {result['error']}",
-                    suggested_next_tools=["execute_sql"],
+                    suggested_next_tools=["resolve_query", "search_memories"],
                 )
 
             if action == "search":
@@ -305,7 +297,7 @@ class PostExecutionValidator:
                     return PostExecutionResult(
                         coverage=GoalCoverage.NEEDS_MORE_TOOLS,
                         reason="No contacts found, may need different search",
-                        suggested_next_tools=["execute_sql"],
+                        suggested_next_tools=["resolve_query", "search_memories"],
                     )
 
             elif action in ("get_relationships", "find_related"):
@@ -333,7 +325,7 @@ class PostExecutionValidator:
                     return PostExecutionResult(
                         coverage=GoalCoverage.NEEDS_MORE_TOOLS,
                         reason="Contact not found for relationship lookup",
-                        suggested_next_tools=["lookup_contact", "execute_sql"],
+                        suggested_next_tools=["lookup_contact", "resolve_query"],
                     )
 
         # For other tools, return None to trigger LLM check
@@ -479,11 +471,6 @@ Rules:
             if count > 0:
                 facts.append(f"Found {count} relevant memories")
 
-        elif tool_name == "execute_sql":
-            rows = result.get("rows", [])
-            if rows:
-                facts.append(f"Query returned {len(rows)} rows")
-
         elif tool_name == "get_events":
             events = result.get("events", [])
             if events:
@@ -596,10 +583,6 @@ class GoalCompletionValidator:
         "home_assistant": {
             "list_tools": "call_tool",
         },
-        "describe_schema": {
-            # describe_schema is discovery, execute_sql is execution
-            None: "execute_sql",  # None means the tool itself is discovery
-        },
     }
 
     def check_goal_achieved(
@@ -678,7 +661,7 @@ class GoalCompletionValidator:
         for tool_name, pairs in self.DISCOVERY_EXECUTION_PAIRS.items():
             for discovery_action, execution_action in pairs.items():
                 if discovery_action is None:
-                    # The tool itself is discovery (like describe_schema)
+                    # The tool itself is discovery
                     if tool_name in tool_names:
                         # Check if execution tool was also called
                         if execution_action not in tool_names:
@@ -741,8 +724,6 @@ class GoalCompletionValidator:
         execution_calls = []
         for tc in successful_calls:
             # Skip pure discovery tools
-            if tc.tool_name == "describe_schema":
-                continue
             # Skip discovery actions
             if tc.tool_name in self.DISCOVERY_EXECUTION_PAIRS:
                 pairs = self.DISCOVERY_EXECUTION_PAIRS[tc.tool_name]
@@ -814,7 +795,7 @@ class GoalCompletionValidator:
         if result_facts:
             if temporal_goal:
                 has_temporal_resolution = any(
-                    t.success and t.tool_name in ("get_events", "execute_sql")
+                    t.success and t.tool_name == "get_events"
                     for t in tool_calls
                 )
                 if not has_temporal_resolution:
@@ -828,7 +809,6 @@ class GoalCompletionValidator:
         # Check for successful query tools
         query_tools = [
             "search_memories",
-            "execute_sql",
             "get_events",
             "get_document",
             "web_search",
@@ -847,7 +827,7 @@ class GoalCompletionValidator:
                 if self._has_results(result):
                     if temporal_goal:
                         has_temporal_resolution = any(
-                            t.success and t.tool_name in ("get_events", "execute_sql")
+                            t.success and t.tool_name == "get_events"
                             for t in tool_calls
                         )
                         if not has_temporal_resolution:

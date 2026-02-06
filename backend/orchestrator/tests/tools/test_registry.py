@@ -13,7 +13,7 @@ class TestToolGroups:
 
     def test_all_groups_defined(self):
         """Test all expected groups exist."""
-        expected = ["memory", "database", "resolution", "web", "home", "skills", "system"]
+        expected = ["memory", "resolution", "web", "home", "skills", "system"]
         for group in expected:
             assert group in TOOL_GROUPS
 
@@ -22,12 +22,6 @@ class TestToolGroups:
         assert "search_memories" in TOOL_GROUPS["memory"]
         assert "get_events" in TOOL_GROUPS["memory"]
         assert "get_document" in TOOL_GROUPS["memory"]
-
-    def test_database_group_tools(self):
-        """Test database group tools."""
-        assert "execute_sql" in TOOL_GROUPS["database"]
-        assert "describe_schema" in TOOL_GROUPS["database"]
-
 
 class TestToolRegistry:
     """Tests for ToolRegistry class."""
@@ -221,11 +215,6 @@ class TestPreregisteredTools:
         assert is_valid is True
         assert error is None
 
-    def test_execute_sql_registered(self, populated_registry):
-        """Test execute_sql tool is registered."""
-        contract = populated_registry.get_contract("execute_sql")
-        assert contract is not None
-
     def test_resolve_query_registered(self, populated_registry):
         """Test resolve_query tool is registered."""
         contract = populated_registry.get_contract("resolve_query")
@@ -257,14 +246,6 @@ class TestPreregisteredTools:
         assert "search_memories" in tool_names
         assert "get_events" in tool_names
         assert "get_document" in tool_names
-
-    def test_all_database_tools_available(self, populated_registry):
-        """Test all database group tools are available."""
-        tool_names = populated_registry.get_tool_names_for_groups(["database"])
-
-        assert "execute_sql" in tool_names
-        assert "describe_schema" in tool_names
-
 
 class TestRegistryValidation:
     """Tests for validation through registry."""

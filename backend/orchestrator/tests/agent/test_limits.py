@@ -176,9 +176,9 @@ class TestNoProgressDetection:
             success=True,
         )
         record3 = ToolCallRecord(
-            tool_name="execute_sql",
+            tool_name="get_events",
             arguments={"query": "SELECT *"},
-            result={"rows": [{"name": "test"}]},
+            result={"events": [{"name": "test"}]},
             duration_ms=100,
             success=True,
         )

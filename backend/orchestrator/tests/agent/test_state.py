@@ -211,16 +211,16 @@ class TestToolCallRecord:
     def test_with_error(self):
         """Test ToolCallRecord with error."""
         record = ToolCallRecord(
-            tool_name="execute_sql",
+            tool_name="get_events",
             arguments={"query": "SELECT *"},
             result={},
             duration_ms=50,
             success=False,
-            error="SQL syntax error",
+            error="Upstream event provider unavailable",
         )
 
         assert record.success is False
-        assert record.error == "SQL syntax error"
+        assert record.error == "Upstream event provider unavailable"
 
     def test_to_dict(self):
         """Test ToolCallRecord serialization."""

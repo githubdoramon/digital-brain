@@ -136,19 +136,19 @@ ToolParameter(
 For complex validation beyond types:
 
 ```python
-from tools.contracts import validate_sql_safe, validate_path_safe
+from tools.contracts import validate_path_safe
 
 contract = ToolContract(
-    name="execute_sql",
+    name="read_file",
     parameters=[
         ToolParameter(
-            name="query",
+            name="path",
             type="string",
             required=True,
         ),
     ],
     custom_validators={
-        "query": validate_sql_safe,
+        "path": validate_path_safe,
     },
 )
 ```
@@ -157,12 +157,6 @@ contract = ToolContract(
 
 ```python
 # tools/contracts.py
-
-def validate_sql_safe(sql: str) -> bool:
-    """Block dangerous SQL operations."""
-    dangerous = ["DROP", "DELETE", "TRUNCATE", "ALTER", "CREATE"]
-    sql_upper = sql.upper()
-    return not any(kw in sql_upper for kw in dangerous)
 
 def validate_path_safe(path: str) -> bool:
     """Block path traversal attempts."""
@@ -300,8 +294,8 @@ def extract_facts(tool_name: str, result: Dict) -> List[str]:
     if tool_name == "search_memories" and "results" in result:
         facts.append(f"Search returned {len(result['results'])} memories")
 
-    if tool_name == "execute_sql" and "rows" in result:
-        facts.append(f"Query returned {len(result['rows'])} rows")
+    if tool_name == "search_memories" and "results" in result:
+        facts.append(f"Search returned {len(result['results'])} results")
 
     # Add extraction for your tools here!
 
@@ -529,7 +523,6 @@ is_empty_result(result) # Is result empty?
 extract_facts(name, result)  # Get facts for state
 
 # Built-in validators
-validate_sql_safe(sql)   # Block dangerous SQL
 validate_path_safe(path) # Block path traversal
 validate_url_safe(url)   # Validate URL format
 ```

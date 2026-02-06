@@ -1002,6 +1002,17 @@ class _SessionContext:
         self.original_question = original_question
 
 
+def _strip_command_prefix(message: str) -> str:
+    """Remove a leading slash-command prefix (e.g. /new, /event) from a message."""
+    from commands.parser import parse_command
+
+    text = (message or "").strip()
+    parsed = parse_command(text)
+    if not parsed:
+        return text
+    return parsed.args
+
+
 def _resolve_session_context(
     payload: AskIn,
     user_email: str,
@@ -1033,6 +1044,9 @@ def _resolve_session_context(
         if force_new_session:
             question = f"/new {question}".strip()
         thread, is_new_session, question = conversations.resolve_main_session(user_email, question)
+
+    # Defensive normalization: never pass slash-command markers into agent prompt.
+    question = _strip_command_prefix(question)
 
     session_id = thread["id"]
     is_reset_only = is_new_session and not question.strip()
@@ -1296,6 +1310,8 @@ async def ask(payload: AskIn, user: dict = Depends(get_current_user)):
             force_new_session = True
 
     ctx = _resolve_session_context(payload, user_email, force_new_session=force_new_session)
+    if ctx.is_new_session:
+        print(f"[session] new session started session={ctx.session_id} user={user_email}")
 
     # Handle /new command with no actual message
     if ctx.is_reset_only:
@@ -1425,6 +1441,8 @@ async def ask_stream(payload: AskIn, user: dict = Depends(get_current_user)):
             force_new_session = True
 
     ctx = _resolve_session_context(payload, user_email, force_new_session=force_new_session)
+    if ctx.is_new_session:
+        print(f"[session] new session started session={ctx.session_id} user={user_email}")
 
     # Handle /new command with no actual message
     if ctx.is_reset_only:

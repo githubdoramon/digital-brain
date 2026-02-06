@@ -86,8 +86,7 @@ Existing groups (defined in `agent/router.py`):
 | Group | Purpose | Tools |
 |-------|---------|-------|
 | `memory` | Memory/document search | search_memories, get_events, get_document |
-| `database` | SQL operations | execute_sql, describe_schema |
-| `resolution` | Entity resolution | resolve_query |
+| `resolution` | Entity resolution | resolve_query, resolve_contacts, lookup_contact |
 | `web` | External web access | web_search |
 | `home` | Home automation | home_assistant |
 | `skills` | Skill scripts | run_skill_script |
