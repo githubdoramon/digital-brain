@@ -9,7 +9,11 @@ import pytest
 
 from agent.state import AgentState, ToolCallRecord
 from tools.contracts import ToolContract, ToolParameter
-from tools.validators.post_execution import GoalCoverage, PostExecutionValidator
+from tools.validators.post_execution import (
+    GoalCompletionValidator,
+    GoalCoverage,
+    PostExecutionValidator,
+)
 
 
 class TestPreExecutionValidation:
@@ -250,3 +254,28 @@ class TestFactExtraction:
 
         assert len(facts) == 1
         assert "2 rows" in facts[0]
+
+
+class TestGoalCompletionValidatorTemporal:
+    """Tests for temporal-goal completion guardrails."""
+
+    def test_temporal_goal_not_achieved_without_event_resolution(self):
+        validator = GoalCompletionValidator()
+        tool_calls = [
+            ToolCallRecord(
+                tool_name="search_memories",
+                arguments={"query": "Gio", "sort_order": "newest"},
+                result={"results": [{"id": "event-1"}], "count": 1},
+                duration_ms=50,
+                success=True,
+            )
+        ]
+        achieved, reason, pending = validator.check_goal_achieved(
+            goal="When did I last meet Gio?",
+            tool_calls=tool_calls,
+            known_facts=["Found 1 relevant memories"],
+            final_content="",
+        )
+        assert achieved is False
+        assert "Temporal query needs explicit date-ordered verification" in reason
+        assert pending

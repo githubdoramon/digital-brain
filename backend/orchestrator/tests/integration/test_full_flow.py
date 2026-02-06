@@ -44,13 +44,18 @@ class TestAgentControllerIntegration:
         self, controller, monkeypatch
     ):
         """
-        Test search_memories is preempted when contact resolution is ambiguous.
+        Test search_memories is preempted when clarification is pending.
 
         This verifies the integration path inside _execute_tool_call:
-        search_memories -> auto contact resolution -> clarification result.
+        search_memories -> pending clarification short-circuit.
         """
         state = AgentState(goal="When did I talk to John?")
         state.step_count = 1
+        state.resolution["pending_contact_clarification"] = "Which John do you mean?"
+        state.resolution["pending_contact_ambiguous_contacts"] = [
+            {"clarification_prompt": "Which John do you mean?"}
+        ]
+        state.resolution["pending_contact_people"] = ["John"]
 
         class StubLogger:
             def log_tool_call(self, *args, **kwargs):
@@ -60,18 +65,6 @@ class TestAgentControllerIntegration:
                 return None
 
         controller._logger = StubLogger()
-
-        monkeypatch.setattr(
-            "agents.contacts.executor.handle_resolve_contacts_request",
-            lambda _payload: {
-                "status": "needs_clarification",
-                "people_mentioned": ["John"],
-                "resolved_contacts": [],
-                "ambiguous_contacts": [
-                    {"clarification_prompt": "Which John do you mean?"}
-                ],
-            },
-        )
 
         def should_not_run_handler(*args, **kwargs):
             raise AssertionError("search handler should not run when clarification is required")
@@ -264,6 +257,7 @@ class TestAgentControllerIntegration:
         monkeypatch.setattr(controller, "_call_llm", fake_call_llm)
         monkeypatch.setattr(controller, "_execute_handler", fake_execute_handler)
         monkeypatch.setattr(controller, "_inject_skills", lambda *args, **kwargs: None)
+        monkeypatch.setattr(controller, "_prime_contact_scope_for_question", lambda *args, **kwargs: None)
 
         bundle = await controller.run(
             question="When did I meet John?",

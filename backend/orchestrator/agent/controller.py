@@ -171,6 +171,22 @@ class AgentController:
                 else self.intent_router.get_all_tools()
             )
 
+            clarification_prompt = self._prime_contact_scope_for_question(
+                state=state,
+                question=question,
+                user_email=user_email,
+                conversation_history=conversation_history,
+            )
+            if clarification_prompt:
+                return self._finalize(
+                    question,
+                    clarification_prompt,
+                    state,
+                    run_id,
+                    session_id,
+                    total_start,
+                )
+
             # Build initial messages
             messages = self._build_messages(
                 question,
@@ -410,6 +426,24 @@ class AgentController:
                 if classification
                 else self.intent_router.get_all_tools()
             )
+
+            clarification_prompt = self._prime_contact_scope_for_question(
+                state=state,
+                question=question,
+                user_email=user_email,
+                conversation_history=conversation_history,
+            )
+            if clarification_prompt:
+                bundle = self._finalize(
+                    question,
+                    clarification_prompt,
+                    state,
+                    run_id,
+                    session_id,
+                    total_start,
+                )
+                yield {"type": "done", "bundle": bundle}
+                return
 
             messages = self._build_messages(
                 question,
@@ -934,6 +968,7 @@ class AgentController:
                 user_email=user_email,
                 conversation_history=conversation_history,
             )
+            trace.trace_tool_args_normalized(tool_name, args)
             if preempt_result is not None:
                 result = preempt_result
                 prompt = result.get("clarification_prompt")
@@ -942,6 +977,39 @@ class AgentController:
                 duration_ms = 0.0
                 success = "error" not in result and result.get("success") is not False
                 result_summary = result.get("clarification_prompt", "Preempted for clarification")
+                trace.trace_tool_execution_result(tool_name, duration_ms, success, result_summary)
+                trace.trace_tool_lifecycle_end(
+                    tool_name,
+                    call_id,
+                    success,
+                    duration_ms,
+                    result_summary,
+                )
+                record = ToolCallRecord(
+                    tool_name=tool_name,
+                    arguments=args,
+                    result=result,
+                    duration_ms=duration_ms,
+                    success=success,
+                    error=result.get("error"),
+                )
+                state.record_tool_call(record)
+                self.logger.log_tool_call(
+                    run_id,
+                    state.step_count,
+                    tool_name,
+                    args,
+                    duration_ms=duration_ms,
+                    result=result,
+                )
+                return result
+
+            blocked_search = self._block_redundant_memory_search(state, args)
+            if blocked_search is not None:
+                result = blocked_search
+                duration_ms = 0.0
+                success = "error" not in result and result.get("success") is not False
+                result_summary = result.get("message", "Blocked redundant memory search")
                 trace.trace_tool_execution_result(tool_name, duration_ms, success, result_summary)
                 trace.trace_tool_lifecycle_end(
                     tool_name,
@@ -1226,15 +1294,41 @@ class AgentController:
         args: dict[str, Any],
     ) -> Optional[dict[str, Any]]:
         """Block repeated resolve_contacts calls that previously made no progress."""
-        text = str(args.get("text", "")).strip()
+        text = self._sanitize_goal_text(str(args.get("text", "")).strip())
         if not text:
             return None
+
+        scoped_text = self._sanitize_goal_text(
+            str(state.resolution.get("active_contact_scope_text", "")).strip()
+        )
+        scoped_ids = state.resolution.get("active_contact_scope_ids", [])
+        if scoped_text and scoped_text.lower() == text.lower() and scoped_ids:
+            cached_result = state.resolution.get("contact_resolution") or {}
+            return {
+                **cached_result,
+                "status": "success",
+                "message": "Contact scope is already resolved for this request.",
+            }
+
+        pending_text = self._sanitize_goal_text(
+            str(state.resolution.get("pending_contact_scope_text", "")).strip()
+        )
+        pending_prompt = state.resolution.get("pending_contact_clarification")
+        if pending_prompt and pending_text and pending_text.lower() == text.lower():
+            return {
+                "status": "needs_clarification",
+                "ambiguous_contacts": state.resolution.get(
+                    "pending_contact_ambiguous_contacts", []
+                ),
+                "people_mentioned": state.resolution.get("pending_contact_people", []),
+                "message": "Contact resolution already requires clarification.",
+            }
 
         last_call = state.last_tool_call
         if not last_call or last_call.tool_name != "resolve_contacts":
             return None
 
-        last_text = str(last_call.arguments.get("text", "")).strip()
+        last_text = self._sanitize_goal_text(str(last_call.arguments.get("text", "")).strip())
         last_status = (last_call.result or {}).get("status")
         if last_text.lower() != text.lower():
             return None
@@ -1275,9 +1369,17 @@ class AgentController:
               of running an unfiltered memory search.
         """
         normalized_args = dict(args)
+        goal_text = self._sanitize_goal_text(question)
 
-        query_text = str(normalized_args.get("query") or question or "").strip()
+        query_text = str(normalized_args.get("query") or "").strip()
+        if not query_text:
+            query_text = goal_text
+        query_text = self._sanitize_goal_text(query_text)
+        normalized_args["query"] = query_text
+
         sort_order = self._detect_temporal_sort_order(query_text)
+        if not sort_order:
+            sort_order = self._detect_temporal_sort_order(goal_text)
         if sort_order and not normalized_args.get("sort_order"):
             normalized_args["sort_order"] = sort_order
         if sort_order:
@@ -1290,9 +1392,6 @@ class AgentController:
             if parsed_limit < 25:
                 normalized_args["limit"] = 25
 
-        if normalized_args.get("contact_ids"):
-            return normalized_args, None
-
         pending_prompt = state.resolution.get("pending_contact_clarification")
         if pending_prompt:
             preempt = self._build_contact_clarification_result(
@@ -1303,95 +1402,143 @@ class AgentController:
             )
             return normalized_args, preempt
 
+        if normalized_args.get("contact_ids"):
+            if self._is_low_signal_person_query(query_text):
+                normalized_args["query"] = goal_text or query_text
+            return normalized_args, None
+
         active_scope_ids = state.resolution.get("active_contact_scope_ids")
         if active_scope_ids:
             normalized_args["contact_ids"] = list(active_scope_ids)
+            if self._is_low_signal_person_query(query_text):
+                normalized_args["query"] = goal_text or query_text
             return normalized_args, None
 
+        # Contact resolution is handled before entering the main loop.
+        # Keep search_memories deterministic and avoid re-running the resolver here.
+        return normalized_args, None
+
+    def _block_redundant_memory_search(
+        self,
+        state: AgentState,
+        args: dict[str, Any],
+    ) -> Optional[dict[str, Any]]:
+        """Block repeated search_memories calls that do not add new signal."""
+        current_signature = self._memory_search_signature(args)
+        current_limit = self._coerce_limit(args.get("limit"))
+
+        for previous in reversed(state.tool_calls):
+            if previous.tool_name != "search_memories":
+                continue
+            previous_signature = self._memory_search_signature(previous.arguments)
+            if previous_signature != current_signature:
+                continue
+
+            previous_limit = self._coerce_limit(previous.arguments.get("limit"))
+            previous_count = int((previous.result or {}).get("count", 0) or 0)
+            if previous_count <= 0:
+                return None
+            if current_limit > previous_limit:
+                return None
+
+            return {
+                **(previous.result or {}),
+                "status": "no_progress",
+                "message": (
+                    "Equivalent memory search already executed. "
+                    "Use existing results or fetch event details instead of repeating the same search."
+                ),
+            }
+
+        return None
+
+    def _memory_search_signature(self, args: dict[str, Any]) -> tuple[Any, ...]:
+        """Build a comparable signature for memory-search de-duplication."""
+        query = " ".join(str(args.get("query", "")).lower().split())
+        contact_ids = tuple(sorted(str(cid) for cid in (args.get("contact_ids") or [])))
+        tags = tuple(sorted(str(tag).lower() for tag in (args.get("tags") or [])))
+        time_start = str(args.get("time_start") or "")
+        time_end = str(args.get("time_end") or "")
+        sort_order = str(args.get("sort_order") or "relevance").lower()
+        return (query, contact_ids, tags, time_start, time_end, sort_order)
+
+    def _coerce_limit(self, value: Any) -> int:
+        """Parse result limit from arbitrary input with a sane default."""
+        try:
+            parsed = int(value)
+        except (TypeError, ValueError):
+            parsed = 0
+        return parsed if parsed > 0 else 5
+
+    def _prime_contact_scope_for_question(
+        self,
+        state: AgentState,
+        question: str,
+        user_email: Optional[str],
+        conversation_history: Optional[list[dict[str, str]]],
+    ) -> Optional[str]:
+        """Resolve people from the top-level question once, before tool loop."""
         if not user_email:
-            return normalized_args, None
+            return None
 
-        if not query_text:
-            return normalized_args, None
-        if not self._should_attempt_contact_resolution(query_text):
-            return normalized_args, None
+        if state.resolution.get("pending_contact_clarification"):
+            return self._get_user_clarification_prompt(state)
+        if state.resolution.get("active_contact_scope_ids"):
+            return None
 
-        cache_key = " ".join(query_text.lower().split())
-        resolution_cache = state.resolution.setdefault("_contact_resolution_cache", {})
-        cached = resolution_cache.get(cache_key)
-        if cached:
-            cached_status = cached.get("status")
-            cached_ids = cached.get("contact_ids", [])
-            if cached_status == "success" and cached_ids:
-                normalized_args["contact_ids"] = cached_ids
-                return normalized_args, None
-            if cached_status == "needs_clarification":
-                preempt = self._build_contact_clarification_result(
-                    cached.get("ambiguous_contacts", []),
-                    cached.get("people_mentioned", []),
-                )
-                return normalized_args, preempt
-            return normalized_args, None
+        text = self._sanitize_goal_text(question)
+        if not self._should_attempt_contact_resolution(text):
+            return None
 
         try:
             from agents.contacts.executor import handle_resolve_contacts_request
 
-            payload: dict[str, Any] = {
-                "text": query_text,
-                "user_email": user_email,
-            }
+            payload: dict[str, Any] = {"text": text, "user_email": user_email}
             if conversation_history:
                 payload["conversation_messages"] = conversation_history[-8:]
 
             resolution = handle_resolve_contacts_request(payload)
             state.resolution["contact_resolution"] = resolution
-            status = resolution.get("status", "error")
-            resolved = resolution.get("resolved_contacts", [])
-            resolved_ids = [
-                contact["contact_id"]
-                for contact in resolved
-                if isinstance(contact, dict) and contact.get("contact_id")
-            ]
-            deduped_ids = list(dict.fromkeys(resolved_ids))
-            resolution_cache[cache_key] = {
-                "status": status,
-                "contact_ids": deduped_ids,
-                "ambiguous_contacts": resolution.get("ambiguous_contacts", []),
-                "people_mentioned": resolution.get("people_mentioned", []),
-            }
+            self._update_contact_resolution_state(state, {"text": text}, resolution)
 
-            self._update_contact_resolution_state(
-                state=state,
-                args={"text": query_text},
-                result=resolution,
-            )
-
-            if status == "success" and deduped_ids:
-                normalized_args["contact_ids"] = deduped_ids
-                state.add_fact(
-                    f"Auto-resolved {len(deduped_ids)} contacts for memory search filter"
-                )
-                return normalized_args, None
-
-            if status == "needs_clarification":
-                preempt = self._build_contact_clarification_result(
-                    resolution.get("ambiguous_contacts", []),
-                    resolution.get("people_mentioned", []),
-                )
-                state.add_fact(
-                    "Contact resolution for memory search needs user clarification"
-                )
-                if preempt.get("clarification_prompt"):
-                    state.add_question(preempt["clarification_prompt"])
-                return normalized_args, preempt
-
-            return normalized_args, None
+            status = resolution.get("status")
+            if status == "success":
+                scope_ids = state.resolution.get("active_contact_scope_ids", [])
+                if scope_ids:
+                    state.add_fact(
+                        f"Pre-resolved {len(scope_ids)} contact(s) from user question"
+                    )
+            elif status == "needs_clarification":
+                prompt = self._get_user_clarification_prompt(state)
+                if prompt:
+                    state.add_question(prompt)
+                    return prompt
         except Exception as e:
             trace.trace_tool_error(
-                "search_memories",
-                f"Automatic contact resolution failed: {e}",
+                "resolve_contacts",
+                f"Contact pre-resolution failed: {e}",
             )
-            return normalized_args, None
+
+        return None
+
+    def _sanitize_goal_text(self, text: str) -> str:
+        """Normalize slash-prefixed command wrappers from user text."""
+        stripped = str(text or "").strip()
+        return re.sub(r"^/\w+\s+", "", stripped)
+
+    def _is_low_signal_person_query(self, query: str) -> bool:
+        """Detect short person-name queries that are weak semantic search prompts."""
+        q = str(query or "").strip()
+        if not q:
+            return True
+        if self._detect_temporal_sort_order(q):
+            return False
+        tokens = re.findall(r"[A-Za-z][A-Za-z'-]*", q)
+        if not tokens:
+            return False
+        if len(tokens) <= 2:
+            return True
+        return False
 
     def _update_contact_resolution_state(
         self,
@@ -1415,6 +1562,7 @@ class AgentController:
                 state.resolution.pop("pending_contact_clarification", None)
                 state.resolution.pop("pending_contact_ambiguous_contacts", None)
                 state.resolution.pop("pending_contact_people", None)
+                state.resolution.pop("pending_contact_scope_text", None)
             return
 
         if status == "needs_clarification":
@@ -1427,6 +1575,7 @@ class AgentController:
             state.resolution["pending_contact_clarification"] = prompt
             state.resolution["pending_contact_ambiguous_contacts"] = ambiguous_contacts
             state.resolution["pending_contact_people"] = result.get("people_mentioned", [])
+            state.resolution["pending_contact_scope_text"] = args.get("text", "")
             state.resolution.pop("active_contact_scope_ids", None)
             state.resolution.pop("active_contact_scope_text", None)
             return
@@ -1438,6 +1587,7 @@ class AgentController:
             state.resolution.pop("pending_contact_clarification", None)
             state.resolution.pop("pending_contact_ambiguous_contacts", None)
             state.resolution.pop("pending_contact_people", None)
+            state.resolution.pop("pending_contact_scope_text", None)
 
     def _detect_temporal_sort_order(self, query: str) -> Optional[str]:
         """Infer temporal ordering intent from query text."""

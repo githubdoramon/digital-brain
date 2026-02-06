@@ -125,12 +125,19 @@ def search_memories(
     limit: int = 10,
     sort_order: str = "relevance",
 ) -> dict[str, Any]:
-    span = None
-    if time_start and time_end:
+    span_start = None
+    span_end = None
+    if time_start:
         try:
-            span = (datetime.fromisoformat(time_start), datetime.fromisoformat(time_end))
+            span_start = datetime.fromisoformat(time_start)
         except Exception:
-            span = None
+            span_start = None
+    if time_end:
+        try:
+            span_end = datetime.fromisoformat(time_end)
+        except Exception:
+            span_end = None
+    span = (span_start, span_end) if (span_start or span_end) else None
     normalized_query = normalize_search_text(query)
     ordering = (sort_order or "relevance").lower()
     if ordering not in {"relevance", "newest", "oldest"}:
@@ -399,8 +406,16 @@ def structured_candidates(timespan, people_ids: list[str], place_ids: list[str],
     clauses = []
     params: list[Any] = []
     if timespan:
-        clauses.append("start_date BETWEEN %s AND %s")
-        params += [timespan[0], timespan[1]]
+        start, end = timespan
+        if start and end:
+            clauses.append("start_date BETWEEN %s AND %s")
+            params += [start, end]
+        elif start:
+            clauses.append("start_date >= %s")
+            params.append(start)
+        elif end:
+            clauses.append("start_date <= %s")
+            params.append(end)
     if people_ids:
         clauses.append("people && %s")
         params.append(people_ids)

@@ -5,8 +5,6 @@ Note: These tests verify the controller interface and configuration.
 Full integration tests would require mocking the LLM backend.
 """
 
-from unittest.mock import patch
-
 import pytest
 
 from agent.controller import AgentController, get_controller
@@ -271,50 +269,32 @@ class TestContactAwareMemorySearch:
 
     def test_enriches_contact_ids_from_resolution(self, controller):
         state = AgentState(goal="When did I talk to John?")
-        mocked_resolution = {
-            "status": "success",
-            "people_mentioned": ["John"],
-            "resolved_contacts": [{"contact_id": "contact-123", "display_name": "John Smith"}],
-            "ambiguous_contacts": [],
-        }
-
-        with patch(
-            "agents.contacts.executor.handle_resolve_contacts_request",
-            return_value=mocked_resolution,
-        ):
-            args, preempt = controller._prepare_memory_search_arguments(
-                args={"query": "When did I talk to John?"},
-                state=state,
-                question="When did I talk to John?",
-                user_email="user@example.com",
-                conversation_history=[],
-            )
+        state.resolution["active_contact_scope_ids"] = ["contact-123"]
+        args, preempt = controller._prepare_memory_search_arguments(
+            args={"query": "When did I talk to John?"},
+            state=state,
+            question="When did I talk to John?",
+            user_email="user@example.com",
+            conversation_history=[],
+        )
 
         assert preempt is None
         assert args.get("contact_ids") == ["contact-123"]
 
     def test_preempts_memory_search_when_contact_is_ambiguous(self, controller):
         state = AgentState(goal="When did I talk to John?")
-        mocked_resolution = {
-            "status": "needs_clarification",
-            "people_mentioned": ["John"],
-            "resolved_contacts": [],
-            "ambiguous_contacts": [
-                {"clarification_prompt": "Which John do you mean?"}
-            ],
-        }
-
-        with patch(
-            "agents.contacts.executor.handle_resolve_contacts_request",
-            return_value=mocked_resolution,
-        ):
-            args, preempt = controller._prepare_memory_search_arguments(
-                args={"query": "When did I talk to John?"},
-                state=state,
-                question="When did I talk to John?",
-                user_email="user@example.com",
-                conversation_history=[],
-            )
+        state.resolution["pending_contact_clarification"] = "Which John do you mean?"
+        state.resolution["pending_contact_ambiguous_contacts"] = [
+            {"clarification_prompt": "Which John do you mean?"}
+        ]
+        state.resolution["pending_contact_people"] = ["John"]
+        args, preempt = controller._prepare_memory_search_arguments(
+            args={"query": "When did I talk to John?"},
+            state=state,
+            question="When did I talk to John?",
+            user_email="user@example.com",
+            conversation_history=[],
+        )
 
         assert "contact_ids" not in args
         assert preempt is not None
@@ -425,3 +405,71 @@ class TestContactAwareMemorySearch:
         assert preempt is None
         assert args.get("sort_order") == "oldest"
         assert args.get("limit") == 25
+
+    def test_low_signal_name_query_uses_goal_when_contact_scope_exists(self, controller):
+        state = AgentState(goal="When did I last meet Gio?")
+        state.resolution["active_contact_scope_ids"] = ["contact-gio"]
+        args, preempt = controller._prepare_memory_search_arguments(
+            args={"query": "Gio"},
+            state=state,
+            question="/new when did I last meet Gio?",
+            user_email="user@example.com",
+            conversation_history=[],
+        )
+        assert preempt is None
+        assert args.get("contact_ids") == ["contact-gio"]
+        assert args.get("query") == "when did I last meet Gio?"
+        assert args.get("sort_order") == "newest"
+        assert args.get("limit") == 25
+
+    def test_blocks_redundant_equivalent_memory_search(self, controller):
+        state = AgentState(goal="When did I last meet Gio?")
+        state.record_tool_call(
+            ToolCallRecord(
+                tool_name="search_memories",
+                arguments={
+                    "query": "when did I last meet Gio?",
+                    "contact_ids": ["contact-gio"],
+                    "sort_order": "newest",
+                    "limit": 25,
+                },
+                result={"results": [{"id": "event-1"}], "count": 1},
+                duration_ms=120,
+                success=True,
+            )
+        )
+        blocked = controller._block_redundant_memory_search(
+            state,
+            {
+                "query": "When did I last meet Gio?",
+                "contact_ids": ["contact-gio"],
+                "sort_order": "newest",
+                "limit": 5,
+            },
+        )
+        assert blocked is not None
+        assert blocked.get("status") == "no_progress"
+
+    def test_primes_contact_scope_from_question(self, controller, monkeypatch):
+        state = AgentState(goal="When did I last meet Gio?")
+        monkeypatch.setattr(
+            "agents.contacts.executor.handle_resolve_contacts_request",
+            lambda _payload: {
+                "status": "success",
+                "people_mentioned": ["Gio"],
+                "resolved_contacts": [
+                    {"contact_id": "contact-gio", "display_name": "Giovanni Panerai"}
+                ],
+                "ambiguous_contacts": [],
+            },
+        )
+
+        prompt = controller._prime_contact_scope_for_question(
+            state=state,
+            question="/new when did I last meet Gio?",
+            user_email="user@example.com",
+            conversation_history=[],
+        )
+
+        assert prompt is None
+        assert state.resolution.get("active_contact_scope_ids") == ["contact-gio"]

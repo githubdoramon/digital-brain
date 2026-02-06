@@ -812,6 +812,17 @@ class GoalCompletionValidator:
         ]
 
         if result_facts:
+            if temporal_goal:
+                has_temporal_resolution = any(
+                    t.success and t.tool_name in ("get_events", "execute_sql")
+                    for t in tool_calls
+                )
+                if not has_temporal_resolution:
+                    return (
+                        False,
+                        "Temporal query needs explicit date-ordered verification",
+                        ["Retrieve ordered event details before final answer"],
+                    )
             return (True, "Query returned results", [])
 
         # Check for successful query tools

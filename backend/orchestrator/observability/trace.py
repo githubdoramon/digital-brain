@@ -226,6 +226,13 @@ def trace_tool_call_start(tool_name: str, args: dict[str, Any]) -> float:
     return perf_counter()
 
 
+def trace_tool_args_normalized(tool_name: str, args: dict[str, Any]) -> None:
+    """Log normalized tool arguments after controller enrichment."""
+    if _should_log(LogLevel.INFO):
+        args_str = _format_args(args)
+        print(f"[tool.{tool_name}] Normalized args: {args_str}")
+
+
 def trace_pre_validation_start(tool_name: str) -> None:
     """Log pre-validation start."""
     if _should_log(LogLevel.DEBUG):
