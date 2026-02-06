@@ -6,7 +6,7 @@ This is the core orchestration component that implements:
 
 The controller:
 1. Initializes state with the user's goal
-2. Runs intent router for tool-set narrowing
+2. Runs intent router for intent/hints
 3. Manages the agent loop with hard limits
 4. Validates tool calls before execution
 5. Checks goal coverage after execution
@@ -164,13 +164,6 @@ class AgentController:
             else:
                 classification = None
 
-            # Get allowed tools based on intent
-            allowed_tools = (
-                self.intent_router.get_allowed_tools(classification)
-                if classification
-                else self.intent_router.get_all_tools()
-            )
-
             clarification_prompt = self._prime_contact_scope_for_question(
                 state=state,
                 question=question,
@@ -196,8 +189,8 @@ class AgentController:
                 search_limit,
                 )
 
-            # Get tool definitions (filtered by intent)
-            tools = self.tool_registry.get_tool_definitions(allowed_tools)
+            # Expose full tool set; no intent-based narrowing.
+            tools = self.tool_registry.get_tool_definitions()
 
             # Phase 2: Agent loop
             while True:
@@ -421,12 +414,6 @@ class AgentController:
             else:
                 classification = None
 
-            allowed_tools = (
-                self.intent_router.get_allowed_tools(classification)
-                if classification
-                else self.intent_router.get_all_tools()
-            )
-
             clarification_prompt = self._prime_contact_scope_for_question(
                 state=state,
                 question=question,
@@ -453,7 +440,7 @@ class AgentController:
                 search_limit,
                 )
 
-            tools = self.tool_registry.get_tool_definitions(allowed_tools)
+            tools = self.tool_registry.get_tool_definitions()
             accumulated_content = ""
 
             while True:

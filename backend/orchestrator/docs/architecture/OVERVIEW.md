@@ -44,17 +44,17 @@ The LLM suggests tool calls, but the controller:
        │
        ▼
 2. IntentRouter.classify()
-   ├─ Rule-based classification (fast)
-   └─ LLM classification (if ambiguous)
+   ├─ LLM-first classification
+   └─ Rule-based fallback (if LLM unavailable/fails)
        │
        ▼
-3. Filter tools by intent (tool-set narrowing)
+3. Build full tool list from registry
        │
        ▼
 4. Agent Loop:
    ├─ Check limits (max_steps, max_tool_calls, max_repairs)
    ├─ Inject state into prompt
-   ├─ Call LLM with filtered tools
+   ├─ Call LLM with full tool set
    ├─ If tool_call:
    │   ├─ Pre-execution validation
    │   ├─ Execute tool handler
@@ -104,7 +104,7 @@ AGENT_ENABLE_VALIDATION=true
 
 1. **Intent router checks order matters**: Rule-based classification checks intents in a specific order. Earlier matches take precedence.
 
-2. **Tool groups affect visibility**: A tool not in any allowed group won't be available for that intent.
+2. **Tool groups are metadata**: Intent router still emits groups for observability/hints, but the controller currently exposes the full tool set.
 
 3. **State is per-request**: AgentState is created fresh for each user question. Cross-request state must be handled externally.
 

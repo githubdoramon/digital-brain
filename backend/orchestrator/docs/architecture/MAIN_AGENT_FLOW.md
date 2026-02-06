@@ -21,7 +21,7 @@ POST /ask or /mobile/ask
     -> session resolution (/new, idle timeout, main session thread)
     -> llm.answer_question(...)
       -> AgentController.run(...)
-        -> Intent routing + tool narrowing
+        -> Intent routing (LLM-first metadata)
         -> Contact scope pre-resolution (once, before loop)
         -> Bounded agent loop (LLM <-> tools)
         -> Finalization + metadata
@@ -42,10 +42,10 @@ Important nuance:
 
 ## 3) Controller Phases
 
-## 3.1 Intent Routing + Tool Narrowing
+## 3.1 Intent Routing (No Tool Narrowing)
 - `IntentRouter` classifies the request.
-- Allowed tool groups are selected (`memory`, `resolution`, etc.).
-- Only tools from those groups are exposed to the model.
+- Allowed tool groups are still produced for state/observability.
+- Controller currently exposes the **full tool set** to the model each step.
 
 ## 3.2 Contact Scope Priming (New Main Flow)
 
@@ -72,7 +72,7 @@ Controller builds LLM messages with:
 
 For each step:
 1. Check stop conditions (`max_steps`, `max_tool_calls`, `max_repairs`, no-progress detection).
-2. Call LLM with filtered tools.
+2. Call LLM with full tool set.
 3. If tool calls:
    - execute tool pipeline (below),
    - if clarification now required, return clarification immediately,
@@ -197,14 +197,14 @@ User: "when did I last meet Gio?"
        limit>=25
   -> retrieval with structured people filter + newest ordering
   -> if model retries equivalent search without new signal -> blocked
-  -> model fetches event details (or SQL) for temporal grounding
+  -> model fetches event details for temporal grounding
   -> final answer
 ```
 
 ## 10) Practical Guardrail Summary
 
 - Model cannot directly execute arbitrary behavior; controller mediates everything.
-- Tool visibility is narrowed by intent.
+- Tool visibility is currently full-set (no intent narrowing).
 - Tool params are schema-validated before execution.
 - Ambiguity produces clarification prompts, not silent guessing.
 - Temporal "first/last/most recent" questions require explicit temporal grounding.

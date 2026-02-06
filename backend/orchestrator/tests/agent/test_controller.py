@@ -260,6 +260,75 @@ class TestResponseBundle:
         assert len(data["tool_calls"]) == 1
 
 
+class TestToolExposurePolicy:
+    """Tests for tool exposure strategy in the controller."""
+
+    @pytest.mark.asyncio
+    async def test_run_exposes_full_toolset_without_intent_narrowing(self, monkeypatch):
+        from agent.router import IntentClassification, IntentType
+
+        controller = AgentController(
+            config=AgentConfig(
+                max_steps=2,
+                max_tool_calls=5,
+                max_repairs=1,
+                enable_intent_routing=True,
+                enable_validation=False,
+            )
+        )
+
+        captured: dict[str, list[str]] = {}
+
+        async def fake_run_intent_router(*_args, **_kwargs):
+            return IntentClassification(
+                intent=IntentType.HOME_CONTROL,
+                confidence=0.9,
+                allowed_tool_groups=["home"],
+                constraints=[],
+                skill_hints=[],
+                reasoning="home intent",
+            )
+
+        monkeypatch.setattr(controller, "_run_intent_router", fake_run_intent_router)
+        monkeypatch.setattr(
+            controller,
+            "_prime_contact_scope_for_question",
+            lambda *args, **kwargs: None,
+        )
+        monkeypatch.setattr(
+            controller,
+            "_build_messages",
+            lambda *args, **kwargs: [{"role": "user", "content": "Turn off office heater"}],
+        )
+        monkeypatch.setattr(
+            controller,
+            "_check_goal_completion",
+            lambda *args, **kwargs: {"achieved": True, "reason": "ok", "pending_actions": []},
+        )
+
+        def fake_call_llm(_messages, tools):
+            captured["tool_names"] = sorted(
+                t.get("function", {}).get("name", "") for t in tools
+            )
+            return {
+                "message": {
+                    "content": "Action completed successfully with available context and tools.",
+                }
+            }
+
+        monkeypatch.setattr(controller, "_call_llm", fake_call_llm)
+
+        await controller.run(
+            question="Turn off office heater",
+            user_email="user@example.com",
+            conversation_history=[],
+        )
+
+        tool_names = captured.get("tool_names", [])
+        assert "home_assistant" in tool_names
+        assert "search_memories" in tool_names
+
+
 class TestContactAwareMemorySearch:
     """Tests for contact-aware memory search enrichment hooks."""
 

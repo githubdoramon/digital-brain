@@ -351,3 +351,64 @@ class TestClassificationConfidence:
         """Test lower confidence for ambiguous queries."""
         result = router._rule_based_classify("What about that thing we discussed?")
         assert result.confidence < 0.8
+
+
+class TestClassificationFlow:
+    """Tests for LLM-first routing behavior."""
+
+    @pytest.mark.asyncio
+    async def test_classify_prefers_llm_before_rule_fallback(self, monkeypatch):
+        router = IntentRouter(
+            llm_base_url="http://localhost:11434/v1",
+            llm_model="test-model",
+            enable_llm_routing=True,
+        )
+
+        llm_result = IntentClassification(
+            intent=IntentType.WEB_SEARCH,
+            confidence=0.91,
+            allowed_tool_groups=["web"],
+            reasoning="LLM-selected intent",
+        )
+
+        monkeypatch.setattr(router, "_llm_classify", lambda *_args, **_kwargs: llm_result)
+        monkeypatch.setattr(
+            router,
+            "_rule_based_classify",
+            lambda *_args, **_kwargs: IntentClassification(
+                intent=IntentType.MEMORY_SEARCH,
+                confidence=0.8,
+                allowed_tool_groups=["memory"],
+                reasoning="rule",
+            ),
+        )
+
+        result = await router.classify("What happened last week?")
+        assert result.intent == IntentType.WEB_SEARCH
+
+    @pytest.mark.asyncio
+    async def test_classify_falls_back_to_rule_when_llm_errors(self, monkeypatch):
+        router = IntentRouter(
+            llm_base_url="http://localhost:11434/v1",
+            llm_model="test-model",
+            enable_llm_routing=True,
+        )
+
+        monkeypatch.setattr(
+            router,
+            "_llm_classify",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("boom")),
+        )
+        monkeypatch.setattr(
+            router,
+            "_rule_based_classify",
+            lambda *_args, **_kwargs: IntentClassification(
+                intent=IntentType.MEMORY_SEARCH,
+                confidence=0.8,
+                allowed_tool_groups=["memory"],
+                reasoning="rule",
+            ),
+        )
+
+        result = await router.classify("Find meetings")
+        assert result.intent == IntentType.MEMORY_SEARCH

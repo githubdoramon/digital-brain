@@ -114,22 +114,6 @@ def get_event_capture_prompt() -> str:
     )
 
 
-def get_tool_visibility_prompt(allowed_tools: list[str]) -> str:
-    """
-    Get a prompt explaining which tools are available.
-
-    Used when intent-based tool narrowing is active.
-    """
-    if not allowed_tools:
-        return (
-            "No tools are needed for this request. "
-            "Respond conversationally based on the context provided."
-        )
-
-    tools_list = ", ".join(f"`{t}`" for t in allowed_tools)
-    return f"AVAILABLE TOOLS: {tools_list}\nUse only these tools for this request."
-
-
 def get_repair_prompt(
     tool_name: str,
     error: str,

@@ -3,8 +3,7 @@ LLM-based intent router for task classification.
 
 The intent router:
 1. Classifies the user's intent
-2. Restricts tool visibility (tool-set narrowing)
-3. Provides skill hints for the skill matcher
+2. Provides skill hints for the skill matcher
 
 This is a separate, dedicated LLM call at the start of each request.
 It can use a smaller/faster model for efficiency.
@@ -99,8 +98,8 @@ class IntentRouter:
     """
     LLM-based intent router for task classification.
 
-    Restricts tool visibility based on intent (tool-set narrowing).
-    Uses a separate LLM call with potentially a smaller/faster model.
+    Produces intent classification and hints via a separate LLM call.
+    Tool visibility is controlled by the controller.
     """
 
     def __init__(
@@ -141,7 +140,8 @@ class IntentRouter:
         """
         Classify the user's intent.
 
-        Uses rule-based heuristics first, then LLM for ambiguous cases.
+        Uses LLM-first classification, then rule-based fallback if LLM is
+        disabled/unavailable or returns an error.
 
         Args:
             question: The user's question
@@ -152,20 +152,7 @@ class IntentRouter:
         """
         start_time = trace.trace_router_start(question)
 
-        # Try rule-based classification first
-        rule_result = self._rule_based_classify(question)
-        if rule_result and rule_result.confidence >= 0.8:
-            duration_ms = (perf_counter() - start_time) * 1000
-            trace.trace_router_rule_match(
-                rule_result.intent.value,
-                rule_result.confidence,
-                rule_result.reasoning or "",
-                rule_result.allowed_tool_groups,
-                duration_ms,
-            )
-            return rule_result
-
-        # Use LLM for ambiguous cases
+        # LLM-first routing
         if self.enable_llm_routing and self.llm_base_url and self.llm_model:
             trace.trace_router_llm_start()
             try:
@@ -184,7 +171,16 @@ class IntentRouter:
                 trace.trace_router_llm_error(str(e))
 
         # Fallback to rule-based result or unknown
+        rule_result = self._rule_based_classify(question)
         if rule_result:
+            duration_ms = (perf_counter() - start_time) * 1000
+            trace.trace_router_rule_match(
+                rule_result.intent.value,
+                rule_result.confidence,
+                rule_result.reasoning or "",
+                rule_result.allowed_tool_groups,
+                duration_ms,
+            )
             trace.trace_router_fallback(rule_result.intent.value, "Using rule-based result")
             return rule_result
 
