@@ -478,6 +478,13 @@ class TestContactAwareMemorySearch:
     def test_low_signal_name_query_uses_goal_when_contact_scope_exists(self, controller):
         state = AgentState(goal="When did I last meet Gio?")
         state.resolution["active_contact_scope_ids"] = ["contact-gio"]
+        state.resolution["active_contact_scope"] = [
+            {
+                "mention_text": "Gio",
+                "display_name": "Giovanni Panerai",
+                "contact_id": "contact-gio",
+            }
+        ]
         args, preempt = controller._prepare_memory_search_arguments(
             args={"query": "Gio"},
             state=state,
@@ -487,9 +494,52 @@ class TestContactAwareMemorySearch:
         )
         assert preempt is None
         assert args.get("contact_ids") == ["contact-gio"]
-        assert args.get("query") == "when did I last meet Gio?"
+        assert args.get("query") == "events"
         assert args.get("sort_order") == "newest"
         assert args.get("limit") == 25
+
+    def test_scoped_query_keeps_only_semantic_topic_terms(self, controller):
+        state = AgentState(goal="When did I last meet Gio and we talked about birds?")
+        state.resolution["active_contact_scope_ids"] = ["contact-gio"]
+        state.resolution["active_contact_scope"] = [
+            {
+                "mention_text": "Gio",
+                "display_name": "Giovanni Panerai",
+                "contact_id": "contact-gio",
+            }
+        ]
+
+        args, preempt = controller._prepare_memory_search_arguments(
+            args={"query": "When did I last meet Gio and we talked about birds?"},
+            state=state,
+            question="When did I last meet Gio and we talked about birds?",
+            user_email="user@example.com",
+            conversation_history=[],
+        )
+
+        assert preempt is None
+        assert args.get("contact_ids") == ["contact-gio"]
+        assert args.get("query") == "birds"
+        assert args.get("sort_order") == "newest"
+        assert args.get("limit") == 25
+
+    def test_builds_contact_scope_context_message(self, controller):
+        state = AgentState(goal="When did I last meet Gio?")
+        state.resolution["active_contact_scope"] = [
+            {
+                "mention_text": "Gio",
+                "display_name": "Giovanni Panerai",
+                "contact_id": "contact:gio-acme-xyz",
+            }
+        ]
+
+        context = controller._build_contact_scope_context(state)
+
+        assert context is not None
+        assert "RESOLVED CONTACT SCOPE" in context
+        assert "'Gio' -> 'Giovanni Panerai'" in context
+        assert "contact:gio-acme-xyz" in context
+        assert "query to 'events'" in context
 
     def test_blocks_redundant_equivalent_memory_search(self, controller):
         state = AgentState(goal="When did I last meet Gio?")

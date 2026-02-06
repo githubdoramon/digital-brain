@@ -111,7 +111,9 @@ parse args
   - temporal limit floor (`>= 25`),
   - applies active contact scope IDs automatically,
   - blocks when pending contact clarification exists.
-- Low-signal person-only query (e.g., `Gio`) with scoped contact IDs is rewritten to the full goal text to avoid weak semantic retrieval.
+- With scoped contact IDs, query text is optimized to semantic topic terms only:
+  - person mentions are stripped from query,
+  - if no extra topic remains, query defaults to `events`.
 - Logs finalized args as `Normalized args`.
 - Blocks redundant equivalent searches that do not increase retrieval window/signal.
 
@@ -192,7 +194,7 @@ User: "when did I last meet Gio?"
        resolve_contacts(question) -> active_contact_scope_ids=[...]
   -> LLM asks search_memories(query="Gio", ...)
   -> controller normalizes:
-       query -> full goal text (low-signal rewrite)
+       query -> "events" (contact-only temporal lookup)
        contact_ids injected from scope
        sort_order="newest"
        limit>=25

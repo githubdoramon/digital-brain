@@ -711,6 +711,11 @@ class AgentController:
         # State injection
         messages.append(build_state_message(state))
 
+        # Explicit contact-scope injection for tool planning.
+        contact_scope_context = self._build_contact_scope_context(state)
+        if contact_scope_context:
+            messages.append({"role": "system", "content": contact_scope_context})
+
         # Conversation history
         if conversation_history:
             for msg in conversation_history:
@@ -1379,16 +1384,24 @@ class AgentController:
             )
             return normalized_args, preempt
 
+        active_scope = state.resolution.get("active_contact_scope") or []
+
         if normalized_args.get("contact_ids"):
-            if self._is_low_signal_person_query(query_text):
-                normalized_args["query"] = goal_text or query_text
+            normalized_args["query"] = self._optimize_query_for_scoped_contacts(
+                query_text=query_text,
+                goal_text=goal_text,
+                active_scope=active_scope,
+            )
             return normalized_args, None
 
         active_scope_ids = state.resolution.get("active_contact_scope_ids")
         if active_scope_ids:
             normalized_args["contact_ids"] = list(active_scope_ids)
-            if self._is_low_signal_person_query(query_text):
-                normalized_args["query"] = goal_text or query_text
+            normalized_args["query"] = self._optimize_query_for_scoped_contacts(
+                query_text=query_text,
+                goal_text=goal_text,
+                active_scope=active_scope,
+            )
             return normalized_args, None
 
         # Contact resolution is handled before entering the main loop.
@@ -1503,19 +1516,73 @@ class AgentController:
         stripped = str(text or "").strip()
         return re.sub(r"^/\w+\s+", "", stripped)
 
-    def _is_low_signal_person_query(self, query: str) -> bool:
-        """Detect short person-name queries that are weak semantic search prompts."""
-        q = str(query or "").strip()
-        if not q:
-            return True
-        if self._detect_temporal_sort_order(q):
-            return False
-        tokens = re.findall(r"[A-Za-z][A-Za-z'-]*", q)
-        if not tokens:
-            return False
-        if len(tokens) <= 2:
-            return True
-        return False
+    def _tokenize_text(self, text: str) -> list[str]:
+        """Tokenize text into lowercase lexical tokens."""
+        return re.findall(r"[A-Za-z0-9']+", str(text or "").lower())
+
+    def _extract_contact_scope_terms(self, active_scope: list[dict[str, Any]]) -> tuple[list[str], set[str]]:
+        """Extract phrase and token forms for resolved contact mentions."""
+        phrases: list[str] = []
+        tokens: set[str] = set()
+
+        for entry in active_scope:
+            if not isinstance(entry, dict):
+                continue
+            for field in ("mention_text", "display_name"):
+                raw_value = str(entry.get(field) or "").strip()
+                if not raw_value:
+                    continue
+                phrases.append(raw_value)
+                for token in self._tokenize_text(raw_value):
+                    tokens.add(token)
+
+        deduped_phrases = list(dict.fromkeys(phrases))
+        return deduped_phrases, tokens
+
+    def _optimize_query_for_scoped_contacts(
+        self,
+        query_text: str,
+        goal_text: str,
+        active_scope: list[dict[str, Any]],
+    ) -> str:
+        """
+        Keep query focused on semantic topic when contact_ids already scope the person.
+
+        Example:
+        - "when did I last meet Gio?" + contact_ids => "events"
+        - "when did I last meet Gio and we talked about birds?" => "birds"
+        """
+        base_query = (query_text or goal_text or "").strip()
+        if not base_query:
+            return "events"
+
+        phrases, mention_tokens = self._extract_contact_scope_terms(active_scope)
+        scrubbed = base_query
+        for phrase in phrases:
+            escaped = re.escape(phrase.strip())
+            if not escaped:
+                continue
+            escaped = escaped.replace(r"\ ", r"\s+")
+            scrubbed = re.sub(rf"\b{escaped}\b", " ", scrubbed, flags=re.IGNORECASE)
+
+        stop_words = {
+            "a", "an", "and", "about", "did", "do", "does", "event", "events",
+            "first", "i", "last", "latest", "meet", "meeting", "meetings", "met",
+            "most", "recent", "talk", "talked", "the", "time", "was", "we",
+            "when", "where", "who", "with",
+        }
+        semantic_terms: list[str] = []
+        seen_terms: set[str] = set()
+        for token in self._tokenize_text(scrubbed):
+            if token in mention_tokens or token in stop_words:
+                continue
+            if token not in seen_terms:
+                seen_terms.add(token)
+                semantic_terms.append(token)
+
+        if semantic_terms:
+            return " ".join(semantic_terms)
+        return "events"
 
     def _update_contact_resolution_state(
         self,
@@ -1534,12 +1601,33 @@ class AgentController:
             ]
             deduped_ids = list(dict.fromkeys(contact_ids))
             if deduped_ids:
+                scope_entries: list[dict[str, Any]] = []
+                seen_scope_ids: set[str] = set()
+                for item in resolved_contacts:
+                    if not isinstance(item, dict):
+                        continue
+                    contact_id = str(item.get("contact_id") or "").strip()
+                    if not contact_id or contact_id in seen_scope_ids:
+                        continue
+                    seen_scope_ids.add(contact_id)
+                    scope_entries.append(
+                        {
+                            "mention_text": str(item.get("original_text") or "").strip(),
+                            "display_name": str(item.get("display_name") or "").strip(),
+                            "contact_id": contact_id,
+                            "confidence": item.get("confidence"),
+                            "matched_via": item.get("matched_via"),
+                        }
+                    )
                 state.resolution["active_contact_scope_ids"] = deduped_ids
+                state.resolution["active_contact_scope"] = scope_entries
                 state.resolution["active_contact_scope_text"] = args.get("text", "")
                 state.resolution.pop("pending_contact_clarification", None)
                 state.resolution.pop("pending_contact_ambiguous_contacts", None)
                 state.resolution.pop("pending_contact_people", None)
                 state.resolution.pop("pending_contact_scope_text", None)
+            else:
+                state.resolution.pop("active_contact_scope", None)
             return
 
         if status == "needs_clarification":
@@ -1555,16 +1643,45 @@ class AgentController:
             state.resolution["pending_contact_scope_text"] = args.get("text", "")
             state.resolution.pop("active_contact_scope_ids", None)
             state.resolution.pop("active_contact_scope_text", None)
+            state.resolution.pop("active_contact_scope", None)
             return
 
         if status == "no_people":
             # No person context found; clear scoped contact state.
             state.resolution.pop("active_contact_scope_ids", None)
             state.resolution.pop("active_contact_scope_text", None)
+            state.resolution.pop("active_contact_scope", None)
             state.resolution.pop("pending_contact_clarification", None)
             state.resolution.pop("pending_contact_ambiguous_contacts", None)
             state.resolution.pop("pending_contact_people", None)
             state.resolution.pop("pending_contact_scope_text", None)
+
+    def _build_contact_scope_context(self, state: AgentState) -> Optional[str]:
+        """Build explicit resolver context for the model when contact scope exists."""
+        entries = state.resolution.get("active_contact_scope") or []
+        if not entries:
+            return None
+
+        lines = ["RESOLVED CONTACT SCOPE (controller authoritative mapping):"]
+        for entry in entries[:8]:
+            mention = str(entry.get("mention_text") or "").strip() or "<unknown mention>"
+            display_name = str(entry.get("display_name") or "").strip() or "<unknown contact>"
+            contact_id = str(entry.get("contact_id") or "").strip()
+            lines.append(
+                f"- '{mention}' -> '{display_name}' (contact_id: {contact_id})"
+            )
+
+        lines.extend(
+            [
+                "",
+                "When calling `search_memories` with scoped contacts:",
+                "- Always pass the mapped IDs via `contact_ids`.",
+                "- Use `query` only for extra semantic topic terms (for example, 'birds').",
+                "- Do not repeat resolved person names in `query` unless the name itself is the topic.",
+                "- If no extra semantic topic exists, set query to 'events'.",
+            ]
+        )
+        return "\n".join(lines)
 
     def _detect_temporal_sort_order(self, query: str) -> Optional[str]:
         """Infer temporal ordering intent from query text."""
