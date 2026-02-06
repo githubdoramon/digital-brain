@@ -17,6 +17,8 @@ import { useRouter } from 'expo-router';
 import Ionicons from '@expo/vector-icons/Ionicons';
 
 import { apiFetch } from '@/api/client';
+import { useAuth } from '@/auth/AuthContext';
+import { Avatar } from '@/components/Avatar';
 import { Card } from '@/components/Card';
 import { useTopNotice } from '@/components/top-notice';
 import { theme } from '@/theme';
@@ -54,6 +56,7 @@ function formatTimezone(): string {
 export default function DailyScreen() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
+  const { email, name, photo, token } = useAuth();
   const [expanded, setExpanded] = React.useState(false);
   const [briefing, setBriefing] = React.useState<DailyBriefing | null>(null);
   const [loading, setLoading] = React.useState(true);
@@ -202,6 +205,7 @@ export default function DailyScreen() {
     : 'No summary metrics yet';
   const formatEventTitle = (event: TodoItem['events'][number]) =>
     event.title?.trim() || 'Linked event';
+  const profileName = name || email || 'You';
 
   return (
     <LinearGradient colors={theme.gradients.sunrise} style={styles.container}>
@@ -218,9 +222,25 @@ export default function DailyScreen() {
         ]}
         ListHeaderComponent={
           <View>
-            <Text style={styles.kicker}>Daily</Text>
-            <Text style={styles.title}>Your day, scoped</Text>
-            <Text style={styles.subtitle}>Review the briefing before you dive in.</Text>
+            <View style={styles.headerRow}>
+              <View style={styles.headerText}>
+                <Text style={styles.kicker}>Daily</Text>
+                <Text style={styles.title}>Your day, scoped</Text>
+                <Text style={styles.subtitle}>Review the briefing before you dive in.</Text>
+              </View>
+              <Pressable
+                onPress={() => router.push('/settings')}
+                accessibilityRole="button"
+                accessibilityLabel="Open settings"
+                accessibilityHint="Shows account and app preferences"
+                style={({ pressed }) => [
+                  styles.profileButton,
+                  pressed && styles.profileButtonPressed,
+                ]}
+              >
+                <Avatar name={profileName} uri={photo} token={token} size={34} />
+              </Pressable>
+            </View>
 
             <Card style={styles.summaryCard}>
               <Pressable
@@ -406,6 +426,15 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
     gap: 12,
   },
+  headerRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    gap: 12,
+  },
+  headerText: {
+    flex: 1,
+  },
   kicker: {
     fontSize: 12,
     textTransform: 'uppercase',
@@ -421,6 +450,20 @@ const styles = StyleSheet.create({
   subtitle: {
     fontSize: 14,
     color: theme.colors.mutedInk,
+  },
+  profileButton: {
+    minHeight: 44,
+    minWidth: 44,
+    padding: 4,
+    borderRadius: 999,
+    backgroundColor: 'rgba(255, 255, 255, 0.86)',
+    borderWidth: 1,
+    borderColor: theme.colors.line,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  profileButtonPressed: {
+    opacity: 0.7,
   },
   summaryCard: {
     marginTop: 10,

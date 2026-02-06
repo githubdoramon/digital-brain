@@ -3,6 +3,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import * as SecureStore from 'expo-secure-store';
 import { ActivityIndicator, Alert, StyleSheet, Switch, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useHeaderHeight } from '@react-navigation/elements';
 
 import { apiFetch } from '@/api/client';
 import { useAuth } from '@/auth/AuthContext';
@@ -23,6 +24,7 @@ const TOKEN_KEY = 'digitalbrain.expoPushToken';
 export default function SettingsScreen() {
   const { token, signOut } = useAuth();
   const insets = useSafeAreaInsets();
+  const headerHeight = useHeaderHeight();
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [pushEnabled, setPushEnabled] = useState(false);
@@ -160,7 +162,10 @@ export default function SettingsScreen() {
   return (
     <LinearGradient
       colors={theme.gradients.sunrise}
-      style={[styles.container, { paddingTop: insets.top + 20, paddingBottom: insets.bottom + 24 }]}
+      style={[
+        styles.container,
+        { paddingTop: headerHeight + 12, paddingBottom: insets.bottom + 24 },
+      ]}
     >
       <View style={styles.header}>
         <Text style={styles.kicker}>Configuration</Text>

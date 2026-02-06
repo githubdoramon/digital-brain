@@ -18,8 +18,7 @@ export {
 } from 'expo-router';
 
 export const unstable_settings = {
-  // Ensure that reloading on `/modal` keeps a back button present.
-  initialRouteName: '(tabs)',
+  initialRouteName: 'home',
 };
 
 // Prevent the splash screen from auto-hiding before asset loading is complete.
@@ -70,12 +69,14 @@ function RootLayoutNav() {
 
   useEffect(() => {
     if (isLoading) return;
+    console.log('[nav] root', { isLoading, token: Boolean(token), segments });
     const inAuthGroup = segments[0] === '(auth)';
     if (!token && !inAuthGroup) {
       router.replace('/(auth)/sign-in');
     }
     if (token && inAuthGroup) {
-      router.replace('/(tabs)');
+      
+      router.replace('/home');
     }
   }, [token, segments, isLoading, router]);
 
@@ -96,7 +97,7 @@ function RootLayoutNav() {
       // Foreground notifications are handled by the global handler.
     });
     responseListener = Notifications.addNotificationResponseReceivedListener(() => {
-      router.push('/(tabs)');
+      router.push('/home');
     });
 
     return () => {
@@ -121,9 +122,29 @@ function RootLayoutNav() {
       }}
     >
       <StatusBar style="dark" backgroundColor="#f7f2ec" />
-      <Stack>
-        <Stack.Screen name="(auth)" options={{ headerShown: false }} />
-        <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
+      <Stack initialRouteName='home'>
+      <Stack.Screen name="(auth)" options={{ headerShown: false }} />
+      <Stack.Screen
+        name="home"
+        options={{
+          headerShown: false,
+          animation: 'fade',
+        }}
+      />
+      <Stack.Screen
+        name="settings"
+        options={{
+          headerShown: true,
+          headerTransparent: true,
+          headerTitle: '',
+          headerBackTitle: ' ',
+          headerBackTitleStyle: { fontSize: 0 },
+          headerBackButtonMenuEnabled: false,
+          headerShadowVisible: false,
+          headerTintColor: theme.colors.ink,
+          headerStyle: { backgroundColor: 'transparent' },
+        }}
+      />
         <Stack.Screen
           name="contacts/[contactId]"
           options={{

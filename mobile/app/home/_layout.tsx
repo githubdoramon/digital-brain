@@ -12,7 +12,7 @@ import { TopNoticeProvider } from '@/components/top-notice';
 
 const leftTabs = [
   {
-    name: 'daily',
+    name: 'index',
     label: 'Daily',
     icon: 'calendar-outline' as const,
   },
@@ -23,7 +23,7 @@ const leftTabs = [
   },
 ];
 
-const chatRoute = 'index';
+const chatRoute = 'brain';
 
 function TabBar({ state, navigation }: BottomTabBarProps) {
   const insets = useSafeAreaInsets();
@@ -167,7 +167,6 @@ export default function TabLayout() {
   return (
     <TopNoticeProvider>
       <Tabs
-        initialRouteName="index"
         screenOptions={{
           headerShown: false,
           tabBarHideOnKeyboard: true,
@@ -179,8 +178,8 @@ export default function TabLayout() {
         }}
         tabBar={(props) => <TabBar {...props} />}
       >
-        <Tabs.Screen name="index" options={{ title: 'Chat' }} />
-        <Tabs.Screen name="daily" options={{ title: 'Daily' }} />
+        <Tabs.Screen name="index" options={{ title: 'Daily' }} />
+        <Tabs.Screen name="brain" options={{ title: 'Chat' }} />
         <Tabs.Screen name="contacts" options={{ title: 'Contacts' }} />
       </Tabs>
     </TopNoticeProvider>
