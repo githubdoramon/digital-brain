@@ -98,9 +98,9 @@ User Question → Intent Router → Tool-Set Narrowing → Agent Loop → Respon
 
 | Intent | Tool Groups | Description |
 |--------|-------------|-------------|
-| `MEMORY_SEARCH` | memory | Search memories, events, documents |
-| `DATA_QUERY` | database | SQL queries, aggregation |
-| `CONTACT_LOOKUP` | resolution | Find people, relationships |
+| `MEMORY_SEARCH` | memory, resolution | Search memories with optional entity resolution |
+| `DATA_QUERY` | database, resolution | SQL queries and entity-aware filtering |
+| `CONTACT_LOOKUP` | resolution, database, memory | Find people, relationships, and related records |
 | `WEB_SEARCH` | web | External information |
 | `HOME_CONTROL` | home | Smart home automation |
 | `SKILL_EXECUTION` | skills | Run skill scripts |
@@ -114,11 +114,23 @@ User Question → Intent Router → Tool-Set Narrowing → Agent Loop → Respon
 |-------|-------|
 | `memory` | search_memories, get_events, get_document |
 | `database` | execute_sql, describe_schema |
-| `resolution` | resolve_query |
-| `web` | web_search |
+| `resolution` | resolve_query, resolve_contacts, lookup_contact |
+| `web` | web_search, fetch_web_page |
 | `home` | home_assistant |
 | `skills` | run_skill_script |
 | `system` | bash |
+
+### Important Rules (Recent)
+
+- **Single source of truth for tool groups**: keep router tool groups aligned with `backend/orchestrator/tools/registry.py`; do not maintain divergent copies.
+- **Controller context kwargs are global**: handlers are invoked with shared runtime context (`state`, `question`, `search_limit`, `user_email`, `conversation_history`). Every handler must accept these explicitly or via `**kwargs`.
+- **Regression guard**: keep `backend/orchestrator/tests/tools/test_handlers/test_handler_signatures.py` passing to prevent `unexpected keyword argument` runtime failures.
+- **`resolve_contacts` contract**: model-facing params should remain minimal (`text` only). Runtime identity/context (like `user_email`) is injected by the controller, not authored by the model.
+- **Contact-aware memory search flow**: if `search_memories` has no `contact_ids` and query is person-referential, controller attempts contact resolution first.
+- **Contact-aware memory search flow**: on unambiguous resolution, inject `contact_ids` into memory search.
+- **Contact-aware memory search flow**: on ambiguity, return a clarification-needed result instead of running unfiltered search.
+- **Contact-aware memory search flow**: avoid repeating identical `resolve_contacts` calls after `needs_clarification`/`no_people` (no-progress guard).
+- **Validation semantics**: post-execution validation must treat clarification-required search/resolution results as `need_user_input`, not generic empty-result retries.
 
 ### Limits & Safety
 
@@ -232,6 +244,7 @@ See `backend/env.template` and `frontend/web/env.template` for full templates.
 ```bash
 # Backend
 cd backend/orchestrator
+source .venv/bin/activate
 pip install -r requirements.txt
 uvicorn app:api --reload
 
@@ -242,6 +255,17 @@ yarn dev
 
 # Full stack
 docker compose up --build
+```
+
+### Test Commands
+
+- Always run backend tests inside `backend/orchestrator/.venv`.
+- Example:
+
+```bash
+cd backend/orchestrator
+source .venv/bin/activate
+pytest tests/agent/test_controller.py tests/integration/test_full_flow.py tests/tools/test_validators.py
 ```
 
 ## Data & Storage

@@ -138,6 +138,7 @@ export default function ChatScreen() {
   const [isAtBottom, setIsAtBottom] = useState(true);
   const [forceScrollNext, setForceScrollNext] = useState(false);
   const [isBootstrapping, setIsBootstrapping] = useState(true);
+  const [composerHeight, setComposerHeight] = useState(0);
   const tabBarOffset = 64;
   const composerInset = tabBarOffset + 96;
 
@@ -304,6 +305,7 @@ export default function ChatScreen() {
   const hasCommandToken = /^\/\w+\s/.test(trimmedInput);
   const showSlashPalette = trimmedInput.startsWith('/') && !hasCommandToken;
   const slashQuery = trimmedInput.slice(1).split(/\s/)[0];
+  const showAnchoredSlashPalette = showSlashPalette && composerHeight > 0;
 
   useEffect(() => {
     if (!listRef.current || listHeight === 0 || (!isAtBottom && !forceScrollNext)) return;
@@ -477,17 +479,22 @@ export default function ChatScreen() {
             </View>
           )}
         />
-        {showSlashPalette && (
-          <SlashCommandPalette
-            query={slashQuery}
-            onSelect={(command) => {
-              const nextInput = `/${command} `;
-              setInput(nextInput);
-            }}
-          />
+        {showAnchoredSlashPalette && (
+          <View style={[styles.slashPaletteAnchor, { bottom: composerHeight + 8 }]}>
+            <SlashCommandPalette
+              query={slashQuery}
+              onSelect={(command) => {
+                const nextInput = `/${command} `;
+                setInput(nextInput);
+              }}
+            />
+          </View>
         )}
 
         <View
+          onLayout={(event) => {
+            setComposerHeight(event.nativeEvent.layout.height);
+          }}
           style={[
             styles.composer,
             {
@@ -595,6 +602,13 @@ const styles = StyleSheet.create({
   },
   commandCardWrap: {
     marginTop: 12,
+  },
+  slashPaletteAnchor: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    zIndex: 3,
+    elevation: 3,
   },
   composer: {
     position: 'absolute',

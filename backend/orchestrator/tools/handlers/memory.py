@@ -21,6 +21,7 @@ def handle_search_memories(
     state: Optional["AgentState"] = None,
     question: str = "",
     search_limit: int = 5,
+    **kwargs,
 ) -> dict[str, Any]:
     """
     Execute search_memories tool.
