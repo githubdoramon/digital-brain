@@ -1464,7 +1464,7 @@ class AgentController:
             return None
 
         text = self._sanitize_goal_text(question)
-        if not self._should_attempt_contact_resolution(text):
+        if not text:
             return None
 
         try:
@@ -1644,43 +1644,6 @@ class AgentController:
                 prompt = f"{prompt} Options: {options_preview}."
 
         return prompt
-
-    def _should_attempt_contact_resolution(self, query: str) -> bool:
-        """Heuristic gate: only resolve contacts when the query appears person-referential."""
-        q = query.strip()
-        if not q:
-            return False
-
-        q_lower = q.lower()
-        relationship_terms = [
-            "my daughter", "my son", "my wife", "my husband", "my mother",
-            "my father", "my mom", "my dad", "my sister", "my brother",
-            "my friend", "my colleague", "my boss", "my manager",
-            "my doctor", "my therapist", "my teacher", "my dentist",
-            "girlfriend", "boyfriend", "coworker", "partner",
-        ]
-        if any(term in q_lower for term in relationship_terms):
-            return True
-
-        if "'s " in q_lower:
-            return True
-
-        pronoun_patterns = [r"\bwith (him|her|them)\b", r"\bmet (him|her|them)\b"]
-        if any(re.search(pattern, q_lower) for pattern in pronoun_patterns):
-            return True
-
-        # Detect likely person names while excluding common sentence starters.
-        stop_tokens = {
-            "what", "when", "where", "who", "why", "how", "find", "search",
-            "show", "list", "tell", "did", "do", "i", "my", "we", "our",
-            "recall", "remember", "meeting", "meetings", "notes", "events",
-        }
-        capitalized_tokens = re.findall(r"\b[A-Z][a-z]+\b", q)
-        for token in capitalized_tokens:
-            if token.lower() not in stop_tokens:
-                return True
-
-        return False
 
     def _check_goal_completion(
         self,

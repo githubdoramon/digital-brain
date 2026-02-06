@@ -542,3 +542,32 @@ class TestContactAwareMemorySearch:
 
         assert prompt is None
         assert state.resolution.get("active_contact_scope_ids") == ["contact-gio"]
+
+    def test_primes_contacts_even_for_generic_question(self, controller, monkeypatch):
+        state = AgentState(goal="What happened last week?")
+        captured_payload = {}
+
+        def fake_resolver(payload):
+            captured_payload.update(payload)
+            return {
+                "status": "no_people",
+                "people_mentioned": [],
+                "resolved_contacts": [],
+                "ambiguous_contacts": [],
+            }
+
+        monkeypatch.setattr(
+            "agents.contacts.executor.handle_resolve_contacts_request",
+            fake_resolver,
+        )
+
+        prompt = controller._prime_contact_scope_for_question(
+            state=state,
+            question="What happened last week?",
+            user_email="user@example.com",
+            conversation_history=[],
+        )
+
+        assert prompt is None
+        assert captured_payload.get("text") == "What happened last week?"
+        assert captured_payload.get("user_email") == "user@example.com"

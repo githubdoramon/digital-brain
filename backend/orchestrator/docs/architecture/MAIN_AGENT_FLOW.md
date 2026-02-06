@@ -51,6 +51,7 @@ Important nuance:
 
 Before the loop starts, controller tries to resolve people from the top-level question once:
 - Runs `resolve_contacts` logic using user email + recent conversation context.
+- Controller does not apply person-detection heuristics here; it delegates that decision to the contacts resolver.
 - Stores either:
   - `active_contact_scope_ids` (success), or
   - pending clarification state (ambiguous).
