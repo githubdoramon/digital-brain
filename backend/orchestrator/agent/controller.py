@@ -248,6 +248,26 @@ class AgentController:
                         conversation_history=conversation_history,
                     )
 
+                    clarification_prompt = self._get_user_clarification_prompt(state)
+                    if clarification_prompt:
+                        trace.trace_decision(
+                            "Need user clarification",
+                            "Returning clarification prompt to user",
+                            {"prompt": clarification_prompt},
+                        )
+                        self.logger.log_decision(
+                            decision="Requesting clarification",
+                            reason=clarification_prompt,
+                        )
+                        return self._finalize(
+                            question,
+                            clarification_prompt,
+                            state,
+                            run_id,
+                            session_id,
+                            total_start,
+                        )
+
                     # Check if goal was achieved after tool execution
                     goal_check = self._check_goal_completion(state, "")
                     if goal_check["pending_actions"]:
@@ -495,6 +515,17 @@ class AgentController:
                             "tool_call_id": call.get("id"),
                             "content": json.dumps(result, ensure_ascii=False, default=str),
                         })
+
+                    clarification_prompt = self._get_user_clarification_prompt(state)
+                    if clarification_prompt:
+                        trace.trace_decision(
+                            "Need user clarification (stream)",
+                            "Returning clarification prompt to user",
+                            {"prompt": clarification_prompt},
+                        )
+                        accumulated_content = clarification_prompt
+                        yield {"type": "token", "content": clarification_prompt}
+                        break
 
                     continue
 
@@ -905,6 +936,9 @@ class AgentController:
             )
             if preempt_result is not None:
                 result = preempt_result
+                prompt = result.get("clarification_prompt")
+                if prompt:
+                    state.add_question(prompt)
                 duration_ms = 0.0
                 success = "error" not in result and result.get("success") is not False
                 result_summary = result.get("clarification_prompt", "Preempted for clarification")
@@ -1065,6 +1099,14 @@ class AgentController:
 
                 # Track failure for potential retry
                 state.add_fact(f"Tool {tool_name} failed: {post_result.reason}")
+            elif post_result.coverage == GoalCoverage.NEED_USER_INPUT:
+                clarification_prompt = post_result.reason.strip()
+                if clarification_prompt:
+                    state.add_question(clarification_prompt)
+                    state.add_fact("User clarification required before continuing")
+                    result.setdefault("_validation", {})
+                    result["_validation"]["status"] = "need_user_input"
+                    result["_validation"]["reason"] = clarification_prompt
 
         # Track successful tool execution as completion evidence
         if success:
@@ -1446,6 +1488,35 @@ class AgentController:
             "results": [],
             "count": 0,
         }
+
+    def _get_user_clarification_prompt(self, state: AgentState) -> Optional[str]:
+        """Return a user-facing clarification prompt when additional input is required."""
+        prompt = str(state.resolution.get("pending_contact_clarification", "")).strip()
+        if not prompt and state.pending_questions:
+            prompt = state.pending_questions[-1].strip()
+        if not prompt:
+            return None
+
+        ambiguous_contacts = state.resolution.get("pending_contact_ambiguous_contacts", [])
+        candidate_names: list[str] = []
+        if isinstance(ambiguous_contacts, list):
+            for item in ambiguous_contacts:
+                if not isinstance(item, dict):
+                    continue
+                for candidate in item.get("candidates", []):
+                    if not isinstance(candidate, dict):
+                        continue
+                    name = str(candidate.get("display_name", "")).strip()
+                    if name and name not in candidate_names:
+                        candidate_names.append(name)
+
+        if candidate_names:
+            options_preview = ", ".join(candidate_names[:4])
+            lower_prompt = prompt.lower()
+            if not any(name.lower() in lower_prompt for name in candidate_names[:4]):
+                prompt = f"{prompt} Options: {options_preview}."
+
+        return prompt
 
     def _should_attempt_contact_resolution(self, query: str) -> bool:
         """Heuristic gate: only resolve contacts when the query appears person-referential."""

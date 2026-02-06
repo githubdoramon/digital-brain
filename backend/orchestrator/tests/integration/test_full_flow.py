@@ -181,6 +181,100 @@ class TestAgentControllerIntegration:
 
         assert captured_search_args.get("contact_ids") == ["contact-gio"]
 
+    @pytest.mark.asyncio
+    async def test_run_returns_clarification_immediately_on_ambiguity(
+        self, monkeypatch
+    ):
+        """Main loop should return clarification instead of looping on ambiguous contact resolution."""
+        controller = AgentController(
+            config=AgentConfig(
+                max_steps=5,
+                max_tool_calls=10,
+                max_repairs=2,
+                enable_intent_routing=False,
+                enable_validation=True,
+            )
+        )
+
+        class StubLogger:
+            def start_run(self, *args, **kwargs):
+                return "run_test"
+
+            def start_step(self, *args, **kwargs):
+                return None
+
+            def log_llm_call(self, *args, **kwargs):
+                return None
+
+            def log_tool_call(self, *args, **kwargs):
+                return None
+
+            def log_validation_result(self, *args, **kwargs):
+                return None
+
+            def log_decision(self, *args, **kwargs):
+                return None
+
+            def log_state_update(self, *args, **kwargs):
+                return None
+
+            def complete_run(self, *args, **kwargs):
+                return None
+
+        controller._logger = StubLogger()
+
+        llm_calls = {"count": 0}
+
+        def fake_call_llm(_messages, _tools):
+            llm_calls["count"] += 1
+            return {
+                "message": {
+                    "tool_calls": [
+                        {
+                            "id": "call_resolve_1",
+                            "type": "function",
+                            "function": {
+                                "name": "resolve_contacts",
+                                "arguments": json.dumps({"text": "When did I meet John?"}),
+                            },
+                        }
+                    ]
+                }
+            }
+
+        def fake_execute_handler(tool_name, args, **_kwargs):
+            if tool_name == "resolve_contacts":
+                return {
+                    "status": "needs_clarification",
+                    "people_mentioned": ["John"],
+                    "resolved_contacts": [],
+                    "ambiguous_contacts": [
+                        {
+                            "person_text": "John",
+                            "candidates": [
+                                {"contact_id": "contact-1", "display_name": "John Smith"},
+                                {"contact_id": "contact-2", "display_name": "John Doe"},
+                            ],
+                            "clarification_prompt": "Which John did you mean?",
+                        }
+                    ],
+                }
+            return {"error": f"Unexpected tool: {tool_name}"}
+
+        monkeypatch.setattr(controller, "_call_llm", fake_call_llm)
+        monkeypatch.setattr(controller, "_execute_handler", fake_execute_handler)
+        monkeypatch.setattr(controller, "_inject_skills", lambda *args, **kwargs: None)
+
+        bundle = await controller.run(
+            question="When did I meet John?",
+            user_email="user@example.com",
+        )
+
+        assert llm_calls["count"] == 1
+        assert "Which John did you mean?" in bundle["answer"]
+        assert "John Smith" in bundle["answer"]
+        assert bundle["resolution"].get("pending_contact_clarification") == "Which John did you mean?"
+
 
 class TestIntentRouterIntegration:
     """Integration tests for intent router with tool registry."""
