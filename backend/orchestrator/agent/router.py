@@ -22,6 +22,7 @@ from typing import Any, Optional
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from observability import trace
+from tools.registry import TOOL_GROUPS as REGISTRY_TOOL_GROUPS
 
 
 class IntentType(str, Enum):
@@ -62,15 +63,8 @@ class IntentClassification:
 
 
 # Tool group mappings
-TOOL_GROUPS = {
-    "memory": ["search_memories", "get_events", "get_document"],
-    "database": ["execute_sql", "describe_schema"],
-    "resolution": ["resolve_query"],
-    "web": ["web_search", "fetch_web_page"],
-    "home": ["home_assistant"],
-    "skills": ["run_skill_script"],
-    "system": ["bash"],
-}
+# Keep this aligned with the canonical registry to avoid drift.
+TOOL_GROUPS = dict(REGISTRY_TOOL_GROUPS)
 
 # Intent to tool group mappings
 INTENT_TOOL_MAP = {

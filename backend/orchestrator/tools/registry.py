@@ -293,20 +293,14 @@ def _register_all_tools(registry: ToolRegistry) -> None:
                 "Extract people from free-form text and resolve them to existing contacts. "
                 "Handles relationships (e.g., 'my daughter') and nested relationships "
                 "('my daughter's doctor'), returns candidates when ambiguous, and "
-                "suggests missing relationships plus inferred professions for new contacts."
+                "suggests missing relationships plus inferred professions for new contacts. "
+                "Provide only natural-language text; runtime user context is injected by the controller."
             ),
             parameters=[
                 ToolParameter(
                     name="text",
                     type="string",
                     description="The text to analyze for person mentions.",
-                    required=True,
-                    min_length=1,
-                ),
-                ToolParameter(
-                    name="user_email",
-                    type="string",
-                    description="User email for relationship context and self resolution.",
                     required=True,
                     min_length=1,
                 ),

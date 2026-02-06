@@ -178,6 +178,16 @@ class PostExecutionValidator:
 
         # Check for empty results from search/query tools
         if tool_name in ("search_memories", "web_search", "execute_sql", "get_events"):
+            if tool_name == "search_memories" and result.get("needs_clarification"):
+                return PostExecutionResult(
+                    coverage=GoalCoverage.NEED_USER_INPUT,
+                    reason=result.get(
+                        "clarification_prompt",
+                        "Multiple people matched. User clarification is required.",
+                    ),
+                    extracted_facts=["Contact disambiguation required before memory search"],
+                )
+
             results_key = "results" if tool_name != "execute_sql" else "rows"
             if tool_name == "get_events":
                 results_key = "events"
@@ -221,6 +231,51 @@ class PostExecutionValidator:
                 coverage=GoalCoverage.NEEDS_MORE_TOOLS,
                 reason="Entities resolved, ready for queries",
                 extracted_facts=facts,
+                )
+
+        # Check resolve_contacts - extract resolution status and ambiguity signals
+        if tool_name == "resolve_contacts":
+            status = result.get("status", "unknown")
+            people = result.get("people_mentioned", [])
+            resolved = result.get("resolved_contacts", [])
+            ambiguous = result.get("ambiguous_contacts", [])
+
+            facts = []
+            if people:
+                facts.append(f"Detected {len(people)} person mentions")
+            if resolved:
+                facts.append(f"Resolved {len(resolved)} contacts")
+
+            if status == "needs_clarification" or ambiguous:
+                prompt = ""
+                if ambiguous:
+                    prompt = ambiguous[0].get("clarification_prompt", "")
+                return PostExecutionResult(
+                    coverage=GoalCoverage.NEED_USER_INPUT,
+                    reason=prompt or "Contact resolution requires user clarification",
+                    extracted_facts=facts or ["Ambiguous contact resolution"],
+                )
+
+            if status == "no_people":
+                return PostExecutionResult(
+                    coverage=GoalCoverage.NEEDS_MORE_TOOLS,
+                    reason="No people detected; continue without contact filters",
+                    extracted_facts=facts,
+                    suggested_next_tools=["search_memories", "resolve_query"],
+                )
+
+            if status == "success":
+                return PostExecutionResult(
+                    coverage=GoalCoverage.NEEDS_MORE_TOOLS,
+                    reason="Contacts resolved and ready for downstream queries",
+                    extracted_facts=facts,
+                    suggested_next_tools=["search_memories", "lookup_contact"],
+                )
+
+            return PostExecutionResult(
+                coverage=GoalCoverage.FAILED,
+                reason=result.get("message", "Contact resolution failed"),
+                suggested_next_tools=["resolve_query", "search_memories"],
             )
 
         # Check lookup_contact - extract contact search/relationship results
@@ -467,6 +522,15 @@ Rules:
                     rel_count = result.get("relationship_count", 0)
                     contact_name = result.get("primary_contact", result.get("contact", {})).get("display_name", "Unknown")
                     facts.append(f"Found {rel_count} relationships for {contact_name}")
+
+        elif tool_name == "resolve_contacts":
+            status = result.get("status", "unknown")
+            resolved = result.get("resolved_contacts", [])
+            ambiguous = result.get("ambiguous_contacts", [])
+            if status == "success" and resolved:
+                facts.append(f"Resolved {len(resolved)} contacts from text")
+            elif status == "needs_clarification" or ambiguous:
+                facts.append("Contact resolution is ambiguous and needs clarification")
 
         return facts
 
@@ -734,7 +798,15 @@ class GoalCompletionValidator:
             return (True, "Query returned results", [])
 
         # Check for successful query tools
-        query_tools = ["search_memories", "execute_sql", "get_events", "get_document", "web_search", "lookup_contact"]
+        query_tools = [
+            "search_memories",
+            "execute_sql",
+            "get_events",
+            "get_document",
+            "web_search",
+            "lookup_contact",
+            "resolve_contacts",
+        ]
         successful_query_calls = [
             tc for tc in tool_calls
             if tc.tool_name in query_tools and tc.success
@@ -770,7 +842,16 @@ class GoalCompletionValidator:
             return False
 
         # Check common result containers
-        for key in ["results", "rows", "events", "documents", "items", "data", "tools"]:
+        for key in [
+            "results",
+            "rows",
+            "events",
+            "documents",
+            "items",
+            "data",
+            "tools",
+            "resolved_contacts",
+        ]:
             value = result.get(key)
             if isinstance(value, list) and len(value) > 0:
                 return True

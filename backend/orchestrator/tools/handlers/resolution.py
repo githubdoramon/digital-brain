@@ -52,6 +52,8 @@ def handle_resolve_query(
 def handle_resolve_contacts(
     args: dict[str, Any],
     state: Optional["AgentState"] = None,
+    conversation_history: Optional[list[dict[str, str]]] = None,
+    user_email: str = "",
     **kwargs,
 ) -> dict[str, Any]:
     """
@@ -62,19 +64,34 @@ def handle_resolve_contacts(
     from agents.contacts.executor import handle_resolve_contacts_request
 
     text = args.get("text", "")
-    user_email = args.get("user_email", "")
+    if not text:
+        text = kwargs.get("question", "")
+
+    # user_email should be injected by the controller, not authored by the model.
+    runtime_email = user_email or args.get("user_email", "")
 
     if not text:
         return {"error": "text is required"}
-    if not user_email:
+    if not runtime_email:
         return {"error": "user_email is required"}
 
-    result = handle_resolve_contacts_request({"text": text, "user_email": user_email})
+    payload: dict[str, Any] = {"text": text, "user_email": runtime_email}
+    if conversation_history:
+        payload["conversation_messages"] = conversation_history[-8:]
+
+    result = handle_resolve_contacts_request(payload)
 
     if state is not None:
         status = result.get("status", "unknown")
         people_count = len(result.get("people_mentioned", []))
-        state.add_fact(f"Resolved {people_count} people from text (status: {status})")
+        resolved_count = len(result.get("resolved_contacts", []))
+        ambiguous_count = len(result.get("ambiguous_contacts", []))
+        state.add_fact(
+            "Resolved "
+            f"{people_count} mentions to {resolved_count} contacts "
+            f"(ambiguous: {ambiguous_count}, status: {status})"
+        )
+        state.resolution["contact_resolution"] = result
 
     return result
 

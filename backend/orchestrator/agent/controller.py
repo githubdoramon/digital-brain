@@ -15,6 +15,7 @@ The controller:
 
 import json
 import os
+import re
 
 # Import with absolute paths to avoid circular imports
 import sys
@@ -245,6 +246,8 @@ class AgentController:
                         question,
                         search_limit,
                         run_id,
+                        user_email=user_email,
+                        conversation_history=conversation_history,
                     )
 
                     # Check if goal was achieved after tool execution
@@ -474,7 +477,13 @@ class AgentController:
                         }
 
                         result = await self._execute_tool_call(
-                            call, state, question, search_limit, run_id
+                            call,
+                            state,
+                            question,
+                            search_limit,
+                            run_id,
+                            user_email=user_email,
+                            conversation_history=conversation_history,
                         )
 
                         yield {
@@ -835,6 +844,8 @@ class AgentController:
         question: str,
         search_limit: int,
         run_id: str,
+        user_email: Optional[str] = None,
+        conversation_history: Optional[list[dict[str, str]]] = None,
     ) -> None:
         """Handle tool calls with validation."""
         # Add assistant message with tool calls
@@ -846,7 +857,13 @@ class AgentController:
 
         for call in tool_calls:
             result = await self._execute_tool_call(
-                call, state, question, search_limit, run_id
+                call,
+                state,
+                question,
+                search_limit,
+                run_id,
+                user_email=user_email,
+                conversation_history=conversation_history,
             )
 
             messages.append({
@@ -862,6 +879,8 @@ class AgentController:
         question: str,
         search_limit: int,
         run_id: str,
+        user_email: Optional[str] = None,
+        conversation_history: Optional[list[dict[str, str]]] = None,
     ) -> dict[str, Any]:
         """Execute a single tool call with validation."""
         func = call.get("function", {})
@@ -878,6 +897,81 @@ class AgentController:
         # Trace tool call start with lifecycle event
         trace.trace_tool_call_start(tool_name, args)
         trace.trace_tool_lifecycle_start(tool_name, call_id, args)
+
+        # Guard against repeated no-progress contact resolution loops.
+        if tool_name == "resolve_contacts":
+            blocked_result = self._block_redundant_contact_resolution(state, args)
+            if blocked_result is not None:
+                duration_ms = 0.0
+                success = "error" not in blocked_result and blocked_result.get("success") is not False
+                result_summary = blocked_result.get("message", "Blocked redundant contact resolution")
+                trace.trace_tool_execution_result(tool_name, duration_ms, success, result_summary)
+                trace.trace_tool_lifecycle_end(
+                    tool_name,
+                    call_id,
+                    success,
+                    duration_ms,
+                    result_summary,
+                )
+                record = ToolCallRecord(
+                    tool_name=tool_name,
+                    arguments=args,
+                    result=blocked_result,
+                    duration_ms=duration_ms,
+                    success=success,
+                    error=blocked_result.get("error"),
+                )
+                state.record_tool_call(record)
+                self.logger.log_tool_call(
+                    run_id,
+                    state.step_count,
+                    tool_name,
+                    args,
+                    duration_ms=duration_ms,
+                    result=blocked_result,
+                )
+                return blocked_result
+
+        # Optionally enrich memory search with resolved contact IDs.
+        if tool_name == "search_memories":
+            args, preempt_result = self._prepare_memory_search_arguments(
+                args=args,
+                state=state,
+                question=question,
+                user_email=user_email,
+                conversation_history=conversation_history,
+            )
+            if preempt_result is not None:
+                result = preempt_result
+                duration_ms = 0.0
+                success = "error" not in result and result.get("success") is not False
+                result_summary = result.get("clarification_prompt", "Preempted for clarification")
+                trace.trace_tool_execution_result(tool_name, duration_ms, success, result_summary)
+                trace.trace_tool_lifecycle_end(
+                    tool_name,
+                    call_id,
+                    success,
+                    duration_ms,
+                    result_summary,
+                )
+                record = ToolCallRecord(
+                    tool_name=tool_name,
+                    arguments=args,
+                    result=result,
+                    duration_ms=duration_ms,
+                    success=success,
+                    error=result.get("error"),
+                )
+                state.record_tool_call(record)
+                self.logger.log_tool_call(
+                    run_id,
+                    state.step_count,
+                    tool_name,
+                    args,
+                    duration_ms=duration_ms,
+                    result=result,
+                )
+                return result
 
         # Pre-execution validation
         if self.config.enable_validation:
@@ -900,7 +994,15 @@ class AgentController:
 
         # Execute tool
         step_start = perf_counter()
-        result = self._execute_handler(tool_name, args, state, question, search_limit)
+        result = self._execute_handler(
+            tool_name=tool_name,
+            args=args,
+            state=state,
+            question=question,
+            search_limit=search_limit,
+            user_email=user_email,
+            conversation_history=conversation_history,
+        )
         duration_ms = (perf_counter() - step_start) * 1000
 
         # Determine result summary for tracing
@@ -1049,6 +1151,13 @@ class AgentController:
                 return f"Resolved {contacts} contacts, {places} places"
             return None
 
+        if tool_name == "resolve_contacts":
+            status = result.get("status")
+            resolved = len(result.get("resolved_contacts", []))
+            if status == "success" and resolved > 0:
+                return f"Resolved {resolved} contacts from natural language"
+            return None
+
         # Default: generic successful execution
         return f"Executed {tool_name}"
 
@@ -1081,6 +1190,8 @@ class AgentController:
         state: AgentState,
         question: str,
         search_limit: int,
+        user_email: Optional[str] = None,
+        conversation_history: Optional[list[dict[str, str]]] = None,
     ) -> dict[str, Any]:
         """Execute tool handler."""
         from tools.handlers import get_handler
@@ -1095,10 +1206,208 @@ class AgentController:
                 state=state,
                 question=question,
                 search_limit=search_limit,
+                user_email=user_email,
+                conversation_history=conversation_history,
             )
         except Exception as e:
             print(f"[controller] Tool execution error: {e}")
             return {"error": str(e)}
+
+    def _block_redundant_contact_resolution(
+        self,
+        state: AgentState,
+        args: dict[str, Any],
+    ) -> Optional[dict[str, Any]]:
+        """Block repeated resolve_contacts calls that previously made no progress."""
+        text = str(args.get("text", "")).strip()
+        if not text:
+            return None
+
+        last_call = state.last_tool_call
+        if not last_call or last_call.tool_name != "resolve_contacts":
+            return None
+
+        last_text = str(last_call.arguments.get("text", "")).strip()
+        last_status = (last_call.result or {}).get("status")
+        if last_text.lower() != text.lower():
+            return None
+        if last_status not in {"needs_clarification", "no_people"}:
+            return None
+
+        reason = (
+            "Contact resolution already returned ambiguity for this exact text. "
+            "Ask the user to clarify instead of retrying the same call."
+            if last_status == "needs_clarification"
+            else "No people were detected for this text in the previous attempt."
+        )
+        trace.trace_decision(
+            "Blocked redundant resolve_contacts call",
+            reason,
+            {"text": text, "previous_status": last_status},
+        )
+        return {
+            **(last_call.result or {}),
+            "status": last_status,
+            "message": reason,
+        }
+
+    def _prepare_memory_search_arguments(
+        self,
+        args: dict[str, Any],
+        state: AgentState,
+        question: str,
+        user_email: Optional[str],
+        conversation_history: Optional[list[dict[str, str]]],
+    ) -> tuple[dict[str, Any], Optional[dict[str, Any]]]:
+        """
+        Enrich search_memories args with resolved contact IDs when person mentions are present.
+
+        Returns:
+            (normalized_args, preempt_result)
+            - preempt_result is set when we should ask the user for clarification instead
+              of running an unfiltered memory search.
+        """
+        normalized_args = dict(args)
+        if normalized_args.get("contact_ids"):
+            return normalized_args, None
+        if not user_email:
+            return normalized_args, None
+
+        query_text = str(normalized_args.get("query") or question or "").strip()
+        if not query_text:
+            return normalized_args, None
+        if not self._should_attempt_contact_resolution(query_text):
+            return normalized_args, None
+
+        cache_key = " ".join(query_text.lower().split())
+        resolution_cache = state.resolution.setdefault("_contact_resolution_cache", {})
+        cached = resolution_cache.get(cache_key)
+        if cached:
+            cached_status = cached.get("status")
+            cached_ids = cached.get("contact_ids", [])
+            if cached_status == "success" and cached_ids:
+                normalized_args["contact_ids"] = cached_ids
+                return normalized_args, None
+            if cached_status == "needs_clarification":
+                preempt = self._build_contact_clarification_result(
+                    cached.get("ambiguous_contacts", []),
+                    cached.get("people_mentioned", []),
+                )
+                return normalized_args, preempt
+            return normalized_args, None
+
+        try:
+            from agents.contacts.executor import handle_resolve_contacts_request
+
+            payload: dict[str, Any] = {
+                "text": query_text,
+                "user_email": user_email,
+            }
+            if conversation_history:
+                payload["conversation_messages"] = conversation_history[-8:]
+
+            resolution = handle_resolve_contacts_request(payload)
+            state.resolution["contact_resolution"] = resolution
+            status = resolution.get("status", "error")
+            resolved = resolution.get("resolved_contacts", [])
+            resolved_ids = [
+                contact["contact_id"]
+                for contact in resolved
+                if isinstance(contact, dict) and contact.get("contact_id")
+            ]
+            deduped_ids = list(dict.fromkeys(resolved_ids))
+            resolution_cache[cache_key] = {
+                "status": status,
+                "contact_ids": deduped_ids,
+                "ambiguous_contacts": resolution.get("ambiguous_contacts", []),
+                "people_mentioned": resolution.get("people_mentioned", []),
+            }
+
+            if status == "success" and deduped_ids:
+                normalized_args["contact_ids"] = deduped_ids
+                state.add_fact(
+                    f"Auto-resolved {len(deduped_ids)} contacts for memory search filter"
+                )
+                return normalized_args, None
+
+            if status == "needs_clarification":
+                preempt = self._build_contact_clarification_result(
+                    resolution.get("ambiguous_contacts", []),
+                    resolution.get("people_mentioned", []),
+                )
+                state.add_fact(
+                    "Contact resolution for memory search needs user clarification"
+                )
+                if preempt.get("clarification_prompt"):
+                    state.add_question(preempt["clarification_prompt"])
+                return normalized_args, preempt
+
+            return normalized_args, None
+        except Exception as e:
+            trace.trace_tool_error(
+                "search_memories",
+                f"Automatic contact resolution failed: {e}",
+            )
+            return normalized_args, None
+
+    def _build_contact_clarification_result(
+        self,
+        ambiguous_contacts: list[dict[str, Any]],
+        people_mentioned: list[str],
+    ) -> dict[str, Any]:
+        """Build a synthetic search result asking for person clarification."""
+        prompt = ""
+        if ambiguous_contacts:
+            prompt = ambiguous_contacts[0].get("clarification_prompt", "")
+        if not prompt:
+            prompt = "I found multiple matching people. Please clarify which person you mean."
+
+        return {
+            "status": "needs_clarification",
+            "needs_clarification": True,
+            "clarification_prompt": prompt,
+            "ambiguous_contacts": ambiguous_contacts,
+            "people_mentioned": people_mentioned,
+            "results": [],
+            "count": 0,
+        }
+
+    def _should_attempt_contact_resolution(self, query: str) -> bool:
+        """Heuristic gate: only resolve contacts when the query appears person-referential."""
+        q = query.strip()
+        if not q:
+            return False
+
+        q_lower = q.lower()
+        relationship_terms = [
+            "my daughter", "my son", "my wife", "my husband", "my mother",
+            "my father", "my mom", "my dad", "my sister", "my brother",
+            "my friend", "my colleague", "my boss", "my manager",
+            "my doctor", "my therapist", "my teacher", "my dentist",
+            "girlfriend", "boyfriend", "coworker", "partner",
+        ]
+        if any(term in q_lower for term in relationship_terms):
+            return True
+
+        if "'s " in q_lower:
+            return True
+
+        pronoun_patterns = [r"\bwith (him|her|them)\b", r"\bmet (him|her|them)\b"]
+        if any(re.search(pattern, q_lower) for pattern in pronoun_patterns):
+            return True
+
+        # Detect likely person names while excluding common sentence starters.
+        stop_tokens = {
+            "what", "when", "where", "who", "why", "how", "find", "search",
+            "show", "list", "tell", "did", "do", "i", "my", "we", "our",
+            "recall", "remember", "meeting", "meetings", "notes", "events",
+        }
+        capitalized_tokens = re.findall(r"\b[A-Z][a-z]+\b", q)
+        for token in capitalized_tokens:
+            if token.lower() not in stop_tokens:
+                return True
+
+        return False
 
     def _check_goal_completion(
         self,

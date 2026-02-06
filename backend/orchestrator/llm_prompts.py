@@ -34,6 +34,8 @@ def get_protocol_prompt() -> str:
         "- Use `search_memories` for semantic/vector search across events and documents.\n"
         "- Use `execute_sql` for precise queries - validate column names against schema, use ILIKE for case-insensitive matching.\n"
         "- Use `resolve_query` to extract contacts, places, and time ranges from natural language.\n"
+        "- Use `resolve_contacts` when person mentions may be relational/ambiguous before memory search.\n"
+        "- When searching memories about a person, pass resolved IDs via `contact_ids` to `search_memories`.\n"
         "- The database is personal to this user - all data relates to them.\n"
         "- Tasks/todos are in the 'todos' table.\n\n"
         "CRITICAL - Tool calling behavior:\n"

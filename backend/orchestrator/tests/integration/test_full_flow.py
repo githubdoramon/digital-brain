@@ -5,6 +5,8 @@ Note: These tests verify integration between components.
 Full end-to-end tests with LLM calls require additional infrastructure.
 """
 
+import json
+
 import pytest
 
 from agent.controller import AgentController
@@ -36,6 +38,68 @@ class TestAgentControllerIntegration:
         assert controller.config.max_steps == 5
         assert controller.config.max_tool_calls == 10
         assert controller.config.max_repairs == 2
+
+    @pytest.mark.asyncio
+    async def test_search_memories_preempts_with_contact_clarification(
+        self, controller, monkeypatch
+    ):
+        """
+        Test search_memories is preempted when contact resolution is ambiguous.
+
+        This verifies the integration path inside _execute_tool_call:
+        search_memories -> auto contact resolution -> clarification result.
+        """
+        state = AgentState(goal="When did I talk to John?")
+        state.step_count = 1
+
+        class StubLogger:
+            def log_tool_call(self, *args, **kwargs):
+                return None
+
+        controller._logger = StubLogger()
+
+        monkeypatch.setattr(
+            "agents.contacts.executor.handle_resolve_contacts_request",
+            lambda _payload: {
+                "status": "needs_clarification",
+                "people_mentioned": ["John"],
+                "resolved_contacts": [],
+                "ambiguous_contacts": [
+                    {"clarification_prompt": "Which John do you mean?"}
+                ],
+            },
+        )
+
+        def should_not_run_handler(*args, **kwargs):
+            raise AssertionError("search handler should not run when clarification is required")
+
+        monkeypatch.setattr(controller, "_execute_handler", should_not_run_handler)
+
+        call = {
+            "id": "call_ambiguous_search",
+            "type": "function",
+            "function": {
+                "name": "search_memories",
+                "arguments": json.dumps({"query": "When did I talk to John?"}),
+            },
+        }
+
+        result = await controller._execute_tool_call(
+            call=call,
+            state=state,
+            question="When did I talk to John?",
+            search_limit=5,
+            run_id="test_run",
+            user_email="user@example.com",
+            conversation_history=[],
+        )
+
+        assert result["status"] == "needs_clarification"
+        assert result["needs_clarification"] is True
+        assert "Which John do you mean?" in result["clarification_prompt"]
+        assert state.tool_calls_count == 1
+        assert state.last_tool_call is not None
+        assert state.last_tool_call.tool_name == "search_memories"
 
 
 class TestIntentRouterIntegration:

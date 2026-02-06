@@ -9,6 +9,7 @@ import pytest
 
 from agent.state import AgentState, ToolCallRecord
 from tools.contracts import ToolContract, ToolParameter
+from tools.validators.post_execution import GoalCoverage, PostExecutionValidator
 
 
 class TestPreExecutionValidation:
@@ -165,6 +166,47 @@ class TestValidationFlow:
         state.repair_count += 1
 
         assert state.repair_count == 1
+
+
+class TestPostValidatorContactResolution:
+    """Tests for deterministic resolve_contacts post-validation behavior."""
+
+    @pytest.fixture
+    def validator(self):
+        return PostExecutionValidator(enable_llm_validation=False)
+
+    def test_resolve_contacts_needs_user_input(self, validator):
+        result = validator.validate(
+            tool_name="resolve_contacts",
+            params={"text": "When did I meet John?"},
+            result={
+                "status": "needs_clarification",
+                "people_mentioned": ["John"],
+                "resolved_contacts": [],
+                "ambiguous_contacts": [
+                    {"clarification_prompt": "Which John do you mean?"}
+                ],
+            },
+            goal="Find meetings with John",
+            known_facts=[],
+        )
+        assert result.coverage == GoalCoverage.NEED_USER_INPUT
+        assert "Which John do you mean?" in result.reason
+
+    def test_search_memories_clarification_short_circuit(self, validator):
+        result = validator.validate(
+            tool_name="search_memories",
+            params={"query": "When did I meet John?"},
+            result={
+                "needs_clarification": True,
+                "clarification_prompt": "Which John do you mean?",
+                "results": [],
+                "count": 0,
+            },
+            goal="Find meetings with John",
+            known_facts=[],
+        )
+        assert result.coverage == GoalCoverage.NEED_USER_INPUT
 
 
 class TestFactExtraction:

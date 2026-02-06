@@ -220,6 +220,15 @@ class TestPreregisteredTools:
         contract = populated_registry.get_contract("resolve_query")
         assert contract is not None
 
+    def test_resolve_contacts_registered(self, populated_registry):
+        """Test resolve_contacts tool is registered and model-facing params are minimal."""
+        contract = populated_registry.get_contract("resolve_contacts")
+        assert contract is not None
+
+        is_valid, error, _ = contract.validate_params({"text": "When did I see John?"})
+        assert is_valid is True
+        assert error is None
+
     def test_web_search_registered(self, populated_registry):
         """Test web_search tool is registered."""
         contract = populated_registry.get_contract("web_search")

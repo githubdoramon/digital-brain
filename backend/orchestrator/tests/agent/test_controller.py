@@ -5,6 +5,8 @@ Note: These tests verify the controller interface and configuration.
 Full integration tests would require mocking the LLM backend.
 """
 
+from unittest.mock import patch
+
 import pytest
 
 from agent.controller import AgentController, get_controller
@@ -258,3 +260,107 @@ class TestResponseBundle:
         assert "known_facts" in data
         assert "tool_calls" in data
         assert len(data["tool_calls"]) == 1
+
+
+class TestContactAwareMemorySearch:
+    """Tests for contact-aware memory search enrichment hooks."""
+
+    @pytest.fixture
+    def controller(self, agent_config):
+        return AgentController(config=agent_config)
+
+    def test_enriches_contact_ids_from_resolution(self, controller):
+        state = AgentState(goal="When did I talk to John?")
+        mocked_resolution = {
+            "status": "success",
+            "people_mentioned": ["John"],
+            "resolved_contacts": [{"contact_id": "contact-123", "display_name": "John Smith"}],
+            "ambiguous_contacts": [],
+        }
+
+        with patch(
+            "agents.contacts.executor.handle_resolve_contacts_request",
+            return_value=mocked_resolution,
+        ):
+            args, preempt = controller._prepare_memory_search_arguments(
+                args={"query": "When did I talk to John?"},
+                state=state,
+                question="When did I talk to John?",
+                user_email="user@example.com",
+                conversation_history=[],
+            )
+
+        assert preempt is None
+        assert args.get("contact_ids") == ["contact-123"]
+
+    def test_preempts_memory_search_when_contact_is_ambiguous(self, controller):
+        state = AgentState(goal="When did I talk to John?")
+        mocked_resolution = {
+            "status": "needs_clarification",
+            "people_mentioned": ["John"],
+            "resolved_contacts": [],
+            "ambiguous_contacts": [
+                {"clarification_prompt": "Which John do you mean?"}
+            ],
+        }
+
+        with patch(
+            "agents.contacts.executor.handle_resolve_contacts_request",
+            return_value=mocked_resolution,
+        ):
+            args, preempt = controller._prepare_memory_search_arguments(
+                args={"query": "When did I talk to John?"},
+                state=state,
+                question="When did I talk to John?",
+                user_email="user@example.com",
+                conversation_history=[],
+            )
+
+        assert "contact_ids" not in args
+        assert preempt is not None
+        assert preempt.get("needs_clarification") is True
+        assert "Which John do you mean?" in preempt.get("clarification_prompt", "")
+
+    def test_blocks_redundant_resolve_contacts_after_ambiguity(self, controller):
+        state = AgentState(goal="When did I meet John?")
+        state.record_tool_call(
+            ToolCallRecord(
+                tool_name="resolve_contacts",
+                arguments={"text": "When did I meet John?"},
+                result={
+                    "status": "needs_clarification",
+                    "ambiguous_contacts": [{"clarification_prompt": "Which John?"}],
+                },
+                duration_ms=10,
+                success=True,
+            )
+        )
+
+        blocked = controller._block_redundant_contact_resolution(
+            state,
+            {"text": "When did I meet John?"},
+        )
+        assert blocked is not None
+        assert blocked.get("status") == "needs_clarification"
+
+    def test_execute_handler_receives_runtime_context(self, controller, monkeypatch):
+        captured = {}
+
+        def fake_handler(args, **kwargs):
+            captured.update(kwargs)
+            return {"ok": True}
+
+        monkeypatch.setattr("tools.handlers.get_handler", lambda _: fake_handler)
+        result = controller._execute_handler(
+            tool_name="resolve_contacts",
+            args={"text": "John"},
+            state=AgentState(goal="x"),
+            question="x",
+            search_limit=5,
+            user_email="user@example.com",
+            conversation_history=[{"role": "user", "content": "John"}],
+        )
+
+        assert result == {"ok": True}
+        assert captured.get("user_email") == "user@example.com"
+        assert captured.get("conversation_history") == [{"role": "user", "content": "John"}]
