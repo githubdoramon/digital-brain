@@ -29,6 +29,15 @@ from .guardrails import (
     sanitize_goal_text,
 )
 from .limits import AgentConfig, LimitChecker
+from .response_guardrails import (
+    CODE_DESCRIBING_TOOL_PROMPT,
+    CONTINUATION_PROMPT_STREAM,
+    CONTINUATION_PROMPT_SYNC,
+    MALFORMED_TOOL_CALL_PROMPT,
+    looks_like_code_describing_tool,
+    looks_like_continuation,
+    looks_like_malformed_tool_call,
+)
 from .router import IntentClassification, IntentRouter
 from .state import AgentState
 
@@ -319,38 +328,32 @@ class AgentController:
                     content = "I apologize, but I wasn't able to complete this request."
 
                 # Check if this is a continuation intent
-                if self._looks_like_continuation(content) and state.step_count < self.config.max_steps - 1:
+                if looks_like_continuation(content) and state.step_count < self.config.max_steps - 1:
                     trace.trace_continuation_detected(content)
                     self.logger.log_continuation_detected(content)
                     messages.append({
                         "role": "user",
-                        "content": "You expressed intent to perform an action but didn't call any tool. Please actually invoke the tool now.",
+                        "content": CONTINUATION_PROMPT_SYNC,
                     })
                     continue
 
                 # Check for malformed tool call (JSON in content instead of proper tool call)
-                if self._looks_like_malformed_tool_call(content) and state.step_count < self.config.max_steps - 1:
+                if looks_like_malformed_tool_call(content) and state.step_count < self.config.max_steps - 1:
                     trace.trace_malformed_output(content, "JSON tool call in text output")
                     self.logger.log_malformed_output(content, "JSON tool call in text output")
                     messages.append({
                         "role": "user",
-                        "content": "You output JSON instead of making a proper tool call. Do NOT output raw JSON. "
-                        "Use the home_assistant tool with action='call_tool', tool_name set to the HA tool name "
-                        "(e.g., 'HassLightSet'), and arguments containing the parameters. Try again.",
+                        "content": MALFORMED_TOOL_CALL_PROMPT,
                     })
                     continue
 
                 # Check for code describing tool usage instead of actual tool call
-                if self._looks_like_code_describing_tool(content) and state.step_count < self.config.max_steps - 1:
+                if looks_like_code_describing_tool(content) and state.step_count < self.config.max_steps - 1:
                     trace.trace_malformed_output(content, "Code describing tool instead of calling it")
                     self.logger.log_malformed_output(content, "Code describing tool instead of calling it")
                     messages.append({
                         "role": "user",
-                        "content": "WRONG: You wrote CODE describing a tool call instead of ACTUALLY calling the tool. "
-                        "Do NOT output code snippets, variable assignments, or descriptions. "
-                        "You MUST use the tool_call mechanism to invoke tools. "
-                        "Call the home_assistant tool NOW with action='call_tool', tool_name='HassTurnOff' (or appropriate tool), "
-                        "and arguments={'name': 'device name'}. ACTUALLY CALL THE TOOL - don't describe it.",
+                        "content": CODE_DESCRIBING_TOOL_PROMPT,
                     })
                     continue
 
@@ -572,44 +575,38 @@ class AgentController:
                     })
                     continue
 
-                if self._looks_like_continuation(current_content) and state.step_count < self.config.max_steps - 1:
+                if looks_like_continuation(current_content) and state.step_count < self.config.max_steps - 1:
                     trace.trace_continuation_detected(current_content)
                     self.logger.log_continuation_detected(current_content)
                     if streamed_any:
                         yield {"type": "clear_content"}
                     messages.append({
                         "role": "user",
-                        "content": "You expressed intent to perform an action but didn't call any tool. Please invoke the tool now.",
+                        "content": CONTINUATION_PROMPT_STREAM,
                     })
                     continue
 
                 # Check for malformed tool call (JSON in content instead of proper tool call)
-                if self._looks_like_malformed_tool_call(current_content) and state.step_count < self.config.max_steps - 1:
+                if looks_like_malformed_tool_call(current_content) and state.step_count < self.config.max_steps - 1:
                     trace.trace_malformed_output(current_content, "JSON tool call in text output")
                     self.logger.log_malformed_output(current_content, "JSON tool call in text output")
                     if streamed_any:
                         yield {"type": "clear_content"}
                     messages.append({
                         "role": "user",
-                        "content": "You output JSON instead of making a proper tool call. Do NOT output raw JSON. "
-                        "Use the home_assistant tool with action='call_tool', tool_name set to the HA tool name "
-                        "(e.g., 'HassLightSet'), and arguments containing the parameters. Try again.",
+                        "content": MALFORMED_TOOL_CALL_PROMPT,
                     })
                     continue
 
                 # Check for code describing tool usage instead of actual tool call
-                if self._looks_like_code_describing_tool(current_content) and state.step_count < self.config.max_steps - 1:
+                if looks_like_code_describing_tool(current_content) and state.step_count < self.config.max_steps - 1:
                     trace.trace_malformed_output(current_content, "Code describing tool instead of calling it")
                     self.logger.log_malformed_output(current_content, "Code describing tool instead of calling it")
                     if streamed_any:
                         yield {"type": "clear_content"}
                     messages.append({
                         "role": "user",
-                        "content": "WRONG: You wrote CODE describing a tool call instead of ACTUALLY calling the tool. "
-                        "Do NOT output code snippets, variable assignments, or descriptions. "
-                        "You MUST use the tool_call mechanism to invoke tools. "
-                        "Call the home_assistant tool NOW with action='call_tool', tool_name='HassTurnOff' (or appropriate tool), "
-                        "and arguments={'name': 'device name'}. ACTUALLY CALL THE TOOL - don't describe it.",
+                        "content": CODE_DESCRIBING_TOOL_PROMPT,
                     })
                     continue
 
@@ -1345,106 +1342,6 @@ class AgentController:
             "reason": reason,
             "pending_actions": pending_actions,
         }
-
-    def _looks_like_continuation(self, content: str) -> bool:
-        """Check if content indicates model wants to continue but didn't call a tool."""
-        patterns = [
-            "let me try", "let me find", "let me search",
-            "let me check", "let me look", "let me query",
-            "i need to", "i will try", "i'll try",
-            "i will search", "i'll search", "i will query",
-            "first, i need", "i should", "i'll need to",
-        ]
-
-        lower = content.lower().strip()
-        if len(lower) > 800:
-            return False
-
-        return any(p in lower for p in patterns)
-
-    def _looks_like_malformed_tool_call(self, content: str) -> bool:
-        """Check if content looks like a malformed tool call (JSON output instead of proper tool call)."""
-        stripped = content.strip()
-
-        # Remove common LLM artifacts that prefix JSON
-        for prefix in ["<|python_tag|>", "```json", "```", "<tool_call>", "<function_call>"]:
-            if stripped.startswith(prefix):
-                stripped = stripped[len(prefix):].strip()
-        for suffix in ["```", "</tool_call>", "</function_call>"]:
-            if stripped.endswith(suffix):
-                stripped = stripped[:-len(suffix)].strip()
-
-        # Check for JSON-like tool call patterns
-        if stripped.startswith("{") and stripped.endswith("}"):
-            # Quick check for common tool call indicators
-            tool_indicators = [
-                '"type": "function"',
-                '"name":',
-                '"function":',
-                '"parameters":',
-                '"arguments":',
-                '"tool_call"',
-                '"action":'
-            ]
-            return any(indicator in stripped for indicator in tool_indicators)
-
-        return False
-
-    def _looks_like_code_describing_tool(self, content: str) -> bool:
-        """
-        Check if content contains code describing tool usage instead of actually calling the tool.
-
-        This catches cases where the LLM outputs code snippets like:
-        - action = 'call_tool'
-        - tool_name = 'HassTurnOff'
-        - arguments = {'name': 'office lights'}
-        """
-        lower = content.lower()
-
-        # Check for code block with tool-related variable assignments
-        code_indicators = [
-            "action = ",
-            "action=",
-            "tool_name = ",
-            "tool_name=",
-            "arguments = ",
-            "arguments=",
-            "'call_tool'",
-            '"call_tool"',
-            "'list_tools'",
-            '"list_tools"',
-        ]
-
-        # Must have a code block indicator
-        has_code_block = "```" in content or "action =" in lower or "tool_name =" in lower
-
-        # And must reference tool-related patterns
-        has_tool_reference = any(ind in lower for ind in code_indicators)
-
-        # Also check for Home Assistant tool names mentioned as strings
-        ha_tools_as_strings = [
-            "'hassturnoff'", '"hassturnoff"',
-            "'hassturnon'", '"hassturnon"',
-            "'hasslightset'", '"hasslightset"',
-            "'hassclimatesettemperature'", '"hassclimatesettemperature"',
-        ]
-        has_ha_tool_string = any(tool in lower for tool in ha_tools_as_strings)
-
-        # Check for phrases indicating description instead of action
-        description_phrases = [
-            "here is the code",
-            "here's the code",
-            "the code is",
-            "use this code",
-            "code to",
-            "i will turn off",
-            "i'll turn off",
-            "i will turn on",
-            "i'll turn on",
-        ]
-        has_description_phrase = any(phrase in lower for phrase in description_phrases)
-
-        return (has_code_block and has_tool_reference) or has_ha_tool_string or (has_description_phrase and has_tool_reference)
 
     def _handle_limit_violation(
         self,
