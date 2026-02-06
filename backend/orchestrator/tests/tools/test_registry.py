@@ -210,6 +210,17 @@ class TestPreregisteredTools:
         assert contract is not None
         assert contract.name == "search_memories"
 
+    def test_search_memories_accepts_sort_order(self, populated_registry):
+        """Test search_memories supports temporal ordering parameter."""
+        contract = populated_registry.get_contract("search_memories")
+        assert contract is not None
+
+        is_valid, error, _ = contract.validate_params(
+            {"query": "first time I met Gio", "sort_order": "oldest"}
+        )
+        assert is_valid is True
+        assert error is None
+
     def test_execute_sql_registered(self, populated_registry):
         """Test execute_sql tool is registered."""
         contract = populated_registry.get_contract("execute_sql")

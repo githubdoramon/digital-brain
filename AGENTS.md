@@ -123,6 +123,7 @@ User Question → Intent Router → Tool-Set Narrowing → Agent Loop → Respon
 ### Important Rules (Recent)
 
 - **Single source of truth for tool groups**: keep router tool groups aligned with `backend/orchestrator/tools/registry.py`; do not maintain divergent copies.
+- **LLM calls must use helpers**: all LLM requests and streams go through `backend/orchestrator/llm_helpers.py` (no direct HTTP calls in controllers/handlers).
 - **Controller context kwargs are global**: handlers are invoked with shared runtime context (`state`, `question`, `search_limit`, `user_email`, `conversation_history`). Every handler must accept these explicitly or via `**kwargs`.
 - **Regression guard**: keep `backend/orchestrator/tests/tools/test_handlers/test_handler_signatures.py` passing to prevent `unexpected keyword argument` runtime failures.
 - **`resolve_contacts` contract**: model-facing params should remain minimal (`text` only). Runtime identity/context (like `user_email`) is injected by the controller, not authored by the model.

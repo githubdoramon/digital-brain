@@ -364,3 +364,64 @@ class TestContactAwareMemorySearch:
         assert result == {"ok": True}
         assert captured.get("user_email") == "user@example.com"
         assert captured.get("conversation_history") == [{"role": "user", "content": "John"}]
+
+    def test_applies_active_contact_scope_to_followup_search(self, controller):
+        state = AgentState(goal="When did I last meet Gio?")
+        state.resolution["active_contact_scope_ids"] = ["contact-123"]
+
+        args, preempt = controller._prepare_memory_search_arguments(
+            args={"query": "last meeting"},
+            state=state,
+            question="When did I last meet Gio?",
+            user_email="user@example.com",
+            conversation_history=[],
+        )
+
+        assert preempt is None
+        assert args.get("contact_ids") == ["contact-123"]
+
+    def test_pending_clarification_blocks_search(self, controller):
+        state = AgentState(goal="When did I meet John?")
+        state.resolution["pending_contact_clarification"] = "Which John do you mean?"
+        state.resolution["pending_contact_ambiguous_contacts"] = [
+            {"clarification_prompt": "Which John do you mean?"}
+        ]
+        state.resolution["pending_contact_people"] = ["John"]
+
+        args, preempt = controller._prepare_memory_search_arguments(
+            args={"query": "meeting notes"},
+            state=state,
+            question="When did I meet John?",
+            user_email="user@example.com",
+            conversation_history=[],
+        )
+
+        assert "contact_ids" not in args
+        assert preempt is not None
+        assert preempt.get("needs_clarification") is True
+
+    def test_temporal_latest_sets_newest_sort_and_wider_limit(self, controller):
+        state = AgentState(goal="When did I last meet Gio?")
+        args, preempt = controller._prepare_memory_search_arguments(
+            args={"query": "When did I last meet Gio?"},
+            state=state,
+            question="When did I last meet Gio?",
+            user_email=None,
+            conversation_history=[],
+        )
+        assert preempt is None
+        assert args.get("sort_order") == "newest"
+        assert args.get("limit") == 25
+
+    def test_temporal_first_sets_oldest_sort_and_wider_limit(self, controller):
+        state = AgentState(goal="When was the first time I met Gio?")
+        args, preempt = controller._prepare_memory_search_arguments(
+            args={"query": "first time I met Gio"},
+            state=state,
+            question="When was the first time I met Gio?",
+            user_email=None,
+            conversation_history=[],
+        )
+        assert preempt is None
+        assert args.get("sort_order") == "oldest"
+        assert args.get("limit") == 25

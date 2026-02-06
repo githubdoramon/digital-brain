@@ -216,6 +216,17 @@ def _register_all_tools(registry: ToolRegistry) -> None:
                     items_type="string",
                 ),
                 ToolParameter(
+                    name="sort_order",
+                    type="string",
+                    description=(
+                        "Optional ordering mode: 'relevance' (default), "
+                        "'newest' (most recent first), or 'oldest' (earliest first)."
+                    ),
+                    required=False,
+                    default="relevance",
+                    enum=["relevance", "newest", "oldest"],
+                ),
+                ToolParameter(
                     name="tags",
                     type="array",
                     description="Filter by tags - can be major tags (e.g., 'Health') or minor tags (e.g., 'prescription'). Multiple tags use OR logic.",

@@ -36,6 +36,7 @@ def handle_search_memories(
     time_start = args.get("time_start")
     time_end = args.get("time_end")
     contact_ids = args.get("contact_ids")  # Maps to 'people' parameter
+    sort_order = args.get("sort_order", "relevance")
     # Note: 'tags' from tool schema is not yet supported by retrieval.search_memories
 
     search_result = retrieval.search_memories(
@@ -44,6 +45,7 @@ def handle_search_memories(
         time_start=time_start,
         time_end=time_end,
         limit=limit,
+        sort_order=sort_order,
     )
     results = search_result.get("results", [])
 

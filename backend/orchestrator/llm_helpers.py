@@ -7,8 +7,10 @@ ensuring consistent configuration, error handling, and response parsing.
 
 import json
 import os
+from collections.abc import AsyncGenerator
 from typing import Any, Optional
 
+import httpx
 import requests
 
 # LLM Configuration
@@ -38,6 +40,73 @@ def get_llm_headers() -> dict[str, str]:
     return headers
 
 
+def _resolve_model(model: Optional[str], use_simpler_model: Optional[bool]) -> str:
+    if not model and use_simpler_model and LLM_CHAT_MODEL_SIMPLER:
+        return LLM_CHAT_MODEL_SIMPLER
+    return model or LLM_CHAT_MODEL
+
+
+def build_chat_payload(
+    messages: list[dict[str, Any]],
+    *,
+    model: Optional[str] = None,
+    use_simpler_model: Optional[bool] = None,
+    stream: bool = False,
+    max_tokens: Optional[int] = None,
+    temperature: Optional[float] = None,
+    top_p: Optional[float] = None,
+    tools: Optional[list[dict[str, Any]]] = None,
+    tool_choice: Optional[str | dict[str, Any]] = None,
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "model": _resolve_model(model, use_simpler_model),
+        "messages": messages,
+        "stream": stream,
+    }
+
+    if max_tokens:
+        payload["max_tokens"] = max_tokens
+
+    if temperature is not None:
+        payload["temperature"] = temperature
+
+    if top_p is not None:
+        payload["top_p"] = top_p
+
+    if tools:
+        payload["tools"] = tools
+        if tool_choice is not None:
+            payload["tool_choice"] = tool_choice
+
+    return payload
+
+
+def _raise_for_llm_error(data: dict[str, Any]) -> None:
+    if "error" in data:
+        error_msg = data.get("error", {})
+        if isinstance(error_msg, dict):
+            error_msg = error_msg.get("message", str(error_msg))
+        raise RuntimeError(f"LLM API error: {error_msg}")
+
+
+def _post_chat_completion(
+    payload: dict[str, Any],
+    *,
+    timeout: Optional[int] = None,
+) -> dict[str, Any]:
+    response = requests.post(
+        f"{LLM_BASE_URL}/chat/completions",
+        headers=get_llm_headers(),
+        json=payload,
+        timeout=timeout or LLM_TIMEOUT,
+    )
+    response.raise_for_status()
+
+    content = response.json()
+    _raise_for_llm_error(content)
+    return content
+
+
 def _build_messages(prompt: str, system_prompt: Optional[str] = None) -> list[dict[str, str]]:
     messages: list[dict[str, str]] = []
     if system_prompt:
@@ -58,44 +127,76 @@ def _call_llm_raw(
     tools: Optional[list[dict[str, Any]]] = None,
     tool_choice: Optional[str | dict[str, Any]] = None,
 ) -> dict[str, Any]:
-    resolved_model = model
-    if not resolved_model and use_simpler_model and LLM_CHAT_MODEL_SIMPLER:
-        resolved_model = LLM_CHAT_MODEL_SIMPLER
-
-    payload: dict[str, Any] = {
-        "model": resolved_model or LLM_CHAT_MODEL,
-        "messages": messages,
-        "stream": False,
-    }
-
-    if max_tokens:
-        payload["max_tokens"] = max_tokens
-
-    if temperature is not None:
-        payload["temperature"] = temperature
-
-    if top_p is not None:
-        payload["top_p"] = top_p
-
-    if tools:
-        payload["tools"] = tools
-        if tool_choice is not None:
-            payload["tool_choice"] = tool_choice
-
-    response = requests.post(
-        f"{LLM_BASE_URL}/chat/completions",
-        headers=get_llm_headers(),
-        json=payload,
-        timeout=timeout or LLM_TIMEOUT,
+    payload = build_chat_payload(
+        messages,
+        model=model,
+        use_simpler_model=use_simpler_model,
+        stream=False,
+        max_tokens=max_tokens,
+        temperature=temperature,
+        top_p=top_p,
+        tools=tools,
+        tool_choice=tool_choice,
     )
-    response.raise_for_status()
-
-    content = response.json()
+    content = _post_chat_completion(payload, timeout=timeout)
 
     print(f"[llm_helpers] LLM input: {json.dumps(messages, ensure_ascii=False)}")
     print(f"[llm_helpers] LLM response: {json.dumps(content, ensure_ascii=False)}")
 
     return content
+
+
+def call_llm_chat(
+    messages: list[dict[str, Any]],
+    *,
+    tools: Optional[list[dict[str, Any]]] = None,
+    tool_choice: Optional[str | dict[str, Any]] = None,
+    model: Optional[str] = None,
+    use_simpler_model: Optional[bool] = None,
+    timeout: Optional[int] = None,
+) -> dict[str, Any]:
+    data = _call_llm_raw(
+        messages,
+        model=model,
+        use_simpler_model=use_simpler_model,
+        timeout=timeout,
+        tools=tools,
+        tool_choice=tool_choice,
+    )
+    _raise_for_llm_error(data)
+    return data
+
+
+async def stream_llm_chat(
+    messages: list[dict[str, Any]],
+    *,
+    tools: Optional[list[dict[str, Any]]] = None,
+    tool_choice: Optional[str | dict[str, Any]] = None,
+    model: Optional[str] = None,
+    use_simpler_model: Optional[bool] = None,
+    timeout: Optional[int] = None,
+) -> AsyncGenerator[str, None]:
+    payload = build_chat_payload(
+        messages,
+        model=model,
+        use_simpler_model=use_simpler_model,
+        stream=True,
+        tools=tools,
+        tool_choice=tool_choice,
+    )
+    resolved_timeout = timeout or LLM_TIMEOUT
+    timeout_config = httpx.Timeout(resolved_timeout, connect=10.0)
+
+    async with httpx.AsyncClient(timeout=timeout_config) as client:
+        async with client.stream(
+            "POST",
+            f"{LLM_BASE_URL}/chat/completions",
+            headers=get_llm_headers(),
+            json=payload,
+        ) as response:
+            response.raise_for_status()
+            async for line in response.aiter_lines():
+                yield line
 
 
 def call_llm(

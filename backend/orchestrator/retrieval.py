@@ -123,6 +123,7 @@ def search_memories(
     time_start: str | None = None,
     time_end: str | None = None,
     limit: int = 10,
+    sort_order: str = "relevance",
 ) -> dict[str, Any]:
     span = None
     if time_start and time_end:
@@ -131,6 +132,16 @@ def search_memories(
         except Exception:
             span = None
     normalized_query = normalize_search_text(query)
+    ordering = (sort_order or "relevance").lower()
+    if ordering not in {"relevance", "newest", "oldest"}:
+        ordering = "relevance"
+
+    has_structured_filters = bool(span or people or place_ids)
+    print(
+        "[retrieval] search_memories filters "
+        f"people={list(people or [])} places={list(place_ids or [])} "
+        f"span={span} sort_order={ordering} limit={limit}"
+    )
 
     vec_events = vector_search(normalized_query, 50) if normalized_query else {}
     bm_events = bm25_search(normalized_query, 50) if normalized_query else {}
@@ -140,7 +151,12 @@ def search_memories(
     vec_docs = vector_search_documents(normalized_query, 50) if normalized_query else {}
     bm_docs = bm25_search_documents(normalized_query, 50) if normalized_query else {}
 
-    event_ids = set(vec_events) | set(bm_events) | set(st_events)
+    if has_structured_filters:
+        # When filters are provided (people/place/time), treat them as hard constraints.
+        # This avoids returning unrelated events that only match text similarity.
+        event_ids = set(st_events)
+    else:
+        event_ids = set(vec_events) | set(bm_events) | set(st_events)
     event_scores: dict[str, float] = {}
     for event_id in event_ids:
         v = vec_events.get(event_id, 0.0)
@@ -161,13 +177,54 @@ def search_memories(
 
     contact_scores = dict(vec_contacts)
 
-    combined: list[tuple[str, str, float]] = []
-    combined.extend((event_id, "event", event_scores[event_id]) for event_id in event_scores)
-    combined.extend((doc_id, "document", doc_scores[doc_id]) for doc_id in doc_scores)
-    combined.extend(
-        (contact_id, "contact", contact_scores[contact_id]) for contact_id in contact_scores
+    event_rows_all = fetch_events(list(event_ids)) if event_ids else []
+    event_lookup_all = {row["id"]: row for row in event_rows_all}
+
+    if ordering in {"newest", "oldest"}:
+        with_dates = [
+            row for row in event_rows_all if row.get("start_date") or row.get("end_date")
+        ]
+        without_dates = [
+            row for row in event_rows_all if not (row.get("start_date") or row.get("end_date"))
+        ]
+        with_dates.sort(
+            key=lambda row: row.get("start_date") or row.get("end_date"),
+            reverse=(ordering == "newest"),
+        )
+        event_ids_ordered_all = [row["id"] for row in with_dates] + [
+            row["id"] for row in without_dates
+        ]
+    else:
+        event_ids_ordered_all = sorted(
+            event_scores.keys(),
+            key=lambda event_id: event_scores[event_id],
+            reverse=True,
+        )
+
+    doc_ids_ordered = sorted(
+        doc_scores.keys(),
+        key=lambda doc_id: doc_scores[doc_id],
+        reverse=True,
     )
-    combined.sort(key=lambda item: item[2], reverse=True)
+    contact_ids_ordered = sorted(
+        contact_scores.keys(),
+        key=lambda contact_id: contact_scores[contact_id],
+        reverse=True,
+    )
+
+    combined: list[tuple[str, str, float]] = []
+    if ordering in {"newest", "oldest"} or has_structured_filters:
+        # For temporal or explicitly-filtered queries, prioritize events first.
+        combined.extend((event_id, "event", event_scores.get(event_id, 0.0)) for event_id in event_ids_ordered_all)
+        combined.extend((doc_id, "document", doc_scores[doc_id]) for doc_id in doc_ids_ordered)
+        combined.extend((contact_id, "contact", contact_scores[contact_id]) for contact_id in contact_ids_ordered)
+    else:
+        combined.extend((event_id, "event", event_scores[event_id]) for event_id in event_scores)
+        combined.extend((doc_id, "document", doc_scores[doc_id]) for doc_id in doc_scores)
+        combined.extend(
+            (contact_id, "contact", contact_scores[contact_id]) for contact_id in contact_scores
+        )
+        combined.sort(key=lambda item: item[2], reverse=True)
 
     if not combined:
         return {"results": []}
@@ -175,15 +232,21 @@ def search_memories(
     final_limit = max(1, int(limit))
     top_combined = combined[:final_limit]
 
-    event_ids_ordered = [item_id for item_id, kind, _ in top_combined if kind == "event"]
-    doc_ids_ordered = [item_id for item_id, kind, _ in top_combined if kind == "document"]
-    contact_ids_ordered = [item_id for item_id, kind, _ in top_combined if kind == "contact"]
+    event_ids_top = [item_id for item_id, kind, _ in top_combined if kind == "event"]
+    doc_ids_top = [item_id for item_id, kind, _ in top_combined if kind == "document"]
+    contact_ids_top = [item_id for item_id, kind, _ in top_combined if kind == "contact"]
 
-    event_rows = fetch_events(event_ids_ordered) if event_ids_ordered else []
-    event_lookup = {row["id"]: row for row in event_rows}
+    event_lookup = (
+        {event_id: event_lookup_all[event_id] for event_id in event_ids_top if event_id in event_lookup_all}
+        if event_lookup_all
+        else {}
+    )
+    if event_ids_top and not event_lookup:
+        event_rows = fetch_events(event_ids_top)
+        event_lookup = {row["id"]: row for row in event_rows}
 
-    doc_lookup = fetch_document_summaries(doc_ids_ordered) if doc_ids_ordered else {}
-    contact_lookup = fetch_contact_summaries(contact_ids_ordered) if contact_ids_ordered else {}
+    doc_lookup = fetch_document_summaries(doc_ids_top) if doc_ids_top else {}
+    contact_lookup = fetch_contact_summaries(contact_ids_top) if contact_ids_top else {}
 
     results: list[dict[str, Any]] = []
     for item_id, kind, _ in top_combined:

@@ -782,6 +782,23 @@ class GoalCompletionValidator:
         final_content: str,
     ) -> tuple[bool, str, list[str]]:
         """Check if a query goal was achieved (e.g., search for memories)."""
+        goal_lower = goal.lower()
+        temporal_goal = any(
+            phrase in goal_lower
+            for phrase in (
+                "most recent",
+                "latest",
+                "last time",
+                "last meeting",
+                "last event",
+                "first time",
+                "first meeting",
+                "first event",
+                "earliest",
+                "when did i first",
+                "when did i last",
+            )
+        )
 
         # For queries, we need actual results
         if not tool_calls:
@@ -817,6 +834,17 @@ class GoalCompletionValidator:
             for tc in successful_query_calls:
                 result = tc.result
                 if self._has_results(result):
+                    if temporal_goal:
+                        has_temporal_resolution = any(
+                            t.success and t.tool_name in ("get_events", "execute_sql")
+                            for t in tool_calls
+                        )
+                        if not has_temporal_resolution:
+                            return (
+                                False,
+                                "Temporal query needs explicit date-ordered verification",
+                                ["Retrieve ordered event details before final answer"],
+                            )
                     return (True, "Query returned data", [])
 
             # Query succeeded but no results

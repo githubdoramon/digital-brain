@@ -56,6 +56,9 @@ class TestAgentControllerIntegration:
             def log_tool_call(self, *args, **kwargs):
                 return None
 
+            def log_validation_result(self, *args, **kwargs):
+                return None
+
         controller._logger = StubLogger()
 
         monkeypatch.setattr(
@@ -100,6 +103,83 @@ class TestAgentControllerIntegration:
         assert state.tool_calls_count == 1
         assert state.last_tool_call is not None
         assert state.last_tool_call.tool_name == "search_memories"
+
+    @pytest.mark.asyncio
+    async def test_search_memories_inherits_scope_after_resolve_contacts(
+        self, controller, monkeypatch
+    ):
+        """After resolve_contacts succeeds, follow-up search should keep contact scope."""
+        state = AgentState(goal="When did I last meet Gio?")
+        state.step_count = 1
+        controller.config.enable_validation = False
+
+        class StubLogger:
+            def log_tool_call(self, *args, **kwargs):
+                return None
+
+            def log_validation_result(self, *args, **kwargs):
+                return None
+
+        controller._logger = StubLogger()
+        captured_search_args = {}
+
+        def fake_execute_handler(tool_name, args, **kwargs):
+            if tool_name == "resolve_contacts":
+                return {
+                    "status": "success",
+                    "people_mentioned": ["Gio"],
+                    "resolved_contacts": [
+                        {"contact_id": "contact-gio", "display_name": "Giovanni Panerai"}
+                    ],
+                    "ambiguous_contacts": [],
+                }
+            if tool_name == "search_memories":
+                captured_search_args.update(args)
+                return {"results": [{"id": "event-1", "kind": "event"}], "count": 1}
+            return {"results": [], "count": 0}
+
+        monkeypatch.setattr(controller, "_execute_handler", fake_execute_handler)
+
+        resolve_call = {
+            "id": "call_resolve",
+            "type": "function",
+            "function": {
+                "name": "resolve_contacts",
+                "arguments": json.dumps({"text": "Gio"}),
+            },
+        }
+        search_call = {
+            "id": "call_search",
+            "type": "function",
+            "function": {
+                "name": "search_memories",
+                "arguments": json.dumps({"query": "last meeting"}),
+            },
+        }
+
+        resolve_result = await controller._execute_tool_call(
+            call=resolve_call,
+            state=state,
+            question="When did I last meet Gio?",
+            search_limit=5,
+            run_id="test_run",
+            user_email="user@example.com",
+            conversation_history=[],
+        )
+        assert resolve_result["status"] == "success"
+        assert state.resolution.get("active_contact_scope_ids") == ["contact-gio"]
+
+        await controller._execute_tool_call(
+            call=search_call,
+            state=state,
+            question="When did I last meet Gio?",
+            search_limit=5,
+            run_id="test_run",
+            user_email="user@example.com",
+            conversation_history=[],
+        )
+
+        assert captured_search_args.get("contact_ids") == ["contact-gio"]
 
 
 class TestIntentRouterIntegration:

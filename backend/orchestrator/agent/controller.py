@@ -23,9 +23,6 @@ from collections.abc import AsyncGenerator
 from time import perf_counter
 from typing import Any, Optional
 
-import httpx
-import requests
-
 from .limits import AgentConfig, LimitChecker
 from .router import IntentClassification, IntentRouter
 from .state import AgentState, ToolCallRecord
@@ -33,6 +30,7 @@ from .state import AgentState, ToolCallRecord
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 # Import tracing
+from llm_helpers import call_llm_chat, stream_llm_chat
 from observability import trace
 
 
@@ -722,34 +720,13 @@ class AgentController:
         tools: list[dict[str, Any]],
     ) -> dict[str, Any]:
         """Make synchronous LLM call."""
-        # Import at top of file would be better, but keeping local to minimize changes
-        sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-        from llm_helpers import get_llm_headers
-
-        payload = {
-            "model": self.llm_model,
-            "messages": messages,
-            "tools": tools,
-            "tool_choice": "auto",
-            "stream": False,
-        }
-
-        response = requests.post(
-            f"{self.llm_base_url}/chat/completions",
-            headers=get_llm_headers(),
-            json=payload,
+        data = call_llm_chat(
+            messages,
+            tools=tools,
+            tool_choice="auto",
+            model=self.llm_model or None,
             timeout=self.llm_timeout,
         )
-        response.raise_for_status()
-
-        data = response.json()
-
-        # Check for API errors in response body (some APIs return 200 with error)
-        if "error" in data:
-            error_msg = data.get("error", {})
-            if isinstance(error_msg, dict):
-                error_msg = error_msg.get("message", str(error_msg))
-            raise RuntimeError(f"LLM API error: {error_msg}")
 
         if "choices" in data and data["choices"]:
             return {"message": data["choices"][0].get("message", {})}
@@ -763,78 +740,63 @@ class AgentController:
         tools: list[dict[str, Any]],
     ) -> AsyncGenerator[dict[str, Any], None]:
         """Stream LLM responses."""
-        sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-        from llm_helpers import get_llm_headers
+        accumulated_tool_calls: dict[int, dict[str, Any]] = {}
 
-        payload = {
-            "model": self.llm_model,
-            "messages": messages,
-            "tools": tools,
-            "tool_choice": "auto",
-            "stream": True,
-        }
+        async for line in stream_llm_chat(
+            messages,
+            tools=tools,
+            tool_choice="auto",
+            model=self.llm_model or None,
+            timeout=self.llm_timeout,
+        ):
+            line = line.strip()
+            if not line or line == "data: [DONE]":
+                continue
+            if line.startswith("data: "):
+                line = line[6:]
 
-        timeout = httpx.Timeout(self.llm_timeout, connect=10.0)
+            try:
+                chunk = json.loads(line)
 
-        async with httpx.AsyncClient(timeout=timeout) as client:
-            async with client.stream(
-                "POST",
-                f"{self.llm_base_url}/chat/completions",
-                headers=get_llm_headers(),
-                json=payload,
-            ) as response:
-                response.raise_for_status()
-                accumulated_tool_calls: dict[int, dict[str, Any]] = {}
+                # Check for API errors in streaming response
+                if "error" in chunk:
+                    error_msg = chunk.get("error", {})
+                    if isinstance(error_msg, dict):
+                        error_msg = error_msg.get("message", str(error_msg))
+                    raise RuntimeError(f"LLM API streaming error: {error_msg}")
 
-                async for line in response.aiter_lines():
-                    line = line.strip()
-                    if not line or line == "data: [DONE]":
-                        continue
-                    if line.startswith("data: "):
-                        line = line[6:]
+                delta = chunk.get("choices", [{}])[0].get("delta", {})
+                finish_reason = chunk.get("choices", [{}])[0].get("finish_reason")
 
-                    try:
-                        chunk = json.loads(line)
+                if "tool_calls" in delta:
+                    for tc in delta["tool_calls"]:
+                        idx = tc.get("index", 0)
+                        if idx not in accumulated_tool_calls:
+                            accumulated_tool_calls[idx] = {
+                                "id": tc.get("id", ""),
+                                "type": "function",
+                                "function": {"name": "", "arguments": ""},
+                            }
+                        if tc.get("id"):
+                            accumulated_tool_calls[idx]["id"] = tc["id"]
+                        if "function" in tc:
+                            if tc["function"].get("name"):
+                                accumulated_tool_calls[idx]["function"]["name"] = tc["function"]["name"]
+                            if tc["function"].get("arguments"):
+                                accumulated_tool_calls[idx]["function"]["arguments"] += tc["function"]["arguments"]
 
-                        # Check for API errors in streaming response
-                        if "error" in chunk:
-                            error_msg = chunk.get("error", {})
-                            if isinstance(error_msg, dict):
-                                error_msg = error_msg.get("message", str(error_msg))
-                            raise RuntimeError(f"LLM API streaming error: {error_msg}")
+                normalized = {"message": {"content": delta.get("content", "")}}
 
-                        delta = chunk.get("choices", [{}])[0].get("delta", {})
-                        finish_reason = chunk.get("choices", [{}])[0].get("finish_reason")
+                if finish_reason in ("tool_calls", "stop") and accumulated_tool_calls:
+                    normalized["message"]["tool_calls"] = list(accumulated_tool_calls.values())
+                    normalized["done"] = True
+                elif finish_reason == "stop":
+                    normalized["done"] = True
 
-                        if "tool_calls" in delta:
-                            for tc in delta["tool_calls"]:
-                                idx = tc.get("index", 0)
-                                if idx not in accumulated_tool_calls:
-                                    accumulated_tool_calls[idx] = {
-                                        "id": tc.get("id", ""),
-                                        "type": "function",
-                                        "function": {"name": "", "arguments": ""},
-                                    }
-                                if tc.get("id"):
-                                    accumulated_tool_calls[idx]["id"] = tc["id"]
-                                if "function" in tc:
-                                    if tc["function"].get("name"):
-                                        accumulated_tool_calls[idx]["function"]["name"] = tc["function"]["name"]
-                                    if tc["function"].get("arguments"):
-                                        accumulated_tool_calls[idx]["function"]["arguments"] += tc["function"]["arguments"]
+                yield normalized
 
-                        normalized = {"message": {"content": delta.get("content", "")}}
-
-                        if finish_reason in ("tool_calls", "stop") and accumulated_tool_calls:
-                            normalized["message"]["tool_calls"] = list(accumulated_tool_calls.values())
-                            normalized["done"] = True
-                        elif finish_reason == "stop":
-                            normalized["done"] = True
-
-                        yield normalized
-
-                    except json.JSONDecodeError:
-                        continue
+            except json.JSONDecodeError:
+                continue
 
     async def _handle_tool_calls(
         self,
@@ -1004,6 +966,9 @@ class AgentController:
             conversation_history=conversation_history,
         )
         duration_ms = (perf_counter() - step_start) * 1000
+
+        if tool_name == "resolve_contacts":
+            self._update_contact_resolution_state(state, args, result)
 
         # Determine result summary for tracing
         success = "error" not in result and result.get("success") is not False
@@ -1268,12 +1233,42 @@ class AgentController:
               of running an unfiltered memory search.
         """
         normalized_args = dict(args)
+
+        query_text = str(normalized_args.get("query") or question or "").strip()
+        sort_order = self._detect_temporal_sort_order(query_text)
+        if sort_order and not normalized_args.get("sort_order"):
+            normalized_args["sort_order"] = sort_order
+        if sort_order:
+            # Temporal questions are accuracy-sensitive. Use a wider candidate window.
+            current_limit = normalized_args.get("limit")
+            try:
+                parsed_limit = int(current_limit) if current_limit is not None else 0
+            except (TypeError, ValueError):
+                parsed_limit = 0
+            if parsed_limit < 25:
+                normalized_args["limit"] = 25
+
         if normalized_args.get("contact_ids"):
             return normalized_args, None
+
+        pending_prompt = state.resolution.get("pending_contact_clarification")
+        if pending_prompt:
+            preempt = self._build_contact_clarification_result(
+                ambiguous_contacts=state.resolution.get(
+                    "pending_contact_ambiguous_contacts", []
+                ),
+                people_mentioned=state.resolution.get("pending_contact_people", []),
+            )
+            return normalized_args, preempt
+
+        active_scope_ids = state.resolution.get("active_contact_scope_ids")
+        if active_scope_ids:
+            normalized_args["contact_ids"] = list(active_scope_ids)
+            return normalized_args, None
+
         if not user_email:
             return normalized_args, None
 
-        query_text = str(normalized_args.get("query") or question or "").strip()
         if not query_text:
             return normalized_args, None
         if not self._should_attempt_contact_resolution(query_text):
@@ -1323,6 +1318,12 @@ class AgentController:
                 "people_mentioned": resolution.get("people_mentioned", []),
             }
 
+            self._update_contact_resolution_state(
+                state=state,
+                args={"text": query_text},
+                result=resolution,
+            )
+
             if status == "success" and deduped_ids:
                 normalized_args["contact_ids"] = deduped_ids
                 state.add_fact(
@@ -1349,6 +1350,80 @@ class AgentController:
                 f"Automatic contact resolution failed: {e}",
             )
             return normalized_args, None
+
+    def _update_contact_resolution_state(
+        self,
+        state: AgentState,
+        args: dict[str, Any],
+        result: dict[str, Any],
+    ) -> None:
+        """Store scoped contact-resolution outcomes for subsequent tool calls."""
+        status = result.get("status")
+        if status == "success":
+            resolved_contacts = result.get("resolved_contacts", [])
+            contact_ids = [
+                c.get("contact_id")
+                for c in resolved_contacts
+                if isinstance(c, dict) and c.get("contact_id")
+            ]
+            deduped_ids = list(dict.fromkeys(contact_ids))
+            if deduped_ids:
+                state.resolution["active_contact_scope_ids"] = deduped_ids
+                state.resolution["active_contact_scope_text"] = args.get("text", "")
+                state.resolution.pop("pending_contact_clarification", None)
+                state.resolution.pop("pending_contact_ambiguous_contacts", None)
+                state.resolution.pop("pending_contact_people", None)
+            return
+
+        if status == "needs_clarification":
+            ambiguous_contacts = result.get("ambiguous_contacts", [])
+            prompt = ""
+            if ambiguous_contacts:
+                prompt = ambiguous_contacts[0].get("clarification_prompt", "")
+            if not prompt:
+                prompt = "I found multiple matching people. Please clarify which one you mean."
+            state.resolution["pending_contact_clarification"] = prompt
+            state.resolution["pending_contact_ambiguous_contacts"] = ambiguous_contacts
+            state.resolution["pending_contact_people"] = result.get("people_mentioned", [])
+            state.resolution.pop("active_contact_scope_ids", None)
+            state.resolution.pop("active_contact_scope_text", None)
+            return
+
+        if status == "no_people":
+            # No person context found; clear scoped contact state.
+            state.resolution.pop("active_contact_scope_ids", None)
+            state.resolution.pop("active_contact_scope_text", None)
+            state.resolution.pop("pending_contact_clarification", None)
+            state.resolution.pop("pending_contact_ambiguous_contacts", None)
+            state.resolution.pop("pending_contact_people", None)
+
+    def _detect_temporal_sort_order(self, query: str) -> Optional[str]:
+        """Infer temporal ordering intent from query text."""
+        if not query:
+            return None
+
+        q = query.lower()
+        oldest_patterns = [
+            r"\bfirst time\b",
+            r"\bfirst meeting\b",
+            r"\bfirst event\b",
+            r"\bearliest\b",
+            r"\bwhen did i first\b",
+        ]
+        newest_patterns = [
+            r"\bmost recent\b",
+            r"\blatest\b",
+            r"\blast time\b",
+            r"\blast meeting\b",
+            r"\blast event\b",
+            r"\bwhen did i last\b",
+        ]
+
+        if any(re.search(pattern, q) for pattern in oldest_patterns):
+            return "oldest"
+        if any(re.search(pattern, q) for pattern in newest_patterns):
+            return "newest"
+        return None
 
     def _build_contact_clarification_result(
         self,
