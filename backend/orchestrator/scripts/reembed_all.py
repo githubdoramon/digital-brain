@@ -24,15 +24,24 @@ import os
 import sys
 import time
 from collections.abc import Sequence
+from pathlib import Path
 from typing import Any, cast
 
 # Add paret directory to path for imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from db import get_conn  # noqa: E402
+from documents import (
+    CONTENT_TRANSLATION_GENERATED_KEY,  # noqa: E402
+    CONTENT_TRANSLATION_HASH_KEY,  # noqa: E402
+    CONTENT_TRANSLATION_TEXT_KEY,  # noqa: E402
+    MAX_CONTENT_CHARS,  # noqa: E402
+)
+from documents import _extract_text as extract_document_text  # noqa: E402
+from documents import _generate_document_embedding as generate_document_embedding  # noqa: E402
 from embeddings import embed_text  # noqa: E402
 
-# Constants - nomic-embed-text v1 has 8192 token context
+# Constants for payload assembly before centralized embedding truncation
 MAX_EVENT_EMBED_CHARS = 6000
 MAX_DOCUMENT_EMBED_CHARS = 8000
 MAX_CONTACT_EMBED_CHARS = 4000
@@ -195,7 +204,16 @@ def fetch_documents_batch(offset: int, limit: int) -> list[dict[str, Any]]:
     with get_conn() as conn, conn.cursor() as cur:
         cur.execute(
             """
-            SELECT document_id, title, description, content, tags, file_name
+            SELECT
+              document_id,
+              title,
+              description,
+              content,
+              tags,
+              file_name,
+              file_path,
+              file_mime,
+              raw_metadata
             FROM documents
             ORDER BY document_id
             OFFSET %s LIMIT %s
@@ -230,14 +248,84 @@ def update_event_embedding(event_id: str, embedding: Sequence[float]) -> None:
         conn.commit()
 
 
-def update_document_embedding(document_id: str, embedding: Sequence[float]) -> None:
+def update_document_embedding(
+    document_id: str,
+    embedding: Sequence[float],
+    raw_metadata: dict[str, Any],
+    content: str | None = None,
+) -> None:
     """Update the embedding for a single document."""
     with get_conn() as conn, conn.cursor() as cur:
-        cur.execute(
-            "UPDATE documents SET content_embed = %s::vector WHERE document_id = %s",
-            (list(embedding), document_id),
-        )
+        if content is None:
+            cur.execute(
+                """
+                UPDATE documents
+                SET content_embed = %s::vector,
+                    raw_metadata = %s::jsonb
+                WHERE document_id = %s
+                """,
+                (list(embedding), json.dumps(raw_metadata or {}), document_id),
+            )
+        else:
+            cur.execute(
+                """
+                UPDATE documents
+                SET content_embed = %s::vector,
+                    raw_metadata = %s::jsonb,
+                    content = %s
+                WHERE document_id = %s
+                """,
+                (list(embedding), json.dumps(raw_metadata or {}), content, document_id),
+            )
         conn.commit()
+
+
+def normalize_raw_metadata(raw_metadata: Any) -> dict[str, Any]:
+    if isinstance(raw_metadata, dict):
+        return dict(raw_metadata)
+    if isinstance(raw_metadata, str):
+        try:
+            loaded = json.loads(raw_metadata)
+            if isinstance(loaded, dict):
+                return loaded
+        except json.JSONDecodeError:
+            pass
+        return {"raw": raw_metadata}
+    return {}
+
+
+def recover_document_content(doc: dict[str, Any]) -> str:
+    current_content = doc.get("content")
+    if isinstance(current_content, str) and current_content.strip():
+        return current_content[:MAX_CONTENT_CHARS]
+
+    file_path = doc.get("file_path")
+    if not isinstance(file_path, str) or not file_path.strip():
+        return ""
+
+    path = Path(file_path)
+    if not path.exists():
+        print(
+            "[documents] content missing and file path not found "
+            f"document_id={doc.get('document_id')} file_path={file_path}"
+        )
+        return ""
+
+    extracted = extract_document_text(path, doc.get("file_mime"))
+    recovered = (extracted or "").strip()
+    if not recovered:
+        print(
+            "[documents] failed to recover content from file "
+            f"document_id={doc.get('document_id')} file_path={file_path}"
+        )
+        return ""
+
+    clipped = recovered[:MAX_CONTENT_CHARS]
+    print(
+        "[documents] recovered content from file for re-embed "
+        f"document_id={doc.get('document_id')} chars={len(clipped)}"
+    )
+    return clipped
 
 
 def update_contact_embedding(contact_id: str, embedding: Sequence[float]) -> None:
@@ -299,7 +387,24 @@ def reembed_events(batch_size: int, dry_run: bool) -> int:
     return processed
 
 
-def reembed_documents(batch_size: int, dry_run: bool) -> int:
+def clear_document_translation_cache(raw_metadata: dict[str, Any]) -> bool:
+    removed = False
+    for key in (
+        CONTENT_TRANSLATION_TEXT_KEY,
+        CONTENT_TRANSLATION_HASH_KEY,
+        CONTENT_TRANSLATION_GENERATED_KEY,
+    ):
+        if key in raw_metadata:
+            raw_metadata.pop(key, None)
+            removed = True
+    return removed
+
+
+def reembed_documents(
+    batch_size: int,
+    dry_run: bool,
+    clear_translation_cache: bool = False,
+) -> int:
     """Re-embed all documents. Returns count of processed records."""
     total = count_records("documents", "document_id")
     print(f"\n[documents] Found {total} documents to re-embed")
@@ -319,13 +424,27 @@ def reembed_documents(batch_size: int, dry_run: bool) -> int:
         for doc in batch:
             doc_id = doc["document_id"]
             try:
-                embed_text_str = generate_document_embed_text(doc)
+                raw_metadata = normalize_raw_metadata(doc.get("raw_metadata"))
+                if clear_translation_cache and clear_document_translation_cache(raw_metadata):
+                    print(f"[documents] cleared translation cache document_id={doc_id}")
+                recovered_content = recover_document_content(doc)
+                should_persist_content = False
+                if recovered_content:
+                    had_content = bool(isinstance(doc.get("content"), str) and doc.get("content").strip())
+                    doc["content"] = recovered_content
+                    should_persist_content = not had_content
 
                 if dry_run:
+                    embed_text_str = generate_document_embed_text(doc)
                     print(f"  [dry-run] Would re-embed document {doc_id}: {embed_text_str[:80]}...")
                 else:
-                    embedding = embed_text(embed_text_str)
-                    update_document_embedding(doc_id, embedding)
+                    embedding = generate_document_embedding(doc, raw_metadata=raw_metadata)
+                    update_document_embedding(
+                        doc_id,
+                        embedding,
+                        raw_metadata,
+                        content=doc["content"] if should_persist_content else None,
+                    )
 
                 processed += 1
 
@@ -429,6 +548,11 @@ def main():
         action="store_true",
         help="Show what would be done without making changes",
     )
+    parser.add_argument(
+        "--clear-document-translation-cache",
+        action="store_true",
+        help="Clear cached translated document content before re-embedding documents",
+    )
     args = parser.parse_args()
 
     print("=" * 60)
@@ -437,6 +561,7 @@ def main():
     print(f"Embedding model: {os.getenv('OLLAMA_EMBED_MODEL', 'nomic-embed-text')}")
     print(f"Batch size: {args.batch_size}")
     print(f"Dry run: {args.dry_run}")
+    print(f"Clear document translation cache: {args.clear_document_translation_cache}")
     print("=" * 60)
 
     if args.dry_run:
@@ -452,7 +577,11 @@ def main():
             total_processed += reembed_events(args.batch_size, args.dry_run)
 
         if not args.events_only:
-            total_processed += reembed_documents(args.batch_size, args.dry_run)
+            total_processed += reembed_documents(
+                args.batch_size,
+                args.dry_run,
+                clear_translation_cache=args.clear_document_translation_cache,
+            )
 
         if not args.events_only and not args.documents_only:
             total_processed += reembed_contacts(args.batch_size, args.dry_run)

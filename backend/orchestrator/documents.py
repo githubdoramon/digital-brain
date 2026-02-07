@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import mimetypes
 import os
@@ -11,7 +12,6 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-import requests
 from docx import Document as DocxDocument
 from fastapi import UploadFile
 from pdfminer.high_level import extract_text as extract_pdf_text
@@ -36,13 +36,49 @@ DOCUMENT_STORAGE_DIR = Path(
 
 MAX_CONTENT_CHARS = int(os.getenv("DOCUMENT_MAX_CONTENT_CHARS", "20000"))
 MAX_EMBED_CHARS = int(os.getenv("DOCUMENT_EMBED_MAX_CHARS", "8000"))
+MAX_TRANSLATION_SOURCE_CHARS = int(os.getenv("DOCUMENT_TRANSLATION_MAX_CHARS", "2500"))
 MAX_TITLE_PROMPT_CHARS = int(os.getenv("DOCUMENT_TITLE_PROMPT_CHARS", "2000"))
 MAX_DATE_PROMPT_CHARS = int(os.getenv("DOCUMENT_DATE_PROMPT_CHARS", "2000"))
 MAX_DESCRIPTION_PROMPT_CHARS = int(os.getenv("DOCUMENT_DESCRIPTION_PROMPT_CHARS", "1200"))
 
-OLLAMA_HOST = os.getenv("OLLAMA_HOST", "http://localhost:11434")
-OLLAMA_CHAT_MODEL = os.getenv("OLLAMA_CHAT_MODEL")
+LLM_CHAT_MODEL = os.getenv("LLM_CHAT_MODEL")
 OLLAMA_TIMEOUT = int(os.getenv("OLLAMA_TIMEOUT", "60"))
+
+CONTENT_TRANSLATION_TEXT_KEY = "content_english_for_embedding"
+CONTENT_TRANSLATION_HASH_KEY = "content_english_source_hash"
+CONTENT_TRANSLATION_GENERATED_KEY = "content_english_generated"
+
+
+def _call_llm_text(
+    prompt: str,
+    *,
+    system_prompt: str,
+    timeout: int,
+) -> str:
+    from llm_helpers import call_llm
+
+    return call_llm(
+        prompt,
+        system_prompt=system_prompt,
+        model=LLM_CHAT_MODEL,
+        timeout=timeout,
+    )
+
+
+def _call_llm_json_response(
+    prompt: str,
+    *,
+    system_prompt: str,
+    timeout: int,
+) -> Any:
+    from llm_helpers import call_llm_json
+
+    return call_llm_json(
+        prompt,
+        system_prompt=system_prompt,
+        model=LLM_CHAT_MODEL,
+        timeout=timeout,
+    )
 
 @dataclass
 class StoredFileInfo:
@@ -251,6 +287,15 @@ def update_document_metadata(
     tags_input = tags if tags is not None else row.get("tags") or []
 
     content_text = (row.get("content") or "")[:MAX_CONTENT_CHARS]
+    if not content_text and stored.path.exists():
+        extracted = _extract_text(stored.path, stored.mime_type)
+        recovered = (extracted or "").strip()
+        if recovered:
+            content_text = recovered[:MAX_CONTENT_CHARS]
+            print(
+                "[documents] recovered missing content from file "
+                f"document_id={document_id} chars={len(content_text)}"
+            )
     if not content_text:
         fallback_parts: list[str] = []
         for candidate in (
@@ -443,37 +488,23 @@ def _extract_text(path: Path, mime_type: str | None) -> str:
 
 def _suggest_document_date(content: str, fallback: str | None) -> datetime | None:
     cleaned = (content or fallback or "").strip()
-    if not cleaned or not OLLAMA_CHAT_MODEL:
+    if not cleaned or not LLM_CHAT_MODEL:
         return None
     excerpt = cleaned[:MAX_DATE_PROMPT_CHARS]
-    payload = {
-        "model": OLLAMA_CHAT_MODEL,
-        "messages": [
-            {
-                "role": "system",
-                "content": (
-                    "You extract dates from documents. Find the primary date the document was written or refers to. "
-                    "Respond with JSON like {\"date\": \"YYYY-MM-DD\"} or {\"date\": null} if unsure."
-                ),
-            },
-            {
-                "role": "user",
-                "content": (
-                    f"Document excerpt:\n{excerpt}\n\n"
-                    "If a clear date is present, respond with it in ISO-8601 (YYYY-MM-DD or YYYY-MM-DDTHH:MM)."
-                ),
-            },
-        ],
-        "stream": False,
-    }
+    system_prompt = (
+        "You extract dates from documents. Find the primary date the document was written or refers to. "
+        "Respond with JSON like {\"date\": \"YYYY-MM-DD\"} or {\"date\": null} if unsure."
+    )
+    user_prompt = (
+        f"Document excerpt:\n{excerpt}\n\n"
+        "If a clear date is present, respond with it in ISO-8601 (YYYY-MM-DD or YYYY-MM-DDTHH:MM)."
+    )
     try:
-        response = requests.post(
-            f"{OLLAMA_HOST}/api/chat", json=payload, timeout=OLLAMA_TIMEOUT
-        )
-        response.raise_for_status()
-        data = response.json()
-        message = data.get("message") or {}
-        raw_content = (message.get("content") or "").strip()
+        raw_content = _call_llm_text(
+            user_prompt,
+            system_prompt=system_prompt,
+            timeout=OLLAMA_TIMEOUT,
+        ).strip()
         if not raw_content:
             return None
         candidate = _parse_date_response(raw_content)
@@ -533,6 +564,7 @@ def _build_document_fields(
     file_name: str | None,
     raw_metadata: dict[str, Any],
 ) -> DocumentPrepared:
+    metadata = dict(raw_metadata or {})
     print(f"[documents] tags={tags}")
     normalized_tags = _normalize_strings(tags)
     print(f"[documents] normalized_tags={normalized_tags}")
@@ -576,10 +608,10 @@ def _build_document_fields(
             "title": final_title,
             "tags": merged_tags,
             "file_name": file_name,
-        }
+        },
+        raw_metadata=metadata,
     )
 
-    metadata = dict(raw_metadata or {})
     metadata["suggested_tags"] = suggested_tags
     metadata["title_generated"] = bool(generated_title)
     metadata["date_generated"] = bool(inferred_date)
@@ -613,30 +645,25 @@ def _build_document_fields(
 
 def _translate_text_to_english(text: str, max_chars: int) -> str:
     trimmed = (text or "").strip()
-    if not trimmed or not OLLAMA_CHAT_MODEL:
+    if not trimmed:
+        return text
+    if not LLM_CHAT_MODEL:
+        print(
+            "[documents] Translation skipped: no LLM_CHAT_MODEL configured"
+        )
         return text
     excerpt = trimmed[:max_chars]
-    payload = {
-        "model": OLLAMA_CHAT_MODEL,
-        "messages": [
-            {
-                "role": "system",
-                "content": "Translate the user's text into fluent English. Respond with the translation only. If already in english, just return the same text.",
-            },
-            {
-                "role": "user",
-                "content": excerpt[:100],
-            },
-        ],
-        "stream": False,
-    }
+    system_prompt = (
+        "Translate the user's text into fluent English. Respond with the translation only. "
+        "If already in english, just return the same text."
+    )
 
     try:
-        response = requests.post(f"{OLLAMA_HOST}/api/chat", json=payload, timeout=OLLAMA_TIMEOUT)
-        response.raise_for_status()
-        data = response.json()
-        message = data.get("message") or {}
-        candidate = (message.get("content") or "").strip()
+        candidate = _call_llm_text(
+            excerpt,
+            system_prompt=system_prompt,
+            timeout=OLLAMA_TIMEOUT,
+        ).strip()
         return candidate or text
     except Exception as exc:
         print(f"[documents] Failed to translate text: {exc}")
@@ -645,29 +672,19 @@ def _translate_text_to_english(text: str, max_chars: int) -> str:
 
 def _translate_tags_to_english(tags: Sequence[str]) -> list[str]:
     normalized = [t for t in tags if t]
-    if not normalized or not OLLAMA_CHAT_MODEL:
+    if not normalized or not LLM_CHAT_MODEL:
         return normalized
     prompt = (
         "Translate each of the following labels into concise English (1-3 words). If a tag is already in English, just return the exact same tag. "
         "Respond with JSON like {\"tags\": [\"tag\", ...]} in the same order."
     )
-    payload = {
-        "model": OLLAMA_CHAT_MODEL,
-        "messages": [
-            {"role": "system", "content": prompt},
-            {"role": "user", "content": json.dumps({"tags": normalized}, ensure_ascii=False)},
-        ],
-        "stream": False,
-    }
+    user_prompt = json.dumps({"tags": normalized}, ensure_ascii=False)
     try:
-        response = requests.post(f"{OLLAMA_HOST}/api/chat", json=payload, timeout=OLLAMA_TIMEOUT)
-        response.raise_for_status()
-        data = response.json()
-        message = data.get("message") or {}
-        raw = (message.get("content") or "").strip()
-        if not raw:
-            return normalized
-        parsed = json.loads(raw)
+        parsed = _call_llm_json_response(
+            user_prompt,
+            system_prompt=prompt,
+            timeout=OLLAMA_TIMEOUT,
+        )
         print(f"[documents] parsed={parsed}")
         if isinstance(parsed, dict) and isinstance(parsed.get("tags"), list):
             translated = []
@@ -686,32 +703,20 @@ def _translate_tags_to_english(tags: Sequence[str]) -> list[str]:
 
 def _summarize_description(content: str) -> str | None:
     cleaned = (content or "").strip()
-    if not cleaned or not OLLAMA_CHAT_MODEL:
+    if not cleaned or not LLM_CHAT_MODEL:
         return None
     excerpt = cleaned[:MAX_DESCRIPTION_PROMPT_CHARS]
-    payload = {
-        "model": OLLAMA_CHAT_MODEL,
-        "messages": [
-            {
-                "role": "system",
-                "content": (
-                    "Provide a concise English description (<= 400 words) of the user's document excerpt. No need to output the amount of words used and no need to use any kind of text formatting."
-                    "Highlight the main topic, purpose and main findings of the document."
-                ),
-            },
-            {
-                "role": "user",
-                "content": excerpt,
-            },
-        ],
-        "stream": False,
-    }
+    system_prompt = (
+        "Provide a concise English description (<= 400 words) of the user's document excerpt. "
+        "No need to output the amount of words used and no need to use any kind of text formatting."
+        "Highlight the main topic, purpose and main findings of the document."
+    )
     try:
-        response = requests.post(f"{OLLAMA_HOST}/api/chat", json=payload, timeout=OLLAMA_TIMEOUT)
-        response.raise_for_status()
-        data = response.json()
-        message = data.get("message") or {}
-        candidate = (message.get("content") or "").strip()
+        candidate = _call_llm_text(
+            excerpt,
+            system_prompt=system_prompt,
+            timeout=OLLAMA_TIMEOUT,
+        ).strip()
         return candidate or None
     except Exception as exc:
         print(f"[documents] Failed to summarize description: {exc}")
@@ -985,7 +990,66 @@ def _sanitize_filename(name: str) -> str:
     return "".join(ch for ch in name if ch.isalnum() or ch in {"-", "_", "."}).strip()
 
 
-def _generate_document_embedding(document: dict[str, Any]) -> Sequence[float]:
+def _translation_source_hash(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def _resolve_english_content_for_embedding(
+    content: str,
+    raw_metadata: dict[str, Any] | None,
+    document_id: str | None = None,
+) -> str:
+    cleaned = (content or "").strip()
+    if not cleaned:
+        if document_id:
+            print(
+                "[documents] content empty before translation "
+                f"document_id={document_id}"
+            )
+        return ""
+
+    translation_chars = max(1, min(MAX_EMBED_CHARS, MAX_TRANSLATION_SOURCE_CHARS))
+    source_text = cleaned[:translation_chars]
+    source_hash = _translation_source_hash(source_text)
+
+    if raw_metadata is not None:
+        cached_hash = raw_metadata.get(CONTENT_TRANSLATION_HASH_KEY)
+        cached_text = raw_metadata.get(CONTENT_TRANSLATION_TEXT_KEY)
+        if (
+            isinstance(cached_hash, str)
+            and cached_hash == source_hash
+            and isinstance(cached_text, str)
+            and cached_text.strip()
+        ):
+            if document_id:
+                cached_preview = " ".join(cached_text.strip().split())[:100]
+                print(
+                    "[documents] using cached english content "
+                    f"document_id={document_id} chars={len(cached_text.strip())} preview={cached_preview!r}"
+                )
+            return cached_text.strip()
+
+    if document_id:
+        print(
+            "[documents] translating content for embedding "
+            f"document_id={document_id} chars={len(source_text)}"
+        )
+    translated = _translate_text_to_english(source_text, translation_chars)
+    english_content = (translated or "").strip() or source_text
+
+    if raw_metadata is not None:
+        raw_metadata[CONTENT_TRANSLATION_TEXT_KEY] = english_content
+        raw_metadata[CONTENT_TRANSLATION_HASH_KEY] = source_hash
+        raw_metadata[CONTENT_TRANSLATION_GENERATED_KEY] = english_content != source_text
+
+    return english_content
+
+
+def _generate_document_embedding(
+    document: dict[str, Any],
+    *,
+    raw_metadata: dict[str, Any] | None = None,
+) -> Sequence[float]:
     segments: list[str] = []
 
     tags = document.get("tags")
@@ -995,10 +1059,17 @@ def _generate_document_embedding(document: dict[str, Any]) -> Sequence[float]:
             segments.append(tag_text)
 
     content = document.get("content")
+    english_content = ""
     if isinstance(content, str):
-        cleaned = content.strip()
-        if cleaned:
-            segments.append(cleaned)
+        document_id = document.get("document_id")
+        document_id_text = document_id if isinstance(document_id, str) else None
+        english_content = _resolve_english_content_for_embedding(
+            content,
+            raw_metadata,
+            document_id=document_id_text,
+        )
+        if english_content:
+            segments.append(english_content)
 
     description = document.get("description")
     if isinstance(description, str):
@@ -1019,18 +1090,13 @@ def _generate_document_embedding(document: dict[str, Any]) -> Sequence[float]:
             segments.append(cleaned)
 
     combined = " ".join(segments).strip()
-
-    embed_source = combined[:MAX_EMBED_CHARS]
-    embed_input = ""
-    if embed_source is not None:
-        embed_input = _translate_text_to_english(embed_source, MAX_EMBED_CHARS)
-
-    if not embed_input.strip():
-        embed_input = embed_source
-
-    doc_id = document.get("id")
-    if doc_id is not None:
-        embed_source = f"{embed_source} document Id: {doc_id}"
+    embed_input = combined[:MAX_EMBED_CHARS] or "document"
+    document_id = document.get("document_id")
+    if isinstance(document_id, str):
+        print(
+            "[documents] embedding payload "
+            f"document_id={document_id} chars={len(embed_input)} bytes={len(embed_input.encode('utf-8'))}"
+        )
     return embed_text(embed_input)
 
 
@@ -1049,37 +1115,21 @@ def _derive_title_from_filename(filename: str | None) -> str | None:
 
 def _suggest_title(content: str, fallback: str | None) -> str | None:
     cleaned = (content or "").strip()
-    if not cleaned or not OLLAMA_CHAT_MODEL:
+    if not cleaned or not LLM_CHAT_MODEL:
         return _derive_title_from_filename(fallback)
     excerpt = cleaned[:MAX_TITLE_PROMPT_CHARS]
-    payload = {
-        "model": OLLAMA_CHAT_MODEL,
-        "messages": [
-            {
-                "role": "system",
-                "content": (
-                    "You generate concise, descriptive document titles (maximum 8 words). If documents are not in english, you still suggest a title in english. Do not use any kind of text formatting."
-                    "Respond with text only, no JSON."
-                ),
-            },
-            {
-                "role": "user",
-                "content": (
-                    "Suggest a short title for the following document excerpt:\n\n"
-                    f"{excerpt}"
-                ),
-            },
-        ],
-        "stream": False,
-    }
+    system_prompt = (
+        "You generate concise, descriptive document titles (maximum 8 words). "
+        "If documents are not in english, you still suggest a title in english. "
+        "Do not use any kind of text formatting. Respond with text only, no JSON."
+    )
+    user_prompt = f"Suggest a short title for the following document excerpt:\n\n{excerpt}"
     try:
-        response = requests.post(
-            f"{OLLAMA_HOST}/api/chat", json=payload, timeout=OLLAMA_TIMEOUT
-        )
-        response.raise_for_status()
-        data = response.json()
-        message = data.get("message") or {}
-        candidate = (message.get("content") or "").strip()
+        candidate = _call_llm_text(
+            user_prompt,
+            system_prompt=system_prompt,
+            timeout=OLLAMA_TIMEOUT,
+        ).strip()
         if candidate:
             return candidate.splitlines()[0].strip()
     except Exception as exc:

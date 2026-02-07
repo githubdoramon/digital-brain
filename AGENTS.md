@@ -125,7 +125,7 @@ User Question → Intent Router (metadata) → Agent Loop (full tool set) → Re
 
 - **Single source of truth for tool groups**: keep router tool groups aligned with `backend/orchestrator/tools/registry.py`; do not maintain divergent copies.
 - **Tool groups are metadata today**: router still classifies intents and groups, but the controller currently exposes the full tool set to the LLM.
-- **LLM calls must use helpers**: all LLM requests and streams go through `backend/orchestrator/llm_helpers.py` (no direct HTTP calls in controllers/handlers).
+- **LLM calls must use helpers**: all LLM requests and streams go through `backend/orchestrator/llm_helpers.py` (never call LLM endpoints via direct `requests`/`httpx` in app modules).
 - **Controller context kwargs are global**: handlers are invoked with shared runtime context (`state`, `question`, `search_limit`, `user_email`, `conversation_history`). Every handler must accept these explicitly or via `**kwargs`.
 - **Regression guard**: keep `backend/orchestrator/tests/tools/test_handlers/test_handler_signatures.py` passing to prevent `unexpected keyword argument` runtime failures.
 - **`resolve_contacts` contract**: model-facing params should remain minimal (`text` only). Runtime identity/context (like `user_email`) is injected by the controller, not authored by the model.

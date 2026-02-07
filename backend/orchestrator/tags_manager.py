@@ -5,12 +5,9 @@ import os
 from collections.abc import Iterable, Sequence
 from typing import Literal
 
-import requests
-
 MAX_LABEL_PROMPT_CHARS = int(os.getenv("DOCUMENT_LABEL_PROMPT_CHARS", "10000"))
 MAX_SUGGESTED_TAGS = int(os.getenv("DOCUMENT_LABEL_MAX_COUNT", "5"))
-OLLAMA_HOST = os.getenv("OLLAMA_HOST", "http://localhost:11434")
-OLLAMA_CHAT_MODEL = os.getenv("OLLAMA_CHAT_MODEL")
+LLM_CHAT_MODEL = os.getenv("LLM_CHAT_MODEL")
 OLLAMA_TIMEOUT = int(os.getenv("OLLAMA_TIMEOUT", "60"))
 
 MAJOR_TAGS = [
@@ -136,6 +133,22 @@ MAJOR_TAG_KEYWORDS = {
 }
 
 
+def _call_llm_text(
+    prompt: str,
+    *,
+    system_prompt: str,
+    timeout: int,
+) -> str:
+    from llm_helpers import call_llm
+
+    return call_llm(
+        prompt,
+        system_prompt=system_prompt,
+        model=LLM_CHAT_MODEL,
+        timeout=timeout,
+    )
+
+
 def _has_major_tag(tags: Sequence[str]) -> bool:
     lowered = {str(tag).strip().lower() for tag in tags if isinstance(tag, str) and str(tag).strip()}
     return any(major.lower() in lowered for major in MAJOR_TAGS)
@@ -199,7 +212,7 @@ def _suggest_tags(
     subject: Literal["document", "event"],
 ) -> list[str]:
     cleaned = (content or "").strip()
-    if not cleaned or not OLLAMA_CHAT_MODEL:
+    if not cleaned or not LLM_CHAT_MODEL:
         return []
 
     prompt_content = cleaned[:MAX_LABEL_PROMPT_CHARS]
@@ -220,43 +233,29 @@ def _suggest_tags(
         for major in MAJOR_TAGS
     )
 
-    payload = {
-        "model": OLLAMA_CHAT_MODEL,
-        "messages": [
-            {
-                "role": "system",
-                "content": (
-                    "You are a tagging assistant for a personal knowledge base. "
-                    "Propose concise English tags (1-3 words) that balance specificity and generality. "
-                    f"Always include AT LEAST ONE of these major categories as a tag exactly as written: {major_categories}. "
-                    f"{subject_instruction} "
-                    "Blend specific tags (e.g., \"Form 1040\", \"Dr. Smith\", \"Project Apollo\") with broader ones (e.g., \"Taxes\", \"Travel\", \"Contracts\", \"Blood test\"). "
-                    f"Here are example sub-tags for each major category: {subtag_examples}. "
-                    "Respond ONLY with JSON in the shape {\"tags\": [\"tag\", ...]} and do not include any prose or numbering."
-                ),
-            },
-            {
-                "role": "user",
-                "content": (
-                    f"Existing tags: {existing}\n"
-                    f"Major categories (must include at least one): {major_categories}\n"
-                    f"{subject_excerpt_label}:\n"
-                    f"{prompt_content}\n\n"
-                    f"Return up to {MAX_SUGGESTED_TAGS} new tags relevant to this {subject}."
-                ),
-            },
-        ],
-        "stream": False,
-    }
+    system_prompt = (
+        "You are a tagging assistant for a personal knowledge base. "
+        "Propose concise English tags (1-3 words) that balance specificity and generality. "
+        f"Always include AT LEAST ONE of these major categories as a tag exactly as written: {major_categories}. "
+        f"{subject_instruction} "
+        "Blend specific tags (e.g., \"Form 1040\", \"Dr. Smith\", \"Project Apollo\") with broader ones (e.g., \"Taxes\", \"Travel\", \"Contracts\", \"Blood test\"). "
+        f"Here are example sub-tags for each major category: {subtag_examples}. "
+        "Respond ONLY with JSON in the shape {\"tags\": [\"tag\", ...]} and do not include any prose or numbering."
+    )
+    user_prompt = (
+        f"Existing tags: {existing}\n"
+        f"Major categories (must include at least one): {major_categories}\n"
+        f"{subject_excerpt_label}:\n"
+        f"{prompt_content}\n\n"
+        f"Return up to {MAX_SUGGESTED_TAGS} new tags relevant to this {subject}."
+    )
 
     try:
-        response = requests.post(
-            f"{OLLAMA_HOST}/api/chat", json=payload, timeout=OLLAMA_TIMEOUT
-        )
-        response.raise_for_status()
-        data = response.json()
-        message = data.get("message") or {}
-        raw_content = (message.get("content") or "").strip()
+        raw_content = _call_llm_text(
+            user_prompt,
+            system_prompt=system_prompt,
+            timeout=OLLAMA_TIMEOUT,
+        ).strip()
         if not raw_content:
             return []
         parsed = _parse_suggested_tags_response(raw_content)
