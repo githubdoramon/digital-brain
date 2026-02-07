@@ -46,6 +46,144 @@ def _format_conversation_for_prompt(conversation_messages: list[dict[str, str]])
     return json.dumps(sanitized, ensure_ascii=True)
 
 
+def _normalize_entity_for_match(value: str) -> str:
+    normalized = re.sub(r"\s+", " ", value.strip().lower())
+    for article in ("the ", "a ", "an "):
+        if normalized.startswith(article):
+            normalized = normalized[len(article) :].strip()
+            break
+    return normalized
+
+
+def _is_org_title_phrase(value: str) -> bool:
+    text = _normalize_entity_for_match(value)
+    if not text:
+        return False
+
+    tokens = set(re.findall(r"[a-z]+", text))
+    if not tokens:
+        return False
+
+    # Corporate/professional titles that usually indicate one person role, not two people.
+    org_title_keywords = {
+        "ceo",
+        "cto",
+        "cfo",
+        "coo",
+        "cio",
+        "cmo",
+        "chief",
+        "president",
+        "vice",
+        "vp",
+        "founder",
+        "cofounder",
+        "director",
+        "head",
+        "lead",
+        "manager",
+        "officer",
+        "chair",
+        "chairman",
+        "chairwoman",
+    }
+
+    if tokens & org_title_keywords:
+        return True
+    return text.startswith("head of ") or text.startswith("vice president")
+
+
+def _detect_split_possessive_title_errors(
+    text: str,
+    people: list[str],
+) -> list[dict[str, str]]:
+    """
+    Detect extraction errors where "Org's Title" was split into two people.
+
+    Example:
+    - Input text: "Acme's CEO"
+    - Bad extraction: ["Acme", "CEO"]
+    - Desired: ["CEO at Acme"]
+    """
+    if not text or len(people) < 2:
+        return []
+
+    errors: list[dict[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    for owner in people:
+        owner_norm = _normalize_entity_for_match(owner)
+        if not owner_norm:
+            continue
+        for title in people:
+            title_norm = _normalize_entity_for_match(title)
+            if not title_norm or owner_norm == title_norm or not _is_org_title_phrase(title):
+                continue
+
+            possessive_pattern = re.compile(
+                rf"\b{re.escape(owner)}(?:'s|s')\s+(?:the\s+|a\s+|an\s+)?{re.escape(title)}\b",
+                re.IGNORECASE,
+            )
+            if not possessive_pattern.search(text):
+                continue
+
+            key = (owner_norm, title_norm)
+            if key in seen:
+                continue
+            seen.add(key)
+            normalized_title = re.sub(r"^(?:the|a|an)\s+", "", title, flags=re.IGNORECASE).strip()
+            errors.append(
+                {
+                    "owner": owner.strip(),
+                    "title": normalized_title,
+                    "canonical": f"{normalized_title} at {owner.strip()}",
+                }
+            )
+
+    return errors
+
+
+def _repair_split_possessive_title_entities(
+    text: str,
+    people: list[str],
+) -> list[str]:
+    """
+    Repair known extraction mistakes where possessive organization titles are split.
+    """
+    errors = _detect_split_possessive_title_errors(text, people)
+    if not errors:
+        return people
+
+    repaired = list(people)
+    for error in errors:
+        owner_norm = _normalize_entity_for_match(error["owner"])
+        title_norm = _normalize_entity_for_match(error["title"])
+
+        owner_removed = False
+        title_removed = False
+        next_people: list[str] = []
+        for person in repaired:
+            person_norm = _normalize_entity_for_match(person)
+            if not owner_removed and person_norm == owner_norm:
+                owner_removed = True
+                continue
+            if not title_removed and person_norm == title_norm:
+                title_removed = True
+                continue
+            next_people.append(person)
+        repaired = next_people
+
+        canonical = error["canonical"]
+        canonical_norm = _normalize_entity_for_match(canonical)
+        if canonical_norm not in {_normalize_entity_for_match(p) for p in repaired}:
+            print(
+                "[contact_resolver] Repairing split possessive title "
+                f"'{error['owner']}'s {error['title']}' -> '{canonical}'"
+            )
+            repaired.append(canonical)
+
+    return repaired
+
+
 def extract_people_from_text(
     text: str,
     conversation_messages: list[dict[str, str]] | None = None,
@@ -63,6 +201,8 @@ def extract_people_from_text(
             "ambiguous_text": true | false
         }
     """
+
+    print(f"[contact_resolver] extract_people_from_text: {text}")
     conversation_block = ""
     if conversation_messages:
         conversation_json = _format_conversation_for_prompt(conversation_messages)
@@ -87,6 +227,19 @@ Extract ONLY people - all person references including:
 - Relational terms (e.g., "my daughter", "the doctor")
 - Nested relationships (e.g., "my daughter's doctor", "my son's teacher", "my wife's family") - Also correct any spelling if user mistyped (for example, daughters instead of daugther's)
 - The current user IF they are a participant in the event (e.g., "I visited my daughter" - both "I" and "my daughter" are participants)
+
+POSSESSIVE ORG TITLES (IMPORTANT):
+- If text has "X's <corporate/professional title>" and X is an organization/brand/company/team, this is ONE person mention, not two people.
+- Rewrite it as "<title> at X" as a single entry.
+- NEVER output ["X", "<title>"] for this case.
+- Examples:
+  * "Walmart's Marketing Manager" → ["Marketing Manager at Walmart"]
+  * "Apple's Head of Engineering" → ["Head of Engineering at Apple"]
+  * "OpenAI's CTO met us" → ["CTO at OpenAI"]
+
+PERSON NESTED RELATIONSHIPS (keep these as person references):
+- "my daughter's doctor" stays ["my daughter", "my daughter's doctor"]
+- "John's doctor" stays ["John", "John's doctor"]
 
 SAME-PERSON APPOSITIVES (AVOID DUPLICATES):
 - If a proper name and a relationship/profession describe the SAME person in the same clause/sentence, return ONLY the proper name.
@@ -172,14 +325,18 @@ Return ONLY a valid JSON, nothing more, no other text or explanation:
                 if person_lower.startswith(("her ", "his ", "their ")):
                     invalid_extractions.append(person)
 
-            if invalid_extractions and attempt < max_retries - 1:
+            split_possessive_title_errors = _detect_split_possessive_title_errors(text, people)
+            if (invalid_extractions or split_possessive_title_errors) and attempt < max_retries - 1:
                 print(
-                    f"[contact_resolver] Attempt {attempt + 1}: Invalid extractions detected: {invalid_extractions}"
+                    f"[contact_resolver] Attempt {attempt + 1}: Invalid extractions detected: "
+                    f"{invalid_extractions}, split_possessive_titles={split_possessive_title_errors}"
                 )
                 print("[contact_resolver] Retrying extraction with stricter guidance...")
 
                 # Add stricter guidance to the prompt
-                prompt += f"""
+                correction_block = ""
+                if invalid_extractions:
+                    correction_block += f"""
 
 CRITICAL ERROR CORRECTION:
 Your previous extraction contained unresolved pronouns: {", ".join(invalid_extractions)}
@@ -191,6 +348,20 @@ These are INVALID because:
 - If you cannot identify the referent, DO NOT include it
 
 Please extract again with proper pronoun resolution or omit unclear references."""
+                if split_possessive_title_errors:
+                    error_lines = "\n".join(
+                        f"- You returned both '{e['owner']}' and '{e['title']}'. "
+                        f"Use one entry: '{e['canonical']}'."
+                        for e in split_possessive_title_errors
+                    )
+                    correction_block += f"""
+
+CRITICAL ERROR CORRECTION (POSSESSIVE ORG TITLES):
+You split possessive organization titles into two people. This is invalid.
+{error_lines}
+
+For possessive org titles, output ONE person mention only, formatted as "<title> at <org>"."""
+                prompt += correction_block
                 continue
 
             # Post-process: Filter out first-person pronouns and handle "user" token
@@ -220,7 +391,8 @@ Please extract again with proper pronoun resolution or omit unclear references."
 
                 filtered_people.append(person)
 
-            return filtered_people
+            repaired_people = _repair_split_possessive_title_entities(text, filtered_people)
+            return repaired_people
         except Exception as e:
             if attempt < max_retries - 1:
                 print(f"[contact_resolver] Attempt {attempt + 1} failed: {e}, retrying...")

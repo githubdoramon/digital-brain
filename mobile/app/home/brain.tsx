@@ -8,6 +8,7 @@ import {
   KeyboardAvoidingViewProps,
   Platform,
   Pressable,
+  Linking,
   StyleSheet,
   Text,
   TextInput,
@@ -122,14 +123,83 @@ const useKeyboardBehavior = () => {
   return behavior;
 };
 
-const INLINE_MARKDOWN_PATTERN = /(\*\*[^*]+\*\*|`[^`]+`|\*[^*]+\*)/g;
+const INLINE_MARKDOWN_PATTERN =
+  /(\[[^\]]+\]\((?:https?:\/\/|mailto:|www\.)[^)\s]+\)|(?:https?:\/\/|mailto:|www\.)\S+|\*\*[^*]+\*\*|`[^`]+`|\*[^*]+\*)/g;
+const MARKDOWN_LINK_PATTERN = /^\[([^\]]+)\]\(([^)\s]+)\)$/;
+const URL_TOKEN_PATTERN = /^(?:https?:\/\/|mailto:|www\.)\S+$/;
+const TRAILING_URL_PUNCTUATION_PATTERN = /[),.!?;:]+$/;
 const BULLET_LINE_PATTERN = /^[-*]\s+/;
 const NUMBERED_LINE_PATTERN = /^(\d+)\.\s+(.*)$/;
 const BLOCKQUOTE_LINE_PATTERN = /^>\s+/;
 
+function normalizeLinkUrl(url: string) {
+  const trimmed = url.trim();
+  if (trimmed.startsWith('www.')) {
+    return `https://${trimmed}`;
+  }
+  return trimmed;
+}
+
+async function openMarkdownLink(rawUrl: string) {
+  const url = normalizeLinkUrl(rawUrl);
+  try {
+    await Linking.openURL(url);
+  } catch (error) {
+    console.warn('Failed to open markdown link', error);
+  }
+}
+
+function splitTrailingUrlPunctuation(token: string) {
+  const trailing = token.match(TRAILING_URL_PUNCTUATION_PATTERN)?.[0] ?? '';
+  if (!trailing) {
+    return { url: token, trailingText: '' };
+  }
+  return {
+    url: token.slice(0, -trailing.length),
+    trailingText: trailing,
+  };
+}
+
 function renderInlineMarkdown(text: string, keyPrefix: string) {
   const parts = text.split(INLINE_MARKDOWN_PATTERN).filter(Boolean);
   return parts.map((part, index) => {
+    const markdownLinkMatch = part.match(MARKDOWN_LINK_PATTERN);
+    if (markdownLinkMatch) {
+      const [, label, rawUrl] = markdownLinkMatch;
+      return (
+        <Text
+          key={`${keyPrefix}-link-${index}`}
+          style={styles.markdownLink}
+          accessibilityRole="link"
+          selectable={false}
+          onPress={() => {
+            void openMarkdownLink(rawUrl);
+          }}
+        >
+          {label}
+        </Text>
+      );
+    }
+
+    if (URL_TOKEN_PATTERN.test(part)) {
+      const { url, trailingText } = splitTrailingUrlPunctuation(part);
+      return (
+        <React.Fragment key={`${keyPrefix}-url-${index}`}>
+          <Text
+            style={styles.markdownLink}
+            accessibilityRole="link"
+            selectable={false}
+            onPress={() => {
+              void openMarkdownLink(url);
+            }}
+          >
+            {url}
+          </Text>
+          {trailingText ? <Text selectable>{trailingText}</Text> : null}
+        </React.Fragment>
+      );
+    }
+
     if (part.startsWith('**') && part.endsWith('**')) {
       return (
         <Text key={`${keyPrefix}-bold-${index}`} style={styles.markdownBold} selectable>
@@ -846,6 +916,10 @@ const styles = StyleSheet.create({
     borderRadius: theme.radius.md,
     paddingHorizontal: 4,
     color: theme.colors.ink,
+  },
+  markdownLink: {
+    color: theme.colors.accentDeep,
+    textDecorationLine: 'underline',
   },
   markdownBold: {
     fontWeight: '700',

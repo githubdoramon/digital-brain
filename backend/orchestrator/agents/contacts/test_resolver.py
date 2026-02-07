@@ -48,6 +48,9 @@ def mock_call_llm_json(prompt: str, **kwargs) -> dict[str, Any]:
             return {"people": ["the doctor", "her patient"]}
         elif "i took mira to her eye doctor" in text_content and "dr. nash" in text_content:
             return {"people": ["user", "Mira", "Dr. Nash"]}
+        elif "acme's ceo" in text_content:
+            # Simulate bad first-pass extraction that splits org possessive title.
+            return {"people": ["Acme", "CEO"]}
         elif "had lunch with john smith" in text_content:
             # User is participant (having lunch)
             return {"people": ["user", "John Smith"]}
@@ -193,6 +196,12 @@ def test_extract_people_from_text():
     assert "Mira" in people
     assert "Dr. Nash" in people
     assert "Mira's eye doctor" not in people
+
+    # Test possessive org title split repair
+    people = extract_people_from_text("Acme's CEO joined the meeting")
+    assert "Acme" not in people
+    assert "CEO" not in people
+    assert "CEO at Acme" in people
 
 
 @patch("agents.contacts.resolver.contacts_service")

@@ -784,7 +784,7 @@ def _resolve_existing_entities(
 
         matches = contacts_service.search_contacts(
             search_name,
-            search_by="name",
+            search_by="any",
             fuzzy_threshold=75,
             limit=3,
         )
