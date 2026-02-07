@@ -181,6 +181,19 @@ class DocumentSearchIn(BaseModel):
     limit: int | None = 20
 
 
+class ToolRunIn(BaseModel):
+    tool_name: str
+    args: dict[str, Any] = Field(default_factory=dict)
+
+
+class ToolRunOut(BaseModel):
+    tool_name: str
+    args: dict[str, Any] = Field(default_factory=dict)
+    normalized_args: dict[str, Any] = Field(default_factory=dict)
+    result: dict[str, Any] = Field(default_factory=dict)
+    duration_ms: float
+
+
 class PushNotificationsUpdateIn(BaseModel):
     enabled: bool
 
