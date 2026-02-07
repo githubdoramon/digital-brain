@@ -15,6 +15,7 @@ import {
   View,
 } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
+import { useBottomTabBarHeight } from '@react-navigation/bottom-tabs';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { apiFetch } from '@/api/client';
@@ -365,6 +366,7 @@ function renderAssistantMarkdown(markdown: string, keyPrefix: string) {
 export default function ChatScreen() {
   const { token, signOut, email } = useAuth();
   const insets = useSafeAreaInsets();
+  const tabBarHeight = useBottomTabBarHeight();
   const listRef = useRef<FlatList<Message>>(null);
   const [input, setInput] = useState('');
   const [isSending, setIsSending] = useState(false);
@@ -379,8 +381,7 @@ export default function ChatScreen() {
   const [forceScrollNext, setForceScrollNext] = useState(false);
   const [isBootstrapping, setIsBootstrapping] = useState(true);
   const [composerHeight, setComposerHeight] = useState(0);
-  const tabBarOffset = 64;
-  const composerInset = tabBarOffset + 96;
+  const composerInset = Math.max(composerHeight + 16, tabBarHeight + 112);
 
   const allowed = email === 'REDACTED-EMAIL';
   const canSend = input.trim().length > 0 && !isSending && allowed;
@@ -738,7 +739,7 @@ export default function ChatScreen() {
           style={[
             styles.composer,
             {
-              paddingBottom: 18 + (Platform.OS === 'ios' ? insets.bottom : 0) + tabBarOffset,
+              paddingBottom: 30 + tabBarHeight,
             },
           ]}
         >
