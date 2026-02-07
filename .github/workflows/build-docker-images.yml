@@ -16,6 +16,11 @@ jobs:
   test-orchestrator:
     name: Test Orchestrator
     runs-on: ubuntu-latest
+    env:
+      # Required by backend imports (llm_helpers/auth) during test collection.
+      LLM_BASE_URL: http://localhost:11434/v1
+      LLM_CHAT_MODEL: ci-test-model
+      GOOGLE_CLIENT_ID: ci-test-client-id.apps.googleusercontent.com
     defaults:
       run:
         working-directory: backend/orchestrator
@@ -234,4 +239,3 @@ jobs:
               break
             fi
           done
-
