@@ -20,6 +20,13 @@ type MemoryResult = {
   title?: string | null;
   summary?: string | null;
   snippet?: string | null;
+  score?: number;
+  score_breakdown?: {
+    semantic?: number;
+    keyword?: number;
+    structured?: number;
+  };
+  match_sources?: string[];
   start_date?: string | null;
   end_date?: string | null;
   place?: {
@@ -83,6 +90,13 @@ const baseCardStyle = {
   padding: "16px",
   background: "#fff",
 };
+
+function formatScore(value: number | undefined) {
+  if (value === undefined || Number.isNaN(value)) {
+    return "n/a";
+  }
+  return value.toFixed(3);
+}
 
 function parseCommaList(value: string): string[] | undefined {
   const items = value
@@ -542,6 +556,12 @@ export default function ToolsPage() {
                       <span style={{ fontSize: "0.8rem", color: "#6b7280" }}>{item.kind}</span>
                     </div>
                     {item.snippet && <span style={{ color: "#4b5563" }}>{item.snippet}</span>}
+                    {item.score_breakdown && (
+                      <span style={{ fontSize: "0.8rem", color: "#6b7280" }}>
+                        Score {formatScore(item.score)} | semantic {formatScore(item.score_breakdown.semantic)} | keyword{" "}
+                        {formatScore(item.score_breakdown.keyword)} | structured {formatScore(item.score_breakdown.structured)}
+                      </span>
+                    )}
                     {item.start_date && (
                       <span style={{ fontSize: "0.85rem", color: "#6b7280" }}>
                         {item.start_date}

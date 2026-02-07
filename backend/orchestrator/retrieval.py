@@ -185,9 +185,7 @@ def search_memories(
     event_lookup_all = {row["id"]: row for row in event_rows_all}
 
     if ordering in {"newest", "oldest"}:
-        with_dates = [
-            row for row in event_rows_all if row.get("start_date") or row.get("end_date")
-        ]
+        with_dates = [row for row in event_rows_all if row.get("start_date") or row.get("end_date")]
         without_dates = [
             row for row in event_rows_all if not (row.get("start_date") or row.get("end_date"))
         ]
@@ -219,7 +217,10 @@ def search_memories(
 
     if ordering in {"newest", "oldest"} or has_structured_filters:
         # For temporal or explicitly-filtered queries, prioritize events first.
-        combined.extend((event_id, "event", event_scores.get(event_id, 0.0)) for event_id in event_ids_ordered_all)
+        combined.extend(
+            (event_id, "event", event_scores.get(event_id, 0.0))
+            for event_id in event_ids_ordered_all
+        )
         combined.extend((doc_id, "document", doc_scores[doc_id]) for doc_id in doc_ids_ordered)
     else:
         combined.extend((event_id, "event", event_scores[event_id]) for event_id in event_scores)
@@ -236,7 +237,11 @@ def search_memories(
     doc_ids_top = [item_id for item_id, kind, _ in top_combined if kind == "document"]
 
     event_lookup = (
-        {event_id: event_lookup_all[event_id] for event_id in event_ids_top if event_id in event_lookup_all}
+        {
+            event_id: event_lookup_all[event_id]
+            for event_id in event_ids_top
+            if event_id in event_lookup_all
+        }
         if event_lookup_all
         else {}
     )
@@ -252,6 +257,16 @@ def search_memories(
             row = event_lookup.get(item_id)
             if not row:
                 continue
+            vector_score = float(vec_events.get(item_id, 0.0))
+            keyword_score = float(bm_events.get(item_id, 0.0))
+            structured_score = float(st_events.get(item_id, 0.0))
+            match_sources = []
+            if vector_score > 0:
+                match_sources.append("semantic")
+            if keyword_score > 0:
+                match_sources.append("keyword")
+            if structured_score > 0:
+                match_sources.append("structured")
             results.append(
                 {
                     "id": row["id"],
@@ -260,6 +275,13 @@ def search_memories(
                     "end_date": row["end_date"].isoformat() if row.get("end_date") else None,
                     "title": row.get("title"),
                     "summary": row.get("summary"),
+                    "score": float(event_scores.get(item_id, 0.0)),
+                    "score_breakdown": {
+                        "semantic": vector_score,
+                        "keyword": keyword_score,
+                        "structured": structured_score,
+                    },
+                    "match_sources": match_sources,
                     "place": (
                         {
                             "place_id": row["place_id"],
@@ -280,12 +302,26 @@ def search_memories(
             doc = doc_lookup.get(item_id)
             if not doc:
                 continue
+            vector_score = float(vec_docs.get(item_id, 0.0))
+            keyword_score = float(bm_docs.get(item_id, 0.0))
+            match_sources = []
+            if vector_score > 0:
+                match_sources.append("semantic")
+            if keyword_score > 0:
+                match_sources.append("keyword")
             results.append(
                 {
                     "id": doc["document_id"],
                     "kind": "document",
                     "title": doc.get("title"),
                     "description": doc.get("description"),
+                    "score": float(doc_scores.get(item_id, 0.0)),
+                    "score_breakdown": {
+                        "semantic": vector_score,
+                        "keyword": keyword_score,
+                        "structured": 0.0,
+                    },
+                    "match_sources": match_sources,
                     "tags": doc.get("tags", []),
                     "document_date": _isoformat(doc.get("document_date")),
                     "created_at": _isoformat(doc.get("created_at")),
