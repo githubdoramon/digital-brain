@@ -1119,8 +1119,14 @@ class AgentController:
             from agents.contacts.executor import handle_resolve_contacts_request
 
             payload: dict[str, Any] = {"text": text, "user_email": user_email}
-            if conversation_history:
-                payload["conversation_messages"] = conversation_history[-8:]
+            context_messages = list((conversation_history or [])[-8:])
+            if (
+                not context_messages
+                or context_messages[-1].get("role") != "user"
+                or sanitize_goal_text(str(context_messages[-1].get("content", ""))) != text
+            ):
+                context_messages.append({"role": "user", "content": text})
+            payload["conversation_messages"] = context_messages
 
             resolution = handle_resolve_contacts_request(payload)
             state.resolution["contact_resolution"] = resolution

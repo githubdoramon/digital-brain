@@ -189,3 +189,60 @@ def test_llm_disambiguation_lenient_accepts_without_context(monkeypatch):
     assert len(resolved) == 1
     assert resolved[0]["contact_id"] == "contact:alice-a"
     assert ambiguous == []
+
+
+def test_resolve_contacts_keeps_current_text_even_with_history(monkeypatch):
+    captured = {}
+
+    def fake_extract_people(text, conversation_messages=None):
+        captured["text"] = text
+        captured["conversation_messages"] = conversation_messages
+        return []
+
+    monkeypatch.setattr(resolver, "extract_people_from_text", fake_extract_people)
+
+    result = resolver.resolve_contacts_from_text(
+        text="Perenai",
+        user_email="user@example.com",
+        conversation_messages=[
+            {"role": "user", "content": "when did I last meet Gio?"},
+            {"role": "assistant", "content": "Which Gio did you mean?"},
+        ],
+    )
+
+    assert captured["text"] == "Perenai"
+    assert result["text"] == "Perenai"
+    assert result["people_mentioned"] == []
+
+
+def test_llm_disambiguation_prompt_includes_aliases_and_match_hints(monkeypatch):
+    captured = {}
+
+    def fake_call_llm_json(prompt, **_kwargs):
+        captured["prompt"] = prompt
+        return {
+            "decision": "cannot_decide",
+            "candidate_number": None,
+            "confidence": "low",
+            "reasoning": "insufficient context",
+        }
+
+    monkeypatch.setattr(resolver, "call_llm_json", fake_call_llm_json)
+
+    output = resolver._llm_disambiguate_contact(
+        person_text="Gio",
+        candidates=[
+            {
+                "contact_id": "contact:gio-acme-xyz",
+                "display_name": "Giovanni Panerai",
+                "aliases": ["Gio", "Panerai"],
+                "match_reason": "exact name match: gio",
+            }
+        ],
+        event_context="Perenai",
+    )
+
+    assert output["resolved"] is False
+    prompt = captured["prompt"]
+    assert "Aliases: Gio, Panerai" in prompt
+    assert "Match hint: exact name match: gio" in prompt

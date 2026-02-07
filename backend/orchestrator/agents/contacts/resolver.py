@@ -77,6 +77,11 @@ Text: "{text}"
 
 {conversation_block}
 
+IMPORTANT CONTEXT USAGE:
+- Focus on the current Text above.
+- Use Conversation messages only to resolve references inside this Text (e.g., pronouns, ellipsis).
+- Do NOT include people that appear only in conversation history.
+
 Extract ONLY people - all person references including:
 - Proper names (e.g., "John Smith")
 - Relational terms (e.g., "my daughter", "the doctor")
@@ -434,6 +439,8 @@ def resolve_contact(
                 "contact_id": m["contact_id"],
                 "display_name": m["display_name"],
                 "match_score": m.get("match_score", 0),
+                "match_reason": m.get("match_reason"),
+                "aliases": m.get("aliases") or [],
             }
             for m in matches
         ]
@@ -536,23 +543,6 @@ def resolve_contacts_from_text(
     # Step 1: Extract people
     print("\n[contact_resolver] Step 1: Extracting people...")
     effective_text = text
-    if conversation_messages:
-        user_only = [
-            entry.get("content", "")
-            for entry in conversation_messages
-            if entry.get("role") == "user"
-        ]
-        combined: list[str] = []
-        for chunk in user_only:
-            normalized = chunk.strip()
-            if not normalized:
-                continue
-            if any(normalized.lower() in existing.lower() for existing in combined):
-                continue
-            combined.append(normalized)
-        compact = " ".join(combined)
-        if compact:
-            effective_text = compact
 
     people = extract_people_from_text(effective_text, conversation_messages=conversation_messages)
     print(f"[contact_resolver] Extracted {len(people)} people: {people}")
@@ -1244,9 +1234,21 @@ def _llm_disambiguate_contact(
         {"resolved": bool, "contact_id": Optional[str], "display_name": Optional[str], "confidence": str}
     """
 
-    candidate_list = "\n".join(
-        f"- {i + 1}. {c['display_name']} (ID: {c['contact_id']})" for i, c in enumerate(candidates)
-    )
+    formatted_candidates: list[str] = []
+    for i, candidate in enumerate(candidates):
+        aliases = [
+            str(alias).strip()
+            for alias in (candidate.get("aliases") or [])
+            if str(alias).strip()
+        ]
+        alias_suffix = f" | Aliases: {', '.join(aliases[:5])}" if aliases else ""
+        reason = str(candidate.get("match_reason") or "").strip()
+        reason_suffix = f" | Match hint: {reason}" if reason else ""
+        formatted_candidates.append(
+            f"- {i + 1}. {candidate['display_name']} (ID: {candidate['contact_id']})"
+            f"{alias_suffix}{reason_suffix}"
+        )
+    candidate_list = "\n".join(formatted_candidates)
 
     conversation_block = ""
     if conversation_messages:

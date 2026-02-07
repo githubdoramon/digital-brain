@@ -624,3 +624,38 @@ class TestContactAwareMemorySearch:
         assert prompt is None
         assert captured_payload.get("text") == "What happened last week?"
         assert captured_payload.get("user_email") == "user@example.com"
+
+    def test_prime_contact_scope_includes_current_user_message_in_context(
+        self, controller, monkeypatch
+    ):
+        state = AgentState(goal="Perenai")
+        captured_payload = {}
+
+        def fake_resolver(payload):
+            captured_payload.update(payload)
+            return {
+                "status": "no_people",
+                "people_mentioned": [],
+                "resolved_contacts": [],
+                "ambiguous_contacts": [],
+            }
+
+        monkeypatch.setattr(
+            "agents.contacts.executor.handle_resolve_contacts_request",
+            fake_resolver,
+        )
+
+        prompt = controller._prime_contact_scope_for_question(
+            state=state,
+            question="Perenai",
+            user_email="user@example.com",
+            conversation_history=[
+                {"role": "user", "content": "when did I last meet Gio?"},
+                {"role": "assistant", "content": "Which Gio did you mean?"},
+            ],
+        )
+
+        assert prompt is None
+        conversation_messages = captured_payload.get("conversation_messages")
+        assert conversation_messages is not None
+        assert conversation_messages[-1] == {"role": "user", "content": "Perenai"}
