@@ -1,4 +1,5 @@
 import Link from "next/link";
+import Link from "next/link";
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "@/app/api/auth/[...nextauth]/route";
 import Image from "next/image";
@@ -90,6 +91,14 @@ export async function NavBar() {
               }}
             >
               System Status
+            </Link>
+            <Link
+              href="/tools"
+              style={{
+                color: "#444",
+              }}
+            >
+              Tools
             </Link>
           </nav>
           

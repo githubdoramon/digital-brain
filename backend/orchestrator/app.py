@@ -37,6 +37,7 @@ import places as places_service
 import skills
 import telegram_bot
 import todos as todos_service
+from agent.state import AgentState
 from auth import get_current_user
 from db import get_conn
 from notifications.preferences import get_push_settings, update_push_settings
@@ -69,7 +70,12 @@ from schemas import (
     ThreadUpdate,
     TodoIn,
     TodoStatusUpdateIn,
+    ToolRunIn,
+    ToolRunOut,
 )
+from tools.handlers import get_handler
+from tools.registry import get_registry
+from tools.validators.pre_execution import PreExecutionValidator
 from versioning import get_service_versions
 
 ORCHESTRATOR_API_KEY = os.getenv("ORCHESTRATOR_API_KEY")
@@ -250,6 +256,15 @@ def get_contact(contact_id: str, user: dict = Depends(get_current_user)):
     if contact is None or contacts_service.is_external_placeholder(contact.get("display_name")):
         raise HTTPException(status_code=404, detail="Contact not found")
     return contact
+
+
+@api.get("/places/{place_id}")
+@api.get("/mobile/places/{place_id}")
+def get_place(place_id: str, user: dict = Depends(get_current_user)):
+    place = places_service.get_place(place_id)
+    if place is None:
+        raise HTTPException(status_code=404, detail="Place not found")
+    return place
 
 
 @api.get("/mobile/contacts/{contact_id}/avatar")
@@ -1678,6 +1693,55 @@ def reload_skills(user: dict = Depends(get_current_user)):
 
     count = reload_registry()
     return {"reloaded": count, "message": f"Reloaded {count} skills"}
+
+
+@api.post("/tools/run", response_model=ToolRunOut)
+def run_tool(payload: ToolRunIn, user: dict = Depends(get_current_user)):
+    user_email = user.get("email")
+    if not user_email:
+        raise HTTPException(status_code=400, detail="Authenticated user email missing")
+
+    registry = get_registry()
+    contract = registry.get_contract(payload.tool_name)
+    if not contract:
+        raise HTTPException(status_code=404, detail=f"Unknown tool: {payload.tool_name}")
+
+    validator = PreExecutionValidator(registry)
+    validation = validator.validate(payload.tool_name, payload.args)
+    if not validation.valid:
+        raise HTTPException(status_code=400, detail=validation.to_message())
+
+    normalized_args = contract.normalize(payload.args)
+    handler = get_handler(payload.tool_name)
+    if handler is None:
+        raise HTTPException(status_code=500, detail=f"Tool handler not found: {payload.tool_name}")
+
+    state = AgentState(goal=f"tool_run:{payload.tool_name}")
+    search_limit = normalized_args.get("limit")
+    if not isinstance(search_limit, int):
+        search_limit = 5
+
+    start = perf_counter()
+    try:
+        result = handler(
+            normalized_args,
+            state=state,
+            question="",
+            search_limit=search_limit,
+            user_email=user_email,
+            conversation_history=None,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Tool execution failed: {exc}") from exc
+    duration_ms = (perf_counter() - start) * 1000
+
+    return ToolRunOut(
+        tool_name=payload.tool_name,
+        args=payload.args,
+        normalized_args=normalized_args,
+        result=result,
+        duration_ms=duration_ms,
+    )
 
 
 # ---------------------------------------------------------------------------
