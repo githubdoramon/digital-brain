@@ -24,9 +24,11 @@ from typing import Any, Optional
 
 from .guardrails import (
     build_contact_scope_context,
+    detect_future_temporal_intent,
     detect_temporal_sort_order,
     optimize_query_for_scoped_contacts,
     sanitize_goal_text,
+    utc_now_iso,
 )
 from .limits import AgentConfig, LimitChecker
 from .llm_transport import call_llm_with_tools, stream_llm_with_tools
@@ -999,6 +1001,15 @@ class AgentController:
             sort_order = detect_temporal_sort_order(goal_text)
         if sort_order and not normalized_args.get("sort_order"):
             normalized_args["sort_order"] = sort_order
+        is_future_temporal_query = detect_future_temporal_intent(query_text) or detect_future_temporal_intent(
+            goal_text
+        )
+        if is_future_temporal_query and not normalized_args.get("time_start"):
+            normalized_args["time_start"] = utc_now_iso()
+        if sort_order in {"newest", "oldest"} and not is_future_temporal_query and not normalized_args.get(
+            "time_end"
+        ):
+            normalized_args["time_end"] = utc_now_iso()
         if sort_order:
             # Temporal questions are accuracy-sensitive. Use a wider candidate window.
             current_limit = normalized_args.get("limit")

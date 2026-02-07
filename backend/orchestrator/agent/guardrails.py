@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from datetime import datetime, timezone
 from typing import Any
 
 
@@ -134,3 +135,31 @@ def detect_temporal_sort_order(query: str) -> str | None:
     if any(re.search(pattern, q) for pattern in newest_patterns):
         return "newest"
     return None
+
+
+def detect_future_temporal_intent(query: str) -> bool:
+    """Detect whether the user is asking about future/scheduled events."""
+    if not query:
+        return False
+
+    q = query.lower()
+    future_patterns = [
+        r"\bupcoming\b",
+        r"\bscheduled\b",
+        r"\bin the future\b",
+        r"\bfuture\b",
+        r"\bnext\b",
+        r"\bwill\b",
+        r"\bgoing to\b",
+        r"\bplan(?:ned)?\b",
+        r"\btomorrow\b",
+        r"\bthis weekend\b",
+        r"\bnext week\b",
+        r"\bnext month\b",
+    ]
+    return any(re.search(pattern, q) for pattern in future_patterns)
+
+
+def utc_now_iso() -> str:
+    """Current UTC timestamp in ISO format for time guardrails."""
+    return datetime.now(timezone.utc).isoformat()

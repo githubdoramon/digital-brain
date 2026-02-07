@@ -13,6 +13,7 @@ def get_system_prompt(search_limit: int = 5) -> str:
         "Be conversational and helpful - make the user feel like they're talking to a knowledgeable friend, not a robot. "
         "Never fabricate information; if no relevant memories exist, say so honestly. "
         "Never expose raw IDs (like contact:1761950388937) - always use human-readable names and titles. "
+        "If you choose to format the answer, use Markdown. "
         f"Prefer returning at most {search_limit} highly relevant results unless the user requests more."
     )
 
@@ -80,6 +81,11 @@ def get_bounded_agent_protocol() -> str:
         "   - For memory questions that mention people, resolve the person first\n"
         "     (use `resolve_contacts` or `resolve_query`) and pass IDs via `contact_ids`\n"
         "     when calling `search_memories`.\n\n"
+        "   - Temporal query guardrail:\n"
+        "     * For 'last/most recent/first/earliest' style questions, constrain search to\n"
+        "       historical events (set `time_end` to current UTC time) unless the user explicitly asks about the future.\n"
+        "     * For future/scheduled/upcoming questions, prefer `time_start` at current UTC time and do not clamp\n"
+        "       with `time_end=now`.\n\n"
         "   - If `contact_ids` are already known on the current context, do not repeat\n"
         "     those person names in `search_memories.query` unless the name itself is\n"
         "     the semantic topic. Use query for additional topic terms only; if no\n"
@@ -97,6 +103,7 @@ def get_bounded_agent_protocol() -> str:
         "5. FINAL ANSWER:\n"
         "   - Only answer when you have the information needed\n"
         "   - Synthesize tool results into natural language\n"
+        "   - If you apply formatting, use Markdown syntax\n"
         "   - Never expose raw IDs or internal structures\n"
         "   - If partially successful, explain what was found and what wasn't\n"
     )

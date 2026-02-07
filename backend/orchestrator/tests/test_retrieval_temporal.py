@@ -94,3 +94,30 @@ def test_temporal_structured_oldest_is_deterministic_and_event_only(monkeypatch)
     kinds = [item["kind"] for item in result["results"]]
     assert ids == ["evt-a", "evt-b", "evt-c"]
     assert kinds == ["event", "event", "event"]
+
+
+def test_search_memories_does_not_call_contact_vector_search(monkeypatch):
+    monkeypatch.setattr(retrieval, "vector_search", lambda *_args, **_kwargs: {"evt-a": 0.9})
+    monkeypatch.setattr(retrieval, "bm25_search", lambda *_args, **_kwargs: {"evt-a": 0.8})
+    monkeypatch.setattr(retrieval, "vector_search_documents", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr(retrieval, "bm25_search_documents", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr(retrieval, "structured_candidates", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr(
+        retrieval,
+        "fetch_events",
+        lambda *_args, **_kwargs: [_event_row("evt-a", datetime(2026, 1, 1, 10, 0, 0))],
+    )
+    monkeypatch.setattr(retrieval, "fetch_document_summaries", lambda *_args, **_kwargs: {})
+
+    called = {"count": 0}
+
+    def fail_if_called(*_args, **_kwargs):
+        called["count"] += 1
+        raise AssertionError("vector_search_contacts should not be called by search_memories")
+
+    monkeypatch.setattr(retrieval, "vector_search_contacts", fail_if_called)
+
+    result = retrieval.search_memories(query="gio sync", limit=1)
+
+    assert called["count"] == 0
+    assert result["results"][0]["kind"] == "event"

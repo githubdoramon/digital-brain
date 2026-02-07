@@ -463,6 +463,22 @@ class TestContactAwareMemorySearch:
         assert args.get("sort_order") == "newest"
         assert args.get("limit") == 25
 
+    def test_temporal_latest_caps_time_end_at_now_for_past_queries(self, controller, monkeypatch):
+        state = AgentState(goal="When did I last meet Gio?")
+        monkeypatch.setattr("agent.controller.utc_now_iso", lambda: "2026-02-07T12:00:00+00:00")
+
+        args, preempt = controller._prepare_memory_search_arguments(
+            args={"query": "When did I last meet Gio?"},
+            state=state,
+            question="When did I last meet Gio?",
+            user_email=None,
+            conversation_history=[],
+        )
+
+        assert preempt is None
+        assert args.get("sort_order") == "newest"
+        assert args.get("time_end") == "2026-02-07T12:00:00+00:00"
+
     def test_temporal_first_sets_oldest_sort_and_wider_limit(self, controller):
         state = AgentState(goal="When was the first time I met Gio?")
         args, preempt = controller._prepare_memory_search_arguments(
@@ -475,6 +491,22 @@ class TestContactAwareMemorySearch:
         assert preempt is None
         assert args.get("sort_order") == "oldest"
         assert args.get("limit") == 25
+
+    def test_future_temporal_query_sets_time_start_without_time_end(self, controller, monkeypatch):
+        state = AgentState(goal="What meetings are scheduled with Gio next week?")
+        monkeypatch.setattr("agent.controller.utc_now_iso", lambda: "2026-02-07T12:00:00+00:00")
+
+        args, preempt = controller._prepare_memory_search_arguments(
+            args={"query": "What meetings are scheduled with Gio next week?"},
+            state=state,
+            question="What meetings are scheduled with Gio next week?",
+            user_email=None,
+            conversation_history=[],
+        )
+
+        assert preempt is None
+        assert args.get("time_start") == "2026-02-07T12:00:00+00:00"
+        assert args.get("time_end") in {None, ""}
 
     def test_low_signal_name_query_uses_goal_when_contact_scope_exists(self, controller):
         state = AgentState(goal="When did I last meet Gio?")

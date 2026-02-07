@@ -152,7 +152,6 @@ def search_memories(
 
     vec_events = vector_search(normalized_query, 50) if normalized_query else {}
     bm_events = bm25_search(normalized_query, 50) if normalized_query else {}
-    vec_contacts = vector_search_contacts(normalized_query, 50) if normalized_query else []
     st_events = structured_candidates(span, list(people or []), list(place_ids or []), 200)
 
     vec_docs = vector_search_documents(normalized_query, 50) if normalized_query else {}
@@ -181,8 +180,6 @@ def search_memories(
         score = 0.6 * v + 0.4 * b
         print(f"[retrieval] doc_id={doc_id} score={score}")
         doc_scores[doc_id] = score
-
-    contact_scores = dict(vec_contacts)
 
     event_rows_all = fetch_events(list(event_ids)) if event_ids else []
     event_lookup_all = {row["id"]: row for row in event_rows_all}
@@ -217,11 +214,6 @@ def search_memories(
         key=lambda doc_id: doc_scores[doc_id],
         reverse=True,
     )
-    contact_ids_ordered = sorted(
-        contact_scores.keys(),
-        key=lambda contact_id: contact_scores[contact_id],
-        reverse=True,
-    )
 
     temporal_structured_query = ordering in {"newest", "oldest"} and has_structured_filters
 
@@ -233,13 +225,9 @@ def search_memories(
         # For temporal or explicitly-filtered queries, prioritize events first.
         combined.extend((event_id, "event", event_scores.get(event_id, 0.0)) for event_id in event_ids_ordered_all)
         combined.extend((doc_id, "document", doc_scores[doc_id]) for doc_id in doc_ids_ordered)
-        combined.extend((contact_id, "contact", contact_scores[contact_id]) for contact_id in contact_ids_ordered)
     else:
         combined.extend((event_id, "event", event_scores[event_id]) for event_id in event_scores)
         combined.extend((doc_id, "document", doc_scores[doc_id]) for doc_id in doc_scores)
-        combined.extend(
-            (contact_id, "contact", contact_scores[contact_id]) for contact_id in contact_scores
-        )
         combined.sort(key=lambda item: item[2], reverse=True)
 
     if not combined:
@@ -250,7 +238,6 @@ def search_memories(
 
     event_ids_top = [item_id for item_id, kind, _ in top_combined if kind == "event"]
     doc_ids_top = [item_id for item_id, kind, _ in top_combined if kind == "document"]
-    contact_ids_top = [item_id for item_id, kind, _ in top_combined if kind == "contact"]
 
     event_lookup = (
         {event_id: event_lookup_all[event_id] for event_id in event_ids_top if event_id in event_lookup_all}
@@ -262,7 +249,6 @@ def search_memories(
         event_lookup = {row["id"]: row for row in event_rows}
 
     doc_lookup = fetch_document_summaries(doc_ids_top) if doc_ids_top else {}
-    contact_lookup = fetch_contact_summaries(contact_ids_top) if contact_ids_top else {}
 
     results: list[dict[str, Any]] = []
     for item_id, kind, _ in top_combined:
@@ -315,22 +301,6 @@ def search_memories(
                     "snippet": doc.get("snippet", ""),
                 }
             )
-        else:
-            contact = contact_lookup.get(item_id)
-            if not contact:
-                continue
-            results.append(
-                {
-                    "id": contact["contact_id"],
-                    "kind": "contact",
-                    "display_name": contact.get("display_name"),
-                    "aliases": contact.get("aliases", []),
-                    "tags": contact.get("tags", []),
-                    "comments": contact.get("comments", ""),
-                    "snippet": contact.get("snippet", ""),
-                }
-            )
-
     return {"results": results}
 
 
