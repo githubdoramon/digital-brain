@@ -215,13 +215,9 @@ def search_memories(
         reverse=True,
     )
 
-    temporal_structured_query = ordering in {"newest", "oldest"} and has_structured_filters
-
     combined: list[tuple[str, str, float]] = []
-    if temporal_structured_query:
-        # Temporal + structured filters are event-time questions; keep results event-only.
-        combined.extend((event_id, "event", event_scores.get(event_id, 0.0)) for event_id in event_ids_ordered_all)
-    elif ordering in {"newest", "oldest"} or has_structured_filters:
+
+    if ordering in {"newest", "oldest"} or has_structured_filters:
         # For temporal or explicitly-filtered queries, prioritize events first.
         combined.extend((event_id, "event", event_scores.get(event_id, 0.0)) for event_id in event_ids_ordered_all)
         combined.extend((doc_id, "document", doc_scores[doc_id]) for doc_id in doc_ids_ordered)

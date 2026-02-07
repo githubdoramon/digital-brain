@@ -149,11 +149,11 @@ function TabBar({ state, navigation }: BottomTabBarProps) {
                 end={{ x: 0.9, y: 1 }}
                 style={styles.brainButtonGradient}
               >
-                <Digibrain width={26} height={26} color="#fff" />
+                <Digibrain width={32} height={32} color="#fff" />
               </LinearGradient>
             ) : (
               <View style={[styles.brainButtonGradient, styles.brainButtonIdle]}>
-                <Digibrain width={26} height={26} color={theme.colors.mutedInk} />
+                <Digibrain width={32} height={32} color={theme.colors.mutedInk} />
               </View>
             )}
           </Pressable>

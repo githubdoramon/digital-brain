@@ -43,12 +43,6 @@ export default function RootLayout() {
     if (error) throw error;
   }, [error]);
 
-  useEffect(() => {
-    if (loaded) {
-      SplashScreen.hideAsync();
-    }
-  }, [loaded]);
-
   if (!loaded) {
     return null;
   }
@@ -56,20 +50,21 @@ export default function RootLayout() {
   return (
     <AuthProvider>
       <SafeAreaProvider>
-        <RootLayoutNav />
+        <RootLayoutNav loaded={loaded} />
       </SafeAreaProvider>
     </AuthProvider>
   );
 }
 
-function RootLayoutNav() {
+function RootLayoutNav({ loaded }: { loaded: boolean }) {
   const router = useRouter();
   const segments = useSegments();
   const { token, isLoading } = useAuth();
 
   useEffect(() => {
-    if (isLoading) return;
-    console.log('[nav] root', { isLoading, token: Boolean(token), segments });
+    if (isLoading || !loaded) return;
+
+    SplashScreen.hideAsync();
     const inAuthGroup = segments[0] === '(auth)';
     if (!token && !inAuthGroup) {
       router.replace('/(auth)/sign-in');
@@ -78,7 +73,7 @@ function RootLayoutNav() {
       
       router.replace('/home');
     }
-  }, [token, segments, isLoading, router]);
+  }, [token, segments, isLoading, router, loaded]);
 
   useEffect(() => {
     let responseListener: Notifications.Subscription | undefined;
