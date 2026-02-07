@@ -32,7 +32,7 @@ def test_search_contacts_prefiltered_candidates_without_full_fallback(monkeypatc
 
     def fake_vector(*_args, **_kwargs):
         calls["vector_called"] = True
-        return ["contact-2"]
+        return {"contact-2": 0.2}
 
     def fake_load(contact_ids=None):
         calls["loaded_ids"] = contact_ids
@@ -45,7 +45,7 @@ def test_search_contacts_prefiltered_candidates_without_full_fallback(monkeypatc
         raise AssertionError("full scan fallback should not run when prefiltered candidates match")
 
     monkeypatch.setattr(contacts, "_lexical_candidate_contact_ids", fake_lexical)
-    monkeypatch.setattr(contacts, "_vector_candidate_contact_ids", fake_vector)
+    monkeypatch.setattr(contacts, "_vector_candidate_contact_scores", fake_vector)
     monkeypatch.setattr(contacts, "_load_contacts", fake_load)
     monkeypatch.setattr(contacts, "list_contacts", fail_if_full_scan)
 
@@ -61,7 +61,7 @@ def test_search_contacts_falls_back_to_full_scan_when_prefilter_misses(monkeypat
     calls = {"full_scan_count": 0}
 
     monkeypatch.setattr(contacts, "_lexical_candidate_contact_ids", lambda *_a, **_k: ["contact-1"])
-    monkeypatch.setattr(contacts, "_vector_candidate_contact_ids", lambda *_a, **_k: [])
+    monkeypatch.setattr(contacts, "_vector_candidate_contact_scores", lambda *_a, **_k: {})
     monkeypatch.setattr(
         contacts,
         "_load_contacts",
@@ -90,10 +90,114 @@ def test_search_contacts_email_mode_skips_vector_candidates(monkeypatch):
 
     def fake_vector(*_args, **_kwargs):
         calls["vector_called"] += 1
-        return ["contact-1"]
+        return {"contact-1": 0.9}
 
-    monkeypatch.setattr(contacts, "_vector_candidate_contact_ids", fake_vector)
+    monkeypatch.setattr(contacts, "_vector_candidate_contact_scores", fake_vector)
 
     contacts.search_contacts("jane@example.com", search_by="email", limit=5)
 
     assert calls["vector_called"] == 0
+
+
+def test_search_contacts_any_non_email_query_ignores_email_domain_noise(monkeypatch):
+    def fake_lexical(*_args, **_kwargs):
+        return ["contact-email"]
+
+    def fake_vector(*_args, **_kwargs):
+        # Vector picks the role-based contact as semantically relevant.
+        return {"contact-role": 0.9}
+
+    def fake_load(contact_ids=None):
+        assert contact_ids == ["contact-email", "contact-role"]
+        return [
+            _contact("contact-email", "Alice Example", emails=["alice@acme.example"]),
+            _contact(
+                "contact-role",
+                "Dana Executive",
+                comments="Chief Executive Officer at Acme",
+            ),
+        ]
+
+    monkeypatch.setattr(contacts, "_lexical_candidate_contact_ids", fake_lexical)
+    monkeypatch.setattr(contacts, "_vector_candidate_contact_scores", fake_vector)
+    monkeypatch.setattr(contacts, "_load_contacts", fake_load)
+    monkeypatch.setattr(contacts, "list_contacts", lambda: [])
+
+    results = contacts.search_contacts("acme's ceo", search_by="any", limit=5)
+
+    assert len(results) == 1
+    assert results[0]["contact_id"] == "contact-role"
+    assert results[0]["match_reason"].startswith("vector match")
+
+
+def test_is_email_intent_query_detects_at_or_email_word():
+    assert contacts._is_email_intent_query("john@example.com") is True
+    assert contacts._is_email_intent_query("john email") is True
+    assert contacts._is_email_intent_query("acme's ceo") is False
+
+
+def test_search_contacts_enforces_minimum_confidence_floor(monkeypatch):
+    monkeypatch.setattr(contacts, "_lexical_candidate_contact_ids", lambda *_a, **_k: ["contact-1"])
+    monkeypatch.setattr(contacts, "_vector_candidate_contact_scores", lambda *_a, **_k: {})
+    monkeypatch.setattr(
+        contacts,
+        "_load_contacts",
+        lambda *_a, **_k: [_contact("contact-1", "John Smith")],
+    )
+    monkeypatch.setattr(contacts, "list_contacts", lambda: [])
+
+    # Force fuzzy score below 0.6 confidence (score < 60).
+    from rapidfuzz import fuzz
+
+    monkeypatch.setattr(fuzz, "token_sort_ratio", lambda *_a, **_k: 55)
+
+    results = contacts.search_contacts("jhn smt", search_by="name", fuzzy_threshold=40, limit=5)
+    assert results == []
+
+
+def test_search_contacts_rejects_low_vector_confidence(monkeypatch):
+    monkeypatch.setattr(contacts, "_lexical_candidate_contact_ids", lambda *_a, **_k: [])
+    monkeypatch.setattr(contacts, "_vector_candidate_contact_scores", lambda *_a, **_k: {"c1": 0.4})
+    monkeypatch.setattr(
+        contacts,
+        "_load_contacts",
+        lambda *_a, **_k: [_contact("c1", "Low Vector", comments="Chief Executive Officer at Acme")],
+    )
+    monkeypatch.setattr(contacts, "list_contacts", lambda: [])
+
+    results = contacts.search_contacts("CEO at Acme", search_by="name", limit=5)
+    assert results == []
+
+
+def test_search_contacts_comment_weight_can_beat_email_match(monkeypatch):
+    monkeypatch.setattr(
+        contacts,
+        "_lexical_candidate_contact_ids",
+        lambda *_a, **_k: ["contact-email", "contact-comment"],
+    )
+    monkeypatch.setattr(contacts, "_vector_candidate_contact_scores", lambda *_a, **_k: {})
+    monkeypatch.setattr(
+        contacts,
+        "_load_contacts",
+        lambda *_a, **_k: [
+            _contact(
+                "contact-email",
+                "Email Person",
+                emails=["exec@acme.example"],
+                comments="",
+            ),
+            _contact(
+                "contact-comment",
+                "Comment Person",
+                emails=[],
+                comments="@acme.example",
+            ),
+        ],
+    )
+    monkeypatch.setattr(contacts, "list_contacts", lambda: [])
+
+    # Includes "@" to activate email-intent scoring in "any" mode.
+    results = contacts.search_contacts("@acme.example", search_by="any", limit=5)
+    assert len(results) >= 1
+    assert results[0]["contact_id"] == "contact-comment"
+    assert results[0]["match_reason"] == "comment match"

@@ -575,7 +575,7 @@ def resolve_contact(
         search_name,
         search_by="any",
         fuzzy_threshold=75,
-        limit=5,
+        limit=15,
     )
 
     if len(matches) == 0:

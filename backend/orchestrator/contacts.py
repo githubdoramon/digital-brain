@@ -38,6 +38,9 @@ __all__ = [
 
 MAX_CONTACT_EMBED_CHARS = 4000
 EXTERNAL_CONTACT_PREFIX = "external contact"
+MIN_CONTACT_CONFIDENCE = 0.6
+MIN_CONTACT_MATCH_SCORE = MIN_CONTACT_CONFIDENCE * 100.0
+MIN_VECTOR_CONFIDENCE = MIN_CONTACT_CONFIDENCE
 
 
 def is_external_placeholder(display_name: str | None) -> bool:
@@ -1020,6 +1023,7 @@ def search_contacts(
         return []
 
     search_mode = search_by if search_by in {"name", "email", "phone", "any"} else "any"
+    email_intent = _is_email_intent_query(query_lower)
     candidate_multiplier = 20
     candidate_limit = min(max(limit * candidate_multiplier, 100), 500)
     query_digits = "".join(c for c in query_lower if c.isdigit())
@@ -1039,20 +1043,27 @@ def search_contacts(
             query_lower,
             search_by=search_mode,
             query_digits=query_digits,
+            email_intent=email_intent,
             limit=candidate_limit,
         )
     )
+    vector_scores: dict[str, float] = {}
     if search_mode in {"name", "any"}:
-        _append_candidates(_vector_candidate_contact_ids(query_lower, limit=candidate_limit))
+        vector_scores = _vector_candidate_contact_scores(query_lower, limit=candidate_limit)
+        _append_candidates(vector_scores.keys())
 
     used_prefilter = bool(candidate_ids)
     all_contacts = _load_contacts(candidate_ids) if candidate_ids else list_contacts()
+    minimum_match_score = max(float(fuzzy_threshold), MIN_CONTACT_MATCH_SCORE)
+
     matches = _score_contacts(
         all_contacts,
         query_lower=query_lower,
         query_digits=query_digits,
         search_mode=search_mode,
-        fuzzy_threshold=fuzzy_threshold,
+        email_intent=email_intent,
+        vector_scores=vector_scores,
+        fuzzy_threshold=int(minimum_match_score),
         token_sort_ratio=fuzz.token_sort_ratio,
     )
 
@@ -1063,7 +1074,9 @@ def search_contacts(
             query_lower=query_lower,
             query_digits=query_digits,
             search_mode=search_mode,
-            fuzzy_threshold=fuzzy_threshold,
+            email_intent=email_intent,
+            vector_scores=vector_scores,
+            fuzzy_threshold=int(minimum_match_score),
             token_sort_ratio=fuzz.token_sort_ratio,
         )
 
@@ -1087,16 +1100,20 @@ def _score_contacts(
     query_lower: str,
     query_digits: str,
     search_mode: str,
+    email_intent: bool,
+    vector_scores: dict[str, float],
     fuzzy_threshold: int,
     token_sort_ratio,
 ) -> list[tuple[dict[str, Any], float, str]]:
     matches: list[tuple[dict[str, Any], float, str]] = []
 
     for contact in contacts:
+        contact_id = str(contact.get("contact_id") or "")
         best_score = 0.0
         match_reason = ""
 
-        if search_mode in {"email", "any"}:
+        allow_email_match = search_mode == "email" or (search_mode == "any" and email_intent)
+        if allow_email_match:
             emails = contact.get("emails") or []
             for email in emails:
                 email_lower = email.lower()
@@ -1174,10 +1191,20 @@ def _score_contacts(
                     best_score = float(fuzzy_score)
                     match_reason = f"fuzzy match ({fuzzy_score}%): {name}"
 
+        if search_mode in {"name", "any"} and contact_id:
+            similarity = vector_scores.get(contact_id)
+            if similarity is not None and similarity >= MIN_VECTOR_CONFIDENCE:
+                # Keep vector confidence semantics direct: similarity 0.0-1.0 -> score 0-100.
+                vector_score = similarity * 100.0
+                if vector_score > best_score:
+                    best_score = vector_score
+                    match_reason = f"vector match ({similarity:.3f})"
+
         if search_mode == "any":
             comments = (contact.get("comments") or "").lower()
             if comments and query_lower in comments:
-                score = 80
+                # Prioritize contextual role/company metadata in comments.
+                score = 92
                 if score > best_score:
                     best_score = score
                     match_reason = "comment match"
@@ -1189,18 +1216,22 @@ def _score_contacts(
 
 
 def _vector_candidate_contact_ids(query: str, *, limit: int) -> list[str]:
+    return list(_vector_candidate_contact_scores(query, limit=limit).keys())
+
+
+def _vector_candidate_contact_scores(query: str, *, limit: int) -> dict[str, float]:
     if not query:
-        return []
+        return {}
 
     try:
         query_vector = embed_text(query)
     except Exception:
-        return []
+        return {}
 
     with get_conn() as conn, conn.cursor() as cur:
         cur.execute(
             """
-            SELECT contact_id
+            SELECT contact_id, 1 - (comments_embed <=> %s::vector) AS vscore
             FROM contacts
             WHERE comments_embed IS NOT NULL
               AND (display_name IS NULL OR LOWER(display_name) NOT LIKE %s)
@@ -1208,12 +1239,26 @@ def _vector_candidate_contact_ids(query: str, *, limit: int) -> list[str]:
             LIMIT %s
             """,
             (
+                query_vector,
                 f"{EXTERNAL_CONTACT_PREFIX}%",
                 query_vector,
                 limit,
             ),
         )
-        return [row["contact_id"] for row in cur.fetchall()]
+        scores: dict[str, float] = {}
+        for row in cur.fetchall():
+            raw_score = float(row.get("vscore") or 0.0)
+            similarity = max(0.0, min(1.0, raw_score))
+            if similarity < MIN_VECTOR_CONFIDENCE:
+                continue
+            scores[row["contact_id"]] = similarity
+        return scores
+
+
+def _is_email_intent_query(query_lower: str) -> bool:
+    if "@" in query_lower:
+        return True
+    return bool(re.search(r"\bemail\b", query_lower))
 
 
 def _lexical_candidate_contact_ids(
@@ -1221,6 +1266,7 @@ def _lexical_candidate_contact_ids(
     *,
     search_by: str,
     query_digits: str,
+    email_intent: bool,
     limit: int,
 ) -> list[str]:
     if not query_lower:
@@ -1245,7 +1291,7 @@ def _lexical_candidate_contact_ids(
         )
         params.extend([query_like, query_like])
 
-    if search_by in {"email", "any"}:
+    if search_by == "email" or (search_by == "any" and email_intent):
         conditions.append(
             """
             EXISTS (
