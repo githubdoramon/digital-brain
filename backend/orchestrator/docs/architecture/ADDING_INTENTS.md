@@ -2,6 +2,9 @@
 
 This guide covers how to add new intent types for the intent router system.
 
+Important:
+- Intent routing currently provides metadata/hints. The main controller presently exposes the full tool set at runtime.
+
 ## Checklist
 
 When adding a new intent, you must update:
@@ -9,7 +12,7 @@ When adding a new intent, you must update:
 - [ ] `agent/router.py` - Add to `IntentType` enum
 - [ ] `agent/router.py` - Add to `INTENT_TOOL_MAP`
 - [ ] `agent/router.py` - Add to `INTENT_SKILL_HINTS` (optional)
-- [ ] `agent/router.py` - Add to `TOOL_GROUPS` (if new group needed)
+- [ ] `tools/registry.py` - Add to `TOOL_GROUPS` (if new group needed)
 - [ ] `agent/router.py` - Add rule-based keywords in `_rule_based_classify()`
 - [ ] `agent/router.py` - Update LLM classification prompt
 - [ ] `tests/agent/test_router.py` - Add tests for new intent
@@ -37,7 +40,7 @@ Define which tool groups this intent should have access to:
 ```python
 INTENT_TOOL_MAP = {
     IntentType.MEMORY_SEARCH: ["memory", "resolution"],
-    IntentType.DATA_QUERY: ["database", "resolution"],
+    IntentType.DATA_QUERY: ["memory", "resolution"],
     # ... existing mappings ...
 
     # Add your mapping
@@ -122,7 +125,7 @@ Current order:
 2. `WEB_SEARCH` - "search the web", "google", etc.
 3. `CONTACT_LOOKUP` - "who is", "contact", etc.
 4. `MEMORY_SEARCH` - "remember", "find", "meeting", etc.
-5. `DATA_QUERY` - "how many", "count", "sql", etc.
+5. `DATA_QUERY` - "how many", "count", structured retrieval/counting, etc.
 6. `SYSTEM_COMMAND` - "run command", "bash", etc.
 7. `CONVERSATIONAL` - "hello", "thanks", etc.
 8. `UNKNOWN` - fallback
@@ -144,7 +147,7 @@ QUESTION: {question}
 
 AVAILABLE INTENTS:
 - memory_search: Searching memories, events, documents
-- data_query: SQL queries, counting, aggregations
+- data_query: Counting, aggregation, structured retrieval (no SQL tool)
 # ... existing intents ...
 - my_new_intent: Description of what this intent covers
 

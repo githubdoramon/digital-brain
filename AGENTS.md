@@ -44,6 +44,9 @@ All client API calls must go through the frontend proxy layer. See
 backend/orchestrator/
 ├── agent/                      # Bounded agent orchestration
 │   ├── controller.py          # Main agent loop
+│   ├── guardrails.py          # Query shaping and contact scope helpers
+│   ├── tool_executor.py       # Tool execution + validation pipeline
+│   ├── response_guardrails.py # Output/malformed-call guardrails
 │   ├── router.py              # Intent classification
 │   ├── state.py               # Canonical state management
 │   └── limits.py              # Stop rules, progress detection
@@ -53,7 +56,6 @@ backend/orchestrator/
 │   ├── handlers/              # Tool implementations
 │   │   ├── memory.py         # search_memories, get_events, get_document
 │   │   ├── homeassistant.py  # Home Assistant MCP integration
-│   │   ├── database.py       # SQL tools
 │   │   ├── resolution.py     # Entity resolution
 │   │   ├── skills.py         # Skill script execution
 │   │   ├── web.py            # Web search/fetch
@@ -85,11 +87,11 @@ backend/orchestrator/
 ### Request Flow
 
 ```
-User Question → Intent Router → Tool-Set Narrowing → Agent Loop → Response
+User Question → Intent Router (metadata) → Agent Loop (full tool set) → Response
 ```
 
 1. **IntentRouter** classifies the question (rule-based or LLM fallback)
-2. **Tool groups** are filtered based on intent
+2. **Tool groups** are emitted as routing metadata for observability/hints
 3. **AgentController** runs the loop with limits enforcement
 4. Each tool call goes through **pre-validation → execution → post-validation**
 5. **AgentState** tracks facts, actions, and tool call history
@@ -99,8 +101,8 @@ User Question → Intent Router → Tool-Set Narrowing → Agent Loop → Respon
 | Intent | Tool Groups | Description |
 |--------|-------------|-------------|
 | `MEMORY_SEARCH` | memory, resolution | Search memories with optional entity resolution |
-| `DATA_QUERY` | database, resolution | SQL queries and entity-aware filtering |
-| `CONTACT_LOOKUP` | resolution, database, memory | Find people, relationships, and related records |
+| `DATA_QUERY` | memory, resolution | Structured retrieval/counting (no SQL tools) |
+| `CONTACT_LOOKUP` | resolution, memory | Find people, relationships, and related records |
 | `WEB_SEARCH` | web | External information |
 | `HOME_CONTROL` | home | Smart home automation |
 | `SKILL_EXECUTION` | skills | Run skill scripts |
@@ -113,7 +115,6 @@ User Question → Intent Router → Tool-Set Narrowing → Agent Loop → Respon
 | Group | Tools |
 |-------|-------|
 | `memory` | search_memories, get_events, get_document |
-| `database` | execute_sql, describe_schema |
 | `resolution` | resolve_query, resolve_contacts, lookup_contact |
 | `web` | web_search, fetch_web_page |
 | `home` | home_assistant |
@@ -123,6 +124,7 @@ User Question → Intent Router → Tool-Set Narrowing → Agent Loop → Respon
 ### Important Rules (Recent)
 
 - **Single source of truth for tool groups**: keep router tool groups aligned with `backend/orchestrator/tools/registry.py`; do not maintain divergent copies.
+- **Tool groups are metadata today**: router still classifies intents and groups, but the controller currently exposes the full tool set to the LLM.
 - **LLM calls must use helpers**: all LLM requests and streams go through `backend/orchestrator/llm_helpers.py` (no direct HTTP calls in controllers/handlers).
 - **Controller context kwargs are global**: handlers are invoked with shared runtime context (`state`, `question`, `search_limit`, `user_email`, `conversation_history`). Every handler must accept these explicitly or via `**kwargs`.
 - **Regression guard**: keep `backend/orchestrator/tests/tools/test_handlers/test_handler_signatures.py` passing to prevent `unexpected keyword argument` runtime failures.
@@ -133,6 +135,9 @@ User Question → Intent Router → Tool-Set Narrowing → Agent Loop → Respon
 - **Contact-aware memory search flow**: on ambiguity, return a clarification-needed result instead of running unfiltered search.
 - **Contact-aware memory search flow**: avoid repeating identical `resolve_contacts` calls after `needs_clarification`/`no_people` (no-progress guard).
 - **Validation semantics**: post-execution validation must treat clarification-required search/resolution results as `need_user_input`, not generic empty-result retries.
+- **Session command hygiene**: strip leading slash commands from user text before agent execution; commands are control signals, not semantic query content.
+- **Import-time side effects**: avoid filesystem writes (like `mkdir`) during module import. Create directories lazily at the point of file operations.
+- **Contact disambiguation policy**: ambiguity auto-resolution strictness is controlled by `CONTACT_DISAMBIGUATION_STRICTNESS` (`strict`/`balanced`/`lenient`).
 
 ### Limits & Safety
 

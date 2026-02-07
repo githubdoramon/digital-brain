@@ -28,9 +28,9 @@ class AgentState:
     step_count: int = 0                 # Loop iterations
     repair_count: int = 0               # Validation repair attempts
 
-    # Intent routing
-    intent: Optional[str] = None        # Classified intent
-    allowed_tool_groups: List[str]      # Groups from intent classification
+    # Intent routing metadata
+    intent: Optional[str] = None        # Classified intent (metadata only)
+    allowed_tool_groups: List[str]      # Router groups (metadata only; not enforced for visibility)
 
     # Legacy compatibility fields
     resolution: Dict[str, Any]          # From resolve_query results
@@ -72,6 +72,8 @@ classification = router.classify(state.goal)
 state.intent = classification.intent.value
 state.allowed_tool_groups = classification.allowed_tool_groups
 state.constraints = classification.constraints
+
+# Note: the main controller currently still passes the full tool set to the LLM.
 ```
 
 ### 3. Loop Iteration

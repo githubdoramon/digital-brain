@@ -47,7 +47,11 @@ def handle_resolve_contacts_request(data: dict[str, Any]) -> dict[str, Any]:
 
     try:
         # Call the resolver - it handles everything
-        result = resolve_contacts_from_text(text, user_email)
+        result = resolve_contacts_from_text(
+            text,
+            user_email,
+            conversation_messages=data.get("conversation_messages"),
+        )
 
         # Add status field based on results
         if result["ambiguous_contacts"]:

@@ -11,7 +11,7 @@ When adding a new tool, you must update:
 - [ ] `tools/handlers/<category>.py` - Implement the handler function
 - [ ] `tools/validators/pre_execution.py` - Add custom validators (if needed)
 - [ ] `tools/validators/post_execution.py` - Add result extraction logic
-- [ ] `agent/router.py` - Update TOOL_GROUPS if creating new group
+- [ ] `tools/registry.py` - Update TOOL_GROUPS if creating new group
 - [ ] `tests/tools/test_registry.py` - Add registration tests
 - [ ] `tests/tools/test_contracts.py` - Add validation tests (if custom validators)
 
@@ -275,7 +275,7 @@ def test_my_custom_validator_invalid(self):
 
 1. **Tool names must be unique**: The registry will overwrite if you register the same name twice.
 
-2. **Group assignment affects availability**: Tools are only visible when their group is allowed by the intent router. If your tool should always be available, add it to multiple groups or the `COMPLEX` intent.
+2. **Group assignment is metadata in main flow**: The main controller currently exposes the full tool set. Group mappings are still important for router metadata, hints, and tests.
 
 3. **Handler exceptions**: Always catch exceptions in handlers and return error dicts. Unhandled exceptions may crash the agent loop.
 

@@ -6,6 +6,9 @@ Primary implementation files:
 - `backend/orchestrator/app.py`
 - `backend/orchestrator/llm.py`
 - `backend/orchestrator/agent/controller.py`
+- `backend/orchestrator/agent/tool_executor.py`
+- `backend/orchestrator/agent/guardrails.py`
+- `backend/orchestrator/agent/response_guardrails.py`
 - `backend/orchestrator/agent/router.py`
 - `backend/orchestrator/agent/limits.py`
 - `backend/orchestrator/tools/validators/pre_execution.py`

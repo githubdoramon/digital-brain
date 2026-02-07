@@ -20,10 +20,13 @@ Design principles:
 4. Clear confidence scoring
 """
 
+import os
+import re
 from typing import Any, Optional
 
 import contacts as contacts_service
 from llm_helpers import call_llm_json
+from observability import trace
 
 
 def _format_conversation_for_prompt(conversation_messages: list[dict[str, str]]) -> str:
@@ -657,6 +660,13 @@ def _resolve_people_mentions(
                 "resolution_path": resolution.get("resolution_path"),
             }
             resolved_contacts.append(resolved_contact)
+            trace.trace_contact_resolution_outcome(
+                "resolved",
+                {
+                    "person_text": person_text,
+                    "matched_via": resolution.get("matched_via"),
+                },
+            )
             print(f"[contact_resolver]   ✓ '{person_text}' → {resolution['display_name']}")
 
         elif resolution["status"] == "candidates":
@@ -666,7 +676,13 @@ def _resolve_people_mentions(
                 full_text,
                 conversation_messages=conversation_messages,
             )
-            if llm_result.get("resolved"):
+            if llm_result.get("resolved") and _should_accept_llm_disambiguation(
+                person_text=person_text,
+                candidates=resolution["candidates"],
+                full_text=full_text,
+                llm_result=llm_result,
+                conversation_messages=conversation_messages,
+            ):
                 resolved_contact = {
                     "original_text": person_text,
                     "contact_id": llm_result.get("contact_id"),
@@ -676,8 +692,20 @@ def _resolve_people_mentions(
                     "resolution_path": None,
                 }
                 resolved_contacts.append(resolved_contact)
+                trace.trace_contact_resolution_outcome(
+                    "auto_disambiguated",
+                    {
+                        "person_text": person_text,
+                        "contact_id": llm_result.get("contact_id"),
+                    },
+                )
                 print(f"[contact_resolver]   ✓ LLM resolved: {llm_result['display_name']}")
                 continue
+            if llm_result.get("resolved"):
+                print(
+                    f"[contact_resolver]   ⚠️  LLM suggested '{llm_result.get('display_name')}' "
+                    "but context was insufficient; asking user to clarify instead"
+                )
 
             ambiguous_contacts.append(
                 {
@@ -685,6 +713,13 @@ def _resolve_people_mentions(
                     "candidates": resolution["candidates"],
                     "clarification_prompt": resolution["clarification_prompt"],
                 }
+            )
+            trace.trace_contact_resolution_outcome(
+                "ambiguous",
+                {
+                    "person_text": person_text,
+                    "candidate_count": len(resolution.get("candidates", [])),
+                },
             )
             print(
                 f"[contact_resolver]   ⚠️  '{person_text}' → ambiguous ({len(resolution['candidates'])} candidates)"
@@ -699,6 +734,111 @@ def _resolve_people_mentions(
             print(f"[contact_resolver]   ✗ '{person_text}' → new contact")
 
     return resolved_contacts, new_contacts, ambiguous_contacts, resolution_cache
+
+
+def _should_accept_llm_disambiguation(
+    person_text: str,
+    candidates: list[dict[str, Any]],
+    full_text: str,
+    llm_result: dict[str, Any],
+    conversation_messages: list[dict[str, str]] | None = None,
+) -> bool:
+    """
+    Decide whether auto-disambiguation is safe enough to accept without user confirmation.
+
+    Current policy is intentionally conservative:
+    - LLM confidence must be high.
+    - If there are multiple candidates, context must include non-trivial
+      semantic signal beyond temporal boilerplate and the person token itself.
+    """
+    if not llm_result.get("resolved"):
+        return False
+
+    confidence = str(llm_result.get("confidence", "low")).lower()
+    if confidence != "high":
+        return False
+
+    if len(candidates) <= 1:
+        return True
+
+    strictness = _get_disambiguation_strictness()
+    if strictness == "lenient":
+        return True
+
+    has_context_signal = _has_disambiguating_context(
+        person_text=person_text,
+        full_text=full_text,
+        conversation_messages=conversation_messages,
+    )
+    if strictness == "strict":
+        return has_context_signal
+
+    selected_name = str(llm_result.get("display_name") or "")
+    return has_context_signal or _is_name_level_match(person_text, selected_name)
+
+
+def _get_disambiguation_strictness() -> str:
+    """Return disambiguation strictness from env: strict|balanced|lenient."""
+    configured = os.getenv("CONTACT_DISAMBIGUATION_STRICTNESS", "strict").strip().lower()
+    if configured in {"strict", "balanced", "lenient"}:
+        return configured
+    return "strict"
+
+
+def _has_disambiguating_context(
+    person_text: str,
+    full_text: str,
+    conversation_messages: list[dict[str, str]] | None = None,
+) -> bool:
+    """Return True when context includes meaningful tokens beyond the person mention."""
+    person_tokens = set(re.findall(r"[a-z0-9']+", person_text.lower()))
+    if not person_tokens:
+        return False
+
+    context_fragments = [full_text or ""]
+    if conversation_messages:
+        context_fragments.extend(
+            entry.get("content", "")
+            for entry in conversation_messages
+            if entry.get("role") == "user"
+        )
+    context_text = " ".join(fragment for fragment in context_fragments if fragment)
+    context_tokens = re.findall(r"[a-z0-9']+", context_text.lower())
+
+    stop_words = {
+        "a", "an", "and", "about", "did", "do", "does", "event", "events",
+        "first", "i", "last", "latest", "meet", "meeting", "meetings", "met",
+        "most", "recent", "talk", "talked", "the", "time", "was", "we",
+        "when", "where", "who", "with", "my", "new",
+    }
+
+    semantic_tokens = {
+        token
+        for token in context_tokens
+        if token not in stop_words and token not in person_tokens
+    }
+
+    return len(semantic_tokens) >= 1
+
+
+def _is_name_level_match(person_text: str, display_name: str) -> bool:
+    """
+    Return True when mention tokens plausibly map to selected display-name tokens.
+
+    Example: "gio" -> "Giovanni Panerai"
+    """
+    mention_tokens = [token for token in re.findall(r"[a-z0-9']+", person_text.lower()) if len(token) >= 3]
+    name_tokens = re.findall(r"[a-z0-9']+", display_name.lower())
+    if not mention_tokens or not name_tokens:
+        return False
+
+    return all(
+        any(
+            name_token.startswith(mention_token) or mention_token.startswith(name_token)
+            for name_token in name_tokens
+        )
+        for mention_token in mention_tokens
+    )
 
 
 def _infer_professions_for_new_contacts(

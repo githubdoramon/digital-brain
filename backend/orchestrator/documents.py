@@ -34,8 +34,6 @@ DOCUMENT_STORAGE_DIR = Path(
     os.getenv("DOCUMENT_STORAGE_DIR", "/app/storage/documents")
 ).expanduser()
 
-DOCUMENT_STORAGE_DIR.mkdir(parents=True, exist_ok=True)
-
 MAX_CONTENT_CHARS = int(os.getenv("DOCUMENT_MAX_CONTENT_CHARS", "20000"))
 MAX_EMBED_CHARS = int(os.getenv("DOCUMENT_EMBED_MAX_CHARS", "8000"))
 MAX_TITLE_PROMPT_CHARS = int(os.getenv("DOCUMENT_TITLE_PROMPT_CHARS", "2000"))
@@ -67,6 +65,12 @@ class DocumentPrepared:
     generated_title: str | None
     generated_description: str | None
     inferred_date: datetime | None
+
+
+def _ensure_document_storage_dir() -> Path:
+    """Create document storage directory only when file operations need it."""
+    DOCUMENT_STORAGE_DIR.mkdir(parents=True, exist_ok=True)
+    return DOCUMENT_STORAGE_DIR
 
 
 def ingest_document(
@@ -396,7 +400,7 @@ def _store_upload(upload: UploadFile, document_id: str) -> StoredFileInfo:
     safe_name = _sanitize_filename(original_name) or f"{document_id}{extension or ''}"
     final_name = f"{document_id}{extension}" if extension else f"{document_id}_{safe_name}"
 
-    target_path = DOCUMENT_STORAGE_DIR / final_name
+    target_path = _ensure_document_storage_dir() / final_name
     with open(target_path, "wb") as destination:
         upload.file.seek(0)
         shutil.copyfileobj(upload.file, destination)
@@ -1081,4 +1085,3 @@ def _suggest_title(content: str, fallback: str | None) -> str | None:
     except Exception as exc:
         print(f"[documents] Failed to generate title: {exc}")
     return _derive_title_from_filename(fallback)
-

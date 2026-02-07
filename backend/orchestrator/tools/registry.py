@@ -1,9 +1,9 @@
 """
-Tool registry with grouping support for intent-based filtering.
+Tool registry with grouping support and optional group filtering helpers.
 
 The registry maintains all tool contracts and provides:
 - Tool registration with group assignment
-- Filtering tools by allowed groups (from intent router)
+- Group-based lookup/filtering APIs
 - OpenAI-format tool definitions
 - Singleton access pattern
 """
@@ -42,7 +42,7 @@ class ToolRegistry:
 
     Provides:
     - Tool registration and lookup
-    - Filtering by group (for intent-based narrowing)
+    - Filtering by group (optional helper API)
     - OpenAI-format tool definitions
     """
 
@@ -86,7 +86,7 @@ class ToolRegistry:
         """
         Get all tool contracts for the specified groups.
 
-        Used by the controller to filter tools based on intent.
+        Used by router/metadata workflows and tests; optional at runtime.
         """
         tool_names = set()
         for group in groups:

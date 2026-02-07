@@ -48,6 +48,12 @@ class TraceConfig:
 
 # Global config
 _config: Optional[TraceConfig] = None
+_contact_resolution_counters: dict[str, int] = {
+    "resolved": 0,
+    "ambiguous": 0,
+    "auto_disambiguated": 0,
+    "clarification_returned": 0,
+}
 
 
 def get_config() -> TraceConfig:
@@ -403,6 +409,29 @@ def trace_run_error(run_id: str, error: str) -> None:
         print(f"[agent] ✗ Error in run {run_id}")
         print(f"[agent]   {error}")
         print(f"{'='*60}\n")
+
+
+# =============================================================================
+# CONTACT RESOLUTION LOGGING
+# =============================================================================
+
+def trace_contact_resolution_outcome(
+    outcome: str,
+    details: Optional[dict[str, Any]] = None,
+) -> None:
+    """Log and count contact-resolution outcomes."""
+    if outcome not in _contact_resolution_counters:
+        return
+
+    _contact_resolution_counters[outcome] += 1
+
+    if _should_log(LogLevel.INFO):
+        total = _contact_resolution_counters[outcome]
+        print(f"[contact_resolution] outcome={outcome} total={total}")
+        if details:
+            for key, value in details.items():
+                if value is not None and value != "":
+                    print(f"[contact_resolution]   {key}: {value}")
 
 
 # =============================================================================

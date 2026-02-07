@@ -72,6 +72,9 @@ The LLM suggests tool calls, but the controller:
 | File | Purpose |
 |------|---------|
 | `agent/controller.py` | Main orchestration logic |
+| `agent/tool_executor.py` | Tool-call execution + validation pipeline |
+| `agent/guardrails.py` | Query shaping and contact-scope guardrails |
+| `agent/response_guardrails.py` | Malformed-output and continuation detection |
 | `agent/state.py` | AgentState and ToolCallRecord |
 | `agent/router.py` | Intent classification |
 | `agent/limits.py` | Stop rules, no-progress detection |

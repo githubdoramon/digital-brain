@@ -175,6 +175,201 @@ class TestAgentControllerIntegration:
         assert captured_search_args.get("contact_ids") == ["contact-gio"]
 
     @pytest.mark.asyncio
+    async def test_search_memories_scoped_temporal_first_uses_oldest_and_events(
+        self, controller, monkeypatch
+    ):
+        state = AgentState(goal="When was the first time I met Gio?")
+        state.step_count = 1
+        state.resolution["active_contact_scope_ids"] = ["contact-gio"]
+        state.resolution["active_contact_scope"] = [
+            {
+                "mention_text": "Gio",
+                "display_name": "Giovanni Panerai",
+                "contact_id": "contact-gio",
+            }
+        ]
+        controller.config.enable_validation = False
+
+        class StubLogger:
+            def log_tool_call(self, *args, **kwargs):
+                return None
+
+            def log_validation_result(self, *args, **kwargs):
+                return None
+
+        controller._logger = StubLogger()
+        captured_search_args = {}
+
+        def fake_execute_handler(tool_name, args, **_kwargs):
+            if tool_name == "search_memories":
+                captured_search_args.update(args)
+                return {"results": [], "count": 0}
+            return {"error": f"Unexpected tool: {tool_name}"}
+
+        monkeypatch.setattr(controller, "_execute_handler", fake_execute_handler)
+
+        search_call = {
+            "id": "call_search_first",
+            "type": "function",
+            "function": {
+                "name": "search_memories",
+                "arguments": json.dumps({"query": "first time I met Gio", "limit": 3}),
+            },
+        }
+
+        await controller._execute_tool_call(
+            call=search_call,
+            state=state,
+            question="When was the first time I met Gio?",
+            search_limit=5,
+            run_id="test_run",
+            user_email="user@example.com",
+            conversation_history=[],
+        )
+
+        assert captured_search_args.get("contact_ids") == ["contact-gio"]
+        assert captured_search_args.get("query") == "events"
+        assert captured_search_args.get("sort_order") == "oldest"
+        assert captured_search_args.get("limit") == 25
+
+    @pytest.mark.asyncio
+    async def test_search_memories_scoped_temporal_topic_keeps_semantic_query(
+        self, controller, monkeypatch
+    ):
+        state = AgentState(goal="When did I last meet Gio and we talked about birds?")
+        state.step_count = 1
+        state.resolution["active_contact_scope_ids"] = ["contact-gio"]
+        state.resolution["active_contact_scope"] = [
+            {
+                "mention_text": "Gio",
+                "display_name": "Giovanni Panerai",
+                "contact_id": "contact-gio",
+            }
+        ]
+        controller.config.enable_validation = False
+
+        class StubLogger:
+            def log_tool_call(self, *args, **kwargs):
+                return None
+
+            def log_validation_result(self, *args, **kwargs):
+                return None
+
+        controller._logger = StubLogger()
+        captured_search_args = {}
+
+        def fake_execute_handler(tool_name, args, **_kwargs):
+            if tool_name == "search_memories":
+                captured_search_args.update(args)
+                return {"results": [], "count": 0}
+            return {"error": f"Unexpected tool: {tool_name}"}
+
+        monkeypatch.setattr(controller, "_execute_handler", fake_execute_handler)
+
+        search_call = {
+            "id": "call_search_topic",
+            "type": "function",
+            "function": {
+                "name": "search_memories",
+                "arguments": json.dumps(
+                    {"query": "When did I last meet Gio and we talked about birds?"}
+                ),
+            },
+        }
+
+        await controller._execute_tool_call(
+            call=search_call,
+            state=state,
+            question="When did I last meet Gio and we talked about birds?",
+            search_limit=5,
+            run_id="test_run",
+            user_email="user@example.com",
+            conversation_history=[],
+        )
+
+        assert captured_search_args.get("contact_ids") == ["contact-gio"]
+        assert captured_search_args.get("query") == "birds"
+        assert captured_search_args.get("sort_order") == "newest"
+        assert captured_search_args.get("limit") == 25
+
+    @pytest.mark.asyncio
+    async def test_run_returns_clarification_on_ambiguous_alias_from_pre_resolution(
+        self, monkeypatch
+    ):
+        controller = AgentController(
+            config=AgentConfig(
+                max_steps=5,
+                max_tool_calls=10,
+                max_repairs=2,
+                enable_intent_routing=False,
+                enable_validation=True,
+            )
+        )
+
+        class StubLogger:
+            def start_run(self, *args, **kwargs):
+                return "run_test"
+
+            def start_step(self, *args, **kwargs):
+                return None
+
+            def log_llm_call(self, *args, **kwargs):
+                return None
+
+            def log_tool_call(self, *args, **kwargs):
+                return None
+
+            def log_validation_result(self, *args, **kwargs):
+                return None
+
+            def log_decision(self, *args, **kwargs):
+                return None
+
+            def log_state_update(self, *args, **kwargs):
+                return None
+
+            def complete_run(self, *args, **kwargs):
+                return None
+
+        controller._logger = StubLogger()
+
+        llm_calls = {"count": 0}
+
+        def fake_call_llm(_messages, _tools):
+            llm_calls["count"] += 1
+            return {"message": {"content": "unexpected"}}
+
+        monkeypatch.setattr(controller, "_call_llm", fake_call_llm)
+        monkeypatch.setattr(controller, "_inject_skills", lambda *args, **kwargs: None)
+        monkeypatch.setattr(
+            "agents.contacts.executor.handle_resolve_contacts_request",
+            lambda _payload: {
+                "status": "needs_clarification",
+                "people_mentioned": ["Gio"],
+                "resolved_contacts": [],
+                "ambiguous_contacts": [
+                    {
+                        "person_text": "Gio",
+                        "candidates": [
+                            {"contact_id": "contact-1", "display_name": "Giovanni Panerai"},
+                            {"contact_id": "contact-2", "display_name": "Giovanni Ghelfi"},
+                        ],
+                        "clarification_prompt": "Which Gio did you mean?",
+                    }
+                ],
+            },
+        )
+
+        bundle = await controller.run(
+            question="When did I last meet Gio?",
+            user_email="user@example.com",
+        )
+
+        assert llm_calls["count"] == 0
+        assert "Which Gio did you mean?" in bundle["answer"]
+        assert "Giovanni Panerai" in bundle["answer"]
+
+    @pytest.mark.asyncio
     async def test_run_returns_clarification_immediately_on_ambiguity(
         self, monkeypatch
     ):

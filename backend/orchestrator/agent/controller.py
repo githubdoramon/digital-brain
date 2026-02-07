@@ -29,6 +29,7 @@ from .guardrails import (
     sanitize_goal_text,
 )
 from .limits import AgentConfig, LimitChecker
+from .llm_transport import call_llm_with_tools, stream_llm_with_tools
 from .response_guardrails import (
     CODE_DESCRIBING_TOOL_PROMPT,
     CONTINUATION_PROMPT_STREAM,
@@ -44,7 +45,6 @@ from .state import AgentState
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 # Import tracing
-from llm_helpers import call_llm_chat, stream_llm_chat
 from observability import trace
 
 
@@ -195,6 +195,10 @@ class AgentController:
                 conversation_history=conversation_history,
             )
             if clarification_prompt:
+                trace.trace_contact_resolution_outcome(
+                    "clarification_returned",
+                    {"source": "pre_resolution"},
+                )
                 return self._finalize(
                     question,
                     clarification_prompt,
@@ -283,6 +287,10 @@ class AgentController:
 
                     clarification_prompt = self._get_user_clarification_prompt(state)
                     if clarification_prompt:
+                        trace.trace_contact_resolution_outcome(
+                            "clarification_returned",
+                            {"source": "tool_loop"},
+                        )
                         trace.trace_decision(
                             "Need user clarification",
                             "Returning clarification prompt to user",
@@ -439,6 +447,10 @@ class AgentController:
                 conversation_history=conversation_history,
             )
             if clarification_prompt:
+                trace.trace_contact_resolution_outcome(
+                    "clarification_returned",
+                    {"source": "pre_resolution_stream"},
+                )
                 bundle = self._finalize(
                     question,
                     clarification_prompt,
@@ -557,6 +569,10 @@ class AgentController:
 
                     clarification_prompt = self._get_user_clarification_prompt(state)
                     if clarification_prompt:
+                        trace.trace_contact_resolution_outcome(
+                            "clarification_returned",
+                            {"source": "tool_loop_stream"},
+                        )
                         trace.trace_decision(
                             "Need user clarification (stream)",
                             "Returning clarification prompt to user",
@@ -785,19 +801,12 @@ class AgentController:
         tools: list[dict[str, Any]],
     ) -> dict[str, Any]:
         """Make synchronous LLM call."""
-        data = call_llm_chat(
+        return call_llm_with_tools(
             messages,
-            tools=tools,
-            tool_choice="auto",
+            tools,
             model=self.llm_model or None,
             timeout=self.llm_timeout,
         )
-
-        if "choices" in data and data["choices"]:
-            return {"message": data["choices"][0].get("message", {})}
-
-        # If response doesn't have expected structure, raise an error
-        raise ValueError(f"Unexpected LLM API response format: missing 'choices' field. Response: {data}")
 
     async def _stream_llm(
         self,
@@ -805,63 +814,13 @@ class AgentController:
         tools: list[dict[str, Any]],
     ) -> AsyncGenerator[dict[str, Any], None]:
         """Stream LLM responses."""
-        accumulated_tool_calls: dict[int, dict[str, Any]] = {}
-
-        async for line in stream_llm_chat(
+        async for chunk in stream_llm_with_tools(
             messages,
-            tools=tools,
-            tool_choice="auto",
+            tools,
             model=self.llm_model or None,
             timeout=self.llm_timeout,
         ):
-            line = line.strip()
-            if not line or line == "data: [DONE]":
-                continue
-            if line.startswith("data: "):
-                line = line[6:]
-
-            try:
-                chunk = json.loads(line)
-
-                # Check for API errors in streaming response
-                if "error" in chunk:
-                    error_msg = chunk.get("error", {})
-                    if isinstance(error_msg, dict):
-                        error_msg = error_msg.get("message", str(error_msg))
-                    raise RuntimeError(f"LLM API streaming error: {error_msg}")
-
-                delta = chunk.get("choices", [{}])[0].get("delta", {})
-                finish_reason = chunk.get("choices", [{}])[0].get("finish_reason")
-
-                if "tool_calls" in delta:
-                    for tc in delta["tool_calls"]:
-                        idx = tc.get("index", 0)
-                        if idx not in accumulated_tool_calls:
-                            accumulated_tool_calls[idx] = {
-                                "id": tc.get("id", ""),
-                                "type": "function",
-                                "function": {"name": "", "arguments": ""},
-                            }
-                        if tc.get("id"):
-                            accumulated_tool_calls[idx]["id"] = tc["id"]
-                        if "function" in tc:
-                            if tc["function"].get("name"):
-                                accumulated_tool_calls[idx]["function"]["name"] = tc["function"]["name"]
-                            if tc["function"].get("arguments"):
-                                accumulated_tool_calls[idx]["function"]["arguments"] += tc["function"]["arguments"]
-
-                normalized = {"message": {"content": delta.get("content", "")}}
-
-                if finish_reason in ("tool_calls", "stop") and accumulated_tool_calls:
-                    normalized["message"]["tool_calls"] = list(accumulated_tool_calls.values())
-                    normalized["done"] = True
-                elif finish_reason == "stop":
-                    normalized["done"] = True
-
-                yield normalized
-
-            except json.JSONDecodeError:
-                continue
+            yield chunk
 
     async def _handle_tool_calls(
         self,

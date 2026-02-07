@@ -60,8 +60,8 @@ class AgentState:
         tool_calls: Full record of all tool executions
         step_count: Number of LLM call iterations
         repair_count: Number of validation repair attempts
-        intent: Classified intent from router
-        allowed_tool_groups: Tool groups allowed for this intent
+        intent: Classified intent from router (metadata only)
+        allowed_tool_groups: Router-provided groups (metadata only; not enforced for tool visibility)
 
         # Completion tracking (clawdbot-inspired)
         goal_achieved: Whether the user's goal was actually accomplished
@@ -242,7 +242,7 @@ class AgentState:
             lines.append(f"CONSTRAINTS: {', '.join(self.constraints)}")
 
         if self.intent:
-            lines.append(f"INTENT: {self.intent}")
+            lines.append(f"INTENT: {self.intent} (routing metadata only)")
 
         if self.known_facts:
             # Include last 5 facts to limit context size
