@@ -1025,11 +1025,18 @@ def _resolve_session_context(
 
     Raises HTTPException on thread not found or permission errors.
     """
+    from commands.parser import parse_command
+
     requested_thread_id = payload.thread_id or payload.session_id
     question = payload.question
     is_new_session = False
+    parsed_command = parse_command(question)
+    reset_requested = bool(parsed_command and parsed_command.command == "new")
+    if reset_requested:
+        question = parsed_command.args
+        force_new_session = True
 
-    if requested_thread_id:
+    if requested_thread_id and not force_new_session:
         # Explicit thread - existing behavior
         try:
             thread = conversations.ensure_thread(requested_thread_id, user_email)
@@ -1039,6 +1046,10 @@ def _resolve_session_context(
             raise HTTPException(
                 status_code=403, detail="Conversation thread does not belong to user"
             )
+    elif requested_thread_id and force_new_session:
+        # /new should always reset context, even when client sends an explicit thread_id.
+        thread = conversations.ensure_thread(None, user_email)
+        is_new_session = True
     else:
         # Main session mode - resolve with timeout and command parsing
         if force_new_session:
