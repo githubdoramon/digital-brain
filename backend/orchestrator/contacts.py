@@ -220,19 +220,41 @@ def ingest_contact(contact: ContactIn) -> None:
 
 
 def list_contacts() -> list[dict[str, Any]]:
+    return _load_contacts()
+
+
+def _load_contacts(contact_ids: Sequence[str] | None = None) -> list[dict[str, Any]]:
+    filters = [
+        """
+        (display_name IS NULL OR LOWER(display_name) NOT LIKE %s)
+        """
+    ]
+    params: list[Any] = [f"{EXTERNAL_CONTACT_PREFIX}%"]
+
+    if contact_ids is not None:
+        contact_id_list = list(contact_ids)
+        if not contact_id_list:
+            return []
+        filters.append("contact_id = ANY(%s)")
+        params.append(contact_id_list)
+
+    where_clause = " AND ".join(filters)
+
     with get_conn() as conn, conn.cursor() as cur:
         cur.execute(
-            """
+            f"""
             SELECT contact_id, display_name, aliases, birthday, emails, phones, links, tags, comments, external_id
             FROM contacts
-            WHERE display_name IS NULL
-               OR LOWER(display_name) NOT LIKE %s
+            WHERE {where_clause}
             ORDER BY display_name
             """,
-            (f"{EXTERNAL_CONTACT_PREFIX}%",),
+            tuple(params),
         )
         rows = [dict(row) for row in cur.fetchall()]
-        relationships_map = _collect_contact_relationships()
+        selected_contact_ids = [row["contact_id"] for row in rows]
+        relationships_map = (
+            _collect_contact_relationships(selected_contact_ids) if selected_contact_ids else {}
+        )
         contacts: list[dict[str, Any]] = []
         for row in rows:
             row = dict(row)
@@ -997,123 +1019,53 @@ def search_contacts(
     if not query_lower:
         return []
 
-    all_contacts = list_contacts()
-    matches: list[tuple[dict[str, Any], float, str]] = []
+    search_mode = search_by if search_by in {"name", "email", "phone", "any"} else "any"
+    candidate_multiplier = 20
+    candidate_limit = min(max(limit * candidate_multiplier, 100), 500)
+    query_digits = "".join(c for c in query_lower if c.isdigit())
 
-    for contact in all_contacts:
-        best_score = 0
-        match_reason = ""
+    candidate_ids: list[str] = []
+    seen_ids: set[str] = set()
 
-        # Search by email
-        if search_by in ("email", "any"):
-            emails = contact.get("emails") or []
-            for email in emails:
-                email_lower = email.lower()
-                if query_lower in email_lower:
-                    score = 100 if query_lower == email_lower else 90
-                    if score > best_score:
-                        best_score = score
-                        match_reason = f"email match: {email}"
+    def _append_candidates(ids: Iterable[str]) -> None:
+        for contact_id in ids:
+            if contact_id in seen_ids:
+                continue
+            seen_ids.add(contact_id)
+            candidate_ids.append(contact_id)
 
-        # Search by phone
-        if search_by in ("phone", "any"):
-            phones = contact.get("phones") or []
-            query_digits = "".join(c for c in query_lower if c.isdigit())
-            if query_digits:
-                for phone in phones:
-                    phone_digits = "".join(c for c in phone if c.isdigit())
-                    if query_digits in phone_digits:
-                        score = 100 if query_digits == phone_digits else 85
-                        if score > best_score:
-                            best_score = score
-                            match_reason = f"phone match: {phone}"
+    _append_candidates(
+        _lexical_candidate_contact_ids(
+            query_lower,
+            search_by=search_mode,
+            query_digits=query_digits,
+            limit=candidate_limit,
+        )
+    )
+    if search_mode in {"name", "any"}:
+        _append_candidates(_vector_candidate_contact_ids(query_lower, limit=candidate_limit))
 
-        # Search by name (display_name + aliases)
-        if search_by in ("name", "any"):
-            display_name = (contact.get("display_name") or "").lower()
-            aliases = [a.lower() for a in (contact.get("aliases") or [])]
-            all_names = [display_name] + aliases
+    used_prefilter = bool(candidate_ids)
+    all_contacts = _load_contacts(candidate_ids) if candidate_ids else list_contacts()
+    matches = _score_contacts(
+        all_contacts,
+        query_lower=query_lower,
+        query_digits=query_digits,
+        search_mode=search_mode,
+        fuzzy_threshold=fuzzy_threshold,
+        token_sort_ratio=fuzz.token_sort_ratio,
+    )
 
-            for name in all_names:
-                if not name:
-                    continue
-
-                # Exact match
-                if query_lower == name:
-                    if 100 > best_score:
-                        best_score = 100
-                        match_reason = f"exact name match: {name}"
-                    continue
-
-                # Substring match: query in name (user searching "Ed", contact "Eduardo")
-                # This is always OK - the user is searching for part of the contact's name
-                if query_lower in name:
-                    score = 95
-                    if score > best_score:
-                        best_score = score
-                        match_reason = f"name contains: {name}"
-                    continue
-
-                # Substring match: name in query (user searching "Pedro", contact "Ed")
-                # This is ONLY OK if the name is a complete word in a multi-word query
-                # We DON'T want "Ed" to match "Pedro" (random substring)
-                # We DO want "Ed" to match "Ed Smith" (complete word in multi-word query)
-                if name in query_lower:
-                    # Only match if query has spaces (multi-word) and name is a complete word
-                    if " " in query_lower:
-                        name_len = len(name)
-                        name_pos = query_lower.find(name)
-
-                        # Check if name appears as a complete word (surrounded by spaces or at edges)
-                        at_start = name_pos == 0
-                        at_end = name_pos + name_len == len(query_lower)
-                        preceded_by_space = name_pos > 0 and query_lower[name_pos - 1] == " "
-                        followed_by_space = (
-                            name_pos + name_len < len(query_lower)
-                            and query_lower[name_pos + name_len] == " "
-                        )
-
-                        # Must be at start/end with space on other side, or surrounded by spaces
-                        is_complete_word = (
-                            (at_start and followed_by_space)
-                            or (at_end and preceded_by_space)
-                            or (preceded_by_space and followed_by_space)
-                        )
-
-                        if is_complete_word:
-                            score = 90
-                            if score > best_score:
-                                best_score = score
-                                match_reason = f"query contains name: {name}"
-                            continue
-
-                # First name / last name partial match
-                name_parts = name.split()
-                query_parts = query_lower.split()
-                for qpart in query_parts:
-                    for npart in name_parts:
-                        if qpart == npart:
-                            score = 88
-                            if score > best_score:
-                                best_score = score
-                                match_reason = f"name part match: {npart}"
-
-                # Fuzzy match
-                fuzzy_score = fuzz.token_sort_ratio(query_lower, name)
-                if fuzzy_score >= fuzzy_threshold and fuzzy_score > best_score:
-                    best_score = fuzzy_score
-                    match_reason = f"fuzzy match ({fuzzy_score}%): {name}"
-
-        if search_by == "any":
-            comments = (contact.get("comments") or "").lower()
-            if comments and query_lower in comments:
-                score = 80
-                if score > best_score:
-                    best_score = score
-                    match_reason = "comment match"
-
-        if best_score >= fuzzy_threshold:
-            matches.append((contact, best_score, match_reason))
+    # Fallback to full fuzzy scan only when candidate pre-filtering missed everything.
+    if not matches and used_prefilter:
+        matches = _score_contacts(
+            list_contacts(),
+            query_lower=query_lower,
+            query_digits=query_digits,
+            search_mode=search_mode,
+            fuzzy_threshold=fuzzy_threshold,
+            token_sort_ratio=fuzz.token_sort_ratio,
+        )
 
     # Sort by score descending, then by display_name
     matches.sort(key=lambda x: (-x[1], x[0].get("display_name", "")))
@@ -1127,6 +1079,216 @@ def search_contacts(
         results.append(result)
 
     return results
+
+
+def _score_contacts(
+    contacts: Sequence[dict[str, Any]],
+    *,
+    query_lower: str,
+    query_digits: str,
+    search_mode: str,
+    fuzzy_threshold: int,
+    token_sort_ratio,
+) -> list[tuple[dict[str, Any], float, str]]:
+    matches: list[tuple[dict[str, Any], float, str]] = []
+
+    for contact in contacts:
+        best_score = 0.0
+        match_reason = ""
+
+        if search_mode in {"email", "any"}:
+            emails = contact.get("emails") or []
+            for email in emails:
+                email_lower = email.lower()
+                if query_lower in email_lower:
+                    score = 100 if query_lower == email_lower else 90
+                    if score > best_score:
+                        best_score = score
+                        match_reason = f"email match: {email}"
+
+        if search_mode in {"phone", "any"} and query_digits:
+            phones = contact.get("phones") or []
+            for phone in phones:
+                phone_digits = "".join(c for c in phone if c.isdigit())
+                if query_digits in phone_digits:
+                    score = 100 if query_digits == phone_digits else 85
+                    if score > best_score:
+                        best_score = score
+                        match_reason = f"phone match: {phone}"
+
+        if search_mode in {"name", "any"}:
+            display_name = (contact.get("display_name") or "").lower()
+            aliases = [a.lower() for a in (contact.get("aliases") or [])]
+            all_names = [display_name, *aliases]
+
+            for name in all_names:
+                if not name:
+                    continue
+
+                if query_lower == name:
+                    if 100 > best_score:
+                        best_score = 100
+                        match_reason = f"exact name match: {name}"
+                    continue
+
+                if query_lower in name:
+                    score = 95
+                    if score > best_score:
+                        best_score = score
+                        match_reason = f"name contains: {name}"
+                    continue
+
+                if name in query_lower and " " in query_lower:
+                    name_len = len(name)
+                    name_pos = query_lower.find(name)
+
+                    at_start = name_pos == 0
+                    at_end = name_pos + name_len == len(query_lower)
+                    preceded_by_space = name_pos > 0 and query_lower[name_pos - 1] == " "
+                    followed_by_space = (
+                        name_pos + name_len < len(query_lower)
+                        and query_lower[name_pos + name_len] == " "
+                    )
+                    is_complete_word = (
+                        (at_start and followed_by_space)
+                        or (at_end and preceded_by_space)
+                        or (preceded_by_space and followed_by_space)
+                    )
+                    if is_complete_word:
+                        score = 90
+                        if score > best_score:
+                            best_score = score
+                            match_reason = f"query contains name: {name}"
+                        continue
+
+                for qpart in query_lower.split():
+                    for npart in name.split():
+                        if qpart == npart:
+                            score = 88
+                            if score > best_score:
+                                best_score = score
+                                match_reason = f"name part match: {npart}"
+
+                fuzzy_score = token_sort_ratio(query_lower, name)
+                if fuzzy_score >= fuzzy_threshold and fuzzy_score > best_score:
+                    best_score = float(fuzzy_score)
+                    match_reason = f"fuzzy match ({fuzzy_score}%): {name}"
+
+        if search_mode == "any":
+            comments = (contact.get("comments") or "").lower()
+            if comments and query_lower in comments:
+                score = 80
+                if score > best_score:
+                    best_score = score
+                    match_reason = "comment match"
+
+        if best_score >= fuzzy_threshold:
+            matches.append((contact, best_score, match_reason))
+
+    return matches
+
+
+def _vector_candidate_contact_ids(query: str, *, limit: int) -> list[str]:
+    if not query:
+        return []
+
+    try:
+        query_vector = embed_text(query)
+    except Exception:
+        return []
+
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT contact_id
+            FROM contacts
+            WHERE comments_embed IS NOT NULL
+              AND (display_name IS NULL OR LOWER(display_name) NOT LIKE %s)
+            ORDER BY comments_embed <=> %s::vector
+            LIMIT %s
+            """,
+            (
+                f"{EXTERNAL_CONTACT_PREFIX}%",
+                query_vector,
+                limit,
+            ),
+        )
+        return [row["contact_id"] for row in cur.fetchall()]
+
+
+def _lexical_candidate_contact_ids(
+    query_lower: str,
+    *,
+    search_by: str,
+    query_digits: str,
+    limit: int,
+) -> list[str]:
+    if not query_lower:
+        return []
+
+    conditions: list[str] = []
+    params: list[Any] = [f"{EXTERNAL_CONTACT_PREFIX}%"]
+    query_like = f"%{query_lower}%"
+
+    if search_by in {"name", "any"}:
+        conditions.append(
+            """
+            (
+              LOWER(display_name) LIKE %s
+              OR EXISTS (
+                SELECT 1
+                FROM unnest(aliases) AS alias
+                WHERE LOWER(alias) LIKE %s
+              )
+            )
+            """
+        )
+        params.extend([query_like, query_like])
+
+    if search_by in {"email", "any"}:
+        conditions.append(
+            """
+            EXISTS (
+              SELECT 1
+              FROM unnest(emails) AS email
+              WHERE LOWER(email) LIKE %s
+            )
+            """
+        )
+        params.append(query_like)
+
+    if search_by in {"phone", "any"} and query_digits:
+        conditions.append(
+            """
+            EXISTS (
+              SELECT 1
+              FROM unnest(phones) AS phone
+              WHERE regexp_replace(phone, '[^0-9]', '', 'g') LIKE %s
+            )
+            """
+        )
+        params.append(f"%{query_digits}%")
+
+    if search_by == "any":
+        conditions.append("LOWER(COALESCE(comments, '')) LIKE %s")
+        params.append(query_like)
+
+    if not conditions:
+        return []
+
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            f"""
+            SELECT contact_id
+            FROM contacts
+            WHERE (display_name IS NULL OR LOWER(display_name) NOT LIKE %s)
+              AND ({' OR '.join(conditions)})
+            ORDER BY display_name
+            LIMIT %s
+            """,
+            (*params, limit),
+        )
+        return [row["contact_id"] for row in cur.fetchall()]
 
 
 def get_contact_relationships(

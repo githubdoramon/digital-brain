@@ -246,3 +246,41 @@ def test_llm_disambiguation_prompt_includes_aliases_and_match_hints(monkeypatch)
     prompt = captured["prompt"]
     assert "Aliases: Gio, Panerai" in prompt
     assert "Match hint: exact name match: gio" in prompt
+
+
+def test_resolve_contact_uses_any_search_for_role_queries(monkeypatch):
+    captured = {}
+
+    monkeypatch.setattr(resolver.contacts_service, "find_self_contact", lambda *_a, **_k: None)
+    monkeypatch.setattr(
+        resolver.contacts_service,
+        "search_contacts",
+        lambda query, **kwargs: captured.update({"query": query, "kwargs": kwargs}) or [],
+    )
+
+    result = resolver.resolve_contact("the CTO of Acme", "user@example.com")
+
+    assert result["status"] == "new"
+    assert captured["query"] == "CTO of Acme"
+    assert captured["kwargs"]["search_by"] == "any"
+
+
+def test_relationship_candidates_include_match_reason():
+    relationship_context = {
+        "relationships": [
+            {
+                "type": "doctor",
+                "related_contact": {"contact_id": "doc-1", "display_name": "Dr. One"},
+            },
+            {
+                "type": "doctor",
+                "related_contact": {"contact_id": "doc-2", "display_name": "Dr. Two"},
+            },
+        ]
+    }
+
+    result = resolver._resolve_via_relationship("doctor", relationship_context)
+
+    assert result["found"] is False
+    assert len(result["candidates"]) == 2
+    assert all(c.get("match_reason") == "relationship match: doctor" for c in result["candidates"])

@@ -122,6 +122,176 @@ const useKeyboardBehavior = () => {
   return behavior;
 };
 
+const INLINE_MARKDOWN_PATTERN = /(\*\*[^*]+\*\*|`[^`]+`|\*[^*]+\*)/g;
+const BULLET_LINE_PATTERN = /^[-*]\s+/;
+const NUMBERED_LINE_PATTERN = /^(\d+)\.\s+(.*)$/;
+const BLOCKQUOTE_LINE_PATTERN = /^>\s+/;
+
+function renderInlineMarkdown(text: string, keyPrefix: string) {
+  const parts = text.split(INLINE_MARKDOWN_PATTERN).filter(Boolean);
+  return parts.map((part, index) => {
+    if (part.startsWith('**') && part.endsWith('**')) {
+      return (
+        <Text key={`${keyPrefix}-bold-${index}`} style={styles.markdownBold} selectable>
+          {part.slice(2, -2)}
+        </Text>
+      );
+    }
+    if (part.startsWith('*') && part.endsWith('*')) {
+      return (
+        <Text key={`${keyPrefix}-italic-${index}`} style={styles.markdownItalic} selectable>
+          {part.slice(1, -1)}
+        </Text>
+      );
+    }
+    if (part.startsWith('`') && part.endsWith('`')) {
+      return (
+        <Text key={`${keyPrefix}-code-${index}`} style={styles.markdownInlineCode} selectable>
+          {part.slice(1, -1)}
+        </Text>
+      );
+    }
+    return (
+      <Text key={`${keyPrefix}-text-${index}`} selectable>
+        {part}
+      </Text>
+    );
+  });
+}
+
+function flushCodeBlock(
+  blocks: React.ReactNode[],
+  codeLines: string[],
+  keyPrefix: string,
+  codeBlockCount: number,
+) {
+  blocks.push(
+    <View key={`${keyPrefix}-code-block-${codeBlockCount}`} style={styles.markdownCodeBlock}>
+      <Text style={styles.markdownCodeText} selectable>
+        {codeLines.join('\n')}
+      </Text>
+    </View>,
+  );
+}
+
+function renderAssistantMarkdown(markdown: string, keyPrefix: string) {
+  const blocks: React.ReactNode[] = [];
+  let inCodeBlock = false;
+  let codeBlockCount = 0;
+  let codeLines: string[] = [];
+
+  markdown.split('\n').forEach((line, index) => {
+    const trimmedLine = line.trim();
+
+    if (trimmedLine.startsWith('```')) {
+      if (inCodeBlock) {
+        flushCodeBlock(blocks, codeLines, keyPrefix, codeBlockCount);
+        codeLines = [];
+        inCodeBlock = false;
+        codeBlockCount += 1;
+      } else {
+        inCodeBlock = true;
+      }
+      return;
+    }
+
+    if (inCodeBlock) {
+      codeLines.push(line);
+      return;
+    }
+
+    if (!trimmedLine) {
+      blocks.push(<View key={`${keyPrefix}-space-${index}`} style={styles.markdownSpacer} />);
+      return;
+    }
+
+    if (line.startsWith('### ')) {
+      blocks.push(
+        <Text key={`${keyPrefix}-h3-${index}`} style={styles.markdownH3} selectable>
+          {renderInlineMarkdown(line.replace('### ', ''), `${keyPrefix}-h3-${index}`)}
+        </Text>,
+      );
+      return;
+    }
+
+    if (line.startsWith('## ')) {
+      blocks.push(
+        <Text key={`${keyPrefix}-h2-${index}`} style={styles.markdownH2} selectable>
+          {renderInlineMarkdown(line.replace('## ', ''), `${keyPrefix}-h2-${index}`)}
+        </Text>,
+      );
+      return;
+    }
+
+    if (line.startsWith('# ')) {
+      blocks.push(
+        <Text key={`${keyPrefix}-h1-${index}`} style={styles.markdownH1} selectable>
+          {renderInlineMarkdown(line.replace('# ', ''), `${keyPrefix}-h1-${index}`)}
+        </Text>,
+      );
+      return;
+    }
+
+    if (BULLET_LINE_PATTERN.test(line)) {
+      blocks.push(
+        <View key={`${keyPrefix}-bullet-${index}`} style={styles.markdownListRow}>
+          <Text style={styles.markdownListMarker} selectable>
+            •
+          </Text>
+          <Text style={styles.markdownListText} selectable>
+            {renderInlineMarkdown(
+              line.replace(BULLET_LINE_PATTERN, ''),
+              `${keyPrefix}-bullet-${index}`,
+            )}
+          </Text>
+        </View>,
+      );
+      return;
+    }
+
+    const numberedMatch = line.match(NUMBERED_LINE_PATTERN);
+    if (numberedMatch) {
+      blocks.push(
+        <View key={`${keyPrefix}-numbered-${index}`} style={styles.markdownListRow}>
+          <Text style={styles.markdownListMarker} selectable>
+            {numberedMatch[1]}.
+          </Text>
+          <Text style={styles.markdownListText} selectable>
+            {renderInlineMarkdown(numberedMatch[2], `${keyPrefix}-numbered-${index}`)}
+          </Text>
+        </View>,
+      );
+      return;
+    }
+
+    if (BLOCKQUOTE_LINE_PATTERN.test(line)) {
+      blocks.push(
+        <View key={`${keyPrefix}-quote-${index}`} style={styles.markdownQuote}>
+          <Text style={styles.markdownQuoteText} selectable>
+            {renderInlineMarkdown(
+              line.replace(BLOCKQUOTE_LINE_PATTERN, ''),
+              `${keyPrefix}-quote-${index}`,
+            )}
+          </Text>
+        </View>,
+      );
+      return;
+    }
+
+    blocks.push(
+      <Text key={`${keyPrefix}-paragraph-${index}`} style={styles.markdownParagraph} selectable>
+        {renderInlineMarkdown(line, `${keyPrefix}-paragraph-${index}`)}
+      </Text>,
+    );
+  });
+
+  if (codeLines.length > 0) {
+    flushCodeBlock(blocks, codeLines, keyPrefix, codeBlockCount);
+  }
+
+  return blocks;
+}
+
 export default function ChatScreen() {
   const { token, signOut, email } = useAuth();
   const insets = useSafeAreaInsets();
@@ -369,15 +539,15 @@ export default function ChatScreen() {
                 }
               }}
             >
-              <Text
-                style={[
-                  styles.messageText,
-                  item.role === 'user' ? styles.userText : styles.assistantText,
-                ]}
-                selectable
-              >
-                {item.content}
-              </Text>
+              {item.role === 'assistant' ? (
+                <View style={styles.markdownContainer}>
+                  {renderAssistantMarkdown(item.content, item.id)}
+                </View>
+              ) : (
+                <Text style={[styles.messageText, styles.userText]} selectable>
+                  {item.content}
+                </Text>
+              )}
               {item.metadata?.command_result?.type === 'event_confirmation' && (
                 <View style={styles.commandCardWrap}>
                   <EventProposalCard
@@ -594,11 +764,97 @@ const styles = StyleSheet.create({
     paddingTop: 2,
     paddingBottom: 2,
   },
+  markdownContainer: {
+    gap: 6,
+  },
   userText: {
     color: '#fff',
   },
-  assistantText: {
+  markdownH1: {
+    fontSize: 18,
+    lineHeight: 26,
+    fontWeight: '700',
     color: theme.colors.ink,
+  },
+  markdownH2: {
+    fontSize: 16,
+    lineHeight: 24,
+    fontWeight: '700',
+    color: theme.colors.ink,
+  },
+  markdownH3: {
+    fontSize: 15,
+    lineHeight: 22,
+    fontWeight: '700',
+    color: theme.colors.ink,
+  },
+  markdownParagraph: {
+    fontSize: 15,
+    lineHeight: 24,
+    color: theme.colors.ink,
+  },
+  markdownListRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 8,
+  },
+  markdownListMarker: {
+    minWidth: 16,
+    fontSize: 15,
+    lineHeight: 24,
+    color: theme.colors.ink,
+    fontWeight: '600',
+  },
+  markdownListText: {
+    flex: 1,
+    fontSize: 15,
+    lineHeight: 24,
+    color: theme.colors.ink,
+  },
+  markdownQuote: {
+    borderLeftWidth: 3,
+    borderLeftColor: theme.colors.line,
+    paddingLeft: 10,
+    paddingVertical: 2,
+  },
+  markdownQuoteText: {
+    fontSize: 15,
+    lineHeight: 24,
+    color: theme.colors.mutedInk,
+  },
+  markdownCodeBlock: {
+    borderWidth: 1,
+    borderColor: theme.colors.line,
+    backgroundColor: '#F5F7FA',
+    borderRadius: theme.radius.md,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+  },
+  markdownCodeText: {
+    fontFamily: Platform.select({ ios: 'Menlo', android: 'monospace', default: 'monospace' }),
+    fontSize: 13,
+    lineHeight: 20,
+    color: theme.colors.ink,
+  },
+  markdownInlineCode: {
+    fontFamily: Platform.select({ ios: 'Menlo', android: 'monospace', default: 'monospace' }),
+    fontSize: 14,
+    lineHeight: 22,
+    borderWidth: 1,
+    borderColor: theme.colors.line,
+    backgroundColor: '#F5F7FA',
+    borderRadius: theme.radius.md,
+    paddingHorizontal: 4,
+    color: theme.colors.ink,
+  },
+  markdownBold: {
+    fontWeight: '700',
+  },
+  markdownItalic: {
+    fontStyle: 'italic',
+  },
+  markdownSpacer: {
+    height: 6,
   },
   commandCardWrap: {
     marginTop: 12,

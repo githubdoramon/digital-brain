@@ -120,7 +120,7 @@ def trace_router_rule_match(
 def trace_router_llm_start() -> float:
     """Log LLM classification start. Returns start time."""
     if _should_log(LogLevel.INFO):
-        print("[router.llm] Rule confidence too low, using LLM...")
+        print("[router.llm] Starting LLM routing...")
     return perf_counter()
 
 

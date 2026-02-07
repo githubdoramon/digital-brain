@@ -401,7 +401,7 @@ def resolve_contact(
     print(f"[contact_resolver] Searching for: '{search_name}'")
     matches = contacts_service.search_contacts(
         search_name,
-        search_by="name",
+        search_by="any",
         fuzzy_threshold=75,
         limit=5,
     )
@@ -1004,7 +1004,7 @@ def _resolve_nested_relationship(
     # Try fuzzy search among related contacts as fallback
     search_name = second_part
     matches = contacts_service.search_contacts(
-        search_name, search_by="name", fuzzy_threshold=75, limit=3
+        search_name, search_by="any", fuzzy_threshold=75, limit=3
     )
 
     if matches:
@@ -1116,6 +1116,17 @@ def _resolve_via_relationship(
             deduped.append(candidate)
         return deduped
 
+    def _build_candidate(contact: dict[str, Any], reason: str) -> dict[str, Any]:
+        candidate: dict[str, Any] = {
+            "contact_id": contact["contact_id"],
+            "display_name": contact["display_name"],
+            "match_reason": reason,
+        }
+        aliases = contact.get("aliases")
+        if isinstance(aliases, list) and aliases:
+            candidate["aliases"] = aliases
+        return candidate
+
     relationships = relationship_context.get("relationships", [])
     if not relationships:
         return result
@@ -1172,10 +1183,7 @@ def _resolve_via_relationship(
             result["found"] = False
             result["candidates"] = _dedupe_candidates(
                 [
-                    {
-                        "contact_id": c["contact_id"],
-                        "display_name": c["display_name"],
-                    }
+                    _build_candidate(c, f"relationship match: {relationship_type}")
                     for c in matches
                 ]
             )
@@ -1205,10 +1213,7 @@ def _resolve_via_relationship(
                 result["found"] = False
                 result["candidates"] = _dedupe_candidates(
                     [
-                        {
-                            "contact_id": c["contact_id"],
-                            "display_name": c["display_name"],
-                        }
+                        _build_candidate(c, f"related relationship match: {related_type}")
                         for c in matches
                     ]
                 )
