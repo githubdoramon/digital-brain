@@ -7,7 +7,7 @@ import { useSession } from "next-auth/react";
 import ReactMarkdown from "react-markdown";
 import type { Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { api, ask, StreamBundle } from "@/lib/api";
+import { api, ask, primeClientContext, StreamBundle } from "@/lib/api";
 import { EventCommandCard } from "@/components/EventCommandCard";
 import { EventClarificationCard } from "@/components/EventClarificationCard";
 
@@ -242,6 +242,10 @@ export default function Home() {
   // Quick Chat mode state
   const [chatMode, setChatMode] = useState<ChatMode>("quick");
   const [quickChatMessages, setQuickChatMessages] = useState<Message[]>([]);
+
+  useEffect(() => {
+    primeClientContext();
+  }, []);
 
   useEffect(() => {
     setPendingEventId(null);

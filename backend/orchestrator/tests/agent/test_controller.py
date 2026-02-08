@@ -691,3 +691,51 @@ class TestContactAwareMemorySearch:
         conversation_messages = captured_payload.get("conversation_messages")
         assert conversation_messages is not None
         assert conversation_messages[-1] == {"role": "user", "content": "Perenai"}
+
+
+class TestClientContextNormalization:
+    """Tests for client context normalization before prompt injection."""
+
+    @pytest.fixture
+    def controller(self, agent_config):
+        return AgentController(config=agent_config)
+
+    def test_normalizes_and_rounds_location_context(self, controller):
+        normalized = controller._normalize_client_context(
+            {
+                "timezone": " America/Los_Angeles ",
+                "locale": " en-US ",
+                "location": {
+                    "lat": "37.7749295",
+                    "lon": "-122.4194155",
+                    "accuracy_m": "42.44",
+                    "captured_at": "2026-02-08T10:20:30Z",
+                    "source": "browser",
+                },
+            }
+        )
+
+        assert normalized == {
+            "timezone": "America/Los_Angeles",
+            "locale": "en-US",
+            "location": {
+                "lat": 37.775,
+                "lon": -122.419,
+                "accuracy_m": 42.4,
+                "captured_at": "2026-02-08T10:20:30Z",
+                "source": "browser",
+            },
+        }
+
+    def test_drops_invalid_location_values(self, controller):
+        normalized = controller._normalize_client_context(
+            {
+                "timezone": "UTC",
+                "location": {
+                    "lat": "400",
+                    "lon": "-122.41",
+                },
+            }
+        )
+
+        assert normalized == {"timezone": "UTC"}

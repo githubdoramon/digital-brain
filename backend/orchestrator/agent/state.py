@@ -104,6 +104,7 @@ class AgentState:
     search_results: list[dict[str, Any]] = field(default_factory=list)
     detailed_events: list[dict[str, Any]] = field(default_factory=list)
     activated_skills: list[dict[str, Any]] = field(default_factory=list)
+    request_context: dict[str, Any] = field(default_factory=dict)
 
     # Timestamps
     started_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
@@ -260,6 +261,20 @@ class AgentState:
         if self.pending_questions:
             lines.append(f"PENDING_QUESTIONS: {'; '.join(self.pending_questions)}")
 
+        if self.request_context:
+            parts: list[str] = []
+            timezone = str(self.request_context.get("timezone") or "").strip()
+            locale = str(self.request_context.get("locale") or "").strip()
+            location = self.request_context.get("location")
+            if timezone:
+                parts.append(f"timezone={timezone}")
+            if locale:
+                parts.append(f"locale={locale}")
+            if isinstance(location, dict) and "lat" in location and "lon" in location:
+                parts.append("location=available")
+            if parts:
+                lines.append(f"REQUEST_CONTEXT: {', '.join(parts)}")
+
         if self.goal_achieved:
             lines.append("GOAL_STATUS: ACHIEVED")
         elif self.pending_actions:
@@ -305,6 +320,7 @@ class AgentState:
             "search_results_count": len(self.search_results),
             "detailed_events_count": len(self.detailed_events),
             "activated_skills": [s.get("name") for s in self.activated_skills],
+            "request_context": self.request_context,
             "started_at": self.started_at.isoformat(),
         }
 

@@ -33,6 +33,7 @@ async def answer_question(
     user_id: str = "default_user",
     session_id: str | None = None,
     user_email: str | None = None,
+    client_context: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """
     Answer a question using the LLM with tool calling.
@@ -45,6 +46,7 @@ async def answer_question(
         user_id: User identifier
         session_id: Conversation session ID
         user_email: User's email for context
+        client_context: Context from client (timezone/locale/location)
 
     Returns:
         Response bundle with answer and metadata
@@ -67,6 +69,7 @@ async def answer_question(
         user_email=user_email,
         conversation_history=conversation_history,
         search_limit=search_limit,
+        client_context=client_context,
     )
 
     # Persist conversation (bounded agent doesn't do this internally)
@@ -106,6 +109,7 @@ async def answer_question_stream(
     user_id: str = "default_user",
     session_id: str | None = None,
     user_email: str | None = None,
+    client_context: dict[str, Any] | None = None,
 ) -> AsyncGenerator[dict[str, Any], None]:
     """
     Stream LLM responses with tool calling support.
@@ -124,6 +128,7 @@ async def answer_question_stream(
         user_id: User identifier
         session_id: Conversation session ID
         user_email: User's email for context
+        client_context: Context from client (timezone/locale/location)
     """
     from agent.controller import get_controller
 
@@ -145,6 +150,7 @@ async def answer_question_stream(
         user_email=user_email,
         conversation_history=conversation_history,
         search_limit=search_limit,
+        client_context=client_context,
     ):
         if event.get("type") == "done":
             final_bundle = event.get("bundle", {})

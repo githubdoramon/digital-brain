@@ -15,7 +15,10 @@
     },
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.appcalipse.digitalbrain"
+      "bundleIdentifier": "com.appcalipse.digitalbrain",
+      "infoPlist": {
+        "NSLocationWhenInUseUsageDescription": "Digital Brain uses your approximate location to answer context-aware questions."
+      }
     },
     "android": {
       "googleServicesFile": "./google-services.json",
@@ -33,7 +36,7 @@
       "softwareKeyboardLayoutMode": "resize",
       "predictiveBackGestureEnabled": false,
       "package": "com.appcalipse.digitalbrain",
-      "permissions": ["POST_NOTIFICATIONS"]
+      "permissions": ["POST_NOTIFICATIONS", "ACCESS_COARSE_LOCATION", "ACCESS_FINE_LOCATION"]
     },
     "plugins": [
       ["expo-splash-screen", {

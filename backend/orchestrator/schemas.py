@@ -239,12 +239,27 @@ class DailyBriefingOut(BaseModel):
     markdown: str
 
 
+class ClientLocationIn(BaseModel):
+    lat: float
+    lon: float
+    accuracy_m: float | None = None
+    captured_at: datetime | None = None
+    source: Literal["gps", "network", "browser", "manual", "unknown"] | None = None
+
+
+class ClientContextIn(BaseModel):
+    timezone: str | None = None
+    locale: str | None = None
+    location: ClientLocationIn | None = None
+
+
 class AskIn(BaseModel):
     question: str
     limit: int | None = 30
     session_id: str | None = None  # kept for backward compatibility
     thread_id: str | None = None
     pending_event_id: str | None = None
+    client_context: ClientContextIn | None = None
 
 
 class AskOut(BaseModel):

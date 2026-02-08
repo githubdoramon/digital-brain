@@ -151,6 +151,7 @@ class AgentController:
         user_email: Optional[str] = None,
         conversation_history: Optional[list[dict[str, str]]] = None,
         search_limit: int = 30,
+        client_context: Optional[dict[str, Any]] = None,
     ) -> dict[str, Any]:
         """
         Run the agent loop for a question.
@@ -164,6 +165,7 @@ class AgentController:
             user_email: User's email for context
             conversation_history: Previous messages
             search_limit: Max search results
+            client_context: Client-provided timezone/locale/location context
 
         Returns:
             Response bundle with answer and metadata
@@ -173,6 +175,7 @@ class AgentController:
 
         # Initialize state
         state = AgentState(goal=question)
+        state.request_context = self._normalize_client_context(client_context)
 
         # Trace run start
         trace.trace_run_start(question, run_id)
@@ -217,7 +220,8 @@ class AgentController:
                 conversation_history,
                 user_email,
                 search_limit,
-                )
+                state.request_context,
+            )
 
             # Expose full tool set; no intent-based narrowing.
             tools = self.tool_registry.get_tool_definitions()
@@ -415,6 +419,7 @@ class AgentController:
         user_email: Optional[str] = None,
         conversation_history: Optional[list[dict[str, str]]] = None,
         search_limit: int = 30,
+        client_context: Optional[dict[str, Any]] = None,
     ) -> AsyncGenerator[dict[str, Any], None]:
         """
         Stream agent responses with tool calling support.
@@ -425,6 +430,7 @@ class AgentController:
         run_id = self.logger.start_run(question, user_id, session_id)
 
         state = AgentState(goal=question)
+        state.request_context = self._normalize_client_context(client_context)
 
         # Trace run start
         trace.trace_run_start(question, run_id)
@@ -470,7 +476,8 @@ class AgentController:
                 conversation_history,
                 user_email,
                 search_limit,
-                )
+                state.request_context,
+            )
 
             tools = self.tool_registry.get_tool_definitions()
             accumulated_content = ""
@@ -693,6 +700,53 @@ class AgentController:
 
         return classification
 
+    def _normalize_client_context(
+        self,
+        client_context: Optional[dict[str, Any]],
+    ) -> dict[str, Any]:
+        """Normalize client context into a compact, safe structure for prompts."""
+        if not isinstance(client_context, dict):
+            return {}
+
+        normalized: dict[str, Any] = {}
+
+        timezone_name = str(client_context.get("timezone") or "").strip()
+        if timezone_name:
+            normalized["timezone"] = timezone_name
+
+        locale = str(client_context.get("locale") or "").strip()
+        if locale:
+            normalized["locale"] = locale
+
+        location = client_context.get("location")
+        if isinstance(location, dict):
+            try:
+                lat = round(float(location.get("lat")), 3)
+                lon = round(float(location.get("lon")), 3)
+                if -90 <= lat <= 90 and -180 <= lon <= 180:
+                    normalized_location: dict[str, Any] = {"lat": lat, "lon": lon}
+
+                    accuracy = location.get("accuracy_m")
+                    if accuracy is not None:
+                        try:
+                            normalized_location["accuracy_m"] = round(float(accuracy), 1)
+                        except (TypeError, ValueError):
+                            pass
+
+                    captured_at = str(location.get("captured_at") or "").strip()
+                    if captured_at:
+                        normalized_location["captured_at"] = captured_at
+
+                    source = str(location.get("source") or "").strip()
+                    if source:
+                        normalized_location["source"] = source
+
+                    normalized["location"] = normalized_location
+            except (TypeError, ValueError):
+                pass
+
+        return normalized
+
     def _build_messages(
         self,
         question: str,
@@ -700,9 +754,11 @@ class AgentController:
         conversation_history: Optional[list[dict[str, str]]],
         user_email: Optional[str],
         search_limit: int,
+        client_context: Optional[dict[str, Any]],
     ) -> list[dict[str, Any]]:
         """Build the message list for the LLM."""
         from prompts.context import (
+            get_location_context,
             get_self_context,
             get_tag_context,
             get_time_context,
@@ -734,6 +790,11 @@ class AgentController:
 
         # Time context
         messages.append({"role": "system", "content": get_time_context()})
+
+        # Client context (timezone/locale/location)
+        location_context = get_location_context(client_context)
+        if location_context:
+            messages.append({"role": "system", "content": location_context})
 
         # Skills integration
         self._inject_skills(messages, question, conversation_history, state)

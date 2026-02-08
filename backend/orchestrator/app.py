@@ -1360,6 +1360,9 @@ async def ask(payload: AskIn, user: dict = Depends(get_current_user)):
         user_id=user_email,
         session_id=ctx.session_id,
         user_email=user_email,
+        client_context=payload.client_context.model_dump(exclude_none=True)
+        if payload.client_context
+        else None,
     )
     bundle["thread_id"] = ctx.session_id
     bundle["session_id"] = ctx.session_id
@@ -1510,6 +1513,9 @@ async def ask_stream(payload: AskIn, user: dict = Depends(get_current_user)):
                 user_id=user_email,
                 session_id=ctx.session_id,
                 user_email=user_email,
+                client_context=payload.client_context.model_dump(exclude_none=True)
+                if payload.client_context
+                else None,
             ):
                 if event.get("type") == "done":
                     from commands.storage import get_pending_event

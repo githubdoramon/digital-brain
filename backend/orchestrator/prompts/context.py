@@ -8,17 +8,15 @@ These functions build context that gets injected into prompts:
 """
 
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Any, Optional
 
 
 def get_time_context() -> str:
     """Get the current time context for the agent."""
     current_utc = datetime.now(timezone.utc)
-    local_now = current_utc.astimezone()
     return (
         "Current time context available to you:\n"
         f"- UTC now: {current_utc.isoformat()}\n"
-        f"- Local system time: {local_now.isoformat()}"
     )
 
 
@@ -64,6 +62,52 @@ def get_self_context(email: str) -> Optional[str]:
         pass
 
     return f"You are assisting the user with email: {email}"
+
+
+def get_location_context(client_context: Optional[dict[str, Any]]) -> Optional[str]:
+    """Format client-provided runtime location/timezone context for prompt injection."""
+    if not client_context:
+        return None
+
+    timezone_name = str(client_context.get("timezone") or "").strip()
+    locale = str(client_context.get("locale") or "").strip()
+    location = client_context.get("location")
+
+    lines: list[str] = ["Client runtime context:"]
+
+    if timezone_name:
+        lines.append(f"- Timezone: {timezone_name}")
+    if locale:
+        lines.append(f"- Locale: {locale}")
+
+    if isinstance(location, dict):
+        try:
+            lat = float(location.get("lat"))
+            lon = float(location.get("lon"))
+            lines.append(f"- Approximate location: {lat:.3f}, {lon:.3f}")
+        except (TypeError, ValueError):
+            pass
+
+        accuracy = location.get("accuracy_m")
+        if accuracy is not None:
+            try:
+                lines.append(f"- Location accuracy: {round(float(accuracy), 1)} meters")
+            except (TypeError, ValueError):
+                pass
+
+        captured_at = str(location.get("captured_at") or "").strip()
+        if captured_at:
+            lines.append(f"- Location captured at: {captured_at}")
+
+        source = str(location.get("source") or "").strip()
+        if source:
+            lines.append(f"- Location source: {source}")
+
+    if len(lines) == 1:
+        return None
+
+    lines.append("- Treat this location as approximate context.")
+    return "\n".join(lines)
 
 
 def get_skill_index() -> Optional[str]:

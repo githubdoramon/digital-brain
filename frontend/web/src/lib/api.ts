@@ -4,6 +4,99 @@
 
 const API_BASE = "/api/orchestrator";
 
+export type ClientLocationContext = {
+  lat: number;
+  lon: number;
+  accuracy_m?: number;
+  captured_at: string;
+  source: "browser";
+};
+
+export type ClientContext = {
+  timezone?: string;
+  locale?: string;
+  location?: ClientLocationContext;
+};
+
+let cachedClientContext: ClientContext | null = null;
+let locationRequestInFlight = false;
+
+function roundCoordinate(value: number): number {
+  return Math.round(value * 1000) / 1000;
+}
+
+function getBaseClientContext(): ClientContext {
+  if (typeof window === "undefined") {
+    return {};
+  }
+
+  const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  const locale = navigator.language || Intl.DateTimeFormat().resolvedOptions().locale;
+
+  return {
+    timezone: timezone || undefined,
+    locale: locale || undefined,
+  };
+}
+
+function requestBrowserLocationInBackground(): void {
+  if (locationRequestInFlight || typeof window === "undefined" || !navigator.geolocation) {
+    return;
+  }
+
+  locationRequestInFlight = true;
+  navigator.geolocation.getCurrentPosition(
+    (position) => {
+      const lat = roundCoordinate(position.coords.latitude);
+      const lon = roundCoordinate(position.coords.longitude);
+      const capturedAt = new Date(position.timestamp || Date.now()).toISOString();
+
+      const accuracy = Number.isFinite(position.coords.accuracy)
+        ? Math.round(position.coords.accuracy * 10) / 10
+        : undefined;
+
+      cachedClientContext = {
+        ...(cachedClientContext ?? getBaseClientContext()),
+        location: {
+          lat,
+          lon,
+          accuracy_m: accuracy,
+          captured_at: capturedAt,
+          source: "browser",
+        },
+      };
+      locationRequestInFlight = false;
+    },
+    () => {
+      locationRequestInFlight = false;
+    },
+    {
+      enableHighAccuracy: false,
+      timeout: 10000,
+      maximumAge: 5 * 60 * 1000,
+    }
+  );
+}
+
+export function primeClientContext(): void {
+  if (!cachedClientContext) {
+    cachedClientContext = getBaseClientContext();
+  }
+  requestBrowserLocationInBackground();
+}
+
+export function getClientContext(): ClientContext {
+  if (!cachedClientContext) {
+    primeClientContext();
+  }
+  return {
+    ...(cachedClientContext ?? {}),
+    location: cachedClientContext?.location
+      ? { ...cachedClientContext.location }
+      : undefined,
+  };
+}
+
 export interface MeetingIn {
   title: string;
   content: string;
@@ -140,11 +233,13 @@ export async function ask(
     pendingEventId?: string | null;
   }
 ): Promise<StreamBundle> {
+  const clientContext = getClientContext();
   return api.post<StreamBundle>("/ask", {
     question,
     thread_id: options.threadId,
     limit: options.limit ?? 30,
     pending_event_id: options.pendingEventId ?? undefined,
+    client_context: clientContext,
     timeout: 60000,
   });
 }
@@ -172,6 +267,7 @@ export async function askWithStreaming(
   },
   callbacks: StreamCallbacks
 ): Promise<StreamBundle> {
+  const clientContext = getClientContext();
   const response = await fetch(`${API_BASE}/ask/stream`, {
     method: "POST",
     headers: {
@@ -182,6 +278,7 @@ export async function askWithStreaming(
       thread_id: options.threadId,
       limit: options.limit ?? 30,
       pending_event_id: options.pendingEventId ?? undefined,
+      client_context: clientContext,
     }),
   });
 

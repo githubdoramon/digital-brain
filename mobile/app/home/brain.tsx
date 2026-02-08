@@ -1,11 +1,13 @@
 import { LinearGradient } from 'expo-linear-gradient';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
+  ActivityIndicator,
   FlatList,
   Keyboard,
   KeyboardAvoidingView,
   KeyboardAvoidingViewProps,
   Platform,
+  Pressable,
   Linking,
   StyleSheet,
   Text,
@@ -14,6 +16,7 @@ import {
 } from 'react-native';
 import { useBottomTabBarHeight } from '@react-navigation/bottom-tabs';
 import { useIsFocused, useNavigation } from '@react-navigation/native';
+import Ionicons from '@expo/vector-icons/Ionicons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { apiFetch } from '@/api/client';
@@ -24,6 +27,7 @@ import { EventProposalCard } from '@/components/EventProposalCard';
 import { SlashCommandPalette } from '@/components/SlashCommandPalette';
 import { loadChatSession, saveChatSession, StoredChatSession } from '@/chat/session';
 import { restoreChatHistory } from '@/chat/threads';
+import { getClientContext } from '@/location/clientContext';
 
 type Message = {
   id: string;
@@ -454,10 +458,13 @@ export default function ChatScreen() {
   }, [threadId, pendingEventId, isBootstrapping]);
 
   useEffect(() => {
-    const showListener = Keyboard.addListener('keyboardDidShow', () => {
+    const showEvent = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
+    const hideEvent = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
+
+    const showListener = Keyboard.addListener(showEvent, () => {
       setKeyboardVisible(true);
     });
-    const hideListener = Keyboard.addListener('keyboardDidHide', () => {
+    const hideListener = Keyboard.addListener(hideEvent, () => {
       setKeyboardVisible(false);
     });
 
@@ -497,6 +504,7 @@ export default function ChatScreen() {
         question: trimmed,
         thread_id: threadId,
         pending_event_id: pendingEventId ?? undefined,
+        client_context: getClientContext(),
       };
       const response = await apiFetch('/mobile/ask', {
         method: 'POST',
@@ -770,22 +778,43 @@ export default function ChatScreen() {
             styles.composer,
             {
               paddingBottom: (keyboardVisible ? insets.bottom : insets.bottom + tabBarHeight) + 12,
+              paddingRight: keyboardVisible ? 12 : 16,
+              gap: keyboardVisible ? 8 : 10,
             },
           ]}
         >
-          <TextInput
-            value={input}
-            editable={allowed}
-            style={[
-              styles.input,
-              !allowed && {
-                backgroundColor: '#eee',
-              },
-            ]}
-            onChangeText={setInput}
-            placeholder="Send a message..."
-            multiline
-          />
+          <View style={styles.inputWrap}>
+            <TextInput
+              value={input}
+              editable={allowed}
+              style={[
+                styles.input,
+                !allowed && {
+                  backgroundColor: '#eee',
+                },
+              ]}
+              onChangeText={setInput}
+              placeholder="Send a message..."
+              multiline
+            />
+          </View>
+          {keyboardVisible ? (
+            <Pressable
+              onPress={() => sendMessage()}
+              disabled={!canSend}
+              style={({ pressed }) => [
+                styles.inlineSendButton,
+                pressed && styles.inlineSendButtonPressed,
+                !canSend && styles.inlineSendButtonDisabled,
+              ]}
+            >
+              {isSending ? (
+                <ActivityIndicator size="small" color="#fff" />
+              ) : (
+                <Ionicons name="send" size={18} color="#fff" />
+              )}
+            </Pressable>
+          ) : null}
         </View>
       </KeyboardAvoidingView>
     </LinearGradient>
@@ -964,6 +993,9 @@ const styles = StyleSheet.create({
     gap: 10,
     alignItems: 'center',
   },
+  inputWrap: {
+    flex: 1,
+  },
   input: {
     flex: 1,
     minHeight: 46,
@@ -981,5 +1013,26 @@ const styles = StyleSheet.create({
     shadowRadius: 12,
     shadowOffset: { width: 0, height: 8 },
     elevation: 3,
+  },
+  inlineSendButton: {
+    alignSelf: 'flex-end',
+    width: 46,
+    height: 46,
+    borderRadius: 23,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: theme.colors.accent,
+    shadowColor: theme.shadow.color,
+    shadowOpacity: 0.2,
+    shadowRadius: 12,
+    shadowOffset: { width: 0, height: 8 },
+    elevation: 4,
+  },
+  inlineSendButtonPressed: {
+    opacity: 0.9,
+    transform: [{ scale: 0.98 }],
+  },
+  inlineSendButtonDisabled: {
+    opacity: 0.5,
   },
 });

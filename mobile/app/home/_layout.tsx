@@ -9,6 +9,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { theme } from '@/theme';
 import Digibrain from '@/assets/images/digibrain.svg';
 import { TopNoticeProvider } from '@/components/top-notice';
+import { primeClientContext } from '@/location/clientContext';
 
 const leftTabs = [
   {
@@ -234,6 +235,10 @@ function TabBar({ state, navigation }: BottomTabBarProps) {
 }
 
 export default function TabLayout() {
+  React.useEffect(() => {
+    primeClientContext();
+  }, []);
+
   return (
     <TopNoticeProvider>
       <Tabs
