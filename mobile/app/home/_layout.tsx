@@ -3,7 +3,7 @@ import Ionicons from '@expo/vector-icons/Ionicons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Tabs } from 'expo-router';
 import { BottomTabBarProps } from '@react-navigation/bottom-tabs';
-import { Animated, Pressable, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Animated, Pressable, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { theme } from '@/theme';
@@ -33,6 +33,7 @@ function TabBar({ state, navigation }: BottomTabBarProps) {
   const tabLayouts = React.useRef<Record<string, { x: number; width: number }>>({});
   const indicatorReady = React.useRef(false);
   const isLeftTabActive = leftTabs.some((tab) => tab.name === currentRoute);
+  const chatSwap = React.useRef(new Animated.Value(currentRoute === chatRoute ? 1 : 0)).current;
 
   const handlePress = (routeName: string, routeKey: string) => {
     const event = navigation.emit({
@@ -62,6 +63,15 @@ function TabBar({ state, navigation }: BottomTabBarProps) {
       }),
     ]).start();
   }, [currentRoute, indicatorWidth, indicatorX]);
+
+  React.useEffect(() => {
+    const focused = currentRoute === chatRoute;
+    Animated.timing(chatSwap, {
+      toValue: focused ? 1 : 0,
+      duration: 220,
+      useNativeDriver: true,
+    }).start();
+  }, [currentRoute, chatSwap]);
 
   return (
     <View style={[styles.barWrap, { paddingBottom: Math.max(insets.bottom, 14) }]}>
@@ -131,31 +141,91 @@ function TabBar({ state, navigation }: BottomTabBarProps) {
         const chat = state.routes.find((route) => route.name === chatRoute);
         if (!chat) return null;
         const focused = currentRoute === chat.name;
+        const sendEnabled = Boolean(chat.params?.sendEnabled);
+        const isSending = Boolean(chat.params?.isSending);
+        const sendDisabled = focused && !sendEnabled;
+        const sendOpacity = focused ? 1 : 0;
+        const idleOpacity = focused ? 0 : 1;
+        const sendScale = chatSwap.interpolate({
+          inputRange: [0, 1],
+          outputRange: [0.92, 1],
+          extrapolate: 'clamp',
+        });
+        const idleScale = chatSwap.interpolate({
+          inputRange: [0, 1],
+          outputRange: [1, 0.92],
+          extrapolate: 'clamp',
+        });
+        const sendRotate = chatSwap.interpolate({
+          inputRange: [0, 1],
+          outputRange: ['-8deg', '0deg'],
+          extrapolate: 'clamp',
+        });
+        const idleRotate = chatSwap.interpolate({
+          inputRange: [0, 1],
+          outputRange: ['0deg', '8deg'],
+          extrapolate: 'clamp',
+        });
         return (
           <Pressable
             onPress={() => handlePress(chat.name, chat.key)}
             accessibilityRole="button"
-            accessibilityState={focused ? { selected: true } : {}}
+            accessibilityState={
+              focused
+                ? {
+                    selected: true,
+                    disabled: sendDisabled,
+                  }
+                : sendDisabled
+                  ? { disabled: true }
+                  : {}
+            }
+            disabled={sendDisabled}
             style={({ pressed }) => [
               styles.brainButton,
               focused && styles.brainButtonActive,
+              sendDisabled && styles.brainButtonDisabled,
               pressed && styles.brainButtonPressed,
             ]}
           >
-            {focused ? (
-              <LinearGradient
-                colors={[theme.colors.accentDeep, theme.colors.accent]}
-                start={{ x: 0.2, y: 0 }}
-                end={{ x: 0.9, y: 1 }}
-                style={styles.brainButtonGradient}
+            <View style={styles.brainButtonGradient}>
+              <Animated.View
+                style={[
+                  styles.brainButtonLayer,
+                  {
+                    opacity: sendOpacity,
+                    transform: [{ scale: sendScale }, { rotate: sendRotate }],
+                  },
+                  sendDisabled && styles.brainButtonDisabled,
+                ]}
               >
-                <Digibrain width={32} height={32} color="#fff" />
-              </LinearGradient>
-            ) : (
-              <View style={[styles.brainButtonGradient, styles.brainButtonIdle]}>
-                <Digibrain width={32} height={32} color={theme.colors.mutedInk} />
-              </View>
-            )}
+                <LinearGradient
+                  colors={[theme.colors.accentDeep, theme.colors.accent]}
+                  start={{ x: 0.2, y: 0 }}
+                  end={{ x: 0.9, y: 1 }}
+                  style={styles.brainButtonFill}
+                >
+                  {isSending && focused ? (
+                    <ActivityIndicator size="small" color="#fff" />
+                  ) : (
+                    <Ionicons name="send" size={24} color="#fff" />
+                  )}
+                </LinearGradient>
+              </Animated.View>
+              <Animated.View
+                style={[
+                  styles.brainButtonLayer,
+                  {
+                    opacity: idleOpacity,
+                    transform: [{ scale: idleScale }, { rotate: idleRotate }],
+                  },
+                ]}
+              >
+                <View style={[styles.brainButtonFill, styles.brainButtonIdle]}>
+                  <Digibrain width={30} height={30} color={theme.colors.mutedInk} />
+                </View>
+              </Animated.View>
+            </View>
           </Pressable>
         );
       })()}
@@ -257,6 +327,9 @@ const styles = StyleSheet.create({
   brainButtonActive: {
     shadowOpacity: 0.3,
   },
+  brainButtonDisabled: {
+    opacity: 0.5,
+  },
   brainButtonPressed: {
     transform: [{ scale: 0.98 }],
   },
@@ -264,8 +337,24 @@ const styles = StyleSheet.create({
     width: 60,
     height: 60,
     borderRadius: 30,
+    overflow: 'hidden',
+    position: 'relative',
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  brainButtonLayer: {
+    position: 'absolute',
+    width: 60,
+    height: 60,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  brainButtonFill: {
+    width: 60,
+    height: 60,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: 30,
   },
   brainButtonIdle: {
     backgroundColor: '#fff',

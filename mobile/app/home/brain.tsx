@@ -1,21 +1,19 @@
 import { LinearGradient } from 'expo-linear-gradient';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
-  ActivityIndicator,
   FlatList,
   Keyboard,
   KeyboardAvoidingView,
   KeyboardAvoidingViewProps,
   Platform,
-  Pressable,
   Linking,
   StyleSheet,
   Text,
   TextInput,
   View,
 } from 'react-native';
-import Ionicons from '@expo/vector-icons/Ionicons';
 import { useBottomTabBarHeight } from '@react-navigation/bottom-tabs';
+import { useIsFocused, useNavigation } from '@react-navigation/native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { apiFetch } from '@/api/client';
@@ -368,6 +366,8 @@ export default function ChatScreen() {
   const insets = useSafeAreaInsets();
   const tabBarHeight = useBottomTabBarHeight();
   const listRef = useRef<FlatList<Message>>(null);
+  const navigation = useNavigation();
+  const isFocused = useIsFocused();
   const [input, setInput] = useState('');
   const [isSending, setIsSending] = useState(false);
   const [threadId, setThreadId] = useState<string | null>(null);
@@ -381,7 +381,8 @@ export default function ChatScreen() {
   const [forceScrollNext, setForceScrollNext] = useState(false);
   const [isBootstrapping, setIsBootstrapping] = useState(true);
   const [composerHeight, setComposerHeight] = useState(0);
-  const composerInset = Math.max(composerHeight + 16, tabBarHeight + 112);
+  const [keyboardVisible, setKeyboardVisible] = useState(false);
+  const listBottomInset = insets.bottom + 24;
 
   const allowed = email === 'REDACTED-EMAIL';
   const canSend = input.trim().length > 0 && !isSending && allowed;
@@ -440,6 +441,10 @@ export default function ChatScreen() {
   }, [token, allowed, signOut, starterMessages]);
 
   useEffect(() => {
+    navigation.setParams({ sendEnabled: canSend, isSending });
+  }, [navigation, canSend, isSending]);
+
+  useEffect(() => {
     if (isBootstrapping) return;
     const stored: StoredChatSession = {
       threadId,
@@ -447,6 +452,20 @@ export default function ChatScreen() {
     };
     void saveChatSession(stored);
   }, [threadId, pendingEventId, isBootstrapping]);
+
+  useEffect(() => {
+    const showListener = Keyboard.addListener('keyboardDidShow', () => {
+      setKeyboardVisible(true);
+    });
+    const hideListener = Keyboard.addListener('keyboardDidHide', () => {
+      setKeyboardVisible(false);
+    });
+
+    return () => {
+      showListener.remove();
+      hideListener.remove();
+    };
+  }, []);
 
   const header = useMemo(
     () => (
@@ -542,6 +561,17 @@ export default function ChatScreen() {
     }
   };
 
+  useEffect(() => {
+    const unsubscribe = navigation.addListener('tabPress', (event) => {
+      if (!isFocused) return;
+      event.preventDefault();
+      if (!canSend) return;
+      void sendMessage();
+    });
+
+    return unsubscribe;
+  }, [navigation, isFocused, canSend, sendMessage]);
+
   const trimmedInput = input.trimStart();
   const hasCommandToken = /^\/\w+\s/.test(trimmedInput);
   const showSlashPalette = trimmedInput.startsWith('/') && !hasCommandToken;
@@ -570,7 +600,7 @@ export default function ChatScreen() {
       <KeyboardAvoidingView
         style={styles.screen}
         behavior={keyboardBehavior}
-        keyboardVerticalOffset={Platform.OS === 'ios' ? insets.top : 0}
+        keyboardVerticalOffset={0}
       >
         <FlatList
           ref={listRef}
@@ -582,7 +612,7 @@ export default function ChatScreen() {
             styles.listContent,
             {
               paddingTop: insets.top + 16,
-              paddingBottom: composerInset,
+              paddingBottom: listBottomInset,
             },
           ]}
           onLayout={(event) => {
@@ -739,7 +769,7 @@ export default function ChatScreen() {
           style={[
             styles.composer,
             {
-              paddingBottom: 30 + tabBarHeight,
+              paddingBottom: (keyboardVisible ? insets.bottom : insets.bottom + tabBarHeight) + 12,
             },
           ]}
         >
@@ -756,21 +786,6 @@ export default function ChatScreen() {
             placeholder="Send a message..."
             multiline
           />
-          <Pressable
-            onPress={() => sendMessage()}
-            disabled={!canSend}
-            style={({ pressed }) => [
-              styles.sendButton,
-              pressed && styles.sendButtonPressed,
-              !canSend && styles.sendButtonDisabled,
-            ]}
-          >
-            {isSending ? (
-              <ActivityIndicator size="small" color="#fff" />
-            ) : (
-              <Ionicons name="send" size={20} color="#fff" />
-            )}
-          </Pressable>
         </View>
       </KeyboardAvoidingView>
     </LinearGradient>
@@ -942,10 +957,6 @@ const styles = StyleSheet.create({
     elevation: 3,
   },
   composer: {
-    position: 'absolute',
-    left: 0,
-    right: 0,
-    bottom: 0,
     paddingHorizontal: 16,
     paddingVertical: 14,
     backgroundColor: 'transparent',
@@ -970,26 +981,5 @@ const styles = StyleSheet.create({
     shadowRadius: 12,
     shadowOffset: { width: 0, height: 8 },
     elevation: 3,
-  },
-  sendButton: {
-    alignSelf: 'flex-end',
-    width: 46,
-    height: 46,
-    borderRadius: 23,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: theme.colors.accent,
-    shadowColor: theme.shadow.color,
-    shadowOpacity: 0.2,
-    shadowRadius: 12,
-    shadowOffset: { width: 0, height: 8 },
-    elevation: 4,
-  },
-  sendButtonPressed: {
-    opacity: 0.9,
-    transform: [{ scale: 0.98 }],
-  },
-  sendButtonDisabled: {
-    opacity: 0.6,
   },
 });
