@@ -790,7 +790,7 @@ export default function ChatScreen() {
           style={[
             styles.composer,
             {
-              paddingBottom: (keyboardVisible ? 12 : insets.bottom + tabBarHeight) + 6,
+              paddingBottom: (keyboardVisible ? 12 : insets.bottom + tabBarHeight) + 12,
               paddingRight: keyboardVisible ? 12 : 16,
               gap: keyboardVisible ? 8 : 10,
             },

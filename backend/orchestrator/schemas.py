@@ -244,7 +244,15 @@ class ClientLocationIn(BaseModel):
     lon: float
     accuracy_m: float | None = None
     captured_at: datetime | None = None
-    source: Literal["gps", "network", "browser", "manual", "unknown"] | None = None
+    source: Literal[
+        "gps",
+        "network",
+        "browser",
+        "manual",
+        "unknown",
+        "mobile_geolocation",
+        "expo_location",
+    ] | None = None
 
 
 class ClientContextIn(BaseModel):
