@@ -29,7 +29,7 @@ print("[llm] Bounded agent architecture ENABLED")
 
 async def answer_question(
     question: str,
-    search_limit: int = 3,
+    search_limit: int = 30,
     user_id: str = "default_user",
     session_id: str | None = None,
     user_email: str | None = None,
@@ -102,7 +102,7 @@ async def answer_question(
 
 async def answer_question_stream(
     question: str,
-    search_limit: int = 3,
+    search_limit: int = 30,
     user_id: str = "default_user",
     session_id: str | None = None,
     user_email: str | None = None,

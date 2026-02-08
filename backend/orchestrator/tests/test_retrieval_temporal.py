@@ -121,3 +121,132 @@ def test_search_memories_does_not_call_contact_vector_search(monkeypatch):
 
     assert called["count"] == 0
     assert result["results"][0]["kind"] == "event"
+
+
+def test_temporal_relevance_sorts_events_and_documents_by_date(monkeypatch):
+    monkeypatch.setattr(retrieval, "vector_search", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr(retrieval, "bm25_search", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr(
+        retrieval,
+        "structured_candidates",
+        lambda *_args, **_kwargs: {"evt-a": 1.0, "evt-b": 1.0},
+    )
+    monkeypatch.setattr(
+        retrieval,
+        "vector_search_documents",
+        lambda *_args, **_kwargs: {"doc-a": 0.9, "doc-b": 0.8},
+    )
+    monkeypatch.setattr(
+        retrieval,
+        "bm25_search_documents",
+        lambda *_args, **_kwargs: {"doc-a": 0.9, "doc-b": 0.8},
+    )
+    monkeypatch.setattr(
+        retrieval,
+        "fetch_events",
+        lambda *_args, **_kwargs: [
+            _event_row("evt-a", datetime(2026, 1, 5, 10, 0, 0)),
+            _event_row("evt-b", datetime(2026, 1, 10, 10, 0, 0)),
+        ],
+    )
+    monkeypatch.setattr(
+        retrieval,
+        "fetch_document_summaries",
+        lambda *_args, **_kwargs: {
+            "doc-a": {
+                "document_id": "doc-a",
+                "title": "Doc A",
+                "description": "Doc A summary",
+                "tags": [],
+                "document_date": datetime(2026, 1, 7, 10, 0, 0),
+                "created_at": datetime(2026, 1, 7, 10, 0, 0),
+                "updated_at": datetime(2026, 1, 7, 10, 0, 0),
+                "download_url": "/documents/doc-a/download",
+                "file_name": "doc-a.txt",
+                "file_mime": "text/plain",
+                "file_size": 123,
+                "snippet": "Doc A summary",
+            },
+            "doc-b": {
+                "document_id": "doc-b",
+                "title": "Doc B",
+                "description": "Doc B summary",
+                "tags": [],
+                "document_date": datetime(2026, 1, 12, 10, 0, 0),
+                "created_at": datetime(2026, 1, 12, 10, 0, 0),
+                "updated_at": datetime(2026, 1, 12, 10, 0, 0),
+                "download_url": "/documents/doc-b/download",
+                "file_name": "doc-b.txt",
+                "file_mime": "text/plain",
+                "file_size": 123,
+                "snippet": "Doc B summary",
+            },
+        },
+    )
+
+    result = retrieval.search_memories(
+        query="what happened around early january",
+        time_start="2026-01-01T00:00:00",
+        time_end="2026-01-31T23:59:59",
+        limit=4,
+    )
+
+    ids = [item["id"] for item in result["results"]]
+    kinds = [item["kind"] for item in result["results"]]
+    assert ids == ["doc-b", "evt-b", "doc-a", "evt-a"]
+    assert kinds == ["document", "event", "document", "event"]
+
+
+def test_structured_filters_do_not_force_event_first_ordering(monkeypatch):
+    monkeypatch.setattr(retrieval, "vector_search", lambda *_args, **_kwargs: {"evt-a": 0.1})
+    monkeypatch.setattr(retrieval, "bm25_search", lambda *_args, **_kwargs: {"evt-a": 0.1})
+    monkeypatch.setattr(
+        retrieval,
+        "structured_candidates",
+        lambda *_args, **_kwargs: {"evt-a": 1.0},
+    )
+    monkeypatch.setattr(
+        retrieval,
+        "vector_search_documents",
+        lambda *_args, **_kwargs: {"doc-a": 0.99},
+    )
+    monkeypatch.setattr(
+        retrieval,
+        "bm25_search_documents",
+        lambda *_args, **_kwargs: {"doc-a": 0.99},
+    )
+    monkeypatch.setattr(
+        retrieval,
+        "fetch_events",
+        lambda *_args, **_kwargs: [_event_row("evt-a", datetime(2026, 1, 1, 10, 0, 0))],
+    )
+    monkeypatch.setattr(
+        retrieval,
+        "fetch_document_summaries",
+        lambda *_args, **_kwargs: {
+            "doc-a": {
+                "document_id": "doc-a",
+                "title": "Doc A",
+                "description": "Doc A summary",
+                "tags": [],
+                "document_date": datetime(2026, 1, 2, 10, 0, 0),
+                "created_at": datetime(2026, 1, 2, 10, 0, 0),
+                "updated_at": datetime(2026, 1, 2, 10, 0, 0),
+                "download_url": "/documents/doc-a/download",
+                "file_name": "doc-a.txt",
+                "file_mime": "text/plain",
+                "file_size": 123,
+                "snippet": "Doc A summary",
+            }
+        },
+    )
+
+    result = retrieval.search_memories(
+        query="gio notes",
+        people=["contact-gio"],
+        sort_order="relevance",
+        limit=1,
+    )
+
+    assert result["results"][0]["id"] == "doc-a"
+    assert result["results"][0]["kind"] == "document"

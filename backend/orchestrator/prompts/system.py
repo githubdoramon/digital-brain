@@ -5,7 +5,7 @@ These prompts define the agent's core behavior and protocol.
 """
 
 
-def get_system_prompt(search_limit: int = 5) -> str:
+def get_system_prompt(search_limit: int = 30) -> str:
     """Get the main system prompt for the agent."""
     return (
         "You are a personal memory assistant helping the user explore their stored memories, "

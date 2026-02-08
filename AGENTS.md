@@ -257,8 +257,13 @@ uvicorn app:api --reload
 
 # Frontend
 cd frontend/web
-yarn install
-yarn dev
+npm install
+npm run dev
+
+# Mobile
+cd mobile
+npm install
+npm run dev
 
 # Full stack
 docker compose up --build

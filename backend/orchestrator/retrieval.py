@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, time, timedelta, timezone
 from typing import Any
 
 from dateparser.search import search_dates
@@ -144,6 +144,11 @@ def search_memories(
         ordering = "relevance"
 
     has_structured_filters = bool(span or people or place_ids)
+    is_temporal_query = bool(span)
+    use_temporal_ordering = ordering in {"newest", "oldest"} or (
+        is_temporal_query and ordering == "relevance"
+    )
+    temporal_ordering = ordering if ordering in {"newest", "oldest"} else "newest"
     print(
         "[retrieval] search_memories filters "
         f"people={list(people or [])} places={list(place_ids or [])} "
@@ -169,7 +174,6 @@ def search_memories(
         b = bm_events.get(event_id, 0.0)
         s = st_events.get(event_id, 0.0)
         score = 0.6 * v + 0.3 * b + 0.1 * s
-        print(f"[retrieval] event_id={event_id} score={score}")
         event_scores[event_id] = score
 
     doc_ids = set(vec_docs) | set(bm_docs)
@@ -177,51 +181,47 @@ def search_memories(
     for doc_id in doc_ids:
         v = vec_docs.get(doc_id, 0.0)
         b = bm_docs.get(doc_id, 0.0)
-        score = 0.6 * v + 0.4 * b
-        print(f"[retrieval] doc_id={doc_id} score={score}")
+        score = 0.5 * v + 0.5 * b
         doc_scores[doc_id] = score
 
     event_rows_all = fetch_events(list(event_ids)) if event_ids else []
     event_lookup_all = {row["id"]: row for row in event_rows_all}
-
-    if ordering in {"newest", "oldest"}:
-        with_dates = [row for row in event_rows_all if row.get("start_date") or row.get("end_date")]
-        without_dates = [
-            row for row in event_rows_all if not (row.get("start_date") or row.get("end_date"))
-        ]
-        with_dates.sort(
-            key=lambda row: (
-                row.get("start_date") or row.get("end_date"),
-                str(row.get("id") or ""),
-            ),
-            reverse=(ordering == "newest"),
-        )
-        without_dates.sort(key=lambda row: str(row.get("id") or ""))
-        event_ids_ordered_all = [row["id"] for row in with_dates] + [
-            row["id"] for row in without_dates
-        ]
-    else:
-        event_ids_ordered_all = sorted(
-            event_scores.keys(),
-            key=lambda event_id: event_scores[event_id],
-            reverse=True,
-        )
-
-    doc_ids_ordered = sorted(
-        doc_scores.keys(),
-        key=lambda doc_id: doc_scores[doc_id],
-        reverse=True,
-    )
+    doc_lookup_all = fetch_document_summaries(list(doc_ids)) if (doc_ids and use_temporal_ordering) else {}
 
     combined: list[tuple[str, str, float]] = []
 
-    if ordering in {"newest", "oldest"} or has_structured_filters:
-        # For temporal or explicitly-filtered queries, prioritize events first.
-        combined.extend(
-            (event_id, "event", event_scores.get(event_id, 0.0))
-            for event_id in event_ids_ordered_all
+    if use_temporal_ordering:
+        with_dates: list[tuple[str, str, float, datetime]] = []
+        without_dates: list[tuple[str, str, float]] = []
+
+        for event_id in event_scores:
+            row = event_lookup_all.get(event_id)
+            event_date = _to_temporal_sort_value(
+                (row.get("start_date") or row.get("end_date")) if row else None
+            )
+            item = (event_id, "event", event_scores.get(event_id, 0.0))
+            if event_date:
+                with_dates.append((event_id, "event", event_scores.get(event_id, 0.0), event_date))
+            else:
+                without_dates.append(item)
+
+        for doc_id in doc_scores:
+            doc = doc_lookup_all.get(doc_id)
+            doc_date = _to_temporal_sort_value(
+                (doc.get("document_date") or doc.get("created_at")) if doc else None
+            )
+            item = (doc_id, "document", doc_scores.get(doc_id, 0.0))
+            if doc_date:
+                with_dates.append((doc_id, "document", doc_scores.get(doc_id, 0.0), doc_date))
+            else:
+                without_dates.append(item)
+
+        with_dates.sort(
+            key=lambda item: (item[3], item[0], item[1]),
+            reverse=(temporal_ordering == "newest"),
         )
-        combined.extend((doc_id, "document", doc_scores[doc_id]) for doc_id in doc_ids_ordered)
+        without_dates.sort(key=lambda item: (item[0], item[1]))
+        combined = [(item_id, kind, score) for item_id, kind, score, _ in with_dates] + without_dates
     else:
         combined.extend((event_id, "event", event_scores[event_id]) for event_id in event_scores)
         combined.extend((doc_id, "document", doc_scores[doc_id]) for doc_id in doc_scores)
@@ -249,7 +249,18 @@ def search_memories(
         event_rows = fetch_events(event_ids_top)
         event_lookup = {row["id"]: row for row in event_rows}
 
-    doc_lookup = fetch_document_summaries(doc_ids_top) if doc_ids_top else {}
+    if doc_ids_top:
+        if doc_lookup_all:
+            doc_lookup = {
+                doc_id: doc_lookup_all[doc_id] for doc_id in doc_ids_top if doc_id in doc_lookup_all
+            }
+            missing_doc_ids = [doc_id for doc_id in doc_ids_top if doc_id not in doc_lookup]
+            if missing_doc_ids:
+                doc_lookup.update(fetch_document_summaries(missing_doc_ids))
+        else:
+            doc_lookup = fetch_document_summaries(doc_ids_top)
+    else:
+        doc_lookup = {}
 
     results: list[dict[str, Any]] = []
     for item_id, kind, _ in top_combined:
@@ -333,6 +344,12 @@ def search_memories(
                     "snippet": doc.get("snippet", ""),
                 }
             )
+    event_titles = [row.get("title") for row in results if row.get("kind") == "event"]
+    document_titles = [row.get("title") for row in results if row.get("kind") == "document"]
+    print(
+        "[retrieval] search_memories returning "
+        f"count={len(results)} event_titles={event_titles} document_titles={document_titles}"
+    )
     return {"results": results}
 
 
@@ -534,6 +551,18 @@ def _isoformat(value: Any | None) -> str | None:
     if isinstance(value, date):
         return value.isoformat()
     return None
+
+
+def _to_temporal_sort_value(value: Any | None) -> datetime | None:
+    if isinstance(value, datetime):
+        dt = value
+    elif isinstance(value, date):
+        dt = datetime.combine(value, time.min)
+    else:
+        return None
+    if dt.tzinfo is not None:
+        return dt.astimezone(timezone.utc).replace(tzinfo=None)
+    return dt
 
 
 # --------------------------- Pipeline ---------------------------

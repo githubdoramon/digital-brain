@@ -143,7 +143,7 @@ export async function ask(
   return api.post<StreamBundle>("/ask", {
     question,
     thread_id: options.threadId,
-    limit: options.limit ?? 5,
+    limit: options.limit ?? 30,
     pending_event_id: options.pendingEventId ?? undefined,
     timeout: 60000,
   });
@@ -180,7 +180,7 @@ export async function askWithStreaming(
     body: JSON.stringify({
       question,
       thread_id: options.threadId,
-      limit: options.limit ?? 5,
+      limit: options.limit ?? 30,
       pending_event_id: options.pendingEventId ?? undefined,
     }),
   });

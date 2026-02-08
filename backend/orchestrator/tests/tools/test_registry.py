@@ -204,6 +204,14 @@ class TestPreregisteredTools:
         assert contract is not None
         assert contract.name == "search_memories"
 
+    def test_search_memories_default_limit_is_30(self, populated_registry):
+        """Test search_memories default limit encourages broader recall."""
+        contract = populated_registry.get_contract("search_memories")
+        assert contract is not None
+
+        normalized = contract.normalize({"query": "recent notes"})
+        assert normalized.get("limit") == 30
+
     def test_search_memories_accepts_sort_order(self, populated_registry):
         """Test search_memories supports temporal ordering parameter."""
         contract = populated_registry.get_contract("search_memories")

@@ -20,7 +20,7 @@ def handle_search_memories(
     args: dict[str, Any],
     state: Optional["AgentState"] = None,
     question: str = "",
-    search_limit: int = 5,
+    search_limit: int = 30,
     **kwargs,
 ) -> dict[str, Any]:
     """

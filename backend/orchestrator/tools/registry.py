@@ -187,9 +187,9 @@ def _register_all_tools(registry: ToolRegistry) -> None:
                 ToolParameter(
                     name="limit",
                     type="integer",
-                    description="Maximum results to return (default 5).",
+                    description="Maximum results to return (default 30).",
                     required=False,
-                    default=5,
+                    default=30,
                     minimum=1,
                     maximum=50,
                     validator=validate_limit,

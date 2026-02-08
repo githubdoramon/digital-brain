@@ -31,12 +31,7 @@ from typing import Any, cast
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from db import get_conn  # noqa: E402
-from documents import (
-    CONTENT_TRANSLATION_GENERATED_KEY,  # noqa: E402
-    CONTENT_TRANSLATION_HASH_KEY,  # noqa: E402
-    CONTENT_TRANSLATION_TEXT_KEY,  # noqa: E402
-    MAX_CONTENT_CHARS,  # noqa: E402
-)
+from documents import MAX_CONTENT_CHARS  # noqa: E402
 from documents import _extract_text as extract_document_text  # noqa: E402
 from documents import _generate_document_embedding as generate_document_embedding  # noqa: E402
 from embeddings import embed_text  # noqa: E402
@@ -387,23 +382,9 @@ def reembed_events(batch_size: int, dry_run: bool) -> int:
     return processed
 
 
-def clear_document_translation_cache(raw_metadata: dict[str, Any]) -> bool:
-    removed = False
-    for key in (
-        CONTENT_TRANSLATION_TEXT_KEY,
-        CONTENT_TRANSLATION_HASH_KEY,
-        CONTENT_TRANSLATION_GENERATED_KEY,
-    ):
-        if key in raw_metadata:
-            raw_metadata.pop(key, None)
-            removed = True
-    return removed
-
-
 def reembed_documents(
     batch_size: int,
     dry_run: bool,
-    clear_translation_cache: bool = False,
 ) -> int:
     """Re-embed all documents. Returns count of processed records."""
     total = count_records("documents", "document_id")
@@ -425,8 +406,6 @@ def reembed_documents(
             doc_id = doc["document_id"]
             try:
                 raw_metadata = normalize_raw_metadata(doc.get("raw_metadata"))
-                if clear_translation_cache and clear_document_translation_cache(raw_metadata):
-                    print(f"[documents] cleared translation cache document_id={doc_id}")
                 recovered_content = recover_document_content(doc)
                 should_persist_content = False
                 if recovered_content:
@@ -548,11 +527,6 @@ def main():
         action="store_true",
         help="Show what would be done without making changes",
     )
-    parser.add_argument(
-        "--clear-document-translation-cache",
-        action="store_true",
-        help="Clear cached translated document content before re-embedding documents",
-    )
     args = parser.parse_args()
 
     print("=" * 60)
@@ -561,7 +535,6 @@ def main():
     print(f"Embedding model: {os.getenv('OLLAMA_EMBED_MODEL', 'nomic-embed-text')}")
     print(f"Batch size: {args.batch_size}")
     print(f"Dry run: {args.dry_run}")
-    print(f"Clear document translation cache: {args.clear_document_translation_cache}")
     print("=" * 60)
 
     if args.dry_run:
@@ -580,7 +553,6 @@ def main():
             total_processed += reembed_documents(
                 args.batch_size,
                 args.dry_run,
-                clear_translation_cache=args.clear_document_translation_cache,
             )
 
         if not args.events_only and not args.documents_only:

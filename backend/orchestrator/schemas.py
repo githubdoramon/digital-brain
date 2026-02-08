@@ -241,7 +241,7 @@ class DailyBriefingOut(BaseModel):
 
 class AskIn(BaseModel):
     question: str
-    limit: int | None = 3
+    limit: int | None = 30
     session_id: str | None = None  # kept for backward compatibility
     thread_id: str | None = None
     pending_event_id: str | None = None

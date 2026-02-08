@@ -400,7 +400,7 @@ export default function Home() {
         // Use non-streaming endpoint
         const data: StreamBundle = await ask(pendingInput, {
           threadId: undefined, // Backend resolves main session
-          limit: 5,
+          limit: 30,
           pendingEventId,
         });
 
@@ -465,7 +465,7 @@ export default function Home() {
         // Use non-streaming endpoint
         const data: StreamBundle = await ask(pendingInput, {
           threadId,
-          limit: 5,
+          limit: 30,
           pendingEventId,
         });
 

@@ -1344,7 +1344,7 @@ async def ask(payload: AskIn, user: dict = Depends(get_current_user)):
         print(f"[ask] session reset session={ctx.session_id} user={user_email}")
         return AskOut(**_make_reset_bundle(ctx))
 
-    limit = payload.limit or 3
+    limit = payload.limit or 30
     preview = ctx.question.strip().replace("\n", " ")
     if len(preview) > 120:
         preview = preview[:117] + "..."
@@ -1490,7 +1490,7 @@ async def ask_stream(payload: AskIn, user: dict = Depends(get_current_user)):
             },
         )
 
-    limit = payload.limit or 3
+    limit = payload.limit or 30
 
     preview = ctx.question.strip().replace("\n", " ")
     if len(preview) > 120:
@@ -1719,7 +1719,7 @@ def run_tool(payload: ToolRunIn, user: dict = Depends(get_current_user)):
     state = AgentState(goal=f"tool_run:{payload.tool_name}")
     search_limit = normalized_args.get("limit")
     if not isinstance(search_limit, int):
-        search_limit = 5
+        search_limit = 30
 
     start = perf_counter()
     try:

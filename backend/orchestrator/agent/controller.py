@@ -150,7 +150,7 @@ class AgentController:
         session_id: Optional[str] = None,
         user_email: Optional[str] = None,
         conversation_history: Optional[list[dict[str, str]]] = None,
-        search_limit: int = 5,
+        search_limit: int = 30,
     ) -> dict[str, Any]:
         """
         Run the agent loop for a question.
@@ -414,7 +414,7 @@ class AgentController:
         session_id: Optional[str] = None,
         user_email: Optional[str] = None,
         conversation_history: Optional[list[dict[str, str]]] = None,
-        search_limit: int = 5,
+        search_limit: int = 30,
     ) -> AsyncGenerator[dict[str, Any], None]:
         """
         Stream agent responses with tool calling support.

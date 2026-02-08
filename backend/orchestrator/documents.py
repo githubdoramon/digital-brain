@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hashlib
 import json
 import mimetypes
 import os
@@ -34,20 +33,15 @@ DOCUMENT_STORAGE_DIR = Path(
     os.getenv("DOCUMENT_STORAGE_DIR", "/app/storage/documents")
 ).expanduser()
 
-MAX_CONTENT_CHARS = int(os.getenv("DOCUMENT_MAX_CONTENT_CHARS", "20000"))
+MAX_CONTENT_CHARS = int(os.getenv("DOCUMENT_MAX_CONTENT_CHARS", "60000"))
 MAX_EMBED_CHARS = int(os.getenv("DOCUMENT_EMBED_MAX_CHARS", "8000"))
-MAX_TRANSLATION_SOURCE_CHARS = int(os.getenv("DOCUMENT_TRANSLATION_MAX_CHARS", "2500"))
+MAX_TRANSLATION_CHUNK_CHARS = int(os.getenv("DOCUMENT_TRANSLATION_CHUNK_CHARS", "10000"))
 MAX_TITLE_PROMPT_CHARS = int(os.getenv("DOCUMENT_TITLE_PROMPT_CHARS", "2000"))
 MAX_DATE_PROMPT_CHARS = int(os.getenv("DOCUMENT_DATE_PROMPT_CHARS", "2000"))
 MAX_DESCRIPTION_PROMPT_CHARS = int(os.getenv("DOCUMENT_DESCRIPTION_PROMPT_CHARS", "1200"))
 
 LLM_CHAT_MODEL = os.getenv("LLM_CHAT_MODEL")
 OLLAMA_TIMEOUT = int(os.getenv("OLLAMA_TIMEOUT", "60"))
-
-CONTENT_TRANSLATION_TEXT_KEY = "content_english_for_embedding"
-CONTENT_TRANSLATION_HASH_KEY = "content_english_source_hash"
-CONTENT_TRANSLATION_GENERATED_KEY = "content_english_generated"
-
 
 def _call_llm_text(
     prompt: str,
@@ -138,6 +132,18 @@ def ingest_document(
         "stored_mime_type": stored.mime_type,
         "file_size": stored.size,
     }
+    original_content = content_text
+    translated_content, translated_for_storage = _translate_content_for_storage(
+        original_content,
+        document_id=document_id,
+    )
+    content_text = translated_content[:MAX_CONTENT_CHARS]
+    _update_content_storage_metadata(
+        base_raw_metadata,
+        original_content=original_content,
+        stored_content=content_text,
+        translated=translated_for_storage,
+    )
 
     tags_input = tags if tags is not None else []
 
@@ -670,6 +676,65 @@ def _translate_text_to_english(text: str, max_chars: int) -> str:
         return text
 
 
+def _chunk_text_for_translation(text: str, max_chars: int) -> list[str]:
+    cleaned = (text or "").strip()
+    if not cleaned:
+        return []
+    if max_chars <= 0 or len(cleaned) <= max_chars:
+        return [cleaned]
+
+    chunks: list[str] = []
+    cursor = 0
+    text_len = len(cleaned)
+
+    while cursor < text_len:
+        end = min(text_len, cursor + max_chars)
+        if end < text_len:
+            split_idx = cleaned.rfind("\n", cursor, end)
+            if split_idx <= cursor:
+                split_idx = cleaned.rfind(" ", cursor, end)
+            if split_idx > cursor + max_chars // 2:
+                end = split_idx + 1
+        part = cleaned[cursor:end]
+        if part:
+            chunks.append(part)
+        cursor = end
+
+    return chunks
+
+
+def _translate_content_for_storage(
+    content: str,
+    *,
+    document_id: str | None = None,
+) -> tuple[str, bool]:
+    _ = document_id
+    cleaned = (content or "").strip()
+    if not cleaned or not LLM_CHAT_MODEL:
+        return cleaned, False
+
+    chunk_chars = max(200, min(MAX_TRANSLATION_CHUNK_CHARS, MAX_CONTENT_CHARS))
+    translated_parts: list[str] = []
+    for chunk in _chunk_text_for_translation(cleaned, chunk_chars):
+        translated_chunk = _translate_text_to_english(chunk, len(chunk)).strip()
+        translated_parts.append(translated_chunk or chunk)
+
+    translated = "".join(translated_parts).strip() or cleaned
+    return translated, translated != cleaned
+
+
+def _update_content_storage_metadata(
+    raw_metadata: dict[str, Any],
+    *,
+    original_content: str,
+    stored_content: str,
+    translated: bool,
+) -> None:
+    _ = stored_content
+    raw_metadata["original_content"] = (original_content or "")[:MAX_CONTENT_CHARS]
+    raw_metadata["content_translated_for_storage"] = bool(translated)
+
+
 def _translate_tags_to_english(tags: Sequence[str]) -> list[str]:
     normalized = [t for t in tags if t]
     if not normalized or not LLM_CHAT_MODEL:
@@ -990,66 +1055,13 @@ def _sanitize_filename(name: str) -> str:
     return "".join(ch for ch in name if ch.isalnum() or ch in {"-", "_", "."}).strip()
 
 
-def _translation_source_hash(text: str) -> str:
-    return hashlib.sha256(text.encode("utf-8")).hexdigest()
-
-
-def _resolve_english_content_for_embedding(
-    content: str,
-    raw_metadata: dict[str, Any] | None,
-    document_id: str | None = None,
-) -> str:
-    cleaned = (content or "").strip()
-    if not cleaned:
-        if document_id:
-            print(
-                "[documents] content empty before translation "
-                f"document_id={document_id}"
-            )
-        return ""
-
-    translation_chars = max(1, min(MAX_EMBED_CHARS, MAX_TRANSLATION_SOURCE_CHARS))
-    source_text = cleaned[:translation_chars]
-    source_hash = _translation_source_hash(source_text)
-
-    if raw_metadata is not None:
-        cached_hash = raw_metadata.get(CONTENT_TRANSLATION_HASH_KEY)
-        cached_text = raw_metadata.get(CONTENT_TRANSLATION_TEXT_KEY)
-        if (
-            isinstance(cached_hash, str)
-            and cached_hash == source_hash
-            and isinstance(cached_text, str)
-            and cached_text.strip()
-        ):
-            if document_id:
-                cached_preview = " ".join(cached_text.strip().split())[:100]
-                print(
-                    "[documents] using cached english content "
-                    f"document_id={document_id} chars={len(cached_text.strip())} preview={cached_preview!r}"
-                )
-            return cached_text.strip()
-
-    if document_id:
-        print(
-            "[documents] translating content for embedding "
-            f"document_id={document_id} chars={len(source_text)}"
-        )
-    translated = _translate_text_to_english(source_text, translation_chars)
-    english_content = (translated or "").strip() or source_text
-
-    if raw_metadata is not None:
-        raw_metadata[CONTENT_TRANSLATION_TEXT_KEY] = english_content
-        raw_metadata[CONTENT_TRANSLATION_HASH_KEY] = source_hash
-        raw_metadata[CONTENT_TRANSLATION_GENERATED_KEY] = english_content != source_text
-
-    return english_content
-
-
 def _generate_document_embedding(
     document: dict[str, Any],
     *,
     raw_metadata: dict[str, Any] | None = None,
 ) -> Sequence[float]:
+    # kept for backward compatibility with existing call sites
+    _ = raw_metadata
     segments: list[str] = []
 
     tags = document.get("tags")
@@ -1059,17 +1071,10 @@ def _generate_document_embedding(
             segments.append(tag_text)
 
     content = document.get("content")
-    english_content = ""
     if isinstance(content, str):
-        document_id = document.get("document_id")
-        document_id_text = document_id if isinstance(document_id, str) else None
-        english_content = _resolve_english_content_for_embedding(
-            content,
-            raw_metadata,
-            document_id=document_id_text,
-        )
-        if english_content:
-            segments.append(english_content)
+        cleaned = content.strip()
+        if cleaned:
+            segments.append(cleaned)
 
     description = document.get("description")
     if isinstance(description, str):
