@@ -182,7 +182,6 @@ def read_service_versions(user: dict = Depends(get_current_user)):
 @api.get("/system/logs/stream")
 async def stream_system_logs(
     level: str | None = Query(default=None),
-    user: dict = Depends(get_current_user),
     _: None = Depends(require_service_api_key),
 ):
     if level:
