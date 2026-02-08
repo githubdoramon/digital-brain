@@ -48,6 +48,7 @@ class IntentClassification:
     allowed_tool_groups: list[str]
     constraints: list[str] = field(default_factory=list)
     skill_hints: list[str] = field(default_factory=list)
+    pre_resolve_contacts: Optional[bool] = None
     reasoning: Optional[str] = None
 
     def to_dict(self) -> dict[str, Any]:
@@ -57,6 +58,7 @@ class IntentClassification:
             "allowed_tool_groups": self.allowed_tool_groups,
             "constraints": self.constraints,
             "skill_hints": self.skill_hints,
+            "pre_resolve_contacts": self.pre_resolve_contacts,
             "reasoning": self.reasoning,
         }
 
@@ -91,6 +93,20 @@ INTENT_SKILL_HINTS = {
     IntentType.CONVERSATIONAL: [],
     IntentType.COMPLEX: [],
     IntentType.UNKNOWN: [],
+}
+
+# Intent-level fallback policy for contact pre-resolution.
+INTENT_PRE_RESOLVE_CONTACTS = {
+    IntentType.MEMORY_SEARCH: True,
+    IntentType.DATA_QUERY: True,
+    IntentType.CONTACT_LOOKUP: True,
+    IntentType.WEB_SEARCH: False,
+    IntentType.HOME_CONTROL: False,
+    IntentType.SKILL_EXECUTION: False,
+    IntentType.SYSTEM_COMMAND: False,
+    IntentType.CONVERSATIONAL: False,
+    IntentType.COMPLEX: True,
+    IntentType.UNKNOWN: False,
 }
 
 
@@ -189,6 +205,7 @@ class IntentRouter:
             intent=IntentType.UNKNOWN,
             confidence=0.5,
             allowed_tool_groups=list(TOOL_GROUPS.keys()),
+            pre_resolve_contacts=INTENT_PRE_RESOLVE_CONTACTS[IntentType.UNKNOWN],
             reasoning="Fallback to all tools",
         )
 
@@ -212,6 +229,7 @@ class IntentRouter:
                 confidence=0.9,
                 allowed_tool_groups=INTENT_TOOL_MAP[IntentType.HOME_CONTROL],
                 skill_hints=INTENT_SKILL_HINTS[IntentType.HOME_CONTROL],
+                pre_resolve_contacts=INTENT_PRE_RESOLVE_CONTACTS[IntentType.HOME_CONTROL],
                 reasoning="Home control keywords detected",
             )
 
@@ -227,6 +245,7 @@ class IntentRouter:
                 confidence=0.85,
                 allowed_tool_groups=INTENT_TOOL_MAP[IntentType.WEB_SEARCH],
                 skill_hints=INTENT_SKILL_HINTS[IntentType.WEB_SEARCH],
+                pre_resolve_contacts=INTENT_PRE_RESOLVE_CONTACTS[IntentType.WEB_SEARCH],
                 reasoning="Web search keywords detected",
             )
 
@@ -242,6 +261,7 @@ class IntentRouter:
                 confidence=0.85,
                 allowed_tool_groups=INTENT_TOOL_MAP[IntentType.CONTACT_LOOKUP],
                 skill_hints=INTENT_SKILL_HINTS[IntentType.CONTACT_LOOKUP],
+                pre_resolve_contacts=INTENT_PRE_RESOLVE_CONTACTS[IntentType.CONTACT_LOOKUP],
                 reasoning="Contact/people keywords detected",
             )
 
@@ -257,6 +277,7 @@ class IntentRouter:
                 confidence=0.8,
                 allowed_tool_groups=INTENT_TOOL_MAP[IntentType.MEMORY_SEARCH],
                 skill_hints=INTENT_SKILL_HINTS[IntentType.MEMORY_SEARCH],
+                pre_resolve_contacts=INTENT_PRE_RESOLVE_CONTACTS[IntentType.MEMORY_SEARCH],
                 reasoning="Memory search keywords detected",
             )
 
@@ -271,6 +292,7 @@ class IntentRouter:
                 confidence=0.8,
                 allowed_tool_groups=INTENT_TOOL_MAP[IntentType.DATA_QUERY],
                 skill_hints=INTENT_SKILL_HINTS[IntentType.DATA_QUERY],
+                pre_resolve_contacts=INTENT_PRE_RESOLVE_CONTACTS[IntentType.DATA_QUERY],
                 reasoning="Data query keywords detected",
             )
 
@@ -285,6 +307,7 @@ class IntentRouter:
                 confidence=0.85,
                 allowed_tool_groups=INTENT_TOOL_MAP[IntentType.SYSTEM_COMMAND],
                 skill_hints=INTENT_SKILL_HINTS[IntentType.SYSTEM_COMMAND],
+                pre_resolve_contacts=INTENT_PRE_RESOLVE_CONTACTS[IntentType.SYSTEM_COMMAND],
                 reasoning="System command keywords detected",
             )
 
@@ -300,6 +323,7 @@ class IntentRouter:
                 confidence=0.9,
                 allowed_tool_groups=[],
                 skill_hints=[],
+                pre_resolve_contacts=INTENT_PRE_RESOLVE_CONTACTS[IntentType.CONVERSATIONAL],
                 reasoning="Conversational keywords detected",
             )
 
@@ -308,6 +332,7 @@ class IntentRouter:
             intent=IntentType.UNKNOWN,
             confidence=0.4,
             allowed_tool_groups=list(TOOL_GROUPS.keys()),
+            pre_resolve_contacts=INTENT_PRE_RESOLVE_CONTACTS[IntentType.UNKNOWN],
             reasoning="No clear keyword match",
         )
 
@@ -332,6 +357,7 @@ class IntentRouter:
                 intent=IntentType.UNKNOWN,
                 confidence=0.5,
                 allowed_tool_groups=list(TOOL_GROUPS.keys()),
+                pre_resolve_contacts=INTENT_PRE_RESOLVE_CONTACTS[IntentType.UNKNOWN],
                 reasoning=f"LLM call failed: {e}",
             )
 
@@ -364,12 +390,18 @@ INTENT TYPES:
 - conversational: General chat, no tools needed
 - complex: Multi-step task needing multiple tool groups
 
+Also decide whether the controller should pre-resolve contacts before the tool loop:
+- Set `pre_resolve_contacts` to true when early contact identification or disambiguation is likely useful
+  (for example person-referential memory/data/contact queries).
+- Set it to false for web/home/system/conversational requests.
+
 Respond with JSON only:
 {{
   "intent": "one of the intent types above",
   "confidence": 0.0 to 1.0,
   "constraints": ["read_only"] or [],
   "skill_hints": ["relevant-skill-names"] or [],
+  "pre_resolve_contacts": true or false,
   "reasoning": "brief explanation"
 }}"""
 
@@ -391,12 +423,24 @@ Respond with JSON only:
             except ValueError:
                 intent = IntentType.UNKNOWN
 
+            raw_pre_resolve = data.get(
+                "pre_resolve_contacts",
+                INTENT_PRE_RESOLVE_CONTACTS.get(intent, False),
+            )
+            if isinstance(raw_pre_resolve, bool):
+                pre_resolve_contacts = raw_pre_resolve
+            elif isinstance(raw_pre_resolve, str):
+                pre_resolve_contacts = raw_pre_resolve.strip().lower() in {"1", "true", "yes"}
+            else:
+                pre_resolve_contacts = bool(raw_pre_resolve)
+
             return IntentClassification(
                 intent=intent,
                 confidence=float(data.get("confidence", 0.7)),
                 allowed_tool_groups=INTENT_TOOL_MAP.get(intent, list(TOOL_GROUPS.keys())),
                 constraints=data.get("constraints", []),
                 skill_hints=data.get("skill_hints", INTENT_SKILL_HINTS.get(intent, [])),
+                pre_resolve_contacts=pre_resolve_contacts,
                 reasoning=data.get("reasoning"),
             )
 
@@ -406,6 +450,7 @@ Respond with JSON only:
                 intent=IntentType.UNKNOWN,
                 confidence=0.5,
                 allowed_tool_groups=list(TOOL_GROUPS.keys()),
+                pre_resolve_contacts=INTENT_PRE_RESOLVE_CONTACTS[IntentType.UNKNOWN],
                 reasoning="LLM response parsing failed",
             )
 

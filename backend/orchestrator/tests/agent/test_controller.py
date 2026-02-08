@@ -329,6 +329,116 @@ class TestToolExposurePolicy:
         assert "home_assistant" in tool_names
         assert "search_memories" in tool_names
 
+    @pytest.mark.asyncio
+    async def test_run_skips_contact_presolve_for_web_intent(self, monkeypatch):
+        from agent.router import IntentClassification, IntentType
+
+        controller = AgentController(
+            config=AgentConfig(
+                max_steps=2,
+                max_tool_calls=5,
+                max_repairs=1,
+                enable_intent_routing=True,
+                enable_validation=False,
+            )
+        )
+
+        async def fake_run_intent_router(*_args, **_kwargs):
+            return IntentClassification(
+                intent=IntentType.WEB_SEARCH,
+                confidence=0.9,
+                allowed_tool_groups=["web"],
+                constraints=[],
+                skill_hints=[],
+                reasoning="web intent",
+            )
+
+        monkeypatch.setattr(controller, "_run_intent_router", fake_run_intent_router)
+        monkeypatch.setattr(
+            controller,
+            "_prime_contact_scope_for_question",
+            lambda *args, **kwargs: (_ for _ in ()).throw(
+                AssertionError("contact pre-resolution should be skipped for web intent")
+            ),
+        )
+        monkeypatch.setattr(
+            controller,
+            "_build_messages",
+            lambda *args, **kwargs: [{"role": "user", "content": "What is the weather today?"}],
+        )
+        monkeypatch.setattr(
+            controller,
+            "_check_goal_completion",
+            lambda *args, **kwargs: {"achieved": True, "reason": "ok", "pending_actions": []},
+        )
+        monkeypatch.setattr(
+            controller,
+            "_call_llm",
+            lambda *_args, **_kwargs: {"message": {"content": "Sunny today."}},
+        )
+
+        await controller.run(
+            question="What is the weather today?",
+            user_email="user@example.com",
+            conversation_history=[],
+        )
+
+    @pytest.mark.asyncio
+    async def test_run_keeps_contact_presolve_for_memory_intent(self, monkeypatch):
+        from agent.router import IntentClassification, IntentType
+
+        controller = AgentController(
+            config=AgentConfig(
+                max_steps=2,
+                max_tool_calls=5,
+                max_repairs=1,
+                enable_intent_routing=True,
+                enable_validation=False,
+            )
+        )
+        observed = {"called": False}
+
+        async def fake_run_intent_router(*_args, **_kwargs):
+            return IntentClassification(
+                intent=IntentType.MEMORY_SEARCH,
+                confidence=0.9,
+                allowed_tool_groups=["memory", "resolution"],
+                constraints=[],
+                skill_hints=[],
+                reasoning="memory intent",
+            )
+
+        monkeypatch.setattr(controller, "_run_intent_router", fake_run_intent_router)
+
+        def fake_prime(*_args, **_kwargs):
+            observed["called"] = True
+            return None
+
+        monkeypatch.setattr(controller, "_prime_contact_scope_for_question", fake_prime)
+        monkeypatch.setattr(
+            controller,
+            "_build_messages",
+            lambda *args, **kwargs: [{"role": "user", "content": "When did I last meet Gio?"}],
+        )
+        monkeypatch.setattr(
+            controller,
+            "_check_goal_completion",
+            lambda *args, **kwargs: {"achieved": True, "reason": "ok", "pending_actions": []},
+        )
+        monkeypatch.setattr(
+            controller,
+            "_call_llm",
+            lambda *_args, **_kwargs: {"message": {"content": "You met Gio recently."}},
+        )
+
+        await controller.run(
+            question="When did I last meet Gio?",
+            user_email="user@example.com",
+            conversation_history=[],
+        )
+
+        assert observed["called"] is True
+
 
 class TestContactAwareMemorySearch:
     """Tests for contact-aware memory search enrichment hooks."""
@@ -603,6 +713,73 @@ class TestContactAwareMemorySearch:
         )
         assert blocked is not None
         assert blocked.get("status") == "no_progress"
+
+    def test_resolves_contact_scope_during_person_referential_memory_search(
+        self, controller, monkeypatch
+    ):
+        state = AgentState(goal="When did I last meet Gio?")
+        monkeypatch.setattr(
+            "agents.contacts.executor.handle_resolve_contacts_request",
+            lambda _payload: {
+                "status": "success",
+                "people_mentioned": ["Gio"],
+                "resolved_contacts": [
+                    {
+                        "contact_id": "contact-gio",
+                        "display_name": "Giovanni Panerai",
+                        "original_text": "Gio",
+                    }
+                ],
+                "ambiguous_contacts": [],
+            },
+        )
+
+        args, preempt = controller._prepare_memory_search_arguments(
+            args={"query": "When did I last meet Gio?"},
+            state=state,
+            question="When did I last meet Gio?",
+            user_email="user@example.com",
+            conversation_history=[],
+        )
+
+        assert preempt is None
+        assert args.get("contact_ids") == ["contact-gio"]
+        assert args.get("query") == "events"
+
+    def test_person_referential_no_people_resolution_is_cached(self, controller, monkeypatch):
+        state = AgentState(goal="When did I meet someone?")
+        call_counter = {"count": 0}
+
+        def fake_resolver(_payload):
+            call_counter["count"] += 1
+            return {
+                "status": "no_people",
+                "people_mentioned": [],
+                "resolved_contacts": [],
+                "ambiguous_contacts": [],
+            }
+
+        monkeypatch.setattr(
+            "agents.contacts.executor.handle_resolve_contacts_request",
+            fake_resolver,
+        )
+
+        controller._prepare_memory_search_arguments(
+            args={"query": "When did I meet someone?"},
+            state=state,
+            question="When did I meet someone?",
+            user_email="user@example.com",
+            conversation_history=[],
+        )
+        controller._prepare_memory_search_arguments(
+            args={"query": "When did I meet someone?"},
+            state=state,
+            question="When did I meet someone?",
+            user_email="user@example.com",
+            conversation_history=[],
+        )
+
+        assert call_counter["count"] == 1
 
     def test_primes_contact_scope_from_question(self, controller, monkeypatch):
         state = AgentState(goal="When did I last meet Gio?")

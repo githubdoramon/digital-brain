@@ -181,7 +181,7 @@ def search_memories(
     for doc_id in doc_ids:
         v = vec_docs.get(doc_id, 0.0)
         b = bm_docs.get(doc_id, 0.0)
-        score = 0.5 * v + 0.5 * b
+        score = 0.45 * v + 0.55 * b
         doc_scores[doc_id] = score
 
     event_rows_all = fetch_events(list(event_ids)) if event_ids else []

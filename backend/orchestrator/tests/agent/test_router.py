@@ -299,6 +299,7 @@ class TestLLMClassification:
         assert result.confidence == 0.92
         assert result.constraints == ["read_only"]
         assert result.skill_hints == ["document-search"]
+        assert result.pre_resolve_contacts is True
 
     def test_parse_llm_response_with_markdown(self, router_with_llm):
         """Test parsing LLM response wrapped in markdown."""
@@ -322,6 +323,18 @@ class TestLLMClassification:
 
         assert result.intent == IntentType.UNKNOWN
         assert result.confidence == 0.5
+
+    def test_parse_llm_response_pre_resolve_explicit_false(self, router_with_llm):
+        response = """{
+            "intent": "web_search",
+            "confidence": 0.9,
+            "pre_resolve_contacts": false
+        }"""
+
+        result = router_with_llm._parse_llm_response(response)
+
+        assert result.intent == IntentType.WEB_SEARCH
+        assert result.pre_resolve_contacts is False
 
     def test_parse_llm_response_unknown_intent(self, router_with_llm):
         """Test parsing response with unknown intent type."""

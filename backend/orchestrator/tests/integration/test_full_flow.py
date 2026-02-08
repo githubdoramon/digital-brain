@@ -11,7 +11,7 @@ import pytest
 
 from agent.controller import AgentController
 from agent.limits import AgentConfig, LimitChecker, LimitType
-from agent.router import TOOL_GROUPS, IntentRouter, IntentType
+from agent.router import TOOL_GROUPS, IntentClassification, IntentRouter, IntentType
 from agent.state import AgentState, ToolCallRecord
 from tools.registry import get_registry
 
@@ -301,7 +301,7 @@ class TestAgentControllerIntegration:
                 max_steps=5,
                 max_tool_calls=10,
                 max_repairs=2,
-                enable_intent_routing=False,
+                enable_intent_routing=True,
                 enable_validation=True,
             )
         )
@@ -332,6 +332,18 @@ class TestAgentControllerIntegration:
                 return None
 
         controller._logger = StubLogger()
+
+        async def fake_run_intent_router(*_args, **_kwargs):
+            return IntentClassification(
+                intent=IntentType.MEMORY_SEARCH,
+                confidence=0.9,
+                allowed_tool_groups=["memory", "resolution"],
+                constraints=[],
+                skill_hints=[],
+                reasoning="memory intent",
+            )
+
+        monkeypatch.setattr(controller, "_run_intent_router", fake_run_intent_router)
 
         llm_calls = {"count": 0}
 

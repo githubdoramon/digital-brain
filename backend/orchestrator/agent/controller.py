@@ -22,6 +22,13 @@ from collections.abc import AsyncGenerator
 from time import perf_counter
 from typing import Any, Optional
 
+from .contact_resolution import (
+    build_contact_clarification_result,
+    get_user_clarification_prompt_for_contact_resolution,
+    is_contact_referential_memory_query,
+    resolve_contacts_for_text,
+    should_pre_resolve_contacts,
+)
 from .guardrails import (
     build_contact_scope_context,
     detect_future_temporal_intent,
@@ -193,12 +200,17 @@ class AgentController:
             else:
                 classification = None
 
-            clarification_prompt = self._prime_contact_scope_for_question(
-                state=state,
-                question=question,
-                user_email=user_email,
-                conversation_history=conversation_history,
+            clarification_prompt = None
+            pre_resolve_hint = (
+                classification.pre_resolve_contacts if classification is not None else None
             )
+            if should_pre_resolve_contacts(state.intent, pre_resolve_hint):
+                clarification_prompt = self._prime_contact_scope_for_question(
+                    state=state,
+                    question=question,
+                    user_email=user_email,
+                    conversation_history=conversation_history,
+                )
             if clarification_prompt:
                 trace.trace_contact_resolution_outcome(
                     "clarification_returned",
@@ -291,7 +303,7 @@ class AgentController:
                         conversation_history=conversation_history,
                     )
 
-                    clarification_prompt = self._get_user_clarification_prompt(state)
+                    clarification_prompt = get_user_clarification_prompt_for_contact_resolution(state)
                     if clarification_prompt:
                         trace.trace_contact_resolution_outcome(
                             "clarification_returned",
@@ -448,12 +460,17 @@ class AgentController:
             else:
                 classification = None
 
-            clarification_prompt = self._prime_contact_scope_for_question(
-                state=state,
-                question=question,
-                user_email=user_email,
-                conversation_history=conversation_history,
+            clarification_prompt = None
+            pre_resolve_hint = (
+                classification.pre_resolve_contacts if classification is not None else None
             )
+            if should_pre_resolve_contacts(state.intent, pre_resolve_hint):
+                clarification_prompt = self._prime_contact_scope_for_question(
+                    state=state,
+                    question=question,
+                    user_email=user_email,
+                    conversation_history=conversation_history,
+                )
             if clarification_prompt:
                 trace.trace_contact_resolution_outcome(
                     "clarification_returned",
@@ -576,7 +593,7 @@ class AgentController:
                             "content": json.dumps(result, ensure_ascii=False, default=str),
                         })
 
-                    clarification_prompt = self._get_user_clarification_prompt(state)
+                    clarification_prompt = get_user_clarification_prompt_for_contact_resolution(state)
                     if clarification_prompt:
                         trace.trace_contact_resolution_outcome(
                             "clarification_returned",
@@ -1083,7 +1100,7 @@ class AgentController:
 
         pending_prompt = state.resolution.get("pending_contact_clarification")
         if pending_prompt:
-            preempt = self._build_contact_clarification_result(
+            preempt = build_contact_clarification_result(
                 ambiguous_contacts=state.resolution.get(
                     "pending_contact_ambiguous_contacts", []
                 ),
@@ -1111,8 +1128,38 @@ class AgentController:
             )
             return normalized_args, None
 
-        # Contact resolution is handled before entering the main loop.
-        # Keep search_memories deterministic and avoid re-running the resolver here.
+        if user_email and is_contact_referential_memory_query(query_text, goal_text):
+            resolution = resolve_contacts_for_text(
+                state=state,
+                text=query_text or goal_text,
+                user_email=user_email,
+                conversation_history=conversation_history,
+                update_state=self._update_contact_resolution_state,
+            )
+
+            if resolution:
+                status = resolution.get("status")
+                if status == "needs_clarification":
+                    preempt = build_contact_clarification_result(
+                        ambiguous_contacts=state.resolution.get(
+                            "pending_contact_ambiguous_contacts", []
+                        ),
+                        people_mentioned=state.resolution.get("pending_contact_people", []),
+                    )
+                    return normalized_args, preempt
+
+                if status == "success":
+                    active_scope = state.resolution.get("active_contact_scope") or []
+                    active_scope_ids = state.resolution.get("active_contact_scope_ids") or []
+                    if active_scope_ids:
+                        normalized_args["contact_ids"] = list(active_scope_ids)
+                        normalized_args["query"] = optimize_query_for_scoped_contacts(
+                            query_text=query_text,
+                            goal_text=goal_text,
+                            active_scope=active_scope,
+                        )
+                        return normalized_args, None
+
         return normalized_args, None
 
     def _block_redundant_memory_search(
@@ -1179,7 +1226,7 @@ class AgentController:
             return None
 
         if state.resolution.get("pending_contact_clarification"):
-            return self._get_user_clarification_prompt(state)
+            return get_user_clarification_prompt_for_contact_resolution(state)
         if state.resolution.get("active_contact_scope_ids"):
             return None
 
@@ -1187,40 +1234,28 @@ class AgentController:
         if not text:
             return None
 
-        try:
-            from agents.contacts.executor import handle_resolve_contacts_request
+        resolution = resolve_contacts_for_text(
+            state=state,
+            text=text,
+            user_email=user_email,
+            conversation_history=conversation_history,
+            update_state=self._update_contact_resolution_state,
+        )
+        if not resolution:
+            return None
 
-            payload: dict[str, Any] = {"text": text, "user_email": user_email}
-            context_messages = list((conversation_history or [])[-8:])
-            if (
-                not context_messages
-                or context_messages[-1].get("role") != "user"
-                or sanitize_goal_text(str(context_messages[-1].get("content", ""))) != text
-            ):
-                context_messages.append({"role": "user", "content": text})
-            payload["conversation_messages"] = context_messages
-
-            resolution = handle_resolve_contacts_request(payload)
-            state.resolution["contact_resolution"] = resolution
-            self._update_contact_resolution_state(state, {"text": text}, resolution)
-
-            status = resolution.get("status")
-            if status == "success":
-                scope_ids = state.resolution.get("active_contact_scope_ids", [])
-                if scope_ids:
-                    state.add_fact(
-                        f"Pre-resolved {len(scope_ids)} contact(s) from user question"
-                    )
-            elif status == "needs_clarification":
-                prompt = self._get_user_clarification_prompt(state)
-                if prompt:
-                    state.add_question(prompt)
-                    return prompt
-        except Exception as e:
-            trace.trace_tool_error(
-                "resolve_contacts",
-                f"Contact pre-resolution failed: {e}",
-            )
+        status = resolution.get("status")
+        if status == "success":
+            scope_ids = state.resolution.get("active_contact_scope_ids", [])
+            if scope_ids:
+                state.add_fact(
+                    f"Pre-resolved {len(scope_ids)} contact(s) from user question"
+                )
+        elif status == "needs_clarification":
+            prompt = get_user_clarification_prompt_for_contact_resolution(state)
+            if prompt:
+                state.add_question(prompt)
+                return prompt
 
         return None
 
@@ -1232,6 +1267,8 @@ class AgentController:
     ) -> None:
         """Store scoped contact-resolution outcomes for subsequent tool calls."""
         status = result.get("status")
+        state.resolution["last_contact_resolution_text"] = args.get("text", "")
+        state.resolution["last_contact_resolution_status"] = status
         if status == "success":
             resolved_contacts = result.get("resolved_contacts", [])
             contact_ids = [
@@ -1295,57 +1332,6 @@ class AgentController:
             state.resolution.pop("pending_contact_ambiguous_contacts", None)
             state.resolution.pop("pending_contact_people", None)
             state.resolution.pop("pending_contact_scope_text", None)
-
-    def _build_contact_clarification_result(
-        self,
-        ambiguous_contacts: list[dict[str, Any]],
-        people_mentioned: list[str],
-    ) -> dict[str, Any]:
-        """Build a synthetic search result asking for person clarification."""
-        prompt = ""
-        if ambiguous_contacts:
-            prompt = ambiguous_contacts[0].get("clarification_prompt", "")
-        if not prompt:
-            prompt = "I found multiple matching people. Please clarify which person you mean."
-
-        return {
-            "status": "needs_clarification",
-            "needs_clarification": True,
-            "clarification_prompt": prompt,
-            "ambiguous_contacts": ambiguous_contacts,
-            "people_mentioned": people_mentioned,
-            "results": [],
-            "count": 0,
-        }
-
-    def _get_user_clarification_prompt(self, state: AgentState) -> Optional[str]:
-        """Return a user-facing clarification prompt when additional input is required."""
-        prompt = str(state.resolution.get("pending_contact_clarification", "")).strip()
-        if not prompt and state.pending_questions:
-            prompt = state.pending_questions[-1].strip()
-        if not prompt:
-            return None
-
-        ambiguous_contacts = state.resolution.get("pending_contact_ambiguous_contacts", [])
-        candidate_names: list[str] = []
-        if isinstance(ambiguous_contacts, list):
-            for item in ambiguous_contacts:
-                if not isinstance(item, dict):
-                    continue
-                for candidate in item.get("candidates", []):
-                    if not isinstance(candidate, dict):
-                        continue
-                    name = str(candidate.get("display_name", "")).strip()
-                    if name and name not in candidate_names:
-                        candidate_names.append(name)
-
-        if candidate_names:
-            options_preview = ", ".join(candidate_names[:4])
-            lower_prompt = prompt.lower()
-            if not any(name.lower() in lower_prompt for name in candidate_names[:4]):
-                prompt = f"{prompt} Options: {options_preview}."
-
-        return prompt
 
     def _check_goal_completion(
         self,
