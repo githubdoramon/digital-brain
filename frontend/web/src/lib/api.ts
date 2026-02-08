@@ -254,6 +254,15 @@ export type StreamCallbacks = {
   onError?: (message: string) => void;
 };
 
+export type LogLevel = "debug" | "info" | "decision" | "warning" | "error";
+
+export type LogEntry = {
+  timestamp: string;
+  level: LogLevel;
+  message: string;
+  context?: Record<string, unknown> | null;
+};
+
 /**
  * Stream responses from the /ask/stream SSE endpoint.
  * Returns the final bundle when streaming completes.
@@ -351,4 +360,65 @@ export async function askWithStreaming(
   return {
     answer: fullContent,
   };
+}
+
+export async function streamSystemLogs(
+  level: LogLevel | "all",
+  onEntry: (entry: LogEntry) => void,
+  onError: (message: string) => void,
+  signal?: AbortSignal
+): Promise<void> {
+  const params = new URLSearchParams();
+  if (level !== "all") {
+    params.set("level", level);
+  }
+  const response = await fetch(
+    `${API_BASE}/system/logs/stream${params.toString() ? `?${params.toString()}` : ""}`,
+    {
+      method: "GET",
+      signal,
+    }
+  );
+
+  if (!response.ok) {
+    const errorBody = (await response.json().catch(() => undefined)) as
+      | { detail?: string }
+      | undefined;
+    throw new Error(errorBody?.detail || `Request failed: ${response.statusText}`);
+  }
+
+  const reader = response.body?.getReader();
+  if (!reader) {
+    throw new Error("Response body is not readable");
+  }
+
+  const decoder = new TextDecoder();
+  let buffer = "";
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split("\n");
+    buffer = lines.pop() || "";
+
+    for (const line of lines) {
+      if (!line.startsWith("data: ")) {
+        continue;
+      }
+      const jsonStr = line.slice(6).trim();
+      if (!jsonStr) continue;
+
+      try {
+        const entry = JSON.parse(jsonStr) as LogEntry;
+        if (!entry?.timestamp || !entry?.level || !entry?.message) {
+          continue;
+        }
+        onEntry(entry);
+      } catch {
+        onError("Received malformed log event.");
+      }
+    }
+  }
 }

@@ -4,7 +4,7 @@ import { useMemo, useState } from "react";
 import type { FormEvent } from "react";
 import { api } from "@/lib/api";
 
-type ToolName = "search_memories" | "lookup_contact";
+type ToolName = "search_memories" | "lookup_contact" | "resolve_contacts";
 
 type ToolRunResponse = {
   tool_name: string;
@@ -79,9 +79,45 @@ type LookupContactResult = {
   }>;
 };
 
+type ResolvedContact = {
+  original_text: string;
+  contact_id: string;
+  display_name: string;
+  matched_via: string;
+  confidence: string;
+  resolution_path?: string[] | null;
+};
+
+type NewContact = {
+  original_text: string;
+  display_name: string;
+  inferred_profession?: string | null;
+};
+
+type AmbiguousContact = {
+  original_text: string;
+  candidates: Array<{
+    contact_id: string;
+    display_name: string;
+    match_score: number;
+  }>;
+  clarification_prompt: string;
+};
+
+type ResolveContactsResult = {
+  status?: "success" | "needs_clarification" | "no_people" | "error";
+  text?: string;
+  people_mentioned?: string[];
+  resolved_contacts?: ResolvedContact[];
+  new_contacts?: NewContact[];
+  ambiguous_contacts?: AmbiguousContact[];
+  message?: string;
+};
+
 const TOOL_OPTIONS: Array<{ value: ToolName; label: string }> = [
   { value: "search_memories", label: "search_memories" },
   { value: "lookup_contact", label: "lookup_contact" },
+  { value: "resolve_contacts", label: "resolve_contacts" },
 ];
 
 const baseCardStyle = {
@@ -126,6 +162,9 @@ export default function ToolsPage() {
     fuzzyThreshold: "75",
     limit: "10",
   });
+  const [resolveForm, setResolveForm] = useState({
+    text: "",
+  });
   const [response, setResponse] = useState<ToolRunResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
@@ -136,14 +175,18 @@ export default function ToolsPage() {
     if (tool === "search_memories") {
       return Boolean(searchForm.query.trim());
     }
+    if (tool === "resolve_contacts") {
+      return Boolean(resolveForm.text.trim());
+    }
     if (lookupAction === "search" || lookupAction === "find_related") {
       return Boolean(lookupForm.query.trim());
     }
     return Boolean(lookupForm.contactId.trim() || lookupForm.query.trim());
-  }, [tool, searchForm.query, lookupAction, lookupForm.query, lookupForm.contactId]);
+  }, [tool, searchForm.query, lookupAction, lookupForm.query, lookupForm.contactId, resolveForm.text]);
 
   const memoryResults = (response?.result?.results as MemoryResult[] | undefined) ?? [];
   const lookupResult = response?.result as LookupContactResult | undefined;
+  const resolveResult = response?.result as ResolveContactsResult | undefined;
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -176,7 +219,7 @@ export default function ToolsPage() {
       if (tags) {
         args.tags = tags;
       }
-    } else {
+    } else if (tool === "lookup_contact") {
       args.action = lookupAction;
       if (lookupForm.query.trim()) {
         args.query = lookupForm.query.trim();
@@ -206,6 +249,8 @@ export default function ToolsPage() {
           args.relationship_types = relationshipTypes;
         }
       }
+    } else {
+      args.text = resolveForm.text.trim();
     }
 
     try {
@@ -352,7 +397,7 @@ export default function ToolsPage() {
               </div>
             </div>
           </div>
-        ) : (
+        ) : tool === "lookup_contact" ? (
           <div style={{ display: "grid", gap: "14px" }}>
             <div style={{ display: "grid", gap: "6px" }}>
               <label htmlFor="action" style={{ fontWeight: 600, fontSize: "0.9rem" }}>
@@ -487,6 +532,25 @@ export default function ToolsPage() {
               </div>
             )}
           </div>
+        ) : (
+          <div style={{ display: "grid", gap: "14px" }}>
+            <div style={{ display: "grid", gap: "6px" }}>
+              <label htmlFor="resolveText" style={{ fontWeight: 600, fontSize: "0.9rem" }}>
+                Text
+              </label>
+              <textarea
+                id="resolveText"
+                value={resolveForm.text}
+                onChange={(event) => setResolveForm({ text: event.target.value })}
+                placeholder="Had lunch with John and my daughter's doctor yesterday"
+                rows={4}
+                style={{ padding: "10px 12px", borderRadius: "8px", border: "1px solid #d7d7d7" }}
+              />
+              <span style={{ fontSize: "0.8rem", color: "#666" }}>
+                Detects people, resolves known contacts, and flags ambiguous mentions.
+              </span>
+            </div>
+          </div>
         )}
 
         <button
@@ -602,6 +666,200 @@ export default function ToolsPage() {
                     )}
                   </div>
                 ))
+              )}
+            </div>
+          )}
+
+          {tool === "resolve_contacts" && resolveResult && (
+            <div style={{ ...baseCardStyle, display: "grid", gap: "12px" }}>
+              <h2 style={{ fontSize: "1.1rem", fontWeight: 600, margin: 0 }}>
+                Contact Resolution Results
+              </h2>
+
+              <div
+                style={{
+                  border: "1px solid #e5e7eb",
+                  borderRadius: "10px",
+                  padding: "12px",
+                  background: "#f8fafc",
+                  display: "grid",
+                  gap: "8px",
+                }}
+              >
+                <div style={{ display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" }}>
+                  <strong>Status</strong>
+                  <span
+                    style={{
+                      fontSize: "0.75rem",
+                      fontWeight: 600,
+                      borderRadius: "999px",
+                      padding: "3px 8px",
+                      background:
+                        resolveResult.status === "success"
+                          ? "#dcfce7"
+                          : resolveResult.status === "needs_clarification"
+                            ? "#fef3c7"
+                            : resolveResult.status === "no_people"
+                              ? "#e5e7eb"
+                              : "#fee2e2",
+                      color:
+                        resolveResult.status === "success"
+                          ? "#166534"
+                          : resolveResult.status === "needs_clarification"
+                            ? "#92400e"
+                            : resolveResult.status === "no_people"
+                              ? "#374151"
+                              : "#991b1b",
+                    }}
+                  >
+                    {resolveResult.status || "unknown"}
+                  </span>
+                </div>
+                {resolveResult.message && (
+                  <div style={{ fontSize: "0.9rem", color: "#4b5563" }}>{resolveResult.message}</div>
+                )}
+              </div>
+
+              {resolveResult.people_mentioned && resolveResult.people_mentioned.length > 0 && (
+                <div style={{ display: "grid", gap: "6px" }}>
+                  <strong style={{ fontSize: "0.95rem" }}>People Mentioned</strong>
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: "8px" }}>
+                    {resolveResult.people_mentioned.map((person, index) => (
+                      <span
+                        key={`${person}-${index}`}
+                        style={{
+                          border: "1px solid #bfdbfe",
+                          color: "#1e3a8a",
+                          background: "#eff6ff",
+                          borderRadius: "999px",
+                          padding: "4px 10px",
+                          fontSize: "0.8rem",
+                        }}
+                      >
+                        {person}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {resolveResult.resolved_contacts && resolveResult.resolved_contacts.length > 0 && (
+                <div style={{ display: "grid", gap: "8px" }}>
+                  <strong style={{ fontSize: "0.95rem" }}>
+                    Resolved Contacts ({resolveResult.resolved_contacts.length})
+                  </strong>
+                  {resolveResult.resolved_contacts.map((contact, index) => (
+                    <div
+                      key={`${contact.contact_id}-${index}`}
+                      style={{
+                        border: "1px solid #86efac",
+                        borderRadius: "10px",
+                        padding: "12px",
+                        background: "#f0fdf4",
+                        display: "grid",
+                        gap: "6px",
+                      }}
+                    >
+                      <div style={{ fontSize: "0.9rem", color: "#14532d" }}>
+                        <strong>{contact.display_name}</strong> from &quot;{contact.original_text}&quot;
+                      </div>
+                      <div style={{ fontSize: "0.85rem", color: "#166534" }}>
+                        Matched via {contact.matched_via} | confidence {contact.confidence}
+                      </div>
+                      <a
+                        href={`/api/orchestrator/contacts/${contact.contact_id}`}
+                        style={{ color: "#0b6bcb", fontSize: "0.85rem" }}
+                      >
+                        View contact
+                      </a>
+                      {contact.resolution_path && contact.resolution_path.length > 0 && (
+                        <div style={{ fontSize: "0.8rem", color: "#166534" }}>
+                          Path: {contact.resolution_path.join(" -> ")}
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {resolveResult.new_contacts && resolveResult.new_contacts.length > 0 && (
+                <div style={{ display: "grid", gap: "8px" }}>
+                  <strong style={{ fontSize: "0.95rem" }}>
+                    New Contacts ({resolveResult.new_contacts.length})
+                  </strong>
+                  {resolveResult.new_contacts.map((contact, index) => (
+                    <div
+                      key={`${contact.display_name}-${index}`}
+                      style={{
+                        border: "1px solid #fde68a",
+                        borderRadius: "10px",
+                        padding: "12px",
+                        background: "#fffbeb",
+                        display: "grid",
+                        gap: "6px",
+                      }}
+                    >
+                      <div style={{ fontSize: "0.9rem", color: "#92400e" }}>
+                        <strong>{contact.display_name}</strong> from &quot;{contact.original_text}&quot;
+                      </div>
+                      {contact.inferred_profession && (
+                        <div style={{ fontSize: "0.85rem", color: "#a16207" }}>
+                          Inferred profession: {contact.inferred_profession}
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {resolveResult.ambiguous_contacts && resolveResult.ambiguous_contacts.length > 0 && (
+                <div style={{ display: "grid", gap: "8px" }}>
+                  <strong style={{ fontSize: "0.95rem" }}>
+                    Ambiguous Mentions ({resolveResult.ambiguous_contacts.length})
+                  </strong>
+                  {resolveResult.ambiguous_contacts.map((contact, index) => (
+                    <div
+                      key={`${contact.original_text}-${index}`}
+                      style={{
+                        border: "1px solid #fdba74",
+                        borderRadius: "10px",
+                        padding: "12px",
+                        background: "#fff7ed",
+                        display: "grid",
+                        gap: "8px",
+                      }}
+                    >
+                      <div style={{ fontSize: "0.9rem", color: "#9a3412" }}>
+                        <strong>{contact.original_text}</strong>
+                      </div>
+                      <div style={{ fontSize: "0.85rem", color: "#c2410c" }}>{contact.clarification_prompt}</div>
+                      {contact.candidates.length > 0 && (
+                        <div style={{ display: "grid", gap: "6px" }}>
+                          {contact.candidates.map((candidate) => (
+                            <div
+                              key={candidate.contact_id}
+                              style={{
+                                border: "1px solid #fed7aa",
+                                borderRadius: "8px",
+                                background: "#fff",
+                                padding: "8px 10px",
+                                display: "flex",
+                                justifyContent: "space-between",
+                                gap: "8px",
+                                flexWrap: "wrap",
+                              }}
+                            >
+                              <span style={{ fontSize: "0.85rem", color: "#9a3412" }}>{candidate.display_name}</span>
+                              <span style={{ fontSize: "0.8rem", color: "#c2410c" }}>
+                                score {candidate.match_score}
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
               )}
             </div>
           )}

@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { api } from "@/lib/api";
+import { api, LogEntry, LogLevel, streamSystemLogs } from "@/lib/api";
 
 type ServiceVersion = {
   id: string;
@@ -24,15 +24,7 @@ type ServiceVersionResponse = {
   fallback_count: number;
 };
 
-type LogLevel = "debug" | "info" | "decision" | "warning" | "error";
-
-type LogEntry = {
-  id: string;
-  timestamp: string;
-  level: LogLevel;
-  message: string;
-  context?: Record<string, unknown> | null;
-};
+type LogRow = LogEntry & { id: string };
 
 function formatDate(input?: string | null): string {
   if (!input) {
@@ -77,7 +69,7 @@ export default function SystemStatusPage() {
   const [data, setData] = useState<ServiceVersionResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState<boolean>(true);
-  const [logEntries, setLogEntries] = useState<LogEntry[]>([]);
+  const [logEntries, setLogEntries] = useState<LogRow[]>([]);
   const [logError, setLogError] = useState<string | null>(null);
   const [logLevel, setLogLevel] = useState<"all" | LogLevel>("info");
   const [isLogPaused, setIsLogPaused] = useState(false);
@@ -122,49 +114,44 @@ export default function SystemStatusPage() {
       return;
     }
 
-    const params = new URLSearchParams();
-    if (logLevel !== "all") {
-      params.set("level", logLevel);
-    }
-    const url = `/api/orchestrator/system/logs/stream${params.toString() ? `?${params.toString()}` : ""}`;
-    const source = new EventSource(url);
+    const controller = new AbortController();
 
     setLogError(null);
     setLogConnected(true);
 
-    source.onmessage = (event) => {
-      if (!event.data) {
-        return;
-      }
-
-      try {
-        const parsed = JSON.parse(event.data) as Omit<LogEntry, "id">;
-        if (!parsed.timestamp || !parsed.level || !parsed.message) {
-          return;
-        }
-
+    streamSystemLogs(
+      logLevel,
+      (entry) => {
         setLogEntries((current) => {
           const next = [
             {
-              ...parsed,
-              id: `${parsed.timestamp}-${Math.random().toString(36).slice(2)}`,
+              ...entry,
+              id: `${entry.timestamp}-${Math.random().toString(36).slice(2)}`,
             },
             ...current,
           ];
           return next.slice(0, 200);
         });
-      } catch {
-        // Ignore malformed SSE payloads.
-      }
-    };
-
-    source.onerror = () => {
-      setLogConnected(false);
-      setLogError("Log stream disconnected. Retrying...");
-    };
+      },
+      (message) => {
+        setLogError(message);
+      },
+      controller.signal
+    )
+      .then(() => {
+        if (!controller.signal.aborted) {
+          setLogConnected(false);
+        }
+      })
+      .catch((err) => {
+        if (!controller.signal.aborted) {
+          setLogConnected(false);
+          setLogError(err instanceof Error ? err.message : "Log stream disconnected. Retrying...");
+        }
+      });
 
     return () => {
-      source.close();
+      controller.abort();
     };
   }, [logLevel, isLogPaused]);
 
