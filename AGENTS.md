@@ -138,6 +138,7 @@ User Question → Intent Router (metadata) → Agent Loop (full tool set) → Re
 - **Session command hygiene**: strip leading slash commands from user text before agent execution; commands are control signals, not semantic query content.
 - **Import-time side effects**: avoid filesystem writes (like `mkdir`) during module import. Create directories lazily at the point of file operations.
 - **Contact disambiguation policy**: ambiguity auto-resolution strictness is controlled by `CONTACT_DISAMBIGUATION_STRICTNESS` (`strict`/`balanced`/`lenient`).
+- **Logging policy**: never use `print` in orchestrator runtime code (only in scripts/tests). Use `logging.getLogger(__name__)` with `debug/info/warning/error` (or `logger.log(DECISION_LEVEL, ...)` for decisions). Logging must flow through `observability/log_stream.py` so frontend log streaming can filter by level. For streaming endpoints, rely on authenticated user context (no service API key) unless explicitly required.
 
 ### Limits & Safety
 

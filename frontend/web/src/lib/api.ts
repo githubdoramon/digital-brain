@@ -422,3 +422,20 @@ export async function streamSystemLogs(
     }
   }
 }
+
+export async function getSystemLogs(
+  level: LogLevel | "all",
+  sinceMinutes = 15,
+  limit = 200
+): Promise<LogEntry[]> {
+  const params = new URLSearchParams();
+  if (level !== "all") {
+    params.set("level", level);
+  }
+  params.set("since_minutes", `${sinceMinutes}`);
+  params.set("limit", `${limit}`);
+  const response = await api.get<{ entries: LogEntry[] }>(
+    `/system/logs?${params.toString()}`
+  );
+  return response.entries ?? [];
+}

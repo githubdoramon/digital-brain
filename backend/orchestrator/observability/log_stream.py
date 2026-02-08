@@ -5,7 +5,7 @@ import sys
 import threading
 from collections import deque
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 LOG_LEVELS = {"debug", "info", "decision", "warning", "error"}
@@ -59,6 +59,38 @@ class LogBuffer:
             entries = [entry for entry in self._entries if entry.entry_id > last_id]
         if level:
             return [entry for entry in entries if entry.level == level]
+        return entries
+
+    def get_recent(
+        self,
+        since_minutes: int | None = None,
+        level: str | None = None,
+        limit: int | None = None,
+    ) -> list[LogEntry]:
+        cutoff = None
+        if since_minutes is not None:
+            cutoff = datetime.now(timezone.utc) - timedelta(minutes=since_minutes)
+
+        with self._lock:
+            entries = list(self._entries)
+
+        if level:
+            entries = [entry for entry in entries if entry.level == level]
+
+        if cutoff:
+            filtered: list[LogEntry] = []
+            for entry in entries:
+                try:
+                    timestamp = datetime.fromisoformat(entry.timestamp.replace("Z", "+00:00"))
+                except ValueError:
+                    continue
+                if timestamp >= cutoff:
+                    filtered.append(entry)
+            entries = filtered
+
+        entries.sort(key=lambda entry: entry.entry_id)
+        if limit is not None and limit > 0:
+            entries = entries[-limit:]
         return entries
 
 

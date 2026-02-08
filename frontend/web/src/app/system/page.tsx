@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { api, LogEntry, LogLevel, streamSystemLogs } from "@/lib/api";
+import { api, getSystemLogs, LogEntry, LogLevel, streamSystemLogs } from "@/lib/api";
 
 type ServiceVersion = {
   id: string;
@@ -25,6 +25,24 @@ type ServiceVersionResponse = {
 };
 
 type LogRow = LogEntry & { id: string };
+
+function sortLogEntries(entries: LogRow[]): LogRow[] {
+  return [...entries].sort((left, right) => {
+    const leftTime = Date.parse(left.timestamp) || 0;
+    const rightTime = Date.parse(right.timestamp) || 0;
+    if (leftTime === rightTime) {
+      return left.id.localeCompare(right.id);
+    }
+    return leftTime - rightTime;
+  });
+}
+
+function toLogRow(entry: LogEntry): LogRow {
+  return {
+    ...entry,
+    id: `${entry.timestamp}-${Math.random().toString(36).slice(2)}`,
+  };
+}
 
 function formatDate(input?: string | null): string {
   if (!input) {
@@ -109,6 +127,23 @@ export default function SystemStatusPage() {
   }, []);
 
   useEffect(() => {
+    let mounted = true;
+    getSystemLogs(logLevel, 15, 200)
+      .then((entries) => {
+        if (!mounted) return;
+        const rows = entries.map(toLogRow);
+        setLogEntries(sortLogEntries(rows));
+      })
+      .catch((err) => {
+        if (!mounted) return;
+        setLogError(err instanceof Error ? err.message : "Failed to fetch logs.");
+      });
+    return () => {
+      mounted = false;
+    };
+  }, [logLevel]);
+
+  useEffect(() => {
     if (isLogPaused) {
       setLogConnected(false);
       return;
@@ -123,14 +158,8 @@ export default function SystemStatusPage() {
       logLevel,
       (entry) => {
         setLogEntries((current) => {
-          const next = [
-            {
-              ...entry,
-              id: `${entry.timestamp}-${Math.random().toString(36).slice(2)}`,
-            },
-            ...current,
-          ];
-          return next.slice(0, 200);
+          const next = sortLogEntries([...current, toLogRow(entry)]);
+          return next.length > 200 ? next.slice(-200) : next;
         });
       },
       (message) => {

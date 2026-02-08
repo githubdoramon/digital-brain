@@ -613,6 +613,45 @@ def resolve_contact(
                 )
                 return result
 
+            phrase_match_result = _resolve_relationship_phrase_against_related_contacts(
+                anchor_display_name=str(user_contact.get("display_name") or "user"),
+                relationship_phrase=relationship_type,
+                relationship_context=relationships,
+            )
+            if phrase_match_result["status"] == "resolved":
+                result["status"] = "resolved"
+                result["confidence"] = phrase_match_result.get("confidence", "medium")
+                result["contact_id"] = phrase_match_result.get("contact_id")
+                result["display_name"] = phrase_match_result.get("display_name")
+                result["matched_via"] = "relationship_phrase"
+                logger.info(
+                    "[contact_resolver] Resolved via relationship phrase: %s",
+                    result["display_name"],
+                )
+                return result
+
+            if phrase_match_result["status"] == "candidates":
+                result["status"] = "candidates"
+                result["candidates"] = phrase_match_result.get("candidates", [])
+                result["confidence"] = phrase_match_result.get("confidence", "low")
+                result["skip_auto_disambiguation"] = bool(
+                    phrase_match_result.get("collective_reference")
+                )
+                result["auto_resolve_candidates"] = bool(
+                    phrase_match_result.get("auto_resolve_candidates")
+                )
+                result["needs_clarification"] = not result["auto_resolve_candidates"]
+                if result["needs_clarification"]:
+                    result["clarification_prompt"] = (
+                        f"I found multiple related contacts for '{person_text}'. "
+                        "Which one did you mean?"
+                    )
+                logger.info(
+                    "[contact_resolver] Relationship phrase produced %s candidates",
+                    len(result["candidates"]),
+                )
+                return result
+
     # Step 3: Try direct fuzzy search
     search_name = person_text
     if relationship_type:
@@ -1342,55 +1381,99 @@ def _resolve_nested_relationship(
             result["path"].append(result["display_name"])
             return result
 
-    related_candidates = _build_related_contact_candidates(intermediate_rels)
-    if not related_candidates:
-        return result
-
-    llm_related_result = _llm_match_nested_relationship_candidates(
+    phrase_match_result = _resolve_relationship_phrase_against_related_contacts(
         anchor_display_name=intermediate_name,
         relationship_phrase=second_part,
-        related_candidates=related_candidates,
+        relationship_context=intermediate_rels,
     )
-    selected_candidates = llm_related_result.get("candidates") or []
 
-    if selected_candidates:
-        if len(selected_candidates) == 1:
-            selected = selected_candidates[0]
-            result["found"] = True
-            result["contact_id"] = selected["contact_id"]
-            result["display_name"] = selected["display_name"]
-            result["confidence"] = llm_related_result.get("confidence", "medium")
-            result["path"].append(result["display_name"])
-            logger.info(
-                "[contact_resolver] Nested: LLM matched related contact '%s' for phrase '%s'",
-                result["display_name"],
-                second_part,
-            )
-            return result
-
-        result["candidates"] = selected_candidates
-        result["collective_reference"] = bool(llm_related_result.get("collective_reference"))
-        result["confidence"] = llm_related_result.get("confidence", "low")
-        result["auto_resolve_candidates"] = (
-            result["collective_reference"]
-            and len(selected_candidates) > 1
-            and result["confidence"] in {"high", "medium"}
-        )
+    if phrase_match_result["status"] == "resolved":
+        result["found"] = True
+        result["contact_id"] = phrase_match_result.get("contact_id")
+        result["display_name"] = phrase_match_result.get("display_name")
+        result["confidence"] = phrase_match_result.get("confidence", "medium")
+        result["path"].append(result["display_name"])
         logger.info(
-            "[contact_resolver] Nested: LLM matched multiple related contacts (%s) for phrase '%s'",
-            len(selected_candidates),
+            "[contact_resolver] Nested: LLM matched related contact '%s' for phrase '%s'",
+            result["display_name"],
             second_part,
         )
         return result
 
-    # Fallback: preserve relationship candidates instead of creating a fake new contact.
-    result["candidates"] = related_candidates
-    result["confidence"] = "low"
-    logger.info(
-        "[contact_resolver] Nested: Could not map phrase to one contact; returning %s relationship candidates",
-        len(related_candidates),
-    )
+    if phrase_match_result["status"] == "candidates":
+        result["candidates"] = phrase_match_result.get("candidates", [])
+        result["collective_reference"] = bool(phrase_match_result.get("collective_reference"))
+        result["confidence"] = phrase_match_result.get("confidence", "low")
+        result["auto_resolve_candidates"] = bool(phrase_match_result.get("auto_resolve_candidates"))
+        logger.info(
+            "[contact_resolver] Nested: Relationship phrase produced %s candidates",
+            len(result["candidates"]),
+        )
     return result
+
+
+def _resolve_relationship_phrase_against_related_contacts(
+    *,
+    anchor_display_name: str,
+    relationship_phrase: str,
+    relationship_context: dict[str, Any],
+) -> dict[str, Any]:
+    """
+    Resolve a free-form relationship phrase against known related contacts.
+
+    Used when direct relationship-type matching is insufficient
+    (e.g., collective phrases like "whole family").
+    """
+    related_candidates = _build_related_contact_candidates(relationship_context)
+    if not related_candidates:
+        return {"status": "no_match", "candidates": [], "confidence": "low"}
+
+    llm_related_result = _llm_match_nested_relationship_candidates(
+        anchor_display_name=anchor_display_name,
+        relationship_phrase=relationship_phrase,
+        related_candidates=related_candidates,
+    )
+    selected_candidates = llm_related_result.get("candidates") or []
+    confidence = str(llm_related_result.get("confidence", "low")).lower().strip()
+    if confidence not in {"high", "medium", "low"}:
+        confidence = "low"
+
+    if len(selected_candidates) == 1:
+        selected = selected_candidates[0]
+        return {
+            "status": "resolved",
+            "contact_id": selected.get("contact_id"),
+            "display_name": selected.get("display_name"),
+            "confidence": confidence,
+            "candidates": [],
+            "collective_reference": bool(llm_related_result.get("collective_reference")),
+            "auto_resolve_candidates": False,
+        }
+
+    if len(selected_candidates) > 1:
+        collective_reference = bool(llm_related_result.get("collective_reference"))
+        return {
+            "status": "candidates",
+            "contact_id": None,
+            "display_name": None,
+            "confidence": confidence,
+            "candidates": selected_candidates,
+            "collective_reference": collective_reference,
+            "auto_resolve_candidates": (
+                collective_reference and confidence in {"high", "medium"}
+            ),
+        }
+
+    # Fallback: preserve relationship candidates instead of creating a fake new contact.
+    return {
+        "status": "candidates",
+        "contact_id": None,
+        "display_name": None,
+        "confidence": "low",
+        "candidates": related_candidates,
+        "collective_reference": False,
+        "auto_resolve_candidates": False,
+    }
 
 
 def _build_related_contact_candidates(relationship_context: dict[str, Any]) -> list[dict[str, Any]]:

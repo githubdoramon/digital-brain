@@ -213,6 +213,28 @@ async def stream_system_logs(
     )
 
 
+@api.get("/system/logs")
+def list_system_logs(
+    level: str | None = Query(default=None),
+    since_minutes: int | None = Query(default=15, ge=1, le=1440),
+    limit: int = Query(default=200, ge=1, le=1000),
+    _: dict = Depends(get_current_user),
+):
+    if level:
+        normalized = level.lower()
+        if normalized not in LOG_LEVELS:
+            raise HTTPException(status_code=400, detail=f"Invalid log level: {level}")
+        level = normalized
+
+    buffer = get_log_buffer()
+    entries = buffer.get_recent(
+        since_minutes=since_minutes,
+        level=level,
+        limit=limit,
+    )
+    return {"entries": [entry.to_dict() for entry in entries]}
+
+
 # --------------------------- Mobile endpoints ---------------------------
 
 

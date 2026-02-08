@@ -351,6 +351,63 @@ def test_resolve_contact_nested_collective_uses_related_candidates(monkeypatch):
     assert all(c.get("contact_id", "").startswith("contact:") for c in result["candidates"])
 
 
+def test_resolve_contact_my_whole_family_anchors_on_user(monkeypatch):
+    monkeypatch.setattr(
+        resolver.contacts_service,
+        "find_self_contact",
+        lambda *_a, **_k: {"contact_id": "contact:user", "display_name": "Ramon"},
+    )
+    monkeypatch.setattr(
+        resolver.contacts_service,
+        "search_contacts",
+        lambda *_a, **_k: [],
+    )
+
+    monkeypatch.setattr(
+        resolver.contacts_service,
+        "get_contact_relationships",
+        lambda contact_id, **_kwargs: {
+            "relationships": [
+                {
+                    "contact_id": "contact:robin",
+                    "type": "parent",
+                    "other_type": "daughter",
+                    "related_contact": {"display_name": "Robin Lake"},
+                },
+                {
+                    "contact_id": "contact:jamie",
+                    "type": "parent",
+                    "other_type": "daughter",
+                    "related_contact": {"display_name": "Jamie Lake"},
+                },
+            ]
+        }
+        if contact_id == "contact:user"
+        else {"relationships": []},
+    )
+
+    monkeypatch.setattr(
+        resolver,
+        "call_llm_json",
+        lambda *_args, **_kwargs: {
+            "candidate_numbers": [1, 2],
+            "collective_reference": True,
+            "confidence": "high",
+            "reasoning": "whole family implies multiple relatives",
+        },
+    )
+
+    result = resolver.resolve_contact("my whole family", "user@example.com")
+
+    assert result["status"] == "candidates"
+    assert result["auto_resolve_candidates"] is True
+    assert result["needs_clarification"] is False
+    assert {item["contact_id"] for item in result["candidates"]} == {
+        "contact:robin",
+        "contact:jamie",
+    }
+
+
 def test_resolve_people_mentions_auto_resolves_collective_candidates(monkeypatch):
     monkeypatch.setattr(
         resolver,
