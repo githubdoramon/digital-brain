@@ -1,5 +1,5 @@
 import { LinearGradient } from 'expo-linear-gradient';
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   FlatList,
@@ -15,6 +15,7 @@ import {
   View,
 } from 'react-native';
 import { useBottomTabBarHeight } from '@react-navigation/bottom-tabs';
+import type { BottomTabNavigationProp } from '@react-navigation/bottom-tabs';
 import { useIsFocused, useNavigation } from '@react-navigation/native';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -27,6 +28,7 @@ import { EventProposalCard } from '@/components/EventProposalCard';
 import { SlashCommandPalette } from '@/components/SlashCommandPalette';
 import { loadChatSession, saveChatSession, StoredChatSession } from '@/chat/session';
 import { restoreChatHistory } from '@/chat/threads';
+import type { CommandResult as ThreadCommandResult } from '@/chat/threads';
 import { getClientContext } from '@/location/clientContext';
 
 type Message = {
@@ -102,7 +104,18 @@ type EventConfirmationData = {
   message: string;
 };
 
-type CommandResult = EventClarificationData | EventConfirmationData;
+type CommandResult = ThreadCommandResult | EventClarificationData | EventConfirmationData;
+
+type HomeTabParamList = {
+  index: undefined;
+  contacts: undefined;
+  brain:
+    | {
+        sendEnabled?: boolean;
+        isSending?: boolean;
+      }
+    | undefined;
+};
 
 const useKeyboardBehavior = () => {
   const defaultBehavior: KeyboardAvoidingViewProps['behavior'] =
@@ -370,7 +383,7 @@ export default function ChatScreen() {
   const insets = useSafeAreaInsets();
   const tabBarHeight = useBottomTabBarHeight();
   const listRef = useRef<FlatList<Message>>(null);
-  const navigation = useNavigation();
+  const navigation = useNavigation<BottomTabNavigationProp<HomeTabParamList, 'brain'>>();
   const isFocused = useIsFocused();
   const [input, setInput] = useState('');
   const [isSending, setIsSending] = useState(false);
@@ -485,7 +498,7 @@ export default function ChatScreen() {
     [],
   );
 
-  const sendMessage = async (overrideMessage?: string) => {
+  const sendMessage = useCallback(async (overrideMessage?: string) => {
     const draft = overrideMessage ?? input;
     const trimmed = draft.trim();
     if (!trimmed || isSending || !allowed || isBootstrapping) return;
@@ -567,7 +580,7 @@ export default function ChatScreen() {
     } finally {
       setIsSending(false);
     }
-  };
+  }, [allowed, input, isBootstrapping, isSending, pendingEventId, signOut, threadId, token]);
 
   useEffect(() => {
     const unsubscribe = navigation.addListener('tabPress', (event) => {
@@ -777,7 +790,7 @@ export default function ChatScreen() {
           style={[
             styles.composer,
             {
-              paddingBottom: (keyboardVisible ? insets.bottom : insets.bottom + tabBarHeight) + 12,
+              paddingBottom: (keyboardVisible ? 12 : insets.bottom + tabBarHeight) + 6,
               paddingRight: keyboardVisible ? 12 : 16,
               gap: keyboardVisible ? 8 : 10,
             },
@@ -835,7 +848,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
   },
   header: {
-    marginTop: 24,
+    marginTop: 0,
     marginBottom: 20,
   },
   kicker: {

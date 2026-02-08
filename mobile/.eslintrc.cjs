@@ -4,7 +4,8 @@ module.exports = {
   settings: {
     'import/resolver': {
       typescript: {
-        project: './tsconfig.json',
+        project: './mobile/tsconfig.json',
+        tsconfigRootDir: process.cwd(),
         alwaysTryTypes: true,
       },
       node: {

@@ -1,9 +1,11 @@
+import * as Location from 'expo-location';
+
 export type ClientLocationContext = {
   lat: number;
   lon: number;
   accuracy_m?: number;
   captured_at: string;
-  source: 'mobile_geolocation';
+  source: 'expo_location';
 };
 
 export type ClientContext = {
@@ -32,27 +34,30 @@ function requestLocationInBackground(): void {
     return;
   }
 
-  const geolocation = (globalThis.navigator as any)?.geolocation;
-  if (!geolocation || typeof geolocation.getCurrentPosition !== 'function') {
-    return;
-  }
-
   locationRequestInFlight = true;
-  geolocation.getCurrentPosition(
-    (position: any) => {
-      const lat = roundCoordinate(Number(position?.coords?.latitude));
-      const lon = roundCoordinate(Number(position?.coords?.longitude));
-      if (!Number.isFinite(lat) || !Number.isFinite(lon)) {
-        locationRequestInFlight = false;
+  void (async () => {
+    try {
+      const permission = await Location.requestForegroundPermissionsAsync();
+      if (permission.status !== 'granted') {
         return;
       }
 
-      const rawAccuracy = Number(position?.coords?.accuracy);
+      const position = await Location.getCurrentPositionAsync({
+        accuracy: Location.Accuracy.Balanced,
+      });
+
+      const lat = roundCoordinate(Number(position.coords.latitude));
+      const lon = roundCoordinate(Number(position.coords.longitude));
+      if (!Number.isFinite(lat) || !Number.isFinite(lon)) {
+        return;
+      }
+
+      const rawAccuracy = Number(position.coords.accuracy);
       const accuracy = Number.isFinite(rawAccuracy)
         ? Math.round(rawAccuracy * 10) / 10
         : undefined;
 
-      const capturedAt = new Date(position?.timestamp || Date.now()).toISOString();
+      const capturedAt = new Date(position.timestamp || Date.now()).toISOString();
       cachedClientContext = {
         ...(cachedClientContext ?? getBaseClientContext()),
         location: {
@@ -60,20 +65,15 @@ function requestLocationInBackground(): void {
           lon,
           accuracy_m: accuracy,
           captured_at: capturedAt,
-          source: 'mobile_geolocation',
+          source: 'expo_location',
         },
       };
+    } catch {
+      // Best-effort only; keep timezone/locale context when location fails.
+    } finally {
       locationRequestInFlight = false;
-    },
-    () => {
-      locationRequestInFlight = false;
-    },
-    {
-      enableHighAccuracy: false,
-      timeout: 10000,
-      maximumAge: 5 * 60 * 1000,
     }
-  );
+  })();
 }
 
 export function primeClientContext(): void {

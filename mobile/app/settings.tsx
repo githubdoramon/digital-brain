@@ -164,7 +164,10 @@ export default function SettingsScreen() {
       colors={theme.gradients.sunrise}
       style={[
         styles.container,
-        { paddingTop: headerHeight + 12, paddingBottom: insets.bottom + 24 },
+        {
+          paddingTop: Math.max(insets.top, headerHeight) + 12,
+          paddingBottom: insets.bottom + 24,
+        },
       ]}
     >
       <View style={styles.header}>
