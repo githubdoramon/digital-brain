@@ -132,7 +132,7 @@ function NewTodoContent() {
         if (mounted) {
           setContacts(result.contacts ?? []);
         }
-      } catch (error) {
+      } catch {
         if (mounted) {
           setContacts([]);
         }
@@ -157,7 +157,7 @@ function NewTodoContent() {
           `/mobile/events/search?query=${encodeURIComponent(trimmed)}`
         )) as { events: EventResult[] };
         setEventResults((result.events ?? []).filter((event) => !selectedEventIds.has(event.id)));
-      } catch (error) {
+      } catch {
         setEventResults([]);
       } finally {
         setEventsLoading(false);
@@ -255,7 +255,7 @@ function NewTodoContent() {
     } finally {
       setSaving(false);
     }
-  }, [router, showNotice, trimmedDescription, trimmedDueDate]);
+  }, [router, selectedContacts, selectedEvents, showNotice, trimmedDescription, trimmedDueDate]);
 
   return (
     <LinearGradient colors={theme.gradients.dusk} style={styles.container}>

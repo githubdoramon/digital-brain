@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import re
 from datetime import datetime, timezone
 from typing import Any
@@ -9,6 +10,8 @@ from psycopg.rows import dict_row
 from psycopg.types.json import Json
 
 from db import get_conn
+
+logger = logging.getLogger(__name__)
 
 _DEFAULT_TITLE_PREFIX = "Untitled conversation"
 
@@ -341,7 +344,7 @@ def get_main_session(user_email: str) -> dict[str, Any] | None:
         # Debug: verify search path before query
         cur.execute("SHOW search_path")
         sp = cur.fetchone()
-        print(f"[conversations] get_main_session search_path={sp}")
+        logger.debug("[conversations] get_main_session search_path=%s", sp)
 
         # Debug: check if table exists
         cur.execute("""
@@ -350,7 +353,7 @@ def get_main_session(user_email: str) -> dict[str, Any] | None:
             WHERE table_name = 'main_sessions'
         """)
         tables = cur.fetchall()
-        print(f"[conversations] main_sessions table locations: {tables}")
+        logger.debug("[conversations] main_sessions table locations: %s", tables)
 
         cur.execute(
             """

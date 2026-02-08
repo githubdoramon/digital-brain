@@ -14,6 +14,7 @@ The controller:
 """
 
 import json
+import logging
 import os
 
 # Import with absolute paths to avoid circular imports
@@ -21,6 +22,8 @@ import sys
 from collections.abc import AsyncGenerator
 from time import perf_counter
 from typing import Any, Optional
+
+from observability import trace
 
 from .contact_resolution import (
     build_contact_clarification_result,
@@ -53,8 +56,7 @@ from .state import AgentState
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-# Import tracing
-from observability import trace
+logger = logging.getLogger(__name__)
 
 
 class AgentController:
@@ -103,6 +105,7 @@ class AgentController:
         """Lazy-load tool registry."""
         if self._tool_registry is None:
             from tools.registry import get_registry
+
             self._tool_registry = get_registry()
         return self._tool_registry
 
@@ -111,6 +114,7 @@ class AgentController:
         """Lazy-load pre-execution validator."""
         if self._pre_validator is None:
             from tools.validators import PreExecutionValidator
+
             self._pre_validator = PreExecutionValidator(
                 self.tool_registry,
                 max_repairs=self.config.max_repairs,
@@ -122,6 +126,7 @@ class AgentController:
         """Lazy-load post-execution validator."""
         if self._post_validator is None:
             from tools.validators import PostExecutionValidator
+
             self._post_validator = PostExecutionValidator()
         return self._post_validator
 
@@ -130,6 +135,7 @@ class AgentController:
         """Lazy-load goal completion validator."""
         if not hasattr(self, "_goal_validator") or self._goal_validator is None:
             from tools.validators.post_execution import GoalCompletionValidator
+
             self._goal_validator = GoalCompletionValidator()
         return self._goal_validator
 
@@ -138,6 +144,7 @@ class AgentController:
         """Lazy-load agent logger."""
         if self._logger is None:
             from observability.logger import get_logger
+
             self._logger = get_logger()
         return self._logger
 
@@ -303,7 +310,9 @@ class AgentController:
                         conversation_history=conversation_history,
                     )
 
-                    clarification_prompt = get_user_clarification_prompt_for_contact_resolution(state)
+                    clarification_prompt = get_user_clarification_prompt_for_contact_resolution(
+                        state
+                    )
                     if clarification_prompt:
                         trace.trace_contact_resolution_outcome(
                             "clarification_returned",
@@ -345,48 +354,73 @@ class AgentController:
                 if not content:
                     trace.trace_empty_response(state.step_count)
                     if state.step_count < 3:
-                        messages.append({
-                            "role": "user",
-                            "content": "Please continue and provide your response.",
-                        })
+                        messages.append(
+                            {
+                                "role": "user",
+                                "content": "Please continue and provide your response.",
+                            }
+                        )
                         continue
                     # Give up after a few empty responses
                     content = "I apologize, but I wasn't able to complete this request."
 
                 # Check if this is a continuation intent
-                if looks_like_continuation(content) and state.step_count < self.config.max_steps - 1:
+                if (
+                    looks_like_continuation(content)
+                    and state.step_count < self.config.max_steps - 1
+                ):
                     trace.trace_continuation_detected(content)
                     self.logger.log_continuation_detected(content)
-                    messages.append({
-                        "role": "user",
-                        "content": CONTINUATION_PROMPT_SYNC,
-                    })
+                    messages.append(
+                        {
+                            "role": "user",
+                            "content": CONTINUATION_PROMPT_SYNC,
+                        }
+                    )
                     continue
 
                 # Check for malformed tool call (JSON in content instead of proper tool call)
-                if looks_like_malformed_tool_call(content) and state.step_count < self.config.max_steps - 1:
+                if (
+                    looks_like_malformed_tool_call(content)
+                    and state.step_count < self.config.max_steps - 1
+                ):
                     trace.trace_malformed_output(content, "JSON tool call in text output")
                     self.logger.log_malformed_output(content, "JSON tool call in text output")
-                    messages.append({
-                        "role": "user",
-                        "content": MALFORMED_TOOL_CALL_PROMPT,
-                    })
+                    messages.append(
+                        {
+                            "role": "user",
+                            "content": MALFORMED_TOOL_CALL_PROMPT,
+                        }
+                    )
                     continue
 
                 # Check for code describing tool usage instead of actual tool call
-                if looks_like_code_describing_tool(content) and state.step_count < self.config.max_steps - 1:
-                    trace.trace_malformed_output(content, "Code describing tool instead of calling it")
-                    self.logger.log_malformed_output(content, "Code describing tool instead of calling it")
-                    messages.append({
-                        "role": "user",
-                        "content": CODE_DESCRIBING_TOOL_PROMPT,
-                    })
+                if (
+                    looks_like_code_describing_tool(content)
+                    and state.step_count < self.config.max_steps - 1
+                ):
+                    trace.trace_malformed_output(
+                        content, "Code describing tool instead of calling it"
+                    )
+                    self.logger.log_malformed_output(
+                        content, "Code describing tool instead of calling it"
+                    )
+                    messages.append(
+                        {
+                            "role": "user",
+                            "content": CODE_DESCRIBING_TOOL_PROMPT,
+                        }
+                    )
                     continue
 
                 # CRITICAL: Check if goal was actually achieved before returning
                 # This prevents premature termination (clawdbot pattern)
                 goal_check = self._check_goal_completion(state, content)
-                if not goal_check["achieved"] and goal_check["pending_actions"] and state.step_count < self.config.max_steps - 1:
+                if (
+                    not goal_check["achieved"]
+                    and goal_check["pending_actions"]
+                    and state.step_count < self.config.max_steps - 1
+                ):
                     trace.trace_decision(
                         "Preventing premature completion",
                         "Goal not achieved, forcing continuation",
@@ -398,13 +432,15 @@ class AgentController:
                         details={"pending_actions": goal_check["pending_actions"]},
                     )
                     # Inject a generic prompt to force the LLM to complete the action
-                    messages.append({
-                        "role": "user",
-                        "content": f"INCOMPLETE: You have not completed the user's request yet. "
-                        f"Status: {goal_check['reason']}. "
-                        f"Required: {goal_check['pending_actions'][0]}. "
-                        f"Do NOT respond to the user - FIRST invoke the appropriate tool to complete the action.",
-                    })
+                    messages.append(
+                        {
+                            "role": "user",
+                            "content": f"INCOMPLETE: You have not completed the user's request yet. "
+                            f"Status: {goal_check['reason']}. "
+                            f"Required: {goal_check['pending_actions'][0]}. "
+                            f"Do NOT respond to the user - FIRST invoke the appropriate tool to complete the action.",
+                        }
+                    )
                     continue
 
                 # Final answer
@@ -416,7 +452,7 @@ class AgentController:
                     run_id,
                     session_id,
                     total_start,
-                        )
+                )
 
         except Exception as e:
             trace.trace_run_error(run_id, str(e))
@@ -554,11 +590,13 @@ class AgentController:
                     if streamed_any:
                         yield {"type": "clear_content"}
 
-                    messages.append({
-                        "role": "assistant",
-                        "content": current_content,
-                        "tool_calls": tool_calls,
-                    })
+                    messages.append(
+                        {
+                            "role": "assistant",
+                            "content": current_content,
+                            "tool_calls": tool_calls,
+                        }
+                    )
 
                     for call in tool_calls:
                         func = call.get("function", {})
@@ -587,13 +625,17 @@ class AgentController:
                             "result": result,
                         }
 
-                        messages.append({
-                            "role": "tool",
-                            "tool_call_id": call.get("id"),
-                            "content": json.dumps(result, ensure_ascii=False, default=str),
-                        })
+                        messages.append(
+                            {
+                                "role": "tool",
+                                "tool_call_id": call.get("id"),
+                                "content": json.dumps(result, ensure_ascii=False, default=str),
+                            }
+                        )
 
-                    clarification_prompt = get_user_clarification_prompt_for_contact_resolution(state)
+                    clarification_prompt = get_user_clarification_prompt_for_contact_resolution(
+                        state
+                    )
                     if clarification_prompt:
                         trace.trace_contact_resolution_outcome(
                             "clarification_returned",
@@ -611,50 +653,77 @@ class AgentController:
                     continue
 
                 if not current_content.strip():
-                    messages.append({
-                        "role": "user",
-                        "content": "Please continue and provide your response.",
-                    })
+                    messages.append(
+                        {
+                            "role": "user",
+                            "content": "Please continue and provide your response.",
+                        }
+                    )
                     continue
 
-                if looks_like_continuation(current_content) and state.step_count < self.config.max_steps - 1:
+                if (
+                    looks_like_continuation(current_content)
+                    and state.step_count < self.config.max_steps - 1
+                ):
                     trace.trace_continuation_detected(current_content)
                     self.logger.log_continuation_detected(current_content)
                     if streamed_any:
                         yield {"type": "clear_content"}
-                    messages.append({
-                        "role": "user",
-                        "content": CONTINUATION_PROMPT_STREAM,
-                    })
+                    messages.append(
+                        {
+                            "role": "user",
+                            "content": CONTINUATION_PROMPT_STREAM,
+                        }
+                    )
                     continue
 
                 # Check for malformed tool call (JSON in content instead of proper tool call)
-                if looks_like_malformed_tool_call(current_content) and state.step_count < self.config.max_steps - 1:
+                if (
+                    looks_like_malformed_tool_call(current_content)
+                    and state.step_count < self.config.max_steps - 1
+                ):
                     trace.trace_malformed_output(current_content, "JSON tool call in text output")
-                    self.logger.log_malformed_output(current_content, "JSON tool call in text output")
+                    self.logger.log_malformed_output(
+                        current_content, "JSON tool call in text output"
+                    )
                     if streamed_any:
                         yield {"type": "clear_content"}
-                    messages.append({
-                        "role": "user",
-                        "content": MALFORMED_TOOL_CALL_PROMPT,
-                    })
+                    messages.append(
+                        {
+                            "role": "user",
+                            "content": MALFORMED_TOOL_CALL_PROMPT,
+                        }
+                    )
                     continue
 
                 # Check for code describing tool usage instead of actual tool call
-                if looks_like_code_describing_tool(current_content) and state.step_count < self.config.max_steps - 1:
-                    trace.trace_malformed_output(current_content, "Code describing tool instead of calling it")
-                    self.logger.log_malformed_output(current_content, "Code describing tool instead of calling it")
+                if (
+                    looks_like_code_describing_tool(current_content)
+                    and state.step_count < self.config.max_steps - 1
+                ):
+                    trace.trace_malformed_output(
+                        current_content, "Code describing tool instead of calling it"
+                    )
+                    self.logger.log_malformed_output(
+                        current_content, "Code describing tool instead of calling it"
+                    )
                     if streamed_any:
                         yield {"type": "clear_content"}
-                    messages.append({
-                        "role": "user",
-                        "content": CODE_DESCRIBING_TOOL_PROMPT,
-                    })
+                    messages.append(
+                        {
+                            "role": "user",
+                            "content": CODE_DESCRIBING_TOOL_PROMPT,
+                        }
+                    )
                     continue
 
                 # CRITICAL: Check if goal was actually achieved before returning
                 goal_check = self._check_goal_completion(state, current_content)
-                if not goal_check["achieved"] and goal_check["pending_actions"] and state.step_count < self.config.max_steps - 1:
+                if (
+                    not goal_check["achieved"]
+                    and goal_check["pending_actions"]
+                    and state.step_count < self.config.max_steps - 1
+                ):
                     trace.trace_decision(
                         "Preventing premature completion (stream)",
                         "Goal not achieved, forcing continuation",
@@ -663,13 +732,15 @@ class AgentController:
                     if streamed_any:
                         yield {"type": "clear_content"}
                     yield {"type": "status", "message": "Completing action..."}
-                    messages.append({
-                        "role": "user",
-                        "content": f"INCOMPLETE: You have not completed the user's request yet. "
-                        f"Status: {goal_check['reason']}. "
-                        f"Required: {goal_check['pending_actions'][0]}. "
-                        f"Do NOT respond to the user - FIRST invoke the appropriate tool to complete the action.",
-                    })
+                    messages.append(
+                        {
+                            "role": "user",
+                            "content": f"INCOMPLETE: You have not completed the user's request yet. "
+                            f"Status: {goal_check['reason']}. "
+                            f"Required: {goal_check['pending_actions'][0]}. "
+                            f"Do NOT respond to the user - FIRST invoke the appropriate tool to complete the action.",
+                        }
+                    )
                     continue
 
                 accumulated_content = current_content
@@ -683,7 +754,7 @@ class AgentController:
                 run_id,
                 session_id,
                 total_start,
-                )
+            )
 
             yield {"type": "done", "bundle": bundle}
 
@@ -710,9 +781,11 @@ class AgentController:
             classification.skill_hints,
         )
 
-        print(
-            f"[controller] Intent: {classification.intent.value} "
-            f"(confidence={classification.confidence:.2f}, duration={router_duration:.1f}ms)"
+        logger.info(
+            "[controller] Intent: %s (confidence=%.2f, duration=%.1fms)",
+            classification.intent.value,
+            classification.confidence,
+            router_duration,
         )
 
         return classification
@@ -867,13 +940,15 @@ class AgentController:
                 )
                 messages.append({"role": "system", "content": skill_prompt})
 
-                state.activated_skills.append({
-                    "name": match.skill.name,
-                    "confidence": match.confidence,
-                })
+                state.activated_skills.append(
+                    {
+                        "name": match.skill.name,
+                        "confidence": match.confidence,
+                    }
+                )
 
         except Exception as e:
-            print(f"[controller] Skills injection error: {e}")
+            logger.exception("[controller] Skills injection error: %s", e)
 
     def _call_llm(
         self,
@@ -1079,13 +1154,15 @@ class AgentController:
             sort_order = detect_temporal_sort_order(goal_text)
         if sort_order and not normalized_args.get("sort_order"):
             normalized_args["sort_order"] = sort_order
-        is_future_temporal_query = detect_future_temporal_intent(query_text) or detect_future_temporal_intent(
-            goal_text
-        )
+        is_future_temporal_query = detect_future_temporal_intent(
+            query_text
+        ) or detect_future_temporal_intent(goal_text)
         if is_future_temporal_query and not normalized_args.get("time_start"):
             normalized_args["time_start"] = utc_now_iso()
-        if sort_order in {"newest", "oldest"} and not is_future_temporal_query and not normalized_args.get(
-            "time_end"
+        if (
+            sort_order in {"newest", "oldest"}
+            and not is_future_temporal_query
+            and not normalized_args.get("time_end")
         ):
             normalized_args["time_end"] = utc_now_iso()
         if sort_order:
@@ -1101,9 +1178,7 @@ class AgentController:
         pending_prompt = state.resolution.get("pending_contact_clarification")
         if pending_prompt:
             preempt = build_contact_clarification_result(
-                ambiguous_contacts=state.resolution.get(
-                    "pending_contact_ambiguous_contacts", []
-                ),
+                ambiguous_contacts=state.resolution.get("pending_contact_ambiguous_contacts", []),
                 people_mentioned=state.resolution.get("pending_contact_people", []),
             )
             return normalized_args, preempt
@@ -1248,9 +1323,7 @@ class AgentController:
         if status == "success":
             scope_ids = state.resolution.get("active_contact_scope_ids", [])
             if scope_ids:
-                state.add_fact(
-                    f"Pre-resolved {len(scope_ids)} contact(s) from user question"
-                )
+                state.add_fact(f"Pre-resolved {len(scope_ids)} contact(s) from user question")
         elif status == "needs_clarification":
             prompt = get_user_clarification_prompt_for_contact_resolution(state)
             if prompt:
@@ -1515,7 +1588,7 @@ class AgentController:
             return None
 
         try:
-            json_str = content[start_idx + len(start):end_idx].strip()
+            json_str = content[start_idx + len(start) : end_idx].strip()
             return json.loads(json_str)
         except json.JSONDecodeError:
             return None
@@ -1534,7 +1607,7 @@ class AgentController:
             return content
 
         before = content[:start_idx].rstrip()
-        after = content[end_idx + len(end):].lstrip()
+        after = content[end_idx + len(end) :].lstrip()
 
         return (before + " " + after).strip() if after else before
 

@@ -8,6 +8,7 @@ The registry maintains all tool contracts and provides:
 - Singleton access pattern
 """
 
+import logging
 import threading
 from typing import Any, Optional
 
@@ -16,6 +17,8 @@ from .contracts import (
     ToolParameter,
     validate_limit,
 )
+
+logger = logging.getLogger(__name__)
 
 # Tool group definitions - maps group names to tool names
 TOOL_GROUPS = {
@@ -92,11 +95,7 @@ class ToolRegistry:
         for group in groups:
             tool_names.update(self._groups.get(group, []))
 
-        return [
-            self._contracts[name]
-            for name in tool_names
-            if name in self._contracts
-        ]
+        return [self._contracts[name] for name in tool_names if name in self._contracts]
 
     def get_tool_names_for_groups(self, groups: list[str]) -> list[str]:
         """Get tool names for the specified groups."""
@@ -123,9 +122,7 @@ class ToolRegistry:
                 definitions.append(contract.to_openai_tool())
         return definitions
 
-    def get_tool_definitions_for_groups(
-        self, groups: list[str]
-    ) -> list[dict[str, Any]]:
+    def get_tool_definitions_for_groups(self, groups: list[str]) -> list[dict[str, Any]]:
         """Get OpenAI-format tool definitions for specific groups."""
         allowed = self.get_tool_names_for_groups(groups)
         return self.get_tool_definitions(allowed)
@@ -573,4 +570,4 @@ def _register_all_tools(registry: ToolRegistry) -> None:
         )
     )
 
-    print(f"[tools.registry] Registered {len(registry._contracts)} tools")
+    logger.info("[tools.registry] Registered %s tools", len(registry._contracts))

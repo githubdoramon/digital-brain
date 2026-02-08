@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import json
+import logging
 from time import perf_counter
 from typing import Any
 
 from observability import trace
 
 from .state import AgentState, ToolCallRecord
+
+logger = logging.getLogger(__name__)
 
 
 class ToolExecutionCoordinator:
@@ -29,11 +32,13 @@ class ToolExecutionCoordinator:
         conversation_history: list[dict[str, str]] | None = None,
     ) -> None:
         """Handle a batch of tool calls and append tool results to messages."""
-        messages.append({
-            "role": "assistant",
-            "content": "",
-            "tool_calls": tool_calls,
-        })
+        messages.append(
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": tool_calls,
+            }
+        )
 
         for call in tool_calls:
             result = await self.execute_tool_call(
@@ -46,11 +51,13 @@ class ToolExecutionCoordinator:
                 conversation_history=conversation_history,
             )
 
-            messages.append({
-                "role": "tool",
-                "tool_call_id": call.get("id"),
-                "content": json.dumps(result, ensure_ascii=False, default=str),
-            })
+            messages.append(
+                {
+                    "role": "tool",
+                    "tool_call_id": call.get("id"),
+                    "content": json.dumps(result, ensure_ascii=False, default=str),
+                }
+            )
 
     async def execute_tool_call(
         self,
@@ -224,7 +231,9 @@ class ToolExecutionCoordinator:
                 self.controller.logger.log_decision(
                     decision="Tool call failed - injecting recovery guidance",
                     reason=post_result.reason,
-                    details={"guidance": guidance[:100] + "..." if len(guidance) > 100 else guidance},
+                    details={
+                        "guidance": guidance[:100] + "..." if len(guidance) > 100 else guidance
+                    },
                 )
                 result["_validation"] = {
                     "status": "failed",
@@ -277,7 +286,7 @@ class ToolExecutionCoordinator:
                 conversation_history=conversation_history,
             )
         except Exception as e:
-            print(f"[controller] Tool execution error: {e}")
+            logger.exception("[controller] Tool execution error: %s", e)
             return {"error": str(e)}
 
     def get_completion_evidence(
@@ -361,9 +370,7 @@ class ToolExecutionCoordinator:
         duration_ms = 0.0
         success = "error" not in result and result.get("success") is not False
         result_summary = (
-            result.get("message")
-            or result.get("clarification_prompt")
-            or default_summary
+            result.get("message") or result.get("clarification_prompt") or default_summary
         )
         trace.trace_tool_execution_result(tool_name, duration_ms, success, result_summary)
         trace.trace_tool_lifecycle_end(tool_name, call_id, success, duration_ms, result_summary)

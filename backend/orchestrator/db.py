@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import os
 from contextlib import contextmanager
 from typing import Any, cast
@@ -7,6 +8,8 @@ from typing import Any, cast
 import psycopg
 from psycopg import sql
 from psycopg.rows import dict_row
+
+logger = logging.getLogger(__name__)
 
 # Construct DB connection string from environment variables
 POSTGRES_USER = os.getenv("POSTGRES_USER")
@@ -19,12 +22,12 @@ POSTGRES_SCHEMA = (os.getenv("POSTGRES_SCHEMA") or "public").strip()
 DB_DSN = f"postgresql://{POSTGRES_USER}:{POSTGRES_PASSWORD}@{POSTGRES_HOST}:{POSTGRES_PORT}/{POSTGRES_DB}"
 
 # Log schema configuration at startup
-print(f"[db] Configured POSTGRES_SCHEMA={POSTGRES_SCHEMA!r}")
+logger.info("[db] Configured POSTGRES_SCHEMA=%r", POSTGRES_SCHEMA)
 
 
 def _set_search_path(conn: psycopg.Connection) -> None:
     if not POSTGRES_SCHEMA:
-        print("[db] WARNING: POSTGRES_SCHEMA is empty, using default search_path")
+        logger.warning("[db] POSTGRES_SCHEMA is empty, using default search_path")
         return
     with conn.cursor() as cur:
         cur.execute(

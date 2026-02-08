@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import os
 from dataclasses import dataclass
 from typing import Any
@@ -7,6 +8,8 @@ from typing import Any
 import requests
 
 from contacts import get_contact_by_external_id
+
+logger = logging.getLogger(__name__)
 
 IMMICH_HTTP_TIMEOUT = int(os.getenv("IMMICH_HTTP_TIMEOUT", "45"))
 
@@ -128,14 +131,14 @@ def fetch_person_thumbnail(
     try:
         response = requests.get(url, headers=headers, timeout=timeout)
     except requests.RequestException as exc:
-        print(f"[fetch_person_thumbnail] error={exc}")
+        logger.warning("[fetch_person_thumbnail] error=%s", exc, exc_info=exc)
         raise ImmichClientError(f"Immich thumbnail request failed: {exc}") from exc
 
     if response.status_code == 404:
-        print("[fetch_person_thumbnail] 404")
+        logger.info("[fetch_person_thumbnail] 404")
         return None
     if response.status_code >= 400:
-        print(f"[fetch_person_thumbnail] response={response.text}")
+        logger.warning("[fetch_person_thumbnail] response=%s", response.text)
         snippet = response.text[:200]
         raise ImmichClientError(f"Immich thumbnail failed ({response.status_code}): {snippet}")
 

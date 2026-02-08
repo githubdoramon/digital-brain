@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 from collections.abc import Iterable, Sequence
 from typing import Literal
+
+logger = logging.getLogger(__name__)
 
 MAX_LABEL_PROMPT_CHARS = int(os.getenv("DOCUMENT_LABEL_PROMPT_CHARS", "10000"))
 MAX_SUGGESTED_TAGS = int(os.getenv("DOCUMENT_LABEL_MAX_COUNT", "5"))
@@ -150,7 +153,9 @@ def _call_llm_text(
 
 
 def _has_major_tag(tags: Sequence[str]) -> bool:
-    lowered = {str(tag).strip().lower() for tag in tags if isinstance(tag, str) and str(tag).strip()}
+    lowered = {
+        str(tag).strip().lower() for tag in tags if isinstance(tag, str) and str(tag).strip()
+    }
     return any(major.lower() in lowered for major in MAJOR_TAGS)
 
 
@@ -229,8 +234,7 @@ def _suggest_tags(
     )
 
     subtag_examples = "; ".join(
-        f'{major}: {", ".join(MAJOR_TAG_KEYWORDS.get(major, [])[:3])}'
-        for major in MAJOR_TAGS
+        f"{major}: {', '.join(MAJOR_TAG_KEYWORDS.get(major, [])[:3])}" for major in MAJOR_TAGS
     )
 
     system_prompt = (
@@ -238,9 +242,9 @@ def _suggest_tags(
         "Propose concise English tags (1-3 words) that balance specificity and generality. "
         f"Always include AT LEAST ONE of these major categories as a tag exactly as written: {major_categories}. "
         f"{subject_instruction} "
-        "Blend specific tags (e.g., \"Form 1040\", \"Dr. Smith\", \"Project Apollo\") with broader ones (e.g., \"Taxes\", \"Travel\", \"Contracts\", \"Blood test\"). "
+        'Blend specific tags (e.g., "Form 1040", "Dr. Smith", "Project Apollo") with broader ones (e.g., "Taxes", "Travel", "Contracts", "Blood test"). '
         f"Here are example sub-tags for each major category: {subtag_examples}. "
-        "Respond ONLY with JSON in the shape {\"tags\": [\"tag\", ...]} and do not include any prose or numbering."
+        'Respond ONLY with JSON in the shape {"tags": ["tag", ...]} and do not include any prose or numbering.'
     )
     user_prompt = (
         f"Existing tags: {existing}\n"
@@ -261,7 +265,7 @@ def _suggest_tags(
         parsed = _parse_suggested_tags_response(raw_content)
         return parsed[:MAX_SUGGESTED_TAGS]
     except Exception as exc:
-        print(f"[tags_manager] Failed to generate tags: {exc}")
+        logger.warning("[tags_manager] Failed to generate tags: %s", exc, exc_info=exc)
         return []
 
 
@@ -304,7 +308,6 @@ def _merge_tag_lists(primary: Sequence[str], secondary: Sequence[str]) -> list[s
         merged.append(candidate)
         seen.add(lowered)
     return merged
-
 
 
 def get_tag_taxonomy() -> dict[str, list[str]]:

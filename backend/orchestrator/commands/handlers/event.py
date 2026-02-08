@@ -5,6 +5,7 @@ The /event command allows users to add new memories/events to the database.
 It extracts entities, checks for existing ones, and asks for confirmation.
 """
 
+import logging
 import re
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
@@ -13,6 +14,8 @@ from uuid import uuid4
 
 from commands.parser import ParsedCommand
 from commands.registry import CommandRegistry
+
+logger = logging.getLogger(__name__)
 
 
 def _format_existing_extraction_for_prompt(existing: dict[str, Any] | None) -> str:
@@ -187,14 +190,14 @@ def _extract_event_entities_with_llm(
     from prompts.context import get_time_context
     from tags_manager import MAJOR_TAGS
 
-    print(f"\n[event_extraction] Starting extraction for: '{message}'")
+    logger.info("[event_extraction] Starting extraction for: '%s'", message)
 
     # Get current time context
     time_context = get_time_context()
     user_email = context.get("user_email", "")
 
-    print(f"[event_extraction] Time context: {time_context}")
-    print(f"[event_extraction] User: {user_email}")
+    logger.debug("[event_extraction] Time context: %s", time_context)
+    logger.debug("[event_extraction] User: %s", user_email)
 
     # Build tag context
     tag_examples = ", ".join(MAJOR_TAGS[:5])  # Show first 5 major tags as examples
@@ -248,26 +251,34 @@ Return ONLY valid JSON in this exact format:
 }}"""
 
     try:
-        print("[event_extraction] Calling LLM for extraction...")
+        logger.info("[event_extraction] Calling LLM for extraction...")
         extracted = call_llm_json(extraction_prompt, timeout=60)
 
-        print("[event_extraction] Raw LLM response:")
-        print(f"  - Title: {extracted.get('title')}")
-        print(f"  - Summary: {extracted.get('summary')}")
-        print(f"  - When: {extracted.get('when')}")
-        print(f"  - Where: {extracted.get('where')}")
-        print(f"  - Tags: {extracted.get('tags')}")
-        print(f"  - Types: {extracted.get('types')}")
-        print(f"  - Needs clarification: {extracted.get('needs_clarification')}")
+        logger.debug("[event_extraction] Raw LLM response")
+        logger.debug("[event_extraction]   - Title: %s", extracted.get("title"))
+        logger.debug("[event_extraction]   - Summary: %s", extracted.get("summary"))
+        logger.debug("[event_extraction]   - When: %s", extracted.get("when"))
+        logger.debug("[event_extraction]   - Where: %s", extracted.get("where"))
+        logger.debug("[event_extraction]   - Tags: %s", extracted.get("tags"))
+        logger.debug("[event_extraction]   - Types: %s", extracted.get("types"))
+        logger.debug(
+            "[event_extraction]   - Needs clarification: %s",
+            extracted.get("needs_clarification"),
+        )
 
         # Parse datetime if provided
         when = None
         if extracted.get("when"):
             try:
                 when = datetime.fromisoformat(extracted["when"].replace("Z", "+00:00"))
-                print(f"[event_extraction] Parsed datetime: {when}")
+                logger.debug("[event_extraction] Parsed datetime: %s", when)
             except (ValueError, AttributeError) as e:
-                print(f"[event_extraction] Failed to parse datetime '{extracted.get('when')}': {e}")
+                logger.warning(
+                    "[event_extraction] Failed to parse datetime '%s': %s",
+                    extracted.get("when"),
+                    e,
+                    exc_info=e,
+                )
 
         result = {
             "needs_clarification": extracted.get("needs_clarification", False),
@@ -287,14 +298,11 @@ Return ONLY valid JSON in this exact format:
                 if result.get(key) in (None, "", [], ["generic"]) and existing_extraction.get(key):
                     result[key] = existing_extraction[key]
 
-        print("[event_extraction] Extraction complete")
+        logger.info("[event_extraction] Extraction complete")
         return result
 
     except Exception as e:
-        print(f"[event_extraction] ERROR: LLM extraction failed: {e}")
-        import traceback
-
-        traceback.print_exc()
+        logger.exception("[event_extraction] LLM extraction failed: %s", e)
 
         # Fallback to basic extraction
         return {
@@ -344,18 +352,22 @@ def _resolve_generic_terms_with_relationships(
     """
     import contacts as contacts_service
 
-    print(f"\n[generic_resolution] Attempting to resolve {len(terms)} terms: {terms}")
+    logger.info("[generic_resolution] Attempting to resolve %s terms: %s", len(terms), terms)
 
     resolved = {}
 
     # Find user's contact record
     user_contact = contacts_service.find_self_contact(user_email)
     if not user_contact:
-        print(f"[generic_resolution] User contact not found for: {user_email}")
+        logger.warning("[generic_resolution] User contact not found for: %s", user_email)
         return resolved
 
     user_id = user_contact["contact_id"]
-    print(f"[generic_resolution] User contact ID: {user_id} ({user_contact.get('display_name')})")
+    logger.debug(
+        "[generic_resolution] User contact ID: %s (%s)",
+        user_id,
+        user_contact.get("display_name"),
+    )
 
     # Get all relationships for the user
     relationships_result = contacts_service.get_contact_relationships(
@@ -364,7 +376,7 @@ def _resolve_generic_terms_with_relationships(
     )
 
     relationships = relationships_result.get("relationships", [])
-    print(f"[generic_resolution] Found {len(relationships)} relationships")
+    logger.debug("[generic_resolution] Found %s relationships", len(relationships))
 
     # Build a map of relationship types to contacts
     rel_map: dict[str, list[dict]] = {}
@@ -376,14 +388,17 @@ def _resolve_generic_terms_with_relationships(
             rel_map[rel_type].append(rel["related_contact"])
 
     if rel_map:
-        print(f"[generic_resolution] Relationship types available: {list(rel_map.keys())}")
+        logger.debug(
+            "[generic_resolution] Relationship types available: %s",
+            list(rel_map.keys()),
+        )
     else:
-        print("[generic_resolution] No relationships with contact details found")
+        logger.info("[generic_resolution] No relationships with contact details found")
 
     # Try to resolve each term
     for term in terms:
         term_lower = term.lower().strip()
-        print(f"[generic_resolution] Processing term: '{term}'")
+        logger.debug("[generic_resolution] Processing term: '%s'", term)
 
         # Extract relationship type from phrases like "my daughter", "the doctor", "user's daughter"
         # Remove possessives, articles, and "user's"
@@ -395,35 +410,52 @@ def _resolve_generic_terms_with_relationships(
             .replace("an ", "")
             .strip()
         )
-        print(f"[generic_resolution]   Cleaned to: '{cleaned}'")
+        logger.debug("[generic_resolution]   Cleaned to: '%s'", cleaned)
 
         # Direct match first
         if cleaned in rel_map and rel_map[cleaned]:
             contact = rel_map[cleaned][0]
             resolved_name = contact.get("display_name", term)
             resolved[term] = resolved_name
-            print(f"[generic_resolution]   ✓ Direct match: '{term}' -> '{resolved_name}'")
+            logger.info(
+                "[generic_resolution] Direct match: '%s' -> '%s'",
+                term,
+                resolved_name,
+            )
             continue
 
         # Smart matching: look for related relationship types
         # For example: "daughter" should match "child", "father" should match "parent"
         # Use the shared relationship type mappings from contacts module
         possible_types = contacts_service.find_related_types(cleaned)
-        print(f"[generic_resolution]   Trying relationship types: {possible_types}")
+        logger.debug(
+            "[generic_resolution]   Trying relationship types: %s",
+            possible_types,
+        )
 
         for rel_type in possible_types:
             if rel_type in rel_map and rel_map[rel_type]:
                 contact = rel_map[rel_type][0]
                 resolved_name = contact.get("display_name", term)
                 resolved[term] = resolved_name
-                print(
-                    f"[generic_resolution]   ✓ Smart match via '{rel_type}': '{term}' -> '{resolved_name}'"
+                logger.info(
+                    "[generic_resolution] Smart match via '%s': '%s' -> '%s'",
+                    rel_type,
+                    term,
+                    resolved_name,
                 )
                 break
         else:
-            print(f"[generic_resolution]   ✗ No match for '{cleaned}' or related types")
+            logger.info(
+                "[generic_resolution] No match for '%s' or related types",
+                cleaned,
+            )
 
-    print(f"[generic_resolution] Resolution complete. Resolved {len(resolved)}/{len(terms)} terms")
+    logger.info(
+        "[generic_resolution] Resolution complete. Resolved %s/%s terms",
+        len(resolved),
+        len(terms),
+    )
     return resolved
 
 
@@ -635,22 +667,28 @@ def _suggest_relationships_from_context(
     """
     from llm_helpers import call_llm_json
 
-    print("\n[relationship_suggestion] Analyzing event for relationship suggestions")
+    logger.info("[relationship_suggestion] Analyzing event for relationship suggestions")
 
     suggestions = []
 
     # Get all resolved contacts
     contacts = resolution.get("contacts", [])
-    print(f"[relationship_suggestion] Found {len(contacts)} resolved contacts")
+    logger.debug(
+        "[relationship_suggestion] Found %s resolved contacts",
+        len(contacts),
+    )
 
     if len(contacts) < 2:
         # Need at least 2 contacts to suggest relationships
-        print("[relationship_suggestion] Not enough contacts (need at least 2), skipping")
+        logger.info("[relationship_suggestion] Not enough contacts (need at least 2), skipping")
         return suggestions
 
     # Use LLM to detect implied relationships
     contact_list = ", ".join(c["display_name"] for c in contacts)
-    print(f"[relationship_suggestion] Analyzing relationships between: {contact_list}")
+    logger.debug(
+        "[relationship_suggestion] Analyzing relationships between: %s",
+        contact_list,
+    )
 
     prompt = f"""Analyze this event description and identify any implied relationships between the people mentioned.
 
@@ -677,11 +715,14 @@ Return ONLY valid JSON with suggested relationships. If no clear relationships, 
 }}"""
 
     try:
-        print("[relationship_suggestion] Calling LLM for relationship analysis...")
+        logger.info("[relationship_suggestion] Calling LLM for relationship analysis...")
         result = call_llm_json(prompt, timeout=15)
         llm_suggestions = result.get("relationships", [])
 
-        print(f"[relationship_suggestion] LLM returned {len(llm_suggestions)} suggestions")
+        logger.debug(
+            "[relationship_suggestion] LLM returned %s suggestions",
+            len(llm_suggestions),
+        )
 
         # Map names back to contact IDs
         name_to_id = {c["display_name"]: c["contact_id"] for c in contacts}
@@ -693,11 +734,18 @@ Return ONLY valid JSON with suggested relationships. If no clear relationships, 
             reciprocal = sug.get("reciprocal_type")
             confidence = sug.get("confidence")
 
-            print(f"[relationship_suggestion]   Suggestion {idx + 1}:")
-            print(f"[relationship_suggestion]     {from_name} -> {to_name}")
-            print(f"[relationship_suggestion]     Type: {rel_type} (reciprocal: {reciprocal})")
-            print(f"[relationship_suggestion]     Confidence: {confidence}")
-            print(f"[relationship_suggestion]     Reasoning: {sug.get('reasoning')}")
+            logger.debug("[relationship_suggestion]   Suggestion %s:", idx + 1)
+            logger.debug("[relationship_suggestion]     %s -> %s", from_name, to_name)
+            logger.debug(
+                "[relationship_suggestion]     Type: %s (reciprocal: %s)",
+                rel_type,
+                reciprocal,
+            )
+            logger.debug("[relationship_suggestion]     Confidence: %s", confidence)
+            logger.debug(
+                "[relationship_suggestion]     Reasoning: %s",
+                sug.get("reasoning"),
+            )
 
             if from_name in name_to_id and to_name in name_to_id:
                 suggestions.append(
@@ -712,19 +760,17 @@ Return ONLY valid JSON with suggested relationships. If no clear relationships, 
                         "reasoning": sug.get("reasoning", ""),
                     }
                 )
-                print("[relationship_suggestion]     ✓ Added to suggestions")
+                logger.debug("[relationship_suggestion]     Added to suggestions")
             else:
-                print("[relationship_suggestion]     ✗ Names not found in contact list, skipping")
+                logger.info("[relationship_suggestion] Names not found in contact list, skipping")
 
-        print(
-            f"[relationship_suggestion] Suggestion complete. Created {len(suggestions)} suggestions"
+        logger.info(
+            "[relationship_suggestion] Suggestion complete. Created %s suggestions",
+            len(suggestions),
         )
 
     except Exception as e:
-        print(f"[relationship_suggestion] ERROR: Relationship suggestion failed: {e}")
-        import traceback
-
-        traceback.print_exc()
+        logger.exception("[relationship_suggestion] Relationship suggestion failed: %s", e)
 
     return suggestions
 
@@ -746,7 +792,7 @@ def _resolve_existing_entities(
     """
     import contacts as contacts_service
 
-    print("\n[entity_resolution] Starting entity resolution")
+    logger.info("[entity_resolution] Starting entity resolution")
 
     resolution = {
         "contacts": [],
@@ -762,24 +808,27 @@ def _resolve_existing_entities(
 
     # First, try to resolve generic terms using relationships
     who_list = entities.get("who", [])
-    print(f"[entity_resolution] People to resolve: {who_list}")
+    logger.debug("[entity_resolution] People to resolve: %s", who_list)
 
     if who_list:
         replacements = _resolve_generic_terms_with_relationships(who_list, user_email)
         resolution["name_replacements"] = replacements
         if replacements:
-            print(f"[entity_resolution] Name replacements: {replacements}")
+            logger.debug("[entity_resolution] Name replacements: %s", replacements)
 
     # Resolve contacts using existing search_contacts function
     for idx, person_name in enumerate(entities.get("who", []), 1):
         if not person_name or not isinstance(person_name, str):
-            print(f"[entity_resolution]   Person {idx}: Skipping invalid name")
+            logger.info("[entity_resolution]   Person %s: Skipping invalid name", idx)
             continue
 
         # Use the actual name if we resolved a generic term
         search_name = resolution["name_replacements"].get(person_name, person_name)
-        print(
-            f"[entity_resolution]   Person {idx}: '{person_name}' -> searching for '{search_name}'"
+        logger.debug(
+            "[entity_resolution]   Person %s: '%s' -> searching for '%s'",
+            idx,
+            person_name,
+            search_name,
         )
 
         matches = contacts_service.search_contacts(
@@ -789,7 +838,7 @@ def _resolve_existing_entities(
             limit=3,
         )
 
-        print(f"[entity_resolution]     Found {len(matches)} matches")
+        logger.debug("[entity_resolution]     Found %s matches", len(matches))
 
         if matches:
             # Add first match with confidence
@@ -805,8 +854,12 @@ def _resolve_existing_entities(
                     "confidence": confidence,
                 }
             )
-            print(
-                f"[entity_resolution]     ✓ Matched to existing: {best_match['display_name']} (ID: {best_match['contact_id']}, score: {match_score}, confidence: {confidence})"
+            logger.info(
+                "[entity_resolution] Matched to existing: %s (ID: %s, score: %s, confidence: %s)",
+                best_match["display_name"],
+                best_match["contact_id"],
+                match_score,
+                confidence,
             )
         else:
             # Mark as new contact to create (use resolved name if available)
@@ -817,12 +870,15 @@ def _resolve_existing_entities(
                     "query": person_name,
                 }
             )
-            print(f"[entity_resolution]     ✗ No match, will create new contact: '{display_name}'")
+            logger.info(
+                "[entity_resolution] No match, will create new contact: '%s'",
+                display_name,
+            )
 
     # Resolve places (simple implementation for now)
     where = entities.get("where")
     if where:
-        print(f"[entity_resolution] Place: '{where}' -> creating new place")
+        logger.info("[entity_resolution] Place: '%s' -> creating new place", where)
         # TODO: Search for existing places
         # For now, always create new places
         resolution["new_entities"]["places"].append(
@@ -832,10 +888,19 @@ def _resolve_existing_entities(
             }
         )
 
-    print("[entity_resolution] Resolution complete:")
-    print(f"[entity_resolution]   - Matched contacts: {len(resolution['contacts'])}")
-    print(f"[entity_resolution]   - New contacts: {len(resolution['new_entities']['contacts'])}")
-    print(f"[entity_resolution]   - New places: {len(resolution['new_entities']['places'])}")
+    logger.info("[entity_resolution] Resolution complete")
+    logger.info(
+        "[entity_resolution]   - Matched contacts: %s",
+        len(resolution["contacts"]),
+    )
+    logger.info(
+        "[entity_resolution]   - New contacts: %s",
+        len(resolution["new_entities"]["contacts"]),
+    )
+    logger.info(
+        "[entity_resolution]   - New places: %s",
+        len(resolution["new_entities"]["places"]),
+    )
 
     return resolution
 
@@ -860,9 +925,7 @@ def handle_event(parsed: ParsedCommand, context: dict) -> dict[str, Any]:
     Returns:
         Dict with event_confirmation or clarification_needed type
     """
-    print(f"\n{'=' * 80}")
-    print("[handle_event] NEW EVENT COMMAND")
-    print(f"{'=' * 80}")
+    logger.info("[handle_event] NEW EVENT COMMAND")
 
     if not parsed.args:
         return {
@@ -871,9 +934,9 @@ def handle_event(parsed: ParsedCommand, context: dict) -> dict[str, Any]:
         }
 
     user_email = context.get("user_email", "")
-    print(f"[handle_event] User: {user_email}")
+    logger.debug("[handle_event] User: %s", user_email)
     raw_message, clarification_id = _extract_clarification_token(parsed.args)
-    print(f"[handle_event] Input: '{raw_message}'")
+    logger.debug("[handle_event] Input: '%s'", raw_message)
 
     clarification_context = None
     if clarification_id:
@@ -882,9 +945,15 @@ def handle_event(parsed: ParsedCommand, context: dict) -> dict[str, Any]:
         clarification_context = get_command_data(clarification_id)
         delete_command_data(clarification_id)
         if clarification_context:
-            print(f"[handle_event] Found clarification context: {clarification_id}")
+            logger.info(
+                "[handle_event] Found clarification context: %s",
+                clarification_id,
+            )
         else:
-            print(f"[handle_event] Clarification context missing or expired: {clarification_id}")
+            logger.warning(
+                "[handle_event] Clarification context missing or expired: %s",
+                clarification_id,
+            )
 
     clarification_messages = None
     event_message = raw_message
@@ -944,7 +1013,7 @@ def handle_event(parsed: ParsedCommand, context: dict) -> dict[str, Any]:
                 )
 
     # Extract entities using LLM with time context
-    print("\n[handle_event] STEP 1: Extracting entities with LLM...")
+    logger.info("[handle_event] STEP 1: Extracting entities with LLM...")
     with ThreadPoolExecutor(max_workers=2) as executor:
         extraction_future = executor.submit(
             _extract_event_entities_with_llm,
@@ -980,7 +1049,7 @@ def handle_event(parsed: ParsedCommand, context: dict) -> dict[str, Any]:
 
     ambiguous_contacts = contact_result.get("ambiguous_contacts", []) if contact_result else []
     if ambiguous_contacts:
-        print("[handle_event] ⚠️  Contact disambiguation needed")
+        logger.warning("[handle_event] Contact disambiguation needed")
         clarification_questions.extend(
             [
                 contact.get("clarification_prompt")
@@ -994,7 +1063,7 @@ def handle_event(parsed: ParsedCommand, context: dict) -> dict[str, Any]:
             )
 
     if clarification_questions:
-        print("[handle_event] ⚠️  Clarification needed, returning questions to user")
+        logger.warning("[handle_event] Clarification needed, returning questions to user")
         clarification_preview_id = f"event:clarification:{uuid4().hex[:8]}"
         from commands.storage import store_command_data
 
@@ -1029,7 +1098,7 @@ def handle_event(parsed: ParsedCommand, context: dict) -> dict[str, Any]:
         }
 
     # Resolve existing entities and generic terms
-    print("\n[handle_event] STEP 2: Contact resolution complete")
+    logger.info("[handle_event] STEP 2: Contact resolution complete")
 
     # Keep place handling aligned with existing flow
     where = extracted.get("where")
@@ -1044,7 +1113,7 @@ def handle_event(parsed: ParsedCommand, context: dict) -> dict[str, Any]:
     # Replace generic terms with actual names in title and summary
     name_replacements = resolution.get("name_replacements", {})
     if name_replacements:
-        print("\n[handle_event] STEP 3: Replacing generic terms in text...")
+        logger.info("[handle_event] STEP 3: Replacing generic terms in text...")
         original_title = extracted.get("title", "")
         original_summary = extracted.get("summary", "")
 
@@ -1052,14 +1121,22 @@ def handle_event(parsed: ParsedCommand, context: dict) -> dict[str, Any]:
         extracted["summary"] = _replace_generic_terms_in_text(original_summary, name_replacements)
 
         if extracted["title"] != original_title:
-            print(f"[handle_event]   Title: '{original_title}' -> '{extracted['title']}'")
+            logger.debug(
+                "[handle_event]   Title: '%s' -> '%s'",
+                original_title,
+                extracted["title"],
+            )
         if extracted["summary"] != original_summary:
-            print(f"[handle_event]   Summary: '{original_summary}' -> '{extracted['summary']}'")
+            logger.debug(
+                "[handle_event]   Summary: '%s' -> '%s'",
+                original_summary,
+                extracted["summary"],
+            )
     else:
-        print("\n[handle_event] STEP 3: No generic terms to replace")
+        logger.info("[handle_event] STEP 3: No generic terms to replace")
 
     # Suggest relationships between contacts based on context
-    print("\n[handle_event] STEP 4: Suggesting relationships...")
+    logger.info("[handle_event] STEP 4: Suggesting relationships...")
     relationship_suggestions = _format_relationship_suggestions(
         contact_result.get("suggested_relationships", []),
         resolution,
@@ -1089,7 +1166,10 @@ def handle_event(parsed: ParsedCommand, context: dict) -> dict[str, Any]:
 
     from commands.storage import store_command_data
 
-    print(f"\n[handle_event] STEP 5: Storing preview data (ID: {preview_id})")
+    logger.info(
+        "[handle_event] STEP 5: Storing preview data (ID: %s)",
+        preview_id,
+    )
     store_command_data(
         preview_id,
         {
@@ -1109,13 +1189,15 @@ def handle_event(parsed: ParsedCommand, context: dict) -> dict[str, Any]:
 
         store_pending_event(pending_key, preview_id)
 
-    print("\n[handle_event] ✓ Event processing complete!")
-    print("[handle_event] Summary:")
-    print(f"  - Title: {extracted.get('title')}")
-    print(f"  - Contacts found: {len(resolution.get('contacts', []))}")
-    print(f"  - New contacts: {len(resolution.get('new_entities', {}).get('contacts', []))}")
-    print(f"  - Relationship suggestions: {len(relationship_suggestions)}")
-    print(f"{'=' * 80}\n")
+    logger.info("[handle_event] Event processing complete")
+    logger.info("[handle_event] Summary:")
+    logger.info("  - Title: %s", extracted.get("title"))
+    logger.info("  - Contacts found: %s", len(resolution.get("contacts", [])))
+    logger.info(
+        "  - New contacts: %s",
+        len(resolution.get("new_entities", {}).get("contacts", [])),
+    )
+    logger.info("  - Relationship suggestions: %s", len(relationship_suggestions))
 
     return {
         "type": "event_confirmation",

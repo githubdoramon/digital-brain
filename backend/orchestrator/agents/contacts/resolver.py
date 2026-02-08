@@ -20,6 +20,7 @@ Design principles:
 4. Clear confidence scoring
 """
 
+import logging
 import os
 import re
 from typing import Any, Optional
@@ -27,6 +28,8 @@ from typing import Any, Optional
 import contacts as contacts_service
 from llm_helpers import call_llm_json
 from observability import trace
+
+logger = logging.getLogger(__name__)
 
 
 def _format_conversation_for_prompt(conversation_messages: list[dict[str, str]]) -> str:
@@ -175,9 +178,11 @@ def _repair_split_possessive_title_entities(
         canonical = error["canonical"]
         canonical_norm = _normalize_entity_for_match(canonical)
         if canonical_norm not in {_normalize_entity_for_match(p) for p in repaired}:
-            print(
-                "[contact_resolver] Repairing split possessive title "
-                f"'{error['owner']}'s {error['title']}' -> '{canonical}'"
+            logger.info(
+                "[contact_resolver] Repairing split possessive title '%s's %s' -> '%s'",
+                error["owner"],
+                error["title"],
+                canonical,
             )
             repaired.append(canonical)
 
@@ -202,7 +207,7 @@ def extract_people_from_text(
         }
     """
 
-    print(f"[contact_resolver] extract_people_from_text: {text}")
+    logger.debug("[contact_resolver] extract_people_from_text: %s", text)
     conversation_block = ""
     if conversation_messages:
         conversation_json = _format_conversation_for_prompt(conversation_messages)
@@ -327,11 +332,13 @@ Return ONLY a valid JSON, nothing more, no other text or explanation:
 
             split_possessive_title_errors = _detect_split_possessive_title_errors(text, people)
             if (invalid_extractions or split_possessive_title_errors) and attempt < max_retries - 1:
-                print(
-                    f"[contact_resolver] Attempt {attempt + 1}: Invalid extractions detected: "
-                    f"{invalid_extractions}, split_possessive_titles={split_possessive_title_errors}"
+                logger.warning(
+                    "[contact_resolver] Attempt %s: Invalid extractions detected: %s, split_possessive_titles=%s",
+                    attempt + 1,
+                    invalid_extractions,
+                    split_possessive_title_errors,
                 )
-                print("[contact_resolver] Retrying extraction with stricter guidance...")
+                logger.info("[contact_resolver] Retrying extraction with stricter guidance...")
 
                 # Add stricter guidance to the prompt
                 correction_block = ""
@@ -371,7 +378,7 @@ For possessive org titles, output ONE person mention only, formatted as "<title>
 
                 # Skip invalid third-person pronouns (last safety check)
                 if person_lower.startswith(("her ", "his ", "their ")):
-                    print(f"[contact_resolver] Skipping invalid extraction: '{person}'")
+                    logger.info("[contact_resolver] Skipping invalid extraction: '%s'", person)
                     continue
 
                 # Keep the special "user" token for direct email resolution later
@@ -381,12 +388,12 @@ For possessive org titles, output ONE person mention only, formatted as "<title>
 
                 # Skip standalone first-person pronouns (these should be converted to "user" by LLM)
                 if person_lower in ["i", "me", "my", "mine", "myself", "we", "us", "our", "ours"]:
-                    print(f"[contact_resolver] Skipping first-person pronoun: '{person}'")
+                    logger.info("[contact_resolver] Skipping first-person pronoun: '%s'", person)
                     continue
 
                 # Skip second-person pronouns
                 if person_lower in ["you", "your", "yours", "yourself"]:
-                    print(f"[contact_resolver] Skipping second-person pronoun: '{person}'")
+                    logger.info("[contact_resolver] Skipping second-person pronoun: '%s'", person)
                     continue
 
                 filtered_people.append(person)
@@ -395,9 +402,19 @@ For possessive org titles, output ONE person mention only, formatted as "<title>
             return repaired_people
         except Exception as e:
             if attempt < max_retries - 1:
-                print(f"[contact_resolver] Attempt {attempt + 1} failed: {e}, retrying...")
+                logger.warning(
+                    "[contact_resolver] Attempt %s failed: %s, retrying...",
+                    attempt + 1,
+                    e,
+                    exc_info=e,
+                )
                 continue
-            print(f"[contact_resolver] Failed to extract people after {max_retries} attempts: {e}")
+            logger.warning(
+                "[contact_resolver] Failed to extract people after %s attempts: %s",
+                max_retries,
+                e,
+                exc_info=e,
+            )
             return []
 
     return []
@@ -437,7 +454,7 @@ def resolve_contact(
             "clarification_prompt": Optional[str]
         }
     """
-    print(f"\n[contact_resolver] Resolving: '{person_text}'")
+    logger.info("[contact_resolver] Resolving: '%s'", person_text)
 
     result: dict[str, Any] = {
         "status": "new",
@@ -449,6 +466,8 @@ def resolve_contact(
         "candidates": [],
         "needs_clarification": False,
         "clarification_prompt": None,
+        "skip_auto_disambiguation": False,
+        "auto_resolve_candidates": False,
     }
 
     # Short-circuit for the current user: resolve directly by email.
@@ -460,19 +479,19 @@ def resolve_contact(
             result["contact_id"] = user_contact["contact_id"]
             result["display_name"] = user_contact.get("display_name")
             result["matched_via"] = "user_email"
-            print(f"[contact_resolver] ✓ Resolved user via email: {result['display_name']}")
+            logger.info("[contact_resolver] Resolved user via email: %s", result["display_name"])
             return result
-        print("[contact_resolver] User token provided but no contact found by email")
+        logger.info("[contact_resolver] User token provided but no contact found by email")
         result["status"] = "new"
         result["display_name"] = "user"
         return result
 
     # Step 1: Check for nested relationships (e.g., "my daughter's doctor")
     nested_parts = _parse_nested_relationship(person_text)
-    print(f"[contact_resolver] Nested parts: {nested_parts}")
-    print(f"[contact_resolver] User email: {user_email}")
+    logger.debug("[contact_resolver] Nested parts: %s", nested_parts)
+    logger.debug("[contact_resolver] User email: %s", user_email)
     if nested_parts and len(nested_parts) > 1:
-        print(f"[contact_resolver] Detected nested relationship: {nested_parts}")
+        logger.info("[contact_resolver] Detected nested relationship: %s", nested_parts)
         nested_result = _resolve_nested_relationship(nested_parts, user_email, resolution_cache)
 
         if nested_result["found"]:
@@ -482,18 +501,43 @@ def resolve_contact(
             result["display_name"] = nested_result["display_name"]
             result["matched_via"] = "nested_relationship"
             result["resolution_path"] = nested_result["path"]
-            print(f"[contact_resolver] ✓ Resolved via nested: {' → '.join(nested_result['path'])}")
+            logger.info(
+                "[contact_resolver] Resolved via nested: %s",
+                " -> ".join(nested_result["path"]),
+            )
+            return result
+
+        if nested_result.get("candidates"):
+            result["status"] = "candidates"
+            result["candidates"] = nested_result["candidates"]
+            result["confidence"] = nested_result.get("confidence", "low")
+            result["skip_auto_disambiguation"] = bool(nested_result.get("collective_reference"))
+            result["auto_resolve_candidates"] = bool(nested_result.get("auto_resolve_candidates"))
+            result["needs_clarification"] = not result["auto_resolve_candidates"]
+            if result["needs_clarification"]:
+                result["clarification_prompt"] = (
+                    f"I found multiple related contacts for '{nested_parts[0]}'. "
+                    f"Which one did you mean by '{person_text}'?"
+                )
+            logger.info(
+                "[contact_resolver] Nested: Returning %s related candidates",
+                len(result["candidates"]),
+            )
             return result
 
         # Check if first part couldn't be resolved
         if nested_result.get("first_part_unresolved"):
             first_part_status = nested_result.get("first_part_status")
-            print(f"[contact_resolver] Nested: First part unresolved (status: {first_part_status})")
+            logger.info(
+                "[contact_resolver] Nested: First part unresolved (status: %s)",
+                first_part_status,
+            )
 
             # If first part is ambiguous, the whole nested relationship is ambiguous
             if first_part_status == "candidates":
-                print(
-                    f"[contact_resolver] First part '{nested_parts[0]}' is ambiguous, cannot resolve nested relationship"
+                logger.info(
+                    "[contact_resolver] First part '%s' is ambiguous, cannot resolve nested relationship",
+                    nested_parts[0],
                 )
                 result["status"] = "candidates"
                 # We can't provide candidates for the nested relationship since we don't know which first part
@@ -505,8 +549,9 @@ def resolve_contact(
                 return result
             # If first part is new, the whole nested relationship is unresolvable
             elif first_part_status == "new":
-                print(
-                    f"[contact_resolver] First part '{nested_parts[0]}' is new, cannot resolve nested relationship"
+                logger.info(
+                    "[contact_resolver] First part '%s' is new, cannot resolve nested relationship",
+                    nested_parts[0],
                 )
                 result["status"] = "new"
                 return result
@@ -520,17 +565,17 @@ def resolve_contact(
         if not is_user_nested:
             # Non-user nested relationship failed (e.g., "Pedro's doctor")
             # Don't fall back to direct search as it will give wrong results
-            print(
+            logger.info(
                 "[contact_resolver] Nested resolution failed for non-user relationship, marking as new"
             )
             result["status"] = "new"
             return result
 
-        print("[contact_resolver] Nested resolution failed, falling back")
+        logger.info("[contact_resolver] Nested resolution failed, falling back")
 
     # Step 2: Check for simple relationship (e.g., "my daughter")
     relationship_type = _detect_relational_term(person_text)
-    print(f"[contact_resolver] Relationship type: {relationship_type}")
+    logger.debug("[contact_resolver] Relationship type: %s", relationship_type)
     if relationship_type:
         # Get user's relationships
         user_contact = contacts_service.find_self_contact(user_email)
@@ -541,15 +586,16 @@ def resolve_contact(
             )
 
             rel_result = _resolve_via_relationship(relationship_type, relationships)
-            print(f"[contact_resolver] Relationship result: {rel_result}")
+            logger.debug("[contact_resolver] Relationship result: %s", rel_result)
             if rel_result["found"]:
                 result["status"] = "resolved"
                 result["confidence"] = rel_result["confidence"]
                 result["contact_id"] = rel_result["contact_id"]
                 result["display_name"] = rel_result["display_name"]
                 result["matched_via"] = "relationship"
-                print(
-                    f"[contact_resolver] ✓ Resolved via relationship: {rel_result['display_name']}"
+                logger.info(
+                    "[contact_resolver] Resolved via relationship: %s",
+                    rel_result["display_name"],
                 )
                 return result
             elif rel_result["candidates"]:
@@ -561,7 +607,10 @@ def resolve_contact(
                     f"Multiple {relationship_type}s found. "
                     f"Which one did you mean: {', '.join(c['display_name'] for c in rel_result['candidates'])}?"
                 )
-                print(f"[contact_resolver] ⚠️  Multiple {relationship_type}s, returning candidates")
+                logger.warning(
+                    "[contact_resolver] Multiple %ss, returning candidates",
+                    relationship_type,
+                )
                 return result
 
     # Step 3: Try direct fuzzy search
@@ -570,7 +619,7 @@ def resolve_contact(
         # Strip generic markers for better search
         search_name = _strip_generic_markers(person_text)
 
-    print(f"[contact_resolver] Searching for: '{search_name}'")
+    logger.debug("[contact_resolver] Searching for: '%s'", search_name)
     matches = contacts_service.search_contacts(
         search_name,
         search_by="any",
@@ -580,7 +629,7 @@ def resolve_contact(
 
     if len(matches) == 0:
         # No matches - new contact
-        print("[contact_resolver] ✗ No matches, marking as new")
+        logger.info("[contact_resolver] No matches, marking as new")
         result["status"] = "new"
         result["display_name"] = person_text
         return result
@@ -593,18 +642,23 @@ def resolve_contact(
         result["contact_id"] = match["contact_id"]
         result["display_name"] = match["display_name"]
         result["matched_via"] = "direct_match"
-        print(
-            f"[contact_resolver] ✓ Single match: {match['display_name']} (score: {match.get('match_score')})"
+        logger.info(
+            "[contact_resolver] Single match: %s (score: %s)",
+            match["display_name"],
+            match.get("match_score"),
         )
         return result
 
     else:
         # Multiple matches - need disambiguation
-        print(
-            "[contact_resolver] Matches found: "
-            + ", ".join(f"{m['display_name']} ({m.get('match_reason', '')})" for m in matches)
+        logger.debug(
+            "[contact_resolver] Matches found: %s",
+            ", ".join(f"{m['display_name']} ({m.get('match_reason', '')})" for m in matches),
         )
-        print(f"[contact_resolver] Found {len(matches)} matches, attempting disambiguation")
+        logger.info(
+            "[contact_resolver] Found %s matches, attempting disambiguation",
+            len(matches),
+        )
 
         result["candidates"] = [
             {
@@ -631,7 +685,10 @@ def resolve_contact(
                 result["contact_id"] = llm_result["contact_id"]
                 result["display_name"] = llm_result["display_name"]
                 result["matched_via"] = "llm_disambiguation"
-                print(f"[contact_resolver] ✓ LLM resolved: {llm_result['display_name']}")
+                logger.info(
+                    "[contact_resolver] LLM resolved: %s",
+                    llm_result["display_name"],
+                )
                 return result
 
         # Still ambiguous - return candidates
@@ -641,7 +698,7 @@ def resolve_contact(
             f"Multiple contacts match '{person_text}'. "
             f"Which one did you mean: {', '.join(c['display_name'] for c in result['candidates'])}?"
         )
-        print("[contact_resolver] ⚠️  Ambiguous, returning candidates")
+        logger.warning("[contact_resolver] Ambiguous, returning candidates")
         return result
 
 
@@ -706,18 +763,16 @@ def resolve_contacts_from_text(
             "ambiguous_text": true | false
         }
     """
-    print(f"\n{'=' * 80}")
-    print("[contact_resolver] RESOLVING CONTACTS FROM TEXT")
-    print(f"[contact_resolver] Text: '{text}'")
-    print(f"[contact_resolver] User: {user_email}")
-    print(f"{'=' * 80}")
+    logger.info("[contact_resolver] RESOLVING CONTACTS FROM TEXT")
+    logger.debug("[contact_resolver] Text: '%s'", text)
+    logger.debug("[contact_resolver] User: %s", user_email)
 
     # Step 1: Extract people
-    print("\n[contact_resolver] Step 1: Extracting people...")
+    logger.info("[contact_resolver] Step 1: Extracting people...")
     effective_text = text
 
     people = extract_people_from_text(effective_text, conversation_messages=conversation_messages)
-    print(f"[contact_resolver] Extracted {len(people)} people: {people}")
+    logger.info("[contact_resolver] Extracted %s people: %s", len(people), people)
 
     if not people:
         return {
@@ -729,7 +784,7 @@ def resolve_contacts_from_text(
         }
 
     # Step 2: Resolve each person (DB lookup or mark as new)
-    print(f"\n[contact_resolver] Step 2: Resolving {len(people)} people...")
+    logger.info("[contact_resolver] Step 2: Resolving %s people...", len(people))
     (
         resolved_contacts,
         new_contacts,
@@ -743,15 +798,15 @@ def resolve_contacts_from_text(
     )
 
     # Step 3: Infer professions for new contacts
-    print("\n[contact_resolver] Step 3: Inferring professions for new contacts...")
+    logger.info("[contact_resolver] Step 3: Inferring professions for new contacts...")
     profession_by_text = _infer_professions_for_new_contacts(new_contacts, effective_text)
 
     # Step 4: Infer relationship pairs from text (deduped)
-    print("\n[contact_resolver] Step 4: Inferring relationship pairs...")
+    logger.info("[contact_resolver] Step 4: Inferring relationship pairs...")
     relationship_pairs = _infer_relationship_pairs(people, effective_text)
 
     # Step 5: Suggest missing relationships (only when none exist yet)
-    print("\n[contact_resolver] Step 5: Suggesting missing relationships...")
+    logger.info("[contact_resolver] Step 5: Suggesting missing relationships...")
     suggested_relationships = _suggest_missing_relationships(
         pairs=relationship_pairs,
         full_text=effective_text,
@@ -760,12 +815,14 @@ def resolve_contacts_from_text(
         profession_by_text=profession_by_text,
     )
 
-    print("\n[contact_resolver] ✓ Resolution complete:")
-    print(f"[contact_resolver]   - Resolved: {len(resolved_contacts)}")
-    print(f"[contact_resolver]   - New: {len(new_contacts)}")
-    print(f"[contact_resolver]   - Ambiguous: {len(ambiguous_contacts)}")
-    print(f"[contact_resolver]   - Suggested relationships: {len(suggested_relationships)}")
-    print(f"{'=' * 80}\n")
+    logger.info("[contact_resolver] Resolution complete:")
+    logger.info("[contact_resolver]   - Resolved: %s", len(resolved_contacts))
+    logger.info("[contact_resolver]   - New: %s", len(new_contacts))
+    logger.info("[contact_resolver]   - Ambiguous: %s", len(ambiguous_contacts))
+    logger.info(
+        "[contact_resolver]   - Suggested relationships: %s",
+        len(suggested_relationships),
+    )
 
     return {
         "text": effective_text,
@@ -801,7 +858,7 @@ def _resolve_people_mentions(
     for person_text in people:
         # Check cache first
         if person_text in resolution_cache:
-            print(f"[contact_resolver] Using cached resolution for: '{person_text}'")
+            logger.debug("[contact_resolver] Using cached resolution for: '%s'", person_text)
             resolution = resolution_cache[person_text]
         else:
             resolution = resolve_contact(
@@ -829,15 +886,46 @@ def _resolve_people_mentions(
                     "matched_via": resolution.get("matched_via"),
                 },
             )
-            print(f"[contact_resolver]   ✓ '{person_text}' → {resolution['display_name']}")
+            logger.info(
+                "[contact_resolver] '%s' -> %s",
+                person_text,
+                resolution["display_name"],
+            )
 
         elif resolution["status"] == "candidates":
-            llm_result = _llm_disambiguate_contact(
-                person_text,
-                resolution["candidates"],
-                full_text,
-                conversation_messages=conversation_messages,
-            )
+            if resolution.get("auto_resolve_candidates"):
+                for candidate in resolution["candidates"]:
+                    resolved_contact = {
+                        "original_text": person_text,
+                        "contact_id": candidate.get("contact_id"),
+                        "display_name": candidate.get("display_name"),
+                        "matched_via": "nested_relationship_group",
+                        "confidence": resolution.get("confidence", "medium"),
+                        "resolution_path": None,
+                    }
+                    resolved_contacts.append(resolved_contact)
+                trace.trace_contact_resolution_outcome(
+                    "auto_group_resolved",
+                    {
+                        "person_text": person_text,
+                        "resolved_count": len(resolution["candidates"]),
+                    },
+                )
+                logger.info(
+                    "[contact_resolver] Auto-resolved group mention '%s' to %s related contacts",
+                    person_text,
+                    len(resolution["candidates"]),
+                )
+                continue
+
+            llm_result = {"resolved": False}
+            if not resolution.get("skip_auto_disambiguation"):
+                llm_result = _llm_disambiguate_contact(
+                    person_text,
+                    resolution["candidates"],
+                    full_text,
+                    conversation_messages=conversation_messages,
+                )
             if llm_result.get("resolved") and _should_accept_llm_disambiguation(
                 person_text=person_text,
                 candidates=resolution["candidates"],
@@ -861,12 +949,15 @@ def _resolve_people_mentions(
                         "contact_id": llm_result.get("contact_id"),
                     },
                 )
-                print(f"[contact_resolver]   ✓ LLM resolved: {llm_result['display_name']}")
+                logger.info(
+                    "[contact_resolver] LLM resolved: %s",
+                    llm_result["display_name"],
+                )
                 continue
             if llm_result.get("resolved"):
-                print(
-                    f"[contact_resolver]   ⚠️  LLM suggested '{llm_result.get('display_name')}' "
-                    "but context was insufficient; asking user to clarify instead"
+                logger.warning(
+                    "[contact_resolver] LLM suggested '%s' but context was insufficient; asking user to clarify instead",
+                    llm_result.get("display_name"),
                 )
 
             ambiguous_contacts.append(
@@ -883,8 +974,10 @@ def _resolve_people_mentions(
                     "candidate_count": len(resolution.get("candidates", [])),
                 },
             )
-            print(
-                f"[contact_resolver]   ⚠️  '{person_text}' → ambiguous ({len(resolution['candidates'])} candidates)"
+            logger.warning(
+                "[contact_resolver] '%s' -> ambiguous (%s candidates)",
+                person_text,
+                len(resolution["candidates"]),
             )
 
         elif resolution["status"] == "new":
@@ -893,7 +986,7 @@ def _resolve_people_mentions(
                 "display_name": person_text,
             }
             new_contacts.append(new_contact)
-            print(f"[contact_resolver]   ✗ '{person_text}' → new contact")
+            logger.info("[contact_resolver] '%s' -> new contact", person_text)
 
     return resolved_contacts, new_contacts, ambiguous_contacts, resolution_cache
 
@@ -968,16 +1061,41 @@ def _has_disambiguating_context(
     context_tokens = re.findall(r"[a-z0-9']+", context_text.lower())
 
     stop_words = {
-        "a", "an", "and", "about", "did", "do", "does", "event", "events",
-        "first", "i", "last", "latest", "meet", "meeting", "meetings", "met",
-        "most", "recent", "talk", "talked", "the", "time", "was", "we",
-        "when", "where", "who", "with", "my", "new",
+        "a",
+        "an",
+        "and",
+        "about",
+        "did",
+        "do",
+        "does",
+        "event",
+        "events",
+        "first",
+        "i",
+        "last",
+        "latest",
+        "meet",
+        "meeting",
+        "meetings",
+        "met",
+        "most",
+        "recent",
+        "talk",
+        "talked",
+        "the",
+        "time",
+        "was",
+        "we",
+        "when",
+        "where",
+        "who",
+        "with",
+        "my",
+        "new",
     }
 
     semantic_tokens = {
-        token
-        for token in context_tokens
-        if token not in stop_words and token not in person_tokens
+        token for token in context_tokens if token not in stop_words and token not in person_tokens
     }
 
     return len(semantic_tokens) >= 1
@@ -989,7 +1107,9 @@ def _is_name_level_match(person_text: str, display_name: str) -> bool:
 
     Example: "gio" -> "Giovanni Panerai"
     """
-    mention_tokens = [token for token in re.findall(r"[a-z0-9']+", person_text.lower()) if len(token) >= 3]
+    mention_tokens = [
+        token for token in re.findall(r"[a-z0-9']+", person_text.lower()) if len(token) >= 3
+    ]
     name_tokens = re.findall(r"[a-z0-9']+", display_name.lower())
     if not mention_tokens or not name_tokens:
         return False
@@ -1084,7 +1204,10 @@ def _resolve_nested_relationship(
             "confidence": str,
             "path": List[str],
             "first_part_unresolved": bool,  # True if first part couldn't be resolved
-            "first_part_status": Optional[str]  # Status of first part resolution
+            "first_part_status": Optional[str],  # Status of first part resolution
+            "candidates": List[dict],  # Candidate contacts for unresolved group mentions
+            "collective_reference": bool,
+            "auto_resolve_candidates": bool,
         }
     """
     result = {
@@ -1095,6 +1218,9 @@ def _resolve_nested_relationship(
         "path": [],
         "first_part_unresolved": False,
         "first_part_status": None,
+        "candidates": [],
+        "collective_reference": False,
+        "auto_resolve_candidates": False,
     }
 
     if len(parts) < 2:
@@ -1103,7 +1229,10 @@ def _resolve_nested_relationship(
     # Step 1: Resolve first part (check cache first)
     first_part = parts[0]
     if resolution_cache and first_part in resolution_cache:
-        print(f"[contact_resolver] Nested: Using cached resolution for first part: '{first_part}'")
+        logger.debug(
+            "[contact_resolver] Nested: Using cached resolution for first part: '%s'",
+            first_part,
+        )
         first_resolution = resolution_cache[first_part]
     else:
         first_resolution = resolve_contact(
@@ -1113,8 +1242,10 @@ def _resolve_nested_relationship(
             resolution_cache[first_part] = first_resolution
 
     if first_resolution["status"] != "resolved":
-        print(
-            f"[contact_resolver] Nested: Could not resolve first part '{parts[0]}' (status: {first_resolution['status']})"
+        logger.info(
+            "[contact_resolver] Nested: Could not resolve first part '%s' (status: %s)",
+            parts[0],
+            first_resolution["status"],
         )
         # Mark that the first part couldn't be resolved
         result["first_part_unresolved"] = True
@@ -1125,7 +1256,10 @@ def _resolve_nested_relationship(
     intermediate_name = first_resolution["display_name"]
     result["path"] = ["user", intermediate_name]
 
-    print(f"[contact_resolver] Nested: First part resolved to {intermediate_name}")
+    logger.debug(
+        "[contact_resolver] Nested: First part resolved to %s",
+        intermediate_name,
+    )
 
     # Step 2: Get intermediate contact's relationships
     try:
@@ -1134,14 +1268,21 @@ def _resolve_nested_relationship(
             include_contact_details=True,
         )
     except Exception as e:
-        print(f"[contact_resolver] Nested: Failed to get relationships: {e}")
+        logger.warning(
+            "[contact_resolver] Nested: Failed to get relationships: %s",
+            e,
+            exc_info=e,
+        )
         return result
 
     # Step 3: Resolve second part within those relationships
     # The second part is already the clean relationship type (e.g., "doctor")
     # because _parse_nested_relationship already stripped articles
     second_part = parts[1]
-    print(f"[contact_resolver] Nested: Second part (relationship type): {second_part}")
+    logger.debug(
+        "[contact_resolver] Nested: Second part (relationship type): %s",
+        second_part,
+    )
 
     # Try relationship match directly with the second part as the relationship type
     # Use for_nested_resolution=True to ONLY match on 'other_type'
@@ -1149,7 +1290,7 @@ def _resolve_nested_relationship(
     rel_result = _resolve_via_relationship(
         second_part, intermediate_rels, for_nested_resolution=True
     )
-    print(f"[contact_resolver] Nested: Relationship result: {rel_result}")
+    logger.debug("[contact_resolver] Nested: Relationship result: %s", rel_result)
 
     if rel_result["found"]:
         result["found"] = True
@@ -1168,8 +1309,10 @@ def _resolve_nested_relationship(
         result["display_name"] = candidate["display_name"]
         result["confidence"] = "low"
         result["path"].append(result["display_name"])
-        print(
-            f"[contact_resolver] Nested: Multiple {second_part}s found, using first: {candidate['display_name']}"
+        logger.info(
+            "[contact_resolver] Nested: Multiple %ss found, using first: %s",
+            second_part,
+            candidate["display_name"],
         )
         return result
 
@@ -1199,7 +1342,192 @@ def _resolve_nested_relationship(
             result["path"].append(result["display_name"])
             return result
 
+    related_candidates = _build_related_contact_candidates(intermediate_rels)
+    if not related_candidates:
+        return result
+
+    llm_related_result = _llm_match_nested_relationship_candidates(
+        anchor_display_name=intermediate_name,
+        relationship_phrase=second_part,
+        related_candidates=related_candidates,
+    )
+    selected_candidates = llm_related_result.get("candidates") or []
+
+    if selected_candidates:
+        if len(selected_candidates) == 1:
+            selected = selected_candidates[0]
+            result["found"] = True
+            result["contact_id"] = selected["contact_id"]
+            result["display_name"] = selected["display_name"]
+            result["confidence"] = llm_related_result.get("confidence", "medium")
+            result["path"].append(result["display_name"])
+            logger.info(
+                "[contact_resolver] Nested: LLM matched related contact '%s' for phrase '%s'",
+                result["display_name"],
+                second_part,
+            )
+            return result
+
+        result["candidates"] = selected_candidates
+        result["collective_reference"] = bool(llm_related_result.get("collective_reference"))
+        result["confidence"] = llm_related_result.get("confidence", "low")
+        result["auto_resolve_candidates"] = (
+            result["collective_reference"]
+            and len(selected_candidates) > 1
+            and result["confidence"] in {"high", "medium"}
+        )
+        logger.info(
+            "[contact_resolver] Nested: LLM matched multiple related contacts (%s) for phrase '%s'",
+            len(selected_candidates),
+            second_part,
+        )
+        return result
+
+    # Fallback: preserve relationship candidates instead of creating a fake new contact.
+    result["candidates"] = related_candidates
+    result["confidence"] = "low"
+    logger.info(
+        "[contact_resolver] Nested: Could not map phrase to one contact; returning %s relationship candidates",
+        len(related_candidates),
+    )
     return result
+
+
+def _build_related_contact_candidates(relationship_context: dict[str, Any]) -> list[dict[str, Any]]:
+    relationships = relationship_context.get("relationships", [])
+    if not relationships:
+        return []
+
+    candidates: list[dict[str, Any]] = []
+    seen_ids: set[str] = set()
+    seen_names: set[str] = set()
+
+    for rel in relationships:
+        related_contact = rel.get("related_contact") or {}
+        contact_id = str(related_contact.get("contact_id") or rel.get("contact_id") or "").strip()
+        display_name = str(related_contact.get("display_name") or "").strip()
+        if not contact_id or not display_name:
+            continue
+
+        if contact_id in seen_ids or display_name.lower() in seen_names:
+            continue
+        seen_ids.add(contact_id)
+        seen_names.add(display_name.lower())
+
+        rel_type = str(rel.get("type") or "").strip().lower()
+        other_type = str(rel.get("other_type") or "").strip().lower()
+        reason_parts = []
+        if other_type:
+            reason_parts.append(f"other_type: {other_type}")
+        if rel_type:
+            reason_parts.append(f"type: {rel_type}")
+        reason = ", ".join(reason_parts) if reason_parts else "relationship candidate"
+
+        candidates.append(
+            {
+                "contact_id": contact_id,
+                "display_name": display_name,
+                "match_reason": reason,
+                "relationship_type": rel_type,
+                "other_type": other_type,
+            }
+        )
+
+    return candidates
+
+
+def _llm_match_nested_relationship_candidates(
+    *,
+    anchor_display_name: str,
+    relationship_phrase: str,
+    related_candidates: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """
+    Map an unresolved nested relationship phrase to one or more related contacts.
+
+    This keeps matching generic and model-driven, avoiding hardcoded lexical lists.
+    """
+    if not related_candidates:
+        return {
+            "candidates": [],
+            "collective_reference": False,
+            "confidence": "low",
+        }
+
+    candidate_lines: list[str] = []
+    for index, candidate in enumerate(related_candidates, start=1):
+        rel_type = candidate.get("relationship_type") or "-"
+        other_type = candidate.get("other_type") or "-"
+        candidate_lines.append(
+            f"- {index}. {candidate['display_name']} (ID: {candidate['contact_id']}) "
+            f"| relationship_type: {rel_type} | other_type: {other_type}"
+        )
+    candidate_block = "\n".join(candidate_lines)
+
+    prompt = f"""Choose which related contacts match a nested relationship mention.
+
+Anchor person: "{anchor_display_name}"
+Nested relationship phrase: "{relationship_phrase}"
+
+Candidate related contacts:
+{candidate_block}
+
+Rules:
+1. You MUST select only from the listed candidates.
+2. Return one or more candidate numbers when the phrase clearly refers to those people.
+3. For group/collective mentions, multiple selections are allowed.
+4. If no candidate matches, return an empty list.
+5. Set collective_reference=true only when the phrase implies multiple people.
+
+Return ONLY valid JSON:
+{{
+  "candidate_numbers": [1, 2],
+  "collective_reference": true or false,
+  "confidence": "high" | "medium" | "low",
+  "reasoning": "brief explanation"
+}}"""
+
+    try:
+        llm_result = call_llm_json(
+            prompt, timeout=60, temperature=0.1, top_p=0.9, use_simpler_model=True
+        )
+    except Exception:
+        return {
+            "candidates": [],
+            "collective_reference": False,
+            "confidence": "low",
+        }
+
+    raw_numbers = llm_result.get("candidate_numbers", [])
+    if isinstance(raw_numbers, int):
+        raw_numbers = [raw_numbers]
+    if not isinstance(raw_numbers, list):
+        raw_numbers = []
+
+    selected: list[dict[str, Any]] = []
+    seen_ids: set[str] = set()
+    for value in raw_numbers:
+        if not isinstance(value, int):
+            continue
+        if value < 1 or value > len(related_candidates):
+            continue
+        candidate = related_candidates[value - 1]
+        candidate_id = str(candidate.get("contact_id") or "")
+        if candidate_id and candidate_id in seen_ids:
+            continue
+        if candidate_id:
+            seen_ids.add(candidate_id)
+        selected.append(candidate)
+
+    confidence = str(llm_result.get("confidence", "low")).lower().strip()
+    if confidence not in {"high", "medium", "low"}:
+        confidence = "low"
+
+    return {
+        "candidates": selected,
+        "collective_reference": bool(llm_result.get("collective_reference", False)),
+        "confidence": confidence,
+    }
 
 
 def _detect_relational_term(text: str) -> Optional[str]:
@@ -1340,7 +1668,7 @@ def _resolve_via_relationship(
     # Direct match
     if relationship_type in rel_map and rel_map[relationship_type]:
         matches = rel_map[relationship_type]
-        print(f"[contact_resolver_inner] Direct match found: {matches}")
+        logger.debug("[contact_resolver_inner] Direct match found: %s", matches)
 
         if len(matches) == 1:
             # Single match - resolved
@@ -1354,10 +1682,7 @@ def _resolve_via_relationship(
             # Multiple matches - return candidates
             result["found"] = False
             result["candidates"] = _dedupe_candidates(
-                [
-                    _build_candidate(c, f"relationship match: {relationship_type}")
-                    for c in matches
-                ]
+                [_build_candidate(c, f"relationship match: {relationship_type}") for c in matches]
             )
             result["confidence"] = "low"
             return result
@@ -1366,7 +1691,7 @@ def _resolve_via_relationship(
     # Use the shared mapping from contacts module
     related_types = contacts_service.find_related_types(relationship_type)
 
-    print(f"[contact_resolver_inner] Related types: {related_types}")
+    logger.debug("[contact_resolver_inner] Related types: %s", related_types)
 
     for related_type in related_types:
         if related_type in rel_map and rel_map[related_type]:
@@ -1414,9 +1739,7 @@ def _llm_disambiguate_contact(
     formatted_candidates: list[str] = []
     for i, candidate in enumerate(candidates):
         aliases = [
-            str(alias).strip()
-            for alias in (candidate.get("aliases") or [])
-            if str(alias).strip()
+            str(alias).strip() for alias in (candidate.get("aliases") or []) if str(alias).strip()
         ]
         alias_suffix = f" | Aliases: {', '.join(aliases[:5])}" if aliases else ""
         reason = str(candidate.get("match_reason") or "").strip()
@@ -1489,7 +1812,7 @@ Return ONLY a valid JSON, nothing more, no other text or explanation:
         }
 
     except Exception as e:
-        print(f"[contact_resolver] LLM disambiguation failed: {e}")
+        logger.warning("[contact_resolver] LLM disambiguation failed: %s", e, exc_info=e)
         return {
             "resolved": False,
             "contact_id": None,
@@ -1551,7 +1874,7 @@ def _infer_relationship_pairs(people: list[str], full_text: str) -> list[dict[st
         return []
 
     people_list = "\n".join(f"- {p}" for p in people)
-    print(f"[contact_resolver_inner] People list: {people_list}")
+    logger.debug("[contact_resolver_inner] People list: %s", people_list)
     prompt = f"""Infer explicit relationship pairs between mentioned people.
 
 Text: "{full_text}"
@@ -1585,7 +1908,7 @@ Return ONLY valid JSON:
         return []
 
     relationships = result.get("relationships", [])
-    print(f"[contact_resolver_inner] Relationships: {relationships}")
+    logger.debug("[contact_resolver_inner] Relationships: %s", relationships)
     pairs: list[dict[str, str]] = []
     seen_pairs: set[tuple[str, str]] = set()
     for item in relationships:
@@ -1612,7 +1935,7 @@ Return ONLY valid JSON:
             }
         )
 
-    print(f"[contact_resolver_inner] Pairs: {pairs}")
+    logger.debug("[contact_resolver_inner] Pairs: %s", pairs)
     return pairs
 
 
@@ -1655,7 +1978,7 @@ Return ONLY a valid JSON:
     except Exception:
         return None
 
-    print(f"[contact_resolver_inner] Result: {result}")
+    logger.debug("[contact_resolver_inner] Result: %s", result)
     rel_type = _normalize_relationship_type(result.get("type"))
     other_type = _normalize_relationship_type(result.get("other_type"))
 

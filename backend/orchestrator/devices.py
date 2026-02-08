@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import logging
 from uuid import uuid4
 
 from db import get_conn
+
+logger = logging.getLogger(__name__)
 
 
 def register_device(
@@ -13,7 +16,15 @@ def register_device(
     app_version: str | None,
     os_version: str | None,
 ) -> dict:
-    print("register_device", user_email, expo_push_token, platform, device_name, app_version, os_version)
+    logger.info(
+        "register_device user=%s token=%s platform=%s device=%s app=%s os=%s",
+        user_email,
+        expo_push_token,
+        platform,
+        device_name,
+        app_version,
+        os_version,
+    )
     with get_conn() as conn, conn.cursor() as cur:
         cur.execute(
             """

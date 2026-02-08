@@ -24,6 +24,16 @@ type ServiceVersionResponse = {
   fallback_count: number;
 };
 
+type LogLevel = "debug" | "info" | "decision" | "warning" | "error";
+
+type LogEntry = {
+  id: string;
+  timestamp: string;
+  level: LogLevel;
+  message: string;
+  context?: Record<string, unknown> | null;
+};
+
 function formatDate(input?: string | null): string {
   if (!input) {
     return "—";
@@ -51,10 +61,27 @@ function abbreviateSha(sha?: string | null): string {
   return sha.length > 10 ? sha.slice(0, 10) : sha;
 }
 
+function formatLogTimestamp(input: string): string {
+  const parsed = new Date(input);
+  if (Number.isNaN(parsed.getTime())) {
+    return input;
+  }
+  return parsed.toLocaleTimeString([], {
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  });
+}
+
 export default function SystemStatusPage() {
   const [data, setData] = useState<ServiceVersionResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState<boolean>(true);
+  const [logEntries, setLogEntries] = useState<LogEntry[]>([]);
+  const [logError, setLogError] = useState<string | null>(null);
+  const [logLevel, setLogLevel] = useState<"all" | LogLevel>("info");
+  const [isLogPaused, setIsLogPaused] = useState(false);
+  const [logConnected, setLogConnected] = useState(false);
 
   const frontendMetadata = {
     version: process.env.NEXT_PUBLIC_APP_VERSION ?? "unknown",
@@ -88,6 +115,60 @@ export default function SystemStatusPage() {
       cancelled = true;
     };
   }, []);
+
+  useEffect(() => {
+    if (isLogPaused) {
+      setLogConnected(false);
+      return;
+    }
+
+    const params = new URLSearchParams();
+    if (logLevel !== "all") {
+      params.set("level", logLevel);
+    }
+    const url = `/api/orchestrator/system/logs/stream${params.toString() ? `?${params.toString()}` : ""}`;
+    const source = new EventSource(url);
+
+    setLogError(null);
+    setLogConnected(true);
+
+    source.onmessage = (event) => {
+      if (!event.data) {
+        return;
+      }
+
+      try {
+        const parsed = JSON.parse(event.data) as Omit<LogEntry, "id">;
+        if (!parsed.timestamp || !parsed.level || !parsed.message) {
+          return;
+        }
+
+        setLogEntries((current) => {
+          const next = [
+            {
+              ...parsed,
+              id: `${parsed.timestamp}-${Math.random().toString(36).slice(2)}`,
+            },
+            ...current,
+          ];
+          return next.slice(0, 200);
+        });
+      } catch {
+        // Ignore malformed SSE payloads.
+      }
+    };
+
+    source.onerror = () => {
+      setLogConnected(false);
+      setLogError("Log stream disconnected. Retrying...");
+    };
+
+    return () => {
+      source.close();
+    };
+  }, [logLevel, isLogPaused]);
+
+  const filteredLogs = logLevel === "all" ? logEntries : logEntries.filter((entry) => entry.level === logLevel);
 
   return (
     <section style={{ display: "grid", gap: "24px" }}>
@@ -223,6 +304,122 @@ export default function SystemStatusPage() {
               </div>
             </div>
           </div>
+
+          <div
+            style={{
+              border: "1px solid #e2e2e2",
+              borderRadius: "12px",
+              padding: "16px",
+              background: "#fff",
+              display: "grid",
+              gap: "12px",
+            }}
+          >
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: "12px" }}>
+              <div>
+                <h2 style={{ fontSize: "1.1rem", fontWeight: 600, margin: 0 }}>Orchestrator Logs</h2>
+                <p style={{ margin: "6px 0 0", color: "#6b7280", fontSize: "0.9rem" }}>
+                  Live log stream via SSE. Showing {filteredLogs.length} of {logEntries.length} entries.
+                </p>
+              </div>
+              <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                <select
+                  value={logLevel}
+                  onChange={(event) => setLogLevel(event.target.value as "all" | LogLevel)}
+                  style={{
+                    border: "1px solid #d1d5db",
+                    borderRadius: "8px",
+                    padding: "6px 10px",
+                    fontSize: "0.9rem",
+                  }}
+                >
+                  <option value="all">All levels</option>
+                  <option value="debug">Debug</option>
+                  <option value="info">Info</option>
+                  <option value="decision">Decision</option>
+                  <option value="warning">Warning</option>
+                  <option value="error">Error</option>
+                </select>
+                <button
+                  type="button"
+                  onClick={() => setIsLogPaused((prev) => !prev)}
+                  style={{
+                    border: "1px solid #d1d5db",
+                    borderRadius: "8px",
+                    padding: "6px 10px",
+                    fontSize: "0.9rem",
+                    background: isLogPaused ? "#e2e8f0" : "#fff",
+                    cursor: "pointer",
+                  }}
+                >
+                  {isLogPaused ? "Resume" : "Pause"}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setLogEntries([])}
+                  style={{
+                    border: "1px solid #d1d5db",
+                    borderRadius: "8px",
+                    padding: "6px 10px",
+                    fontSize: "0.9rem",
+                    background: "#fff",
+                    cursor: "pointer",
+                  }}
+                >
+                  Clear
+                </button>
+              </div>
+            </div>
+
+            <div style={{ display: "flex", gap: "12px", fontSize: "0.85rem", color: "#64748b" }}>
+              <span>
+                <strong>Status:</strong> {isLogPaused ? "Paused" : logConnected ? "Connected" : "Connecting"}
+              </span>
+              {logError && <span style={{ color: "#b91c1c" }}>{logError}</span>}
+            </div>
+
+            <div
+              style={{
+                border: "1px solid #e5e7eb",
+                borderRadius: "10px",
+                background: "#0f172a",
+                color: "#e2e8f0",
+                padding: "12px",
+                maxHeight: "320px",
+                overflowY: "auto",
+                fontFamily: "var(--font-mono, monospace)",
+                fontSize: "0.8rem",
+              }}
+            >
+              {filteredLogs.length === 0 ? (
+                <div style={{ color: "#94a3b8" }}>Waiting for log events...</div>
+              ) : (
+                filteredLogs.map((entry) => (
+                  <div key={entry.id} style={{ display: "grid", gridTemplateColumns: "80px 70px 1fr", gap: "8px" }}>
+                    <span style={{ color: "#94a3b8" }}>{formatLogTimestamp(entry.timestamp)}</span>
+                    <span
+                      style={{
+                        textTransform: "uppercase",
+                        color:
+                          entry.level === "error"
+                            ? "#fca5a5"
+                            : entry.level === "warning"
+                            ? "#fde68a"
+                          : entry.level === "info"
+                            ? "#93c5fd"
+                            : entry.level === "decision"
+                            ? "#fbcfe8"
+                            : "#cbd5f5",
+                      }}
+                    >
+                      {entry.level}
+                    </span>
+                    <span>{entry.message}</span>
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
         </>
       ) : (
         <div style={{ color: "#666" }}>No version data available.</div>
@@ -230,4 +427,3 @@ export default function SystemStatusPage() {
     </section>
   );
 }
-

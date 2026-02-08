@@ -5,10 +5,13 @@ Run with: python -m pytest agents/contacts/test_resolver.py -v
 Or directly: python3 agents/contacts/test_resolver.py
 """
 
+import logging
 import os
 import sys
 from typing import Any
 from unittest.mock import MagicMock, patch
+
+logger = logging.getLogger(__name__)
 
 # Add parent directory to path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../.."))
@@ -509,7 +512,7 @@ def test_resolve_contacts_mixed_results(mock_contacts):
 
 def run_manual_tests():
     """Run tests manually without pytest."""
-    print("Running manual tests...\n")
+    logger.info("Running manual tests...")
 
     tests = [
         ("Detect relational term", test_detect_relational_term),
@@ -532,13 +535,13 @@ def run_manual_tests():
     for name, test_func in tests:
         try:
             test_func()
-            print(f"✓ {name}")
+            logger.info("✓ %s", name)
             passed += 1
         except Exception as e:
-            print(f"✗ {name}: {e}")
+            logger.error("✗ %s: %s", name, e, exc_info=e)
             failed += 1
 
-    print(f"\n{passed} passed, {failed} failed")
+    logger.info("%s passed, %s failed", passed, failed)
     return failed == 0
 
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import mimetypes
 import os
 import shutil
@@ -24,6 +25,8 @@ from tags_manager import (
     _suggest_additional_tags,
 )
 
+logger = logging.getLogger(__name__)
+
 
 class DocumentProcessingError(RuntimeError):
     """Raised when an uploaded document cannot be processed."""
@@ -42,6 +45,7 @@ MAX_DESCRIPTION_PROMPT_CHARS = int(os.getenv("DOCUMENT_DESCRIPTION_PROMPT_CHARS"
 
 LLM_CHAT_MODEL = os.getenv("LLM_CHAT_MODEL")
 OLLAMA_TIMEOUT = int(os.getenv("OLLAMA_TIMEOUT", "60"))
+
 
 def _call_llm_text(
     prompt: str,
@@ -73,6 +77,7 @@ def _call_llm_json_response(
         model=LLM_CHAT_MODEL,
         timeout=timeout,
     )
+
 
 @dataclass
 class StoredFileInfo:
@@ -298,9 +303,10 @@ def update_document_metadata(
         recovered = (extracted or "").strip()
         if recovered:
             content_text = recovered[:MAX_CONTENT_CHARS]
-            print(
-                "[documents] recovered missing content from file "
-                f"document_id={document_id} chars={len(content_text)}"
+            logger.info(
+                "[documents] recovered missing content from file document_id=%s chars=%s",
+                document_id,
+                len(content_text),
             )
     if not content_text:
         fallback_parts: list[str] = []
@@ -319,7 +325,6 @@ def update_document_metadata(
                 fallback_parts.append(text)
         fallback_joined = " ".join(fallback_parts)
         content_text = fallback_joined[:MAX_CONTENT_CHARS]
-
 
     prepared = _build_document_fields(
         document_id=document_id,
@@ -380,8 +385,7 @@ def search_documents(
         return []
 
     sorted_ids = [
-        doc_id
-        for doc_id, _ in sorted(scores.items(), key=lambda item: item[1], reverse=True)
+        doc_id for doc_id, _ in sorted(scores.items(), key=lambda item: item[1], reverse=True)
     ][: max(1, limit)]
 
     rows = _fetch_documents(sorted_ids)
@@ -413,7 +417,7 @@ def delete_document(document_id: str) -> bool:
         try:
             file_path.unlink()
         except OSError as exc:
-            print(f"[documents] Failed to delete file {file_path}: {exc}")
+            logger.warning("[documents] Failed to delete file %s: %s", file_path, exc, exc_info=exc)
     return True
 
 
@@ -481,14 +485,14 @@ def _extract_text(path: Path, mime_type: str | None) -> str:
             with open(path, encoding="utf-8", errors="ignore") as handle:
                 return handle.read()
     except Exception as exc:
-        print(f"[documents] Failed to extract text from {path}: {exc}")
+        logger.warning("[documents] Failed to extract text from %s: %s", path, exc, exc_info=exc)
     # Fallback: attempt binary read and decode
     try:
         with open(path, "rb") as handle:
             data = handle.read()
         return data.decode("utf-8", errors="ignore")
     except Exception as exc:
-        print(f"[documents] Failed binary decode for {path}: {exc}")
+        logger.warning("[documents] Failed binary decode for %s: %s", path, exc, exc_info=exc)
         return ""
 
 
@@ -499,7 +503,7 @@ def _suggest_document_date(content: str, fallback: str | None) -> datetime | Non
     excerpt = cleaned[:MAX_DATE_PROMPT_CHARS]
     system_prompt = (
         "You extract dates from documents. Find the primary date the document was written or refers to. "
-        "Respond with JSON like {\"date\": \"YYYY-MM-DD\"} or {\"date\": null} if unsure."
+        'Respond with JSON like {"date": "YYYY-MM-DD"} or {"date": null} if unsure.'
     )
     user_prompt = (
         f"Document excerpt:\n{excerpt}\n\n"
@@ -517,7 +521,7 @@ def _suggest_document_date(content: str, fallback: str | None) -> datetime | Non
         if candidate:
             return candidate
     except Exception as exc:
-        print(f"[documents] Failed to infer date: {exc}")
+        logger.warning("[documents] Failed to infer date: %s", exc, exc_info=exc)
     return None
 
 
@@ -571,15 +575,15 @@ def _build_document_fields(
     raw_metadata: dict[str, Any],
 ) -> DocumentPrepared:
     metadata = dict(raw_metadata or {})
-    print(f"[documents] tags={tags}")
+    logger.debug("[documents] tags=%s", tags)
     normalized_tags = _normalize_strings(tags)
-    print(f"[documents] normalized_tags={normalized_tags}")
+    logger.debug("[documents] normalized_tags=%s", normalized_tags)
     english_tags = _normalize_strings(_translate_tags_to_english(normalized_tags))
-    print(f"[documents] english_tags={english_tags}")
+    logger.debug("[documents] english_tags=%s", english_tags)
     suggested_tags = _suggest_additional_tags(content_text, english_tags)
-    print(f"[documents] suggested_tags={suggested_tags}")
+    logger.debug("[documents] suggested_tags=%s", suggested_tags)
     merged_tags = _merge_tag_lists(english_tags, suggested_tags)
-    print(f"[documents] merged_tags={merged_tags}")
+    logger.debug("[documents] merged_tags=%s", merged_tags)
 
     final_description = provided_description
     generated_description: str | None = None
@@ -594,11 +598,7 @@ def _build_document_fields(
     generated_title: str | None = None
     if not final_title:
         generated_title = _suggest_title(content_text, fallback=file_name or document_id)
-        final_title = (
-            generated_title
-            or _derive_title_from_filename(file_name)
-            or document_id
-        )
+        final_title = generated_title or _derive_title_from_filename(file_name) or document_id
 
     final_date = document_date
     inferred_date: datetime | None = None
@@ -654,9 +654,7 @@ def _translate_text_to_english(text: str, max_chars: int) -> str:
     if not trimmed:
         return text
     if not LLM_CHAT_MODEL:
-        print(
-            "[documents] Translation skipped: no LLM_CHAT_MODEL configured"
-        )
+        logger.info("[documents] Translation skipped: no LLM_CHAT_MODEL configured")
         return text
     excerpt = trimmed[:max_chars]
     system_prompt = (
@@ -672,7 +670,7 @@ def _translate_text_to_english(text: str, max_chars: int) -> str:
         ).strip()
         return candidate or text
     except Exception as exc:
-        print(f"[documents] Failed to translate text: {exc}")
+        logger.warning("[documents] Failed to translate text: %s", exc, exc_info=exc)
         return text
 
 
@@ -741,7 +739,7 @@ def _translate_tags_to_english(tags: Sequence[str]) -> list[str]:
         return normalized
     prompt = (
         "Translate each of the following labels into concise English (1-3 words). If a tag is already in English, just return the exact same tag. "
-        "Respond with JSON like {\"tags\": [\"tag\", ...]} in the same order."
+        'Respond with JSON like {"tags": ["tag", ...]} in the same order.'
     )
     user_prompt = json.dumps({"tags": normalized}, ensure_ascii=False)
     try:
@@ -750,19 +748,19 @@ def _translate_tags_to_english(tags: Sequence[str]) -> list[str]:
             system_prompt=prompt,
             timeout=OLLAMA_TIMEOUT,
         )
-        print(f"[documents] parsed={parsed}")
+        logger.debug("[documents] parsed=%s", parsed)
         if isinstance(parsed, dict) and isinstance(parsed.get("tags"), list):
             translated = []
             for item in parsed["tags"]:
                 if isinstance(item, str):
-                    print(f"[documents] item={item}")
+                    logger.debug("[documents] item=%s", item)
                     cleaned = item.strip()
-                    print(f"[documents] cleaned={cleaned}")
+                    logger.debug("[documents] cleaned=%s", cleaned)
                     if cleaned:
                         translated.append(cleaned)
             return translated or normalized
     except Exception as exc:
-        print(f"[documents] Failed to translate tags: {exc}")
+        logger.warning("[documents] Failed to translate tags: %s", exc, exc_info=exc)
     return normalized
 
 
@@ -784,7 +782,7 @@ def _summarize_description(content: str) -> str | None:
         ).strip()
         return candidate or None
     except Exception as exc:
-        print(f"[documents] Failed to summarize description: {exc}")
+        logger.warning("[documents] Failed to summarize description: %s", exc, exc_info=exc)
         return None
 
 
@@ -1066,7 +1064,9 @@ def _generate_document_embedding(
 
     tags = document.get("tags")
     if isinstance(tags, (list, tuple)):
-        tag_text = " ".join(str(tag).strip() for tag in tags if isinstance(tag, str) and tag.strip())
+        tag_text = " ".join(
+            str(tag).strip() for tag in tags if isinstance(tag, str) and tag.strip()
+        )
         if tag_text:
             segments.append(tag_text)
 
@@ -1098,9 +1098,11 @@ def _generate_document_embedding(
     embed_input = combined[:MAX_EMBED_CHARS] or "document"
     document_id = document.get("document_id")
     if isinstance(document_id, str):
-        print(
-            "[documents] embedding payload "
-            f"document_id={document_id} chars={len(embed_input)} bytes={len(embed_input.encode('utf-8'))}"
+        logger.debug(
+            "[documents] embedding payload document_id=%s chars=%s bytes=%s",
+            document_id,
+            len(embed_input),
+            len(embed_input.encode("utf-8")),
         )
     return embed_text(embed_input)
 
@@ -1138,5 +1140,5 @@ def _suggest_title(content: str, fallback: str | None) -> str | None:
         if candidate:
             return candidate.splitlines()[0].strip()
     except Exception as exc:
-        print(f"[documents] Failed to generate title: {exc}")
+        logger.warning("[documents] Failed to generate title: %s", exc, exc_info=exc)
     return _derive_title_from_filename(fallback)

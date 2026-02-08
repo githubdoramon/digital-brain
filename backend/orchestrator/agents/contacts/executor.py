@@ -4,9 +4,12 @@ HTTP endpoint for contact resolution.
 Thin wrapper that calls the resolver and formats the response.
 """
 
+import logging
 from typing import Any
 
 from agents.contacts.resolver import resolve_contacts_from_text
+
+logger = logging.getLogger(__name__)
 
 
 def handle_resolve_contacts_request(data: dict[str, Any]) -> dict[str, Any]:
@@ -64,9 +67,7 @@ def handle_resolve_contacts_request(data: dict[str, Any]) -> dict[str, Any]:
         return result
 
     except Exception as e:
-        print(f"[contact_endpoint] Error: {e}")
-        import traceback
-        traceback.print_exc()
+        logger.exception("[contact_endpoint] Error: %s", e)
         return {
             "status": "error",
             "message": f"Internal error: {str(e)}",

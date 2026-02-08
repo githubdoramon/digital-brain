@@ -22,7 +22,7 @@ type NoticeState = {
 
 export function TopNoticeProvider({ children }: { children: React.ReactNode }) {
   const insets = useSafeAreaInsets();
-  const headerHeight = useHeaderHeight();
+  useHeaderHeight();
   const [notice, setNotice] = React.useState<NoticeState>({
     message: '',
     visible: false,

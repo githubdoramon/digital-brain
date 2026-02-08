@@ -6,12 +6,15 @@ ensuring consistent configuration, error handling, and response parsing.
 """
 
 import json
+import logging
 import os
 from collections.abc import AsyncGenerator
 from typing import Any, Optional
 
 import httpx
 import requests
+
+logger = logging.getLogger(__name__)
 
 # LLM Configuration
 LLM_BASE_URL = os.getenv("LLM_BASE_URL")
@@ -140,8 +143,8 @@ def _call_llm_raw(
     )
     content = _post_chat_completion(payload, timeout=timeout)
 
-    print(f"[llm_helpers] LLM input: {json.dumps(messages, ensure_ascii=False)}")
-    print(f"[llm_helpers] LLM response: {json.dumps(content, ensure_ascii=False)}")
+    logger.debug("[llm_helpers] LLM input: %s", json.dumps(messages, ensure_ascii=False))
+    logger.debug("[llm_helpers] LLM response: %s", json.dumps(content, ensure_ascii=False))
 
     return content
 
@@ -355,7 +358,7 @@ def call_llm_with_tools(
             function = tool_call.get("function", {})
             name = function.get("name")
             raw_args = function.get("arguments", "{}")
-            print(f"[llm_helpers] Tool call: {name} args={raw_args}")
+            logger.debug("[llm_helpers] Tool call: %s args=%s", name, raw_args)
             try:
                 args = json.loads(raw_args) if raw_args else {}
             except json.JSONDecodeError:
@@ -370,7 +373,7 @@ def call_llm_with_tools(
                 except Exception as exc:
                     result = {"error": f"Tool handler error: {exc}"}
 
-            print(f"[llm_helpers] Tool result: {name} -> {result}")
+            logger.debug("[llm_helpers] Tool result: %s -> %s", name, result)
             messages.append(
                 {
                     "role": "tool",

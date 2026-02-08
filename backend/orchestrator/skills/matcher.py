@@ -7,6 +7,7 @@ enabling automatic skill selection without loading all skills into context.
 
 from __future__ import annotations
 
+import logging
 import os
 
 # Import from parent package
@@ -19,10 +20,13 @@ from .loader import Skill
 sys.path.insert(0, str(__file__).rsplit("/", 2)[0])
 import embeddings as embeddings_module
 
+logger = logging.getLogger(__name__)
+
 
 @dataclass
 class SkillMatch:
     """Result of matching a query to a skill."""
+
     skill: Skill
     confidence: float
 
@@ -79,7 +83,10 @@ class SkillMatcher:
 
     def _precompute_embeddings(self) -> None:
         """Pre-compute and cache embeddings for all skill descriptions."""
-        print(f"[skills.matcher] Pre-computing embeddings for {len(self.skills)} skills...")
+        logger.info(
+            "[skills.matcher] Pre-computing embeddings for %s skills...",
+            len(self.skills),
+        )
 
         for name, skill in self.skills.items():
             if name not in self._embeddings_cache:
@@ -89,9 +96,17 @@ class SkillMatcher:
                     embedding = embeddings_module.embed_text(text)
                     self._embeddings_cache[name] = embedding
                 except Exception as e:
-                    print(f"[skills.matcher] Failed to embed skill '{name}': {e}")
+                    logger.warning(
+                        "[skills.matcher] Failed to embed skill '%s': %s",
+                        name,
+                        e,
+                        exc_info=e,
+                    )
 
-        print(f"[skills.matcher] Cached {len(self._embeddings_cache)} skill embeddings")
+        logger.info(
+            "[skills.matcher] Cached %s skill embeddings",
+            len(self._embeddings_cache),
+        )
 
     def _get_skill_embedding(self, skill: Skill) -> list[float] | None:
         """Get embedding for a skill (from cache or compute)."""
@@ -106,7 +121,12 @@ class SkillMatcher:
                 self._embeddings_cache[skill.name] = embedding
             return embedding
         except Exception as e:
-            print(f"[skills.matcher] Failed to embed skill '{skill.name}': {e}")
+            logger.warning(
+                "[skills.matcher] Failed to embed skill '%s': %s",
+                skill.name,
+                e,
+                exc_info=e,
+            )
             return None
 
     def _get_query_embedding(self, query: str) -> list[float] | None:
@@ -114,7 +134,7 @@ class SkillMatcher:
         try:
             return embeddings_module.embed_text(query)
         except Exception as e:
-            print(f"[skills.matcher] Failed to embed query: {e}")
+            logger.warning("[skills.matcher] Failed to embed query: %s", e, exc_info=e)
             return None
 
     def _build_context_query(
@@ -198,7 +218,7 @@ class SkillMatcher:
                 continue
 
             similarity = _cosine_similarity(query_embedding, skill_embedding)
-            print(f"[skills.matcher] Similarity: {similarity}")
+            logger.debug("[skills.matcher] Similarity: %s", similarity)
             if similarity >= min_confidence:
                 matches.append(SkillMatch(skill=skill, confidence=similarity))
         # Sort by confidence (highest first) and limit

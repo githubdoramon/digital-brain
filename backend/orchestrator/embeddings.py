@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import logging
 import os
 from typing import Any
 
 import requests
+
+logger = logging.getLogger(__name__)
 
 OLLAMA_HOST = os.getenv("OLLAMA_HOST", "http://localhost:11434")
 OLLAMA_EMBED_MODEL = os.getenv("OLLAMA_EMBED_MODEL", "nomic-embed-text")
@@ -28,7 +31,8 @@ def _is_context_length_error(message: str) -> bool:
     return (
         "input length exceeds the context length" in normalized
         or "exceeds the context length" in normalized
-        or "context length" in normalized and "exceeds" in normalized
+        or "context length" in normalized
+        and "exceeds" in normalized
     )
 
 
@@ -91,14 +95,17 @@ def embed_text(text: str) -> list[float]:
     response = _post_embed(input_text)
 
     if response.status_code == 404:
-        print("[embeddings] /api/embed not available; using legacy /api/embeddings")
+        logger.warning("[embeddings] /api/embed not available; using legacy /api/embeddings")
         return _embed_text_with_legacy_endpoint(input_text)
 
     if response.status_code >= 400:
         body = (response.text or "").strip()
-        print(
-            "[embeddings] embed request failed "
-            f"status={response.status_code} chars={input_chars} bytes={input_bytes} body={body[:300]}"
+        logger.warning(
+            "[embeddings] embed request failed status=%s chars=%s bytes=%s body=%s",
+            response.status_code,
+            input_chars,
+            input_bytes,
+            body[:300],
         )
         if _is_context_length_error(body):
             retry_caps = [2500, 2000, 1600, 1200, 1000, 800]
@@ -110,9 +117,10 @@ def embed_text(text: str) -> list[float]:
                     continue
                 reduced_chars = len(reduced)
                 reduced_bytes = len(reduced.encode("utf-8"))
-                print(
-                    "[embeddings] retrying after context error "
-                    f"chars={reduced_chars} bytes={reduced_bytes}"
+                logger.info(
+                    "[embeddings] retrying after context error chars=%s bytes=%s",
+                    reduced_chars,
+                    reduced_bytes,
                 )
                 retry_response = _post_embed(reduced)
                 if retry_response.status_code == 404:
@@ -120,9 +128,10 @@ def embed_text(text: str) -> list[float]:
                     return _embed_text_with_legacy_endpoint(reduced)
                 if retry_response.status_code >= 400:
                     retry_body = (retry_response.text or "").strip()
-                    print(
-                        "[embeddings] retry failed "
-                        f"status={retry_response.status_code} body={retry_body[:300]}"
+                    logger.warning(
+                        "[embeddings] retry failed status=%s body=%s",
+                        retry_response.status_code,
+                        retry_body[:300],
                     )
                     continue
                 retry_data = retry_response.json()
@@ -130,9 +139,9 @@ def embed_text(text: str) -> list[float]:
                 if retry_embedding:
                     if reduced_bytes < _adaptive_max_input_bytes:
                         _adaptive_max_input_bytes = max(ADAPTIVE_MIN_INPUT_BYTES, reduced_bytes)
-                        print(
-                            "[embeddings] adapting byte cap after successful retry "
-                            f"new_byte_cap={_adaptive_max_input_bytes}"
+                        logger.info(
+                            "[embeddings] adapting byte cap after successful retry new_byte_cap=%s",
+                            _adaptive_max_input_bytes,
                         )
                     return retry_embedding
             return _embed_text_with_legacy_endpoint(input_text)

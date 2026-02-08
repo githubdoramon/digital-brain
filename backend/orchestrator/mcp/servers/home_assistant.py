@@ -15,11 +15,14 @@ Home Assistant's "Exposed Entities" settings.
 
 from __future__ import annotations
 
+import logging
 import os
 from time import perf_counter
 from typing import Any
 
 from mcp.client import MCPClient, MCPClientError
+
+logger = logging.getLogger(__name__)
 
 # Configuration from environment
 HA_URL = os.getenv("HA_URL", "").rstrip("/")
@@ -94,13 +97,11 @@ def list_ha_tools(force_refresh: bool = False) -> list[dict[str, Any]]:
         tools = client.list_tools_sync(force_refresh=force_refresh)
         return [tool.to_dict() for tool in tools]
     except MCPClientError as e:
-        print(f"[mcp.ha] Failed to list tools: {e}")
+        logger.warning("[mcp.ha] Failed to list tools: %s", e, exc_info=e)
         return []
 
 
-def call_ha_tool(
-    tool_name: str, arguments: dict[str, Any] | None = None
-) -> dict[str, Any]:
+def call_ha_tool(tool_name: str, arguments: dict[str, Any] | None = None) -> dict[str, Any]:
     """
     Call a Home Assistant MCP tool.
 
@@ -124,13 +125,19 @@ def call_ha_tool(
         result = client.call_tool_sync(tool_name, arguments)
         elapsed = perf_counter() - start
 
-        print(f"[mcp.ha] call_ha_tool({tool_name}) completed in {elapsed:.3f}s")
+        logger.info("[mcp.ha] call_ha_tool(%s) completed in %.3fs", tool_name, elapsed)
 
         return result.to_dict()
 
     except MCPClientError as e:
         elapsed = perf_counter() - start
-        print(f"[mcp.ha] call_ha_tool({tool_name}) failed in {elapsed:.3f}s: {e}")
+        logger.warning(
+            "[mcp.ha] call_ha_tool(%s) failed in %.3fs: %s",
+            tool_name,
+            elapsed,
+            e,
+            exc_info=e,
+        )
         return {
             "success": False,
             "error": str(e),
@@ -163,13 +170,23 @@ async def call_ha_tool_async(
         result = await client.call_tool_async(tool_name, arguments)
         elapsed = perf_counter() - start
 
-        print(f"[mcp.ha] call_ha_tool_async({tool_name}) completed in {elapsed:.3f}s")
+        logger.info(
+            "[mcp.ha] call_ha_tool_async(%s) completed in %.3fs",
+            tool_name,
+            elapsed,
+        )
 
         return result.to_dict()
 
     except MCPClientError as e:
         elapsed = perf_counter() - start
-        print(f"[mcp.ha] call_ha_tool_async({tool_name}) failed in {elapsed:.3f}s: {e}")
+        logger.warning(
+            "[mcp.ha] call_ha_tool_async(%s) failed in %.3fs: %s",
+            tool_name,
+            elapsed,
+            e,
+            exc_info=e,
+        )
         return {
             "success": False,
             "error": str(e),

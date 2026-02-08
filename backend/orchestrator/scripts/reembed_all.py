@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import os
 import sys
 import time
@@ -35,6 +36,24 @@ from documents import MAX_CONTENT_CHARS  # noqa: E402
 from documents import _extract_text as extract_document_text  # noqa: E402
 from documents import _generate_document_embedding as generate_document_embedding  # noqa: E402
 from embeddings import embed_text  # noqa: E402
+
+logger = logging.getLogger(__name__)
+
+
+def _log_print(*args: object, **kwargs: object) -> None:
+    sep = kwargs.get("sep", " ")
+    end = kwargs.get("end", "")
+    message = f"{sep.join(str(arg) for arg in args)}{end}".rstrip("\n")
+    if not message:
+        return
+    lowered = message.lower()
+    if "error" in lowered or "failed" in lowered or "✗" in message:
+        logger.warning(message)
+    else:
+        logger.info(message)
+
+
+print = _log_print
 
 # Constants for payload assembly before centralized embedding truncation
 MAX_EVENT_EMBED_CHARS = 6000
@@ -409,7 +428,9 @@ def reembed_documents(
                 recovered_content = recover_document_content(doc)
                 should_persist_content = False
                 if recovered_content:
-                    had_content = bool(isinstance(doc.get("content"), str) and doc.get("content").strip())
+                    had_content = bool(
+                        isinstance(doc.get("content"), str) and doc.get("content").strip()
+                    )
                     doc["content"] = recovered_content
                     should_persist_content = not had_content
 

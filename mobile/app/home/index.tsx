@@ -90,7 +90,7 @@ export default function DailyScreen() {
         if (isMounted) {
           setBriefing(response as DailyBriefing);
         }
-      } catch (err) {
+      } catch {
         if (!isMounted) return;
         const message = err instanceof Error ? err.message : 'Unable to load briefing.';
         if (message.toLowerCase().includes('briefing not found')) {
@@ -121,7 +121,7 @@ export default function DailyScreen() {
         if (!isMounted) return;
         const items = Array.isArray(response?.todos) ? response.todos : [];
         setTodos(items);
-      } catch (err) {
+      } catch {
         if (!isMounted) return;
         setTodos([]);
       } finally {

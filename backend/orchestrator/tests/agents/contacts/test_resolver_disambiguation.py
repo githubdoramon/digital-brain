@@ -284,3 +284,98 @@ def test_relationship_candidates_include_match_reason():
     assert result["found"] is False
     assert len(result["candidates"]) == 2
     assert all(c.get("match_reason") == "relationship match: doctor" for c in result["candidates"])
+
+
+def test_resolve_contact_nested_collective_uses_related_candidates(monkeypatch):
+    monkeypatch.setattr(resolver.contacts_service, "find_self_contact", lambda *_a, **_k: None)
+
+    def fake_search_contacts(query, **kwargs):
+        if query == "Dana Lewis":
+            return [
+                {
+                    "contact_id": "contact:dana",
+                    "display_name": "Dana Lewis",
+                    "match_score": 100,
+                }
+            ]
+        return []
+
+    monkeypatch.setattr(resolver.contacts_service, "search_contacts", fake_search_contacts)
+
+    monkeypatch.setattr(
+        resolver.contacts_service,
+        "get_contact_relationships",
+        lambda contact_id, **_kwargs: {
+            "relationships": [
+                {
+                    "contact_id": "contact:robin",
+                    "type": "parent",
+                    "other_type": "daughter",
+                    "related_contact": {"display_name": "Robin Lake"},
+                },
+                {
+                    "contact_id": "contact:jamie",
+                    "type": "parent",
+                    "other_type": "daughter",
+                    "related_contact": {"display_name": "Jamie Lake"},
+                },
+                {
+                    "contact_id": "contact:rafael",
+                    "type": "spouse",
+                    "other_type": "spouse",
+                    "related_contact": {"display_name": "Hugo Lake"},
+                },
+            ]
+        }
+        if contact_id == "contact:dana"
+        else {"relationships": []},
+    )
+
+    monkeypatch.setattr(
+        resolver,
+        "call_llm_json",
+        lambda *_args, **_kwargs: {
+            "candidate_numbers": [1, 2, 3],
+            "collective_reference": True,
+            "confidence": "high",
+            "reasoning": "whole family refers to multiple close relatives",
+        },
+    )
+
+    result = resolver.resolve_contact("Dana Lewis's whole family", "user@example.com")
+
+    assert result["status"] == "candidates"
+    assert result["auto_resolve_candidates"] is True
+    assert result["needs_clarification"] is False
+    assert len(result["candidates"]) == 3
+    assert all(c.get("contact_id", "").startswith("contact:") for c in result["candidates"])
+
+
+def test_resolve_people_mentions_auto_resolves_collective_candidates(monkeypatch):
+    monkeypatch.setattr(
+        resolver,
+        "resolve_contact",
+        lambda *_args, **_kwargs: {
+            "status": "candidates",
+            "candidates": [
+                {"contact_id": "contact:robin", "display_name": "Robin Lake"},
+                {"contact_id": "contact:jamie", "display_name": "Jamie Lake"},
+            ],
+            "confidence": "high",
+            "auto_resolve_candidates": True,
+            "skip_auto_disambiguation": True,
+            "clarification_prompt": "",
+        },
+    )
+
+    resolved, new, ambiguous, _cache = resolver._resolve_people_mentions(
+        people=["Dana Lewis's whole family"],
+        user_email="user@example.com",
+        full_text="having lunch with Dana Lewis and his whole family",
+    )
+
+    assert len(resolved) == 2
+    assert {item["contact_id"] for item in resolved} == {"contact:robin", "contact:jamie"}
+    assert all(item["matched_via"] == "nested_relationship_group" for item in resolved)
+    assert new == []
+    assert ambiguous == []

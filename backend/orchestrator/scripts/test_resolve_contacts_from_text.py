@@ -11,9 +11,12 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import os
 import sys
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 # Add backend/orchestrator to import path when running from scripts/
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -86,7 +89,7 @@ def main() -> int:
             conversation_messages=messages,
         )
     except Exception as exc:
-        print(f"resolve_contacts_from_text failed: {exc}", file=sys.stderr)
+        logger.error("resolve_contacts_from_text failed: %s", exc, exc_info=exc)
         return 1
 
     if args.compact:

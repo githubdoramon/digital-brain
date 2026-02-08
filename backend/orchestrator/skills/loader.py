@@ -8,6 +8,7 @@ Skills follow the Agent Skills specification:
 
 from __future__ import annotations
 
+import logging
 import os
 import re
 from dataclasses import dataclass, field
@@ -16,10 +17,13 @@ from typing import Any
 
 import yaml
 
+logger = logging.getLogger(__name__)
+
 
 @dataclass
 class SkillTool:
     """A custom tool defined by a skill."""
+
     name: str
     description: str
     script: str
@@ -29,6 +33,7 @@ class SkillTool:
 @dataclass
 class Skill:
     """Represents a loaded skill."""
+
     name: str
     description: str
     instructions: str
@@ -78,10 +83,7 @@ class Skill:
 
 
 # Regex to parse YAML frontmatter
-FRONTMATTER_PATTERN = re.compile(
-    r"^---\s*\n(.*?)\n---\s*\n(.*)$",
-    re.DOTALL
-)
+FRONTMATTER_PATTERN = re.compile(r"^---\s*\n(.*?)\n---\s*\n(.*)$", re.DOTALL)
 
 
 def _parse_frontmatter(content: str) -> tuple[dict[str, Any], str]:
@@ -140,12 +142,14 @@ def _load_tools_md(skill_path: Path) -> list[SkillTool]:
         if not name or not description:
             continue
 
-        tools.append(SkillTool(
-            name=name,
-            description=description,
-            script=script or "",
-            parameters=tool_def.get("parameters", {}),
-        ))
+        tools.append(
+            SkillTool(
+                name=name,
+                description=description,
+                script=script or "",
+                parameters=tool_def.get("parameters", {}),
+            )
+        )
 
     return tools
 
@@ -170,13 +174,13 @@ def load_skill(skill_path: Path) -> Skill | None:
     try:
         content = skill_md.read_text(encoding="utf-8")
     except Exception as e:
-        print(f"[skills] Failed to read {skill_md}: {e}")
+        logger.warning("[skills] Failed to read %s: %s", skill_md, e, exc_info=e)
         return None
 
     try:
         frontmatter, body = _parse_frontmatter(content)
     except ValueError as e:
-        print(f"[skills] Invalid frontmatter in {skill_md}: {e}")
+        logger.warning("[skills] Invalid frontmatter in %s: %s", skill_md, e, exc_info=e)
         return None
 
     # Required fields
@@ -184,16 +188,16 @@ def load_skill(skill_path: Path) -> Skill | None:
     description = frontmatter.get("description")
 
     if not name:
-        print(f"[skills] Missing 'name' in {skill_md}")
+        logger.warning("[skills] Missing 'name' in %s", skill_md)
         return None
 
     if not description:
-        print(f"[skills] Missing 'description' in {skill_md}")
+        logger.warning("[skills] Missing 'description' in %s", skill_md)
         return None
 
     # Validate name format (lowercase, hyphens only)
     if not re.match(r"^[a-z0-9]+(-[a-z0-9]+)*$", name):
-        print(f"[skills] Invalid name format '{name}' in {skill_md}")
+        logger.warning("[skills] Invalid name format '%s' in %s", name, skill_md)
         return None
 
     # Load optional components
@@ -203,10 +207,7 @@ def load_skill(skill_path: Path) -> Skill | None:
     assets = _list_files_in_dir(skill_path / "assets")
 
     # Extract optional metadata
-    metadata = {
-        k: v for k, v in frontmatter.items()
-        if k not in ("name", "description")
-    }
+    metadata = {k: v for k, v in frontmatter.items() if k not in ("name", "description")}
 
     return Skill(
         name=name,
@@ -238,7 +239,7 @@ def load_all_skills(skills_dir: Path | None = None) -> list[Skill]:
         skills_dir = base_dir / dir_name
 
     if not skills_dir.exists():
-        print(f"[skills] Skills directory not found: {skills_dir}")
+        logger.warning("[skills] Skills directory not found: %s", skills_dir)
         return []
 
     skills = []
@@ -252,8 +253,8 @@ def load_all_skills(skills_dir: Path | None = None) -> list[Skill]:
 
         skill = load_skill(item)
         if skill:
-            print(f"[skills] Loaded skill: {skill.name}")
+            logger.info("[skills] Loaded skill: %s", skill.name)
             skills.append(skill)
 
-    print(f"[skills] Loaded {len(skills)} skills from {skills_dir}")
+    logger.info("[skills] Loaded %s skills from %s", len(skills), skills_dir)
     return skills

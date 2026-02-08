@@ -7,17 +7,17 @@ These functions build context that gets injected into prompts:
 - Self context (user information)
 """
 
+import logging
 from datetime import datetime, timezone
 from typing import Any, Optional
+
+logger = logging.getLogger(__name__)
 
 
 def get_time_context() -> str:
     """Get the current time context for the agent."""
     current_utc = datetime.now(timezone.utc)
-    return (
-        "Current time context available to you:\n"
-        f"- UTC now: {current_utc.isoformat()}\n"
-    )
+    return f"Current time context available to you:\n- UTC now: {current_utc.isoformat()}\n"
 
 
 def get_tag_context() -> Optional[str]:
@@ -42,7 +42,7 @@ def get_tag_context() -> Optional[str]:
 
         return "\n".join(lines)
     except Exception as exc:
-        print(f"[context] Failed to get tag taxonomy: {exc}")
+        logger.exception("[context] Failed to get tag taxonomy: %s", exc)
         return None
 
 
@@ -118,7 +118,7 @@ def get_skill_index() -> Optional[str]:
         registry = skills.get_registry()
         return registry.get_skill_index()
     except Exception as exc:
-        print(f"[context] Failed to get skill index: {exc}")
+        logger.exception("[context] Failed to get skill index: %s", exc)
         return None
 
 

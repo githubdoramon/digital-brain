@@ -7,6 +7,7 @@ and output limits.
 
 from __future__ import annotations
 
+import logging
 import os
 import subprocess
 from typing import Any
@@ -35,6 +36,8 @@ BLOCKED_PATTERNS = [
     "xmrig",
     "minerd",
 ]
+
+logger = logging.getLogger(__name__)
 
 
 def execute_bash(
@@ -114,7 +117,7 @@ def execute_bash(
             env=cmd_env,
         )
 
-        print(result)
+        logger.debug("[bash_tools] result=%s", result)
 
         stdout = result.stdout or ""
         stderr = result.stderr or ""
@@ -139,20 +142,23 @@ def execute_bash(
 
         # Always print stdout
         if stdout:
-            print(stdout)
+            logger.debug("[bash_tools] stdout=%s", stdout)
 
         # Print debug info on non-zero return code
         if result.returncode != 0:
-            print(f"[bash_tools] ERROR: Command exited with return code {result.returncode}")
-            print(f"[bash_tools] Command was: {command!r}")
+            logger.error(
+                "[bash_tools] Command exited with return code %s",
+                result.returncode,
+            )
+            logger.error("[bash_tools] Command was: %r", command)
             if stderr:
-                print(f"[bash_tools] stderr: {stderr}")
+                logger.error("[bash_tools] stderr: %s", stderr)
 
         return output
 
     except subprocess.TimeoutExpired:
-        print(f"[bash_tools] ERROR: Command timed out after {timeout} seconds")
-        print(f"[bash_tools] Command was: {command!r}")
+        logger.error("[bash_tools] Command timed out after %s seconds", timeout)
+        logger.error("[bash_tools] Command was: %r", command)
         return {
             "error": f"Command timed out after {timeout} seconds",
             "stdout": "",
@@ -160,9 +166,9 @@ def execute_bash(
             "returncode": -1,
         }
     except Exception as e:
-        print(f"[bash_tools] ERROR: Command failed with exception: {e}")
-        print(f"[bash_tools] Command was: {command!r}")
-        print(f"[bash_tools] Working dir: {working_dir}")
+        logger.exception("[bash_tools] Command failed with exception: %s", e)
+        logger.error("[bash_tools] Command was: %r", command)
+        logger.error("[bash_tools] Working dir: %s", working_dir)
         return {
             "error": str(e),
             "stdout": "",

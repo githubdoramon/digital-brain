@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import asyncio
 import json
+import logging
 import os
 import re
 from contextlib import asynccontextmanager
@@ -41,6 +43,12 @@ from agent.state import AgentState
 from auth import get_current_user
 from db import get_conn
 from notifications.preferences import get_push_settings, update_push_settings
+from observability.log_stream import (
+    LOG_LEVELS,
+    configure_logging,
+    get_log_buffer,
+    install_stdout_logger,
+)
 from schemas import (
     AskIn,
     AskOut,
@@ -77,6 +85,8 @@ from tools.handlers import get_handler
 from tools.registry import get_registry
 from tools.validators.pre_execution import PreExecutionValidator
 from versioning import get_service_versions
+
+logger = logging.getLogger(__name__)
 
 ORCHESTRATOR_API_KEY = os.getenv("ORCHESTRATOR_API_KEY")
 
@@ -142,6 +152,8 @@ def _format_briefing_response(briefing: dict[str, Any]) -> dict[str, Any]:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    configure_logging()
+    install_stdout_logger()
     # Startup: Ensure we can connect at startup; this raises early if DB connection is misconfigured.
     with get_conn():
         pass
@@ -165,6 +177,41 @@ api.add_middleware(
 @api.get("/mobile/system/versions", response_model=ServiceVersionCollection)
 def read_service_versions(user: dict = Depends(get_current_user)):
     return get_service_versions()
+
+
+@api.get("/system/logs/stream")
+async def stream_system_logs(
+    level: str | None = Query(default=None),
+    user: dict = Depends(get_current_user),
+    _: None = Depends(require_service_api_key),
+):
+    if level:
+        normalized = level.lower()
+        if normalized not in LOG_LEVELS:
+            raise HTTPException(status_code=400, detail=f"Invalid log level: {level}")
+        level = normalized
+
+    buffer = get_log_buffer()
+
+    async def event_generator():
+        last_id = 0
+        while True:
+            entries = buffer.get_since(last_id, level=level)
+            if entries:
+                for entry in entries:
+                    last_id = entry.entry_id
+                    yield f"data: {json.dumps(entry.to_dict())}\n\n"
+            await asyncio.sleep(0.5)
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 # --------------------------- Mobile endpoints ---------------------------
@@ -269,21 +316,21 @@ def get_place(place_id: str, user: dict = Depends(get_current_user)):
 
 @api.get("/mobile/contacts/{contact_id}/avatar")
 def get_contact_avatar(contact_id: str, _: dict = Depends(get_current_user)):
-    print(f"[get_contact_avatar] contact_id={contact_id}")
+    logger.debug("[get_contact_avatar] contact_id=%s", contact_id)
     contact = contacts_service.get_contact(contact_id)
-    print(f"[get_contact_avatar] contact={contact}")
+    logger.debug("[get_contact_avatar] contact=%s", contact)
     if contact is None or contacts_service.is_external_placeholder(contact.get("display_name")):
         raise HTTPException(status_code=404, detail="Contact not found")
 
     external_id = contact.get("external_id")
-    print(f"[get_contact_avatar] external_id={external_id}")
+    logger.debug("[get_contact_avatar] external_id=%s", external_id)
     if not external_id:
         raise HTTPException(status_code=404, detail="Avatar not available")
 
     try:
         result = immich_client.fetch_person_thumbnail(external_id)
     except immich_client.ImmichClientError as exc:
-        print(f"[get_contact_avatar] error={exc}")
+        logger.exception("[get_contact_avatar] error=%s", exc)
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
     if not result:
@@ -396,7 +443,7 @@ async def handle_telegram_messages(
     except telegram_bot.TelegramProcessingError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except telegram_bot.TelegramUploadError as exc:
-        print(f"[telegram_bot] upload error={exc}")
+        logger.exception("[telegram_bot] upload error=%s", exc)
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
 
@@ -548,7 +595,7 @@ async def upload_document(
     except documents.DocumentProcessingError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     except Exception as exc:
-        print(f"[documents] Failed to ingest document: {exc}")
+        logger.exception("[documents] Failed to ingest document: %s", exc)
         raise HTTPException(status_code=500, detail="Failed to ingest document")
 
     return DocumentDetailOut(**document)
@@ -570,7 +617,7 @@ def ingest_external_document(
     except documents.DocumentProcessingError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     except Exception as exc:
-        print(f"[documents] Failed to ingest document: {exc}")
+        logger.exception("[documents] Failed to ingest document: %s", exc)
         raise HTTPException(status_code=500, detail="Failed to ingest document")
 
     return DocumentDetailOut(**document)
@@ -611,7 +658,7 @@ def update_document(
     except documents.DocumentProcessingError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     except Exception as exc:
-        print(f"[documents] Failed to update document metadata: {exc}")
+        logger.exception("[documents] Failed to update document metadata: %s", exc)
         raise HTTPException(status_code=500, detail="Failed to update document")
 
     if not document:
@@ -885,7 +932,7 @@ def confirm_event_command(
         )
 
     except Exception as e:
-        print(f"[event_confirm] Failed to create event: {e}")
+        logger.exception("[event_confirm] Failed to create event: %s", e)
         raise HTTPException(status_code=500, detail=f"Failed to create event: {str(e)}")
 
 
@@ -1202,7 +1249,7 @@ def _handle_pending_event(
             assistant_metadata={"command_result": _sanitize_command_metadata(command_result)},
         )
     except Exception as exc:
-        print(f"[command_thread] Failed to record exchange: {exc}")
+        logger.warning("[command_thread] Failed to record exchange: %s", exc, exc_info=exc)
 
     return command_result, command_thread_id
 
@@ -1255,7 +1302,7 @@ def _handle_command(
             assistant_metadata={"command_result": _sanitize_command_metadata(command_result)},
         )
     except Exception as exc:
-        print(f"[command_thread] Failed to record exchange: {exc}")
+        logger.warning("[command_thread] Failed to record exchange: %s", exc, exc_info=exc)
 
     return command_result, command_thread_id
 
@@ -1337,11 +1384,11 @@ async def ask(payload: AskIn, user: dict = Depends(get_current_user)):
 
     ctx = _resolve_session_context(payload, user_email, force_new_session=force_new_session)
     if ctx.is_new_session:
-        print(f"[session] new session started session={ctx.session_id} user={user_email}")
+        logger.info("[session] new session started session=%s user=%s", ctx.session_id, user_email)
 
     # Handle /new command with no actual message
     if ctx.is_reset_only:
-        print(f"[ask] session reset session={ctx.session_id} user={user_email}")
+        logger.info("[ask] session reset session=%s user=%s", ctx.session_id, user_email)
         return AskOut(**_make_reset_bundle(ctx))
 
     limit = payload.limit or 30
@@ -1350,8 +1397,14 @@ async def ask(payload: AskIn, user: dict = Depends(get_current_user)):
         preview = preview[:117] + "..."
 
     mode = "main_session" if not (payload.thread_id or payload.session_id) else "thread"
-    print(
-        f"[ask] start session={ctx.session_id} user={user_email} limit={limit} mode={mode} is_new={ctx.is_new_session} question={preview!r}"
+    logger.info(
+        "[ask] start session=%s user=%s limit=%s mode=%s is_new=%s question=%r",
+        ctx.session_id,
+        user_email,
+        limit,
+        mode,
+        ctx.is_new_session,
+        preview,
     )
 
     bundle = await llm.answer_question(
@@ -1371,8 +1424,12 @@ async def ask(payload: AskIn, user: dict = Depends(get_current_user)):
     elapsed = perf_counter() - start_time
     search_results = bundle.get("search_results")
     search_count = len(search_results) if isinstance(search_results, list) else "n/a"
-    print(
-        f"[ask] complete session={ctx.session_id} user={user_email} elapsed={elapsed:.3f}s search_results={search_count}"
+    logger.info(
+        "[ask] complete session=%s user=%s elapsed=%.3fs search_results=%s",
+        ctx.session_id,
+        user_email,
+        elapsed,
+        search_count,
     )
 
     from commands.storage import get_pending_event
@@ -1471,11 +1528,11 @@ async def ask_stream(payload: AskIn, user: dict = Depends(get_current_user)):
 
     ctx = _resolve_session_context(payload, user_email, force_new_session=force_new_session)
     if ctx.is_new_session:
-        print(f"[session] new session started session={ctx.session_id} user={user_email}")
+        logger.info("[session] new session started session=%s user=%s", ctx.session_id, user_email)
 
     # Handle /new command with no actual message
     if ctx.is_reset_only:
-        print(f"[ask/stream] session reset session={ctx.session_id} user={user_email}")
+        logger.info("[ask/stream] session reset session=%s user=%s", ctx.session_id, user_email)
         reset_bundle = _make_reset_bundle(ctx)
 
         async def reset_generator():
@@ -1499,8 +1556,14 @@ async def ask_stream(payload: AskIn, user: dict = Depends(get_current_user)):
     if len(preview) > 120:
         preview = preview[:117] + "..."
     mode = "main_session" if not (payload.thread_id or payload.session_id) else "thread"
-    print(
-        f"[ask/stream] start session={ctx.session_id} user={user_email} limit={limit} mode={mode} is_new={ctx.is_new_session} question={preview!r}"
+    logger.info(
+        "[ask/stream] start session=%s user=%s limit=%s mode=%s is_new=%s question=%r",
+        ctx.session_id,
+        user_email,
+        limit,
+        mode,
+        ctx.is_new_session,
+        preview,
     )
 
     async def event_generator():
@@ -1533,11 +1596,14 @@ async def ask_stream(payload: AskIn, user: dict = Depends(get_current_user)):
 
                 if event.get("type") == "done":
                     elapsed = perf_counter() - start_time
-                    print(
-                        f"[ask/stream] complete session={ctx.session_id} user={user_email} elapsed={elapsed:.3f}s"
+                    logger.info(
+                        "[ask/stream] complete session=%s user=%s elapsed=%.3fs",
+                        ctx.session_id,
+                        user_email,
+                        elapsed,
                     )
         except Exception as exc:
-            print(f"[ask/stream] error session={ctx.session_id}: {exc}")
+            logger.exception("[ask/stream] error session=%s", ctx.session_id)
             yield f"data: {json.dumps({'type': 'error', 'message': str(exc)})}\n\n"
 
     return StreamingResponse(

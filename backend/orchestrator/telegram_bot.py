@@ -56,19 +56,18 @@ class TelegramConfig:
 
 
 def process_update(update: dict[str, Any], *, secret_token: str | None) -> dict[str, Any]:
-
     config = _load_config()
     _verify_secret(secret_token, config)
 
     message = _extract_message(update)
-    print(f"[telegram_bot] message={message}")
+    logger.debug("[telegram_bot] message=%s", message)
     if not message:
         logger.info("Telegram webhook ignored update without a message: %s", list(update.keys()))
         return {"ok": True, "skipped": "no_message"}
 
     chat = message.get("chat") or {}
     chat_id = chat.get("id")
-    print(f"[telegram_bot] chat_id={chat_id}")
+    logger.debug("[telegram_bot] chat_id=%s", chat_id)
     if chat_id is None:
         raise TelegramProcessingError("Missing chat identifier in Telegram payload")
 
@@ -77,12 +76,12 @@ def process_update(update: dict[str, Any], *, secret_token: str | None) -> dict[
         raise TelegramAuthError("Chat is not allowed to use this webhook")
 
     candidate = _extract_image_candidate(message)
-    print(f"[telegram_bot] candidate={candidate}")
+    logger.debug("[telegram_bot] candidate=%s", candidate)
     if not candidate:
         logger.info("Telegram webhook skipped non-image message chat=%s", chat_id_int)
         return {"ok": True, "skipped": "non_image_message"}
 
-    print(f"[telegram_bot] candidate={candidate}")
+    logger.debug("[telegram_bot] candidate=%s", candidate)
     file_bytes, remote_filename = _download_file(candidate["file_id"], config)
     taken_at = _message_datetime(message)
     filename = _build_filename(candidate, remote_filename, chat_id_int)
@@ -170,7 +169,8 @@ def _extract_image_candidate(message: dict[str, Any]) -> dict[str, Any] | None:
         # Telegram sends an array of sizes; pick the largest by file_size or width*height
         candidate = max(
             photos,
-            key=lambda item: item.get("file_size") or (item.get("width", 0) * item.get("height", 0)),
+            key=lambda item: item.get("file_size")
+            or (item.get("width", 0) * item.get("height", 0)),
         )
         candidate_copy = dict(candidate)
         candidate_copy["mime_type"] = "image/jpeg"

@@ -63,7 +63,7 @@ function TabBar({ state, navigation }: BottomTabBarProps) {
         useNativeDriver: false,
       }),
     ]).start();
-  }, [currentRoute, indicatorWidth, indicatorX]);
+  }, [currentRoute, indicatorWidth, indicatorX, isLeftTabActive]);
 
   React.useEffect(() => {
     const focused = currentRoute === chatRoute;

@@ -98,7 +98,7 @@ export default function EventDetailScreen() {
         if (mounted) {
           setEvent(result);
         }
-      } catch (error) {
+      } catch {
         if (mounted) {
           setEvent(null);
         }
@@ -116,7 +116,7 @@ export default function EventDetailScreen() {
         const map = new Map<string, string>();
         result.contacts.forEach((item) => map.set(item.contact_id, item.display_name));
         setContactMap(map);
-      } catch (error) {
+      } catch {
         setContactMap(new Map());
       }
     })();

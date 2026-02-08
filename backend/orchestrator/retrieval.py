@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from collections.abc import Sequence
 from datetime import date, datetime, time, timedelta, timezone
 from typing import Any
@@ -12,6 +13,8 @@ from db import fetch_events, get_conn
 from documents import _vector_search_documents as vector_search_documents
 from embeddings import embed_text
 from search_normalization import normalize_search_text
+
+logger = logging.getLogger(__name__)
 
 
 # --------------------------- Resolution helpers ---------------------------
@@ -149,10 +152,13 @@ def search_memories(
         is_temporal_query and ordering == "relevance"
     )
     temporal_ordering = ordering if ordering in {"newest", "oldest"} else "newest"
-    print(
-        "[retrieval] search_memories filters "
-        f"people={list(people or [])} places={list(place_ids or [])} "
-        f"span={span} sort_order={ordering} limit={limit}"
+    logger.info(
+        "[retrieval] search_memories filters people=%s places=%s span=%s sort_order=%s limit=%s",
+        list(people or []),
+        list(place_ids or []),
+        span,
+        ordering,
+        limit,
     )
 
     vec_events = vector_search(normalized_query, 50) if normalized_query else {}
@@ -186,7 +192,9 @@ def search_memories(
 
     event_rows_all = fetch_events(list(event_ids)) if event_ids else []
     event_lookup_all = {row["id"]: row for row in event_rows_all}
-    doc_lookup_all = fetch_document_summaries(list(doc_ids)) if (doc_ids and use_temporal_ordering) else {}
+    doc_lookup_all = (
+        fetch_document_summaries(list(doc_ids)) if (doc_ids and use_temporal_ordering) else {}
+    )
 
     combined: list[tuple[str, str, float]] = []
 
@@ -221,7 +229,9 @@ def search_memories(
             reverse=(temporal_ordering == "newest"),
         )
         without_dates.sort(key=lambda item: (item[0], item[1]))
-        combined = [(item_id, kind, score) for item_id, kind, score, _ in with_dates] + without_dates
+        combined = [
+            (item_id, kind, score) for item_id, kind, score, _ in with_dates
+        ] + without_dates
     else:
         combined.extend((event_id, "event", event_scores[event_id]) for event_id in event_scores)
         combined.extend((doc_id, "document", doc_scores[doc_id]) for doc_id in doc_scores)
@@ -346,15 +356,17 @@ def search_memories(
             )
     event_titles = [row.get("title") for row in results if row.get("kind") == "event"]
     document_titles = [row.get("title") for row in results if row.get("kind") == "document"]
-    print(
-        "[retrieval] search_memories returning "
-        f"count={len(results)} event_titles={event_titles} document_titles={document_titles}"
+    logger.info(
+        "[retrieval] search_memories returning count=%s event_titles=%s document_titles=%s",
+        len(results),
+        event_titles,
+        document_titles,
     )
     return {"results": results}
 
 
 def vector_search(query: str, k: int = 50):
-    print(f"[retrieval] vector_search memories (query={query!r}, k={k})")
+    logger.debug("[retrieval] vector_search memories (query=%r, k=%s)", query, k)
     cleaned_query = normalize_search_text(query)
     if not cleaned_query:
         return {}
@@ -373,7 +385,7 @@ def vector_search(query: str, k: int = 50):
 
 
 def vector_search_contacts(query: str, k: int = 20) -> list[tuple[str, float]]:
-    print(f"[retrieval] vector_search contacts (query={query!r}, k={k})")
+    logger.debug("[retrieval] vector_search contacts (query=%r, k=%s)", query, k)
     cleaned_query = normalize_search_text(query)
     if not cleaned_query:
         return []

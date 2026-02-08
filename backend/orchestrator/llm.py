@@ -6,11 +6,14 @@ Main entry point for LLM interactions using the bounded agent controller.
 
 from __future__ import annotations
 
+import logging
 import os
 from collections.abc import AsyncGenerator
 from typing import Any
 
 import conversations
+
+logger = logging.getLogger(__name__)
 
 LLM_BASE_URL = os.getenv("LLM_BASE_URL")
 LLM_CHAT_MODEL = os.getenv("LLM_CHAT_MODEL")
@@ -20,12 +23,13 @@ if not LLM_BASE_URL:
 if not LLM_CHAT_MODEL:
     raise RuntimeError("LLM_CHAT_MODEL environment variable is required")
 
-print("[llm] Bounded agent architecture ENABLED")
+logger.info("[llm] Bounded agent architecture ENABLED")
 
 
 # ---------------------------------------------------------------------------
 # Main agent functions
 # ---------------------------------------------------------------------------
+
 
 async def answer_question(
     question: str,
@@ -59,7 +63,7 @@ async def answer_question(
         try:
             conversation_history = conversations.get_conversation_history(session_id, user_email)
         except Exception as exc:
-            print(f"[session] Failed to load history: {exc}")
+            logger.warning("[session] Failed to load history: %s", exc, exc_info=exc)
 
     controller = get_controller()
     result = await controller.run(
@@ -88,17 +92,18 @@ async def answer_question(
             )
 
             # Generate title for new threads
-            if (
-                persist_result.get("message_count_before", 0) == 0
-                and conversations.is_default_title(persist_result.get("previous_title"))
-            ):
+            if persist_result.get(
+                "message_count_before", 0
+            ) == 0 and conversations.is_default_title(persist_result.get("previous_title")):
                 generated_title = _generate_thread_title(question)
                 if generated_title:
-                    updated = conversations.update_thread_title(session_id, user_email, generated_title)
+                    updated = conversations.update_thread_title(
+                        session_id, user_email, generated_title
+                    )
                     if updated:
                         result["thread_title"] = updated.get("title")
         except Exception as exc:
-            print(f"[session] Failed to persist exchange: {exc}")
+            logger.warning("[session] Failed to persist exchange: %s", exc, exc_info=exc)
 
     return result
 
@@ -138,7 +143,7 @@ async def answer_question_stream(
         try:
             conversation_history = conversations.get_conversation_history(session_id, user_email)
         except Exception as exc:
-            print(f"[session] Failed to load history: {exc}")
+            logger.warning("[session] Failed to load history: %s", exc, exc_info=exc)
 
     controller = get_controller()
     final_bundle = None
@@ -172,13 +177,14 @@ async def answer_question_stream(
             )
 
             # Generate title for new threads
-            if (
-                persist_result.get("message_count_before", 0) == 0
-                and conversations.is_default_title(persist_result.get("previous_title"))
-            ):
+            if persist_result.get(
+                "message_count_before", 0
+            ) == 0 and conversations.is_default_title(persist_result.get("previous_title")):
                 generated_title = _generate_thread_title(question)
                 if generated_title:
-                    updated = conversations.update_thread_title(session_id, user_email, generated_title)
+                    updated = conversations.update_thread_title(
+                        session_id, user_email, generated_title
+                    )
                     if updated:
                         # Yield title update event
                         yield {
@@ -186,7 +192,7 @@ async def answer_question_stream(
                             "title": updated.get("title"),
                         }
         except Exception as exc:
-            print(f"[session] Failed to persist exchange: {exc}")
+            logger.warning("[session] Failed to persist exchange: %s", exc, exc_info=exc)
 
     return
 
@@ -194,6 +200,7 @@ async def answer_question_stream(
 # ---------------------------------------------------------------------------
 # Helper functions
 # ---------------------------------------------------------------------------
+
 
 def _generate_thread_title(question: str) -> str | None:
     """Generate a thread title from the first question."""
@@ -206,12 +213,12 @@ def _generate_thread_title(question: str) -> str | None:
     )
 
     try:
-        title = call_llm(prompt, timeout=30).strip().strip('"\'')
+        title = call_llm(prompt, timeout=30).strip().strip("\"'")
 
         if len(title) > 100:
             title = title[:97] + "..."
 
         return title if title else None
     except Exception as exc:
-        print(f"[agent] Failed to generate thread title: {exc}")
+        logger.warning("[agent] Failed to generate thread title: %s", exc, exc_info=exc)
         return None

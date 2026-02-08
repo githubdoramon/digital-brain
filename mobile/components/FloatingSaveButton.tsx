@@ -1,5 +1,5 @@
 import React, { useEffect, useRef } from 'react';
-import { ActivityIndicator, Animated, Pressable, StyleSheet, Text } from 'react-native';
+import { ActivityIndicator, Animated, Pressable, StyleSheet } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
 
 import { theme } from '@/theme';

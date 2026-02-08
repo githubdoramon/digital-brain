@@ -7,6 +7,7 @@ exposes them for matching and execution.
 
 from __future__ import annotations
 
+import logging
 import os
 from pathlib import Path
 from threading import Lock
@@ -14,6 +15,8 @@ from typing import Any
 
 from .loader import Skill, load_all_skills
 from .matcher import SkillMatch, SkillMatcher
+
+logger = logging.getLogger(__name__)
 
 
 class SkillRegistry:
@@ -61,7 +64,10 @@ class SkillRegistry:
             cache_embeddings = os.getenv("SKILLS_CACHE_EMBEDDINGS", "true").lower() == "true"
             self._matcher = SkillMatcher(skills, cache_embeddings=cache_embeddings)
 
-            print(f"[skills.registry] Initialized registry with {len(self._skills)} skills")
+            logger.info(
+                "[skills.registry] Initialized registry with %s skills",
+                len(self._skills),
+            )
             return len(self._skills)
 
     def get_skill(self, name: str) -> Skill | None:

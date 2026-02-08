@@ -23,6 +23,7 @@ Usage:
 
 from __future__ import annotations
 
+import logging
 import threading
 from dataclasses import dataclass
 from time import perf_counter
@@ -30,10 +31,13 @@ from typing import Any
 
 from mcp.client import MCPClient, MCPClientError, MCPTool
 
+logger = logging.getLogger(__name__)
+
 
 @dataclass
 class RegisteredServer:
     """A registered MCP server with metadata."""
+
     name: str
     client: MCPClient
     description: str = ""
@@ -77,7 +81,7 @@ class MCPRegistry:
                 description=description,
                 enabled=enabled,
             )
-            print(f"[mcp.registry] Registered server: {name}")
+            logger.info("[mcp.registry] Registered server: %s", name)
 
     def unregister(self, name: str) -> bool:
         """
@@ -92,7 +96,7 @@ class MCPRegistry:
         with self._lock:
             if name in self._servers:
                 del self._servers[name]
-                print(f"[mcp.registry] Unregistered server: {name}")
+                logger.info("[mcp.registry] Unregistered server: %s", name)
                 return True
             return False
 
@@ -164,7 +168,12 @@ class MCPRegistry:
                 try:
                     result[name] = server.client.list_tools_sync(force_refresh=force_refresh)
                 except MCPClientError as e:
-                    print(f"[mcp.registry] Failed to list tools from {name}: {e}")
+                    logger.warning(
+                        "[mcp.registry] Failed to list tools from %s: %s",
+                        name,
+                        e,
+                        exc_info=e,
+                    )
                     server.last_error = str(e)
                     result[name] = []
 
@@ -203,7 +212,12 @@ class MCPRegistry:
                 server.last_error = None
 
             elapsed = perf_counter() - start
-            print(f"[mcp.registry] {server_name}.{tool_name}() completed in {elapsed:.3f}s")
+            logger.info(
+                "[mcp.registry] %s.%s() completed in %.3fs",
+                server_name,
+                tool_name,
+                elapsed,
+            )
 
             return result.to_dict()
 
@@ -212,7 +226,14 @@ class MCPRegistry:
                 server.last_error = str(e)
 
             elapsed = perf_counter() - start
-            print(f"[mcp.registry] {server_name}.{tool_name}() failed in {elapsed:.3f}s: {e}")
+            logger.warning(
+                "[mcp.registry] %s.%s() failed in %.3fs: %s",
+                server_name,
+                tool_name,
+                elapsed,
+                e,
+                exc_info=e,
+            )
 
             return {"success": False, "error": str(e)}
 
@@ -249,7 +270,12 @@ class MCPRegistry:
                 server.last_error = None
 
             elapsed = perf_counter() - start
-            print(f"[mcp.registry] {server_name}.{tool_name}() completed in {elapsed:.3f}s")
+            logger.info(
+                "[mcp.registry] %s.%s() completed in %.3fs",
+                server_name,
+                tool_name,
+                elapsed,
+            )
 
             return result.to_dict()
 
@@ -258,7 +284,14 @@ class MCPRegistry:
                 server.last_error = str(e)
 
             elapsed = perf_counter() - start
-            print(f"[mcp.registry] {server_name}.{tool_name}() failed in {elapsed:.3f}s: {e}")
+            logger.warning(
+                "[mcp.registry] %s.%s() failed in %.3fs: %s",
+                server_name,
+                tool_name,
+                elapsed,
+                e,
+                exc_info=e,
+            )
 
             return {"success": False, "error": str(e)}
 
@@ -276,7 +309,11 @@ class MCPRegistry:
         server = self.get_server(server_name)
         if server:
             server.enabled = enabled
-            print(f"[mcp.registry] Server {server_name} {'enabled' if enabled else 'disabled'}")
+            logger.info(
+                "[mcp.registry] Server %s %s",
+                server_name,
+                "enabled" if enabled else "disabled",
+            )
             return True
         return False
 

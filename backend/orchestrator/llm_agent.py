@@ -8,8 +8,11 @@ This module contains:
 """
 
 import json
+import logging
 import re
 from typing import Any, Optional
+
+logger = logging.getLogger(__name__)
 
 # Configuration
 MAX_ITERATIONS = 15  # Safety limit to prevent infinite loops
@@ -162,13 +165,13 @@ def extract_event_proposal(content: str) -> Optional[dict[str, Any]]:
     if end_idx == -1:
         return None
 
-    json_str = content[start_idx + len(EVENT_PROPOSAL_START):end_idx].strip()
+    json_str = content[start_idx + len(EVENT_PROPOSAL_START) : end_idx].strip()
 
     try:
         raw = json.loads(json_str)
         return normalize_event_proposal(raw)
     except json.JSONDecodeError as exc:
-        print(f"[agent] Failed to parse event proposal JSON: {exc}")
+        logger.warning("[agent] Failed to parse event proposal JSON: %s", exc)
         return None
 
 
@@ -206,9 +209,7 @@ def normalize_event_proposal(raw: Any) -> Optional[dict[str, Any]]:
         proposal["location"] = str(raw["location"]).strip()
 
     if "attendees" in raw and isinstance(raw["attendees"], list):
-        proposal["attendees"] = [
-            str(a).strip() for a in raw["attendees"] if a
-        ]
+        proposal["attendees"] = [str(a).strip() for a in raw["attendees"] if a]
 
     if "all_day" in raw:
         proposal["all_day"] = _coerce_bool(raw["all_day"])
@@ -248,7 +249,7 @@ def strip_event_proposal(content: str) -> str:
 
     # Remove the event proposal section
     before = content[:start_idx].rstrip()
-    after = content[end_idx + len(EVENT_PROPOSAL_END):].lstrip()
+    after = content[end_idx + len(EVENT_PROPOSAL_END) :].lstrip()
 
     return (before + " " + after).strip() if after else before
 
