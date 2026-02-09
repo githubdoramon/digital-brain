@@ -270,6 +270,25 @@ class PostExecutionValidator:
                 suggested_next_tools=["resolve_query", "search_memories"],
             )
 
+        if tool_name == "emit_ui_directive":
+            if result.get("success"):
+                directive = result.get("directive") or {}
+                reason = (
+                    result.get("message")
+                    or directive.get("fallback_text")
+                    or "Structured follow-up requested from user"
+                )
+                return PostExecutionResult(
+                    coverage=GoalCoverage.NEED_USER_INPUT,
+                    reason=reason,
+                    extracted_facts=["Prepared structured UI follow-up"],
+                )
+            return PostExecutionResult(
+                coverage=GoalCoverage.FAILED,
+                reason=result.get("error", "Failed to emit UI directive"),
+                suggested_next_tools=["search_memories", "resolve_query"],
+            )
+
         # Check lookup_contact - extract contact search/relationship results
         if tool_name == "lookup_contact":
             action = params.get("action", "search")
@@ -518,6 +537,12 @@ Rules:
                 facts.append(f"Resolved {len(resolved)} contacts from text")
             elif status == "needs_clarification" or ambiguous:
                 facts.append("Contact resolution is ambiguous and needs clarification")
+
+        elif tool_name == "emit_ui_directive":
+            directive = result.get("directive") or {}
+            block_count = len(directive.get("blocks", [])) if isinstance(directive, dict) else 0
+            if block_count > 0:
+                facts.append(f"Prepared {block_count} UI block(s) for user follow-up")
 
         return facts
 

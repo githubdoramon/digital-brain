@@ -13,7 +13,7 @@ class TestToolGroups:
 
     def test_all_groups_defined(self):
         """Test all expected groups exist."""
-        expected = ["memory", "resolution", "web", "home", "skills", "system"]
+        expected = ["memory", "resolution", "web", "home", "skills", "ui", "system"]
         for group in expected:
             assert group in TOOL_GROUPS
 
@@ -246,6 +246,12 @@ class TestPreregisteredTools:
         """Test home_assistant tool is registered."""
         contract = populated_registry.get_contract("home_assistant")
         assert contract is not None
+
+    def test_emit_ui_directive_registered(self, populated_registry):
+        """Test emit_ui_directive tool is registered."""
+        contract = populated_registry.get_contract("emit_ui_directive")
+        assert contract is not None
+        assert "emit_ui_directive" in TOOL_GROUPS["ui"]
 
     def test_all_memory_tools_available(self, populated_registry):
         """Test all memory group tools are available."""

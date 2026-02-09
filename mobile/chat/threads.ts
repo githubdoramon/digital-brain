@@ -1,4 +1,5 @@
 import { apiFetch } from '@/api/client';
+import type { UiDirectives } from './uiDirectives';
 
 import { StoredChatSession } from './session';
 
@@ -21,6 +22,7 @@ export type ThreadMessage = {
   content: string;
   metadata?: {
     command_result?: CommandResult;
+    ui_directives?: UiDirectives;
     [key: string]: unknown;
   } | null;
   created_at: string;
@@ -36,6 +38,7 @@ export type ChatMessage = {
   content: string;
   metadata?: {
     command_result?: CommandResult;
+    ui_directives?: UiDirectives;
   };
 };
 

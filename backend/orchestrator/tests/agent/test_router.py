@@ -88,6 +88,7 @@ class TestToolGroups:
             "web",
             "home",
             "skills",
+            "ui",
             "system",
         ]
 

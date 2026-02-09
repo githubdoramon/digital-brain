@@ -166,6 +166,7 @@ class AgentController:
         conversation_history: Optional[list[dict[str, str]]] = None,
         search_limit: int = 30,
         client_context: Optional[dict[str, Any]] = None,
+        ui_submission: Optional[dict[str, Any]] = None,
     ) -> dict[str, Any]:
         """
         Run the agent loop for a question.
@@ -180,6 +181,7 @@ class AgentController:
             conversation_history: Previous messages
             search_limit: Max search results
             client_context: Client-provided timezone/locale/location context
+            ui_submission: Optional structured UI submission from the client
 
         Returns:
             Response bundle with answer and metadata
@@ -190,6 +192,9 @@ class AgentController:
         # Initialize state
         state = AgentState(goal=question)
         state.request_context = self._normalize_client_context(client_context)
+        normalized_submission = self._normalize_ui_submission(ui_submission)
+        if normalized_submission:
+            state.request_context["ui_submission"] = normalized_submission
 
         # Trace run start
         trace.trace_run_start(question, run_id)
@@ -336,6 +341,26 @@ class AgentController:
                             total_start,
                         )
 
+                    if state.ui_directives and state.pending_questions:
+                        follow_up_prompt = state.pending_questions[-1]
+                        trace.trace_decision(
+                            "Returning UI follow-up",
+                            "Structured directive requires user input",
+                            {"prompt": follow_up_prompt},
+                        )
+                        self.logger.log_decision(
+                            decision="Requesting UI follow-up",
+                            reason=follow_up_prompt,
+                        )
+                        return self._finalize(
+                            question,
+                            follow_up_prompt,
+                            state,
+                            run_id,
+                            session_id,
+                            total_start,
+                        )
+
                     # Check if goal was achieved after tool execution
                     goal_check = self._check_goal_completion(state, "")
                     if goal_check["pending_actions"]:
@@ -468,6 +493,7 @@ class AgentController:
         conversation_history: Optional[list[dict[str, str]]] = None,
         search_limit: int = 30,
         client_context: Optional[dict[str, Any]] = None,
+        ui_submission: Optional[dict[str, Any]] = None,
     ) -> AsyncGenerator[dict[str, Any], None]:
         """
         Stream agent responses with tool calling support.
@@ -479,6 +505,9 @@ class AgentController:
 
         state = AgentState(goal=question)
         state.request_context = self._normalize_client_context(client_context)
+        normalized_submission = self._normalize_ui_submission(ui_submission)
+        if normalized_submission:
+            state.request_context["ui_submission"] = normalized_submission
 
         # Trace run start
         trace.trace_run_start(question, run_id)
@@ -648,6 +677,17 @@ class AgentController:
                         )
                         accumulated_content = clarification_prompt
                         yield {"type": "token", "content": clarification_prompt}
+                        break
+
+                    if state.ui_directives and state.pending_questions:
+                        follow_up_prompt = state.pending_questions[-1]
+                        trace.trace_decision(
+                            "Returning UI follow-up (stream)",
+                            "Structured directive requires user input",
+                            {"prompt": follow_up_prompt},
+                        )
+                        accumulated_content = follow_up_prompt
+                        yield {"type": "token", "content": follow_up_prompt}
                         break
 
                     continue
@@ -835,6 +875,19 @@ class AgentController:
             except (TypeError, ValueError):
                 pass
 
+        return normalized
+
+    def _normalize_ui_submission(
+        self,
+        ui_submission: Optional[dict[str, Any]],
+    ) -> dict[str, Any] | None:
+        """Normalize `ui_submission` payload for prompt injection."""
+        if ui_submission is None:
+            return None
+
+        from ui_dsl.validator import sanitize_ui_submission_payload
+
+        normalized, _errors = sanitize_ui_submission_payload(ui_submission)
         return normalized
 
     def _build_messages(
@@ -1496,6 +1549,7 @@ class AgentController:
             "resolution": state.resolution,
             "search_results": state.search_results,
             "detailed_events": state.detailed_events,
+            "ui_directives": state.ui_directives,
             "limit_hit": violation.limit_type.value,
         }
 
@@ -1557,6 +1611,7 @@ class AgentController:
             "resolution": state.resolution,
             "search_results": state.search_results,
             "detailed_events": state.detailed_events,
+            "ui_directives": state.ui_directives,
             # Completion metadata (clawdbot-inspired)
             "_meta": {
                 "goal_achieved": state.goal_achieved,

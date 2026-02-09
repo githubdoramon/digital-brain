@@ -212,6 +212,31 @@ class TestPostValidatorContactResolution:
         )
         assert result.coverage == GoalCoverage.NEED_USER_INPUT
 
+    def test_emit_ui_directive_requests_user_input(self, validator):
+        result = validator.validate(
+            tool_name="emit_ui_directive",
+            params={},
+            result={
+                "success": True,
+                "message": "Pick one option.",
+                "directive": {
+                    "version": "1.0",
+                    "fallback_text": "Pick one option.",
+                    "blocks": [
+                        {
+                            "id": "range_picker",
+                            "type": "choice_buttons",
+                            "options": [{"id": "7d", "label": "Last 7 days"}],
+                        }
+                    ],
+                },
+            },
+            goal="Help me choose a date range",
+            known_facts=[],
+        )
+        assert result.coverage == GoalCoverage.NEED_USER_INPUT
+        assert "Pick one option." in result.reason
+
 
 class TestFactExtraction:
     """Tests for fact extraction concepts."""

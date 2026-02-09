@@ -18,6 +18,7 @@ TOOL_GROUPS = {
     "web": ["web_search", "fetch_web_page"],
     "home": ["home_assistant"],
     "skills": ["run_skill_script"],
+    "ui": ["emit_ui_directive"],
     "system": ["bash"],
 }
 ```

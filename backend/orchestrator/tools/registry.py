@@ -12,6 +12,7 @@ import threading
 from typing import Any, Optional
 
 from observability.logger import get_runtime_logger
+from ui_dsl.validator import validate_ui_directive_tool_param
 
 from .contracts import (
     ToolContract,
@@ -28,6 +29,7 @@ TOOL_GROUPS = {
     "web": ["web_search", "fetch_web_page"],
     "home": ["home_assistant"],
     "skills": ["run_skill_script"],
+    "ui": ["emit_ui_directive"],
     "system": ["bash"],
 }
 
@@ -455,6 +457,32 @@ def _register_all_tools(registry: ToolRegistry) -> None:
                     maximum=120,
                 ),
             ],
+        )
+    )
+
+    # emit_ui_directive
+    registry.register(
+        ToolContract(
+            name="emit_ui_directive",
+            description=(
+                "Emit a structured UI directive for the client to render interactive follow-up "
+                "cards (forms, buttons, or info cards). Use this when you need user input in a "
+                "structured way or when a richer display card is helpful. Always include a clear "
+                "fallback_text for clients that do not support the directive."
+            ),
+            parameters=[
+                ToolParameter(
+                    name="directive",
+                    type="object",
+                    description=(
+                        "UI directive payload with version, fallback_text, and blocks. "
+                        "Supported block types: clarification_form, choice_buttons, info_card."
+                    ),
+                    required=True,
+                    validator=validate_ui_directive_tool_param,
+                ),
+            ],
+            constraints=["read_only"],
         )
     )
 

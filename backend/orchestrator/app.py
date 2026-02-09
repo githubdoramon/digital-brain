@@ -84,6 +84,7 @@ from schemas import (
 from tools.handlers import get_handler
 from tools.registry import get_registry
 from tools.validators.pre_execution import PreExecutionValidator
+from ui_dsl import command_result_to_ui_directives
 from versioning import get_service_versions
 
 logger = get_runtime_logger(__name__)
@@ -1193,13 +1194,25 @@ def _sanitize_command_metadata(command_result: dict[str, Any]) -> dict[str, Any]
         return {"type": command_result.get("type", "command")}
 
 
+def _command_assistant_metadata(
+    command_result: dict[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any] | None]:
+    metadata: dict[str, Any] = {
+        "command_result": _sanitize_command_metadata(command_result),
+    }
+    ui_directives = command_result_to_ui_directives(command_result)
+    if ui_directives:
+        metadata["ui_directives"] = ui_directives
+    return metadata, ui_directives
+
+
 def _handle_pending_event(
     question: str,
     user_email: str,
     user: dict,
     thread_id: str | None,
     pending_event_id: str | None,
-) -> tuple[dict[str, Any], str] | None:
+) -> tuple[dict[str, Any], str, dict[str, Any] | None] | None:
     from uuid import uuid4
 
     from commands import get_command_registry, parse_command
@@ -1261,18 +1274,19 @@ def _handle_pending_event(
     }
     command_result = registry.execute(parsed_cmd, context)
 
+    assistant_metadata, ui_directives = _command_assistant_metadata(command_result)
     try:
         conversations.record_exchange(
             command_thread_id,
             user_email,
             question,
             _command_response_text(command_result),
-            assistant_metadata={"command_result": _sanitize_command_metadata(command_result)},
+            assistant_metadata=assistant_metadata,
         )
     except Exception as exc:
         logger.warning("[command_thread] Failed to record exchange: %s", exc, exc_info=exc)
 
-    return command_result, command_thread_id
+    return command_result, command_thread_id, ui_directives
 
 
 def _handle_command(
@@ -1280,7 +1294,7 @@ def _handle_command(
     user_email: str,
     user: dict,
     thread_id: str | None,
-) -> tuple[dict[str, Any], str] | None:
+) -> tuple[dict[str, Any], str, dict[str, Any] | None] | None:
     """
     Check if the question is a command and handle it.
 
@@ -1314,18 +1328,19 @@ def _handle_command(
     if thread_id is None:
         conversations.set_main_session_thread(user_email, command_thread_id)
 
+    assistant_metadata, ui_directives = _command_assistant_metadata(command_result)
     try:
         conversations.record_exchange(
             command_thread_id,
             user_email,
             question,
             _command_response_text(command_result),
-            assistant_metadata={"command_result": _sanitize_command_metadata(command_result)},
+            assistant_metadata=assistant_metadata,
         )
     except Exception as exc:
         logger.warning("[command_thread] Failed to record exchange: %s", exc, exc_info=exc)
 
-    return command_result, command_thread_id
+    return command_result, command_thread_id, ui_directives
 
 
 def _should_reset_command_thread(
@@ -1366,7 +1381,7 @@ async def ask(payload: AskIn, user: dict = Depends(get_current_user)):
                 payload.thread_id or payload.session_id,
             )
         if command_payload:
-            command_result, command_thread_id = command_payload
+            command_result, command_thread_id, command_ui_directives = command_payload
             from commands.storage import get_pending_event
 
             pending_event_id = get_pending_event(_event_pending_key(user_email, command_thread_id))
@@ -1381,6 +1396,7 @@ async def ask(payload: AskIn, user: dict = Depends(get_current_user)):
                 session_id=command_thread_id,
                 is_new_session=True,
                 command_result=command_result,
+                ui_directives=command_ui_directives,
                 pending_event_id=pending_event_id,
             )
     except ValueError as e:
@@ -1436,6 +1452,9 @@ async def ask(payload: AskIn, user: dict = Depends(get_current_user)):
         user_email=user_email,
         client_context=payload.client_context.model_dump(exclude_none=True)
         if payload.client_context
+        else None,
+        ui_submission=payload.ui_submission.model_dump(exclude_none=True)
+        if payload.ui_submission
         else None,
     )
     bundle["thread_id"] = ctx.session_id
@@ -1497,7 +1516,7 @@ async def ask_stream(payload: AskIn, user: dict = Depends(get_current_user)):
                 payload.thread_id or payload.session_id,
             )
         if command_payload:
-            command_result, command_thread_id = command_payload
+            command_result, command_thread_id, command_ui_directives = command_payload
             from commands.storage import get_pending_event
 
             pending_event_id = get_pending_event(_event_pending_key(user_email, command_thread_id))
@@ -1514,6 +1533,7 @@ async def ask_stream(payload: AskIn, user: dict = Depends(get_current_user)):
                     "session_id": command_thread_id,
                     "is_new_session": True,
                     "command_result": command_result,
+                    "ui_directives": command_ui_directives,
                     "pending_event_id": pending_event_id,
                 }
                 yield f"data: {json.dumps({'type': 'done', 'bundle': bundle})}\n\n"
@@ -1599,6 +1619,9 @@ async def ask_stream(payload: AskIn, user: dict = Depends(get_current_user)):
                 user_email=user_email,
                 client_context=payload.client_context.model_dump(exclude_none=True)
                 if payload.client_context
+                else None,
+                ui_submission=payload.ui_submission.model_dump(exclude_none=True)
+                if payload.ui_submission
                 else None,
             ):
                 if event.get("type") == "done":

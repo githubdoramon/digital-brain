@@ -18,6 +18,51 @@ export type ClientContext = {
   location?: ClientLocationContext;
 };
 
+export type UiDirectiveOption = {
+  id: string;
+  label: string;
+};
+
+export type UiDirectiveLink = {
+  label: string;
+  url: string;
+};
+
+export type UiDirectiveField = {
+  id: string;
+  kind: string;
+  label: string;
+  placeholder?: string;
+  required?: boolean;
+  options?: UiDirectiveOption[];
+};
+
+export type UiDirectiveBlock = {
+  id: string;
+  type: "clarification_form" | "choice_buttons" | "info_card";
+  title?: string;
+  description?: string;
+  submit_label?: string;
+  action_id?: string;
+  fields?: UiDirectiveField[];
+  options?: UiDirectiveOption[];
+  links?: UiDirectiveLink[];
+  body?: string;
+};
+
+export type UiDirectives = {
+  version: string;
+  fallback_text: string;
+  blocks: UiDirectiveBlock[];
+};
+
+export type UiSubmissionInput = {
+  block_id?: string;
+  action_id?: string;
+  values?: Record<string, unknown>;
+  text_fallback?: string;
+};
+
 let cachedClientContext: ClientContext | null = null;
 let locationRequestInFlight = false;
 
@@ -215,6 +260,7 @@ export type StreamBundle = {
   pending_event_id?: string | null;
   // Removed: event_proposal (old event capture system)
   activated_skills?: string[];
+  ui_directives?: UiDirectives;
   command_result?: {
     type: string;
     [key: string]: unknown;
@@ -231,6 +277,7 @@ export async function ask(
     threadId?: string | null;
     limit?: number;
     pendingEventId?: string | null;
+    uiSubmission?: UiSubmissionInput;
   }
 ): Promise<StreamBundle> {
   const clientContext = getClientContext();
@@ -239,6 +286,7 @@ export async function ask(
     thread_id: options.threadId,
     limit: options.limit ?? 30,
     pending_event_id: options.pendingEventId ?? undefined,
+    ui_submission: options.uiSubmission ?? undefined,
     client_context: clientContext,
     timeout: 60000,
   });
@@ -274,6 +322,7 @@ export async function askWithStreaming(
     threadId?: string | null;
     limit?: number;
     pendingEventId?: string | null;
+    uiSubmission?: UiSubmissionInput;
   },
   callbacks: StreamCallbacks
 ): Promise<StreamBundle> {
@@ -288,6 +337,7 @@ export async function askWithStreaming(
       thread_id: options.threadId,
       limit: options.limit ?? 30,
       pending_event_id: options.pendingEventId ?? undefined,
+      ui_submission: options.uiSubmission ?? undefined,
       client_context: clientContext,
     }),
   });

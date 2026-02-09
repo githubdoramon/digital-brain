@@ -23,12 +23,12 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { apiFetch } from '@/api/client';
 import { useAuth } from '@/auth/AuthContext';
 import { theme } from '@/theme';
-import { EventClarificationCard } from '@/components/EventClarificationCard';
-import { EventProposalCard } from '@/components/EventProposalCard';
+import { UiDirectiveCard } from '@/components/ui-directive-card';
 import { SlashCommandPalette } from '@/components/SlashCommandPalette';
 import { loadChatSession, saveChatSession, StoredChatSession } from '@/chat/session';
 import { restoreChatHistory } from '@/chat/threads';
 import type { CommandResult as ThreadCommandResult } from '@/chat/threads';
+import type { UiDirectives, UiSubmissionInput } from '@/chat/uiDirectives';
 import { getClientContext } from '@/location/clientContext';
 
 type Message = {
@@ -38,73 +38,32 @@ type Message = {
   pending?: boolean;
   metadata?: {
     command_result?: CommandResult;
+    ui_directives?: UiDirectives;
   };
 };
 
-type EventClarificationData = {
-  type: 'clarification_needed';
-  questions: string[];
-  partial_extraction: Record<string, unknown>;
-  original_message: string;
-  clarification_id?: string;
+type CommandResult = ThreadCommandResult;
+
+type AskResponse = {
+  answer?: string;
+  thread_id?: string | null;
+  pending_event_id?: string | null;
+  command_result?: CommandResult;
+  ui_directives?: UiDirectives;
 };
 
-type EventConfirmationData = {
-  type: 'event_confirmation';
-  preview_id: string;
-  extracted: {
-    title: string;
-    summary: string;
-    when: string | null;
-    where: string | null;
-    who: string[];
-    documents: string[];
-    tags: string[];
-    types: string[];
-  };
-  resolution: {
-    contacts: {
-      contact_id: string;
-      display_name: string;
-      query: string;
-      confidence: string;
-    }[];
-    places: {
-      place_id: string;
-      name: string;
-    }[];
-    documents: {
-      document_id: string;
-      title: string;
-    }[];
-    new_entities: {
-      contacts: {
-        display_name: string;
-        query: string;
-      }[];
-      places: {
-        name: string;
-        query: string;
-      }[];
-      documents: {
-        reference: string;
-      }[];
+type SendMessageInput =
+  | string
+  | {
+      text?: string;
+      uiSubmission?: UiSubmissionInput;
     };
-  };
-  relationship_suggestions?: {
-    from_contact_id: string;
-    from_display_name: string;
-    to_contact_id: string;
-    to_display_name: string;
-    relationship_type: string;
-    reciprocal_type: string;
-    confidence: string;
-    reasoning: string;
-  }[];
-  message: string;
-};
 
-type CommandResult = ThreadCommandResult | EventClarificationData | EventConfirmationData;
+type EventConfirmationResponse = {
+  event_id?: string;
+  created_contacts?: { contact_id: string; display_name: string }[];
+  created_places?: { place_id: string; name: string }[];
+};
 
 type HomeTabParamList = {
   index: undefined;
@@ -147,6 +106,61 @@ const TRAILING_URL_PUNCTUATION_PATTERN = /[),.!?;:]+$/;
 const BULLET_LINE_PATTERN = /^[-*]\s+/;
 const NUMBERED_LINE_PATTERN = /^(\d+)\.\s+(.*)$/;
 const BLOCKQUOTE_LINE_PATTERN = /^>\s+/;
+const EVENT_CONFIRM_ACTION_ID = 'event_confirmation_action';
+const EVENT_CLARIFICATION_ACTION_PREFIX = 'event_clarification_submit';
+
+function readSubmissionValue(values: Record<string, unknown> | undefined, key: string): string {
+  const raw = values?.[key];
+  return typeof raw === 'string' ? raw.trim() : '';
+}
+
+function buildEventClarificationAnswer(values: Record<string, unknown> | undefined): string {
+  const details = readSubmissionValue(values, 'details');
+  const when = readSubmissionValue(values, 'when');
+  const where = readSubmissionValue(values, 'where');
+
+  const lines: string[] = [];
+  if (details) {
+    lines.push(details);
+  }
+  if (when) {
+    lines.push(`When: ${when}`);
+  }
+  if (where) {
+    lines.push(`Where: ${where}`);
+  }
+  return lines.join('\n');
+}
+
+function parseEventChoice(optionIdRaw: unknown): { confirmed: boolean; previewId: string } | null {
+  if (typeof optionIdRaw !== 'string') return null;
+  const optionId = optionIdRaw.trim();
+  if (optionId.startsWith('confirm:')) {
+    const previewId = optionId.slice('confirm:'.length).trim();
+    if (previewId) {
+      return { confirmed: true, previewId };
+    }
+  }
+  if (optionId.startsWith('cancel:')) {
+    const previewId = optionId.slice('cancel:'.length).trim();
+    if (previewId) {
+      return { confirmed: false, previewId };
+    }
+  }
+  return null;
+}
+
+function clarificationIdFromAction(actionIdRaw: string | undefined): string | null {
+  if (!actionIdRaw) return null;
+  const actionId = actionIdRaw.trim();
+  if (!actionId.startsWith(`${EVENT_CLARIFICATION_ACTION_PREFIX}:`)) {
+    return null;
+  }
+  const clarificationId = actionId
+    .slice(`${EVENT_CLARIFICATION_ACTION_PREFIX}:`.length)
+    .trim();
+  return clarificationId || null;
+}
 
 function normalizeLinkUrl(url: string) {
   const trimmed = url.trim();
@@ -498,40 +512,47 @@ export default function ChatScreen() {
     [],
   );
 
-  const sendMessage = useCallback(async (overrideMessage?: string) => {
-    const draft = overrideMessage ?? input;
+  const sendMessage = useCallback(async (override?: SendMessageInput) => {
+    const overrideText = typeof override === 'string' ? override : override?.text;
+    const uiSubmission = typeof override === 'string' ? undefined : override?.uiSubmission;
+
+    const draft = overrideText ?? input;
     const trimmed = draft.trim();
-    if (!trimmed || isSending || !allowed || isBootstrapping) return;
+    const outboundText =
+      trimmed || uiSubmission?.text_fallback?.trim() || 'Submitted structured response.';
+
+    if (!outboundText || isSending || !allowed || isBootstrapping) return;
     setInput('');
     const pendingId = `${Date.now()}-pending`;
 
     setMessages((prev) => [
       ...prev,
-      { id: `${Date.now()}-user`, role: 'user', content: trimmed },
+      { id: `${Date.now()}-user`, role: 'user', content: outboundText },
       { id: pendingId, role: 'assistant', content: 'Thinking...', pending: true },
     ]);
 
     setIsSending(true);
     try {
       const payload = {
-        question: trimmed,
+        question: outboundText,
         thread_id: threadId,
         pending_event_id: pendingEventId ?? undefined,
         client_context: getClientContext(),
+        ui_submission: uiSubmission ?? undefined,
       };
-      const response = await apiFetch('/mobile/ask', {
+      const response = (await apiFetch('/mobile/ask', {
         method: 'POST',
         body: JSON.stringify(payload),
         token,
-      });
+      })) as AskResponse;
 
       setThreadId(response.thread_id ?? threadId);
       const commandResult = response.command_result as CommandResult | undefined;
-      const assistantContent = commandResult
-        ? commandResult.type === 'clarification_needed'
-          ? 'I need a few more details to log that event.'
-          : 'Here is the event proposal.'
-        : response.answer ?? 'Ready when you are.';
+      const uiDirectives = response.ui_directives;
+      const assistantContent =
+        response.answer ??
+        uiDirectives?.fallback_text ??
+        (commandResult ? 'Command completed.' : 'Ready when you are.');
 
       if (response.pending_event_id !== undefined) {
         setPendingEventId(response.pending_event_id ?? null);
@@ -544,7 +565,13 @@ export default function ChatScreen() {
                 ...message,
                 content: assistantContent,
                 pending: false,
-                metadata: commandResult ? { command_result: commandResult } : undefined,
+                metadata:
+                  commandResult || uiDirectives
+                    ? {
+                        command_result: commandResult,
+                        ui_directives: uiDirectives,
+                      }
+                    : undefined,
               }
             : message,
         ),
@@ -581,6 +608,114 @@ export default function ChatScreen() {
       setIsSending(false);
     }
   }, [allowed, input, isBootstrapping, isSending, pendingEventId, signOut, threadId, token]);
+
+  const handleDirectiveSubmission = useCallback(
+    async (messageId: string, directives: UiDirectives | undefined, submission: UiSubmissionInput) => {
+      if (submission.action_id === EVENT_CONFIRM_ACTION_ID) {
+        const choice = parseEventChoice(submission.values?.['option_id']);
+        if (!choice || isConfirmingEvent) {
+          return;
+        }
+
+        setIsConfirmingEvent(true);
+        try {
+          const result = (await apiFetch('/mobile/commands/event/confirm', {
+            method: 'POST',
+            body: JSON.stringify(
+              choice.confirmed
+                ? {
+                    preview_id: choice.previewId,
+                    confirmed: true,
+                    modifications: {},
+                    skip_entities: {},
+                  }
+                : {
+                    preview_id: choice.previewId,
+                    confirmed: false,
+                  },
+            ),
+            token,
+          })) as EventConfirmationResponse;
+
+          setPendingEventId(null);
+          setMessages((prev) =>
+            prev.map((message) =>
+              message.id === messageId
+                ? {
+                    ...message,
+                    metadata: message.metadata
+                      ? {
+                          ...message.metadata,
+                          ui_directives: undefined,
+                        }
+                      : undefined,
+                  }
+                : message,
+            ),
+          );
+
+          if (choice.confirmed) {
+            const createdCount =
+              (result?.created_contacts?.length ?? 0) + (result?.created_places?.length ?? 0);
+            setMessages((prev) => [
+              ...prev,
+              {
+                id: `${Date.now()}-event-success`,
+                role: 'assistant',
+                content: `Event created.${createdCount > 0 ? ` Created ${createdCount} new entities.` : ''}`,
+              },
+            ]);
+          } else {
+            setMessages((prev) => [
+              ...prev,
+              {
+                id: `${Date.now()}-event-cancel`,
+                role: 'assistant',
+                content: 'Event creation canceled.',
+              },
+            ]);
+          }
+          setForceScrollNext(true);
+          return;
+        } catch {
+          setMessages((prev) => [
+            ...prev,
+            {
+              id: `${Date.now()}-event-action-error`,
+              role: 'assistant',
+              content: 'I could not complete that event action right now.',
+            },
+          ]);
+          setForceScrollNext(true);
+          return;
+        } finally {
+          setIsConfirmingEvent(false);
+        }
+      }
+
+      if (submission.action_id?.startsWith(EVENT_CLARIFICATION_ACTION_PREFIX)) {
+        const answer = buildEventClarificationAnswer(submission.values);
+        if (!answer) {
+          return;
+        }
+        const clarificationId = clarificationIdFromAction(submission.action_id);
+        const clarificationToken = clarificationId ? `\n\n[clarification_id:${clarificationId}]` : '';
+        const combinedMessage = `/event ${answer}${clarificationToken}`;
+        void sendMessage(combinedMessage);
+        return;
+      }
+
+      const fallbackText =
+        submission.text_fallback?.trim() ||
+        directives?.fallback_text ||
+        'Submitted structured response.';
+      void sendMessage({
+        text: fallbackText,
+        uiSubmission: submission,
+      });
+    },
+    [isConfirmingEvent, sendMessage, token],
+  );
 
   useEffect(() => {
     const unsubscribe = navigation.addListener('tabPress', (event) => {
@@ -670,100 +805,17 @@ export default function ChatScreen() {
                   {item.content}
                 </Text>
               )}
-              {item.metadata?.command_result?.type === 'event_confirmation' && (
+              {item.metadata?.ui_directives && (
                 <View style={styles.commandCardWrap}>
-                  <EventProposalCard
-                    data={item.metadata.command_result as EventConfirmationData}
-                    isSubmitting={isConfirmingEvent}
-                    onConfirm={async (previewId) => {
-                      if (isConfirmingEvent) return;
-                      setIsConfirmingEvent(true);
-                      try {
-                        const result = await apiFetch('/mobile/commands/event/confirm', {
-                          method: 'POST',
-                          body: JSON.stringify({
-                            preview_id: previewId,
-                            confirmed: true,
-                            modifications: {},
-                            skip_entities: {},
-                          }),
-                          token,
-                        });
-
-                        const createdCount =
-                          (result?.created_contacts?.length ?? 0) +
-                          (result?.created_places?.length ?? 0);
-                        const successMessage: Message = {
-                          id: `${Date.now()}-event-success`,
-                          role: 'assistant',
-                          content: `Event created. ${createdCount > 0 ? `Created ${createdCount} new entities.` : ''}`,
-                        };
-                        setMessages((prev) => [...prev, successMessage]);
-                        setPendingEventId(null);
-                      } catch (error) {
-                        console.error('Failed to create event:', error);
-    setForceScrollNext(true);
-    setMessages((prev) => [
-                          ...prev,
-                          {
-                            id: `${Date.now()}-event-error`,
-                            role: 'assistant',
-                            content: 'I hit a snag creating that event. Try again in a moment.',
-                          },
-                        ]);
-                      } finally {
-                        setIsConfirmingEvent(false);
-                      }
-                    }}
-                    onCancel={async (previewId) => {
-                      if (isConfirmingEvent) return;
-                      setIsConfirmingEvent(true);
-                      try {
-                        await apiFetch('/mobile/commands/event/confirm', {
-                          method: 'POST',
-                          body: JSON.stringify({
-                            preview_id: previewId,
-                            confirmed: false,
-                          }),
-                          token,
-                        });
-                        setMessages((prev) => [
-                          ...prev,
-                          {
-                            id: `${Date.now()}-event-cancel`,
-                            role: 'assistant',
-                            content: 'Event creation canceled.',
-                          },
-                        ]);
-                        setPendingEventId(null);
-                      } catch {
-                        setMessages((prev) => [
-                          ...prev,
-                          {
-                            id: `${Date.now()}-event-cancel-error`,
-                            role: 'assistant',
-                            content: 'I could not cancel the event just now.',
-                          },
-                        ]);
-                      } finally {
-                        setIsConfirmingEvent(false);
-                      }
-                    }}
-                  />
-                </View>
-              )}
-              {item.metadata?.command_result?.type === 'clarification_needed' && (
-                <View style={styles.commandCardWrap}>
-                  <EventClarificationCard
-                    data={item.metadata.command_result as EventClarificationData}
-                    onSubmit={(answer) => {
-                      const clarificationId =
-                        (item.metadata?.command_result as EventClarificationData).clarification_id;
-                      const clarificationToken = clarificationId
-                        ? `\n\n[clarification_id:${clarificationId}]`
-                        : '';
-                      const combinedMessage = `/event ${answer}${clarificationToken}`;
-                      void sendMessage(combinedMessage);
+                  <UiDirectiveCard
+                    directives={item.metadata.ui_directives}
+                    isSubmitting={isSending || isConfirmingEvent}
+                    onSubmit={(submission) => {
+                      void handleDirectiveSubmission(
+                        item.id,
+                        item.metadata?.ui_directives,
+                        submission,
+                      );
                     }}
                   />
                 </View>

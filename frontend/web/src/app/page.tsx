@@ -7,7 +7,7 @@ import { useSession } from "next-auth/react";
 import ReactMarkdown from "react-markdown";
 import type { Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { api, ask, primeClientContext, StreamBundle } from "@/lib/api";
+import { api, ask, primeClientContext, StreamBundle, UiDirectives } from "@/lib/api";
 import { EventCommandCard } from "@/components/EventCommandCard";
 import { EventClarificationCard } from "@/components/EventClarificationCard";
 
@@ -44,6 +44,7 @@ type AssistantMetadata = {
     type: string;
     [key: string]: unknown;
   };
+  ui_directives?: UiDirectives;
 } & Record<string, unknown>;
 
 type EventClarificationData = {
@@ -411,9 +412,13 @@ export default function Home() {
         const sessionIsNew = data.is_new_session ?? false;
 
         // Handle command results
-        const metadata: AssistantMetadata | undefined = data.command_result
-          ? { command_result: data.command_result }
-          : undefined;
+        const metadata: AssistantMetadata | undefined =
+          data.command_result || data.ui_directives
+            ? {
+                ...(data.command_result ? { command_result: data.command_result } : {}),
+                ...(data.ui_directives ? { ui_directives: data.ui_directives } : {}),
+              }
+            : undefined;
 
         const assistantMessage: Message = {
           id: undefined,
@@ -492,9 +497,13 @@ export default function Home() {
           }
         }
 
-        const metadata: AssistantMetadata | undefined = data.command_result
-          ? { command_result: data.command_result }
-          : undefined;
+        const metadata: AssistantMetadata | undefined =
+          data.command_result || data.ui_directives
+            ? {
+                ...(data.command_result ? { command_result: data.command_result } : {}),
+                ...(data.ui_directives ? { ui_directives: data.ui_directives } : {}),
+              }
+            : undefined;
 
         const assistantMessage: Message = {
           id: undefined,
@@ -766,7 +775,13 @@ export default function Home() {
             {displayMessages.map((message, index) => {
               const metadata = message.metadata as AssistantMetadata | undefined;
               const commandResult = metadata?.command_result;
+              const uiDirectives = metadata?.ui_directives;
               const isLastMessage = index === displayMessages.length - 1 && !isLoading;
+              const infoCardLinks = (uiDirectives?.blocks ?? [])
+                .filter((block) => block.type === "info_card")
+                .flatMap((block) => block.links ?? []);
+              const showUiFallbackCard =
+                Boolean(uiDirectives) && !commandResult && infoCardLinks.length > 0;
               return (
                 <div
                   key={message.id ?? index}
@@ -874,6 +889,35 @@ export default function Home() {
                           }
                         }}
                       />
+                    </div>
+                  )}
+                  {showUiFallbackCard && (
+                    <div style={{ maxWidth: "80%", alignSelf: "stretch" }}>
+                      <div
+                        style={{
+                          border: "1px solid #d9e2ec",
+                          borderRadius: "10px",
+                          background: "#ffffff",
+                          padding: "10px 12px",
+                          display: "grid",
+                          gap: "8px",
+                        }}
+                      >
+                        <p style={{ margin: 0, fontSize: "0.82rem", color: "#4a5568" }}>
+                          Interactive card available in the mobile app. Links from this response:
+                        </p>
+                        {infoCardLinks.map((link, linkIndex) => (
+                          <a
+                            key={`${link.url}-${linkIndex}`}
+                            href={link.url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            style={{ color: "#0b6bcb", textDecoration: "underline", fontSize: "0.88rem" }}
+                          >
+                            {link.label}
+                          </a>
+                        ))}
+                      </div>
                     </div>
                   )}
                   <div

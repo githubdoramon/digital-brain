@@ -104,6 +104,7 @@ class AgentState:
     search_results: list[dict[str, Any]] = field(default_factory=list)
     detailed_events: list[dict[str, Any]] = field(default_factory=list)
     activated_skills: list[dict[str, Any]] = field(default_factory=list)
+    ui_directives: dict[str, Any] | None = None
     request_context: dict[str, Any] = field(default_factory=dict)
 
     # Timestamps
@@ -275,6 +276,24 @@ class AgentState:
             if parts:
                 lines.append(f"REQUEST_CONTEXT: {', '.join(parts)}")
 
+            ui_submission = self.request_context.get("ui_submission")
+            if isinstance(ui_submission, dict):
+                submission_parts: list[str] = []
+                block_id = str(ui_submission.get("block_id") or "").strip()
+                action_id = str(ui_submission.get("action_id") or "").strip()
+                text_fallback = str(ui_submission.get("text_fallback") or "").strip()
+                if block_id:
+                    submission_parts.append(f"block_id={block_id}")
+                if action_id:
+                    submission_parts.append(f"action_id={action_id}")
+                if text_fallback:
+                    preview = text_fallback[:120]
+                    if len(text_fallback) > 120:
+                        preview += "..."
+                    submission_parts.append(f"text_fallback={preview!r}")
+                if submission_parts:
+                    lines.append(f"UI_SUBMISSION: {', '.join(submission_parts)}")
+
         if self.goal_achieved:
             lines.append("GOAL_STATUS: ACHIEVED")
         elif self.pending_actions:
@@ -300,6 +319,7 @@ class AgentState:
             "search_results_count": len(self.search_results),
             "detailed_events_count": len(self.detailed_events),
             "activated_skills": [s.get("name") for s in self.activated_skills],
+            "has_ui_directives": bool(self.ui_directives),
         }
 
     def to_dict(self) -> dict[str, Any]:
@@ -320,6 +340,7 @@ class AgentState:
             "search_results_count": len(self.search_results),
             "detailed_events_count": len(self.detailed_events),
             "activated_skills": [s.get("name") for s in self.activated_skills],
+            "ui_directives": self.ui_directives,
             "request_context": self.request_context,
             "started_at": self.started_at.isoformat(),
         }

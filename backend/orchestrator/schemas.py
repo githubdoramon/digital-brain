@@ -261,6 +261,32 @@ class ClientContextIn(BaseModel):
     location: ClientLocationIn | None = None
 
 
+class UiSubmissionIn(BaseModel):
+    block_id: str | None = None
+    action_id: str | None = None
+    values: dict[str, Any] = Field(default_factory=dict)
+    text_fallback: str | None = None
+
+
+class UiDirectiveBlock(BaseModel):
+    id: str
+    type: Literal["clarification_form", "choice_buttons", "info_card"]
+    title: str | None = None
+    description: str | None = None
+    submit_label: str | None = None
+    action_id: str | None = None
+    fields: list[dict[str, Any]] = Field(default_factory=list)
+    options: list[dict[str, Any]] = Field(default_factory=list)
+    links: list[dict[str, Any]] = Field(default_factory=list)
+    body: str | None = None
+
+
+class UiDirectivesOut(BaseModel):
+    version: str = "1.0"
+    fallback_text: str
+    blocks: list[UiDirectiveBlock] = Field(default_factory=list)
+
+
 class AskIn(BaseModel):
     question: str
     limit: int | None = 30
@@ -268,6 +294,7 @@ class AskIn(BaseModel):
     thread_id: str | None = None
     pending_event_id: str | None = None
     client_context: ClientContextIn | None = None
+    ui_submission: UiSubmissionIn | None = None
 
 
 class AskOut(BaseModel):
@@ -289,6 +316,7 @@ class AskOut(BaseModel):
     web_provider: str | None = None
     web_response_id: str | None = None
     web_documents: list[dict[str, Any]] = Field(default_factory=list)
+    ui_directives: UiDirectivesOut | None = None
     command_result: dict[str, Any] | None = None
     pending_event_id: str | None = None
 

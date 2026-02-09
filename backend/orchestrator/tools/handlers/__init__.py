@@ -14,6 +14,7 @@ from .resolution import (
 )
 from .skills import handle_run_skill_script
 from .system import handle_bash
+from .ui import handle_emit_ui_directive
 from .web import handle_fetch_web_page, handle_web_search
 
 # Handler dispatch table
@@ -27,6 +28,7 @@ HANDLERS = {
     "web_search": handle_web_search,
     "fetch_web_page": handle_fetch_web_page,
     "run_skill_script": handle_run_skill_script,
+    "emit_ui_directive": handle_emit_ui_directive,
     "bash": handle_bash,
     "home_assistant": handle_home_assistant,
 }
@@ -49,6 +51,7 @@ __all__ = [
     "handle_web_search",
     "handle_fetch_web_page",
     "handle_run_skill_script",
+    "handle_emit_ui_directive",
     "handle_bash",
     "handle_home_assistant",
 ]

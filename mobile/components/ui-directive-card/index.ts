@@ -1,0 +1,2 @@
+export { UiDirectiveCard } from './UiDirectiveCard';
+

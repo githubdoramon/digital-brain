@@ -38,6 +38,7 @@ async def answer_question(
     session_id: str | None = None,
     user_email: str | None = None,
     client_context: dict[str, Any] | None = None,
+    ui_submission: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """
     Answer a question using the LLM with tool calling.
@@ -51,6 +52,7 @@ async def answer_question(
         session_id: Conversation session ID
         user_email: User's email for context
         client_context: Context from client (timezone/locale/location)
+        ui_submission: Optional structured UI action or fallback text from client
 
     Returns:
         Response bundle with answer and metadata
@@ -74,12 +76,15 @@ async def answer_question(
         conversation_history=conversation_history,
         search_limit=search_limit,
         client_context=client_context,
+        ui_submission=ui_submission,
     )
 
     # Persist conversation (bounded agent doesn't do this internally)
     if session_id and user_email and result.get("answer"):
         try:
             assistant_metadata = {}
+            if result.get("ui_directives"):
+                assistant_metadata["ui_directives"] = result["ui_directives"]
             # Removed: event_proposal - use /event command instead
 
             persist_result = conversations.record_exchange(
@@ -115,6 +120,7 @@ async def answer_question_stream(
     session_id: str | None = None,
     user_email: str | None = None,
     client_context: dict[str, Any] | None = None,
+    ui_submission: dict[str, Any] | None = None,
 ) -> AsyncGenerator[dict[str, Any], None]:
     """
     Stream LLM responses with tool calling support.
@@ -134,6 +140,7 @@ async def answer_question_stream(
         session_id: Conversation session ID
         user_email: User's email for context
         client_context: Context from client (timezone/locale/location)
+        ui_submission: Optional structured UI action or fallback text from client
     """
     from agent.controller import get_controller
 
@@ -156,6 +163,7 @@ async def answer_question_stream(
         conversation_history=conversation_history,
         search_limit=search_limit,
         client_context=client_context,
+        ui_submission=ui_submission,
     ):
         if event.get("type") == "done":
             final_bundle = event.get("bundle", {})
@@ -166,6 +174,8 @@ async def answer_question_stream(
     if final_bundle and session_id and user_email and final_bundle.get("answer"):
         try:
             assistant_metadata = {}
+            if final_bundle.get("ui_directives"):
+                assistant_metadata["ui_directives"] = final_bundle["ui_directives"]
 
             persist_result = conversations.record_exchange(
                 thread_id=session_id,
