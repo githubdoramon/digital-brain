@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import logging
 import mimetypes
 import os
 import shutil
@@ -18,6 +17,7 @@ from pdfminer.high_level import extract_text as extract_pdf_text
 
 from db import get_conn
 from embeddings import embed_text
+from observability.logger import get_runtime_logger
 from search_normalization import normalize_search_list, normalize_search_text
 from tags_manager import (
     _merge_tag_lists,
@@ -25,7 +25,7 @@ from tags_manager import (
     _suggest_additional_tags,
 )
 
-logger = logging.getLogger(__name__)
+logger = get_runtime_logger(__name__)
 
 
 class DocumentProcessingError(RuntimeError):

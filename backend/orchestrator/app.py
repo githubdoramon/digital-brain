@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import logging
 import os
 import re
 from contextlib import asynccontextmanager
@@ -49,6 +48,7 @@ from observability.log_stream import (
     get_log_buffer,
     install_stdout_logger,
 )
+from observability.logger import get_runtime_logger
 from schemas import (
     AskIn,
     AskOut,
@@ -86,7 +86,7 @@ from tools.registry import get_registry
 from tools.validators.pre_execution import PreExecutionValidator
 from versioning import get_service_versions
 
-logger = logging.getLogger(__name__)
+logger = get_runtime_logger(__name__)
 
 ORCHESTRATOR_API_KEY = os.getenv("ORCHESTRATOR_API_KEY")
 

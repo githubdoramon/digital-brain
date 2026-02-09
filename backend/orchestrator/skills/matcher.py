@@ -7,7 +7,6 @@ enabling automatic skill selection without loading all skills into context.
 
 from __future__ import annotations
 
-import logging
 import os
 
 # Import from parent package
@@ -15,12 +14,14 @@ import sys
 from dataclasses import dataclass
 from typing import Any
 
+from observability.logger import get_runtime_logger
+
 from .loader import Skill
 
 sys.path.insert(0, str(__file__).rsplit("/", 2)[0])
 import embeddings as embeddings_module
 
-logger = logging.getLogger(__name__)
+logger = get_runtime_logger(__name__)
 
 
 @dataclass

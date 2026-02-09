@@ -14,7 +14,6 @@ The controller:
 """
 
 import json
-import logging
 import os
 
 # Import with absolute paths to avoid circular imports
@@ -24,6 +23,7 @@ from time import perf_counter
 from typing import Any, Optional
 
 from observability import trace
+from observability.logger import get_runtime_logger
 
 from .contact_resolution import (
     build_contact_clarification_result,
@@ -56,7 +56,7 @@ from .state import AgentState
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-logger = logging.getLogger(__name__)
+logger = get_runtime_logger(__name__)
 
 
 class AgentController:

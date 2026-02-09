@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-import logging
 from uuid import uuid4
 
 from db import get_conn
+from observability.logger import get_runtime_logger
 
-logger = logging.getLogger(__name__)
+logger = get_runtime_logger(__name__)
 
 
 def register_device(

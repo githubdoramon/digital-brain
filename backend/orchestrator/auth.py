@@ -1,6 +1,5 @@
 """Authentication middleware for Google OAuth JWT validation."""
 
-import logging
 import os
 from typing import Optional
 
@@ -8,7 +7,9 @@ from fastapi import Header, HTTPException, status
 from google.auth.transport import requests
 from google.oauth2 import id_token
 
-logger = logging.getLogger(__name__)
+from observability.logger import get_runtime_logger
+
+logger = get_runtime_logger(__name__)
 
 
 def _env_flag(name: str) -> bool:

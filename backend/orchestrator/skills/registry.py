@@ -7,16 +7,17 @@ exposes them for matching and execution.
 
 from __future__ import annotations
 
-import logging
 import os
 from pathlib import Path
 from threading import Lock
 from typing import Any
 
+from observability.logger import get_runtime_logger
+
 from .loader import Skill, load_all_skills
 from .matcher import SkillMatch, SkillMatcher
 
-logger = logging.getLogger(__name__)
+logger = get_runtime_logger(__name__)
 
 
 class SkillRegistry:

@@ -7,10 +7,11 @@ and output limits.
 
 from __future__ import annotations
 
-import logging
 import os
 import subprocess
 from typing import Any
+
+from observability.logger import get_runtime_logger
 
 # Default and maximum timeout in seconds
 DEFAULT_TIMEOUT = 30
@@ -37,7 +38,7 @@ BLOCKED_PATTERNS = [
     "minerd",
 ]
 
-logger = logging.getLogger(__name__)
+logger = get_runtime_logger(__name__)
 
 
 def execute_bash(

@@ -7,11 +7,12 @@ These functions build context that gets injected into prompts:
 - Self context (user information)
 """
 
-import logging
 from datetime import datetime, timezone
 from typing import Any, Optional
 
-logger = logging.getLogger(__name__)
+from observability.logger import get_runtime_logger
+
+logger = get_runtime_logger(__name__)
 
 
 def get_time_context() -> str:

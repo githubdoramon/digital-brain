@@ -23,15 +23,15 @@ Usage:
 
 from __future__ import annotations
 
-import logging
 import threading
 from dataclasses import dataclass
 from time import perf_counter
 from typing import Any
 
 from mcp.client import MCPClient, MCPClientError, MCPTool
+from observability.logger import get_runtime_logger
 
-logger = logging.getLogger(__name__)
+logger = get_runtime_logger(__name__)
 
 
 @dataclass

@@ -20,7 +20,6 @@ Design principles:
 4. Clear confidence scoring
 """
 
-import logging
 import os
 import re
 from typing import Any, Optional
@@ -28,8 +27,9 @@ from typing import Any, Optional
 import contacts as contacts_service
 from llm_helpers import call_llm_json
 from observability import trace
+from observability.logger import get_runtime_logger
 
-logger = logging.getLogger(__name__)
+logger = get_runtime_logger(__name__)
 
 
 def _format_conversation_for_prompt(conversation_messages: list[dict[str, str]]) -> str:
@@ -1459,9 +1459,7 @@ def _resolve_relationship_phrase_against_related_contacts(
             "confidence": confidence,
             "candidates": selected_candidates,
             "collective_reference": collective_reference,
-            "auto_resolve_candidates": (
-                collective_reference and confidence in {"high", "medium"}
-            ),
+            "auto_resolve_candidates": (collective_reference and confidence in {"high", "medium"}),
         }
 
     # Fallback: preserve relationship candidates instead of creating a fake new contact.

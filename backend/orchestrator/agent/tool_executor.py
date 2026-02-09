@@ -3,15 +3,15 @@
 from __future__ import annotations
 
 import json
-import logging
 from time import perf_counter
 from typing import Any
 
 from observability import trace
+from observability.logger import get_runtime_logger
 
 from .state import AgentState, ToolCallRecord
 
-logger = logging.getLogger(__name__)
+logger = get_runtime_logger(__name__)
 
 
 class ToolExecutionCoordinator:

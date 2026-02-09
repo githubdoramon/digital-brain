@@ -1,12 +1,13 @@
 from __future__ import annotations
 
-import logging
 import os
 from typing import Any
 
 import requests
 
-logger = logging.getLogger(__name__)
+from observability.logger import get_runtime_logger
+
+logger = get_runtime_logger(__name__)
 
 OLLAMA_HOST = os.getenv("OLLAMA_HOST", "http://localhost:11434")
 OLLAMA_EMBED_MODEL = os.getenv("OLLAMA_EMBED_MODEL", "nomic-embed-text")

@@ -1,15 +1,15 @@
 from __future__ import annotations
 
 import json
-import logging
 import os
 from collections.abc import Iterable
 from datetime import datetime, timezone
 from typing import Any
 
+from observability.logger import get_runtime_logger
 from schemas import ServiceVersion, ServiceVersionCollection
 
-logger = logging.getLogger(__name__)
+logger = get_runtime_logger(__name__)
 
 MANIFEST_PATH_ENV = "SERVICE_MANIFEST_PATH"
 DEFAULT_MANIFEST_PATH = "/app/config/service_manifest.json"
@@ -76,14 +76,20 @@ def _load_env_overrides() -> list[dict[str, Any]]:
 def _fallback_services() -> list[dict[str, Any]]:
     """Provide coarse defaults so the API always returns something meaningful."""
     known_services: Iterable[tuple[str, str, str | None]] = (
-        ("orchestrator", "Orchestrator API", os.getenv("ORCHESTRATOR_IMAGE", "appcalipse/digital-brain-orchestrator")),
+        (
+            "orchestrator",
+            "Orchestrator API",
+            os.getenv("ORCHESTRATOR_IMAGE", "appcalipse/digital-brain-orchestrator"),
+        ),
         ("frontend", "Frontend Web", os.getenv("FRONTEND_IMAGE", "digital-brain-frontend")),
         ("db", "Postgres + pgvector", "pgvector/pgvector:pg16"),
     )
 
     fallback_entries: list[dict[str, Any]] = []
     for service_id, display_name, image in known_services:
-        version_value = os.getenv(f"{service_id.upper()}_VERSION") or os.getenv(f"{service_id.upper()}_GIT_SHA")
+        version_value = os.getenv(f"{service_id.upper()}_VERSION") or os.getenv(
+            f"{service_id.upper()}_GIT_SHA"
+        )
         build_time = os.getenv(f"{service_id.upper()}_BUILD_TIME")
         entry: dict[str, Any] = {
             "id": service_id,
@@ -114,7 +120,9 @@ def _merge_services(
 
     def apply(entries: list[dict[str, Any]], source: str) -> None:
         for raw in entries:
-            service_id = raw.get("id") or raw.get("service_id") or raw.get("service") or raw.get("name")
+            service_id = (
+                raw.get("id") or raw.get("service_id") or raw.get("service") or raw.get("name")
+            )
             if not service_id:
                 logger.warning("Skipping service entry without id: %s", raw)
                 continue
@@ -184,7 +192,10 @@ def get_service_versions() -> ServiceVersionCollection:
 
     merged_services = _merge_services(fallback_services, manifest_services, env_overrides)
 
-    models = [ServiceVersion(**service) for service in sorted(merged_services, key=lambda item: item.get("name", ""))]
+    models = [
+        ServiceVersion(**service)
+        for service in sorted(merged_services, key=lambda item: item.get("name", ""))
+    ]
 
     return ServiceVersionCollection(
         generated_at=datetime.now(timezone.utc),
@@ -194,4 +205,3 @@ def get_service_versions() -> ServiceVersionCollection:
         env_entry_count=len(env_overrides),
         fallback_count=len(fallback_services),
     )
-

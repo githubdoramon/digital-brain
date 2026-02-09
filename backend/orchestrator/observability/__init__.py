@@ -9,12 +9,13 @@ Provides structured logging and tracing for:
 """
 
 from . import logger as trace
-from .logger import AgentLogger, AgentRunLog, StepLog, ToolCallLog
+from .logger import AgentLogger, AgentRunLog, StepLog, ToolCallLog, get_runtime_logger
 
 __all__ = [
     "AgentLogger",
     "AgentRunLog",
     "StepLog",
     "ToolCallLog",
+    "get_runtime_logger",
     "trace",
 ]

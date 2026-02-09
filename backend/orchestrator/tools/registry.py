@@ -8,9 +8,10 @@ The registry maintains all tool contracts and provides:
 - Singleton access pattern
 """
 
-import logging
 import threading
 from typing import Any, Optional
+
+from observability.logger import get_runtime_logger
 
 from .contracts import (
     ToolContract,
@@ -18,7 +19,7 @@ from .contracts import (
     validate_limit,
 )
 
-logger = logging.getLogger(__name__)
+logger = get_runtime_logger(__name__)
 
 # Tool group definitions - maps group names to tool names
 TOOL_GROUPS = {

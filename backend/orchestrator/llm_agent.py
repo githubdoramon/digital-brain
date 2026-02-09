@@ -8,11 +8,12 @@ This module contains:
 """
 
 import json
-import logging
 import re
 from typing import Any, Optional
 
-logger = logging.getLogger(__name__)
+from observability.logger import get_runtime_logger
+
+logger = get_runtime_logger(__name__)
 
 # Configuration
 MAX_ITERATIONS = 15  # Safety limit to prevent infinite loops

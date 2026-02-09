@@ -6,7 +6,6 @@ ensuring consistent configuration, error handling, and response parsing.
 """
 
 import json
-import logging
 import os
 from collections.abc import AsyncGenerator
 from typing import Any, Optional
@@ -14,7 +13,9 @@ from typing import Any, Optional
 import httpx
 import requests
 
-logger = logging.getLogger(__name__)
+from observability.logger import get_runtime_logger
+
+logger = get_runtime_logger(__name__)
 
 # LLM Configuration
 LLM_BASE_URL = os.getenv("LLM_BASE_URL")

@@ -5,7 +5,6 @@ The /event command allows users to add new memories/events to the database.
 It extracts entities, checks for existing ones, and asks for confirmation.
 """
 
-import logging
 import re
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
@@ -14,8 +13,9 @@ from uuid import uuid4
 
 from commands.parser import ParsedCommand
 from commands.registry import CommandRegistry
+from observability.logger import get_runtime_logger
 
-logger = logging.getLogger(__name__)
+logger = get_runtime_logger(__name__)
 
 
 def _format_existing_extraction_for_prompt(existing: dict[str, Any] | None) -> str:

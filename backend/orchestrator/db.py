@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import logging
 import os
 from contextlib import contextmanager
 from typing import Any, cast
@@ -9,7 +8,9 @@ import psycopg
 from psycopg import sql
 from psycopg.rows import dict_row
 
-logger = logging.getLogger(__name__)
+from observability.logger import get_runtime_logger
+
+logger = get_runtime_logger(__name__)
 
 # Construct DB connection string from environment variables
 POSTGRES_USER = os.getenv("POSTGRES_USER")

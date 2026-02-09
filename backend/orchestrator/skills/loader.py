@@ -8,7 +8,6 @@ Skills follow the Agent Skills specification:
 
 from __future__ import annotations
 
-import logging
 import os
 import re
 from dataclasses import dataclass, field
@@ -17,7 +16,9 @@ from typing import Any
 
 import yaml
 
-logger = logging.getLogger(__name__)
+from observability.logger import get_runtime_logger
+
+logger = get_runtime_logger(__name__)
 
 
 @dataclass

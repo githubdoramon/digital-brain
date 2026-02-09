@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import logging
 import os
 from dataclasses import dataclass
 from typing import Any
@@ -8,8 +7,9 @@ from typing import Any
 import requests
 
 from contacts import get_contact_by_external_id
+from observability.logger import get_runtime_logger
 
-logger = logging.getLogger(__name__)
+logger = get_runtime_logger(__name__)
 
 IMMICH_HTTP_TIMEOUT = int(os.getenv("IMMICH_HTTP_TIMEOUT", "45"))
 

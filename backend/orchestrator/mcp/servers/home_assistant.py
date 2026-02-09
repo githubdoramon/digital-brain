@@ -15,14 +15,14 @@ Home Assistant's "Exposed Entities" settings.
 
 from __future__ import annotations
 
-import logging
 import os
 from time import perf_counter
 from typing import Any
 
 from mcp.client import MCPClient, MCPClientError
+from observability.logger import get_runtime_logger
 
-logger = logging.getLogger(__name__)
+logger = get_runtime_logger(__name__)
 
 # Configuration from environment
 HA_URL = os.getenv("HA_URL", "").rstrip("/")

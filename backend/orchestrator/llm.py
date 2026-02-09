@@ -6,14 +6,14 @@ Main entry point for LLM interactions using the bounded agent controller.
 
 from __future__ import annotations
 
-import logging
 import os
 from collections.abc import AsyncGenerator
 from typing import Any
 
 import conversations
+from observability.logger import get_runtime_logger
 
-logger = logging.getLogger(__name__)
+logger = get_runtime_logger(__name__)
 
 LLM_BASE_URL = os.getenv("LLM_BASE_URL")
 LLM_CHAT_MODEL = os.getenv("LLM_CHAT_MODEL")

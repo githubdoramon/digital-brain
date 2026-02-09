@@ -257,6 +257,7 @@ export type StreamCallbacks = {
 export type LogLevel = "debug" | "info" | "decision" | "warning" | "error";
 
 export type LogEntry = {
+  id?: number;
   timestamp: string;
   level: LogLevel;
   message: string;

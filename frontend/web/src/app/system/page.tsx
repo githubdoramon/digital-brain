@@ -24,7 +24,7 @@ type ServiceVersionResponse = {
   fallback_count: number;
 };
 
-type LogRow = LogEntry & { id: string };
+type LogRow = LogEntry & { rowKey: string };
 
 const LOG_LEVELS: LogLevel[] = ["debug", "info", "decision", "warning", "error"];
 
@@ -33,17 +33,30 @@ function sortLogEntries(entries: LogRow[]): LogRow[] {
     const leftTime = Date.parse(left.timestamp) || 0;
     const rightTime = Date.parse(right.timestamp) || 0;
     if (leftTime === rightTime) {
-      return left.id.localeCompare(right.id);
+      const leftKey = typeof left.id === "number" ? left.id.toString() : left.rowKey;
+      const rightKey = typeof right.id === "number" ? right.id.toString() : right.rowKey;
+      return leftKey.localeCompare(rightKey);
     }
     return leftTime - rightTime;
   });
 }
 
 function toLogRow(entry: LogEntry): LogRow {
+  const rowKey =
+    typeof entry.id === "number"
+      ? `id:${entry.id}`
+      : `${entry.timestamp}-${Math.random().toString(36).slice(2)}`;
   return {
     ...entry,
-    id: `${entry.timestamp}-${Math.random().toString(36).slice(2)}`,
+    rowKey,
   };
+}
+
+function getLogKey(entry: LogEntry): string {
+  if (typeof entry.id === "number") {
+    return `id:${entry.id}`;
+  }
+  return `${entry.timestamp}|${entry.level}|${entry.message}`;
 }
 
 function formatDate(input?: string | null): string {
@@ -97,6 +110,7 @@ export default function SystemStatusPage() {
   const [logConnected, setLogConnected] = useState(false);
   const [isLogFullscreen, setIsLogFullscreen] = useState(false);
   const logContainerRef = useRef<HTMLDivElement | null>(null);
+  const seenLogKeysRef = useRef<Set<string>>(new Set());
 
   const frontendMetadata = {
     version: process.env.NEXT_PUBLIC_APP_VERSION ?? "unknown",
@@ -137,7 +151,9 @@ export default function SystemStatusPage() {
       .then((entries) => {
         if (!mounted) return;
         const rows = entries.map(toLogRow);
-        setLogEntries(sortLogEntries(rows));
+        const sorted = sortLogEntries(rows);
+        seenLogKeysRef.current = new Set(sorted.map((row) => getLogKey(row)));
+        setLogEntries(sorted);
       })
       .catch((err) => {
         if (!mounted) return;
@@ -162,9 +178,18 @@ export default function SystemStatusPage() {
     streamSystemLogs(
       "all",
       (entry) => {
+        const key = getLogKey(entry);
+        if (seenLogKeysRef.current.has(key)) {
+          return;
+        }
+        seenLogKeysRef.current.add(key);
         setLogEntries((current) => {
           const next = sortLogEntries([...current, toLogRow(entry)]);
-          return next.length > 200 ? next.slice(-200) : next;
+          const trimmed = next.length > 200 ? next.slice(-200) : next;
+          if (seenLogKeysRef.current.size > 2000) {
+            seenLogKeysRef.current = new Set(trimmed.map((row) => getLogKey(row)));
+          }
+          return trimmed;
         });
       },
       (message) => {
@@ -212,6 +237,176 @@ export default function SystemStatusPage() {
     container.scrollTop = container.scrollHeight;
   }, [filteredLogs.length]);
 
+  const logPanel = (
+    <div
+      style={{
+        border: "1px solid #e2e2e2",
+        borderRadius: "12px",
+        padding: "16px",
+        background: "#fff",
+        display: "grid",
+        gap: "12px",
+        height: isLogFullscreen ? "100%" : "auto",
+        width: "100%",
+        flex: isLogFullscreen ? "1 1 auto" : undefined,
+      }}
+    >
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: "12px" }}>
+        <div>
+          <h2 style={{ fontSize: "1.1rem", fontWeight: 600, margin: 0 }}>Orchestrator Logs</h2>
+          <p style={{ margin: "6px 0 0", color: "#6b7280", fontSize: "0.9rem" }}>
+            Live log stream via SSE. Showing {filteredLogs.length} of {logEntries.length} entries.
+          </p>
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" }}>
+          <div style={{ display: "flex", gap: "6px", flexWrap: "wrap" }}>
+            {LOG_LEVELS.map((level) => {
+              const isActive = selectedLevels.includes(level);
+              return (
+                <button
+                  key={level}
+                  type="button"
+                  onClick={() => toggleLevel(level)}
+                  style={{
+                    border: "1px solid #d1d5db",
+                    borderRadius: "999px",
+                    padding: "4px 10px",
+                    fontSize: "0.8rem",
+                    textTransform: "uppercase",
+                    background: isActive ? "#e2e8f0" : "#fff",
+                    cursor: "pointer",
+                  }}
+                >
+                  {level}
+                </button>
+              );
+            })}
+          </div>
+          <button
+            type="button"
+            onClick={resetLevels}
+            style={{
+              border: "1px solid #d1d5db",
+              borderRadius: "8px",
+              padding: "6px 10px",
+              fontSize: "0.8rem",
+              background: "#fff",
+              cursor: "pointer",
+            }}
+          >
+            All levels
+          </button>
+          <button
+            type="button"
+            onClick={() => setIsLogFullscreen((prev) => !prev)}
+            aria-label={isLogFullscreen ? "Exit full screen" : "Enter full screen"}
+            title={isLogFullscreen ? "Exit full screen" : "Enter full screen"}
+            style={{
+              border: "1px solid #d1d5db",
+              borderRadius: "8px",
+              padding: "6px",
+              width: "32px",
+              height: "32px",
+              display: "inline-flex",
+              alignItems: "center",
+              justifyContent: "center",
+              background: isLogFullscreen ? "#e2e8f0" : "#fff",
+              cursor: "pointer",
+            }}
+          >
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6">
+              <path d="M2.5 6V2.5H6" />
+              <path d="M10 2.5H13.5V6" />
+              <path d="M13.5 10V13.5H10" />
+              <path d="M6 13.5H2.5V10" />
+            </svg>
+          </button>
+          <button
+            type="button"
+            onClick={() => setIsLogPaused((prev) => !prev)}
+            style={{
+              border: "1px solid #d1d5db",
+              borderRadius: "8px",
+              padding: "6px 10px",
+              fontSize: "0.9rem",
+              background: isLogPaused ? "#e2e8f0" : "#fff",
+              cursor: "pointer",
+            }}
+          >
+            {isLogPaused ? "Resume" : "Pause"}
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setLogEntries([]);
+              seenLogKeysRef.current.clear();
+            }}
+            style={{
+              border: "1px solid #d1d5db",
+              borderRadius: "8px",
+              padding: "6px 10px",
+              fontSize: "0.9rem",
+              background: "#fff",
+              cursor: "pointer",
+            }}
+          >
+            Clear
+          </button>
+        </div>
+      </div>
+
+      <div style={{ display: "flex", gap: "12px", fontSize: "0.85rem", color: "#64748b" }}>
+        <span>
+          <strong>Status:</strong> {isLogPaused ? "Paused" : logConnected ? "Connected" : "Connecting"}
+        </span>
+        {logError && <span style={{ color: "#b91c1c" }}>{logError}</span>}
+      </div>
+
+      <div
+        ref={logContainerRef}
+        style={{
+          border: "1px solid #e5e7eb",
+          borderRadius: "10px",
+          background: "#0f172a",
+          color: "#e2e8f0",
+          padding: "12px",
+          maxHeight: isLogFullscreen ? "calc(100vh - 260px)" : "320px",
+          overflowY: "auto",
+          fontFamily: "var(--font-mono, monospace)",
+          fontSize: "0.8rem",
+        }}
+      >
+        {filteredLogs.length === 0 ? (
+          <div style={{ color: "#94a3b8" }}>Waiting for log events...</div>
+        ) : (
+          filteredLogs.map((entry) => (
+            <div key={entry.rowKey} style={{ display: "grid", gridTemplateColumns: "80px 70px 1fr", gap: "8px" }}>
+              <span style={{ color: "#94a3b8" }}>{formatLogTimestamp(entry.timestamp)}</span>
+              <span
+                style={{
+                  textTransform: "uppercase",
+                  color:
+                    entry.level === "error"
+                      ? "#fca5a5"
+                      : entry.level === "warning"
+                      ? "#fde68a"
+                      : entry.level === "info"
+                      ? "#93c5fd"
+                      : entry.level === "decision"
+                      ? "#fbcfe8"
+                      : "#cbd5f5",
+                }}
+              >
+                {entry.level}
+              </span>
+              <span>{entry.message}</span>
+            </div>
+          ))
+        )}
+      </div>
+    </div>
+  );
+
   return (
     <section style={{ display: "grid", gap: "24px" }}>
       <div>
@@ -229,10 +424,6 @@ export default function SystemStatusPage() {
           background: "#fff",
           display: "grid",
           gap: "12px",
-          position: isLogFullscreen ? "fixed" : "relative",
-          inset: isLogFullscreen ? "24px" : undefined,
-          zIndex: isLogFullscreen ? 50 : "auto",
-          boxShadow: isLogFullscreen ? "0 20px 40px rgba(15, 23, 42, 0.25)" : "none",
         }}
       >
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "12px" }}>
@@ -406,156 +597,22 @@ export default function SystemStatusPage() {
         )}
       </div>
 
-      <div
-        style={{
-          border: "1px solid #e2e2e2",
-          borderRadius: "12px",
-          padding: "16px",
-          background: "#fff",
-          display: "grid",
-          gap: "12px",
-        }}
-      >
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: "12px" }}>
-          <div>
-            <h2 style={{ fontSize: "1.1rem", fontWeight: 600, margin: 0 }}>Orchestrator Logs</h2>
-            <p style={{ margin: "6px 0 0", color: "#6b7280", fontSize: "0.9rem" }}>
-              Live log stream via SSE. Showing {filteredLogs.length} of {logEntries.length} entries.
-            </p>
-          </div>
-          <div style={{ display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" }}>
-            <div style={{ display: "flex", gap: "6px", flexWrap: "wrap" }}>
-              {LOG_LEVELS.map((level) => {
-                const isActive = selectedLevels.includes(level);
-                return (
-                  <button
-                    key={level}
-                    type="button"
-                    onClick={() => toggleLevel(level)}
-                    style={{
-                      border: "1px solid #d1d5db",
-                      borderRadius: "999px",
-                      padding: "4px 10px",
-                      fontSize: "0.8rem",
-                      textTransform: "uppercase",
-                      background: isActive ? "#e2e8f0" : "#fff",
-                      cursor: "pointer",
-                    }}
-                  >
-                    {level}
-                  </button>
-                );
-              })}
-            </div>
-            <button
-              type="button"
-              onClick={resetLevels}
-              style={{
-                border: "1px solid #d1d5db",
-                borderRadius: "8px",
-                padding: "6px 10px",
-                fontSize: "0.8rem",
-                background: "#fff",
-                cursor: "pointer",
-              }}
-            >
-              All levels
-            </button>
-            <button
-              type="button"
-              onClick={() => setIsLogFullscreen((prev) => !prev)}
-              style={{
-                border: "1px solid #d1d5db",
-                borderRadius: "8px",
-                padding: "6px 10px",
-                fontSize: "0.9rem",
-                background: isLogFullscreen ? "#e2e8f0" : "#fff",
-                cursor: "pointer",
-              }}
-            >
-              {isLogFullscreen ? "Exit full screen" : "Full screen"}
-            </button>
-            <button
-              type="button"
-              onClick={() => setIsLogPaused((prev) => !prev)}
-              style={{
-                border: "1px solid #d1d5db",
-                borderRadius: "8px",
-                padding: "6px 10px",
-                fontSize: "0.9rem",
-                background: isLogPaused ? "#e2e8f0" : "#fff",
-                cursor: "pointer",
-              }}
-            >
-              {isLogPaused ? "Resume" : "Pause"}
-            </button>
-            <button
-              type="button"
-              onClick={() => setLogEntries([])}
-              style={{
-                border: "1px solid #d1d5db",
-                borderRadius: "8px",
-                padding: "6px 10px",
-                fontSize: "0.9rem",
-                background: "#fff",
-                cursor: "pointer",
-              }}
-            >
-              Clear
-            </button>
-          </div>
-        </div>
-
-        <div style={{ display: "flex", gap: "12px", fontSize: "0.85rem", color: "#64748b" }}>
-          <span>
-            <strong>Status:</strong> {isLogPaused ? "Paused" : logConnected ? "Connected" : "Connecting"}
-          </span>
-          {logError && <span style={{ color: "#b91c1c" }}>{logError}</span>}
-        </div>
-
+      {isLogFullscreen ? (
         <div
-          ref={logContainerRef}
           style={{
-            border: "1px solid #e5e7eb",
-            borderRadius: "10px",
-            background: "#0f172a",
-            color: "#e2e8f0",
-            padding: "12px",
-            maxHeight: isLogFullscreen ? "calc(100vh - 220px)" : "320px",
-            overflowY: "auto",
-            fontFamily: "var(--font-mono, monospace)",
-            fontSize: "0.8rem",
+            position: "fixed",
+            inset: 0,
+            background: "rgba(15, 23, 42, 0.65)",
+            padding: "24px",
+            zIndex: 60,
+            display: "flex",
           }}
         >
-          {filteredLogs.length === 0 ? (
-            <div style={{ color: "#94a3b8" }}>Waiting for log events...</div>
-          ) : (
-            filteredLogs.map((entry) => (
-              <div key={entry.id} style={{ display: "grid", gridTemplateColumns: "80px 70px 1fr", gap: "8px" }}>
-                <span style={{ color: "#94a3b8" }}>{formatLogTimestamp(entry.timestamp)}</span>
-                <span
-                  style={{
-                    textTransform: "uppercase",
-                    color:
-                      entry.level === "error"
-                        ? "#fca5a5"
-                        : entry.level === "warning"
-                        ? "#fde68a"
-                        : entry.level === "info"
-                        ? "#93c5fd"
-                        : entry.level === "decision"
-                        ? "#fbcfe8"
-                        : "#cbd5f5",
-                  }}
-                >
-                  {entry.level}
-                </span>
-                <span>{entry.message}</span>
-              </div>
-            ))
-          )}
+          {logPanel}
         </div>
-      </div>
+      ) : (
+        logPanel
+      )}
     </section>
   );
 }

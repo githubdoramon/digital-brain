@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import logging
 import os
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -10,8 +9,9 @@ from typing import Any
 import requests
 
 import immich_client
+from observability.logger import get_runtime_logger
 
-logger = logging.getLogger(__name__)
+logger = get_runtime_logger(__name__)
 
 TELEGRAM_HTTP_TIMEOUT = int(os.getenv("TELEGRAM_HTTP_TIMEOUT", "20"))
 IMMICH_HTTP_TIMEOUT = immich_client.IMMICH_HTTP_TIMEOUT

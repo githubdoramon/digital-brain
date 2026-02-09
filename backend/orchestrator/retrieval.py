@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import logging
 from collections.abc import Sequence
 from datetime import date, datetime, time, timedelta, timezone
 from typing import Any
@@ -12,9 +11,10 @@ import events as events_service
 from db import fetch_events, get_conn
 from documents import _vector_search_documents as vector_search_documents
 from embeddings import embed_text
+from observability.logger import get_runtime_logger
 from search_normalization import normalize_search_text
 
-logger = logging.getLogger(__name__)
+logger = get_runtime_logger(__name__)
 
 
 # --------------------------- Resolution helpers ---------------------------

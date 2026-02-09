@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import logging
 import re
 from datetime import datetime, timezone
 from typing import Any
@@ -10,8 +9,9 @@ from psycopg.rows import dict_row
 from psycopg.types.json import Json
 
 from db import get_conn
+from observability.logger import get_runtime_logger
 
-logger = logging.getLogger(__name__)
+logger = get_runtime_logger(__name__)
 
 _DEFAULT_TITLE_PREFIX = "Untitled conversation"
 

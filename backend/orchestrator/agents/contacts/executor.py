@@ -4,12 +4,12 @@ HTTP endpoint for contact resolution.
 Thin wrapper that calls the resolver and formats the response.
 """
 
-import logging
 from typing import Any
 
 from agents.contacts.resolver import resolve_contacts_from_text
+from observability.logger import get_runtime_logger
 
-logger = logging.getLogger(__name__)
+logger = get_runtime_logger(__name__)
 
 
 def handle_resolve_contacts_request(data: dict[str, Any]) -> dict[str, Any]:

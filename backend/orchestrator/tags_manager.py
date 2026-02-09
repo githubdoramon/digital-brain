@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import json
-import logging
 import os
 from collections.abc import Iterable, Sequence
 from typing import Literal
 
-logger = logging.getLogger(__name__)
+from observability.logger import get_runtime_logger
+
+logger = get_runtime_logger(__name__)
 
 MAX_LABEL_PROMPT_CHARS = int(os.getenv("DOCUMENT_LABEL_PROMPT_CHARS", "10000"))
 MAX_SUGGESTED_TAGS = int(os.getenv("DOCUMENT_LABEL_MAX_COUNT", "5"))

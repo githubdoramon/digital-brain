@@ -29,6 +29,11 @@ from observability.log_stream import DECISION_LEVEL
 logger = logging.getLogger(__name__)
 
 
+def get_runtime_logger(name: str) -> logging.Logger:
+    """Return a module logger wired into orchestrator observability."""
+    return logging.getLogger(name)
+
+
 class LogLevel(str, Enum):
     """Log levels for filtering."""
 
