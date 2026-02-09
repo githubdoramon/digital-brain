@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api, getSystemLogs, LogEntry, LogLevel, streamSystemLogs } from "@/lib/api";
 
 type ServiceVersion = {
@@ -95,6 +95,8 @@ export default function SystemStatusPage() {
   const [selectedLevels, setSelectedLevels] = useState<LogLevel[]>(LOG_LEVELS);
   const [isLogPaused, setIsLogPaused] = useState(false);
   const [logConnected, setLogConnected] = useState(false);
+  const [isLogFullscreen, setIsLogFullscreen] = useState(false);
+  const logContainerRef = useRef<HTMLDivElement | null>(null);
 
   const frontendMetadata = {
     version: process.env.NEXT_PUBLIC_APP_VERSION ?? "unknown",
@@ -204,6 +206,12 @@ export default function SystemStatusPage() {
     ? logEntries.filter((entry) => selectedLevels.includes(entry.level))
     : [];
 
+  useEffect(() => {
+    const container = logContainerRef.current;
+    if (!container) return;
+    container.scrollTop = container.scrollHeight;
+  }, [filteredLogs.length]);
+
   return (
     <section style={{ display: "grid", gap: "24px" }}>
       <div>
@@ -221,6 +229,10 @@ export default function SystemStatusPage() {
           background: "#fff",
           display: "grid",
           gap: "12px",
+          position: isLogFullscreen ? "fixed" : "relative",
+          inset: isLogFullscreen ? "24px" : undefined,
+          zIndex: isLogFullscreen ? 50 : "auto",
+          boxShadow: isLogFullscreen ? "0 20px 40px rgba(15, 23, 42, 0.25)" : "none",
         }}
       >
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "12px" }}>
@@ -451,6 +463,20 @@ export default function SystemStatusPage() {
             </button>
             <button
               type="button"
+              onClick={() => setIsLogFullscreen((prev) => !prev)}
+              style={{
+                border: "1px solid #d1d5db",
+                borderRadius: "8px",
+                padding: "6px 10px",
+                fontSize: "0.9rem",
+                background: isLogFullscreen ? "#e2e8f0" : "#fff",
+                cursor: "pointer",
+              }}
+            >
+              {isLogFullscreen ? "Exit full screen" : "Full screen"}
+            </button>
+            <button
+              type="button"
               onClick={() => setIsLogPaused((prev) => !prev)}
               style={{
                 border: "1px solid #d1d5db",
@@ -488,13 +514,14 @@ export default function SystemStatusPage() {
         </div>
 
         <div
+          ref={logContainerRef}
           style={{
             border: "1px solid #e5e7eb",
             borderRadius: "10px",
             background: "#0f172a",
             color: "#e2e8f0",
             padding: "12px",
-            maxHeight: "320px",
+            maxHeight: isLogFullscreen ? "calc(100vh - 220px)" : "320px",
             overflowY: "auto",
             fontFamily: "var(--font-mono, monospace)",
             fontSize: "0.8rem",
