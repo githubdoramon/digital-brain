@@ -139,11 +139,22 @@ def _init_intentional_debug_level() -> None:
 
 
 class LogBufferHandler(logging.Handler):
+    @staticmethod
+    def _is_orchestrator_record(record: logging.LogRecord) -> bool:
+        pathname = (getattr(record, "pathname", "") or "").replace("\\", "/")
+        if not pathname:
+            return False
+        return "/backend/orchestrator/" in pathname and "/site-packages/" not in pathname
+
     def emit(self, record: logging.LogRecord) -> None:
         try:
             # Ignore generic DEBUG noise from libraries/frameworks.
-            # Only include deliberate app debug emitted via INTENTIONAL_DEBUG_LEVEL.
-            if record.levelno < logging.INFO and record.levelno != INTENTIONAL_DEBUG_LEVEL:
+            # Keep only orchestrator runtime debug (plus explicit intentional debug level).
+            if (
+                record.levelno < logging.INFO
+                and record.levelno != INTENTIONAL_DEBUG_LEVEL
+                and not self._is_orchestrator_record(record)
+            ):
                 return
             message = self.format(record)
             level = self._map_level(record.levelno)
