@@ -55,16 +55,6 @@ def verify_google_token(token: str) -> dict:
         # Verify the token
         idinfo = id_token.verify_oauth2_token(token, requests.Request(), GOOGLE_CLIENT_ID)
 
-        logger.info(
-            "Auth token verified",
-            extra={
-                "email": idinfo.get("email"),
-                "exp": idinfo.get("exp"),
-                "aud": idinfo.get("aud"),
-                "iss": idinfo.get("iss"),
-            },
-        )
-
         # Token is valid, return user info
         return idinfo
     except ValueError as e:
