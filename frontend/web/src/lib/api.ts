@@ -490,3 +490,11 @@ export async function getSystemLogs(
   );
   return response.entries ?? [];
 }
+
+export async function emitSystemDebugProbe(message?: string): Promise<void> {
+  const params = new URLSearchParams();
+  if (message && message.trim()) {
+    params.set("message", message.trim());
+  }
+  await api.post(`/system/logs/probe${params.toString() ? `?${params.toString()}` : ""}`);
+}

@@ -43,6 +43,7 @@ from auth import get_current_user
 from db import get_conn
 from notifications.preferences import get_push_settings, update_push_settings
 from observability.log_stream import (
+    INTENTIONAL_DEBUG_LEVEL,
     LOG_LEVELS,
     configure_logging,
     get_log_buffer,
@@ -234,6 +235,16 @@ def list_system_logs(
         limit=limit,
     )
     return {"entries": [entry.to_dict() for entry in entries]}
+
+
+@api.post("/system/logs/probe")
+def emit_debug_probe(
+    message: str | None = Query(default=None, max_length=200),
+    _: dict = Depends(get_current_user),
+):
+    probe_message = (message or "UI debug probe").strip() or "UI debug probe"
+    logger.log(INTENTIONAL_DEBUG_LEVEL, "[system.log_probe] %s", probe_message)
+    return {"ok": True, "message": probe_message}
 
 
 # --------------------------- Mobile endpoints ---------------------------

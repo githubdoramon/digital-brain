@@ -6,11 +6,13 @@ import threading
 from collections import deque
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any
 
 LOG_LEVELS = {"debug", "info", "decision", "warning", "error"}
 DECISION_LEVEL = 25
 INTENTIONAL_DEBUG_LEVEL = 15
+ORCHESTRATOR_ROOT = Path(__file__).resolve().parents[1]
 
 
 @dataclass
@@ -141,10 +143,14 @@ def _init_intentional_debug_level() -> None:
 class LogBufferHandler(logging.Handler):
     @staticmethod
     def _is_orchestrator_record(record: logging.LogRecord) -> bool:
-        pathname = (getattr(record, "pathname", "") or "").replace("\\", "/")
+        pathname = getattr(record, "pathname", "") or ""
         if not pathname:
             return False
-        return "/backend/orchestrator/" in pathname and "/site-packages/" not in pathname
+        try:
+            record_path = Path(pathname).resolve()
+        except Exception:
+            return False
+        return ORCHESTRATOR_ROOT in record_path.parents or record_path == ORCHESTRATOR_ROOT
 
     def emit(self, record: logging.LogRecord) -> None:
         try:
