@@ -159,8 +159,10 @@ def configure_logging(level: str | None = None) -> None:
 
     _init_decision_level()
     root = logging.getLogger()
-    root_level = (level or "INFO").upper()
-    root.setLevel(getattr(logging, root_level, logging.INFO))
+    # Keep root at DEBUG so the in-memory stream captures all levels,
+    # including debug records. Individual handlers still control what is
+    # emitted to their own outputs.
+    root.setLevel(logging.DEBUG)
 
     handler = LogBufferHandler()
     handler.setLevel(logging.DEBUG)

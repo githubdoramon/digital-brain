@@ -57,7 +57,7 @@ class TraceConfig:
     def from_env(cls) -> "TraceConfig":
         return cls(
             enabled=os.getenv("AGENT_TRACE_ENABLED", "true").lower() == "true",
-            min_level=LogLevel(os.getenv("AGENT_TRACE_LEVEL", "info").lower()),
+            min_level=LogLevel(os.getenv("AGENT_TRACE_LEVEL", "debug").lower()),
             show_timestamps=os.getenv("AGENT_TRACE_TIMESTAMPS", "false").lower() == "true",
             truncate_length=int(os.getenv("AGENT_TRACE_TRUNCATE", "150")),
         )
