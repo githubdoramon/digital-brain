@@ -24,7 +24,7 @@ from enum import Enum
 from time import perf_counter
 from typing import Any, Optional
 
-from observability.log_stream import DECISION_LEVEL
+from observability.log_stream import DECISION_LEVEL, INTENTIONAL_DEBUG_LEVEL
 
 logger = logging.getLogger(__name__)
 
@@ -114,7 +114,7 @@ def _format_args(args: dict[str, Any]) -> str:
 
 def _emit(level: LogLevel, message: str) -> None:
     if level == LogLevel.DEBUG:
-        logger.debug(message)
+        logger.log(INTENTIONAL_DEBUG_LEVEL, message)
     elif level == LogLevel.INFO:
         logger.info(message)
     elif level == LogLevel.DECISION:

@@ -10,6 +10,7 @@ from typing import Any
 
 LOG_LEVELS = {"debug", "info", "decision", "warning", "error"}
 DECISION_LEVEL = 25
+INTENTIONAL_DEBUG_LEVEL = 15
 
 
 @dataclass
@@ -122,12 +123,28 @@ def _init_decision_level() -> None:
         def decision(self: logging.Logger, message: str, *args: Any, **kwargs: Any) -> None:
             self.log(DECISION_LEVEL, message, *args, **kwargs)
 
-        logging.Logger.decision = decision  # type: ignore[attr-defined]
+        logging.Logger.decision = decision
+
+
+def _init_intentional_debug_level() -> None:
+    if logging.getLevelName(INTENTIONAL_DEBUG_LEVEL) == f"Level {INTENTIONAL_DEBUG_LEVEL}":
+        logging.addLevelName(INTENTIONAL_DEBUG_LEVEL, "IDEBUG")
+
+        def intentional_debug(
+            self: logging.Logger, message: str, *args: Any, **kwargs: Any
+        ) -> None:
+            self.log(INTENTIONAL_DEBUG_LEVEL, message, *args, **kwargs)
+
+        logging.Logger.intentional_debug = intentional_debug
 
 
 class LogBufferHandler(logging.Handler):
     def emit(self, record: logging.LogRecord) -> None:
         try:
+            # Ignore generic DEBUG noise from libraries/frameworks.
+            # Only include deliberate app debug emitted via INTENTIONAL_DEBUG_LEVEL.
+            if record.levelno < logging.INFO and record.levelno != INTENTIONAL_DEBUG_LEVEL:
+                return
             message = self.format(record)
             level = self._map_level(record.levelno)
             context = {
@@ -147,6 +164,8 @@ class LogBufferHandler(logging.Handler):
             return "warning"
         if levelno == DECISION_LEVEL:
             return "decision"
+        if levelno == INTENTIONAL_DEBUG_LEVEL:
+            return "debug"
         if levelno >= logging.INFO:
             return "info"
         return "debug"
@@ -158,6 +177,7 @@ def configure_logging(level: str | None = None) -> None:
         return
 
     _init_decision_level()
+    _init_intentional_debug_level()
     root = logging.getLogger()
     # Keep root at DEBUG so the in-memory stream captures all levels,
     # including debug records. Individual handlers still control what is
