@@ -43,7 +43,6 @@ from auth import get_current_user
 from db import get_conn
 from notifications.preferences import get_push_settings, update_push_settings
 from observability.log_stream import (
-    INTENTIONAL_DEBUG_LEVEL,
     LOG_LEVELS,
     configure_logging,
     get_log_buffer,
@@ -235,16 +234,6 @@ def list_system_logs(
         limit=limit,
     )
     return {"entries": [entry.to_dict() for entry in entries]}
-
-
-@api.post("/system/logs/probe")
-def emit_debug_probe(
-    message: str | None = Query(default=None, max_length=200),
-    _: dict = Depends(get_current_user),
-):
-    probe_message = (message or "UI debug probe").strip() or "UI debug probe"
-    logger.log(INTENTIONAL_DEBUG_LEVEL, "[system.log_probe] %s", probe_message)
-    return {"ok": True, "message": probe_message}
 
 
 # --------------------------- Mobile endpoints ---------------------------
@@ -1193,7 +1182,12 @@ def _command_response_text(command_result: dict[str, Any]) -> str:
     result_type = command_result.get("type")
     if result_type == "event_confirmation":
         return command_result.get("message") or "Event proposal ready."
-    if result_type == "clarification_needed":
+    if result_type == "need_user_input":
+        need_user_input = command_result.get("need_user_input")
+        if isinstance(need_user_input, dict):
+            prompt = str(need_user_input.get("prompt") or "").strip()
+            if prompt:
+                return prompt
         return "I need a few more details to continue."
     return command_result.get("message") or "Command completed."
 
@@ -1897,7 +1891,7 @@ def resolve_contacts_endpoint(
 
     Returns:
     {
-        "status": "success" | "needs_clarification" | "no_people" | "error",
+        "status": "success" | "need_user_input" | "no_people" | "error",
         "text": str,
         "people_mentioned": ["my daughter's eye doctor"],
         "resolved_contacts": [
@@ -1911,7 +1905,12 @@ def resolve_contacts_endpoint(
             }
         ],
         "new_contacts": [...],
-        "ambiguous_contacts": [...]
+        "ambiguous_contacts": [...],
+        "need_user_input": {
+            "kind": "disambiguation",
+            "prompt": "...",
+            "fields": [...]
+        }
     }
     """
     from agents.contacts.executor import handle_resolve_contacts_request

@@ -8,6 +8,7 @@ from typing import Any
 
 from observability import trace
 from observability.logger import get_runtime_logger
+from ui_dsl.clarification import extract_need_user_input
 
 from .state import AgentState, ToolCallRecord
 
@@ -107,7 +108,13 @@ class ToolExecutionCoordinator:
             )
             trace.trace_tool_args_normalized(tool_name, args)
             if preempt_result is not None:
-                prompt = preempt_result.get("clarification_prompt")
+                prompt = ""
+                need_user_input = extract_need_user_input(
+                    preempt_result,
+                    default_source=tool_name,
+                )
+                if need_user_input:
+                    prompt = str(need_user_input.get("prompt") or "").strip()
                 if prompt:
                     state.add_question(prompt)
                 return self._finalize_early_tool_result(
@@ -369,8 +376,11 @@ class ToolExecutionCoordinator:
         """Finalize an early-return tool result while preserving bookkeeping."""
         duration_ms = 0.0
         success = "error" not in result and result.get("success") is not False
+        need_user_input = extract_need_user_input(result, default_source=tool_name)
         result_summary = (
-            result.get("message") or result.get("clarification_prompt") or default_summary
+            result.get("message")
+            or (need_user_input or {}).get("prompt")
+            or default_summary
         )
         trace.trace_tool_execution_result(tool_name, duration_ms, success, result_summary)
         trace.trace_tool_lifecycle_end(tool_name, call_id, success, duration_ms, result_summary)

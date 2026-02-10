@@ -14,6 +14,16 @@ from uuid import uuid4
 from commands.parser import ParsedCommand
 from commands.registry import CommandRegistry
 from observability.logger import get_runtime_logger
+from ui_dsl.clarification import (
+    build_need_user_input,
+    build_need_user_input_prompt_guidance,
+    clarification_fields_from_ambiguous_contacts,
+    default_clarification_details_field,
+    derive_clarification_questions_from_fields,
+    need_user_input_json_property_template,
+    normalize_clarification_fields,
+    normalize_need_user_input,
+)
 
 logger = get_runtime_logger(__name__)
 
@@ -184,9 +194,10 @@ def _extract_event_entities_with_llm(
         context: Context dict with user info and time context
 
     Returns:
-        Dict with extracted entities or needs_clarification flag
+        Dict with extracted entities and optional need_user_input envelope
     """
     from llm_helpers import call_llm_json
+    from prompts.clarification import append_clarification_skill_to_prompt
     from prompts.context import get_time_context
     from tags_manager import MAJOR_TAGS
 
@@ -205,6 +216,8 @@ def _extract_event_entities_with_llm(
     existing_context = _format_existing_extraction_for_prompt(existing_extraction)
     clarification_context = _format_clarification_history(clarification_messages)
     conversation_json = _format_conversation_json(message, clarification_messages)
+    need_user_input_guidance = build_need_user_input_prompt_guidance(exclude_people=True)
+    need_user_input_template = need_user_input_json_property_template(indent=4)
     conversation_context = (
         f"Conversation messages (JSON array, most recent last):\n{conversation_json}\n\n"
     )
@@ -231,16 +244,15 @@ People extraction is handled separately. Do NOT include any people/person list.
 
 Prefer specific types over general terms WHEN POSSIBLE (e.g., "Electric Engineer" over "Engineer", "Orthopedist" over "Doctor").
 
-If ANY critical information is missing or ambiguous (excluding people), set "needs_clarification" to true and provide "clarification_questions".
+{need_user_input_guidance}
+
 Use the clarification history to avoid repeating questions that were already answered.
 Never drop previously confirmed facts from the existing extraction or clarification history; only override if the user explicitly corrects them.
 Assistant questions are prompts only and are NOT facts; only treat user-provided details as facts.
-Do NOT ask clarification questions about people; contact resolution handles that separately.
 
 Return ONLY valid JSON in this exact format:
 {{
-    "needs_clarification": false,
-    "clarification_questions": [],
+{need_user_input_template}
     "title": "Brief title",
     "summary": "Detailed description",
     "when": "ISO 8601 datetime or null",
@@ -249,6 +261,7 @@ Return ONLY valid JSON in this exact format:
     "tags": ["tag1", "tag2"],
     "types": ["generic"]
 }}"""
+    extraction_prompt = append_clarification_skill_to_prompt(extraction_prompt)
 
     try:
         logger.info("[event_extraction] Calling LLM for extraction...")
@@ -262,8 +275,16 @@ Return ONLY valid JSON in this exact format:
         logger.debug("[event_extraction]   - Tags: %s", extracted.get("tags"))
         logger.debug("[event_extraction]   - Types: %s", extracted.get("types"))
         logger.debug(
-            "[event_extraction]   - Needs clarification: %s",
-            extracted.get("needs_clarification"),
+            "[event_extraction]   - Needs user input: %s",
+            bool(extracted.get("need_user_input")),
+        )
+        logger.debug(
+            "[event_extraction]   - Clarification fields: %s",
+            len(
+                (extracted.get("need_user_input") or {}).get("fields", [])
+                if isinstance(extracted.get("need_user_input"), dict)
+                else []
+            ),
         )
 
         # Parse datetime if provided
@@ -280,9 +301,10 @@ Return ONLY valid JSON in this exact format:
                     exc_info=e,
                 )
 
+        need_user_input = normalize_need_user_input(extracted.get("need_user_input"))
+
         result = {
-            "needs_clarification": extracted.get("needs_clarification", False),
-            "clarification_questions": extracted.get("clarification_questions", []),
+            "need_user_input": need_user_input,
             "title": extracted.get("title", message[:100]),
             "summary": extracted.get("summary", message),
             "when": when,
@@ -294,7 +316,15 @@ Return ONLY valid JSON in this exact format:
         }
 
         if existing_extraction:
-            for key in ["title", "summary", "when", "where", "documents", "tags", "types"]:
+            for key in [
+                "title",
+                "summary",
+                "when",
+                "where",
+                "documents",
+                "tags",
+                "types",
+            ]:
                 if result.get(key) in (None, "", [], ["generic"]) and existing_extraction.get(key):
                     result[key] = existing_extraction[key]
 
@@ -306,10 +336,14 @@ Return ONLY valid JSON in this exact format:
 
         # Fallback to basic extraction
         return {
-            "needs_clarification": True,
-            "clarification_questions": [
-                "Could you provide more details about what happened, when, and who was involved?"
-            ],
+            "need_user_input": build_need_user_input(
+                kind="clarification",
+                source="event_extraction",
+                prompt="Could you provide more details about what happened?",
+                questions=["Could you provide more details about what happened?"],
+                fields=[default_clarification_details_field()],
+                submission_mode="ui_submission",
+            ),
             "title": message[:100],
             "summary": message,
             "when": None,
@@ -923,7 +957,7 @@ def handle_event(parsed: ParsedCommand, context: dict) -> dict[str, Any]:
         context: Context dict with user info
 
     Returns:
-        Dict with event_confirmation or clarification_needed type
+        Dict with event_confirmation or need_user_input type
     """
     logger.info("[handle_event] NEW EVENT COMMAND")
 
@@ -1039,32 +1073,81 @@ def handle_event(parsed: ParsedCommand, context: dict) -> dict[str, Any]:
             contact_result = contact_result or previous_contact_result
 
     # Check if clarification is needed
-    clarification_questions = (
-        extracted.get("clarification_questions", []) if extracted.get("needs_clarification") else []
+    event_need_user_input = normalize_need_user_input(extracted.get("need_user_input"))
+    clarification_questions = list((event_need_user_input or {}).get("questions") or [])
+    clarification_fields = normalize_clarification_fields(
+        (event_need_user_input or {}).get("fields")
     )
-    if extracted.get("needs_clarification") and not clarification_questions:
-        clarification_questions = [
-            "Could you clarify the missing details (what happened, when, and where)?",
-        ]
+
+    if event_need_user_input and not clarification_fields:
+        clarification_fields = [default_clarification_details_field()]
+    if event_need_user_input and not clarification_questions:
+        clarification_questions = derive_clarification_questions_from_fields(clarification_fields)
+    if event_need_user_input and not clarification_questions:
+        fallback_prompt = str(event_need_user_input.get("prompt") or "").strip()
+        if fallback_prompt:
+            clarification_questions = [fallback_prompt]
 
     ambiguous_contacts = contact_result.get("ambiguous_contacts", []) if contact_result else []
+    contact_need_user_input = None
     if ambiguous_contacts:
         logger.warning("[handle_event] Contact disambiguation needed")
-        clarification_questions.extend(
-            [
-                contact.get("clarification_prompt")
-                for contact in ambiguous_contacts
-                if contact.get("clarification_prompt")
-            ]
+        contact_need_user_input = build_need_user_input(
+            kind="disambiguation",
+            source="contact_resolution",
+            prompt="I found multiple matching contacts. Please choose who you meant.",
+            questions=["I found multiple matching contacts. Please choose who you meant."],
+            fields=clarification_fields_from_ambiguous_contacts(ambiguous_contacts),
+            submission_mode="ui_submission",
         )
-        if not clarification_questions:
-            clarification_questions.append(
-                "I found multiple matching contacts. Can you clarify who you meant?"
-            )
+        if contact_need_user_input:
+            clarification_questions.extend(contact_need_user_input.get("questions", []))
+            clarification_fields.extend(contact_need_user_input.get("fields", []))
 
-    if clarification_questions:
+    # Keep order while deduping repeated questions.
+    seen_questions: set[str] = set()
+    deduped_questions: list[str] = []
+    for question in clarification_questions:
+        text = str(question).strip()
+        if not text:
+            continue
+        key = text.lower()
+        if key in seen_questions:
+            continue
+        seen_questions.add(key)
+        deduped_questions.append(text)
+    clarification_questions = deduped_questions
+
+    needs_follow_up = bool(event_need_user_input or contact_need_user_input)
+    if needs_follow_up and not clarification_fields:
+        clarification_fields = [default_clarification_details_field()]
+    if needs_follow_up and not clarification_questions:
+        clarification_questions = derive_clarification_questions_from_fields(clarification_fields)
+    if needs_follow_up and not clarification_questions:
+        clarification_questions = ["Please share the missing event details so I can continue."]
+
+    if needs_follow_up:
         logger.warning("[handle_event] Clarification needed, returning questions to user")
         clarification_preview_id = f"event:clarification:{uuid4().hex[:8]}"
+        action_id = f"event_clarification_submit:{clarification_preview_id}"
+        need_user_input = build_need_user_input(
+            kind=(
+                "disambiguation"
+                if contact_need_user_input and not event_need_user_input
+                else "clarification"
+            ),
+            source="event_command",
+            prompt=clarification_questions[0],
+            questions=clarification_questions,
+            fields=clarification_fields,
+            action_id=action_id,
+            submission_mode="ui_submission",
+            context={
+                "clarification_id": clarification_preview_id,
+                "command": "event",
+            },
+        )
+
         from commands.storage import store_command_data
 
         if clarification_messages is None:
@@ -1074,7 +1157,8 @@ def handle_event(parsed: ParsedCommand, context: dict) -> dict[str, Any]:
         clarification_messages.append(
             {
                 "role": "assistant",
-                "content": " ".join(clarification_questions),
+                "content": (need_user_input or {}).get("prompt")
+                or " ".join(clarification_questions),
             }
         )
 
@@ -1090,8 +1174,8 @@ def handle_event(parsed: ParsedCommand, context: dict) -> dict[str, Any]:
             },
         )
         return {
-            "type": "clarification_needed",
-            "questions": clarification_questions,
+            "type": "need_user_input",
+            "need_user_input": need_user_input,
             "partial_extraction": extracted,
             "original_message": raw_message,
             "clarification_id": clarification_preview_id,

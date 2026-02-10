@@ -184,12 +184,15 @@ class TestPostValidatorContactResolution:
             tool_name="resolve_contacts",
             params={"text": "When did I meet John?"},
             result={
-                "status": "needs_clarification",
+                "status": "need_user_input",
                 "people_mentioned": ["John"],
                 "resolved_contacts": [],
-                "ambiguous_contacts": [
-                    {"clarification_prompt": "Which John do you mean?"}
-                ],
+                "ambiguous_contacts": [],
+                "need_user_input": {
+                    "kind": "disambiguation",
+                    "prompt": "Which John do you mean?",
+                    "submission_mode": "text",
+                },
             },
             goal="Find meetings with John",
             known_facts=[],
@@ -202,8 +205,12 @@ class TestPostValidatorContactResolution:
             tool_name="search_memories",
             params={"query": "When did I meet John?"},
             result={
-                "needs_clarification": True,
-                "clarification_prompt": "Which John do you mean?",
+                "status": "need_user_input",
+                "need_user_input": {
+                    "kind": "disambiguation",
+                    "prompt": "Which John do you mean?",
+                    "submission_mode": "text",
+                },
                 "results": [],
                 "count": 0,
             },
@@ -236,6 +243,26 @@ class TestPostValidatorContactResolution:
         )
         assert result.coverage == GoalCoverage.NEED_USER_INPUT
         assert "Pick one option." in result.reason
+
+    def test_resolve_contacts_need_user_input_envelope(self, validator):
+        result = validator.validate(
+            tool_name="resolve_contacts",
+            params={"text": "When did I meet John?"},
+            result={
+                "people_mentioned": ["John"],
+                "resolved_contacts": [],
+                "ambiguous_contacts": [],
+                "need_user_input": {
+                    "kind": "disambiguation",
+                    "prompt": "Which John do you mean?",
+                    "questions": ["Which John do you mean?"],
+                },
+            },
+            goal="Find meetings with John",
+            known_facts=[],
+        )
+        assert result.coverage == GoalCoverage.NEED_USER_INPUT
+        assert "Which John do you mean?" in result.reason
 
 
 class TestFactExtraction:

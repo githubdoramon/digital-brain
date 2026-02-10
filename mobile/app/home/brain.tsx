@@ -28,7 +28,7 @@ import { SlashCommandPalette } from '@/components/SlashCommandPalette';
 import { loadChatSession, saveChatSession, StoredChatSession } from '@/chat/session';
 import { restoreChatHistory } from '@/chat/threads';
 import type { CommandResult as ThreadCommandResult } from '@/chat/threads';
-import type { UiDirectives, UiSubmissionInput } from '@/chat/uiDirectives';
+import type { UiDirectiveBlock, UiDirectives, UiSubmissionInput } from '@/chat/uiDirectives';
 import { getClientContext } from '@/location/clientContext';
 
 type Message = {
@@ -109,26 +109,75 @@ const BLOCKQUOTE_LINE_PATTERN = /^>\s+/;
 const EVENT_CONFIRM_ACTION_ID = 'event_confirmation_action';
 const EVENT_CLARIFICATION_ACTION_PREFIX = 'event_clarification_submit';
 
-function readSubmissionValue(values: Record<string, unknown> | undefined, key: string): string {
-  const raw = values?.[key];
-  return typeof raw === 'string' ? raw.trim() : '';
+function formatFieldLabel(fieldId: string): string {
+  return fieldId
+    .replace(/_/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/^\w/, (char) => char.toUpperCase());
 }
 
-function buildEventClarificationAnswer(values: Record<string, unknown> | undefined): string {
-  const details = readSubmissionValue(values, 'details');
-  const when = readSubmissionValue(values, 'when');
-  const where = readSubmissionValue(values, 'where');
+function toSubmissionTextValue(value: unknown): string {
+  if (value === null || value === undefined) return '';
+  if (typeof value === 'string') return value.trim();
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+  if (Array.isArray(value)) {
+    return value
+      .map((item) => toSubmissionTextValue(item))
+      .filter(Boolean)
+      .join(', ');
+  }
+  return '';
+}
 
+function fieldForSubmission(block: UiDirectiveBlock | undefined, fieldId: string) {
+  const fields = block?.fields || [];
+  return fields.find((field) => field.id === fieldId);
+}
+
+function optionLabelForField(field: ReturnType<typeof fieldForSubmission>, rawValue: string): string {
+  const options = field?.options || [];
+  const match = options.find((option) => option.id === rawValue);
+  return match?.label || rawValue;
+}
+
+function buildEventClarificationAnswer(
+  submission: UiSubmissionInput,
+  directives: UiDirectives | undefined,
+): string {
+  const values = submission.values || {};
+  const entries = Object.entries(values)
+    .map(([key, value]) => [key, toSubmissionTextValue(value)] as const)
+    .filter(([, value]) => Boolean(value));
+
+  if (entries.length === 0) {
+    return '';
+  }
+
+  const block = directives?.blocks?.find((candidate) => candidate.id === submission.block_id);
   const lines: string[] = [];
-  if (details) {
-    lines.push(details);
+
+  for (const [key, value] of entries) {
+    const field = fieldForSubmission(block, key);
+    const label = field?.label || formatFieldLabel(key);
+    const normalizedValue = optionLabelForField(field, value);
+    const lowerKey = key.toLowerCase();
+    if (
+      lowerKey === 'details' ||
+      lowerKey === 'description' ||
+      lowerKey === 'summary' ||
+      lowerKey === 'what_happened'
+    ) {
+      lines.push(normalizedValue);
+      continue;
+    }
+    lines.push(`${label}: ${normalizedValue}`);
   }
-  if (when) {
-    lines.push(`When: ${when}`);
+
+  if (lines.length === 0 && submission.text_fallback?.trim()) {
+    return submission.text_fallback.trim();
   }
-  if (where) {
-    lines.push(`Where: ${where}`);
-  }
+
   return lines.join('\n');
 }
 
@@ -694,7 +743,7 @@ export default function ChatScreen() {
       }
 
       if (submission.action_id?.startsWith(EVENT_CLARIFICATION_ACTION_PREFIX)) {
-        const answer = buildEventClarificationAnswer(submission.values);
+        const answer = buildEventClarificationAnswer(submission, directives);
         if (!answer) {
           return;
         }

@@ -4,24 +4,14 @@ from __future__ import annotations
 
 from typing import Any
 
+from ui_dsl.clarification import SUPPORTED_CLARIFICATION_FIELD_KINDS
+
 UI_DSL_VERSION = "1.0"
 
 _SUPPORTED_BLOCK_TYPES = {
     "clarification_form",
     "choice_buttons",
     "info_card",
-}
-
-_SUPPORTED_FIELD_KINDS = {
-    "text",
-    "textarea",
-    "number",
-    "date",
-    "time",
-    "datetime",
-    "email",
-    "url",
-    "select",
 }
 
 _MAX_BLOCKS = 5
@@ -327,8 +317,8 @@ def _sanitize_field(payload: Any, block_prefix: str, index: int) -> tuple[dict[s
         required=True,
         errors=errors,
     )
-    if kind and kind not in _SUPPORTED_FIELD_KINDS:
-        errors.append(f"{prefix}.kind must be one of {sorted(_SUPPORTED_FIELD_KINDS)}")
+    if kind and kind not in SUPPORTED_CLARIFICATION_FIELD_KINDS:
+        errors.append(f"{prefix}.kind must be one of {sorted(SUPPORTED_CLARIFICATION_FIELD_KINDS)}")
 
     label = _sanitize_text(
         payload.get("label"),

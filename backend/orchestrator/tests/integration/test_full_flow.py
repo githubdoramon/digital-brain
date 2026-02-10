@@ -51,9 +51,19 @@ class TestAgentControllerIntegration:
         """
         state = AgentState(goal="When did I talk to John?")
         state.step_count = 1
-        state.resolution["pending_contact_clarification"] = "Which John do you mean?"
+        state.resolution["pending_contact_need_user_input"] = {
+            "kind": "disambiguation",
+            "prompt": "Which John do you mean?",
+            "submission_mode": "text",
+        }
         state.resolution["pending_contact_ambiguous_contacts"] = [
-            {"clarification_prompt": "Which John do you mean?"}
+            {
+                "original_text": "John",
+                "candidates": [
+                    {"contact_id": "contact-1", "display_name": "John Smith"},
+                    {"contact_id": "contact-2", "display_name": "John Doe"},
+                ],
+            }
         ]
         state.resolution["pending_contact_people"] = ["John"]
 
@@ -90,9 +100,8 @@ class TestAgentControllerIntegration:
             conversation_history=[],
         )
 
-        assert result["status"] == "needs_clarification"
-        assert result["needs_clarification"] is True
-        assert "Which John do you mean?" in result["clarification_prompt"]
+        assert result["status"] == "need_user_input"
+        assert "John" in result["need_user_input"]["prompt"]
         assert state.tool_calls_count == 1
         assert state.last_tool_call is not None
         assert state.last_tool_call.tool_name == "search_memories"
@@ -356,19 +365,23 @@ class TestAgentControllerIntegration:
         monkeypatch.setattr(
             "agents.contacts.executor.handle_resolve_contacts_request",
             lambda _payload: {
-                "status": "needs_clarification",
+                "status": "need_user_input",
                 "people_mentioned": ["Gio"],
                 "resolved_contacts": [],
                 "ambiguous_contacts": [
                     {
-                        "person_text": "Gio",
+                        "original_text": "Gio",
                         "candidates": [
                             {"contact_id": "contact-1", "display_name": "Giovanni Panerai"},
                             {"contact_id": "contact-2", "display_name": "Giovanni Ghelfi"},
                         ],
-                        "clarification_prompt": "Which Gio did you mean?",
                     }
                 ],
+                "need_user_input": {
+                    "kind": "disambiguation",
+                    "prompt": "Which Gio did you mean?",
+                    "submission_mode": "text",
+                },
             },
         )
 
@@ -445,19 +458,23 @@ class TestAgentControllerIntegration:
         def fake_execute_handler(tool_name, args, **_kwargs):
             if tool_name == "resolve_contacts":
                 return {
-                    "status": "needs_clarification",
+                    "status": "need_user_input",
                     "people_mentioned": ["John"],
                     "resolved_contacts": [],
                     "ambiguous_contacts": [
                         {
-                            "person_text": "John",
+                            "original_text": "John",
                             "candidates": [
                                 {"contact_id": "contact-1", "display_name": "John Smith"},
                                 {"contact_id": "contact-2", "display_name": "John Doe"},
                             ],
-                            "clarification_prompt": "Which John did you mean?",
                         }
                     ],
+                    "need_user_input": {
+                        "kind": "disambiguation",
+                        "prompt": "Which John did you mean?",
+                        "submission_mode": "text",
+                    },
                 }
             return {"error": f"Unexpected tool: {tool_name}"}
 
@@ -474,7 +491,10 @@ class TestAgentControllerIntegration:
         assert llm_calls["count"] == 1
         assert "Which John did you mean?" in bundle["answer"]
         assert "John Smith" in bundle["answer"]
-        assert bundle["resolution"].get("pending_contact_clarification") == "Which John did you mean?"
+        assert (
+            bundle["resolution"].get("pending_contact_need_user_input", {}).get("prompt")
+            == "Which John did you mean?"
+        )
 
 
 class TestIntentRouterIntegration:

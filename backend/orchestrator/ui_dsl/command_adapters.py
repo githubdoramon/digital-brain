@@ -5,6 +5,13 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
+from ui_dsl.clarification import (
+    default_clarification_details_field,
+    derive_clarification_questions_from_fields,
+    extract_need_user_input,
+    infer_clarification_fields_from_questions,
+    normalize_clarification_fields,
+)
 from ui_dsl.validator import sanitize_ui_directives_payload
 
 _EVENT_CONFIRM_ACTION_ID = "event_confirmation_action"
@@ -16,15 +23,17 @@ def command_result_to_ui_directives(command_result: dict[str, Any]) -> dict[str,
     if not isinstance(command_result, dict):
         return None
 
-    result_type = str(command_result.get("type") or "").strip()
-    if not result_type:
-        return None
-
     raw_directive: dict[str, Any] | None = None
+    result_type = str(command_result.get("type") or "").strip()
     if result_type == "event_confirmation":
         raw_directive = _event_confirmation_directive(command_result)
-    elif result_type == "clarification_needed":
-        raw_directive = _event_clarification_directive(command_result)
+    else:
+        need_user_input = extract_need_user_input(
+            command_result,
+            default_source="command_result",
+        )
+        if need_user_input:
+            raw_directive = _clarification_directive(command_result, need_user_input)
 
     if raw_directive is None:
         return None
@@ -35,55 +44,57 @@ def command_result_to_ui_directives(command_result: dict[str, Any]) -> dict[str,
     return directive
 
 
-def _event_clarification_directive(command_result: dict[str, Any]) -> dict[str, Any]:
-    clarification_id = _normalized_text(command_result.get("clarification_id"))
-    questions = _string_list(command_result.get("questions"))
-
+def _clarification_directive(
+    command_result: dict[str, Any],
+    need_user_input: dict[str, Any],
+) -> dict[str, Any]:
+    clarification_id = _normalized_text(
+        command_result.get("clarification_id")
+        or (need_user_input.get("context") or {}).get("clarification_id")
+    )
+    questions = _string_list(need_user_input.get("questions"))
     description_lines = [f"{idx + 1}. {question}" for idx, question in enumerate(questions[:6])]
     if len(questions) > 6:
         description_lines.append("...")
 
-    action_id = _EVENT_CLARIFICATION_ACTION_ID_PREFIX
-    if clarification_id:
-        action_id = f"{action_id}:{clarification_id}"
+    action_id = _normalized_text(need_user_input.get("action_id"))
+    if not action_id:
+        action_id = _event_clarification_action_id(clarification_id)
 
     block_id_suffix = clarification_id or "follow_up"
-    fallback_text = questions[0] if questions else "Please share the missing event details."
+    fields = normalize_clarification_fields(need_user_input.get("fields"))
+    if not fields:
+        fields = infer_clarification_fields_from_questions(questions, {})
+    if not fields:
+        fields = [default_clarification_details_field()]
+    if not questions:
+        questions = derive_clarification_questions_from_fields(fields)
+    fallback_text = (
+        _normalized_text(need_user_input.get("prompt"))
+        or (questions[0] if questions else "Please share the missing details.")
+    )
+    kind = _normalized_text(need_user_input.get("kind")).lower()
+    source = _normalized_text(need_user_input.get("source")).lower()
+    title = "A few details are still missing"
+    if kind == "disambiguation":
+        title = "I need one quick disambiguation"
+    elif source.startswith("event"):
+        title = "A few event details are still missing"
+    submit_label = "Continue" if kind == "disambiguation" else "Submit details"
+    block_prefix = "event_clarification" if source.startswith("event") else "clarification"
 
     return {
         "version": "1.0",
         "fallback_text": fallback_text,
         "blocks": [
             {
-                "id": f"event_clarification:{block_id_suffix}",
+                "id": f"{block_prefix}:{block_id_suffix}",
                 "type": "clarification_form",
-                "title": "A few details are still missing",
+                "title": title,
                 "description": "\n".join(description_lines) if description_lines else None,
                 "action_id": action_id,
-                "fields": [
-                    {
-                        "id": "details",
-                        "kind": "textarea",
-                        "label": "Add details",
-                        "placeholder": "What happened?",
-                        "required": True,
-                    },
-                    {
-                        "id": "when",
-                        "kind": "datetime",
-                        "label": "When (optional)",
-                        "placeholder": "Select date and time",
-                        "required": False,
-                    },
-                    {
-                        "id": "where",
-                        "kind": "text",
-                        "label": "Where (optional)",
-                        "placeholder": "Add location",
-                        "required": False,
-                    },
-                ],
-                "submit_label": "Submit details",
+                "fields": fields,
+                "submit_label": submit_label,
             }
         ],
     }
@@ -198,6 +209,12 @@ def _format_when(value: Any) -> str:
 
 def _joined_or_default(values: list[str], default_text: str) -> str:
     return ", ".join(values) if values else default_text
+
+
+def _event_clarification_action_id(clarification_id: str) -> str:
+    if not clarification_id:
+        return _EVENT_CLARIFICATION_ACTION_ID_PREFIX
+    return f"{_EVENT_CLARIFICATION_ACTION_ID_PREFIX}:{clarification_id}"
 
 
 def _normalized_text(value: Any) -> str:

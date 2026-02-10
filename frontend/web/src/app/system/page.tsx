@@ -3,7 +3,6 @@
 import { useEffect, useRef, useState } from "react";
 import {
   api,
-  emitSystemDebugProbe,
   getSystemLogs,
   LogEntry,
   LogLevel,
@@ -116,7 +115,6 @@ export default function SystemStatusPage() {
   const [isLogPaused, setIsLogPaused] = useState(false);
   const [logConnected, setLogConnected] = useState(false);
   const [isLogFullscreen, setIsLogFullscreen] = useState(false);
-  const [isSendingProbe, setIsSendingProbe] = useState(false);
   const logContainerRef = useRef<HTMLDivElement | null>(null);
   const seenLogKeysRef = useRef<Set<string>>(new Set());
 
@@ -360,31 +358,6 @@ export default function SystemStatusPage() {
             }}
           >
             Clear
-          </button>
-          <button
-            type="button"
-            disabled={isSendingProbe}
-            onClick={async () => {
-              try {
-                setIsSendingProbe(true);
-                setLogError(null);
-                await emitSystemDebugProbe();
-              } catch (err) {
-                setLogError(err instanceof Error ? err.message : "Failed to emit debug probe.");
-              } finally {
-                setIsSendingProbe(false);
-              }
-            }}
-            style={{
-              border: "1px solid #d1d5db",
-              borderRadius: "8px",
-              padding: "6px 10px",
-              fontSize: "0.9rem",
-              background: isSendingProbe ? "#e2e8f0" : "#fff",
-              cursor: isSendingProbe ? "wait" : "pointer",
-            }}
-          >
-            {isSendingProbe ? "Sending..." : "Debug Probe"}
           </button>
         </div>
       </div>

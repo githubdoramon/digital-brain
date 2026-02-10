@@ -9,7 +9,6 @@ import type { Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { api, ask, primeClientContext, StreamBundle, UiDirectives } from "@/lib/api";
 import { EventCommandCard } from "@/components/EventCommandCard";
-import { EventClarificationCard } from "@/components/EventClarificationCard";
 
 type Message = {
   id?: number;
@@ -46,14 +45,6 @@ type AssistantMetadata = {
   };
   ui_directives?: UiDirectives;
 } & Record<string, unknown>;
-
-type EventClarificationData = {
-  type: "clarification_needed";
-  questions: string[];
-  partial_extraction: Record<string, unknown>;
-  original_message: string;
-  clarification_id?: string;
-};
 
 type EventConfirmationData = {
   type: "event_confirmation";
@@ -814,28 +805,6 @@ export default function Home() {
                       {message.content}
                     </ReactMarkdown>
                   </div>
-                  {commandResult && commandResult.type === "clarification_needed" && (
-                    <div style={{ maxWidth: "80%", alignSelf: "stretch" }}>
-                      <EventClarificationCard
-                        clarificationData={commandResult as EventClarificationData}
-                        onSubmit={async (answers) => {
-                          // Re-submit with additional information
-                          const clarificationId = (commandResult as EventClarificationData).clarification_id;
-                          const clarificationToken = clarificationId
-                            ? `\n\n[clarification_id:${clarificationId}]`
-                            : "";
-                          const combinedMessage = `/event ${answers}${clarificationToken}`;
-                          setInput(combinedMessage);
-                          // Trigger form submit
-                          const form = document.querySelector('form');
-                          if (form) form.requestSubmit();
-                        }}
-                        onCancel={() => {
-                          setPendingEventId(null);
-                        }}
-                      />
-                    </div>
-                  )}
                   {commandResult && commandResult.type === "event_confirmation" && (
                     <div style={{ maxWidth: "80%", alignSelf: "stretch" }}>
                       <EventCommandCard

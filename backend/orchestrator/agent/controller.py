@@ -24,6 +24,7 @@ from typing import Any, Optional
 
 from observability import trace
 from observability.logger import get_runtime_logger
+from ui_dsl.clarification import extract_need_user_input
 
 from .contact_resolution import (
     build_contact_clarification_result,
@@ -900,6 +901,7 @@ class AgentController:
         client_context: Optional[dict[str, Any]],
     ) -> list[dict[str, Any]]:
         """Build the message list for the LLM."""
+        from prompts.clarification import get_clarification_skill_prompt_block
         from prompts.context import (
             get_location_context,
             get_self_context,
@@ -924,6 +926,11 @@ class AgentController:
 
         # Bounded agent protocol
         messages.append({"role": "system", "content": get_bounded_agent_protocol()})
+
+        # Clarification skill (always injected for consistent follow-up behavior)
+        clarification_skill_block = get_clarification_skill_prompt_block()
+        if clarification_skill_block:
+            messages.append({"role": "system", "content": clarification_skill_block})
 
         # Self context
         if user_email:
@@ -1138,15 +1145,19 @@ class AgentController:
         pending_text = sanitize_goal_text(
             str(state.resolution.get("pending_contact_scope_text", "")).strip()
         )
-        pending_prompt = state.resolution.get("pending_contact_clarification")
+        pending_need_user_input = state.resolution.get("pending_contact_need_user_input")
+        pending_prompt = ""
+        if isinstance(pending_need_user_input, dict):
+            pending_prompt = str(pending_need_user_input.get("prompt") or "").strip()
         if pending_prompt and pending_text and pending_text.lower() == text.lower():
             return {
-                "status": "needs_clarification",
+                "status": "need_user_input",
                 "ambiguous_contacts": state.resolution.get(
                     "pending_contact_ambiguous_contacts", []
                 ),
                 "people_mentioned": state.resolution.get("pending_contact_people", []),
                 "message": "Contact resolution already requires clarification.",
+                "need_user_input": pending_need_user_input,
             }
 
         last_call = state.last_tool_call
@@ -1154,16 +1165,19 @@ class AgentController:
             return None
 
         last_text = sanitize_goal_text(str(last_call.arguments.get("text", "")).strip())
-        last_status = (last_call.result or {}).get("status")
+        last_result = last_call.result or {}
+        last_status = last_result.get("status")
+        if not last_status and extract_need_user_input(last_result, default_source="resolve_contacts"):
+            last_status = "need_user_input"
         if last_text.lower() != text.lower():
             return None
-        if last_status not in {"needs_clarification", "no_people"}:
+        if last_status not in {"need_user_input", "no_people"}:
             return None
 
         reason = (
             "Contact resolution already returned ambiguity for this exact text. "
             "Ask the user to clarify instead of retrying the same call."
-            if last_status == "needs_clarification"
+            if last_status == "need_user_input"
             else "No people were detected for this text in the previous attempt."
         )
         trace.trace_decision(
@@ -1172,7 +1186,7 @@ class AgentController:
             {"text": text, "previous_status": last_status},
         )
         return {
-            **(last_call.result or {}),
+            **last_result,
             "status": last_status,
             "message": reason,
         }
@@ -1228,7 +1242,10 @@ class AgentController:
             if parsed_limit < 25:
                 normalized_args["limit"] = 25
 
-        pending_prompt = state.resolution.get("pending_contact_clarification")
+        pending_need_user_input = state.resolution.get("pending_contact_need_user_input")
+        pending_prompt = ""
+        if isinstance(pending_need_user_input, dict):
+            pending_prompt = str(pending_need_user_input.get("prompt") or "").strip()
         if pending_prompt:
             preempt = build_contact_clarification_result(
                 ambiguous_contacts=state.resolution.get("pending_contact_ambiguous_contacts", []),
@@ -1267,7 +1284,12 @@ class AgentController:
 
             if resolution:
                 status = resolution.get("status")
-                if status == "needs_clarification":
+                if not status and extract_need_user_input(
+                    resolution,
+                    default_source="resolve_contacts",
+                ):
+                    status = "need_user_input"
+                if status == "need_user_input":
                     preempt = build_contact_clarification_result(
                         ambiguous_contacts=state.resolution.get(
                             "pending_contact_ambiguous_contacts", []
@@ -1353,7 +1375,7 @@ class AgentController:
         if not user_email:
             return None
 
-        if state.resolution.get("pending_contact_clarification"):
+        if state.resolution.get("pending_contact_need_user_input"):
             return get_user_clarification_prompt_for_contact_resolution(state)
         if state.resolution.get("active_contact_scope_ids"):
             return None
@@ -1373,11 +1395,16 @@ class AgentController:
             return None
 
         status = resolution.get("status")
+        if not status and extract_need_user_input(
+            resolution,
+            default_source="resolve_contacts",
+        ):
+            status = "need_user_input"
         if status == "success":
             scope_ids = state.resolution.get("active_contact_scope_ids", [])
             if scope_ids:
                 state.add_fact(f"Pre-resolved {len(scope_ids)} contact(s) from user question")
-        elif status == "needs_clarification":
+        elif status == "need_user_input":
             prompt = get_user_clarification_prompt_for_contact_resolution(state)
             if prompt:
                 state.add_question(prompt)
@@ -1392,7 +1419,14 @@ class AgentController:
         result: dict[str, Any],
     ) -> None:
         """Store scoped contact-resolution outcomes for subsequent tool calls."""
+        need_user_input = extract_need_user_input(
+            result,
+            default_source="resolve_contacts",
+        )
         status = result.get("status")
+        if not status and need_user_input:
+            status = "need_user_input"
+
         state.resolution["last_contact_resolution_text"] = args.get("text", "")
         state.resolution["last_contact_resolution_status"] = status
         if status == "success":
@@ -1425,7 +1459,7 @@ class AgentController:
                 state.resolution["active_contact_scope_ids"] = deduped_ids
                 state.resolution["active_contact_scope"] = scope_entries
                 state.resolution["active_contact_scope_text"] = args.get("text", "")
-                state.resolution.pop("pending_contact_clarification", None)
+                state.resolution.pop("pending_contact_need_user_input", None)
                 state.resolution.pop("pending_contact_ambiguous_contacts", None)
                 state.resolution.pop("pending_contact_people", None)
                 state.resolution.pop("pending_contact_scope_text", None)
@@ -1433,14 +1467,19 @@ class AgentController:
                 state.resolution.pop("active_contact_scope", None)
             return
 
-        if status == "needs_clarification":
+        if status == "need_user_input":
             ambiguous_contacts = result.get("ambiguous_contacts", [])
-            prompt = ""
-            if ambiguous_contacts:
-                prompt = ambiguous_contacts[0].get("clarification_prompt", "")
+            prompt = str((need_user_input or {}).get("prompt") or "").strip()
             if not prompt:
                 prompt = "I found multiple matching people. Please clarify which one you mean."
-            state.resolution["pending_contact_clarification"] = prompt
+            if need_user_input:
+                state.resolution["pending_contact_need_user_input"] = need_user_input
+            else:
+                state.resolution["pending_contact_need_user_input"] = {
+                    "kind": "disambiguation",
+                    "prompt": prompt,
+                    "submission_mode": "text",
+                }
             state.resolution["pending_contact_ambiguous_contacts"] = ambiguous_contacts
             state.resolution["pending_contact_people"] = result.get("people_mentioned", [])
             state.resolution["pending_contact_scope_text"] = args.get("text", "")
@@ -1454,7 +1493,7 @@ class AgentController:
             state.resolution.pop("active_contact_scope_ids", None)
             state.resolution.pop("active_contact_scope_text", None)
             state.resolution.pop("active_contact_scope", None)
-            state.resolution.pop("pending_contact_clarification", None)
+            state.resolution.pop("pending_contact_need_user_input", None)
             state.resolution.pop("pending_contact_ambiguous_contacts", None)
             state.resolution.pop("pending_contact_people", None)
             state.resolution.pop("pending_contact_scope_text", None)

@@ -8,6 +8,7 @@ from typing import Any
 
 from agents.contacts.resolver import resolve_contacts_from_text
 from observability.logger import get_runtime_logger
+from ui_dsl.clarification import normalize_need_user_input
 
 logger = get_runtime_logger(__name__)
 
@@ -24,7 +25,7 @@ def handle_resolve_contacts_request(data: dict[str, Any]) -> dict[str, Any]:
 
     Returns:
     {
-        "status": "success" | "needs_clarification" | "no_people" | "error",
+        "status": "success" | "need_user_input" | "no_people" | "error",
         "text": str,
         "people_mentioned": list[str],
         "resolved_contacts": [...],
@@ -56,13 +57,19 @@ def handle_resolve_contacts_request(data: dict[str, Any]) -> dict[str, Any]:
             conversation_messages=data.get("conversation_messages"),
         )
 
-        # Add status field based on results
-        if result["ambiguous_contacts"]:
-            result["status"] = "needs_clarification"
-        elif not result["people_mentioned"]:
-            result["status"] = "no_people"
-        else:
-            result["status"] = "success"
+        status = str(result.get("status") or "").strip().lower()
+        need_user_input = normalize_need_user_input(result.get("need_user_input"))
+        if not status:
+            if need_user_input:
+                status = "need_user_input"
+            elif not result.get("people_mentioned"):
+                status = "no_people"
+            else:
+                status = "success"
+            result["status"] = status
+
+        if need_user_input:
+            result["need_user_input"] = need_user_input
 
         return result
 

@@ -25,16 +25,21 @@ type AmbiguousContact = {
     display_name: string;
     match_score: number;
   }>;
-  clarification_prompt: string;
+};
+
+type NeedUserInput = {
+  kind: string;
+  prompt: string;
 };
 
 type ResolveResponse = {
-  status: "success" | "needs_clarification" | "no_people" | "error";
+  status: "success" | "need_user_input" | "no_people" | "error";
   text: string;
   people_mentioned: string[];
   resolved_contacts: ResolvedContact[];
   new_contacts: NewContact[];
   ambiguous_contacts: AmbiguousContact[];
+  need_user_input?: NeedUserInput;
   message?: string;
 };
 
@@ -107,7 +112,7 @@ export default function ContactsTestPage() {
                 className={`inline-block px-2 py-1 rounded text-xs ${
                   response.status === "success"
                     ? "bg-green-100 text-green-800"
-                    : response.status === "needs_clarification"
+                    : response.status === "need_user_input"
                       ? "bg-yellow-100 text-yellow-800"
                       : response.status === "no_people"
                         ? "bg-gray-100 text-gray-800"
@@ -221,9 +226,11 @@ export default function ContactsTestPage() {
                     <p className="text-sm mb-2">
                       <span className="font-medium">Original:</span> {contact.original_text}
                     </p>
-                    <p className="text-sm mb-2 text-orange-700">
-                      {contact.clarification_prompt}
-                    </p>
+                    {response.need_user_input?.prompt && (
+                      <p className="text-sm mb-2 text-orange-700">
+                        {response.need_user_input.prompt}
+                      </p>
+                    )}
                     <div className="mt-2">
                       <p className="text-sm font-medium mb-1">Candidates:</p>
                       <ul className="list-disc list-inside space-y-1 ml-2">

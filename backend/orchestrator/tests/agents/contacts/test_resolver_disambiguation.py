@@ -15,7 +15,6 @@ def test_llm_disambiguation_requires_context_signal(monkeypatch):
         lambda *_args, **_kwargs: {
             "status": "candidates",
             "candidates": candidates,
-            "clarification_prompt": "Which Gio did you mean?",
         },
     )
     monkeypatch.setattr(
@@ -53,7 +52,6 @@ def test_llm_disambiguation_accepted_when_context_is_specific(monkeypatch):
         lambda *_args, **_kwargs: {
             "status": "candidates",
             "candidates": candidates,
-            "clarification_prompt": "Which Gio did you mean?",
         },
     )
     monkeypatch.setattr(
@@ -91,7 +89,6 @@ def test_llm_disambiguation_rejected_for_non_high_confidence(monkeypatch):
         lambda *_args, **_kwargs: {
             "status": "candidates",
             "candidates": candidates,
-            "clarification_prompt": "Which Gio did you mean?",
         },
     )
     monkeypatch.setattr(
@@ -128,7 +125,6 @@ def test_llm_disambiguation_balanced_accepts_name_level_match(monkeypatch):
         lambda *_args, **_kwargs: {
             "status": "candidates",
             "candidates": candidates,
-            "clarification_prompt": "Which Gio did you mean?",
         },
     )
     monkeypatch.setattr(
@@ -166,7 +162,6 @@ def test_llm_disambiguation_lenient_accepts_without_context(monkeypatch):
         lambda *_args, **_kwargs: {
             "status": "candidates",
             "candidates": candidates,
-            "clarification_prompt": "Which Alice did you mean?",
         },
     )
     monkeypatch.setattr(
@@ -346,7 +341,7 @@ def test_resolve_contact_nested_collective_uses_related_candidates(monkeypatch):
 
     assert result["status"] == "candidates"
     assert result["auto_resolve_candidates"] is True
-    assert result["needs_clarification"] is False
+    assert "needs_clarification" not in result
     assert len(result["candidates"]) == 3
     assert all(c.get("contact_id", "").startswith("contact:") for c in result["candidates"])
 
@@ -401,7 +396,7 @@ def test_resolve_contact_my_whole_family_anchors_on_user(monkeypatch):
 
     assert result["status"] == "candidates"
     assert result["auto_resolve_candidates"] is True
-    assert result["needs_clarification"] is False
+    assert "needs_clarification" not in result
     assert {item["contact_id"] for item in result["candidates"]} == {
         "contact:robin",
         "contact:jamie",
@@ -421,7 +416,6 @@ def test_resolve_people_mentions_auto_resolves_collective_candidates(monkeypatch
             "confidence": "high",
             "auto_resolve_candidates": True,
             "skip_auto_disambiguation": True,
-            "clarification_prompt": "",
         },
     )
 

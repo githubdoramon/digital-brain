@@ -101,16 +101,21 @@ type AmbiguousContact = {
     display_name: string;
     match_score: number;
   }>;
-  clarification_prompt: string;
+};
+
+type NeedUserInput = {
+  kind: string;
+  prompt: string;
 };
 
 type ResolveContactsResult = {
-  status?: "success" | "needs_clarification" | "no_people" | "error";
+  status?: "success" | "need_user_input" | "no_people" | "error";
   text?: string;
   people_mentioned?: string[];
   resolved_contacts?: ResolvedContact[];
   new_contacts?: NewContact[];
   ambiguous_contacts?: AmbiguousContact[];
+  need_user_input?: NeedUserInput;
   message?: string;
 };
 
@@ -697,7 +702,7 @@ export default function ToolsPage() {
                       background:
                         resolveResult.status === "success"
                           ? "#dcfce7"
-                          : resolveResult.status === "needs_clarification"
+                          : resolveResult.status === "need_user_input"
                             ? "#fef3c7"
                             : resolveResult.status === "no_people"
                               ? "#e5e7eb"
@@ -705,7 +710,7 @@ export default function ToolsPage() {
                       color:
                         resolveResult.status === "success"
                           ? "#166534"
-                          : resolveResult.status === "needs_clarification"
+                          : resolveResult.status === "need_user_input"
                             ? "#92400e"
                             : resolveResult.status === "no_people"
                               ? "#374151"
@@ -832,7 +837,11 @@ export default function ToolsPage() {
                       <div style={{ fontSize: "0.9rem", color: "#9a3412" }}>
                         <strong>{contact.original_text}</strong>
                       </div>
-                      <div style={{ fontSize: "0.85rem", color: "#c2410c" }}>{contact.clarification_prompt}</div>
+                      {resolveResult.need_user_input?.prompt && (
+                        <div style={{ fontSize: "0.85rem", color: "#c2410c" }}>
+                          {resolveResult.need_user_input.prompt}
+                        </div>
+                      )}
                       {contact.candidates.length > 0 && (
                         <div style={{ display: "grid", gap: "6px" }}>
                           {contact.candidates.map((candidate) => (

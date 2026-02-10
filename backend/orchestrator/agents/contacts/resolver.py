@@ -28,8 +28,40 @@ import contacts as contacts_service
 from llm_helpers import call_llm_json
 from observability import trace
 from observability.logger import get_runtime_logger
+from prompts.clarification import append_clarification_skill_to_prompt
+from ui_dsl.clarification import (
+    build_need_user_input,
+    clarification_fields_from_ambiguous_contacts,
+)
 
 logger = get_runtime_logger(__name__)
+
+
+def _with_clarification_skill(prompt: str) -> str:
+    return append_clarification_skill_to_prompt(prompt)
+
+
+def _build_contact_need_user_input(
+    ambiguous_contacts: list[dict[str, Any]],
+    people_mentioned: list[str],
+) -> dict[str, Any] | None:
+    prompt = "I found multiple matching contacts. Please choose who you meant."
+    if ambiguous_contacts:
+        first = ambiguous_contacts[0]
+        if isinstance(first, dict):
+            original_text = str(first.get("original_text") or "").strip()
+            if original_text:
+                prompt = f"I found multiple matches for '{original_text}'. Please choose one."
+
+    return build_need_user_input(
+        kind="disambiguation",
+        source="contact_resolution",
+        prompt=prompt,
+        questions=[prompt],
+        fields=clarification_fields_from_ambiguous_contacts(ambiguous_contacts),
+        submission_mode="text",
+        context={"people_mentioned": people_mentioned},
+    )
 
 
 def _format_conversation_for_prompt(conversation_messages: list[dict[str, str]]) -> str:
@@ -310,6 +342,7 @@ Return ONLY a valid JSON, nothing more, no other text or explanation:
 {{
     "people": ["person1", "my daughter", "person2's doctor"]
 }}"""
+    prompt = _with_clarification_skill(prompt)
 
     max_retries = 3
     for attempt in range(max_retries):
@@ -450,8 +483,6 @@ def resolve_contact(
             "matched_via": "direct_match" | "relationship" | "nested_relationship" | "llm_disambiguation",
             "resolution_path": Optional[List[str]],  # For nested: ["user", "Emma", "Dr. Smith"]
             "candidates": [{"contact_id": str, "display_name": str, "match_score": float}],
-            "needs_clarification": bool,
-            "clarification_prompt": Optional[str]
         }
     """
     logger.info("[contact_resolver] Resolving: '%s'", person_text)
@@ -464,8 +495,6 @@ def resolve_contact(
         "matched_via": None,
         "resolution_path": None,
         "candidates": [],
-        "needs_clarification": False,
-        "clarification_prompt": None,
         "skip_auto_disambiguation": False,
         "auto_resolve_candidates": False,
     }
@@ -513,12 +542,6 @@ def resolve_contact(
             result["confidence"] = nested_result.get("confidence", "low")
             result["skip_auto_disambiguation"] = bool(nested_result.get("collective_reference"))
             result["auto_resolve_candidates"] = bool(nested_result.get("auto_resolve_candidates"))
-            result["needs_clarification"] = not result["auto_resolve_candidates"]
-            if result["needs_clarification"]:
-                result["clarification_prompt"] = (
-                    f"I found multiple related contacts for '{nested_parts[0]}'. "
-                    f"Which one did you mean by '{person_text}'?"
-                )
             logger.info(
                 "[contact_resolver] Nested: Returning %s related candidates",
                 len(result["candidates"]),
@@ -540,12 +563,6 @@ def resolve_contact(
                     nested_parts[0],
                 )
                 result["status"] = "candidates"
-                # We can't provide candidates for the nested relationship since we don't know which first part
-                result["needs_clarification"] = True
-                result["clarification_prompt"] = (
-                    f"Cannot resolve '{person_text}' because '{nested_parts[0]}' is ambiguous. "
-                    f"Please clarify who '{nested_parts[0]}' refers to first."
-                )
                 return result
             # If first part is new, the whole nested relationship is unresolvable
             elif first_part_status == "new":
@@ -602,11 +619,6 @@ def resolve_contact(
                 # Multiple relationship matches - return candidates
                 result["status"] = "candidates"
                 result["candidates"] = rel_result["candidates"]
-                result["needs_clarification"] = True
-                result["clarification_prompt"] = (
-                    f"Multiple {relationship_type}s found. "
-                    f"Which one did you mean: {', '.join(c['display_name'] for c in rel_result['candidates'])}?"
-                )
                 logger.warning(
                     "[contact_resolver] Multiple %ss, returning candidates",
                     relationship_type,
@@ -640,12 +652,6 @@ def resolve_contact(
                 result["auto_resolve_candidates"] = bool(
                     phrase_match_result.get("auto_resolve_candidates")
                 )
-                result["needs_clarification"] = not result["auto_resolve_candidates"]
-                if result["needs_clarification"]:
-                    result["clarification_prompt"] = (
-                        f"I found multiple related contacts for '{person_text}'. "
-                        "Which one did you mean?"
-                    )
                 logger.info(
                     "[contact_resolver] Relationship phrase produced %s candidates",
                     len(result["candidates"]),
@@ -732,11 +738,6 @@ def resolve_contact(
 
         # Still ambiguous - return candidates
         result["status"] = "candidates"
-        result["needs_clarification"] = True
-        result["clarification_prompt"] = (
-            f"Multiple contacts match '{person_text}'. "
-            f"Which one did you mean: {', '.join(c['display_name'] for c in result['candidates'])}?"
-        )
         logger.warning("[contact_resolver] Ambiguous, returning candidates")
         return result
 
@@ -784,8 +785,7 @@ def resolve_contacts_from_text(
             "ambiguous_contacts": [
                 {
                     "original_text": str,
-                    "candidates": List[dict],
-                    "clarification_prompt": str
+                    "candidates": List[dict]
                 }
             ]
             "suggested_relationships": [
@@ -815,6 +815,7 @@ def resolve_contacts_from_text(
 
     if not people:
         return {
+            "status": "no_people",
             "text": effective_text,
             "people_mentioned": [],
             "resolved_contacts": [],
@@ -863,7 +864,7 @@ def resolve_contacts_from_text(
         len(suggested_relationships),
     )
 
-    return {
+    result = {
         "text": effective_text,
         "people_mentioned": people,
         "resolved_contacts": resolved_contacts,
@@ -871,6 +872,16 @@ def resolve_contacts_from_text(
         "ambiguous_contacts": ambiguous_contacts,
         "suggested_relationships": suggested_relationships,
     }
+    if ambiguous_contacts:
+        result["status"] = "need_user_input"
+        result["need_user_input"] = _build_contact_need_user_input(
+            ambiguous_contacts=ambiguous_contacts,
+            people_mentioned=people,
+        )
+    else:
+        result["status"] = "success"
+
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -1003,7 +1014,6 @@ def _resolve_people_mentions(
                 {
                     "original_text": person_text,
                     "candidates": resolution["candidates"],
-                    "clarification_prompt": resolution["clarification_prompt"],
                 }
             )
             trace.trace_contact_resolution_outcome(
@@ -1567,6 +1577,7 @@ Return ONLY valid JSON:
   "confidence": "high" | "medium" | "low",
   "reasoning": "brief explanation"
 }}"""
+    prompt = _with_clarification_skill(prompt)
 
     try:
         llm_result = call_llm_json(
@@ -1866,6 +1877,7 @@ Return ONLY a valid JSON, nothing more, no other text or explanation:
     "confidence": "high" | "medium" | "low",
     "reasoning": "brief explanation"
 }}"""
+    prompt = _with_clarification_skill(prompt)
 
     try:
         # Use low temperature for consistent disambiguation
@@ -1926,6 +1938,7 @@ Return ONLY a valid JSON, nothing more, no other text or explanation:
 {{
     "profession": str or null
 }}"""
+    prompt = _with_clarification_skill(prompt)
 
     try:
         # Use low temperature for consistent profession inference
@@ -1980,6 +1993,7 @@ Return ONLY valid JSON:
     }}
   ]
 }}"""
+    prompt = _with_clarification_skill(prompt)
 
     try:
         result = call_llm_json(
@@ -2051,6 +2065,7 @@ Return ONLY a valid JSON:
     "type": str or null,
     "other_type": str or null
 }}"""
+    prompt = _with_clarification_skill(prompt)
 
     try:
         result = call_llm_json(

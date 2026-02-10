@@ -6,6 +6,11 @@ import re
 from typing import TYPE_CHECKING, Any, Callable
 
 from observability import trace
+from ui_dsl.clarification import (
+    build_need_user_input,
+    clarification_fields_from_ambiguous_contacts,
+    normalize_need_user_input,
+)
 
 from .guardrails import sanitize_goal_text
 
@@ -72,18 +77,30 @@ def build_contact_clarification_result(
     people_mentioned: list[str],
 ) -> dict[str, Any]:
     """Build a synthetic search result asking for person clarification."""
-    prompt = ""
+    prompt = "I found multiple matching people. Please clarify which person you mean."
     if ambiguous_contacts:
-        prompt = ambiguous_contacts[0].get("clarification_prompt", "")
-    if not prompt:
-        prompt = "I found multiple matching people. Please clarify which person you mean."
+        first = ambiguous_contacts[0]
+        if isinstance(first, dict):
+            original_text = str(first.get("original_text") or "").strip()
+            if original_text:
+                prompt = f"I found multiple matches for '{original_text}'. Please choose one."
+
+    need_user_input = build_need_user_input(
+        kind="disambiguation",
+        source="contact_resolution",
+        prompt=prompt,
+        questions=[prompt],
+        fields=clarification_fields_from_ambiguous_contacts(ambiguous_contacts),
+        submission_mode="text",
+        context={"people_mentioned": people_mentioned},
+    )
 
     return {
-        "status": "needs_clarification",
-        "needs_clarification": True,
-        "clarification_prompt": prompt,
+        "status": "need_user_input",
+        "message": prompt,
         "ambiguous_contacts": ambiguous_contacts,
         "people_mentioned": people_mentioned,
+        "need_user_input": need_user_input,
         "results": [],
         "count": 0,
     }
@@ -91,7 +108,10 @@ def build_contact_clarification_result(
 
 def get_user_clarification_prompt_for_contact_resolution(state: AgentState) -> str | None:
     """Return a user-facing clarification prompt when additional input is required."""
-    prompt = str(state.resolution.get("pending_contact_clarification", "")).strip()
+    pending_need_user_input = normalize_need_user_input(
+        state.resolution.get("pending_contact_need_user_input")
+    )
+    prompt = str((pending_need_user_input or {}).get("prompt") or "").strip()
     if not prompt and state.pending_questions:
         prompt = state.pending_questions[-1].strip()
     if not prompt:

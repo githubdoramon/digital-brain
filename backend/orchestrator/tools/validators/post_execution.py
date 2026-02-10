@@ -24,6 +24,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspa
 
 from agent.router import TOOL_GROUPS
 from observability import trace
+from ui_dsl.clarification import extract_need_user_input
 
 
 class GoalCoverage(str, Enum):
@@ -178,15 +179,17 @@ class PostExecutionValidator:
 
         # Check for empty results from search/query tools
         if tool_name in ("search_memories", "web_search", "get_events"):
-            if tool_name == "search_memories" and result.get("needs_clarification"):
-                return PostExecutionResult(
-                    coverage=GoalCoverage.NEED_USER_INPUT,
-                    reason=result.get(
-                        "clarification_prompt",
-                        "Multiple people matched. User clarification is required.",
-                    ),
-                    extracted_facts=["Contact disambiguation required before memory search"],
+            if tool_name == "search_memories":
+                need_user_input = extract_need_user_input(
+                    result,
+                    default_source=tool_name,
                 )
+                if need_user_input:
+                    return PostExecutionResult(
+                        coverage=GoalCoverage.NEED_USER_INPUT,
+                        reason=need_user_input.get("prompt") or "User clarification is required.",
+                        extracted_facts=["Clarification required before memory search"],
+                    )
 
             results_key = "results"
             if tool_name == "get_events":
@@ -230,7 +233,10 @@ class PostExecutionValidator:
             status = result.get("status", "unknown")
             people = result.get("people_mentioned", [])
             resolved = result.get("resolved_contacts", [])
-            ambiguous = result.get("ambiguous_contacts", [])
+            need_user_input = extract_need_user_input(
+                result,
+                default_source=tool_name,
+            )
 
             facts = []
             if people:
@@ -238,13 +244,11 @@ class PostExecutionValidator:
             if resolved:
                 facts.append(f"Resolved {len(resolved)} contacts")
 
-            if status == "needs_clarification" or ambiguous:
-                prompt = ""
-                if ambiguous:
-                    prompt = ambiguous[0].get("clarification_prompt", "")
+            if need_user_input:
                 return PostExecutionResult(
                     coverage=GoalCoverage.NEED_USER_INPUT,
-                    reason=prompt or "Contact resolution requires user clarification",
+                    reason=need_user_input.get("prompt")
+                    or "Contact resolution requires user clarification",
                     extracted_facts=facts or ["Ambiguous contact resolution"],
                 )
 
@@ -532,10 +536,13 @@ Rules:
         elif tool_name == "resolve_contacts":
             status = result.get("status", "unknown")
             resolved = result.get("resolved_contacts", [])
-            ambiguous = result.get("ambiguous_contacts", [])
+            need_user_input = extract_need_user_input(
+                result,
+                default_source=tool_name,
+            )
             if status == "success" and resolved:
                 facts.append(f"Resolved {len(resolved)} contacts from text")
-            elif status == "needs_clarification" or ambiguous:
+            elif need_user_input:
                 facts.append("Contact resolution is ambiguous and needs clarification")
 
         elif tool_name == "emit_ui_directive":

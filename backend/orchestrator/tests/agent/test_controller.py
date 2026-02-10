@@ -463,9 +463,19 @@ class TestContactAwareMemorySearch:
 
     def test_preempts_memory_search_when_contact_is_ambiguous(self, controller):
         state = AgentState(goal="When did I talk to John?")
-        state.resolution["pending_contact_clarification"] = "Which John do you mean?"
+        state.resolution["pending_contact_need_user_input"] = {
+            "kind": "disambiguation",
+            "prompt": "Which John do you mean?",
+            "submission_mode": "text",
+        }
         state.resolution["pending_contact_ambiguous_contacts"] = [
-            {"clarification_prompt": "Which John do you mean?"}
+            {
+                "original_text": "John",
+                "candidates": [
+                    {"contact_id": "c1", "display_name": "John Smith"},
+                    {"contact_id": "c2", "display_name": "John Doe"},
+                ],
+            }
         ]
         state.resolution["pending_contact_people"] = ["John"]
         args, preempt = controller._prepare_memory_search_arguments(
@@ -478,8 +488,8 @@ class TestContactAwareMemorySearch:
 
         assert "contact_ids" not in args
         assert preempt is not None
-        assert preempt.get("needs_clarification") is True
-        assert "Which John do you mean?" in preempt.get("clarification_prompt", "")
+        assert preempt.get("status") == "need_user_input"
+        assert "John" in preempt.get("need_user_input", {}).get("prompt", "")
 
     def test_blocks_redundant_resolve_contacts_after_ambiguity(self, controller):
         state = AgentState(goal="When did I meet John?")
@@ -488,8 +498,13 @@ class TestContactAwareMemorySearch:
                 tool_name="resolve_contacts",
                 arguments={"text": "When did I meet John?"},
                 result={
-                    "status": "needs_clarification",
-                    "ambiguous_contacts": [{"clarification_prompt": "Which John?"}],
+                    "status": "need_user_input",
+                    "need_user_input": {
+                        "kind": "disambiguation",
+                        "prompt": "Which John?",
+                        "submission_mode": "text",
+                    },
+                    "ambiguous_contacts": [],
                 },
                 duration_ms=10,
                 success=True,
@@ -501,7 +516,7 @@ class TestContactAwareMemorySearch:
             {"text": "When did I meet John?"},
         )
         assert blocked is not None
-        assert blocked.get("status") == "needs_clarification"
+        assert blocked.get("status") == "need_user_input"
 
     def test_execute_handler_receives_runtime_context(self, controller, monkeypatch):
         captured = {}
@@ -542,9 +557,19 @@ class TestContactAwareMemorySearch:
 
     def test_pending_clarification_blocks_search(self, controller):
         state = AgentState(goal="When did I meet John?")
-        state.resolution["pending_contact_clarification"] = "Which John do you mean?"
+        state.resolution["pending_contact_need_user_input"] = {
+            "kind": "disambiguation",
+            "prompt": "Which John do you mean?",
+            "submission_mode": "text",
+        }
         state.resolution["pending_contact_ambiguous_contacts"] = [
-            {"clarification_prompt": "Which John do you mean?"}
+            {
+                "original_text": "John",
+                "candidates": [
+                    {"contact_id": "c1", "display_name": "John Smith"},
+                    {"contact_id": "c2", "display_name": "John Doe"},
+                ],
+            }
         ]
         state.resolution["pending_contact_people"] = ["John"]
 
@@ -558,7 +583,7 @@ class TestContactAwareMemorySearch:
 
         assert "contact_ids" not in args
         assert preempt is not None
-        assert preempt.get("needs_clarification") is True
+        assert preempt.get("status") == "need_user_input"
 
     def test_temporal_latest_sets_newest_sort_and_wider_limit(self, controller):
         state = AgentState(goal="When did I last meet Gio?")
