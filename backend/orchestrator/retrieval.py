@@ -118,6 +118,14 @@ def resolve_contact_embeddings(
     return [contact_id for contact_id, score in matches if score >= score_threshold]
 
 
+def _is_sentence_like_query(query: str) -> bool:
+    normalized = (query or "").strip()
+    if not normalized:
+        return False
+    tokens = normalized.split()
+    return len(tokens) >= 6 or len(normalized) >= 45
+
+
 # --------------------------- Search helpers ---------------------------
 def search_memories(
     query: str,
@@ -142,23 +150,24 @@ def search_memories(
             span_end = None
     span = (span_start, span_end) if (span_start or span_end) else None
     normalized_query = normalize_search_text(query)
+    sentence_like_query = _is_sentence_like_query(query)
     ordering = (sort_order or "relevance").lower()
     if ordering not in {"relevance", "newest", "oldest"}:
         ordering = "relevance"
 
     has_structured_filters = bool(span or people or place_ids)
     is_temporal_query = bool(span)
-    use_temporal_ordering = ordering in {"newest", "oldest"} or (
-        is_temporal_query and ordering == "relevance"
-    )
+    use_temporal_ordering = ordering in {"newest", "oldest"}
     temporal_ordering = ordering if ordering in {"newest", "oldest"} else "newest"
     logger.info(
-        "[retrieval] search_memories filters people=%s places=%s span=%s sort_order=%s limit=%s",
+        "[retrieval] search_memories filters people=%s places=%s span=%s sort_order=%s limit=%s sentence_like=%s temporal_query=%s",
         list(people or []),
         list(place_ids or []),
         span,
         ordering,
         limit,
+        sentence_like_query,
+        is_temporal_query,
     )
 
     vec_events = vector_search(normalized_query, 50) if normalized_query else {}
@@ -167,6 +176,28 @@ def search_memories(
 
     vec_docs = vector_search_documents(normalized_query, 50) if normalized_query else {}
     bm_docs = bm25_search_documents(normalized_query, 50) if normalized_query else {}
+    st_docs = structured_document_candidates(span, 200) if span else {}
+
+    if sentence_like_query:
+        event_semantic_weight = 0.45
+        event_keyword_weight = 0.45
+    else:
+        event_semantic_weight = 0.6
+        event_keyword_weight = 0.3
+    event_structured_weight = 0.1
+
+    if sentence_like_query:
+        doc_semantic_weight = 0.3
+        doc_keyword_weight = 0.7
+    else:
+        doc_semantic_weight = 0.45
+        doc_keyword_weight = 0.55
+    doc_structured_weight = 0.0
+    if span:
+        # Reserve some score mass for temporal fit and scale semantic/keyword accordingly.
+        doc_structured_weight = 0.15
+        doc_semantic_weight *= 0.85
+        doc_keyword_weight *= 0.85
 
     if has_structured_filters:
         # When filters are provided (people/place/time), treat them as hard constraints.
@@ -179,15 +210,23 @@ def search_memories(
         v = vec_events.get(event_id, 0.0)
         b = bm_events.get(event_id, 0.0)
         s = st_events.get(event_id, 0.0)
-        score = 0.6 * v + 0.3 * b + 0.1 * s
+        score = (event_semantic_weight * v) + (event_keyword_weight * b) + (
+            event_structured_weight * s
+        )
         event_scores[event_id] = score
 
     doc_ids = set(vec_docs) | set(bm_docs)
+    if span:
+        if normalized_query:
+            doc_ids = doc_ids & set(st_docs)
+        else:
+            doc_ids = set(st_docs)
     doc_scores: dict[str, float] = {}
     for doc_id in doc_ids:
         v = vec_docs.get(doc_id, 0.0)
         b = bm_docs.get(doc_id, 0.0)
-        score = 0.45 * v + 0.55 * b
+        s = st_docs.get(doc_id, 0.0)
+        score = (doc_semantic_weight * v) + (doc_keyword_weight * b) + (doc_structured_weight * s)
         doc_scores[doc_id] = score
 
     event_rows_all = fetch_events(list(event_ids)) if event_ids else []
@@ -235,7 +274,7 @@ def search_memories(
     else:
         combined.extend((event_id, "event", event_scores[event_id]) for event_id in event_scores)
         combined.extend((doc_id, "document", doc_scores[doc_id]) for doc_id in doc_scores)
-        combined.sort(key=lambda item: item[2], reverse=True)
+        combined.sort(key=lambda item: (-item[2], item[0], item[1]))
 
     if not combined:
         return {"results": []}
@@ -325,11 +364,14 @@ def search_memories(
                 continue
             vector_score = float(vec_docs.get(item_id, 0.0))
             keyword_score = float(bm_docs.get(item_id, 0.0))
+            structured_score = float(st_docs.get(item_id, 0.0))
             match_sources = []
             if vector_score > 0:
                 match_sources.append("semantic")
             if keyword_score > 0:
                 match_sources.append("keyword")
+            if structured_score > 0:
+                match_sources.append("structured")
             results.append(
                 {
                     "id": doc["document_id"],
@@ -340,7 +382,7 @@ def search_memories(
                     "score_breakdown": {
                         "semantic": vector_score,
                         "keyword": keyword_score,
-                        "structured": 0.0,
+                        "structured": structured_score,
                     },
                     "match_sources": match_sources,
                     "tags": doc.get("tags", []),
@@ -429,13 +471,37 @@ def bm25_search_documents(query: str, k: int = 50) -> dict[str, float]:
     with get_conn() as conn, conn.cursor() as cur:
         cur.execute(
             """
-            SELECT document_id, ts_rank_cd(content_tsv, plainto_tsquery('english', unaccent(%s))) AS bscore
+            SELECT
+                document_id,
+                (
+                    0.55 * ts_rank_cd(content_tsv, plainto_tsquery('english', unaccent(%s)))
+                    + 1.25 * ts_rank_cd(content_tsv, phraseto_tsquery('english', unaccent(%s)))
+                    + CASE
+                        WHEN position(
+                            unaccent(%s) in unaccent(lower(coalesce(content, '') || ' ' || coalesce(description, '')))
+                        ) > 0
+                        THEN 2.0
+                        ELSE 0.0
+                    END
+                ) AS bscore
             FROM documents
             WHERE content_tsv @@ plainto_tsquery('english', unaccent(%s))
+               OR content_tsv @@ phraseto_tsquery('english', unaccent(%s))
+               OR position(
+                    unaccent(%s) in unaccent(lower(coalesce(content, '') || ' ' || coalesce(description, '')))
+                  ) > 0
             ORDER BY bscore DESC
             LIMIT %s
             """,
-            (cleaned_query, cleaned_query, k),
+            (
+                cleaned_query,
+                cleaned_query,
+                cleaned_query,
+                cleaned_query,
+                cleaned_query,
+                cleaned_query,
+                k,
+            ),
         )
         return {r["document_id"]: float(r["bscore"]) for r in cur.fetchall()}
 
@@ -475,6 +541,36 @@ def structured_candidates(timespan, people_ids: list[str], place_ids: list[str],
             (*params, k),
         )
         return {r["id"]: float(r["sscore"]) for r in cur.fetchall()}
+
+
+def structured_document_candidates(timespan, k: int = 200) -> dict[str, float]:
+    if not timespan:
+        return {}
+    start, end = timespan
+    clauses = []
+    params: list[Any] = []
+    if start and end:
+        clauses.append("COALESCE(document_date, created_at) BETWEEN %s AND %s")
+        params += [start, end]
+    elif start:
+        clauses.append("COALESCE(document_date, created_at) >= %s")
+        params.append(start)
+    elif end:
+        clauses.append("COALESCE(document_date, created_at) <= %s")
+        params.append(end)
+    where = " AND ".join(clauses) if clauses else "TRUE"
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            f"""
+            SELECT document_id, 1.0 AS sscore
+            FROM documents
+            WHERE {where}
+            ORDER BY COALESCE(document_date, created_at) DESC
+            LIMIT %s
+            """,
+            (*params, k),
+        )
+        return {r["document_id"]: float(r["sscore"]) for r in cur.fetchall()}
 
 
 def make_snippet(text: str | None, length: int = 160) -> str:

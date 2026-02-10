@@ -3,7 +3,7 @@ import Ionicons from '@expo/vector-icons/Ionicons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Tabs } from 'expo-router';
 import { BottomTabBarProps } from '@react-navigation/bottom-tabs';
-import { ActivityIndicator, Animated, Pressable, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Animated, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { theme } from '@/theme';
@@ -25,6 +25,8 @@ const leftTabs = [
 ];
 
 const chatRoute = 'brain';
+const LEFT_INDICATOR_X_OFFSET = -5;
+const LEFT_INDICATOR_WIDTH_TRIM = -8;
 
 function TabBar({ state, navigation }: BottomTabBarProps) {
   const insets = useSafeAreaInsets();
@@ -53,12 +55,12 @@ function TabBar({ state, navigation }: BottomTabBarProps) {
     if (!layout) return;
     Animated.parallel([
       Animated.timing(indicatorX, {
-        toValue: layout.x,
+        toValue: layout.x + LEFT_INDICATOR_X_OFFSET,
         duration: 220,
         useNativeDriver: false,
       }),
       Animated.timing(indicatorWidth, {
-        toValue: layout.width,
+        toValue: Math.max(0, layout.width - LEFT_INDICATOR_WIDTH_TRIM),
         duration: 220,
         useNativeDriver: false,
       }),
@@ -102,19 +104,19 @@ function TabBar({ state, navigation }: BottomTabBarProps) {
                 tabLayouts.current[route.name] = { x: layout.x, width: layout.width };
                 if (route.name !== currentRoute) return;
                 if (!indicatorReady.current) {
-                  indicatorX.setValue(layout.x);
-                  indicatorWidth.setValue(layout.width);
+                  indicatorX.setValue(layout.x + LEFT_INDICATOR_X_OFFSET);
+                  indicatorWidth.setValue(Math.max(0, layout.width - LEFT_INDICATOR_WIDTH_TRIM));
                   indicatorReady.current = true;
                   return;
                 }
                 Animated.parallel([
                   Animated.timing(indicatorX, {
-                    toValue: layout.x,
+                    toValue: layout.x + LEFT_INDICATOR_X_OFFSET,
                     duration: 180,
                     useNativeDriver: false,
                   }),
                   Animated.timing(indicatorWidth, {
-                    toValue: layout.width,
+                    toValue: Math.max(0, layout.width - LEFT_INDICATOR_WIDTH_TRIM),
                     duration: 180,
                     useNativeDriver: false,
                   }),
@@ -276,11 +278,11 @@ const styles = StyleSheet.create({
   leftGroup: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: 'rgba(255, 255, 255, 0.82)',
+    backgroundColor: 'rgba(255, 255, 255, 0.9)',
     borderRadius: 30,
     paddingVertical: 8,
     paddingHorizontal: 10,
-    gap: 6,
+    gap: 0,
     borderWidth: 1,
     borderColor: theme.colors.line,
     position: 'relative',
@@ -289,14 +291,14 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.08,
     shadowRadius: 12,
     shadowOffset: theme.shadow.offset,
-    elevation: 3,
+    elevation: Platform.OS === 'android' ? 0 : 3,
   },
   leftIndicator: {
     position: 'absolute',
     left: 0,
     top: 6,
     bottom: 6,
-    borderRadius: 22,
+    borderRadius: 30,
     backgroundColor: 'rgba(231, 222, 212, 0.55)',
     zIndex: 0,
   },
@@ -306,7 +308,7 @@ const styles = StyleSheet.create({
     gap: 8,
     paddingVertical: 12,
     paddingHorizontal: 14,
-    borderRadius: 22,
+    borderRadius: 30,
     zIndex: 1,
   },
   tabButtonActive: {

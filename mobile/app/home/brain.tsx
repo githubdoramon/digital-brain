@@ -441,10 +441,11 @@ export default function ChatScreen() {
   const [composerHeight, setComposerHeight] = useState(0);
   const [keyboardVisible, setKeyboardVisible] = useState(false);
   const [keyboardHeight, setKeyboardHeight] = useState(0);
-  const composerBottomOffset =
-    Platform.OS === 'ios' && keyboardVisible
+  const composerBottomOffset = keyboardVisible
+    ? Platform.OS === 'ios'
       ? Math.max(0, keyboardHeight - insets.bottom) + COMPOSER_KEYBOARD_GAP
-      : 0;
+      : Math.max(0, keyboardHeight) + COMPOSER_KEYBOARD_GAP
+    : 0;
   const listBottomInset =
     composerHeight > 0 ? composerHeight + 16 : insets.bottom + tabBarHeight + 120;
 
@@ -558,6 +559,7 @@ export default function ChatScreen() {
 
     if (!outboundText || isSending || !allowed || isBootstrapping) return;
     setInput('');
+    setForceScrollNext(true);
     const pendingId = `${Date.now()}-pending`;
 
     setMessages((prev) => [
@@ -787,6 +789,7 @@ export default function ChatScreen() {
     lastMessage?.id,
     lastMessage?.content,
     lastMessage?.pending,
+    listBottomInset,
     forceScrollNext,
   ]);
 
@@ -794,7 +797,7 @@ export default function ChatScreen() {
     <LinearGradient colors={theme.gradients.dusk} style={styles.container}>
       <KeyboardAvoidingView
         style={styles.screen}
-        behavior={Platform.OS === 'android' ? 'height' : undefined}
+        behavior={undefined}
         keyboardVerticalOffset={0}
       >
         <FlatList

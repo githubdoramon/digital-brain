@@ -123,13 +123,18 @@ def test_search_memories_does_not_call_contact_vector_search(monkeypatch):
     assert result["results"][0]["kind"] == "event"
 
 
-def test_temporal_relevance_sorts_events_and_documents_by_date(monkeypatch):
+def test_relevance_with_time_filters_sorts_by_score_not_date(monkeypatch):
     monkeypatch.setattr(retrieval, "vector_search", lambda *_args, **_kwargs: {})
     monkeypatch.setattr(retrieval, "bm25_search", lambda *_args, **_kwargs: {})
     monkeypatch.setattr(
         retrieval,
         "structured_candidates",
         lambda *_args, **_kwargs: {"evt-a": 1.0, "evt-b": 1.0},
+    )
+    monkeypatch.setattr(
+        retrieval,
+        "structured_document_candidates",
+        lambda *_args, **_kwargs: {"doc-a": 1.0, "doc-b": 1.0},
     )
     monkeypatch.setattr(
         retrieval,
@@ -193,8 +198,74 @@ def test_temporal_relevance_sorts_events_and_documents_by_date(monkeypatch):
 
     ids = [item["id"] for item in result["results"]]
     kinds = [item["kind"] for item in result["results"]]
-    assert ids == ["doc-b", "evt-b", "doc-a", "evt-a"]
-    assert kinds == ["document", "event", "document", "event"]
+    assert ids == ["doc-a", "doc-b", "evt-a", "evt-b"]
+    assert kinds == ["document", "document", "event", "event"]
+
+
+def test_time_filter_applies_to_documents(monkeypatch):
+    monkeypatch.setattr(retrieval, "vector_search", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr(retrieval, "bm25_search", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr(retrieval, "structured_candidates", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr(
+        retrieval,
+        "vector_search_documents",
+        lambda *_args, **_kwargs: {"doc-in": 0.9, "doc-out": 0.95},
+    )
+    monkeypatch.setattr(
+        retrieval,
+        "bm25_search_documents",
+        lambda *_args, **_kwargs: {"doc-in": 0.9, "doc-out": 0.95},
+    )
+    monkeypatch.setattr(
+        retrieval,
+        "structured_document_candidates",
+        lambda *_args, **_kwargs: {"doc-in": 1.0},
+    )
+    monkeypatch.setattr(retrieval, "fetch_events", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(
+        retrieval,
+        "fetch_document_summaries",
+        lambda *_args, **_kwargs: {
+            "doc-in": {
+                "document_id": "doc-in",
+                "title": "Doc In",
+                "description": "Inside range",
+                "tags": [],
+                "document_date": datetime(2026, 1, 7, 10, 0, 0),
+                "created_at": datetime(2026, 1, 7, 10, 0, 0),
+                "updated_at": datetime(2026, 1, 7, 10, 0, 0),
+                "download_url": "/documents/doc-in/download",
+                "file_name": "doc-in.txt",
+                "file_mime": "text/plain",
+                "file_size": 123,
+                "snippet": "Inside range",
+            },
+            "doc-out": {
+                "document_id": "doc-out",
+                "title": "Doc Out",
+                "description": "Outside range",
+                "tags": [],
+                "document_date": datetime(2025, 1, 7, 10, 0, 0),
+                "created_at": datetime(2025, 1, 7, 10, 0, 0),
+                "updated_at": datetime(2025, 1, 7, 10, 0, 0),
+                "download_url": "/documents/doc-out/download",
+                "file_name": "doc-out.txt",
+                "file_mime": "text/plain",
+                "file_size": 123,
+                "snippet": "Outside range",
+            },
+        },
+    )
+
+    result = retrieval.search_memories(
+        query="vitamin b12 record",
+        time_start="2026-01-01T00:00:00",
+        time_end="2026-01-31T23:59:59",
+        limit=5,
+    )
+
+    ids = [item["id"] for item in result["results"]]
+    assert ids == ["doc-in"]
 
 
 def test_structured_filters_do_not_force_event_first_ordering(monkeypatch):
