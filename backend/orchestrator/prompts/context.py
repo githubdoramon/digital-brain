@@ -52,17 +52,27 @@ def get_self_context(email: str) -> Optional[str]:
     if not email:
         return None
 
+    behavioral_guidance = (
+        " The user is the owner/narrator of this memory graph. "
+        "When answering people-ranking or interaction questions (for example, who they met/talked to most), "
+        "treat the user as the anchor and return counterpart contacts, not the user themselves, "
+        "unless the user explicitly asks about themselves."
+    )
+
     # Try to find the user in contacts
     try:
         import contacts
 
         user_info = contacts.find_self_contact(email)
         if user_info:
-            return f"You are assisting {user_info.get('name', 'the user')}. Their email is {email}."
+            return (
+                f"You are assisting {user_info.get('name', 'the user')}. Their email is {email}."
+                f"{behavioral_guidance}"
+            )
     except Exception:
         pass
 
-    return f"You are assisting the user with email: {email}"
+    return f"You are assisting the user with email: {email}.{behavioral_guidance}"
 
 
 def get_location_context(client_context: Optional[dict[str, Any]]) -> Optional[str]:

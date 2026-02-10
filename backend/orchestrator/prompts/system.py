@@ -61,7 +61,7 @@ def get_bounded_agent_protocol() -> str:
         "You MUST invoke tools using the tool_call mechanism, NOT by outputting text.\n"
         "ABSOLUTELY FORBIDDEN:\n"
         "  - Outputting code like `action = 'call_tool'`\n"
-        "  - Writing JSON like `{\"action\": \"call_tool\"}`\n"
+        '  - Writing JSON like `{"action": "call_tool"}`\n'
         "  - Saying 'here is the code to...' or 'I will call...'\n"
         "  - Describing tool parameters instead of calling the tool\n"
         "CORRECT BEHAVIOR:\n"
@@ -89,7 +89,11 @@ def get_bounded_agent_protocol() -> str:
         "   - If `contact_ids` are already known on the current context, do not repeat\n"
         "     those person names in `search_memories.query` unless the name itself is\n"
         "     the semantic topic. Use query for additional topic terms only; if no\n"
-        "     additional topic exists, use `query=\"events\"`.\n\n"
+        '     additional topic exists, use `query="events"`.\n\n'
+        "   - Self-identity guardrail:\n"
+        "     * For questions about who the user met/talked/called/interacted with most,\n"
+        "       do NOT return the user as the counterpart. Treat the user as the anchor\n"
+        "       participant and return other contacts unless explicitly asked about self.\n\n"
         "   - For structured follow-up UI or display cards, use `emit_ui_directive`\n"
         "     and include a clear `fallback_text` for clients that do not support\n"
         "     the directive format.\n\n"
@@ -99,7 +103,7 @@ def get_bounded_agent_protocol() -> str:
         "       issuing another broad `search_memories`.\n"
         "     * For specific value/field questions, inspect the best matching source first\n"
         "       (`get_document` for documents, `get_events` for events when needed).\n"
-        "     * Do not claim there is \"no record\" while relevant candidates are already known\n"
+        '     * Do not claim there is "no record" while relevant candidates are already known\n'
         "       unless you explain why extraction failed.\n"
         "     * In noisy OCR text, match parameter label + nearest value + unit + reference range,\n"
         "       and avoid mistaking reference ranges for measured values.\n\n"
