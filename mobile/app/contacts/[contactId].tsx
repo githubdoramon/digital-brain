@@ -177,6 +177,7 @@ export default function ContactDetailScreen() {
     if (!contact || !draft) return false;
     const base = {
       display_name: contact.display_name,
+      aliases: contact.aliases,
       emails: contact.emails,
       phones: contact.phones,
       links: contact.links,
@@ -186,6 +187,7 @@ export default function ContactDetailScreen() {
     };
     const current = {
       display_name: draft.display_name,
+      aliases: draft.aliases,
       emails: draft.emails,
       phones: draft.phones,
       links: draft.links,
@@ -205,7 +207,7 @@ export default function ContactDetailScreen() {
         body: JSON.stringify({
           contact_id: contact.contact_id,
           display_name: draft.display_name,
-          aliases: contact.aliases ?? [],
+          aliases: draft.aliases ?? [],
           birthday: draft.birthday ? draft.birthday : null,
           emails: draft.emails,
           phones: draft.phones,
@@ -213,7 +215,6 @@ export default function ContactDetailScreen() {
           tags: draft.tags,
           comments: draft.comments,
           external_id: contact.external_id,
-          relationships: contact.relationships,
         }),
       });
       const refreshed = (await apiFetch(`/mobile/contacts/${encodeURIComponent(contact.contact_id)}`)) as Contact;
@@ -294,6 +295,17 @@ export default function ContactDetailScreen() {
         <Card style={styles.section}>
           <Text style={styles.sectionTitle}>Contact</Text>
           <ContactActionMenu emails={draft.emails} phones={draft.phones} />
+        </Card>
+
+        <Card style={styles.section}>
+          <Text style={styles.sectionTitle}>Aliases</Text>
+          <TextInput
+            style={styles.input}
+            value={listToText(draft.aliases)}
+            onChangeText={(value) => setDraft({ ...draft, aliases: textToList(value) })}
+            placeholder="nicknames, alternate names"
+            placeholderTextColor={theme.colors.mutedInk}
+          />
         </Card>
 
         <Card style={styles.section}>

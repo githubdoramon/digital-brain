@@ -8,6 +8,7 @@ import type {
   UiDirectives,
   UiSubmissionInput,
 } from '@/chat/uiDirectives';
+import { Card } from '@/components/Card';
 import { theme } from '@/theme';
 
 import { actionIdForBlock } from './helpers';
@@ -23,6 +24,28 @@ type Props = {
 
 function fieldStateKey(block: UiDirectiveBlock, field: UiDirectiveField) {
   return `${block.id}:${field.id}`;
+}
+
+function toneForBlock(block: UiDirectiveBlock) {
+  if (block.type === 'choice_buttons') {
+    return {
+      label: 'Choice',
+      backgroundColor: '#fde9e6',
+      textColor: theme.colors.accentDeep,
+    };
+  }
+  if (block.type === 'info_card') {
+    return {
+      label: 'Info',
+      backgroundColor: theme.colors.paleTeal,
+      textColor: theme.colors.teal,
+    };
+  }
+  return {
+    label: 'Follow-up',
+    backgroundColor: '#f7f2ec',
+    textColor: theme.colors.ink,
+  };
 }
 
 export function UiDirectiveCard({ directives, isSubmitting = false, onSubmit }: Props) {
@@ -72,59 +95,87 @@ export function UiDirectiveCard({ directives, isSubmitting = false, onSubmit }: 
 
   return (
     <View style={styles.container}>
-      {blocks.map((block) => (
-        <View key={block.id} style={styles.block}>
-          {block.title ? <Text style={styles.title}>{block.title}</Text> : null}
-          {block.description ? <Text style={styles.description}>{block.description}</Text> : null}
+      {blocks.map((block) => {
+        const tone = toneForBlock(block);
+        return (
+          <Card key={block.id} variant="elevated" style={styles.blockCard}>
+            <View style={styles.headerRow}>
+              <View
+                style={[
+                  styles.badge,
+                  { backgroundColor: tone.backgroundColor },
+                ]}
+              >
+                <Text style={[styles.badgeText, { color: tone.textColor }]}>
+                  {tone.label}
+                </Text>
+              </View>
+            </View>
 
-          {block.type === 'clarification_form' ? (
-            <UiDirectiveFormBlock
-              block={block}
-              isSubmitting={isSubmitting}
-              getFieldValue={(field) => getFieldValue(block, field)}
-              setFieldValue={(field, value) => setFieldValue(block, field, value)}
-              onSubmit={() => submitForm(block)}
-            />
-          ) : null}
+            {block.title ? <Text style={styles.title}>{block.title}</Text> : null}
+            {block.description ? <Text style={styles.description}>{block.description}</Text> : null}
 
-          {block.type === 'choice_buttons' ? (
-            <UiDirectiveChoiceBlock
-              block={block}
-              isSubmitting={isSubmitting}
-              onSelect={(option) => submitChoice(block, option)}
-            />
-          ) : null}
+            {block.type === 'clarification_form' ? (
+              <UiDirectiveFormBlock
+                block={block}
+                isSubmitting={isSubmitting}
+                getFieldValue={(field) => getFieldValue(block, field)}
+                setFieldValue={(field, value) => setFieldValue(block, field, value)}
+                onSubmit={() => submitForm(block)}
+              />
+            ) : null}
 
-          {block.type === 'info_card' ? <UiDirectiveInfoBlock block={block} /> : null}
-        </View>
-      ))}
+            {block.type === 'choice_buttons' ? (
+              <UiDirectiveChoiceBlock
+                block={block}
+                isSubmitting={isSubmitting}
+                onSelect={(option) => submitChoice(block, option)}
+              />
+            ) : null}
+
+            {block.type === 'info_card' ? <UiDirectiveInfoBlock block={block} /> : null}
+          </Card>
+        );
+      })}
     </View>
   );
 }
 
 const styles = StyleSheet.create({
   container: {
-    gap: 12,
+    gap: 14,
   },
-  block: {
+  blockCard: {
+    paddingHorizontal: 14,
+    paddingVertical: 14,
+    gap: 10,
+  },
+  headerRow: {
+    flexDirection: 'row',
+    justifyContent: 'flex-start',
+  },
+  badge: {
+    borderRadius: 999,
     borderWidth: 1,
     borderColor: theme.colors.line,
-    borderRadius: theme.radius.md,
-    backgroundColor: '#fff',
-    paddingHorizontal: 12,
-    paddingVertical: 12,
-    gap: 10,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+  },
+  badgeText: {
+    fontSize: 11,
+    letterSpacing: 0.5,
+    textTransform: 'uppercase',
+    fontWeight: '700',
   },
   title: {
     color: theme.colors.ink,
-    fontSize: 15,
+    fontSize: 16,
     lineHeight: 22,
     fontWeight: '700',
   },
   description: {
     color: theme.colors.mutedInk,
     fontSize: 14,
-    lineHeight: 20,
+    lineHeight: 21,
   },
 });
-

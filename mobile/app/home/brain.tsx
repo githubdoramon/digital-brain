@@ -4,8 +4,8 @@ import {
   ActivityIndicator,
   FlatList,
   Keyboard,
+  KeyboardEvent,
   KeyboardAvoidingView,
-  KeyboardAvoidingViewProps,
   Platform,
   Pressable,
   Linking,
@@ -76,28 +76,6 @@ type HomeTabParamList = {
     | undefined;
 };
 
-const useKeyboardBehavior = () => {
-  const defaultBehavior: KeyboardAvoidingViewProps['behavior'] =
-    Platform.OS === 'ios' ? 'padding' : 'height';
-  const [behavior, setBehavior] = useState<KeyboardAvoidingViewProps['behavior']>(defaultBehavior);
-
-  useEffect(() => {
-    const showListener = Keyboard.addListener('keyboardDidShow', () => {
-      setBehavior(defaultBehavior);
-    });
-    const hideListener = Keyboard.addListener('keyboardDidHide', () => {
-      setBehavior(undefined);
-    });
-
-    return () => {
-      showListener.remove();
-      hideListener.remove();
-    };
-  }, [defaultBehavior]);
-
-  return behavior;
-};
-
 const INLINE_MARKDOWN_PATTERN =
   /(\[[^\]]+\]\((?:https?:\/\/|mailto:|www\.)[^)\s]+\)|(?:https?:\/\/|mailto:|www\.)\S+|\*\*[^*]+\*\*|`[^`]+`|\*[^*]+\*)/g;
 const MARKDOWN_LINK_PATTERN = /^\[([^\]]+)\]\(([^)\s]+)\)$/;
@@ -108,6 +86,10 @@ const NUMBERED_LINE_PATTERN = /^(\d+)\.\s+(.*)$/;
 const BLOCKQUOTE_LINE_PATTERN = /^>\s+/;
 const EVENT_CONFIRM_ACTION_ID = 'event_confirmation_action';
 const EVENT_CLARIFICATION_ACTION_PREFIX = 'event_clarification_submit';
+const MIN_CHAT_INPUT_HEIGHT = 46;
+const MAX_CHAT_INPUT_HEIGHT = 120;
+const CHAT_INPUT_VERTICAL_PADDING = 12;
+const COMPOSER_KEYBOARD_GAP = 20;
 
 function formatFieldLabel(fieldId: string): string {
   return fieldId
@@ -451,18 +433,20 @@ export default function ChatScreen() {
   const [input, setInput] = useState('');
   const [isSending, setIsSending] = useState(false);
   const [threadId, setThreadId] = useState<string | null>(null);
-  const keyboardBehavior = useKeyboardBehavior();
   const [isConfirmingEvent, setIsConfirmingEvent] = useState(false);
   const [pendingEventId, setPendingEventId] = useState<string | null>(null);
-  const [listHeight, setListHeight] = useState(0);
-  const [contentHeight, setContentHeight] = useState(0);
-  const [lastMessageHeight, setLastMessageHeight] = useState(0);
-  const [isAtBottom, setIsAtBottom] = useState(true);
+  const isAtBottomRef = useRef(true);
   const [forceScrollNext, setForceScrollNext] = useState(false);
   const [isBootstrapping, setIsBootstrapping] = useState(true);
   const [composerHeight, setComposerHeight] = useState(0);
   const [keyboardVisible, setKeyboardVisible] = useState(false);
-  const listBottomInset = insets.bottom + 24;
+  const [keyboardHeight, setKeyboardHeight] = useState(0);
+  const composerBottomOffset =
+    Platform.OS === 'ios' && keyboardVisible
+      ? Math.max(0, keyboardHeight - insets.bottom) + COMPOSER_KEYBOARD_GAP
+      : 0;
+  const listBottomInset =
+    composerHeight > 0 ? composerHeight + 16 : insets.bottom + tabBarHeight + 120;
 
   const allowed = email === 'REDACTED-EMAIL';
   const canSend = input.trim().length > 0 && !isSending && allowed;
@@ -537,11 +521,13 @@ export default function ChatScreen() {
     const showEvent = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
     const hideEvent = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
 
-    const showListener = Keyboard.addListener(showEvent, () => {
+    const showListener = Keyboard.addListener(showEvent, (event: KeyboardEvent) => {
       setKeyboardVisible(true);
+      setKeyboardHeight(event.endCoordinates?.height ?? 0);
     });
     const hideListener = Keyboard.addListener(hideEvent, () => {
       setKeyboardVisible(false);
+      setKeyboardHeight(0);
     });
 
     return () => {
@@ -607,6 +593,7 @@ export default function ChatScreen() {
         setPendingEventId(response.pending_event_id ?? null);
       }
 
+      setForceScrollNext(true);
       setMessages((prev) =>
         prev.map((message) =>
           message.id === pendingId
@@ -629,6 +616,7 @@ export default function ChatScreen() {
       const authExpired = (error as Error & { authExpired?: boolean }).authExpired;
       if (authExpired) {
         await signOut();
+        setForceScrollNext(true);
         setMessages((prev) =>
           prev.map((message) =>
             message.id === pendingId
@@ -642,6 +630,7 @@ export default function ChatScreen() {
         );
         return;
       }
+      setForceScrollNext(true);
       setMessages((prev) =>
         prev.map((message) =>
           message.id === pendingId
@@ -782,29 +771,30 @@ export default function ChatScreen() {
   const showSlashPalette = trimmedInput.startsWith('/') && !hasCommandToken;
   const slashQuery = trimmedInput.slice(1).split(/\s/)[0];
   const showAnchoredSlashPalette = showSlashPalette && composerHeight > 0;
+  const lastMessage = messages[messages.length - 1];
 
   useEffect(() => {
-    if (!listRef.current || listHeight === 0 || (!isAtBottom && !forceScrollNext)) return;
-
-    const padding = listHeight * 0.1;
-    const hasTallMessage = lastMessageHeight > listHeight;
-    const fallbackOffset = Math.max(0, contentHeight - listHeight);
-    const tallMessageOffset = Math.max(0, contentHeight - lastMessageHeight - padding);
-    const offset = hasTallMessage ? tallMessageOffset : fallbackOffset;
+    if (!listRef.current) return;
+    if (!isAtBottomRef.current && !forceScrollNext) return;
 
     requestAnimationFrame(() => {
-      listRef.current?.scrollToOffset({ offset, animated: true });
+      listRef.current?.scrollToEnd({ animated: forceScrollNext });
     });
     if (forceScrollNext) {
       setForceScrollNext(false);
     }
-  }, [messages.length, contentHeight, listHeight, lastMessageHeight, isAtBottom, forceScrollNext]);
+  }, [
+    lastMessage?.id,
+    lastMessage?.content,
+    lastMessage?.pending,
+    forceScrollNext,
+  ]);
 
   return (
     <LinearGradient colors={theme.gradients.dusk} style={styles.container}>
       <KeyboardAvoidingView
         style={styles.screen}
-        behavior={keyboardBehavior}
+        behavior={Platform.OS === 'android' ? 'height' : undefined}
         keyboardVerticalOffset={0}
       >
         <FlatList
@@ -820,17 +810,11 @@ export default function ChatScreen() {
               paddingBottom: listBottomInset,
             },
           ]}
-          onLayout={(event) => {
-            setListHeight(event.nativeEvent.layout.height);
-          }}
-          onContentSizeChange={(_, height) => {
-            setContentHeight(height);
-          }}
           onScroll={(event) => {
             const { contentOffset, layoutMeasurement, contentSize } = event.nativeEvent;
             const distanceFromBottom =
               contentSize.height - (contentOffset.y + layoutMeasurement.height);
-            setIsAtBottom(distanceFromBottom < 48);
+            isAtBottomRef.current = distanceFromBottom < 48;
           }}
           scrollEventThrottle={16}
           renderItem={({ item }) => (
@@ -838,13 +822,7 @@ export default function ChatScreen() {
               style={[
                 styles.messageBubble,
                 item.role === 'user' ? styles.userBubble : styles.assistantBubble,
-              ]}
-              onLayout={(event) => {
-                if (item.id === messages[messages.length - 1]?.id) {
-                  setLastMessageHeight(event.nativeEvent.layout.height);
-                }
-              }}
-            >
+              ]}>
               {item.role === 'assistant' ? (
                 <View style={styles.markdownContainer}>
                   {renderAssistantMarkdown(item.content, item.id)}
@@ -873,7 +851,7 @@ export default function ChatScreen() {
           )}
         />
         {showAnchoredSlashPalette && (
-          <View style={[styles.slashPaletteAnchor, { bottom: composerHeight + 8 }]}>
+          <View style={[styles.slashPaletteAnchor, { bottom: composerHeight + composerBottomOffset + 8 }]}>
             <SlashCommandPalette
               query={slashQuery}
               onSelect={(command) => {
@@ -891,7 +869,8 @@ export default function ChatScreen() {
           style={[
             styles.composer,
             {
-              paddingBottom: (keyboardVisible ? 12 : insets.bottom + tabBarHeight) + 12,
+              bottom: composerBottomOffset,
+              paddingBottom: (keyboardVisible ? 24 : insets.bottom + tabBarHeight),
               paddingRight: keyboardVisible ? 12 : 16,
               gap: keyboardVisible ? 8 : 10,
             },
@@ -903,6 +882,11 @@ export default function ChatScreen() {
               editable={allowed}
               style={[
                 styles.input,
+                {
+                  minHeight: MIN_CHAT_INPUT_HEIGHT,
+                  maxHeight: MAX_CHAT_INPUT_HEIGHT,
+                  width: '100%',
+                },
                 !allowed && {
                   backgroundColor: '#eee',
                 },
@@ -910,6 +894,10 @@ export default function ChatScreen() {
               onChangeText={setInput}
               placeholder="Send a message..."
               multiline
+              onFocus={() => {
+                setForceScrollNext(true);
+              }}
+              scrollEnabled={true}
             />
           </View>
           {keyboardVisible ? (
@@ -1100,28 +1088,32 @@ const styles = StyleSheet.create({
     elevation: 3,
   },
   composer: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    bottom: 0,
+    zIndex: 2,
     paddingHorizontal: 16,
     paddingVertical: 14,
     backgroundColor: 'transparent',
     flexDirection: 'row',
     gap: 10,
-    alignItems: 'center',
+    alignItems: 'flex-end',
   },
   inputWrap: {
     flex: 1,
   },
   input: {
-    flex: 1,
-    minHeight: 46,
-    maxHeight: 120,
+    fontSize: 16,
+    lineHeight: 22,
     paddingHorizontal: 14,
-    paddingVertical: 12,
+    paddingVertical: CHAT_INPUT_VERTICAL_PADDING,
     borderRadius: theme.radius.xl,
     borderWidth: 1,
     borderColor: theme.colors.line,
     backgroundColor: '#fff',
     color: theme.colors.ink,
-    textAlignVertical: 'center',
+    textAlignVertical: 'top',
     shadowColor: theme.shadow.color,
     shadowOpacity: 0.12,
     shadowRadius: 12,

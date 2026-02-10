@@ -1,7 +1,9 @@
 import React, { useState } from 'react';
 import { Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import Ionicons from '@expo/vector-icons/Ionicons';
 
 import type { UiDirectiveBlock, UiDirectiveField } from '@/chat/uiDirectives';
+import { Button } from '@/components/Button';
 import { theme } from '@/theme';
 
 import {
@@ -23,6 +25,11 @@ type Props = {
 type ActivePicker = {
   fieldId: string;
 };
+
+function pickerIconName(field: UiDirectiveField): React.ComponentProps<typeof Ionicons>['name'] {
+  if (field.kind === 'time') return 'time-outline';
+  return 'calendar-outline';
+}
 
 export function UiDirectiveFormBlock({
   block,
@@ -62,21 +69,23 @@ export function UiDirectiveFormBlock({
                       key={`${field.id}:${option.id}`}
                       accessibilityRole="button"
                       accessibilityLabel={`${field.label}: ${option.label}`}
+                      disabled={isSubmitting}
                       onPress={() => setFieldValue(field, option.id)}
                       style={({ pressed }) => [
                         styles.optionButton,
                         selected && styles.optionButtonSelected,
                         pressed && styles.optionButtonPressed,
+                        isSubmitting && styles.disabled,
                       ]}
                     >
-                      <Text
-                        style={[
-                          styles.optionButtonText,
-                          selected && styles.optionButtonTextSelected,
-                        ]}
-                      >
+                      <Text style={[styles.optionButtonText, selected && styles.optionButtonTextSelected]}>
                         {option.label}
                       </Text>
+                      <Ionicons
+                        name={selected ? 'checkmark-circle' : 'ellipse-outline'}
+                        size={18}
+                        color={selected ? theme.colors.accentDeep : theme.colors.mutedInk}
+                      />
                     </Pressable>
                   );
                 })}
@@ -85,15 +94,23 @@ export function UiDirectiveFormBlock({
               <Pressable
                 accessibilityRole="button"
                 accessibilityLabel={`Pick ${field.label}`}
+                disabled={isSubmitting}
                 onPress={() => setActivePicker({ fieldId: field.id })}
                 style={({ pressed }) => [
                   styles.pickerField,
+                  isSubmitting && styles.disabled,
                   pressed && styles.pickerFieldPressed,
                 ]}
               >
-                <Text style={value ? styles.pickerText : styles.pickerPlaceholder}>
-                  {value ? displayValueForField(field, value) : field.placeholder || `Select ${field.label}`}
-                </Text>
+                <View style={styles.pickerFieldLeft}>
+                  <Ionicons name={pickerIconName(field)} size={17} color={theme.colors.teal} />
+                  <Text style={value ? styles.pickerText : styles.pickerPlaceholder}>
+                    {value
+                      ? displayValueForField(field, value)
+                      : field.placeholder || `Select ${field.label}`}
+                  </Text>
+                </View>
+                <Ionicons name="chevron-forward" size={16} color={theme.colors.mutedInk} />
               </Pressable>
             ) : (
               <TextInput
@@ -104,6 +121,7 @@ export function UiDirectiveFormBlock({
                 keyboardType={keyboardTypeForFieldKind(field.kind)}
                 multiline={isMultiLine}
                 numberOfLines={isMultiLine ? 3 : 1}
+                editable={!isSubmitting}
                 style={[styles.input, isMultiLine && styles.textareaInput]}
               />
             )}
@@ -111,19 +129,13 @@ export function UiDirectiveFormBlock({
         );
       })}
 
-      <Pressable
-        accessibilityRole="button"
-        accessibilityLabel={block.submit_label || 'Submit'}
+      <Button
+        label={block.submit_label || 'Submit'}
+        variant="primary"
         disabled={isSubmitting}
         onPress={onSubmit}
-        style={({ pressed }) => [
-          styles.primaryButton,
-          pressed && styles.primaryButtonPressed,
-          isSubmitting && styles.buttonDisabled,
-        ]}
-      >
-        <Text style={styles.primaryButtonText}>{block.submit_label || 'Submit'}</Text>
-      </Pressable>
+        style={styles.submitButton}
+      />
 
       {activeField ? (
         <UiDirectiveDateTimePickerSheet
@@ -143,10 +155,10 @@ export function UiDirectiveFormBlock({
 
 const styles = StyleSheet.create({
   formWrap: {
-    gap: 10,
+    gap: 12,
   },
   fieldWrap: {
-    gap: 6,
+    gap: 7,
   },
   fieldLabel: {
     color: theme.colors.ink,
@@ -158,9 +170,9 @@ const styles = StyleSheet.create({
     minHeight: 44,
     borderWidth: 1,
     borderColor: theme.colors.line,
-    borderRadius: 10,
-    paddingHorizontal: 10,
-    paddingVertical: 10,
+    borderRadius: theme.radius.lg,
+    paddingHorizontal: 14,
+    paddingVertical: 11,
     color: theme.colors.ink,
     backgroundColor: '#fff',
     fontSize: 14,
@@ -170,18 +182,18 @@ const styles = StyleSheet.create({
     textAlignVertical: 'top',
   },
   optionRow: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
+    flexDirection: 'column',
     gap: 8,
   },
   optionButton: {
     minHeight: 44,
-    borderRadius: 999,
+    borderRadius: theme.radius.md,
     borderWidth: 1,
     borderColor: theme.colors.line,
-    paddingHorizontal: 14,
+    paddingHorizontal: 12,
+    flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'center',
+    justifyContent: 'space-between',
     backgroundColor: '#fff',
   },
   optionButtonSelected: {
@@ -193,9 +205,10 @@ const styles = StyleSheet.create({
   },
   optionButtonText: {
     color: theme.colors.ink,
-    fontSize: 13,
-    lineHeight: 18,
+    fontSize: 14,
+    lineHeight: 20,
     fontWeight: '600',
+    flexShrink: 1,
   },
   optionButtonTextSelected: {
     color: theme.colors.accentDeep,
@@ -204,11 +217,19 @@ const styles = StyleSheet.create({
     minHeight: 44,
     borderWidth: 1,
     borderColor: theme.colors.line,
-    borderRadius: 10,
-    paddingHorizontal: 10,
+    borderRadius: theme.radius.lg,
+    paddingHorizontal: 12,
     paddingVertical: 10,
     backgroundColor: '#fff',
-    justifyContent: 'center',
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  pickerFieldLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    flexShrink: 1,
   },
   pickerFieldPressed: {
     borderColor: theme.colors.accent,
@@ -223,24 +244,11 @@ const styles = StyleSheet.create({
     fontSize: 14,
     lineHeight: 20,
   },
-  primaryButton: {
-    minHeight: 44,
-    borderRadius: 12,
-    backgroundColor: theme.colors.ink,
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingHorizontal: 16,
+  submitButton: {
+    minHeight: 46,
+    marginTop: 2,
   },
-  primaryButtonPressed: {
-    opacity: 0.86,
-  },
-  primaryButtonText: {
-    color: '#fff',
-    fontSize: 14,
-    lineHeight: 18,
-    fontWeight: '700',
-  },
-  buttonDisabled: {
+  disabled: {
     opacity: 0.6,
   },
 });

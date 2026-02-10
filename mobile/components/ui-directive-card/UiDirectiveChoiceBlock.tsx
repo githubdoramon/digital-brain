@@ -1,8 +1,8 @@
 import React from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { StyleSheet, View } from 'react-native';
 
 import type { UiDirectiveBlock, UiDirectiveOption } from '@/chat/uiDirectives';
-import { theme } from '@/theme';
+import { Button } from '@/components/Button';
 
 type Props = {
   block: UiDirectiveBlock;
@@ -14,55 +14,41 @@ export function UiDirectiveChoiceBlock({ block, isSubmitting, onSelect }: Props)
   const options = block.options || [];
 
   return (
-    <View style={styles.optionRow}>
+    <View style={styles.optionColumn}>
       {options.map((option) => (
-        <Pressable
+        <Button
           key={`${block.id}:${option.id}`}
-          accessibilityRole="button"
-          accessibilityLabel={option.label}
+          label={option.label}
+          variant={buttonVariant(option)}
           disabled={isSubmitting}
           onPress={() => onSelect(option)}
-          style={({ pressed }) => [
-            styles.choiceButton,
-            pressed && styles.choiceButtonPressed,
-            isSubmitting && styles.buttonDisabled,
-          ]}
-        >
-          <Text style={styles.choiceButtonText}>{option.label}</Text>
-        </Pressable>
+          style={styles.choiceButton}
+        />
       ))}
     </View>
   );
 }
 
+function buttonVariant(option: UiDirectiveOption): 'primary' | 'secondary' {
+  const signal = `${option.id} ${option.label}`.toLowerCase();
+  const isPrimary = [
+    'confirm',
+    'yes',
+    'create',
+    'save',
+    'submit',
+    'continue',
+    'proceed',
+    'ok',
+  ].some((keyword) => signal.includes(keyword));
+  return isPrimary ? 'primary' : 'secondary';
+}
+
 const styles = StyleSheet.create({
-  optionRow: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 8,
+  optionColumn: {
+    gap: 10,
   },
   choiceButton: {
     minHeight: 44,
-    borderRadius: 999,
-    borderWidth: 1,
-    borderColor: theme.colors.line,
-    backgroundColor: '#fff',
-    paddingHorizontal: 14,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  choiceButtonPressed: {
-    backgroundColor: theme.colors.paleTeal,
-    borderColor: theme.colors.teal,
-  },
-  choiceButtonText: {
-    color: theme.colors.ink,
-    fontSize: 13,
-    lineHeight: 18,
-    fontWeight: '600',
-  },
-  buttonDisabled: {
-    opacity: 0.6,
   },
 });
-

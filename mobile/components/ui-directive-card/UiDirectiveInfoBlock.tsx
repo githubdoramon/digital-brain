@@ -1,7 +1,9 @@
 import React from 'react';
 import { Linking, Pressable, StyleSheet, Text, View } from 'react-native';
+import Ionicons from '@expo/vector-icons/Ionicons';
 
 import type { UiDirectiveBlock } from '@/chat/uiDirectives';
+import { Card } from '@/components/Card';
 import { theme } from '@/theme';
 
 type Props = {
@@ -28,12 +30,19 @@ export function UiDirectiveInfoBlock({ block }: Props) {
           onPress={() => {
             void openLink(link.url);
           }}
-          style={({ pressed }) => [styles.linkButton, pressed && styles.linkButtonPressed]}
+          style={({ pressed }) => [pressed && styles.linkButtonPressed]}
         >
-          <Text style={styles.linkText}>{link.label}</Text>
-          <Text style={styles.linkUrl} numberOfLines={1}>
-            {link.url}
-          </Text>
+          <Card variant="surface" style={styles.linkButton}>
+            <View style={styles.linkRow}>
+              <View style={styles.linkTextWrap}>
+                <Text style={styles.linkText}>{link.label}</Text>
+                <Text style={styles.linkUrl} numberOfLines={1}>
+                  {link.url}
+                </Text>
+              </View>
+              <Ionicons name="open-outline" size={16} color={theme.colors.accentDeep} />
+            </View>
+          </Card>
         </Pressable>
       ))}
     </View>
@@ -47,25 +56,31 @@ const styles = StyleSheet.create({
   description: {
     color: theme.colors.mutedInk,
     fontSize: 14,
-    lineHeight: 20,
+    lineHeight: 21,
   },
   linkButton: {
-    minHeight: 44,
-    borderRadius: 10,
-    borderWidth: 1,
-    borderColor: theme.colors.line,
-    backgroundColor: '#fff',
-    paddingHorizontal: 10,
-    paddingVertical: 8,
+    minHeight: 48,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
     justifyContent: 'center',
   },
   linkButtonPressed: {
-    backgroundColor: '#f8f6f2',
+    opacity: 0.78,
+  },
+  linkRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 10,
+  },
+  linkTextWrap: {
+    flexShrink: 1,
+    gap: 2,
   },
   linkText: {
     color: theme.colors.accentDeep,
-    fontSize: 13,
-    lineHeight: 18,
+    fontSize: 14,
+    lineHeight: 19,
     fontWeight: '700',
   },
   linkUrl: {
@@ -74,4 +89,3 @@ const styles = StyleSheet.create({
     lineHeight: 16,
   },
 });
-
