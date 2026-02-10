@@ -59,9 +59,55 @@ def _build_contact_need_user_input(
         prompt=prompt,
         questions=[prompt],
         fields=clarification_fields_from_ambiguous_contacts(ambiguous_contacts),
-        submission_mode="text",
+        submission_mode="ui_submission",
         context={"people_mentioned": people_mentioned},
     )
+
+
+def _is_overly_generic_person_reference(value: str) -> bool:
+    """Return True when a person mention is too generic to resolve usefully."""
+    normalized = _normalize_entity_for_match(value)
+    if not normalized:
+        return False
+
+    return normalized in {
+        "person",
+        "people",
+        "someone",
+        "somebody",
+        "anyone",
+        "anybody",
+        "someone else",
+        "somebody else",
+        "anyone else",
+        "anybody else",
+    }
+
+
+def _is_unknown_person_aggregate_question(text: str) -> bool:
+    """Detect analytical questions that ask for an unknown person (not a concrete contact mention)."""
+    normalized = str(text or "").strip().lower()
+    if not normalized:
+        return False
+
+    if "?" not in normalized or "who" not in normalized:
+        return False
+
+    references_generic_person = re.search(
+        r"\b(?:the|a|an)?\s*(person|people|someone|somebody|anyone|anybody)\b",
+        normalized,
+    )
+    if not references_generic_person:
+        return False
+
+    has_interaction_signal = re.search(
+        r"\b(meet|met|meeting|meetings|talk|talked|chat|chatted|call|called|see|saw|visit|visited)\b",
+        normalized,
+    )
+    if not has_interaction_signal:
+        return False
+
+    return True
 
 
 def _format_conversation_for_prompt(conversation_messages: list[dict[str, str]]) -> str:
@@ -258,6 +304,7 @@ IMPORTANT CONTEXT USAGE:
 - Focus on the current Text above.
 - Use Conversation messages only to resolve references inside this Text (e.g., pronouns, ellipsis).
 - Do NOT include people that appear only in conversation history.
+- If the text is an analytical question asking for an unknown person (e.g., "who did I meet most"), do NOT output placeholder entities like "the person" or "someone".
 
 Extract ONLY people - all person references including:
 - Proper names (e.g., "John Smith")
@@ -333,10 +380,15 @@ CRITICAL: Only resolve pronouns when the referent is crystal clear and creates a
 IMPORTANT:
 - ALWAYS keep possessive markers in relationship phrases: "my daughter" NOT "daughter"
 - Keep relationship phrases intact (e.g., "my daughter's doctor" as ONE entity)
-- Include both proper names and generic references
+- Include proper names and resolvable role/relationship references (e.g., "my daughter", "the doctor" in concrete event statements)
 - If a person is mentioned multiple ways, include all mentions
 - Use the special token "user" to represent the current user when they are a participant
 - Only extract people mentioned by the user. Assistant questions are NOT facts.
+- Do NOT include non-specific placeholders that are not identifiable entities: "the person", "a person", "people", "someone", "somebody", "anyone", "anybody".
+
+Examples:
+- "Who is the person I've met the most in the last 2 weeks?" -> []
+- "Who did I meet the most in the last 2 weeks?" -> []
 
 Return ONLY a valid JSON, nothing more, no other text or explanation:
 {{
@@ -432,7 +484,27 @@ For possessive org titles, output ONE person mention only, formatted as "<title>
                 filtered_people.append(person)
 
             repaired_people = _repair_split_possessive_title_entities(text, filtered_people)
-            return repaired_people
+            cleaned_people = []
+            for person in repaired_people:
+                if _is_overly_generic_person_reference(person):
+                    logger.info(
+                        "[contact_resolver] Skipping overly generic person reference: '%s'",
+                        person,
+                    )
+                    continue
+                cleaned_people.append(person)
+
+            if _is_unknown_person_aggregate_question(text):
+                without_user = [
+                    person for person in cleaned_people if person.lower().strip() != "user"
+                ]
+                if len(without_user) != len(cleaned_people):
+                    logger.info(
+                        "[contact_resolver] Skipping 'user' token for unknown-person aggregate question"
+                    )
+                cleaned_people = without_user
+
+            return cleaned_people
         except Exception as e:
             if attempt < max_retries - 1:
                 logger.warning(

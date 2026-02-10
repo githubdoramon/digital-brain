@@ -25,6 +25,7 @@ from typing import Any, Optional
 from observability import trace
 from observability.logger import get_runtime_logger
 from ui_dsl.clarification import extract_need_user_input
+from ui_dsl.command_adapters import command_result_to_ui_directives
 
 from .contact_resolution import (
     build_contact_clarification_result,
@@ -1174,7 +1175,9 @@ class AgentController:
         last_text = sanitize_goal_text(str(last_call.arguments.get("text", "")).strip())
         last_result = last_call.result or {}
         last_status = last_result.get("status")
-        if not last_status and extract_need_user_input(last_result, default_source="resolve_contacts"):
+        if not last_status and extract_need_user_input(
+            last_result, default_source="resolve_contacts"
+        ):
             last_status = "need_user_input"
         if last_text.lower() != text.lower():
             return None
@@ -1376,10 +1379,9 @@ class AgentController:
         if overlap < min_overlap:
             return None
 
-        same_scope = (
-            tuple(sorted(str(cid) for cid in (reference_args.get("contact_ids") or [])))
-            == tuple(sorted(str(cid) for cid in (args.get("contact_ids") or [])))
-        )
+        same_scope = tuple(
+            sorted(str(cid) for cid in (reference_args.get("contact_ids") or []))
+        ) == tuple(sorted(str(cid) for cid in (args.get("contact_ids") or [])))
         if not same_scope:
             return None
 
@@ -1550,6 +1552,8 @@ class AgentController:
                 state.resolution.pop("pending_contact_ambiguous_contacts", None)
                 state.resolution.pop("pending_contact_people", None)
                 state.resolution.pop("pending_contact_scope_text", None)
+                if state.ui_directives:
+                    state.ui_directives = None
             else:
                 state.resolution.pop("active_contact_scope", None)
             return
@@ -1565,7 +1569,7 @@ class AgentController:
                 state.resolution["pending_contact_need_user_input"] = {
                     "kind": "disambiguation",
                     "prompt": prompt,
-                    "submission_mode": "text",
+                    "submission_mode": "ui_submission",
                 }
             state.resolution["pending_contact_ambiguous_contacts"] = ambiguous_contacts
             state.resolution["pending_contact_people"] = result.get("people_mentioned", [])
@@ -1573,6 +1577,15 @@ class AgentController:
             state.resolution.pop("active_contact_scope_ids", None)
             state.resolution.pop("active_contact_scope_text", None)
             state.resolution.pop("active_contact_scope", None)
+
+            directive = command_result_to_ui_directives(
+                {
+                    "type": "need_user_input",
+                    "need_user_input": state.resolution.get("pending_contact_need_user_input"),
+                }
+            )
+            if directive:
+                state.ui_directives = directive
             return
 
         if status == "no_people":
@@ -1584,6 +1597,8 @@ class AgentController:
             state.resolution.pop("pending_contact_ambiguous_contacts", None)
             state.resolution.pop("pending_contact_people", None)
             state.resolution.pop("pending_contact_scope_text", None)
+            if state.ui_directives:
+                state.ui_directives = None
 
     def _check_goal_completion(
         self,
@@ -1810,9 +1825,7 @@ class AgentController:
     def _compact_document_result(self, document: dict[str, Any]) -> dict[str, Any]:
         """Build a compact document result for response bundles."""
         raw_metadata = (
-            document.get("raw_metadata")
-            if isinstance(document.get("raw_metadata"), dict)
-            else {}
+            document.get("raw_metadata") if isinstance(document.get("raw_metadata"), dict) else {}
         )
         preview_source = (
             document.get("content_preview")

@@ -393,11 +393,12 @@ class TestAgentControllerIntegration:
         assert llm_calls["count"] == 0
         assert "Which Gio did you mean?" in bundle["answer"]
         assert "Giovanni Panerai" in bundle["answer"]
+        assert bundle["ui_directives"] is not None
+        assert bundle["ui_directives"]["blocks"][0]["type"] == "clarification_form"
+        assert bundle["ui_directives"]["fallback_text"] == "Which Gio did you mean?"
 
     @pytest.mark.asyncio
-    async def test_run_returns_clarification_immediately_on_ambiguity(
-        self, monkeypatch
-    ):
+    async def test_run_returns_clarification_immediately_on_ambiguity(self, monkeypatch):
         """Main loop should return clarification instead of looping on ambiguous contact resolution."""
         controller = AgentController(
             config=AgentConfig(
@@ -481,7 +482,9 @@ class TestAgentControllerIntegration:
         monkeypatch.setattr(controller, "_call_llm", fake_call_llm)
         monkeypatch.setattr(controller, "_execute_handler", fake_execute_handler)
         monkeypatch.setattr(controller, "_inject_skills", lambda *args, **kwargs: None)
-        monkeypatch.setattr(controller, "_prime_contact_scope_for_question", lambda *args, **kwargs: None)
+        monkeypatch.setattr(
+            controller, "_prime_contact_scope_for_question", lambda *args, **kwargs: None
+        )
 
         bundle = await controller.run(
             question="When did I meet John?",

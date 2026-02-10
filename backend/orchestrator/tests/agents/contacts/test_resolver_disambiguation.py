@@ -210,6 +210,20 @@ def test_resolve_contacts_keeps_current_text_even_with_history(monkeypatch):
     assert result["people_mentioned"] == []
 
 
+def test_extract_people_ignores_generic_unknown_person_query(monkeypatch):
+    monkeypatch.setattr(
+        resolver,
+        "call_llm_json",
+        lambda *_args, **_kwargs: {"people": ["user", "the person"]},
+    )
+
+    people = resolver.extract_people_from_text(
+        "Who is the person I've met the most in the last 2 weeks?",
+    )
+
+    assert people == []
+
+
 def test_llm_disambiguation_prompt_includes_aliases_and_match_hints(monkeypatch):
     captured = {}
 

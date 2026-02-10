@@ -91,7 +91,7 @@ def build_contact_clarification_result(
         prompt=prompt,
         questions=[prompt],
         fields=clarification_fields_from_ambiguous_contacts(ambiguous_contacts),
-        submission_mode="text",
+        submission_mode="ui_submission",
         context={"people_mentioned": people_mentioned},
     )
 
