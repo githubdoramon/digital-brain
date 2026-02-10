@@ -8,14 +8,16 @@ from zoneinfo import ZoneInfo
 import daily_briefings
 import retrieval
 import todos as todos_service
+from agent.tool_loop_runner import run_profiled_tool_loop
+from agents.daily_briefing.profile import (
+    build_daily_briefing_tools_and_handlers,
+    get_daily_briefing_profile,
+    get_daily_briefing_system_prompt,
+)
 from db import get_conn
-from llm_helpers import call_llm, call_llm_with_tools
-from tools.handlers.memory import handle_get_document, handle_search_memories
-from tools.handlers.web import handle_fetch_web_page, handle_web_search
-from tools.registry import get_registry
+from llm_helpers import call_llm
 
 DEFAULT_SIMILAR_LIMIT = 4
-TOOL_SEARCH_LIMIT = 8
 
 
 def handle_daily_briefing_request(payload: dict[str, Any]) -> dict[str, Any]:
@@ -355,18 +357,16 @@ def _fetch_contact_summaries(contact_ids: list[str]) -> list[dict[str, Any]]:
 
 
 def _generate_markdown(context: dict[str, Any]) -> str:
-    tools, tool_handlers = _build_tooling()
-    system_prompt = "You are a precise writing engine. Follow the user instructions exactly."
+    tools, tool_handlers = build_daily_briefing_tools_and_handlers()
+    profile = get_daily_briefing_profile()
+    system_prompt = get_daily_briefing_system_prompt()
     prompt = _build_briefing_prompt(context)
-    result = call_llm_with_tools(
-        prompt,
+    result = run_profiled_tool_loop(
+        prompt=prompt,
+        system_prompt=system_prompt,
         tools=tools,
         tool_handlers=tool_handlers,
-        system_prompt=system_prompt,
-        timeout=180,
-        temperature=0.1,
-        max_steps=8,
-        max_tool_calls=12,
+        profile=profile,
     )
     content = result.get("content", "")
     if _is_invalid_briefing(content):
@@ -460,28 +460,6 @@ def _generate_summary(context: dict[str, Any], markdown: str) -> str:
         f"{markdown}"
     )
     return call_llm(prompt, system_prompt=system_prompt, temperature=0.2)
-
-
-def _build_tooling() -> tuple[list[dict[str, Any]], dict[str, Any]]:
-    registry = get_registry()
-    allowed_tools = [
-        "search_memories",
-        "get_document",
-        "web_search",
-        "fetch_web_page",
-    ]
-    tools = registry.get_tool_definitions(allowed_tools)
-    tool_handlers = {
-        "search_memories": lambda args: handle_search_memories(
-            args,
-            question="daily briefing",
-            search_limit=TOOL_SEARCH_LIMIT,
-        ),
-        "get_document": lambda args: handle_get_document(args),
-        "web_search": lambda args: handle_web_search(args),
-        "fetch_web_page": lambda args: handle_fetch_web_page(args),
-    }
-    return tools, tool_handlers
 
 
 def _condense_notes(notes: str, limit: int = 12) -> str:

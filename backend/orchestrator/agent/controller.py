@@ -22,6 +22,8 @@ from collections.abc import AsyncGenerator
 from time import perf_counter
 from typing import Any, Optional
 
+from agents.main.message_builder import build_main_messages, inject_main_skills
+from agents.main.profile import build_main_runtime_profile
 from observability import trace
 from observability.logger import get_runtime_logger
 from ui_dsl.clarification import extract_need_user_input
@@ -35,7 +37,6 @@ from .contact_resolution import (
     should_pre_resolve_contacts,
 )
 from .guardrails import (
-    build_contact_scope_context,
     detect_future_temporal_intent,
     detect_temporal_sort_order,
     optimize_query_for_scoped_contacts,
@@ -100,6 +101,11 @@ class AgentController:
         )
         self.router_medium_confidence_threshold = float(
             os.getenv("ROUTER_MEDIUM_CONFIDENCE_THRESHOLD", "0.60")
+        )
+        self.runtime_profile = build_main_runtime_profile(
+            max_steps=self.config.max_steps,
+            max_tool_calls=self.config.max_tool_calls,
+            timeout_seconds=self.llm_timeout,
         )
 
         # Lazy-loaded components
@@ -242,6 +248,14 @@ class AgentController:
         """
         total_start = perf_counter()
         run_id = self.logger.start_run(question, user_id, session_id)
+        self.logger.log_decision(
+            decision="Agent profile selected",
+            reason=self.runtime_profile.name,
+            details={
+                "max_steps": self.runtime_profile.max_steps,
+                "max_tool_calls": self.runtime_profile.max_tool_calls,
+            },
+        )
 
         # Initialize state
         state = AgentState(goal=question)
@@ -552,6 +566,14 @@ class AgentController:
         """
         total_start = perf_counter()
         run_id = self.logger.start_run(question, user_id, session_id)
+        self.logger.log_decision(
+            decision="Agent profile selected",
+            reason=self.runtime_profile.name,
+            details={
+                "max_steps": self.runtime_profile.max_steps,
+                "max_tool_calls": self.runtime_profile.max_tool_calls,
+            },
+        )
 
         state = AgentState(goal=question)
         state.request_context = self._normalize_client_context(client_context)
@@ -898,6 +920,7 @@ class AgentController:
             details={
                 "intent": classification.intent.value,
                 "allowed_tool_groups": classification.allowed_tool_groups,
+                "profile": self.runtime_profile.name,
             },
         )
 
@@ -1090,74 +1113,16 @@ class AgentController:
         search_limit: int,
         client_context: Optional[dict[str, Any]],
     ) -> list[dict[str, Any]]:
-        """Build the message list for the LLM."""
-        from prompts.clarification import get_clarification_skill_prompt_block
-        from prompts.context import (
-            get_location_context,
-            get_self_context,
-            get_tag_context,
-            get_time_context,
+        """Build the message list for the main LLM run."""
+        return build_main_messages(
+            question=question,
+            state=state,
+            conversation_history=conversation_history,
+            user_email=user_email,
+            search_limit=search_limit,
+            client_context=client_context,
+            skill_injector=self._inject_skills,
         )
-        from prompts.state_injection import build_state_message
-        from prompts.system import (
-            get_bounded_agent_protocol,
-            get_system_prompt,
-        )
-
-        messages: list[dict[str, Any]] = []
-
-        # System prompts
-        messages.append({"role": "system", "content": get_system_prompt(search_limit)})
-
-        # Tag context
-        tags_context = get_tag_context()
-        if tags_context:
-            messages.append({"role": "system", "content": tags_context})
-
-        # Bounded agent protocol
-        messages.append({"role": "system", "content": get_bounded_agent_protocol()})
-
-        # Clarification skill (always injected for consistent follow-up behavior)
-        clarification_skill_block = get_clarification_skill_prompt_block()
-        if clarification_skill_block:
-            messages.append({"role": "system", "content": clarification_skill_block})
-
-        # Self context
-        if user_email:
-            self_context = get_self_context(user_email)
-            if self_context:
-                messages.append({"role": "system", "content": self_context})
-
-        # Time context
-        messages.append({"role": "system", "content": get_time_context()})
-
-        # Client context (timezone/locale/location)
-        location_context = get_location_context(client_context)
-        if location_context:
-            messages.append({"role": "system", "content": location_context})
-
-        # Skills integration
-        self._inject_skills(messages, question, conversation_history, state)
-
-        # State injection
-        messages.append(build_state_message(state))
-
-        # Explicit contact-scope injection for tool planning.
-        contact_scope_context = build_contact_scope_context(
-            state.resolution.get("active_contact_scope") or []
-        )
-        if contact_scope_context:
-            messages.append({"role": "system", "content": contact_scope_context})
-
-        # Conversation history
-        if conversation_history:
-            for msg in conversation_history:
-                messages.append({"role": msg["role"], "content": msg["content"]})
-
-        # User question
-        messages.append({"role": "user", "content": question.strip()})
-
-        return messages
 
     def _inject_skills(
         self,
@@ -1167,38 +1132,12 @@ class AgentController:
         state: AgentState,
     ) -> None:
         """Inject matching skills into messages."""
-        try:
-            import skills
-
-            registry = skills.get_registry()
-
-            # Skill index
-            skill_index = registry.get_skill_index()
-            if skill_index:
-                messages.append({"role": "system", "content": skill_index})
-
-            # Find matching skills (with hints from router if available)
-            matching_skills = registry.find_matching_skills(
-                query=question,
-                conversation_history=conversation_history,
-            )
-
-            for match in matching_skills:
-                skill_prompt = (
-                    f"ACTIVE SKILL [{match.skill.name}] (confidence: {match.confidence:.2f}):\n"
-                    f"{match.skill.instructions}"
-                )
-                messages.append({"role": "system", "content": skill_prompt})
-
-                state.activated_skills.append(
-                    {
-                        "name": match.skill.name,
-                        "confidence": match.confidence,
-                    }
-                )
-
-        except Exception as e:
-            logger.exception("[controller] Skills injection error: %s", e)
+        inject_main_skills(
+            messages=messages,
+            question=question,
+            conversation_history=conversation_history,
+            state=state,
+        )
 
     def _call_llm(
         self,
@@ -1875,6 +1814,7 @@ class AgentController:
             "document_results": self._collected_document_results(state),
             "ui_directives": state.ui_directives,
             "limit_hit": violation.limit_type.value,
+            "profile": self.runtime_profile.name,
         }
 
     def _finalize(
@@ -1951,6 +1891,7 @@ class AgentController:
                 "route_confidence_tier": state.route_confidence_tier,
                 "tool_visibility_mode": state.tool_visibility_mode,
                 "tool_visibility_escalated": state.tool_visibility_escalated,
+                "profile": self.runtime_profile.name,
             },
         }
 
