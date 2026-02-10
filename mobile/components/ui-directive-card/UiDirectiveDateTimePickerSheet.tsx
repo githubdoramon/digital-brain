@@ -37,6 +37,8 @@ export function UiDirectiveDateTimePickerSheet({
   onConfirm,
 }: Props) {
   const defaultPickerStyles = useDefaultStyles();
+  const isTimeOnly = mode === 'time';
+  console.log('mode', mode);
   const initialDate = useMemo(() => parseValueToDate(value, mode), [mode, value]);
   const [draftDate, setDraftDate] = useState<Date>(initialDate);
 
@@ -80,6 +82,11 @@ export function UiDirectiveDateTimePickerSheet({
             mode="single"
             date={draftDate}
             timePicker={mode !== 'date'}
+            initialView={isTimeOnly ? 'time' : 'day'}
+            hideHeader={isTimeOnly}
+            hideWeekdays={isTimeOnly}
+            disableMonthPicker={isTimeOnly}
+            disableYearPicker={isTimeOnly}
             onChange={({ date }) => {
               const resolved = resolvePickerDate(date);
               if (resolved) {
@@ -105,7 +112,7 @@ export function UiDirectiveDateTimePickerSheet({
                 borderRadius: 10,
               },
             }}
-            style={styles.picker}
+            style={[styles.picker, isTimeOnly && styles.timePicker]}
           />
         </View>
       </View>
@@ -169,5 +176,7 @@ const styles = StyleSheet.create({
   picker: {
     height: 360,
   },
+  timePicker: {
+    height: 300,
+  },
 });
-

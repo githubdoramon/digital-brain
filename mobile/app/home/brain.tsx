@@ -444,7 +444,7 @@ export default function ChatScreen() {
   const composerBottomOffset = keyboardVisible
     ? Platform.OS === 'ios'
       ? Math.max(0, keyboardHeight - insets.bottom) + COMPOSER_KEYBOARD_GAP
-      : Math.max(0, keyboardHeight) + COMPOSER_KEYBOARD_GAP
+      : Math.max(0, keyboardHeight - insets.bottom) + 2*COMPOSER_KEYBOARD_GAP
     : 0;
   const listBottomInset =
     composerHeight > 0 ? composerHeight + 16 : insets.bottom + tabBarHeight + 120;
@@ -558,6 +558,7 @@ export default function ChatScreen() {
       trimmed || uiSubmission?.text_fallback?.trim() || 'Submitted structured response.';
 
     if (!outboundText || isSending || !allowed || isBootstrapping) return;
+    Keyboard.dismiss();
     setInput('');
     setForceScrollNext(true);
     const pendingId = `${Date.now()}-pending`;
@@ -873,7 +874,7 @@ export default function ChatScreen() {
             styles.composer,
             {
               bottom: composerBottomOffset,
-              paddingBottom: (keyboardVisible ? 24 : insets.bottom + tabBarHeight),
+              paddingBottom: (keyboardVisible ? 24 : insets.bottom + tabBarHeight + 8),
               paddingRight: keyboardVisible ? 12 : 16,
               gap: keyboardVisible ? 8 : 10,
             },
@@ -899,6 +900,12 @@ export default function ChatScreen() {
               multiline
               onFocus={() => {
                 setForceScrollNext(true);
+              }}
+              onBlur={() => {
+                if (Platform.OS === 'android') {
+                  setKeyboardVisible(false);
+                  setKeyboardHeight(0);
+                }
               }}
               scrollEnabled={true}
             />
@@ -1142,6 +1149,6 @@ const styles = StyleSheet.create({
     transform: [{ scale: 0.98 }],
   },
   inlineSendButtonDisabled: {
-    opacity: 0.5,
+    opacity: 0.75,
   },
 });

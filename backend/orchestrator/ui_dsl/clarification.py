@@ -45,6 +45,7 @@ def build_need_user_input_prompt_guidance(
         'If all required details are clear, set "need_user_input": null.',
         'Use concise user-facing wording and avoid repeating already answered questions.',
         f'Allowed field "kind" values: {field_kinds}.',
+        'Try to pick the most specific kind of field that is still missing when you can. For example, if you can determine the date but not the time, use "datetime" with the date and "time" with the time.',
         'Set "submission_mode" to "ui_submission" whenever you include structured "fields"; otherwise use "text".',
     ]
     if exclude_people:
