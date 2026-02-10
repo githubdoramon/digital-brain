@@ -315,6 +315,8 @@ class IntentRouter:
             "search memories",
             "find in memories",
             "look in my memories",
+            "find my meetings",
+            "meetings from",
             "what happened",
             "last time i",
             "when did i",

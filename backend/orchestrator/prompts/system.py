@@ -74,6 +74,8 @@ def get_bounded_agent_protocol() -> str:
         "   - Follow each tool's contract description for when to use it and how to set parameters\n"
         "   - Prefer the smallest useful action: gather missing evidence, then answer\n"
         "   - If a tool fails, repair arguments once and then switch approach\n\n"
+        "   - Self-identity guardrail:\n"
+        "     * For 'who did I meet/talk to/call most' style questions, do NOT return the user as the counterpart.\n\n"
         "3. BOUNDED REASONING:\n"
         "   - Work toward the GOAL efficiently\n"
         "   - Stop when you have enough information\n"
