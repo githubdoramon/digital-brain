@@ -9,11 +9,13 @@ import pytest
 
 from agent.state import AgentState, ToolCallRecord
 from tools.contracts import ToolContract, ToolParameter
+from tools.registry import get_registry
 from tools.validators.post_execution import (
     GoalCompletionValidator,
     GoalCoverage,
     PostExecutionValidator,
 )
+from tools.validators.pre_execution import PreExecutionValidator
 
 
 class TestPreExecutionValidation:
@@ -46,19 +48,23 @@ class TestPreExecutionValidation:
 
     def test_validate_valid_params(self, sample_contract):
         """Test validation of valid parameters."""
-        is_valid, error, suggestions = sample_contract.validate_params({
-            "query": "test search",
-            "limit": 20,
-        })
+        is_valid, error, suggestions = sample_contract.validate_params(
+            {
+                "query": "test search",
+                "limit": 20,
+            }
+        )
 
         assert is_valid is True
         assert error is None
 
     def test_validate_missing_required(self, sample_contract):
         """Test validation catches missing required params."""
-        is_valid, error, suggestions = sample_contract.validate_params({
-            "limit": 10,
-        })
+        is_valid, error, suggestions = sample_contract.validate_params(
+            {
+                "limit": 10,
+            }
+        )
 
         assert is_valid is False
         assert error is not None
@@ -66,10 +72,12 @@ class TestPreExecutionValidation:
 
     def test_validate_wrong_type(self, sample_contract):
         """Test validation catches wrong types."""
-        is_valid, error, suggestions = sample_contract.validate_params({
-            "query": "test",
-            "limit": "not_a_number",
-        })
+        is_valid, error, suggestions = sample_contract.validate_params(
+            {
+                "query": "test",
+                "limit": "not_a_number",
+            }
+        )
 
         assert is_valid is False
         assert error is not None
@@ -77,10 +85,12 @@ class TestPreExecutionValidation:
 
     def test_validate_out_of_range(self, sample_contract):
         """Test validation catches out of range values."""
-        is_valid, error, suggestions = sample_contract.validate_params({
-            "query": "test",
-            "limit": 200,
-        })
+        is_valid, error, suggestions = sample_contract.validate_params(
+            {
+                "query": "test",
+                "limit": 200,
+            }
+        )
 
         assert is_valid is False
         assert error is not None
@@ -88,9 +98,11 @@ class TestPreExecutionValidation:
 
     def test_normalize_adds_defaults(self, sample_contract):
         """Test normalization adds default values."""
-        normalized = sample_contract.normalize({
-            "query": "test",
-        })
+        normalized = sample_contract.normalize(
+            {
+                "query": "test",
+            }
+        )
 
         assert normalized["query"] == "test"
         assert normalized["limit"] == 10
@@ -125,18 +137,30 @@ class TestPostExecutionValidation:
         non_empty = {"results": [{"id": "1"}], "count": 1}
 
         # Empty check
-        is_empty = (
-            len(empty_result.get("results", [])) == 0 or
-            empty_result.get("count", -1) == 0
-        )
+        is_empty = len(empty_result.get("results", [])) == 0 or empty_result.get("count", -1) == 0
         assert is_empty is True
 
         # Non-empty check
-        is_empty = (
-            len(non_empty.get("results", [])) == 0 and
-            non_empty.get("count", -1) == 0
-        )
+        is_empty = len(non_empty.get("results", [])) == 0 and non_empty.get("count", -1) == 0
         assert is_empty is False
+
+
+class TestPreExecutionSemanticValidation:
+    """Tests for targeted semantic checks in pre-execution validation."""
+
+    @pytest.fixture
+    def validator(self):
+        return PreExecutionValidator(get_registry())
+
+    def test_home_assistant_call_tool_requires_tool_name(self, validator):
+        result = validator.validate("home_assistant", {"action": "call_tool", "arguments": {}})
+        assert result.valid is False
+        assert "tool_name" in "; ".join(result.errors)
+
+    def test_lookup_contact_search_requires_query(self, validator):
+        result = validator.validate("lookup_contact", {"action": "search"})
+        assert result.valid is False
+        assert "query" in "; ".join(result.errors)
 
 
 class TestValidationFlow:

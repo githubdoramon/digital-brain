@@ -2,7 +2,6 @@
 Tests for IntentRouter.
 """
 
-
 import pytest
 
 from agent.router import (
@@ -101,6 +100,7 @@ class TestToolGroups:
         assert "get_events" in TOOL_GROUPS["memory"]
         assert "get_document" in TOOL_GROUPS["memory"]
 
+
 class TestIntentToolMap:
     """Tests for intent to tool group mappings."""
 
@@ -158,8 +158,8 @@ class TestRuleBasedClassification:
     def test_memory_search_keywords(self, router):
         """Test memory search intent detection via rule-based."""
         questions = [
-            "What meetings did I have last week?",
-            "Find documents about project planning",
+            "Search memories for project planning notes",
+            "Find in memories my latest doctor visit",
             "When did I last talk to John?",
         ]
 
@@ -286,13 +286,13 @@ class TestLLMClassification:
 
     def test_parse_llm_response_valid(self, router_with_llm):
         """Test parsing valid LLM JSON response."""
-        response = '''{
+        response = """{
             "intent": "memory_search",
             "confidence": 0.92,
             "constraints": ["read_only"],
             "skill_hints": ["document-search"],
             "reasoning": "User is looking for past meetings"
-        }'''
+        }"""
 
         result = router_with_llm._parse_llm_response(response)
 
@@ -304,13 +304,13 @@ class TestLLMClassification:
 
     def test_parse_llm_response_with_markdown(self, router_with_llm):
         """Test parsing LLM response wrapped in markdown."""
-        response = '''```json
+        response = """```json
 {
     "intent": "data_query",
     "confidence": 0.85,
     "reasoning": "User wants counts"
 }
-```'''
+```"""
 
         result = router_with_llm._parse_llm_response(response)
 
@@ -339,10 +339,10 @@ class TestLLMClassification:
 
     def test_parse_llm_response_unknown_intent(self, router_with_llm):
         """Test parsing response with unknown intent type."""
-        response = '''{
+        response = """{
             "intent": "invalid_intent_type",
             "confidence": 0.9
-        }'''
+        }"""
 
         result = router_with_llm._parse_llm_response(response)
 

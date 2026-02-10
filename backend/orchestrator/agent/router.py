@@ -11,6 +11,7 @@ It can use a smaller/faster model for efficiency.
 
 import json
 import os
+import re
 import sys
 from dataclasses import dataclass, field
 from enum import Enum
@@ -50,6 +51,7 @@ class IntentClassification:
     skill_hints: list[str] = field(default_factory=list)
     pre_resolve_contacts: Optional[bool] = None
     reasoning: Optional[str] = None
+    route_source: str = "unknown"
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -60,6 +62,7 @@ class IntentClassification:
             "skill_hints": self.skill_hints,
             "pre_resolve_contacts": self.pre_resolve_contacts,
             "reasoning": self.reasoning,
+            "route_source": self.route_source,
         }
 
 
@@ -123,7 +126,7 @@ class IntentRouter:
         llm_base_url: Optional[str] = None,
         llm_model: Optional[str] = None,
         llm_api_key: Optional[str] = None,
-        llm_timeout: int = 10,
+        llm_timeout: int = 20,
         enable_llm_routing: bool = True,
     ):
         """
@@ -133,7 +136,7 @@ class IntentRouter:
             llm_base_url: Base URL for LLM API (defaults to INTENT_ROUTER_BASE_URL or LLM_BASE_URL)
             llm_model: Model to use (defaults to INTENT_ROUTER_MODEL or LLM_CHAT_MODEL)
             llm_api_key: API key (defaults to INTENT_ROUTER_API_KEY or LLM_API_KEY)
-            llm_timeout: Timeout for LLM calls (default 10s)
+            llm_timeout: Timeout for LLM calls (default 20s)
             enable_llm_routing: Whether to use LLM for classification (False = rule-based only)
         """
         self.llm_base_url = llm_base_url or os.getenv(
@@ -147,6 +150,19 @@ class IntentRouter:
         )
         self.llm_timeout = int(os.getenv("INTENT_ROUTER_TIMEOUT", str(llm_timeout)))
         self.enable_llm_routing = enable_llm_routing
+        self.rule_high_confidence_threshold = float(
+            os.getenv("INTENT_ROUTER_RULE_HIGH_CONFIDENCE", "0.85")
+        )
+
+    def confidence_tier(self, confidence: float) -> str:
+        """Map confidence into coarse routing tiers."""
+        high = float(os.getenv("ROUTER_HIGH_CONFIDENCE_THRESHOLD", "0.80"))
+        medium = float(os.getenv("ROUTER_MEDIUM_CONFIDENCE_THRESHOLD", "0.60"))
+        if confidence >= high:
+            return "high"
+        if confidence >= medium:
+            return "medium"
+        return "low"
 
     async def classify(
         self,
@@ -168,7 +184,21 @@ class IntentRouter:
         """
         start_time = trace.trace_router_start(question)
 
-        # LLM-first routing
+        # Conservative hybrid routing:
+        # 1) high-precision deterministic match can short-circuit
+        # 2) otherwise LLM handles open-ended language
+        rule_result = self._rule_based_classify(question)
+        if rule_result and rule_result.confidence >= self.rule_high_confidence_threshold:
+            duration_ms = (perf_counter() - start_time) * 1000
+            trace.trace_router_rule_match(
+                rule_result.intent.value,
+                rule_result.confidence,
+                rule_result.reasoning or "",
+                rule_result.allowed_tool_groups,
+                duration_ms,
+            )
+            return rule_result
+
         if self.enable_llm_routing and self.llm_base_url and self.llm_model:
             trace.trace_router_llm_start()
             try:
@@ -187,7 +217,6 @@ class IntentRouter:
                 trace.trace_router_llm_error(str(e))
 
         # Fallback to rule-based result or unknown
-        rule_result = self._rule_based_classify(question)
         if rule_result:
             duration_ms = (perf_counter() - start_time) * 1000
             trace.trace_router_rule_match(
@@ -207,6 +236,7 @@ class IntentRouter:
             allowed_tool_groups=list(TOOL_GROUPS.keys()),
             pre_resolve_contacts=INTENT_PRE_RESOLVE_CONTACTS[IntentType.UNKNOWN],
             reasoning="Fallback to all tools",
+            route_source="fallback",
         )
 
     def _rule_based_classify(self, question: str) -> Optional[IntentClassification]:
@@ -219,9 +249,22 @@ class IntentRouter:
 
         # Home control patterns
         home_keywords = [
-            "turn on", "turn off", "switch", "light", "lamp",
-            "thermostat", "temperature", "home assistant", "smart home",
-            "alexa", "google home", "hvac", "ac", "heater", "office", "heater"
+            "turn on",
+            "turn off",
+            "switch",
+            "light",
+            "lamp",
+            "thermostat",
+            "temperature",
+            "home assistant",
+            "smart home",
+            "alexa",
+            "google home",
+            "hvac",
+            "ac",
+            "heater",
+            "office",
+            "heater",
         ]
         if any(kw in q_lower for kw in home_keywords):
             return IntentClassification(
@@ -231,14 +274,11 @@ class IntentRouter:
                 skill_hints=INTENT_SKILL_HINTS[IntentType.HOME_CONTROL],
                 pre_resolve_contacts=INTENT_PRE_RESOLVE_CONTACTS[IntentType.HOME_CONTROL],
                 reasoning="Home control keywords detected",
+                route_source="rule",
             )
 
         # Web search patterns
-        web_keywords = [
-            "search the web", "google", "look up online",
-            "what is", "who is", "news about", "latest on",
-            "current", "today's", "recent news",
-        ]
+        web_keywords = ["search the web", "google", "look up online", "latest news", "news about"]
         if any(kw in q_lower for kw in web_keywords):
             return IntentClassification(
                 intent=IntentType.WEB_SEARCH,
@@ -247,15 +287,19 @@ class IntentRouter:
                 skill_hints=INTENT_SKILL_HINTS[IntentType.WEB_SEARCH],
                 pre_resolve_contacts=INTENT_PRE_RESOLVE_CONTACTS[IntentType.WEB_SEARCH],
                 reasoning="Web search keywords detected",
+                route_source="rule",
             )
 
-        # Contact/people patterns
-        contact_keywords = [
-            "who is", "contact", "phone number", "email address",
-            "relationship", "friend", "family", "colleague",
-            "birthday", "when was .* born",
+        # Contact/people patterns (high precision only)
+        contact_patterns = [
+            r"\bphone number\b",
+            r"\bemail address\b",
+            r"\bwho is\b",
+            r"\bwho do I know\b",
+            r"\brelationship[s]?\b",
+            r"\bbirthday\b",
         ]
-        if any(kw in q_lower for kw in contact_keywords):
+        if any(re.search(pattern, q_lower) for pattern in contact_patterns):
             return IntentClassification(
                 intent=IntentType.CONTACT_LOOKUP,
                 confidence=0.85,
@@ -263,13 +307,17 @@ class IntentRouter:
                 skill_hints=INTENT_SKILL_HINTS[IntentType.CONTACT_LOOKUP],
                 pre_resolve_contacts=INTENT_PRE_RESOLVE_CONTACTS[IntentType.CONTACT_LOOKUP],
                 reasoning="Contact/people keywords detected",
+                route_source="rule",
             )
 
-        # Memory search patterns
+        # Memory search patterns (high precision only)
         memory_keywords = [
-            "remember", "recall", "what happened", "when did",
-            "find", "search", "look for", "meeting", "event",
-            "document", "note", "last time", "history",
+            "search memories",
+            "find in memories",
+            "look in my memories",
+            "what happened",
+            "last time i",
+            "when did i",
         ]
         if any(kw in q_lower for kw in memory_keywords):
             return IntentClassification(
@@ -279,12 +327,19 @@ class IntentRouter:
                 skill_hints=INTENT_SKILL_HINTS[IntentType.MEMORY_SEARCH],
                 pre_resolve_contacts=INTENT_PRE_RESOLVE_CONTACTS[IntentType.MEMORY_SEARCH],
                 reasoning="Memory search keywords detected",
+                route_source="rule",
             )
 
         # Data query/count patterns
         sql_keywords = [
-            "how many", "count", "list all", "show all",
-            "aggregate", "sum", "average", "total",
+            "how many",
+            "count",
+            "list all",
+            "show all",
+            "aggregate",
+            "sum",
+            "average",
+            "total",
         ]
         if any(kw in q_lower for kw in sql_keywords):
             return IntentClassification(
@@ -294,12 +349,18 @@ class IntentRouter:
                 skill_hints=INTENT_SKILL_HINTS[IntentType.DATA_QUERY],
                 pre_resolve_contacts=INTENT_PRE_RESOLVE_CONTACTS[IntentType.DATA_QUERY],
                 reasoning="Data query keywords detected",
+                route_source="rule",
             )
 
         # System command patterns
         system_keywords = [
-            "run command", "execute", "bash", "shell",
-            "curl", "script", "terminal",
+            "run command",
+            "execute",
+            "bash",
+            "shell",
+            "curl",
+            "script",
+            "terminal",
         ]
         if any(kw in q_lower for kw in system_keywords):
             return IntentClassification(
@@ -309,13 +370,23 @@ class IntentRouter:
                 skill_hints=INTENT_SKILL_HINTS[IntentType.SYSTEM_COMMAND],
                 pre_resolve_contacts=INTENT_PRE_RESOLVE_CONTACTS[IntentType.SYSTEM_COMMAND],
                 reasoning="System command keywords detected",
+                route_source="rule",
             )
 
         # Conversational patterns (greetings, thanks, etc.)
         conversational_keywords = [
-            "hello", "hi ", "hey ", "thanks", "thank you",
-            "goodbye", "bye", "how are you", "good morning",
-            "good night", "help", "what can you do",
+            "hello",
+            "hi ",
+            "hey ",
+            "thanks",
+            "thank you",
+            "goodbye",
+            "bye",
+            "how are you",
+            "good morning",
+            "good night",
+            "help",
+            "what can you do",
         ]
         if any(kw in q_lower for kw in conversational_keywords):
             return IntentClassification(
@@ -325,6 +396,7 @@ class IntentRouter:
                 skill_hints=[],
                 pre_resolve_contacts=INTENT_PRE_RESOLVE_CONTACTS[IntentType.CONVERSATIONAL],
                 reasoning="Conversational keywords detected",
+                route_source="rule",
             )
 
         # No clear match - return low confidence result
@@ -334,6 +406,7 @@ class IntentRouter:
             allowed_tool_groups=list(TOOL_GROUPS.keys()),
             pre_resolve_contacts=INTENT_PRE_RESOLVE_CONTACTS[IntentType.UNKNOWN],
             reasoning="No clear keyword match",
+            route_source="rule",
         )
 
     def _llm_classify(
@@ -359,6 +432,7 @@ class IntentRouter:
                 allowed_tool_groups=list(TOOL_GROUPS.keys()),
                 pre_resolve_contacts=INTENT_PRE_RESOLVE_CONTACTS[IntentType.UNKNOWN],
                 reasoning=f"LLM call failed: {e}",
+                route_source="llm_error",
             )
 
     def _build_classification_prompt(
@@ -370,9 +444,7 @@ class IntentRouter:
         context = ""
         if conversation_history:
             recent = conversation_history[-3:]  # Last 3 messages for context
-            context = "\n".join(
-                f"{msg['role']}: {msg['content'][:200]}" for msg in recent
-            )
+            context = "\n".join(f"{msg['role']}: {msg['content'][:200]}" for msg in recent)
             context = f"\nRECENT CONTEXT:\n{context}\n"
 
         return f"""Classify the user's intent to determine which tools are needed.
@@ -442,16 +514,20 @@ Respond with JSON only:
                 skill_hints=data.get("skill_hints", INTENT_SKILL_HINTS.get(intent, [])),
                 pre_resolve_contacts=pre_resolve_contacts,
                 reasoning=data.get("reasoning"),
+                route_source="llm",
             )
 
         except (json.JSONDecodeError, KeyError) as e:
-            trace.trace_router_llm_error(f"Failed to parse LLM response: {e}. Raw: {response[:200]}...")
+            trace.trace_router_llm_error(
+                f"Failed to parse LLM response: {e}. Raw: {response[:200]}..."
+            )
             return IntentClassification(
                 intent=IntentType.UNKNOWN,
                 confidence=0.5,
                 allowed_tool_groups=list(TOOL_GROUPS.keys()),
                 pre_resolve_contacts=INTENT_PRE_RESOLVE_CONTACTS[IntentType.UNKNOWN],
                 reasoning="LLM response parsing failed",
+                route_source="llm_parse_error",
             )
 
     def get_allowed_tools(self, classification: IntentClassification) -> list[str]:

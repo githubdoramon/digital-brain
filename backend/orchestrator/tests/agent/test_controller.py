@@ -121,6 +121,7 @@ class TestLimitChecking:
         state = AgentState(goal="Test", step_count=controller.config.max_steps)
 
         from agent.limits import LimitChecker
+
         checker = LimitChecker(controller.config)
         violation = checker.check(state)
 
@@ -143,6 +144,7 @@ class TestLimitChecking:
             state.record_tool_call(record)
 
         from agent.limits import LimitChecker
+
         checker = LimitChecker(controller.config)
         violation = checker.check(state)
 
@@ -154,6 +156,7 @@ class TestLimitChecking:
         state = AgentState(goal="Test", repair_count=controller.config.max_repairs)
 
         from agent.limits import LimitChecker
+
         checker = LimitChecker(controller.config)
         violation = checker.check(state)
 
@@ -184,6 +187,7 @@ class TestNoProgressDetection:
             state.record_tool_call(record)
 
         from agent.limits import LimitChecker
+
         checker = LimitChecker(controller.config)
         violation = checker.detect_no_progress(state)
 
@@ -195,11 +199,13 @@ class TestNoProgressDetection:
         state = AgentState(goal="Test")
 
         # Add different calls with results
-        for i, result in enumerate([
-            {"results": [{"id": "1"}]},
-            {"results": [{"id": "2"}]},
-            {"results": [{"id": "3"}]},
-        ]):
+        for i, result in enumerate(
+            [
+                {"results": [{"id": "1"}]},
+                {"results": [{"id": "2"}]},
+                {"results": [{"id": "3"}]},
+            ]
+        ):
             record = ToolCallRecord(
                 tool_name="search_memories",
                 arguments={"query": f"query{i}"},
@@ -210,6 +216,7 @@ class TestNoProgressDetection:
             state.record_tool_call(record)
 
         from agent.limits import LimitChecker
+
         checker = LimitChecker(controller.config)
         violation = checker.detect_no_progress(state)
 
@@ -265,7 +272,7 @@ class TestToolExposurePolicy:
     """Tests for tool exposure strategy in the controller."""
 
     @pytest.mark.asyncio
-    async def test_run_exposes_full_toolset_without_intent_narrowing(self, monkeypatch):
+    async def test_high_confidence_route_restricts_tools(self, monkeypatch):
         from agent.router import IntentClassification, IntentType
 
         controller = AgentController(
@@ -283,7 +290,7 @@ class TestToolExposurePolicy:
         async def fake_run_intent_router(*_args, **_kwargs):
             return IntentClassification(
                 intent=IntentType.HOME_CONTROL,
-                confidence=0.9,
+                confidence=0.95,
                 allowed_tool_groups=["home"],
                 constraints=[],
                 skill_hints=[],
@@ -308,9 +315,7 @@ class TestToolExposurePolicy:
         )
 
         def fake_call_llm(_messages, tools):
-            captured["tool_names"] = sorted(
-                t.get("function", {}).get("name", "") for t in tools
-            )
+            captured["tool_names"] = sorted(t.get("function", {}).get("name", "") for t in tools)
             return {
                 "message": {
                     "content": "Action completed successfully with available context and tools.",
@@ -327,7 +332,125 @@ class TestToolExposurePolicy:
 
         tool_names = captured.get("tool_names", [])
         assert "home_assistant" in tool_names
+        assert "search_memories" not in tool_names
+
+    @pytest.mark.asyncio
+    async def test_medium_confidence_adds_resolution_group(self, monkeypatch):
+        from agent.router import IntentClassification, IntentType
+
+        controller = AgentController(
+            config=AgentConfig(
+                max_steps=2,
+                max_tool_calls=5,
+                max_repairs=1,
+                enable_intent_routing=True,
+                enable_validation=False,
+            )
+        )
+
+        captured: dict[str, list[str]] = {}
+
+        async def fake_run_intent_router(*_args, **_kwargs):
+            return IntentClassification(
+                intent=IntentType.MEMORY_SEARCH,
+                confidence=0.7,
+                allowed_tool_groups=["memory"],
+                constraints=[],
+                skill_hints=[],
+                reasoning="memory intent",
+            )
+
+        monkeypatch.setattr(controller, "_run_intent_router", fake_run_intent_router)
+        monkeypatch.setattr(
+            controller,
+            "_prime_contact_scope_for_question",
+            lambda *args, **kwargs: None,
+        )
+        monkeypatch.setattr(
+            controller,
+            "_build_messages",
+            lambda *args, **kwargs: [{"role": "user", "content": "Find memory"}],
+        )
+        monkeypatch.setattr(
+            controller,
+            "_check_goal_completion",
+            lambda *args, **kwargs: {"achieved": True, "reason": "ok", "pending_actions": []},
+        )
+
+        def fake_call_llm(_messages, tools):
+            captured["tool_names"] = sorted(t.get("function", {}).get("name", "") for t in tools)
+            return {"message": {"content": "Done with medium confidence."}}
+
+        monkeypatch.setattr(controller, "_call_llm", fake_call_llm)
+
+        await controller.run(
+            question="Find memory",
+            user_email="user@example.com",
+            conversation_history=[],
+        )
+
+        tool_names = captured.get("tool_names", [])
         assert "search_memories" in tool_names
+        assert "resolve_contacts" in tool_names
+
+    @pytest.mark.asyncio
+    async def test_low_confidence_fails_open_to_full_tools(self, monkeypatch):
+        from agent.router import IntentClassification, IntentType
+
+        controller = AgentController(
+            config=AgentConfig(
+                max_steps=2,
+                max_tool_calls=5,
+                max_repairs=1,
+                enable_intent_routing=True,
+                enable_validation=False,
+            )
+        )
+
+        captured: dict[str, list[str]] = {}
+
+        async def fake_run_intent_router(*_args, **_kwargs):
+            return IntentClassification(
+                intent=IntentType.UNKNOWN,
+                confidence=0.4,
+                allowed_tool_groups=["web"],
+                constraints=[],
+                skill_hints=[],
+                reasoning="uncertain",
+            )
+
+        monkeypatch.setattr(controller, "_run_intent_router", fake_run_intent_router)
+        monkeypatch.setattr(
+            controller,
+            "_prime_contact_scope_for_question",
+            lambda *args, **kwargs: None,
+        )
+        monkeypatch.setattr(
+            controller,
+            "_build_messages",
+            lambda *args, **kwargs: [{"role": "user", "content": "unclear request"}],
+        )
+        monkeypatch.setattr(
+            controller,
+            "_check_goal_completion",
+            lambda *args, **kwargs: {"achieved": True, "reason": "ok", "pending_actions": []},
+        )
+
+        def fake_call_llm(_messages, tools):
+            captured["tool_names"] = sorted(t.get("function", {}).get("name", "") for t in tools)
+            return {"message": {"content": "Done with full tools."}}
+
+        monkeypatch.setattr(controller, "_call_llm", fake_call_llm)
+
+        await controller.run(
+            question="unclear request",
+            user_email="user@example.com",
+            conversation_history=[],
+        )
+
+        tool_names = captured.get("tool_names", [])
+        assert "search_memories" in tool_names
+        assert "home_assistant" in tool_names
 
     @pytest.mark.asyncio
     async def test_run_skips_contact_presolve_for_web_intent(self, monkeypatch):
@@ -701,9 +824,7 @@ class TestContactAwareMemorySearch:
             }
         ]
 
-        context = build_contact_scope_context(
-            state.resolution.get("active_contact_scope") or []
-        )
+        context = build_contact_scope_context(state.resolution.get("active_contact_scope") or [])
 
         assert context is not None
         assert "RESOLVED CONTACT SCOPE" in context

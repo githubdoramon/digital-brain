@@ -171,23 +171,29 @@ def _register_all_tools(registry: ToolRegistry) -> None:
         ToolContract(
             name="search_memories",
             description=(
-                "Perform semantic (vector) search over the user's memories, "
-                "including events, moments, documents, and other recorded information. "
-                "Use this for exploratory queries when you need to find relevant "
-                "information based on meaning rather than exact matches."
+                "Primary retrieval tool for personal memory data (events, documents, notes). "
+                "Use this first for most memory questions. Prefer specific topic terms in `query` "
+                "and use `contact_ids` for people filters after resolution. For temporal requests, "
+                "set `sort_order` and time bounds instead of issuing repeated broad searches."
             ),
             parameters=[
                 ToolParameter(
                     name="query",
                     type="string",
-                    description="A natural-language search phrase describing what to find.",
+                    description=(
+                        "Natural-language topic to retrieve. Keep this focused on the semantic topic "
+                        "(avoid stuffing person names when `contact_ids` are provided)."
+                    ),
                     required=True,
                     min_length=1,
                 ),
                 ToolParameter(
                     name="limit",
                     type="integer",
-                    description="Maximum results to return (default 30).",
+                    description=(
+                        "Maximum rows to return. Use smaller values for focused follow-ups and larger "
+                        "values for broad discovery."
+                    ),
                     required=False,
                     default=30,
                     minimum=1,
@@ -197,19 +203,25 @@ def _register_all_tools(registry: ToolRegistry) -> None:
                 ToolParameter(
                     name="time_start",
                     type="string",
-                    description="ISO 8601 timestamp for the earliest results (optional).",
+                    description=(
+                        "Lower time bound in ISO 8601. Use for future/upcoming windows or bounded ranges."
+                    ),
                     required=False,
                 ),
                 ToolParameter(
                     name="time_end",
                     type="string",
-                    description="ISO 8601 timestamp for the latest results (optional).",
+                    description=(
+                        "Upper time bound in ISO 8601. Use for historical 'latest/last' questions to avoid future leakage."
+                    ),
                     required=False,
                 ),
                 ToolParameter(
                     name="contact_ids",
                     type="array",
-                    description="Filter by contact IDs (optional).",
+                    description=(
+                        "Optional contact scope filter. Populate after `resolve_contacts`/`resolve_query` when people are involved."
+                    ),
                     required=False,
                     items_type="string",
                 ),
@@ -217,8 +229,8 @@ def _register_all_tools(registry: ToolRegistry) -> None:
                     name="sort_order",
                     type="string",
                     description=(
-                        "Optional ordering mode: 'relevance' (default), "
-                        "'newest' (most recent first), or 'oldest' (earliest first)."
+                        "Ordering mode. Use `newest` for most-recent questions, `oldest` for first/earliest, "
+                        "and `relevance` for topical discovery."
                     ),
                     required=False,
                     default="relevance",
@@ -227,7 +239,9 @@ def _register_all_tools(registry: ToolRegistry) -> None:
                 ToolParameter(
                     name="tags",
                     type="array",
-                    description="Filter by tags - can be major tags (e.g., 'Health') or minor tags (e.g., 'prescription'). Multiple tags use OR logic.",
+                    description=(
+                        "Optional tag filter for narrowing by domain. Multiple tags use OR logic."
+                    ),
                     required=False,
                     items_type="string",
                 ),
@@ -241,14 +255,14 @@ def _register_all_tools(registry: ToolRegistry) -> None:
         ToolContract(
             name="resolve_query",
             description=(
-                "Extract structured entities from a natural-language query: contacts (people), "
-                "places, and time ranges. Returns IDs you can use in other tool calls."
+                "Entity extraction helper for mixed questions. Use when you need structured contacts/places/time "
+                "before another tool call. Prefer this for broad parsing; use `resolve_contacts` for person-specific disambiguation."
             ),
             parameters=[
                 ToolParameter(
                     name="query",
                     type="string",
-                    description="The user's natural-language query to parse.",
+                    description="Natural-language query to parse into contacts, places, and temporal hints.",
                     required=True,
                     min_length=1,
                 ),
@@ -262,17 +276,15 @@ def _register_all_tools(registry: ToolRegistry) -> None:
         ToolContract(
             name="resolve_contacts",
             description=(
-                "Extract people from free-form text and resolve them to existing contacts. "
-                "Handles relationships (e.g., 'my daughter') and nested relationships "
-                "('my daughter's doctor'), returns candidates when ambiguous, and "
-                "suggests missing relationships plus inferred professions for new contacts. "
-                "Provide only natural-language text; runtime user context is injected by the controller."
+                "Person-resolution tool. Use when a question references people and you need reliable contact IDs. "
+                "Handles aliases, relationships, and ambiguity. If ambiguous, this returns clarification payloads "
+                "instead of guessing. Pass only `text`; runtime identity context is injected by the controller."
             ),
             parameters=[
                 ToolParameter(
                     name="text",
                     type="string",
-                    description="The text to analyze for person mentions.",
+                    description="User text containing person references to resolve into contact identities.",
                     required=True,
                     min_length=1,
                 ),
@@ -286,15 +298,14 @@ def _register_all_tools(registry: ToolRegistry) -> None:
         ToolContract(
             name="get_events",
             description=(
-                "Retrieve full details for specific events by their IDs. "
-                "Use after search_memories to get complete event information "
-                "including attendees, location, and full content."
+                "Detail retrieval for events surfaced by `search_memories`. Use this to inspect event candidates "
+                "before final answers on date/time/attendee specifics."
             ),
             parameters=[
                 ToolParameter(
                     name="event_ids",
                     type="array",
-                    description="List of event IDs to retrieve.",
+                    description="One or more event IDs from prior search results.",
                     required=True,
                     items_type="string",
                 ),
@@ -308,14 +319,14 @@ def _register_all_tools(registry: ToolRegistry) -> None:
         ToolContract(
             name="get_document",
             description=(
-                "Retrieve full content of a document by its ID. "
-                "Use after search_memories to get the complete document text and metadata."
+                "Detail retrieval for document candidates surfaced by `search_memories`. Use when answer quality "
+                "depends on exact document fields/content."
             ),
             parameters=[
                 ToolParameter(
                     name="document_id",
                     type="string",
-                    description="The document ID to retrieve.",
+                    description="Document ID from search results.",
                     required=True,
                 ),
             ],
@@ -328,21 +339,21 @@ def _register_all_tools(registry: ToolRegistry) -> None:
         ToolContract(
             name="web_search",
             description=(
-                "Search the web for current information. Use when the user asks about "
-                "external topics, news, or information not in their personal database."
+                "External web search for non-personal knowledge. Use only when the answer is not expected "
+                "to exist in personal memories."
             ),
             parameters=[
                 ToolParameter(
                     name="query",
                     type="string",
-                    description="The search query.",
+                    description="Web query string for external information.",
                     required=True,
                     min_length=1,
                 ),
                 ToolParameter(
                     name="max_results",
                     type="integer",
-                    description="Maximum results to return (default 5).",
+                    description="Result cap for web snippets. Keep small unless user asks for breadth.",
                     required=False,
                     default=5,
                     minimum=1,
@@ -358,14 +369,13 @@ def _register_all_tools(registry: ToolRegistry) -> None:
         ToolContract(
             name="fetch_web_page",
             description=(
-                "Fetch a web page and extract its main content using the configured web "
-                "extraction service."
+                "Fetch and extract content from a specific URL. Use after `web_search` when you need details from one source."
             ),
             parameters=[
                 ToolParameter(
                     name="url",
                     type="string",
-                    description="The URL to fetch (http/https).",
+                    description="Absolute http/https URL to fetch.",
                     required=True,
                     min_length=1,
                 ),
@@ -435,22 +445,21 @@ def _register_all_tools(registry: ToolRegistry) -> None:
         ToolContract(
             name="bash",
             description=(
-                "Execute a shell command and return stdout, stderr, and exit code. "
-                "Use this for CLI operations like curl, jq, file manipulation, or any system command. "
-                "Commands run in a sandboxed environment with timeout protection."
+                "Run shell commands for explicit system/CLI tasks. Do not use for normal memory retrieval or contact lookup. "
+                "Keep commands minimal, deterministic, and bounded by timeout."
             ),
             parameters=[
                 ToolParameter(
                     name="command",
                     type="string",
-                    description="The shell command to execute (e.g., 'curl -s https://api.example.com/data | jq .name').",
+                    description="Shell command to execute exactly as written.",
                     required=True,
                     min_length=1,
                 ),
                 ToolParameter(
                     name="timeout",
                     type="integer",
-                    description="Maximum execution time in seconds (default 30, max 120).",
+                    description="Execution timeout in seconds.",
                     required=False,
                     default=30,
                     minimum=1,
@@ -465,10 +474,8 @@ def _register_all_tools(registry: ToolRegistry) -> None:
         ToolContract(
             name="emit_ui_directive",
             description=(
-                "Emit a structured UI directive for the client to render interactive follow-up "
-                "cards (forms, buttons, or info cards). Use this when you need user input in a "
-                "structured way or when a richer display card is helpful. Always include a clear "
-                "fallback_text for clients that do not support the directive."
+                "Emit interactive UI blocks (forms/buttons/info cards) when user clarification is required or richer structured output helps. "
+                "Always include a clear `fallback_text` for clients that cannot render directives."
             ),
             parameters=[
                 ToolParameter(
@@ -491,34 +498,27 @@ def _register_all_tools(registry: ToolRegistry) -> None:
         ToolContract(
             name="home_assistant",
             description=(
-                "Control Home Assistant smart home/office devices via MCP protocol. "
-                "TWO-STEP PROCESS REQUIRED:\n"
-                "1. FIRST call with action='list_tools' to discover available HA tools\n"
-                "2. THEN use action='call_tool' with the correct tool from the list\n\n"
-                "TOOL SELECTION GUIDE (after listing):\n"
-                "- To TURN OFF: Use 'HassTurnOff' with arguments={'name': 'device name'}\n"
-                "- To TURN ON: Use 'HassTurnOn' with arguments={'name': 'device name'}\n"
-                "- To SET BRIGHTNESS: Use 'HassLightSet' with name and brightness\n"
-                "NEVER guess tool names. NEVER use entity_id - use friendly 'name' instead."
+                "Home Assistant bridge. Mandatory two-step flow: call `list_tools`, then call `call_tool` with a discovered tool name. "
+                "Never guess MCP tool names and prefer friendly `name` arguments over raw entity IDs."
             ),
             parameters=[
                 ToolParameter(
                     name="action",
                     type="string",
-                    description="Action to perform: 'list_tools' MUST be called first to discover available tools. Only use 'call_tool' after you have the tool list.",
+                    description="`list_tools` to discover, then `call_tool` to execute a discovered MCP tool.",
                     required=True,
                     enum=["list_tools", "call_tool"],
                 ),
                 ToolParameter(
                     name="tool_name",
                     type="string",
-                    description="Name of the MCP tool to call (e.g., 'HassTurnOff', 'HassTurnOn', 'HassLightSet'). MUST be from the list_tools response.",
+                    description="MCP tool name returned by a previous `list_tools` response.",
                     required=False,
                 ),
                 ToolParameter(
                     name="arguments",
                     type="object",
-                    description="Arguments for the MCP tool. Most tools use 'name' (friendly device name like 'office lights') - NOT entity_id.",
+                    description="Arguments for selected MCP tool. Most use friendly `name` fields.",
                     required=False,
                 ),
             ],
@@ -530,55 +530,47 @@ def _register_all_tools(registry: ToolRegistry) -> None:
         ToolContract(
             name="lookup_contact",
             description=(
-                "Smart contact lookup with fuzzy matching. "
-                "Use this instead of raw SQL queries for contact-related questions.\n\n"
-                "ACTIONS:\n"
-                "- 'search': Find contacts by name, email, or phone (handles typos, partial names, nicknames, aliases)\n"
-                "- 'get_relationships': Get a contact's relationships with full details\n"
-                "- 'find_related': Find a contact AND their related contacts in one call\n\n"
-                "EXAMPLES:\n"
-                "- 'Who is John Smith?' → action='search', query='John Smith'\n"
-                "- 'List Maria's family' → action='find_related', query='Maria' (then filter results by family-type relationships)\n"
-                "- 'Who reports to David?' → action='find_related', query='David', relationship_types=['report', 'direct-report']"
+                "Contact directory and relationship lookup tool. Use for contact profiles, fuzzy identity search, "
+                "and relationship traversal. Prefer this over generic memory search when the request is primarily about contacts."
             ),
             parameters=[
                 ToolParameter(
                     name="action",
                     type="string",
-                    description="Action: 'search' to find contacts, 'get_relationships' for a contact's connections, 'find_related' to find contact + their relationships.",
+                    description="`search`, `get_relationships`, or `find_related` depending on lookup intent.",
                     required=True,
                     enum=["search", "get_relationships", "find_related"],
                 ),
                 ToolParameter(
                     name="query",
                     type="string",
-                    description="Search query - can be a name (partial, full, nickname, alias), email, or phone number.",
+                    description="Name/email/phone query for contact discovery.",
                     required=False,
                 ),
                 ToolParameter(
                     name="contact_id",
                     type="string",
-                    description="Contact ID for get_relationships action. If not provided, query will be used to find the contact.",
+                    description="Direct contact ID for relationship retrieval; optional when query can resolve identity.",
                     required=False,
                 ),
                 ToolParameter(
                     name="search_by",
                     type="string",
-                    description="Search mode for 'search' action: 'name', 'email', 'phone', or 'any' (default).",
+                    description="Field preference for `search`; default `any`.",
                     required=False,
                     enum=["name", "email", "phone", "any"],
                 ),
                 ToolParameter(
                     name="relationship_types",
                     type="array",
-                    description="Filter by specific relationship types. Optional - if not provided, all relationships are returned and you can filter based on context.",
+                    description="Optional relationship-type filter for `get_relationships`/`find_related`.",
                     required=False,
                     items_type="string",
                 ),
                 ToolParameter(
                     name="fuzzy_threshold",
                     type="integer",
-                    description="Minimum fuzzy match score (0-100). Lower = more lenient. Default 75.",
+                    description="Fuzzy matching threshold (0-100). Lower values allow looser matches.",
                     required=False,
                     default=75,
                     minimum=0,
@@ -587,7 +579,7 @@ def _register_all_tools(registry: ToolRegistry) -> None:
                 ToolParameter(
                     name="limit",
                     type="integer",
-                    description="Maximum contacts to return for search action. Default 10.",
+                    description="Maximum contacts to return for search-heavy actions.",
                     required=False,
                     default=10,
                     minimum=1,

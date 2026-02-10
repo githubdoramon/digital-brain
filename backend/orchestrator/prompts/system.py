@@ -49,11 +49,7 @@ def get_bounded_agent_protocol() -> str:
     """
     Get the enhanced protocol for the bounded agent.
 
-    This protocol emphasizes:
-    - CRITICAL: Proper tool calling via tool_call mechanism
-    - State awareness
-    - Bounded reasoning
-    - Tool validation expectations
+    Keep this prompt generic and push tool-specific behavior into tool contracts.
     """
     return (
         "AGENT PROTOCOL:\n\n"
@@ -74,39 +70,10 @@ def get_bounded_agent_protocol() -> str:
         "   - Check STEP count - you have limited iterations\n"
         "   - Monitor TOOL_CALLS_USED against your budget\n\n"
         "2. TOOL USAGE:\n"
-        "   - INVOKE tools via tool_call - never output code/JSON describing them\n"
-        "   - One action at a time for clarity\n"
-        "   - Validate your parameters match the schema\n"
-        "   - If a tool fails, try a different approach\n\n"
-        "   - For memory questions that mention people, resolve the person first\n"
-        "     (use `resolve_contacts` or `resolve_query`) and pass IDs via `contact_ids`\n"
-        "     when calling `search_memories`.\n\n"
-        "   - Temporal query guardrail:\n"
-        "     * For 'last/most recent/first/earliest' style questions, constrain search to\n"
-        "       historical events (set `time_end` to current UTC time) unless the user explicitly asks about the future.\n"
-        "     * For future/scheduled/upcoming questions, prefer `time_start` at current UTC time and do not clamp\n"
-        "       with `time_end=now`.\n\n"
-        "   - If `contact_ids` are already known on the current context, do not repeat\n"
-        "     those person names in `search_memories.query` unless the name itself is\n"
-        "     the semantic topic. Use query for additional topic terms only; if no\n"
-        '     additional topic exists, use `query="events"`.\n\n'
-        "   - Self-identity guardrail:\n"
-        "     * For questions about who the user met/talked/called/interacted with most,\n"
-        "       do NOT return the user as the counterpart. Treat the user as the anchor\n"
-        "       participant and return other contacts unless explicitly asked about self.\n\n"
-        "   - For structured follow-up UI or display cards, use `emit_ui_directive`\n"
-        "     and include a clear `fallback_text` for clients that do not support\n"
-        "     the directive format.\n\n"
-        "   - Evidence-candidate rule:\n"
-        "     * Track and reuse high-signal `INFORMATION_CANDIDATES` from CURRENT_STATE.\n"
-        "       If a relevant candidate was already inspected, prefer synthesizing from it before\n"
-        "       issuing another broad `search_memories`.\n"
-        "     * For specific value/field questions, inspect the best matching source first\n"
-        "       (`get_document` for documents, `get_events` for events when needed).\n"
-        '     * Do not claim there is "no record" while relevant candidates are already known\n'
-        "       unless you explain why extraction failed.\n"
-        "     * In noisy OCR text, match parameter label + nearest value + unit + reference range,\n"
-        "       and avoid mistaking reference ranges for measured values.\n\n"
+        "   - INVOKE tools via tool_call; never output pseudo-calls in text\n"
+        "   - Follow each tool's contract description for when to use it and how to set parameters\n"
+        "   - Prefer the smallest useful action: gather missing evidence, then answer\n"
+        "   - If a tool fails, repair arguments once and then switch approach\n\n"
         "3. BOUNDED REASONING:\n"
         "   - Work toward the GOAL efficiently\n"
         "   - Stop when you have enough information\n"

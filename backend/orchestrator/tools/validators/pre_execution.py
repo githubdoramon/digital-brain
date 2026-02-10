@@ -98,13 +98,22 @@ class PreExecutionValidator:
                 tool_name=tool_name,
                 original_params=params,
                 errors=[f"Unknown tool: {tool_name}"],
-                suggestions=[
-                    f"Available tools: {list(self.registry._contracts.keys())}"
-                ],
+                suggestions=[f"Available tools: {list(self.registry._contracts.keys())}"],
             )
 
         # Validate parameters
         is_valid, error, suggestions = contract.validate_params(params)
+
+        # Targeted semantic checks for action-dependent contracts.
+        semantic_error = self._semantic_validate(tool_name, params)
+        if semantic_error:
+            is_valid = False
+            if error:
+                error = f"{error}; {semantic_error}"
+            else:
+                error = semantic_error
+            suggestions = suggestions or []
+            suggestions.extend(self._semantic_repair_hints(tool_name, params))
 
         if not is_valid:
             return ValidationResult(
@@ -112,7 +121,8 @@ class PreExecutionValidator:
                 tool_name=tool_name,
                 original_params=params,
                 errors=[error] if error else [],
-                suggestions=suggestions or self._generate_repair_hints(contract, params),
+                suggestions=suggestions
+                or self._generate_repair_hints(contract, params, tool_name=tool_name),
             )
 
         # Validation passed
@@ -154,9 +164,13 @@ class PreExecutionValidator:
         self,
         contract,
         params: dict[str, Any],
+        tool_name: str = "",
     ) -> list[str]:
         """Generate helpful hints for fixing validation errors."""
         hints = []
+
+        if contract.description:
+            hints.append(f"Tool intent: {contract.description}")
 
         # Check for missing required params
         required = contract.get_required_params()
@@ -170,6 +184,45 @@ class PreExecutionValidator:
         if unknown:
             hints.append(f"Remove unknown parameters: {unknown}")
             hints.append(f"Valid parameters are: {valid_params}")
+
+        hints.extend(self._semantic_repair_hints(tool_name, params))
+
+        return hints
+
+    def _semantic_validate(self, tool_name: str, params: dict[str, Any]) -> str | None:
+        """Run action-specific semantic validation not expressible in static JSON schema."""
+        if tool_name == "home_assistant":
+            action = str(params.get("action") or "").strip()
+            if action == "call_tool" and not str(params.get("tool_name") or "").strip():
+                return "When action='call_tool', 'tool_name' is required"
+
+        if tool_name == "lookup_contact":
+            action = str(params.get("action") or "").strip()
+            has_query = bool(str(params.get("query") or "").strip())
+            has_contact_id = bool(str(params.get("contact_id") or "").strip())
+            if action in {"search", "find_related"} and not has_query:
+                return f"When action='{action}', provide a non-empty 'query'"
+            if action == "get_relationships" and not (has_contact_id or has_query):
+                return "When action='get_relationships', provide 'contact_id' or 'query'"
+
+        return None
+
+    def _semantic_repair_hints(self, tool_name: str, params: dict[str, Any]) -> list[str]:
+        """Produce targeted repair hints for common mistakes."""
+        hints: list[str] = []
+
+        if tool_name == "home_assistant":
+            action = str(params.get("action") or "").strip()
+            if action == "call_tool" and not str(params.get("tool_name") or "").strip():
+                hints.append(
+                    "Call `home_assistant` with action='list_tools' first, then reuse a returned tool_name"
+                )
+            if action == "call_tool" and not isinstance(params.get("arguments"), dict):
+                hints.append("Use an object for 'arguments' when calling a Home Assistant MCP tool")
+
+        if tool_name == "search_memories":
+            if not str(params.get("query") or "").strip():
+                hints.append("Provide a focused 'query' describing the topic to retrieve")
 
         return hints
 

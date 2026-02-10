@@ -42,7 +42,7 @@ from .guardrails import (
     sanitize_goal_text,
     utc_now_iso,
 )
-from .limits import AgentConfig, LimitChecker
+from .limits import AgentConfig, LimitChecker, LimitType
 from .llm_transport import call_llm_with_tools, stream_llm_with_tools
 from .response_guardrails import (
     CODE_DESCRIBING_TOOL_PROMPT,
@@ -94,6 +94,13 @@ class AgentController:
         self.llm_model = os.getenv("LLM_CHAT_MODEL", "")
         self.llm_api_key = os.getenv("LLM_API_KEY", "")
         self.llm_timeout = int(os.getenv("LLM_TIMEOUT", "120"))
+        self.router_restriction_mode = os.getenv("ROUTER_RESTRICTION_MODE", "conservative").strip()
+        self.router_high_confidence_threshold = float(
+            os.getenv("ROUTER_HIGH_CONFIDENCE_THRESHOLD", "0.80")
+        )
+        self.router_medium_confidence_threshold = float(
+            os.getenv("ROUTER_MEDIUM_CONFIDENCE_THRESHOLD", "0.60")
+        )
 
         # Lazy-loaded components
         self._tool_registry = None
@@ -159,6 +166,51 @@ class AgentController:
             self._tool_executor = ToolExecutionCoordinator(self)
         return self._tool_executor
 
+    async def _prepare_execution_context(
+        self,
+        *,
+        state: AgentState,
+        question: str,
+        conversation_history: Optional[list[dict[str, str]]],
+        user_email: Optional[str],
+        search_limit: int,
+        run_id: str,
+    ) -> tuple[
+        Optional[IntentClassification], Optional[str], list[dict[str, Any]], list[dict[str, Any]]
+    ]:
+        """Prepare routing, pre-resolution, messages, and initial tool visibility."""
+        classification: Optional[IntentClassification] = None
+        if self.config.enable_intent_routing:
+            classification = await self._run_intent_router(question, conversation_history, run_id)
+            self._apply_classification_to_state(state, classification)
+
+        clarification_prompt: Optional[str] = None
+        pre_resolve_hint = (
+            classification.pre_resolve_contacts if classification is not None else None
+        )
+        if should_pre_resolve_contacts(state.intent, pre_resolve_hint):
+            clarification_prompt = self._prime_contact_scope_for_question(
+                state=state,
+                question=question,
+                user_email=user_email,
+                conversation_history=conversation_history,
+            )
+        if clarification_prompt:
+            return classification, clarification_prompt, [], []
+
+        messages = self._build_messages(
+            question,
+            state,
+            conversation_history,
+            user_email,
+            search_limit,
+            state.request_context,
+        )
+        tools, visibility_mode, selected_groups = self._resolve_tool_visibility(classification)
+        state.tool_visibility_mode = visibility_mode
+        state.allowed_tool_groups = selected_groups
+        return classification, None, messages, tools
+
     async def run(
         self,
         question: str,
@@ -202,29 +254,14 @@ class AgentController:
         trace.trace_run_start(question, run_id)
 
         try:
-            # Phase 1: Intent routing
-            if self.config.enable_intent_routing:
-                classification = await self._run_intent_router(
-                    question, conversation_history, run_id
-                )
-                state.intent = classification.intent.value
-                state.allowed_tool_groups = classification.allowed_tool_groups
-                state.constraints = classification.constraints
-                state.skill_hints = classification.skill_hints
-            else:
-                classification = None
-
-            clarification_prompt = None
-            pre_resolve_hint = (
-                classification.pre_resolve_contacts if classification is not None else None
+            _, clarification_prompt, messages, tools = await self._prepare_execution_context(
+                state=state,
+                question=question,
+                conversation_history=conversation_history,
+                user_email=user_email,
+                search_limit=search_limit,
+                run_id=run_id,
             )
-            if should_pre_resolve_contacts(state.intent, pre_resolve_hint):
-                clarification_prompt = self._prime_contact_scope_for_question(
-                    state=state,
-                    question=question,
-                    user_email=user_email,
-                    conversation_history=conversation_history,
-                )
             if clarification_prompt:
                 trace.trace_contact_resolution_outcome(
                     "clarification_returned",
@@ -239,19 +276,6 @@ class AgentController:
                     total_start,
                 )
 
-            # Build initial messages
-            messages = self._build_messages(
-                question,
-                state,
-                conversation_history,
-                user_email,
-                search_limit,
-                state.request_context,
-            )
-
-            # Expose full tool set; no intent-based narrowing.
-            tools = self.tool_registry.get_tool_definitions()
-
             # Phase 2: Agent loop
             while True:
                 # Check limits
@@ -263,10 +287,27 @@ class AgentController:
                     state.repair_count,
                     self.config.max_repairs,
                 )
-                should_stop, violation = self.limit_checker.should_stop(state)
-                if should_stop:
+                hard_violation = self.limit_checker.check(state)
+                if hard_violation:
                     return self._handle_limit_violation(
-                        state, violation, run_id, session_id, total_start
+                        state, hard_violation, run_id, session_id, total_start
+                    )
+
+                no_progress_violation = self.limit_checker.detect_no_progress(state)
+                if no_progress_violation:
+                    if self._should_escalate_tool_visibility(state, no_progress_violation):
+                        tools = self._escalate_tool_visibility(
+                            run_id=run_id,
+                            state=state,
+                            reason=no_progress_violation.message,
+                        )
+                        continue
+                    return self._handle_limit_violation(
+                        state,
+                        no_progress_violation,
+                        run_id,
+                        session_id,
+                        total_start,
                     )
 
                 state.step_count += 1
@@ -374,6 +415,13 @@ class AgentController:
                             "Goal not yet achieved",
                             goal_check["reason"],
                             {"pending_actions": goal_check["pending_actions"]},
+                        )
+
+                    if self._should_escalate_tool_visibility(state):
+                        tools = self._escalate_tool_visibility(
+                            run_id=run_id,
+                            state=state,
+                            reason="Restricted tools produced repeated failures or empty results",
                         )
                     continue
 
@@ -515,29 +563,14 @@ class AgentController:
         trace.trace_run_start(question, run_id)
 
         try:
-            # Intent routing
-            if self.config.enable_intent_routing:
-                classification = await self._run_intent_router(
-                    question, conversation_history, run_id
-                )
-                state.intent = classification.intent.value
-                state.allowed_tool_groups = classification.allowed_tool_groups
-                state.constraints = classification.constraints
-                state.skill_hints = classification.skill_hints
-            else:
-                classification = None
-
-            clarification_prompt = None
-            pre_resolve_hint = (
-                classification.pre_resolve_contacts if classification is not None else None
+            _, clarification_prompt, messages, tools = await self._prepare_execution_context(
+                state=state,
+                question=question,
+                conversation_history=conversation_history,
+                user_email=user_email,
+                search_limit=search_limit,
+                run_id=run_id,
             )
-            if should_pre_resolve_contacts(state.intent, pre_resolve_hint):
-                clarification_prompt = self._prime_contact_scope_for_question(
-                    state=state,
-                    question=question,
-                    user_email=user_email,
-                    conversation_history=conversation_history,
-                )
             if clarification_prompt:
                 trace.trace_contact_resolution_outcome(
                     "clarification_returned",
@@ -554,16 +587,6 @@ class AgentController:
                 yield {"type": "done", "bundle": bundle}
                 return
 
-            messages = self._build_messages(
-                question,
-                state,
-                conversation_history,
-                user_email,
-                search_limit,
-                state.request_context,
-            )
-
-            tools = self.tool_registry.get_tool_definitions()
             accumulated_content = ""
 
             while True:
@@ -576,16 +599,40 @@ class AgentController:
                     state.repair_count,
                     self.config.max_repairs,
                 )
-                should_stop, violation = self.limit_checker.should_stop(state)
-                if should_stop:
+                hard_violation = self.limit_checker.check(state)
+                if hard_violation:
                     trace.trace_limit_violation(
-                        violation.limit_type.value,
-                        violation.message,
+                        hard_violation.limit_type.value,
+                        hard_violation.message,
                         {"steps": state.step_count, "tool_calls": state.tool_calls_count},
                     )
                     yield {
                         "type": "status",
-                        "message": f"Limit reached: {violation.message}",
+                        "message": f"Limit reached: {hard_violation.message}",
+                    }
+                    break
+
+                no_progress_violation = self.limit_checker.detect_no_progress(state)
+                if no_progress_violation:
+                    if self._should_escalate_tool_visibility(state, no_progress_violation):
+                        tools = self._escalate_tool_visibility(
+                            run_id=run_id,
+                            state=state,
+                            reason=no_progress_violation.message,
+                        )
+                        yield {
+                            "type": "status",
+                            "message": "Expanding tool access to recover from no-progress.",
+                        }
+                        continue
+                    trace.trace_limit_violation(
+                        no_progress_violation.limit_type.value,
+                        no_progress_violation.message,
+                        {"steps": state.step_count, "tool_calls": state.tool_calls_count},
+                    )
+                    yield {
+                        "type": "status",
+                        "message": f"Limit reached: {no_progress_violation.message}",
                     }
                     break
 
@@ -698,6 +745,17 @@ class AgentController:
                         accumulated_content = follow_up_prompt
                         yield {"type": "token", "content": follow_up_prompt}
                         break
+
+                    if self._should_escalate_tool_visibility(state):
+                        tools = self._escalate_tool_visibility(
+                            run_id=run_id,
+                            state=state,
+                            reason="Restricted tools produced repeated failures or empty results",
+                        )
+                        yield {
+                            "type": "status",
+                            "message": "Expanding tool access to improve recovery.",
+                        }
 
                     continue
 
@@ -830,14 +888,138 @@ class AgentController:
             classification.skill_hints,
         )
 
+        route_tier = self._confidence_tier(classification.confidence)
+        self.logger.log_decision(
+            decision="Routing decision",
+            reason=(
+                f"source={classification.route_source}, tier={route_tier}, "
+                f"confidence={classification.confidence:.2f}"
+            ),
+            details={
+                "intent": classification.intent.value,
+                "allowed_tool_groups": classification.allowed_tool_groups,
+            },
+        )
+
         logger.info(
-            "[controller] Intent: %s (confidence=%.2f, duration=%.1fms)",
+            "[controller] Intent: %s (source=%s, confidence=%.2f, duration=%.1fms)",
             classification.intent.value,
+            classification.route_source,
             classification.confidence,
             router_duration,
         )
 
         return classification
+
+    def _confidence_tier(self, confidence: float) -> str:
+        """Map routing confidence to high/medium/low tiers."""
+        if confidence >= self.router_high_confidence_threshold:
+            return "high"
+        if confidence >= self.router_medium_confidence_threshold:
+            return "medium"
+        return "low"
+
+    def _apply_classification_to_state(
+        self,
+        state: AgentState,
+        classification: IntentClassification,
+    ) -> None:
+        """Persist router metadata on state for downstream policy and observability."""
+        state.intent = classification.intent.value
+        state.allowed_tool_groups = classification.allowed_tool_groups
+        state.constraints = classification.constraints
+        state.skill_hints = classification.skill_hints
+        state.route_source = classification.route_source
+        state.route_confidence = classification.confidence
+        state.route_confidence_tier = self._confidence_tier(classification.confidence)
+
+    def _resolve_tool_visibility(
+        self,
+        classification: Optional[IntentClassification],
+    ) -> tuple[list[dict[str, Any]], str, list[str]]:
+        """Choose visible tools based on routing confidence and policy mode."""
+        all_tools = self.tool_registry.get_tool_definitions()
+        if classification is None:
+            return all_tools, "full", list(self.tool_registry.list_groups())
+
+        tier = self._confidence_tier(classification.confidence)
+        state_groups = list(classification.allowed_tool_groups or [])
+
+        if self.router_restriction_mode != "conservative":
+            selected_groups = list(dict.fromkeys(state_groups))
+            tool_defs = self.tool_registry.get_tool_definitions_for_groups(selected_groups)
+            if selected_groups and tool_defs:
+                return tool_defs, "restricted", selected_groups
+            return all_tools, "full", list(self.tool_registry.list_groups())
+
+        if tier == "high":
+            selected_groups = list(dict.fromkeys(state_groups))
+            tool_defs = self.tool_registry.get_tool_definitions_for_groups(selected_groups)
+            if selected_groups and tool_defs:
+                return tool_defs, "restricted", selected_groups
+            if not selected_groups:
+                return [], "none", []
+            return all_tools, "full", list(self.tool_registry.list_groups())
+
+        if tier == "medium":
+            selected_groups = list(dict.fromkeys([*state_groups, "resolution"]))
+            tool_defs = self.tool_registry.get_tool_definitions_for_groups(selected_groups)
+            if tool_defs:
+                return tool_defs, "restricted_with_resolution", selected_groups
+            return all_tools, "full", list(self.tool_registry.list_groups())
+
+        return all_tools, "full", list(self.tool_registry.list_groups())
+
+    def _should_escalate_tool_visibility(
+        self,
+        state: AgentState,
+        violation: Any | None = None,
+    ) -> bool:
+        """Decide whether restricted tool visibility should be widened."""
+        if state.tool_visibility_mode == "full":
+            return False
+        if state.tool_visibility_escalated:
+            return False
+
+        if violation is not None and getattr(violation, "limit_type", None) in {
+            LimitType.NO_PROGRESS_EMPTY,
+            LimitType.NO_PROGRESS_REPEATED,
+        }:
+            return True
+
+        recent_calls = state.get_recent_tool_calls(2)
+        if len(recent_calls) < 2:
+            return False
+
+        def _is_failed_or_empty(call: Any) -> bool:
+            if not getattr(call, "success", False):
+                return True
+            result = getattr(call, "result", {}) or {}
+            return state._is_empty_result(result)
+
+        return all(_is_failed_or_empty(call) for call in recent_calls)
+
+    def _escalate_tool_visibility(
+        self,
+        run_id: str,
+        state: AgentState,
+        reason: str,
+    ) -> list[dict[str, Any]]:
+        """Escalate visibility to full toolset and log decision."""
+        state.tool_visibility_mode = "full"
+        state.tool_visibility_escalated = True
+        state.allowed_tool_groups = list(self.tool_registry.list_groups())
+        self.logger.log_decision(
+            decision="Escalating tool visibility",
+            reason=reason,
+            details={"mode": "full", "step": state.step_count},
+        )
+        trace.trace_decision(
+            "Escalating tool visibility",
+            reason,
+            {"step": state.step_count, "route_tier": state.route_confidence_tier},
+        )
+        return self.tool_registry.get_tool_definitions()
 
     def _normalize_client_context(
         self,
@@ -1764,6 +1946,11 @@ class AgentController:
                 "duration_ms": duration_ms,
                 "successful_tools": state.successful_tool_calls,
                 "failed_tools": state.failed_tool_calls,
+                "route_source": state.route_source,
+                "route_confidence": state.route_confidence,
+                "route_confidence_tier": state.route_confidence_tier,
+                "tool_visibility_mode": state.tool_visibility_mode,
+                "tool_visibility_escalated": state.tool_visibility_escalated,
             },
         }
 

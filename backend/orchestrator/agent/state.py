@@ -94,6 +94,11 @@ class AgentState:
     intent: Optional[str] = None
     allowed_tool_groups: list[str] = field(default_factory=list)
     skill_hints: list[str] = field(default_factory=list)
+    route_source: str = "unknown"
+    route_confidence: float = 0.0
+    route_confidence_tier: str = "low"
+    tool_visibility_mode: str = "full"
+    tool_visibility_escalated: bool = False
 
     # Completion tracking (clawdbot-inspired)
     goal_achieved: bool = False
@@ -276,9 +281,7 @@ class AgentState:
             normalized_kinds = {str(kind or "").strip().lower() for kind in kinds if kind}
 
         candidates = [
-            c
-            for c in self.information_candidates
-            if isinstance(c, dict) and c.get("candidate_id")
+            c for c in self.information_candidates if isinstance(c, dict) and c.get("candidate_id")
         ]
         if normalized_kinds is not None:
             candidates = [
@@ -341,8 +344,7 @@ class AgentState:
         recent = self.tool_calls[-n:]
         first = recent[0]
         return all(
-            tc.tool_name == first.tool_name and tc.arguments == first.arguments
-            for tc in recent
+            tc.tool_name == first.tool_name and tc.arguments == first.arguments for tc in recent
         )
 
     def has_empty_result_streak(self, n: int = 3) -> bool:
@@ -387,6 +389,11 @@ class AgentState:
 
         if self.intent:
             lines.append(f"INTENT: {self.intent} (routing metadata only)")
+            lines.append(
+                "ROUTING: "
+                f"source={self.route_source}, confidence={self.route_confidence:.2f}, "
+                f"tier={self.route_confidence_tier}, tools={self.tool_visibility_mode}"
+            )
 
         if self.known_facts:
             # Include last 5 facts to limit context size
@@ -405,6 +412,7 @@ class AgentState:
             lines.append(f"PENDING_QUESTIONS: {'; '.join(self.pending_questions)}")
 
         if self.information_candidates:
+
             def _safe_sort_score(candidate: dict[str, Any]) -> float:
                 score = candidate.get("best_score")
                 try:
@@ -438,10 +446,7 @@ class AgentState:
                     f"{kind}:{label} [{candidate_id}] ({inspected}, score={score_text})"
                 )
             if serialized_candidates:
-                lines.append(
-                    "INFORMATION_CANDIDATES: "
-                    + "; ".join(serialized_candidates)
-                )
+                lines.append("INFORMATION_CANDIDATES: " + "; ".join(serialized_candidates))
 
         if self.request_context:
             parts: list[str] = []
@@ -491,6 +496,11 @@ class AgentState:
         return {
             "goal": self.goal,
             "intent": self.intent,
+            "route_source": self.route_source,
+            "route_confidence": self.route_confidence,
+            "route_confidence_tier": self.route_confidence_tier,
+            "tool_visibility_mode": self.tool_visibility_mode,
+            "tool_visibility_escalated": self.tool_visibility_escalated,
             "constraints": self.constraints,
             "step_count": self.step_count,
             "tool_calls_count": self.tool_calls_count,
@@ -516,6 +526,11 @@ class AgentState:
             "intent": self.intent,
             "allowed_tool_groups": self.allowed_tool_groups,
             "skill_hints": self.skill_hints,
+            "route_source": self.route_source,
+            "route_confidence": self.route_confidence,
+            "route_confidence_tier": self.route_confidence_tier,
+            "tool_visibility_mode": self.tool_visibility_mode,
+            "tool_visibility_escalated": self.tool_visibility_escalated,
             "resolution": self.resolution,
             "information_candidates": self.information_candidates,
             "activated_skills": [s.get("name") for s in self.activated_skills],
