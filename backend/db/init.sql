@@ -242,6 +242,15 @@ CREATE TABLE IF NOT EXISTS documents (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+CREATE TABLE IF NOT EXISTS document_chunks (
+  document_id TEXT NOT NULL REFERENCES documents(document_id) ON DELETE CASCADE,
+  chunk_index INT NOT NULL,
+  chunk_text TEXT NOT NULL,
+  chunk_embed VECTOR(768) NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (document_id, chunk_index)
+);
+
 -- FTS trigger for documents
 CREATE OR REPLACE FUNCTION documents_tsv_update() RETURNS trigger AS $$
 BEGIN
@@ -262,6 +271,8 @@ CREATE INDEX IF NOT EXISTS idx_documents_created_at ON documents (created_at DES
 CREATE INDEX IF NOT EXISTS idx_documents_tags ON documents USING GIN (tags);
 CREATE INDEX IF NOT EXISTS idx_documents_content_tsv ON documents USING GIN (content_tsv);
 CREATE INDEX IF NOT EXISTS idx_documents_embed ON documents USING ivfflat (content_embed) WITH (lists = 100);
+CREATE INDEX IF NOT EXISTS idx_document_chunks_document_id ON document_chunks (document_id);
+CREATE INDEX IF NOT EXISTS idx_document_chunks_embed ON document_chunks USING ivfflat (chunk_embed) WITH (lists = 100);
 
 -- TODOs (tasks with optional associations)
 CREATE TABLE IF NOT EXISTS todos (

@@ -38,6 +38,18 @@ DOCUMENT_STORAGE_DIR = Path(
 
 MAX_CONTENT_CHARS = int(os.getenv("DOCUMENT_MAX_CONTENT_CHARS", "60000"))
 MAX_EMBED_CHARS = int(os.getenv("DOCUMENT_EMBED_MAX_CHARS", "8000"))
+EMBED_CHUNK_CHARS = int(os.getenv("DOCUMENT_EMBED_CHUNK_CHARS", "1200"))
+EMBED_CHUNK_OVERLAP_CHARS = int(os.getenv("DOCUMENT_EMBED_CHUNK_OVERLAP_CHARS", "200"))
+EMBED_MAX_CHUNKS = int(os.getenv("DOCUMENT_EMBED_MAX_CHUNKS", "64"))
+CHUNK_SEARCH_CANDIDATE_MULTIPLIER = int(
+    os.getenv("DOCUMENT_CHUNK_SEARCH_CANDIDATE_MULTIPLIER", "8")
+)
+CHUNK_SCORE_BEST_WEIGHT = float(os.getenv("DOCUMENT_CHUNK_SCORE_BEST_WEIGHT", "0.75"))
+CHUNK_SCORE_MEAN_WEIGHT = float(os.getenv("DOCUMENT_CHUNK_SCORE_MEAN_WEIGHT", "0.25"))
+COMBINED_SCORE_CHUNK_WEIGHT = float(os.getenv("DOCUMENT_COMBINED_SCORE_CHUNK_WEIGHT", "0.85"))
+COMBINED_SCORE_DOC_WEIGHT = float(os.getenv("DOCUMENT_COMBINED_SCORE_DOC_WEIGHT", "0.15"))
+EMBED_CHUNK_METADATA_MAX_CHARS = int(os.getenv("DOCUMENT_EMBED_CHUNK_METADATA_MAX_CHARS", "240"))
+EMBED_CHUNK_METADATA_TAG_LIMIT = int(os.getenv("DOCUMENT_EMBED_CHUNK_METADATA_TAG_LIMIT", "4"))
 MAX_TRANSLATION_CHUNK_CHARS = int(os.getenv("DOCUMENT_TRANSLATION_CHUNK_CHARS", "10000"))
 MAX_TITLE_PROMPT_CHARS = int(os.getenv("DOCUMENT_TITLE_PROMPT_CHARS", "2000"))
 MAX_DATE_PROMPT_CHARS = int(os.getenv("DOCUMENT_DATE_PROMPT_CHARS", "2000"))
@@ -100,6 +112,14 @@ class DocumentPrepared:
     generated_title: str | None
     generated_description: str | None
     inferred_date: datetime | None
+    chunk_embeddings: list[DocumentChunkEmbedding]
+
+
+@dataclass
+class DocumentChunkEmbedding:
+    chunk_index: int
+    chunk_text: str
+    embedding: Sequence[float]
 
 
 def _ensure_document_storage_dir() -> Path:
@@ -171,6 +191,7 @@ def ingest_document(
         stored=stored,
         content=content_text,
         embedding=prepared.embedding,
+        chunk_embeddings=prepared.chunk_embeddings,
         document_date=prepared.document_date,
         raw_metadata=prepared.raw_metadata,
     )
@@ -345,6 +366,7 @@ def update_document_metadata(
         stored=stored,
         content=content_text,
         embedding=prepared.embedding,
+        chunk_embeddings=prepared.chunk_embeddings,
         document_date=prepared.document_date,
         raw_metadata=prepared.raw_metadata,
     )
@@ -606,7 +628,7 @@ def _build_document_fields(
         inferred_date = _suggest_document_date(content_text, fallback=final_description)
         final_date = inferred_date
 
-    embedding = _generate_document_embedding(
+    embedding, chunk_embeddings = _generate_document_embeddings(
         {
             "document_id": document_id,
             "content": content_text,
@@ -646,6 +668,7 @@ def _build_document_fields(
         generated_title=generated_title,
         generated_description=generated_description,
         inferred_date=inferred_date,
+        chunk_embeddings=chunk_embeddings,
     )
 
 
@@ -795,6 +818,7 @@ def _upsert_document(
     stored: StoredFileInfo,
     content: str,
     embedding: Sequence[float],
+    chunk_embeddings: Sequence[DocumentChunkEmbedding],
     document_date: datetime | None,
     raw_metadata: dict[str, Any],
 ) -> dict[str, Any]:
@@ -861,6 +885,7 @@ def _upsert_document(
             ),
         )
         row = cur.fetchone()
+        _replace_document_chunks(cur, document_id=document_id, chunk_embeddings=chunk_embeddings)
         conn.commit()
     return row
 
@@ -871,16 +896,155 @@ def _vector_search_documents(query: str, k: int) -> dict[str, float]:
         return {}
     query_vector = embed_text(cleaned_query)
     with get_conn() as conn, conn.cursor() as cur:
+        chunk_candidate_limit = max(k, k * max(1, CHUNK_SEARCH_CANDIDATE_MULTIPLIER))
         cur.execute(
             """
-            SELECT document_id, 1 - (content_embed <=> %s::vector) AS score
-            FROM documents
-            ORDER BY content_embed <=> %s::vector
+            WITH ranked_chunks AS (
+                SELECT
+                    document_id,
+                    1 - (chunk_embed <=> %s::vector) AS score
+                FROM document_chunks
+                ORDER BY chunk_embed <=> %s::vector
+                LIMIT %s
+            ),
+            aggregated_chunks AS (
+                SELECT
+                    document_id,
+                    MAX(score) AS best_score,
+                    AVG(score) AS mean_score
+                FROM ranked_chunks
+                GROUP BY document_id
+            )
+            SELECT
+                a.document_id,
+                a.best_score,
+                a.mean_score,
+                CASE
+                    WHEN d.content_embed IS NOT NULL
+                        THEN 1 - (d.content_embed <=> %s::vector)
+                    ELSE NULL
+                END AS doc_score
+            FROM aggregated_chunks a
+            LEFT JOIN documents d ON d.document_id = a.document_id
+            ORDER BY a.best_score DESC, a.mean_score DESC
             LIMIT %s
             """,
-            (query_vector, query_vector, k),
+            (query_vector, query_vector, chunk_candidate_limit, query_vector, k),
         )
-        return {row["document_id"]: float(row["score"]) for row in cur.fetchall()}
+        rows = cur.fetchall()
+        document_scores = {
+            row["document_id"]: _score_document_match(
+                best_score=row.get("best_score"),
+                mean_score=row.get("mean_score"),
+                doc_score=row.get("doc_score"),
+            )
+            for row in rows
+        }
+        if len(document_scores) >= k:
+            return document_scores
+
+        exclude_ids = list(document_scores.keys())
+        fallback_limit = max(0, k - len(document_scores))
+        if fallback_limit <= 0:
+            return document_scores
+
+        if exclude_ids:
+            cur.execute(
+                """
+                SELECT document_id, 1 - (content_embed <=> %s::vector) AS score
+                FROM documents
+                WHERE content_embed IS NOT NULL
+                  AND NOT (document_id = ANY(%s))
+                ORDER BY content_embed <=> %s::vector
+                LIMIT %s
+                """,
+                (query_vector, exclude_ids, query_vector, fallback_limit),
+            )
+        else:
+            cur.execute(
+                """
+                SELECT document_id, 1 - (content_embed <=> %s::vector) AS score
+                FROM documents
+                WHERE content_embed IS NOT NULL
+                ORDER BY content_embed <=> %s::vector
+                LIMIT %s
+                """,
+                (query_vector, query_vector, fallback_limit),
+            )
+        fallback_rows = cur.fetchall()
+        for row in fallback_rows:
+            document_scores[row["document_id"]] = _score_document_match(
+                best_score=None,
+                mean_score=None,
+                doc_score=row["score"],
+            )
+        return document_scores
+
+
+def _score_chunk_match(*, best_score: Any, mean_score: Any) -> float | None:
+    if best_score is None and mean_score is None:
+        return None
+    try:
+        best = float(best_score)
+    except (TypeError, ValueError):
+        best = 0.0
+    try:
+        mean = float(mean_score)
+    except (TypeError, ValueError):
+        mean = best
+    return (CHUNK_SCORE_BEST_WEIGHT * best) + (CHUNK_SCORE_MEAN_WEIGHT * mean)
+
+
+def _score_document_match(
+    *,
+    best_score: Any,
+    mean_score: Any,
+    doc_score: Any,
+) -> float:
+    chunk_component = _safe_float(_score_chunk_match(best_score=best_score, mean_score=mean_score))
+    doc_component = _safe_float(doc_score)
+    if chunk_component is not None and doc_component is not None:
+        return (COMBINED_SCORE_CHUNK_WEIGHT * chunk_component) + (
+            COMBINED_SCORE_DOC_WEIGHT * doc_component
+        )
+    if chunk_component is not None:
+        return chunk_component
+    if doc_component is not None:
+        return doc_component
+    return 0.0
+
+
+def _safe_float(value: Any) -> float | None:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _replace_document_chunks(
+    cur: Any,
+    *,
+    document_id: str,
+    chunk_embeddings: Sequence[DocumentChunkEmbedding],
+) -> None:
+    cur.execute("DELETE FROM document_chunks WHERE document_id = %s", (document_id,))
+    if not chunk_embeddings:
+        return
+    cur.executemany(
+        """
+        INSERT INTO document_chunks (document_id, chunk_index, chunk_text, chunk_embed)
+        VALUES (%s, %s, %s, %s)
+        """,
+        [
+            (
+                document_id,
+                chunk.chunk_index,
+                chunk.chunk_text,
+                list(chunk.embedding),
+            )
+            for chunk in chunk_embeddings
+        ],
+    )
 
 
 def _bm25_search_documents(query: str, k: int) -> dict[str, float]:
@@ -1053,58 +1217,188 @@ def _sanitize_filename(name: str) -> str:
     return "".join(ch for ch in name if ch.isalnum() or ch in {"-", "_", "."}).strip()
 
 
-def _generate_document_embedding(
-    document: dict[str, Any],
-    *,
-    raw_metadata: dict[str, Any] | None = None,
-) -> Sequence[float]:
-    # kept for backward compatibility with existing call sites
-    _ = raw_metadata
-    segments: list[str] = []
-
-    tags = document.get("tags")
-    if isinstance(tags, (list, tuple)):
-        tag_text = " ".join(
-            str(tag).strip() for tag in tags if isinstance(tag, str) and tag.strip()
-        )
-        if tag_text:
-            segments.append(tag_text)
-
+def _build_chunk_embedding_source(document: dict[str, Any]) -> str:
     content = document.get("content")
     if isinstance(content, str):
         cleaned = content.strip()
         if cleaned:
-            segments.append(cleaned)
+            return cleaned
 
     description = document.get("description")
     if isinstance(description, str):
         cleaned = description.strip()
-        if cleaned and cleaned not in segments:
-            segments.append(cleaned)
+        if cleaned:
+            return cleaned
 
     title = document.get("title")
     if isinstance(title, str):
         cleaned = title.strip()
         if cleaned:
-            segments.append(cleaned)
+            return cleaned
+
+    tags = document.get("tags")
+    if isinstance(tags, (list, tuple)):
+        cleaned_tags = [str(tag).strip() for tag in tags if isinstance(tag, str) and tag.strip()]
+        if cleaned_tags:
+            return " ".join(cleaned_tags)
 
     file_name = document.get("file_name")
     if isinstance(file_name, str):
         cleaned = file_name.strip()
         if cleaned:
-            segments.append(cleaned)
+            return cleaned
+    return ""
 
-    combined = " ".join(segments).strip()
-    embed_input = combined[:MAX_EMBED_CHARS] or "document"
+
+def _build_chunk_metadata_prefix(document: dict[str, Any]) -> str:
+    parts: list[str] = []
+
+    title = document.get("title")
+    if isinstance(title, str):
+        cleaned = title.strip()
+        if cleaned:
+            parts.append(f"title: {cleaned}")
+
+    tags = document.get("tags")
+    if isinstance(tags, (list, tuple)):
+        cleaned_tags = [str(tag).strip() for tag in tags if isinstance(tag, str) and tag.strip()]
+        if cleaned_tags:
+            limit = max(1, EMBED_CHUNK_METADATA_TAG_LIMIT)
+            parts.append(f"tags: {', '.join(cleaned_tags[:limit])}")
+
+    file_name = document.get("file_name")
+    if isinstance(file_name, str):
+        cleaned = file_name.strip()
+        if cleaned:
+            parts.append(f"file: {cleaned}")
+
+    description = document.get("description")
+    if isinstance(description, str):
+        cleaned = description.strip()
+        if cleaned:
+            parts.append(f"summary: {cleaned[:120]}")
+
+    if not parts:
+        return ""
+    max_chars = max(80, EMBED_CHUNK_METADATA_MAX_CHARS)
+    return " | ".join(parts)[:max_chars].strip()
+
+
+def _compose_chunk_embedding_payload(metadata_prefix: str, chunk_text: str) -> str:
+    cleaned_chunk = (chunk_text or "").strip()
+    cleaned_prefix = (metadata_prefix or "").strip()
+    if cleaned_prefix and cleaned_chunk:
+        return f"{cleaned_prefix}\n\n{cleaned_chunk}"
+    if cleaned_prefix:
+        return cleaned_prefix
+    if cleaned_chunk:
+        return cleaned_chunk
+    return "document"
+
+
+def _chunk_text_for_embedding(
+    text: str,
+    *,
+    chunk_chars: int = EMBED_CHUNK_CHARS,
+    overlap_chars: int = EMBED_CHUNK_OVERLAP_CHARS,
+    max_chunks: int = EMBED_MAX_CHUNKS,
+) -> list[str]:
+    cleaned = (text or "").strip()
+    if not cleaned:
+        return []
+
+    safe_chunk_chars = max(200, chunk_chars)
+    safe_overlap = max(0, min(overlap_chars, safe_chunk_chars - 1))
+    step = max(1, safe_chunk_chars - safe_overlap)
+    allowed_chunks = max(1, max_chunks)
+    chunks: list[str] = []
+    cursor = 0
+    text_len = len(cleaned)
+
+    while cursor < text_len and len(chunks) < allowed_chunks:
+        end = min(text_len, cursor + safe_chunk_chars)
+        if end < text_len:
+            split_idx = cleaned.rfind("\n", cursor, end)
+            if split_idx <= cursor:
+                split_idx = cleaned.rfind(" ", cursor, end)
+            if split_idx > cursor + safe_chunk_chars // 2:
+                end = split_idx + 1
+        chunk = cleaned[cursor:end].strip()
+        if chunk:
+            chunks.append(chunk)
+        if end >= text_len:
+            break
+        cursor = max(cursor + step, end - safe_overlap)
+
+    return chunks
+
+
+def _average_embeddings(vectors: Sequence[Sequence[float]]) -> list[float] | None:
+    valid = [list(vector) for vector in vectors if vector]
+    if not valid:
+        return None
+    dim = len(valid[0])
+    if dim == 0:
+        return None
+    sums = [0.0] * dim
+    used = 0
+    for vector in valid:
+        if len(vector) != dim:
+            logger.warning(
+                "[documents] skipped embedding vector due to mismatched dimension expected=%s got=%s",
+                dim,
+                len(vector),
+            )
+            continue
+        for idx, value in enumerate(vector):
+            sums[idx] += float(value)
+        used += 1
+    if used == 0:
+        return None
+    return [value / used for value in sums]
+
+
+def _generate_document_embeddings(
+    document: dict[str, Any],
+    *,
+    raw_metadata: dict[str, Any] | None = None,
+) -> tuple[Sequence[float], list[DocumentChunkEmbedding]]:
+    _ = raw_metadata
+    content_source = _build_chunk_embedding_source(document)
+    metadata_prefix = _build_chunk_metadata_prefix(document)
+    chunk_inputs = _chunk_text_for_embedding(content_source)
+    if not chunk_inputs:
+        chunk_inputs = [""]
+
+    chunk_embeddings: list[DocumentChunkEmbedding] = []
+    for idx, content_chunk in enumerate(chunk_inputs):
+        chunk_payload = _compose_chunk_embedding_payload(metadata_prefix, content_chunk)
+        chunk_embeddings.append(
+            DocumentChunkEmbedding(
+                chunk_index=idx,
+                chunk_text=chunk_payload,
+                embedding=embed_text(chunk_payload),
+            )
+        )
+
+    averaged = _average_embeddings([chunk.embedding for chunk in chunk_embeddings])
+    if averaged:
+        embedding: Sequence[float] = averaged
+    else:
+        embed_input = _compose_chunk_embedding_payload(metadata_prefix, content_source)
+        embed_input = embed_input[:MAX_EMBED_CHARS] or "document"
+        embedding = embed_text(embed_input)
+
     document_id = document.get("document_id")
     if isinstance(document_id, str):
         logger.debug(
-            "[documents] embedding payload document_id=%s chars=%s bytes=%s",
+            "[documents] embedding payload document_id=%s chunk_count=%s content_chars=%s metadata_chars=%s",
             document_id,
-            len(embed_input),
-            len(embed_input.encode("utf-8")),
+            len(chunk_embeddings),
+            len(content_source),
+            len(metadata_prefix),
         )
-    return embed_text(embed_input)
+    return embedding, chunk_embeddings
 
 
 def _derive_title_from_filename(filename: str | None) -> str | None:

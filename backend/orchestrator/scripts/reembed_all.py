@@ -34,7 +34,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from db import get_conn  # noqa: E402
 from documents import MAX_CONTENT_CHARS  # noqa: E402
 from documents import _extract_text as extract_document_text  # noqa: E402
-from documents import _generate_document_embedding as generate_document_embedding  # noqa: E402
+from documents import _generate_document_embeddings as generate_document_embeddings  # noqa: E402
+from documents import _replace_document_chunks as replace_document_chunks  # noqa: E402
 from embeddings import embed_text  # noqa: E402
 
 logger = logging.getLogger(__name__)
@@ -265,6 +266,7 @@ def update_event_embedding(event_id: str, embedding: Sequence[float]) -> None:
 def update_document_embedding(
     document_id: str,
     embedding: Sequence[float],
+    chunk_embeddings: Sequence[Any],
     raw_metadata: dict[str, Any],
     content: str | None = None,
 ) -> None:
@@ -291,6 +293,11 @@ def update_document_embedding(
                 """,
                 (list(embedding), json.dumps(raw_metadata or {}), content, document_id),
             )
+        replace_document_chunks(
+            cur,
+            document_id=document_id,
+            chunk_embeddings=chunk_embeddings,
+        )
         conn.commit()
 
 
@@ -438,10 +445,13 @@ def reembed_documents(
                     embed_text_str = generate_document_embed_text(doc)
                     print(f"  [dry-run] Would re-embed document {doc_id}: {embed_text_str[:80]}...")
                 else:
-                    embedding = generate_document_embedding(doc, raw_metadata=raw_metadata)
+                    embedding, chunk_embeddings = generate_document_embeddings(
+                        doc, raw_metadata=raw_metadata
+                    )
                     update_document_embedding(
                         doc_id,
                         embedding,
+                        chunk_embeddings,
                         raw_metadata,
                         content=doc["content"] if should_persist_content else None,
                     )
