@@ -15,6 +15,9 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Optional
 
+MAX_INFORMATION_CANDIDATES = 24
+MAX_INFORMATION_CANDIDATES_IN_CONTEXT = 4
+
 
 @dataclass
 class ToolCallRecord:
@@ -68,11 +71,9 @@ class AgentState:
         pending_actions: Actions required to complete the goal
         completion_evidence: Evidence that goal was achieved
 
-        # Legacy compatibility fields (from existing AgentState in llm_tools.py)
-        resolution: Entity resolution results
-        search_results: Accumulated search results
-        detailed_events: Full event details retrieved
+        resolution: Runtime entity-resolution state and scope details
         activated_skills: Skills activated for this request
+        information_candidates: High-signal candidates worth revisiting across steps
     """
 
     # Core task tracking
@@ -99,11 +100,10 @@ class AgentState:
     pending_actions: list[str] = field(default_factory=list)
     completion_evidence: list[str] = field(default_factory=list)
 
-    # Legacy compatibility (from existing AgentState)
+    # Runtime context managed by controller/tool handlers
     resolution: dict[str, Any] = field(default_factory=dict)
-    search_results: list[dict[str, Any]] = field(default_factory=list)
-    detailed_events: list[dict[str, Any]] = field(default_factory=list)
     activated_skills: list[dict[str, Any]] = field(default_factory=list)
+    information_candidates: list[dict[str, Any]] = field(default_factory=list)
     ui_directives: dict[str, Any] | None = None
     request_context: dict[str, Any] = field(default_factory=dict)
 
@@ -182,6 +182,148 @@ class AgentState:
     def record_tool_call(self, record: ToolCallRecord) -> None:
         """Record a tool call (called by controller after execution)."""
         self.tool_calls.append(record)
+
+    def remember_information_candidate(
+        self,
+        kind: str,
+        candidate_id: str,
+        label: str = "",
+        score: Any = None,
+        query: str = "",
+        source_tool: str = "",
+        inspected: bool = False,
+    ) -> None:
+        """Persist and update a high-signal candidate discovered during execution."""
+        normalized_kind = str(kind or "").strip().lower() or "unknown"
+        normalized_id = str(candidate_id or "").strip()
+        if not normalized_id:
+            return
+
+        normalized_label = str(label or "").strip()
+        normalized_query = str(query or "").strip()
+        normalized_source_tool = str(source_tool or "").strip()
+
+        parsed_score: float | None = None
+        if score is not None:
+            try:
+                parsed_score = float(score)
+            except (TypeError, ValueError):
+                parsed_score = None
+
+        for existing in self.information_candidates:
+            if (
+                existing.get("kind") != normalized_kind
+                or existing.get("candidate_id") != normalized_id
+            ):
+                continue
+            if normalized_label and not existing.get("label"):
+                existing["label"] = normalized_label
+            if normalized_query:
+                existing["last_query"] = normalized_query
+            if normalized_source_tool:
+                existing["last_source_tool"] = normalized_source_tool
+            existing["times_seen"] = int(existing.get("times_seen", 0) or 0) + 1
+            existing["last_seen_step"] = self.step_count
+            if inspected:
+                existing["inspected"] = True
+                existing["inspected_step"] = self.step_count
+            if parsed_score is not None:
+                current_best = existing.get("best_score")
+                if current_best is None or parsed_score > float(current_best):
+                    existing["best_score"] = parsed_score
+            self._trim_information_candidates()
+            return
+
+        self.information_candidates.append(
+            {
+                "kind": normalized_kind,
+                "candidate_id": normalized_id,
+                "label": normalized_label,
+                "best_score": parsed_score,
+                "times_seen": 1,
+                "last_query": normalized_query,
+                "last_source_tool": normalized_source_tool,
+                "last_seen_step": self.step_count,
+                "inspected": inspected,
+                "inspected_step": self.step_count if inspected else None,
+            }
+        )
+        self._trim_information_candidates()
+
+    def mark_information_candidate_inspected(
+        self,
+        kind: str,
+        candidate_id: str,
+        label: str = "",
+    ) -> None:
+        """Mark an information candidate as inspected with detailed retrieval."""
+        self.remember_information_candidate(
+            kind=kind,
+            candidate_id=candidate_id,
+            label=label,
+            inspected=True,
+        )
+
+    def get_best_information_candidate(
+        self,
+        *,
+        inspected_only: bool = False,
+        kinds: Optional[list[str]] = None,
+    ) -> Optional[dict[str, Any]]:
+        """Return the highest-priority remembered information candidate."""
+        normalized_kinds = None
+        if kinds:
+            normalized_kinds = {str(kind or "").strip().lower() for kind in kinds if kind}
+
+        candidates = [
+            c
+            for c in self.information_candidates
+            if isinstance(c, dict) and c.get("candidate_id")
+        ]
+        if normalized_kinds is not None:
+            candidates = [
+                c
+                for c in candidates
+                if str(c.get("kind") or "").strip().lower() in normalized_kinds
+            ]
+        if inspected_only:
+            candidates = [c for c in candidates if c.get("inspected")]
+        if not candidates:
+            return None
+
+        def _sort_key(candidate: dict[str, Any]) -> tuple[int, float, int]:
+            inspected = 1 if candidate.get("inspected") else 0
+            score = candidate.get("best_score")
+            try:
+                parsed_score = float(score) if score is not None else -1.0
+            except (TypeError, ValueError):
+                parsed_score = -1.0
+            seen = int(candidate.get("times_seen", 0) or 0)
+            return (inspected, parsed_score, seen)
+
+        return sorted(candidates, key=_sort_key, reverse=True)[0]
+
+    def _trim_information_candidates(self) -> None:
+        """Keep candidate memory compact to avoid prompt bloat over long runs."""
+        if len(self.information_candidates) <= MAX_INFORMATION_CANDIDATES:
+            return
+
+        def _sort_key(candidate: dict[str, Any]) -> tuple[int, float, int, int]:
+            inspected = 1 if candidate.get("inspected") else 0
+            score = candidate.get("best_score")
+            try:
+                parsed_score = float(score) if score is not None else -1.0
+            except (TypeError, ValueError):
+                parsed_score = -1.0
+            seen = int(candidate.get("times_seen", 0) or 0)
+            last_seen = int(candidate.get("last_seen_step", 0) or 0)
+            return (inspected, parsed_score, seen, last_seen)
+
+        self.information_candidates = sorted(
+            self.information_candidates,
+            key=_sort_key,
+            reverse=True,
+        )[:MAX_INFORMATION_CANDIDATES]
 
     def get_recent_tool_calls(self, n: int = 3) -> list[ToolCallRecord]:
         """Get the N most recent tool calls."""
@@ -262,6 +404,45 @@ class AgentState:
         if self.pending_questions:
             lines.append(f"PENDING_QUESTIONS: {'; '.join(self.pending_questions)}")
 
+        if self.information_candidates:
+            def _safe_sort_score(candidate: dict[str, Any]) -> float:
+                score = candidate.get("best_score")
+                try:
+                    return float(score) if score is not None else -1.0
+                except (TypeError, ValueError):
+                    return -1.0
+
+            top_candidates = sorted(
+                self.information_candidates,
+                key=lambda c: (
+                    1 if c.get("inspected") else 0,
+                    _safe_sort_score(c),
+                    int(c.get("times_seen", 0) or 0),
+                ),
+                reverse=True,
+            )[:MAX_INFORMATION_CANDIDATES_IN_CONTEXT]
+            serialized_candidates: list[str] = []
+            for candidate in top_candidates:
+                candidate_id = str(candidate.get("candidate_id") or "").strip()
+                if not candidate_id:
+                    continue
+                kind = str(candidate.get("kind") or "unknown").strip()
+                label = str(candidate.get("label") or "untitled").strip()
+                inspected = "inspected" if candidate.get("inspected") else "not_inspected"
+                score = candidate.get("best_score")
+                try:
+                    score_text = f"{float(score):.3f}" if score is not None else "n/a"
+                except (TypeError, ValueError):
+                    score_text = "n/a"
+                serialized_candidates.append(
+                    f"{kind}:{label} [{candidate_id}] ({inspected}, score={score_text})"
+                )
+            if serialized_candidates:
+                lines.append(
+                    "INFORMATION_CANDIDATES: "
+                    + "; ".join(serialized_candidates)
+                )
+
         if self.request_context:
             parts: list[str] = []
             timezone = str(self.request_context.get("timezone") or "").strip()
@@ -316,8 +497,7 @@ class AgentState:
             "repair_count": self.repair_count,
             "known_facts_count": len(self.known_facts),
             "resolution": self.resolution,
-            "search_results_count": len(self.search_results),
-            "detailed_events_count": len(self.detailed_events),
+            "information_candidates_count": len(self.information_candidates),
             "activated_skills": [s.get("name") for s in self.activated_skills],
             "has_ui_directives": bool(self.ui_directives),
         }
@@ -337,8 +517,7 @@ class AgentState:
             "allowed_tool_groups": self.allowed_tool_groups,
             "skill_hints": self.skill_hints,
             "resolution": self.resolution,
-            "search_results_count": len(self.search_results),
-            "detailed_events_count": len(self.detailed_events),
+            "information_candidates": self.information_candidates,
             "activated_skills": [s.get("name") for s in self.activated_skills],
             "ui_directives": self.ui_directives,
             "request_context": self.request_context,

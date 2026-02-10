@@ -51,7 +51,6 @@ def handle_search_memories(
 
     # Update state if provided
     if state is not None:
-        state.search_results.extend(results)
         if results:
             state.add_fact(f"Found {len(results)} memories matching '{query}'")
 
@@ -80,7 +79,6 @@ def handle_get_events(
 
     # Update state if provided
     if state is not None:
-        state.detailed_events.extend(events)
         if events:
             state.add_fact(f"Retrieved {len(events)} event details")
 

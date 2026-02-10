@@ -699,6 +699,6 @@ def run_pipeline(question: str, search_limit: int = 3) -> dict[str, Any]:
         "question": question,
         "resolution": resolution,
         "search_results": results,
-        "detailed_events": detailed,
+        "events_results": detailed,
         "document_results": document_results,
     }

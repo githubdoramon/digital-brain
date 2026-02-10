@@ -21,6 +21,7 @@ class TestAgentState:
         assert state.tool_calls == []
         assert state.intent is None
         assert state.allowed_tool_groups == []
+        assert state.information_candidates == []
 
     def test_full_initialization(self):
         """Test AgentState with all arguments."""
@@ -121,6 +122,44 @@ class TestAgentState:
         assert "CONSTRAINTS: read_only" in context
         assert "Found 5 meetings" in context
         assert "Searched calendar" in context
+
+    def test_information_candidates_are_injected_into_context(self):
+        """Test remembered candidate evidence is visible to the model context."""
+        state = AgentState(goal="What is my vitamin b12 level?")
+        state.remember_information_candidate(
+            kind="document",
+            candidate_id="doc:abc123",
+            label="Clinical Laboratory Test Results Report",
+            score=1.23,
+            query="vitamin b12",
+        )
+        state.mark_information_candidate_inspected("document", "doc:abc123")
+
+        context = state.to_context_string()
+        assert "INFORMATION_CANDIDATES:" in context
+        assert "document:Clinical Laboratory Test Results Report [doc:abc123]" in context
+        assert "inspected" in context
+
+    def test_get_best_information_candidate_prefers_inspected(self):
+        """Test candidate prioritization for fallback context reuse."""
+        state = AgentState(goal="Test")
+        state.remember_information_candidate(
+            kind="document",
+            candidate_id="doc:uninspected",
+            label="Uninspected",
+            score=9.0,
+        )
+        state.remember_information_candidate(
+            kind="document",
+            candidate_id="doc:inspected",
+            label="Inspected",
+            score=1.0,
+        )
+        state.mark_information_candidate_inspected("document", "doc:inspected")
+
+        best = state.get_best_information_candidate(inspected_only=True)
+        assert best is not None
+        assert best["candidate_id"] == "doc:inspected"
 
     def test_to_dict(self):
         """Test state serialization to dictionary."""
@@ -241,35 +280,19 @@ class TestToolCallRecord:
         assert data["duration_ms"] == 100
 
 
-class TestLegacyCompatibility:
-    """Tests for legacy field compatibility."""
+class TestStateRuntimeFields:
+    """Tests for runtime state helper fields."""
 
     def test_resolution_field(self):
-        """Test resolution field for backward compatibility."""
+        """Test resolution field for runtime contact scope state."""
         state = AgentState(goal="Test")
 
         assert state.resolution == {}
         state.resolution["entity_type"] = "person"
         assert state.resolution["entity_type"] == "person"
 
-    def test_search_results_field(self):
-        """Test search_results field for backward compatibility."""
-        state = AgentState(goal="Test")
-
-        assert state.search_results == []
-        state.search_results.append({"id": "1", "title": "Result"})
-        assert len(state.search_results) == 1
-
-    def test_detailed_events_field(self):
-        """Test detailed_events field for backward compatibility."""
-        state = AgentState(goal="Test")
-
-        assert state.detailed_events == []
-        state.detailed_events.append({"event_id": "123"})
-        assert len(state.detailed_events) == 1
-
     def test_activated_skills_field(self):
-        """Test activated_skills field for backward compatibility."""
+        """Test activated_skills field for runtime skill gating."""
         state = AgentState(goal="Test")
 
         assert state.activated_skills == []

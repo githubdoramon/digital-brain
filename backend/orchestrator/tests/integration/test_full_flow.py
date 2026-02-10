@@ -716,23 +716,17 @@ class TestProgressDetectionIntegration:
         assert violation is None
 
 
-class TestBackwardCompatibility:
-    """Tests for backward compatibility with existing code."""
+class TestStateRuntimeCompatibility:
+    """Tests for runtime compatibility with current state shape."""
 
-    def test_legacy_state_fields(self):
-        """Test legacy state fields are preserved."""
+    def test_runtime_state_fields(self):
+        """Test runtime state fields used by controller remain available."""
         state = AgentState(goal="Test")
 
-        # Legacy fields should exist and work
         state.resolution["entity_type"] = "person"
-        state.search_results.append({"id": "1"})
-        state.detailed_events.append({"event": "test"})
         state.activated_skills.append({"skill": "test"})
 
-        # All should be accessible
         assert state.resolution["entity_type"] == "person"
-        assert len(state.search_results) == 1
-        assert len(state.detailed_events) == 1
         assert len(state.activated_skills) == 1
 
     def test_state_serialization(self):

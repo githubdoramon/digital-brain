@@ -264,6 +264,39 @@ class TestPostValidatorContactResolution:
         assert result.coverage == GoalCoverage.NEED_USER_INPUT
         assert "Which John do you mean?" in result.reason
 
+    def test_search_memories_document_result_suggests_get_document(self, validator):
+        result = validator.validate(
+            tool_name="search_memories",
+            params={"query": "vitamin b12"},
+            result={
+                "results": [
+                    {
+                        "id": "doc:lab",
+                        "kind": "document",
+                        "title": "Clinical Laboratory Test Results Report",
+                        "score": 1.4,
+                    }
+                ],
+                "count": 1,
+            },
+            goal="What is my vitamin b12 level?",
+            known_facts=[],
+        )
+        assert result.coverage == GoalCoverage.NEEDS_MORE_TOOLS
+        assert "get_document" in result.suggested_next_tools
+        assert any("Top document candidate:" in fact for fact in result.extracted_facts)
+
+    def test_get_document_result_is_deterministically_accepted(self, validator):
+        result = validator.validate(
+            tool_name="get_document",
+            params={"document_id": "doc:lab"},
+            result={"document": {"document_id": "doc:lab", "title": "Clinical report"}},
+            goal="What is my vitamin b12 level?",
+            known_facts=[],
+        )
+        assert result.coverage == GoalCoverage.NEEDS_MORE_TOOLS
+        assert "Document retrieved" in result.reason
+
 
 class TestFactExtraction:
     """Tests for fact extraction concepts."""
@@ -330,4 +363,53 @@ class TestGoalCompletionValidatorTemporal:
         )
         assert achieved is False
         assert "Temporal query needs explicit date-ordered verification" in reason
+        assert pending
+
+    def test_document_candidate_requires_document_inspection(self):
+        validator = GoalCompletionValidator()
+        tool_calls = [
+            ToolCallRecord(
+                tool_name="search_memories",
+                arguments={"query": "vitamin b12"},
+                result={"results": [{"id": "doc:lab", "kind": "document"}], "count": 1},
+                duration_ms=40,
+                success=True,
+            )
+        ]
+        achieved, reason, pending = validator.check_goal_achieved(
+            goal="What is my vitamin b12 level?",
+            tool_calls=tool_calls,
+            known_facts=["Found 1 relevant memories", "Top document candidate: Clinical (doc:lab)"],
+            final_content="",
+        )
+        assert achieved is False
+        assert "Top candidate is a document" in reason
+        assert pending
+
+    def test_contradiction_no_record_after_results_is_not_achieved(self):
+        validator = GoalCompletionValidator()
+        tool_calls = [
+            ToolCallRecord(
+                tool_name="search_memories",
+                arguments={"query": "vitamin b12"},
+                result={"results": [{"id": "doc:lab", "kind": "document"}], "count": 1},
+                duration_ms=40,
+                success=True,
+            ),
+            ToolCallRecord(
+                tool_name="get_document",
+                arguments={"document_id": "doc:lab"},
+                result={"document": {"document_id": "doc:lab", "title": "Clinical report"}},
+                duration_ms=60,
+                success=True,
+            ),
+        ]
+        achieved, reason, pending = validator.check_goal_achieved(
+            goal="What is my vitamin b12 level?",
+            tool_calls=tool_calls,
+            known_facts=["Found 1 relevant memories", "Retrieved document: Clinical report"],
+            final_content="I don't have a record of a recent vitamin b12 measurement.",
+        )
+        assert achieved is False
+        assert "contradicts retrieved results" in reason
         assert pending

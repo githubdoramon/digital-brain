@@ -739,6 +739,51 @@ class TestContactAwareMemorySearch:
         assert blocked is not None
         assert blocked.get("status") == "no_progress"
 
+    def test_blocks_research_when_document_already_inspected(self, controller):
+        state = AgentState(goal="What is my vitamin b12 level?")
+        state.remember_information_candidate(
+            kind="document",
+            candidate_id="doc:lab",
+            label="Clinical Laboratory Test Results Report",
+            score=1.3,
+            query="vitamin b12",
+        )
+        state.mark_information_candidate_inspected("document", "doc:lab")
+        state.record_tool_call(
+            ToolCallRecord(
+                tool_name="search_memories",
+                arguments={
+                    "query": "vitamin b12",
+                    "tags": ["health", "lab"],
+                    "sort_order": "relevance",
+                },
+                result={
+                    "results": [
+                        {
+                            "id": "doc:lab",
+                            "kind": "document",
+                            "title": "Clinical Laboratory Test Results Report",
+                        }
+                    ],
+                    "count": 1,
+                },
+                duration_ms=95,
+                success=True,
+            )
+        )
+
+        blocked = controller._block_redundant_memory_search(
+            state,
+            {
+                "query": "vitamin b12 level",
+                "tags": ["health", "lab"],
+                "sort_order": "relevance",
+            },
+        )
+        assert blocked is not None
+        assert blocked.get("status") == "no_progress"
+        assert "already inspected document" in blocked.get("message", "").lower()
+
     def test_resolves_contact_scope_during_person_referential_memory_search(
         self, controller, monkeypatch
     ):

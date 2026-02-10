@@ -9,11 +9,14 @@ This module contains:
 
 import json
 import re
-from typing import Any, Optional
+from typing import TYPE_CHECKING, Any, Optional
 
 from observability.logger import get_runtime_logger
 
 logger = get_runtime_logger(__name__)
+
+if TYPE_CHECKING:
+    from agent.state import AgentState
 
 # Configuration
 MAX_ITERATIONS = 15  # Safety limit to prevent infinite loops
@@ -258,7 +261,7 @@ def strip_event_proposal(content: str) -> str:
 def finalize_bundle(
     question: str,
     answer: str,
-    state: Any,  # AgentState
+    state: "AgentState",
     search_limit: int,
     session_id: Optional[str],
 ) -> dict[str, Any]:
@@ -269,20 +272,87 @@ def finalize_bundle(
         question: The original question
         answer: The final answer text
         state: The agent state
-        search_limit: The search limit used
+        search_limit: Max number of search rows to include in the bundle
         session_id: The session/thread ID
 
     Returns:
         The response bundle dict
     """
+    search_results: list[dict[str, Any]] = []
+    events_results: list[dict[str, Any]] = []
+    document_results: list[dict[str, Any]] = []
+    seen_document_ids: set[str] = set()
+
+    def _compact_document(document: dict[str, Any]) -> dict[str, Any]:
+        raw_metadata = (
+            document.get("raw_metadata")
+            if isinstance(document.get("raw_metadata"), dict)
+            else {}
+        )
+        preview_source = (
+            document.get("content_preview")
+            or raw_metadata.get("content_english_for_embedding")
+            or raw_metadata.get("original_content")
+            or ""
+        )
+        preview_text = str(preview_source or "").strip()
+        if len(preview_text) > 12000:
+            preview_text = preview_text[:11997].rstrip() + "..."
+
+        compact: dict[str, Any] = {
+            "document_id": document.get("document_id"),
+            "title": document.get("title"),
+            "tags": document.get("tags"),
+            "document_date": document.get("document_date"),
+            "file_name": document.get("file_name"),
+            "file_mime": document.get("file_mime"),
+            "file_size": document.get("file_size"),
+            "snippet": document.get("snippet"),
+        }
+        if preview_text:
+            compact["content_preview"] = preview_text
+        return compact
+
+    for call in state.tool_calls:
+        if call.tool_name == "search_memories" and call.success:
+            rows = (call.result or {}).get("results", [])
+            if isinstance(rows, list):
+                search_results = rows
+        elif call.tool_name == "get_events" and call.success:
+            events = (call.result or {}).get("events", [])
+            if isinstance(events, list):
+                events_results.extend(events)
+        elif call.tool_name == "get_document" and call.success:
+            document = (call.result or {}).get("document")
+            if not isinstance(document, dict):
+                continue
+            compact = _compact_document(document)
+            document_id = str(compact.get("document_id") or "").strip()
+            dedupe_key = document_id or json.dumps(compact, sort_keys=True, default=str)
+            if dedupe_key in seen_document_ids:
+                continue
+            seen_document_ids.add(dedupe_key)
+            document_results.append(compact)
+
+    normalized_limit = 30
+    try:
+        parsed_limit = int(search_limit)
+        if parsed_limit > 0:
+            normalized_limit = parsed_limit
+    except (TypeError, ValueError):
+        pass
+    if len(search_results) > normalized_limit:
+        search_results = search_results[:normalized_limit]
+
     bundle: dict[str, Any] = {
         "question": question,
         "answer": answer,
         "thread_id": session_id,
         # Required fields from AgentState
         "resolution": state.resolution,
-        "search_results": state.search_results,
-        "detailed_events": state.detailed_events,
+        "search_results": search_results,
+        "events_results": events_results,
+        "document_results": document_results,
     }
 
     if state.activated_skills:

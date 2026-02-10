@@ -35,6 +35,12 @@ Once you identify relevant documents:
 - You can fetch by ID or by title (fuzzy match)
 - The tool returns metadata plus the full text content
 
+When the question asks for a specific field/value (lab level, amount, date, identifier):
+- Prioritize the top matching document from `search_memories` and call `get_document` before re-searching
+- Keep track of already inspected documents; do not discard them after broader follow-up searches
+- If extraction is noisy (OCR/PDF ordering), align **label + nearest value + unit + reference range**
+- Do not confuse a reference range with the measured value
+
 ## Step 4: Analyze and Present
 
 When presenting document findings:
@@ -42,6 +48,7 @@ When presenting document findings:
 - Quote specific passages if they directly answer the question
 - Note the document date and source
 - Cross-reference with related events or contacts if relevant
+- If a relevant document exists but the exact value is uncertain, say that explicitly and explain what was ambiguous instead of saying no record exists
 
 ## Examples
 

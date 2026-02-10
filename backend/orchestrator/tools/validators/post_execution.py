@@ -206,9 +206,38 @@ class PostExecutionValidator:
             # Non-empty results - extract facts
             if results:
                 facts = self._extract_facts_from_result(tool_name, result)
+                suggested_next_tools: list[str] = []
+                top_candidate = self._select_top_search_candidate(results)
+                if top_candidate is not None:
+                    candidate_kind = str(top_candidate.get("kind") or "").strip().lower()
+                    if candidate_kind == "document":
+                        suggested_next_tools.append("get_document")
+                    elif candidate_kind == "event":
+                        suggested_next_tools.append("get_events")
                 return PostExecutionResult(
                     coverage=GoalCoverage.NEEDS_MORE_TOOLS,
-                    reason=f"Got {len(results)} results, evaluating",
+                    reason=(
+                        f"Got {len(results)} results, evaluating"
+                        if top_candidate is None
+                        else (
+                            f"Got {len(results)} results with a relevant "
+                            f"{str(top_candidate.get('kind') or 'information')} candidate"
+                        )
+                    ),
+                    extracted_facts=facts,
+                    suggested_next_tools=suggested_next_tools,
+                )
+
+        if tool_name == "get_document":
+            document = result.get("document")
+            if isinstance(document, dict) and document:
+                facts = self._extract_facts_from_result(tool_name, result)
+                return PostExecutionResult(
+                    coverage=GoalCoverage.NEEDS_MORE_TOOLS,
+                    reason=(
+                        "Document retrieved; extract the requested information from document "
+                        "content before additional searches"
+                    ),
                     extracted_facts=facts,
                 )
 
@@ -226,7 +255,7 @@ class PostExecutionValidator:
                 coverage=GoalCoverage.NEEDS_MORE_TOOLS,
                 reason="Entities resolved, ready for queries",
                 extracted_facts=facts,
-                )
+            )
 
         # Check resolve_contacts - extract resolution status and ambiguity signals
         if tool_name == "resolve_contacts":
@@ -490,9 +519,22 @@ Rules:
         facts = []
 
         if tool_name == "search_memories":
-            count = result.get("count", len(result.get("results", [])))
+            rows = result.get("results", [])
+            count = result.get("count", len(rows))
             if count > 0:
                 facts.append(f"Found {count} relevant memories")
+            if isinstance(rows, list):
+                top_candidate = self._select_top_search_candidate(rows)
+                if top_candidate is not None:
+                    title = str(top_candidate.get("title") or "untitled").strip()
+                    candidate_id = str(top_candidate.get("id") or "").strip()
+                    candidate_kind = str(top_candidate.get("kind") or "information").strip()
+                    if candidate_id:
+                        facts.append(
+                            f"Top {candidate_kind} candidate: {title} ({candidate_id})"
+                        )
+                    else:
+                        facts.append(f"Top {candidate_kind} candidate: {title}")
 
         elif tool_name == "get_events":
             events = result.get("events", [])
@@ -552,6 +594,31 @@ Rules:
                 facts.append(f"Prepared {block_count} UI block(s) for user follow-up")
 
         return facts
+
+    def _select_top_search_candidate(
+        self,
+        rows: list[dict[str, Any]],
+    ) -> dict[str, Any] | None:
+        """Pick the highest-scoring high-signal row from search results."""
+        candidate_rows: list[dict[str, Any]] = []
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            row_id = str(row.get("id") or "").strip()
+            if not row_id:
+                continue
+            candidate_rows.append(row)
+        if not candidate_rows:
+            return None
+
+        def _score(item: dict[str, Any]) -> float:
+            value = item.get("score")
+            try:
+                return float(value)
+            except (TypeError, ValueError):
+                return -1.0
+
+        return sorted(candidate_rows, key=_score, reverse=True)[0]
 
     def _suggest_alternative_tools(self, failed_tool: str) -> list[str]:
         """
@@ -812,10 +879,67 @@ class GoalCompletionValidator:
                 "when did i last",
             )
         )
-
         # For queries, we need actual results
         if not tool_calls:
             return (False, "No tool calls made for query", ["Search for relevant information"])
+
+        successful_query_calls = [
+            tc
+            for tc in tool_calls
+            if tc.tool_name in (
+                "search_memories",
+                "get_events",
+                "get_document",
+                "web_search",
+                "lookup_contact",
+                "resolve_contacts",
+            )
+            and tc.success
+        ]
+        has_successful_results = any(self._has_results(tc.result) for tc in successful_query_calls)
+        best_search_candidate = self._find_best_search_candidate(tool_calls)
+        required_detail_tool = self._required_detail_tool_for_candidate(best_search_candidate)
+        has_required_detail = (
+            required_detail_tool is None
+            or any(tc.tool_name == required_detail_tool for tc in successful_query_calls)
+        )
+        candidate_kind = str((best_search_candidate or {}).get("kind") or "source")
+        if required_detail_tool == "get_document":
+            detail_requirement_reason = (
+                "Top candidate is a document and must be inspected before finalizing"
+            )
+        elif required_detail_tool == "get_events":
+            detail_requirement_reason = (
+                "Top candidate is an event and must be inspected with get_events before finalizing"
+            )
+        else:
+            detail_requirement_reason = (
+                f"Top candidate requires detailed inspection before finalizing ({candidate_kind})"
+            )
+        detail_requirement_action = (
+            f"Call {required_detail_tool} on the most relevant candidate result"
+            if required_detail_tool
+            else "Inspect the most relevant candidate result"
+        )
+
+        final_content_lower = (final_content or "").lower().strip()
+        if final_content_lower:
+            no_data_markers = (
+                "don't have a record",
+                "do not have a record",
+                "no record",
+                "couldn't find",
+                "could not find",
+                "didn't find",
+                "did not find",
+                "no relevant",
+            )
+            if any(marker in final_content_lower for marker in no_data_markers) and has_successful_results:
+                return (
+                    False,
+                    "Final response contradicts retrieved results",
+                    ["Use retrieved evidence before concluding nothing was found"],
+                )
 
         # Check if we got actual results from facts
         result_indicators = ["found", "retrieved", "returned", "results", "rows", "items", "records"]
@@ -825,6 +949,18 @@ class GoalCompletionValidator:
         ]
 
         if result_facts:
+            if required_detail_tool and not has_required_detail:
+                return (
+                    False,
+                    detail_requirement_reason,
+                    [detail_requirement_action],
+                )
+            if required_detail_tool and has_required_detail and not final_content_lower:
+                return (
+                    False,
+                    "Detailed candidate retrieved; synthesize the final answer from it",
+                    ["Use the inspected source details to produce the final answer"],
+                )
             if temporal_goal:
                 has_temporal_resolution = any(
                     t.success and t.tool_name == "get_events"
@@ -838,25 +974,17 @@ class GoalCompletionValidator:
                     )
             return (True, "Query returned results", [])
 
-        # Check for successful query tools
-        query_tools = [
-            "search_memories",
-            "get_events",
-            "get_document",
-            "web_search",
-            "lookup_contact",
-            "resolve_contacts",
-        ]
-        successful_query_calls = [
-            tc for tc in tool_calls
-            if tc.tool_name in query_tools and tc.success
-        ]
-
         if successful_query_calls:
             # Check if results were actually returned
             for tc in successful_query_calls:
                 result = tc.result
                 if self._has_results(result):
+                    if required_detail_tool and not has_required_detail:
+                        return (
+                            False,
+                            detail_requirement_reason,
+                            [detail_requirement_action],
+                        )
                     if temporal_goal:
                         has_temporal_resolution = any(
                             t.success and t.tool_name == "get_events"
@@ -917,3 +1045,51 @@ class GoalCompletionValidator:
             return True
 
         return False
+
+    def _find_best_search_candidate(self, tool_calls: list) -> dict[str, Any] | None:
+        """Find the highest-scoring candidate from successful search_memories calls."""
+        best_candidate: dict[str, Any] | None = None
+        best_score = float("-inf")
+
+        for call in tool_calls:
+            if getattr(call, "tool_name", "") != "search_memories" or not getattr(call, "success", False):
+                continue
+            rows = (getattr(call, "result", {}) or {}).get("results", [])
+            if not isinstance(rows, list):
+                continue
+            for row in rows:
+                if not isinstance(row, dict):
+                    continue
+                candidate_id = str(row.get("id") or "").strip()
+                if not candidate_id:
+                    continue
+                try:
+                    score = float(row.get("score"))
+                except (TypeError, ValueError):
+                    score = -1.0
+                if best_candidate is None or score > best_score:
+                    kind = str(row.get("kind") or "").strip().lower()
+                    if not kind and ":" in candidate_id:
+                        kind = candidate_id.split(":", 1)[0].strip().lower()
+                    best_score = score
+                    best_candidate = {
+                        "id": candidate_id,
+                        "kind": kind,
+                        "title": str(row.get("title") or "").strip(),
+                        "score": score,
+                    }
+        return best_candidate
+
+    def _required_detail_tool_for_candidate(
+        self,
+        candidate: dict[str, Any] | None,
+    ) -> str | None:
+        """Map candidate kind to tool needed for detailed inspection."""
+        if not isinstance(candidate, dict):
+            return None
+        kind = str(candidate.get("kind") or "").strip().lower()
+        if kind == "document":
+            return "get_document"
+        if kind == "event":
+            return "get_events"
+        return None

@@ -659,7 +659,14 @@ class AgentController:
                             {
                                 "role": "tool",
                                 "tool_call_id": call.get("id"),
-                                "content": json.dumps(result, ensure_ascii=False, default=str),
+                                "content": json.dumps(
+                                    self.tool_executor.build_tool_message_payload(
+                                        func_name,
+                                        result,
+                                    ),
+                                    ensure_ascii=False,
+                                    default=str,
+                                ),
                             }
                         )
 
@@ -1344,7 +1351,47 @@ class AgentController:
                 ),
             }
 
-        return None
+        inspected_candidate = state.get_best_information_candidate(inspected_only=True)
+        if not inspected_candidate:
+            return None
+
+        candidate_id = str(inspected_candidate.get("candidate_id") or "").strip()
+        candidate_kind = str(inspected_candidate.get("kind") or "").strip().lower()
+        if not candidate_id:
+            return None
+
+        reference_search = self._find_latest_search_with_candidate(
+            state=state,
+            candidate_id=candidate_id,
+            candidate_kind=candidate_kind,
+        )
+        if reference_search is None:
+            return None
+
+        reference_args = reference_search.arguments or {}
+        reference_query = str(reference_args.get("query") or "").strip()
+        current_query = str(args.get("query") or "").strip()
+        overlap = self._query_overlap(reference_query, current_query)
+        min_overlap = 0.65
+        if overlap < min_overlap:
+            return None
+
+        same_scope = (
+            tuple(sorted(str(cid) for cid in (reference_args.get("contact_ids") or [])))
+            == tuple(sorted(str(cid) for cid in (args.get("contact_ids") or [])))
+        )
+        if not same_scope:
+            return None
+
+        label = str(inspected_candidate.get("label") or "untitled").strip()
+        return {
+            **(reference_search.result or {}),
+            "status": "no_progress",
+            "message": (
+                f"You already inspected {candidate_kind} candidate '{label}' ({candidate_id}) "
+                "for this topic. Reuse that context before running another broad memory search."
+            ),
+        }
 
     def _memory_search_signature(self, args: dict[str, Any]) -> tuple[Any, ...]:
         """Build a comparable signature for memory-search de-duplication."""
@@ -1363,6 +1410,46 @@ class AgentController:
         except (TypeError, ValueError):
             parsed = 0
         return parsed if parsed > 0 else 5
+
+    def _find_latest_search_with_candidate(
+        self,
+        state: AgentState,
+        candidate_id: str,
+        candidate_kind: str,
+    ) -> Optional[Any]:
+        """Return the latest successful search_memories call containing a candidate id."""
+        target_id = str(candidate_id or "").strip()
+        normalized_kind = str(candidate_kind or "").strip().lower()
+        if not target_id:
+            return None
+
+        for previous in reversed(state.tool_calls):
+            if previous.tool_name != "search_memories" or not previous.success:
+                continue
+            rows = (previous.result or {}).get("results", [])
+            if not isinstance(rows, list):
+                continue
+            for row in rows:
+                if not isinstance(row, dict):
+                    continue
+                row_id = str(row.get("id") or "").strip()
+                if row_id != target_id:
+                    continue
+                if normalized_kind:
+                    row_kind = str(row.get("kind") or "").strip().lower()
+                    if row_kind and row_kind != normalized_kind:
+                        continue
+                return previous
+        return None
+
+    def _query_overlap(self, left: str, right: str) -> float:
+        """Return token overlap ratio for two search queries."""
+        left_tokens = {token for token in str(left or "").lower().split() if token}
+        right_tokens = {token for token in str(right or "").lower().split() if token}
+        if not left_tokens or not right_tokens:
+            return 0.0
+        intersection = left_tokens & right_tokens
+        return len(intersection) / float(min(len(left_tokens), len(right_tokens)))
 
     def _prime_contact_scope_for_question(
         self,
@@ -1586,8 +1673,9 @@ class AgentController:
             "answer": message,
             "thread_id": session_id,
             "resolution": state.resolution,
-            "search_results": state.search_results,
-            "detailed_events": state.detailed_events,
+            "search_results": self._latest_search_results(state),
+            "events_results": self._collected_events_results(state),
+            "document_results": self._collected_document_results(state),
             "ui_directives": state.ui_directives,
             "limit_hit": violation.limit_type.value,
         }
@@ -1648,8 +1736,9 @@ class AgentController:
             "answer": answer,
             "thread_id": session_id,
             "resolution": state.resolution,
-            "search_results": state.search_results,
-            "detailed_events": state.detailed_events,
+            "search_results": self._latest_search_results(state),
+            "events_results": self._collected_events_results(state),
+            "document_results": self._collected_document_results(state),
             "ui_directives": state.ui_directives,
             # Completion metadata (clawdbot-inspired)
             "_meta": {
@@ -1667,6 +1756,87 @@ class AgentController:
             bundle["activated_skills"] = [s.get("name") for s in state.activated_skills]
 
         return bundle
+
+    def _latest_search_results(self, state: AgentState) -> list[dict[str, Any]]:
+        """Return the latest successful search_memories result rows."""
+        for call in reversed(state.tool_calls):
+            if call.tool_name != "search_memories" or not call.success:
+                continue
+            rows = (call.result or {}).get("results", [])
+            if isinstance(rows, list):
+                return rows
+        return []
+
+    def _collected_events_results(self, state: AgentState) -> list[dict[str, Any]]:
+        """Collect event payloads from successful get_events calls."""
+        collected: list[dict[str, Any]] = []
+        seen_ids: set[str] = set()
+        for call in state.tool_calls:
+            if call.tool_name != "get_events" or not call.success:
+                continue
+            events = (call.result or {}).get("events", [])
+            if not isinstance(events, list):
+                continue
+            for event in events:
+                if not isinstance(event, dict):
+                    continue
+                event_id = str(event.get("id") or event.get("event_id") or "").strip()
+                dedupe_key = event_id or json.dumps(event, sort_keys=True, default=str)
+                if dedupe_key in seen_ids:
+                    continue
+                seen_ids.add(dedupe_key)
+                collected.append(event)
+        return collected
+
+    def _collected_document_results(self, state: AgentState) -> list[dict[str, Any]]:
+        """Collect compact document payloads from successful get_document calls."""
+        collected: list[dict[str, Any]] = []
+        seen_ids: set[str] = set()
+        for call in state.tool_calls:
+            if call.tool_name != "get_document" or not call.success:
+                continue
+            document = (call.result or {}).get("document")
+            if not isinstance(document, dict):
+                continue
+            compact = self._compact_document_result(document)
+            document_id = str(compact.get("document_id") or "").strip()
+            dedupe_key = document_id or json.dumps(compact, sort_keys=True, default=str)
+            if dedupe_key in seen_ids:
+                continue
+            seen_ids.add(dedupe_key)
+            collected.append(compact)
+        return collected
+
+    def _compact_document_result(self, document: dict[str, Any]) -> dict[str, Any]:
+        """Build a compact document result for response bundles."""
+        raw_metadata = (
+            document.get("raw_metadata")
+            if isinstance(document.get("raw_metadata"), dict)
+            else {}
+        )
+        preview_source = (
+            document.get("content_preview")
+            or raw_metadata.get("content_english_for_embedding")
+            or raw_metadata.get("original_content")
+            or ""
+        )
+        preview_text = str(preview_source or "").strip()
+        if len(preview_text) > 12000:
+            preview_text = preview_text[:11997].rstrip() + "..."
+
+        compact: dict[str, Any] = {
+            "document_id": document.get("document_id"),
+            "title": document.get("title"),
+            "tags": document.get("tags"),
+            "document_date": document.get("document_date"),
+            "file_name": document.get("file_name"),
+            "file_mime": document.get("file_mime"),
+            "file_size": document.get("file_size"),
+            "snippet": document.get("snippet"),
+        }
+        if preview_text:
+            compact["content_preview"] = preview_text
+        return compact
 
     def _extract_event_proposal(self, content: str) -> Optional[dict[str, Any]]:
         """Extract event proposal from content."""

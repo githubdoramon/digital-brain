@@ -302,7 +302,7 @@ class AskOut(BaseModel):
     answer: str
     resolution: dict[str, Any]
     search_results: list[dict[str, Any]]
-    detailed_events: list[dict[str, Any]]
+    events_results: list[dict[str, Any]]
     document_results: list[dict[str, Any]] = Field(default_factory=list)
     session_id: str | None = None
     thread_id: str | None = None

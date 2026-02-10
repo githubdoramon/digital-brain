@@ -62,7 +62,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         });
         setToken(idToken);
         await SecureStore.setItemAsync(TOKEN_KEY, idToken);
-        console.log('[auth] userInfo', userInfo);
         const userEmail = userInfo?.user?.email ?? null;
         const userName = userInfo?.user?.name ?? null;
         const userPhoto = userInfo?.user?.photo ?? null;
