@@ -61,7 +61,7 @@ def handle_resolve_contacts(
 
     Extracts and resolves people from free-form text using the contacts resolver pipeline.
     """
-    from agents.contacts.executor import handle_resolve_contacts_request
+    from contact_resolution_service import resolve_contacts_request
 
     text = args.get("text", "")
     if not text:
@@ -79,7 +79,7 @@ def handle_resolve_contacts(
     if conversation_history:
         payload["conversation_messages"] = conversation_history[-8:]
 
-    result = handle_resolve_contacts_request(payload)
+    result = resolve_contacts_request(payload)
 
     if state is not None:
         status = result.get("status", "unknown")
@@ -141,7 +141,9 @@ def handle_lookup_contact(
         if state is not None:
             if results:
                 names = [r.get("display_name", "Unknown") for r in results[:3]]
-                state.add_fact(f"Found {len(results)} contacts matching '{query}': {', '.join(names)}")
+                state.add_fact(
+                    f"Found {len(results)} contacts matching '{query}': {', '.join(names)}"
+                )
             else:
                 state.add_fact(f"No contacts found matching '{query}'")
 

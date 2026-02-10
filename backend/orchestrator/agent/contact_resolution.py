@@ -167,7 +167,7 @@ def resolve_contacts_for_text(
         }
 
     try:
-        from agents.contacts.executor import handle_resolve_contacts_request
+        from contact_resolution_service import resolve_contacts_request
 
         payload: dict[str, Any] = {"text": normalized_text, "user_email": user_email}
         context_messages = list((conversation_history or [])[-8:])
@@ -179,7 +179,7 @@ def resolve_contacts_for_text(
             context_messages.append({"role": "user", "content": normalized_text})
         payload["conversation_messages"] = context_messages
 
-        resolution = handle_resolve_contacts_request(payload)
+        resolution = resolve_contacts_request(payload)
         state.resolution["contact_resolution"] = resolution
         update_state(state, {"text": normalized_text}, resolution)
         return resolution

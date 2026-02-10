@@ -910,7 +910,7 @@ class TestContactAwareMemorySearch:
     ):
         state = AgentState(goal="When did I last meet Gio?")
         monkeypatch.setattr(
-            "agents.contacts.executor.handle_resolve_contacts_request",
+            "contact_resolution_service.resolve_contacts_request",
             lambda _payload: {
                 "status": "success",
                 "people_mentioned": ["Gio"],
@@ -951,7 +951,7 @@ class TestContactAwareMemorySearch:
             }
 
         monkeypatch.setattr(
-            "agents.contacts.executor.handle_resolve_contacts_request",
+            "contact_resolution_service.resolve_contacts_request",
             fake_resolver,
         )
 
@@ -975,7 +975,7 @@ class TestContactAwareMemorySearch:
     def test_primes_contact_scope_from_question(self, controller, monkeypatch):
         state = AgentState(goal="When did I last meet Gio?")
         monkeypatch.setattr(
-            "agents.contacts.executor.handle_resolve_contacts_request",
+            "contact_resolution_service.resolve_contacts_request",
             lambda _payload: {
                 "status": "success",
                 "people_mentioned": ["Gio"],
@@ -1010,7 +1010,7 @@ class TestContactAwareMemorySearch:
             }
 
         monkeypatch.setattr(
-            "agents.contacts.executor.handle_resolve_contacts_request",
+            "contact_resolution_service.resolve_contacts_request",
             fake_resolver,
         )
 
@@ -1041,7 +1041,7 @@ class TestContactAwareMemorySearch:
             }
 
         monkeypatch.setattr(
-            "agents.contacts.executor.handle_resolve_contacts_request",
+            "contact_resolution_service.resolve_contacts_request",
             fake_resolver,
         )
 

@@ -1913,7 +1913,7 @@ def resolve_contacts_endpoint(
         }
     }
     """
-    from agents.contacts.executor import handle_resolve_contacts_request
+    from contact_resolution_service import resolve_contacts_request
 
     user_email = user.get("email")
     if not user_email:
@@ -1922,7 +1922,7 @@ def resolve_contacts_endpoint(
     # Add user_email to request data
     request_data["user_email"] = user_email
 
-    return handle_resolve_contacts_request(request_data)
+    return resolve_contacts_request(request_data)
 
 
 # ---------------------------------------------------------------------------

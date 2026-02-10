@@ -363,7 +363,7 @@ class TestAgentControllerIntegration:
         monkeypatch.setattr(controller, "_call_llm", fake_call_llm)
         monkeypatch.setattr(controller, "_inject_skills", lambda *args, **kwargs: None)
         monkeypatch.setattr(
-            "agents.contacts.executor.handle_resolve_contacts_request",
+            "contact_resolution_service.resolve_contacts_request",
             lambda _payload: {
                 "status": "need_user_input",
                 "people_mentioned": ["Gio"],
