@@ -132,6 +132,7 @@ def search_memories(
     people: Sequence[str] | None = None,
     place_ids: Sequence[str] | None = None,
     tags: Sequence[str] | None = None,
+    salience_hints: Sequence[str] | None = None,
     time_start: str | None = None,
     time_end: str | None = None,
     limit: int = 10,
@@ -156,6 +157,11 @@ def search_memories(
     if ordering not in {"relevance", "newest", "oldest"}:
         ordering = "relevance"
     normalized_tags = [str(tag).strip().lower() for tag in (tags or []) if str(tag).strip()]
+    normalized_salience_hints = [
+        str(token).strip().lower()
+        for token in (salience_hints or [])
+        if len(str(token).strip()) >= 4
+    ][:12]
 
     has_structured_filters = bool(span or people or place_ids or normalized_tags)
     is_temporal_query = bool(span)
@@ -247,6 +253,17 @@ def search_memories(
     doc_lookup_all = (
         fetch_document_summaries(list(doc_ids)) if (doc_ids and use_temporal_ordering) else {}
     )
+
+    if normalized_salience_hints:
+        if doc_ids and not doc_lookup_all:
+            doc_lookup_all = fetch_document_summaries(list(doc_ids))
+        _apply_salience_boost_to_scores(
+            event_scores=event_scores,
+            doc_scores=doc_scores,
+            event_lookup=event_lookup_all,
+            doc_lookup=doc_lookup_all,
+            salience_hints=normalized_salience_hints,
+        )
 
     combined: list[tuple[str, str, float]] = []
 
@@ -418,6 +435,55 @@ def search_memories(
         document_titles,
     )
     return {"results": results}
+
+
+def _apply_salience_boost_to_scores(
+    *,
+    event_scores: dict[str, float],
+    doc_scores: dict[str, float],
+    event_lookup: dict[str, dict[str, Any]],
+    doc_lookup: dict[str, dict[str, Any]],
+    salience_hints: Sequence[str],
+) -> None:
+    """Apply a small lexical salience boost using episodic hint tokens."""
+    if not salience_hints:
+        return
+
+    hint_set = {token for token in salience_hints if token}
+    if not hint_set:
+        return
+
+    for event_id in list(event_scores.keys()):
+        row = event_lookup.get(event_id) or {}
+        text = " ".join(
+            [
+                str(row.get("title") or ""),
+                str(row.get("summary") or ""),
+                " ".join(str(tag) for tag in (row.get("tags") or [])),
+                " ".join(str(kind) for kind in (row.get("types") or [])),
+            ]
+        ).lower()
+        overlap = sum(1 for hint in hint_set if hint in text)
+        if overlap <= 0:
+            continue
+        boost = min(0.18, 0.06 * overlap)
+        event_scores[event_id] = event_scores.get(event_id, 0.0) + boost
+
+    for doc_id in list(doc_scores.keys()):
+        row = doc_lookup.get(doc_id) or {}
+        text = " ".join(
+            [
+                str(row.get("title") or ""),
+                str(row.get("description") or ""),
+                str(row.get("snippet") or ""),
+                " ".join(str(tag) for tag in (row.get("tags") or [])),
+            ]
+        ).lower()
+        overlap = sum(1 for hint in hint_set if hint in text)
+        if overlap <= 0:
+            continue
+        boost = min(0.18, 0.06 * overlap)
+        doc_scores[doc_id] = doc_scores.get(doc_id, 0.0) + boost
 
 
 def vector_search(query: str, k: int = 50):

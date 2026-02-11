@@ -42,7 +42,10 @@ flowchart TD
   J -->|no| L{Goal complete?}
   L -->|no| M[Inject force-completion prompt]
   M --> A
-  L -->|yes| N[Return final answer]
+  L -->|yes| V{Verifier evidence check}
+  V -->|fail| W[Inject verification retry prompt]
+  W --> A
+  V -->|pass| N[Return final answer]
 ```
 
 ## Routing and Visibility Rules
@@ -69,6 +72,13 @@ Escalation policy:
   - follow-up prompt selection
   - force-completion prompt generation
   - tool status normalization (`need_user_input` aware)
+- `agent/planning_policy.py`
+  - execution plan generation
+  - final-response verification policy
+  - verification retry prompt generation
+- `agent/model_routing.py`
+  - always-on adaptive model/timeout selection
+  - complexity + runtime-signal based routing
 
 ## Contact-Aware Memory Flow
 
@@ -117,3 +127,8 @@ Main run metadata includes:
 - `tool_visibility_escalated`
 - `tool_visibility_escalations_count`
 - `clarification_requests_count`
+- `execution_plan_steps`
+- `execution_plan_completed_steps`
+- `verifier_notes`
+- `llm_routing_profile`
+- `llm_routing_model`

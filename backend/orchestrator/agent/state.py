@@ -17,6 +17,8 @@ from typing import Any, Optional
 
 MAX_INFORMATION_CANDIDATES = 24
 MAX_INFORMATION_CANDIDATES_IN_CONTEXT = 4
+MAX_EPISODIC_MEMORIES = 24
+MAX_EPISODIC_IN_CONTEXT = 4
 
 
 @dataclass
@@ -64,7 +66,7 @@ class AgentState:
         step_count: Number of LLM call iterations
         repair_count: Number of validation repair attempts
         intent: Classified intent from router (metadata only)
-        allowed_tool_groups: Router-provided groups (metadata only; not enforced for tool visibility)
+        allowed_tool_groups: Router-provided groups
 
         # Completion tracking (clawdbot-inspired)
         goal_achieved: Whether the user's goal was actually accomplished
@@ -74,6 +76,10 @@ class AgentState:
         resolution: Runtime entity-resolution state and scope details
         activated_skills: Skills activated for this request
         information_candidates: High-signal candidates worth revisiting across steps
+        execution_plan: Controller-managed plan steps for verifier-driven completion
+        completed_plan_steps: Completed plan steps
+        verifier_notes: Verifier notes accumulated during run
+        episodic_memory: Compact high-salience memory traces from prior steps
     """
 
     # Core task tracking
@@ -111,6 +117,10 @@ class AgentState:
     resolution: dict[str, Any] = field(default_factory=dict)
     activated_skills: list[dict[str, Any]] = field(default_factory=list)
     information_candidates: list[dict[str, Any]] = field(default_factory=list)
+    execution_plan: list[str] = field(default_factory=list)
+    completed_plan_steps: list[str] = field(default_factory=list)
+    verifier_notes: list[str] = field(default_factory=list)
+    episodic_memory: list[dict[str, Any]] = field(default_factory=list)
     ui_directives: dict[str, Any] | None = None
     request_context: dict[str, Any] = field(default_factory=dict)
 
@@ -175,6 +185,129 @@ class AgentState:
         """Add evidence that the goal was achieved."""
         if evidence and evidence not in self.completion_evidence:
             self.completion_evidence.append(evidence)
+
+    def set_execution_plan(self, steps: list[str]) -> None:
+        """Set or replace the controller-authored execution plan."""
+        normalized = [str(step).strip() for step in steps if str(step).strip()]
+        self.execution_plan = normalized
+        self.completed_plan_steps = []
+
+    def complete_plan_step(self, step: str) -> None:
+        """Mark a plan step as completed once evidence exists."""
+        normalized = str(step or "").strip()
+        if not normalized:
+            return
+        if normalized not in self.execution_plan:
+            return
+        if normalized not in self.completed_plan_steps:
+            self.completed_plan_steps.append(normalized)
+
+    def add_verifier_note(self, note: str) -> None:
+        """Track verifier notes for observability and context."""
+        normalized = str(note or "").strip()
+        if normalized and normalized not in self.verifier_notes:
+            self.verifier_notes.append(normalized)
+
+    def remember_episode(
+        self,
+        *,
+        summary: str,
+        source_tool: str,
+        salience: float,
+        related_query: str = "",
+    ) -> None:
+        """Persist a compact high-signal episodic memory trace."""
+        normalized_summary = str(summary or "").strip()
+        normalized_source = str(source_tool or "").strip() or "unknown"
+        if not normalized_summary:
+            return
+
+        try:
+            parsed_salience = max(0.0, min(1.0, float(salience)))
+        except (TypeError, ValueError):
+            parsed_salience = 0.3
+
+        normalized_query = str(related_query or "").strip()
+        for memory in self.episodic_memory:
+            if memory.get("summary") != normalized_summary:
+                continue
+            memory["salience"] = max(float(memory.get("salience", 0.0) or 0.0), parsed_salience)
+            memory["times_seen"] = int(memory.get("times_seen", 0) or 0) + 1
+            memory["last_seen_step"] = self.step_count
+            if normalized_query:
+                memory["last_query"] = normalized_query
+            self._trim_episodic_memory()
+            return
+
+        self.episodic_memory.append(
+            {
+                "summary": normalized_summary,
+                "source_tool": normalized_source,
+                "salience": parsed_salience,
+                "times_seen": 1,
+                "first_seen_step": self.step_count,
+                "last_seen_step": self.step_count,
+                "last_query": normalized_query,
+            }
+        )
+        self._trim_episodic_memory()
+
+    def get_episodic_hints(self, max_terms: int = 8) -> list[str]:
+        """Return lightweight lexical hints extracted from top episodic memories."""
+        stop_words = {
+            "the",
+            "and",
+            "for",
+            "with",
+            "from",
+            "that",
+            "this",
+            "were",
+            "have",
+            "into",
+            "about",
+            "tool",
+            "result",
+            "results",
+        }
+
+        memories = sorted(
+            self.episodic_memory,
+            key=lambda item: (
+                float(item.get("salience", 0.0) or 0.0),
+                int(item.get("times_seen", 0) or 0),
+                int(item.get("last_seen_step", 0) or 0),
+            ),
+            reverse=True,
+        )
+        hints: list[str] = []
+        seen: set[str] = set()
+        for memory in memories[:MAX_EPISODIC_IN_CONTEXT]:
+            text = str(memory.get("summary") or "")
+            for token in text.lower().replace("/", " ").replace("-", " ").split():
+                normalized = "".join(ch for ch in token if ch.isalnum())
+                if len(normalized) < 4 or normalized in stop_words or normalized in seen:
+                    continue
+                seen.add(normalized)
+                hints.append(normalized)
+                if len(hints) >= max_terms:
+                    return hints
+        return hints
+
+    def _trim_episodic_memory(self) -> None:
+        """Keep episodic memory bounded and salience-weighted."""
+        if len(self.episodic_memory) <= MAX_EPISODIC_MEMORIES:
+            return
+
+        self.episodic_memory = sorted(
+            self.episodic_memory,
+            key=lambda item: (
+                float(item.get("salience", 0.0) or 0.0),
+                int(item.get("times_seen", 0) or 0),
+                int(item.get("last_seen_step", 0) or 0),
+            ),
+            reverse=True,
+        )[:MAX_EPISODIC_MEMORIES]
 
     def mark_goal_achieved(self, evidence: Optional[str] = None) -> None:
         """Mark the goal as achieved with optional evidence."""
@@ -419,6 +552,19 @@ class AgentState:
         if self.pending_questions:
             lines.append(f"PENDING_QUESTIONS: {'; '.join(self.pending_questions)}")
 
+        if self.execution_plan:
+            plan_total = len(self.execution_plan)
+            completed = len(self.completed_plan_steps)
+            lines.append(f"EXECUTION_PLAN_PROGRESS: {completed}/{plan_total}")
+            remaining = [
+                step for step in self.execution_plan if step not in self.completed_plan_steps
+            ]
+            if remaining:
+                lines.append("PLAN_REMAINING: " + "; ".join(remaining[:2]))
+
+        if self.verifier_notes:
+            lines.append("VERIFIER_NOTES: " + "; ".join(self.verifier_notes[-2:]))
+
         if self.information_candidates:
 
             def _safe_sort_score(candidate: dict[str, Any]) -> float:
@@ -455,6 +601,27 @@ class AgentState:
                 )
             if serialized_candidates:
                 lines.append("INFORMATION_CANDIDATES: " + "; ".join(serialized_candidates))
+
+        if self.episodic_memory:
+            top_memories = sorted(
+                self.episodic_memory,
+                key=lambda item: (
+                    float(item.get("salience", 0.0) or 0.0),
+                    int(item.get("times_seen", 0) or 0),
+                    int(item.get("last_seen_step", 0) or 0),
+                ),
+                reverse=True,
+            )[:MAX_EPISODIC_IN_CONTEXT]
+            serialized = []
+            for item in top_memories:
+                summary = str(item.get("summary") or "").strip()
+                if not summary:
+                    continue
+                source = str(item.get("source_tool") or "unknown")
+                salience = float(item.get("salience", 0.0) or 0.0)
+                serialized.append(f"{source}:{summary} (salience={salience:.2f})")
+            if serialized:
+                lines.append("EPISODIC_MEMORY: " + "; ".join(serialized))
 
         if self.request_context:
             parts: list[str] = []
@@ -518,6 +685,9 @@ class AgentState:
             "known_facts_count": len(self.known_facts),
             "resolution": self.resolution,
             "information_candidates_count": len(self.information_candidates),
+            "execution_plan_steps": len(self.execution_plan),
+            "execution_plan_completed_steps": len(self.completed_plan_steps),
+            "episodic_memory_count": len(self.episodic_memory),
             "activated_skills": [s.get("name") for s in self.activated_skills],
             "has_ui_directives": bool(self.ui_directives),
         }
@@ -545,6 +715,10 @@ class AgentState:
             "clarification_requests_count": self.clarification_requests_count,
             "resolution": self.resolution,
             "information_candidates": self.information_candidates,
+            "execution_plan": self.execution_plan,
+            "completed_plan_steps": self.completed_plan_steps,
+            "verifier_notes": self.verifier_notes,
+            "episodic_memory": self.episodic_memory,
             "activated_skills": [s.get("name") for s in self.activated_skills],
             "ui_directives": self.ui_directives,
             "request_context": self.request_context,

@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from time import perf_counter
-from typing import Any
+from typing import Any, cast
 
 from observability import trace
 from observability.logger import get_runtime_logger
@@ -15,6 +16,16 @@ from .enums import ToolStatus
 from .state import AgentState, ToolCallRecord
 
 logger = get_runtime_logger(__name__)
+
+PARALLEL_SAFE_TOOLS = {
+    "search_memories",
+    "get_events",
+    "get_document",
+    "resolve_query",
+    "lookup_contact",
+    "web_search",
+    "fetch_web_page",
+}
 
 
 class ToolExecutionCoordinator:
@@ -43,30 +54,68 @@ class ToolExecutionCoordinator:
             }
         )
 
-        for call in tool_calls:
-            function = call.get("function", {})
-            tool_name = str(function.get("name") or "").strip()
-            result = await self.execute_tool_call(
-                call=call,
-                state=state,
-                question=question,
-                search_limit=search_limit,
-                run_id=run_id,
-                user_email=user_email,
-                conversation_history=conversation_history,
-            )
+        for can_parallelize, batch in self._build_execution_batches(tool_calls):
+            if can_parallelize and len(batch) > 1:
+                self.controller.logger.log_decision(
+                    decision="Parallel tool batch",
+                    reason="Independent read-only tools",
+                    details={"count": len(batch)},
+                )
+                batch_results = await asyncio.gather(
+                    *[
+                        self.execute_tool_call(
+                            call=call,
+                            state=state,
+                            question=question,
+                            search_limit=search_limit,
+                            run_id=run_id,
+                            user_email=user_email,
+                            conversation_history=conversation_history,
+                            allow_parallel_execution=True,
+                        )
+                        for call in batch
+                    ]
+                )
+                for call, result in zip(batch, batch_results):
+                    function = call.get("function", {})
+                    tool_name = str(function.get("name") or "").strip()
+                    messages.append(
+                        {
+                            "role": "tool",
+                            "tool_call_id": call.get("id"),
+                            "content": json.dumps(
+                                self.build_tool_message_payload(tool_name, result),
+                                ensure_ascii=False,
+                                default=str,
+                            ),
+                        }
+                    )
+                continue
 
-            messages.append(
-                {
-                    "role": "tool",
-                    "tool_call_id": call.get("id"),
-                    "content": json.dumps(
-                        self.build_tool_message_payload(tool_name, result),
-                        ensure_ascii=False,
-                        default=str,
-                    ),
-                }
-            )
+            for call in batch:
+                function = call.get("function", {})
+                tool_name = str(function.get("name") or "").strip()
+                result = await self.execute_tool_call(
+                    call=call,
+                    state=state,
+                    question=question,
+                    search_limit=search_limit,
+                    run_id=run_id,
+                    user_email=user_email,
+                    conversation_history=conversation_history,
+                )
+
+                messages.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": call.get("id"),
+                        "content": json.dumps(
+                            self.build_tool_message_payload(tool_name, result),
+                            ensure_ascii=False,
+                            default=str,
+                        ),
+                    }
+                )
 
     async def execute_tool_call(
         self,
@@ -77,6 +126,7 @@ class ToolExecutionCoordinator:
         run_id: str,
         user_email: str | None = None,
         conversation_history: list[dict[str, str]] | None = None,
+        allow_parallel_execution: bool = False,
     ) -> dict[str, Any]:
         """Execute a single tool call with validation."""
         func = call.get("function", {})
@@ -170,15 +220,27 @@ class ToolExecutionCoordinator:
             trace.trace_pre_validation_pass(tool_name)
 
         step_start = perf_counter()
-        result = self.controller._execute_handler(
-            tool_name=tool_name,
-            args=args,
-            state=state,
-            question=question,
-            search_limit=search_limit,
-            user_email=user_email,
-            conversation_history=conversation_history,
-        )
+        if allow_parallel_execution and self._is_parallel_safe_tool(tool_name):
+            result = await asyncio.to_thread(
+                self.controller._execute_handler,
+                tool_name,
+                args,
+                state,
+                question,
+                search_limit,
+                user_email,
+                conversation_history,
+            )
+        else:
+            result = self.controller._execute_handler(
+                tool_name=tool_name,
+                args=args,
+                state=state,
+                question=question,
+                search_limit=search_limit,
+                user_email=user_email,
+                conversation_history=conversation_history,
+            )
         duration_ms = (perf_counter() - step_start) * 1000
 
         if tool_name == "resolve_contacts":
@@ -279,8 +341,70 @@ class ToolExecutionCoordinator:
             evidence = self.get_completion_evidence(tool_name, args, result)
             if evidence:
                 state.add_completion_evidence(evidence)
+            self._remember_episode_from_tool_result(
+                state=state,
+                tool_name=tool_name,
+                args=args,
+                result=result,
+                summary=result_summary,
+            )
 
         return result
+
+    def _build_execution_batches(
+        self,
+        tool_calls: list[dict[str, Any]],
+    ) -> list[tuple[bool, list[dict[str, Any]]]]:
+        """Build dependency-aware tool batches for sequential/parallel execution."""
+        batches: list[tuple[bool, list[dict[str, Any]]]] = []
+        current_parallel_batch: list[dict[str, Any]] = []
+
+        for call in tool_calls:
+            if self._is_parallelizable_call(call):
+                current_parallel_batch.append(call)
+                continue
+
+            if current_parallel_batch:
+                batches.append((True, current_parallel_batch))
+                current_parallel_batch = []
+            batches.append((False, [call]))
+
+        if current_parallel_batch:
+            batches.append((True, current_parallel_batch))
+
+        return batches
+
+    def _is_parallelizable_call(self, call: dict[str, Any]) -> bool:
+        function = call.get("function", {})
+        tool_name = str(function.get("name") or "").strip()
+        return self._is_parallel_safe_tool(tool_name)
+
+    def _is_parallel_safe_tool(self, tool_name: str) -> bool:
+        return tool_name in PARALLEL_SAFE_TOOLS
+
+    def _remember_episode_from_tool_result(
+        self,
+        *,
+        state: AgentState,
+        tool_name: str,
+        args: dict[str, Any],
+        result: dict[str, Any],
+        summary: str,
+    ) -> None:
+        """Persist a compact episode for future salience hints and verifier context."""
+        salience = 0.35
+        if tool_name in {"get_document", "get_events"}:
+            salience = 0.75
+        elif tool_name in {"search_memories", "web_search"}:
+            salience = 0.55
+        if int(result.get("count", 0) or 0) >= 3:
+            salience += 0.1
+        state.remember_episode(
+            summary=summary,
+            source_tool=tool_name,
+            salience=min(1.0, salience),
+            related_query=str(args.get("query") or "").strip(),
+        )
 
     def execute_handler(
         self,
@@ -366,7 +490,7 @@ class ToolExecutionCoordinator:
     ) -> str:
         """Generate guidance message for failed tool calls."""
         if tool_name == "home_assistant":
-            error = result.get("error", "")
+            error = str(result.get("error") or "")
             if "not found" in error.lower() or "unknown" in error.lower():
                 return (
                     "The Home Assistant tool call failed because the tool name was not recognized. "
@@ -452,12 +576,13 @@ class ToolExecutionCoordinator:
         return result
 
     def _compact_search_memories_result(self, result: dict[str, Any]) -> dict[str, Any]:
-        rows = result.get("results", [])
+        rows = result.get("results")
         if not isinstance(rows, list):
             return result
 
         compact_rows: list[dict[str, Any]] = []
-        for row in rows[:10]:
+        for row_obj in rows[:10]:
+            row = row_obj if isinstance(row_obj, dict) else None
             if not isinstance(row, dict):
                 continue
             compact_row: dict[str, Any] = {
@@ -485,8 +610,9 @@ class ToolExecutionCoordinator:
         if not isinstance(document, dict):
             return result
 
-        raw_metadata = (
-            document.get("raw_metadata") if isinstance(document.get("raw_metadata"), dict) else {}
+        raw_metadata_obj = document.get("raw_metadata")
+        raw_metadata: dict[str, Any] = (
+            cast(dict[str, Any], raw_metadata_obj) if isinstance(raw_metadata_obj, dict) else {}
         )
         preview_source = (
             document.get("content_preview")
@@ -573,7 +699,10 @@ class ToolExecutionCoordinator:
         result: dict[str, Any],
     ) -> None:
         """Mark a document candidate as inspected after `get_document` succeeds."""
-        document = result.get("document") if isinstance(result.get("document"), dict) else {}
+        document_obj = result.get("document")
+        document: dict[str, Any] = (
+            cast(dict[str, Any], document_obj) if isinstance(document_obj, dict) else {}
+        )
         document_id = (
             str(document.get("document_id") or "").strip()
             or str(args.get("document_id") or "").strip()

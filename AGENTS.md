@@ -95,6 +95,9 @@ User Question → Intent Router → Tool Visibility Policy → Agent Loop → Re
 3. **AgentController** runs the loop with limits enforcement
 4. Each tool call goes through **pre-validation → execution → post-validation**
 5. **AgentState** tracks facts, actions, and tool call history
+6. **Planner/verifier checks** prevent premature final answers and require completion evidence when tools ran
+7. **Adaptive model routing** selects fast vs smart model profile per step (always enabled)
+8. **Tool execution coordinator** can run independent read-only tool calls in parallel batches
 
 ### Intent Types
 
@@ -127,6 +130,9 @@ User Question → Intent Router → Tool Visibility Policy → Agent Loop → Re
 - **Single source of truth for tool groups**: keep router tool groups aligned with `backend/orchestrator/tools/registry.py`; do not maintain divergent copies.
 - **Prefer enums for internal control-flow values**: avoid raw string comparisons for statuses/actions/modes (for example limit actions, tool statuses, follow-up sources). Define shared enums and compare enum members to prevent typos and drift.
 - **Tool visibility is runtime-enforced**: routing confidence tiers determine visible tool groups (`restricted`, `restricted_with_resolution`, or `full`) and can escalate to full tools on no-progress.
+- **Adaptive model routing is always on**: per-step policy selects model/timeout using query complexity + runtime signals (route confidence tier, step count, tool count).
+- **Planner/verifier loop is runtime-enforced**: controller tracks an execution plan and retries when final response lacks required evidence.
+- **Parallel tool batches are supported**: independent read-only tools may execute concurrently via the tool execution coordinator.
 - **LLM calls must use helpers**: all LLM requests and streams go through `backend/orchestrator/llm_helpers.py` (never call LLM endpoints via direct `requests`/`httpx` in app modules).
 - **Controller context kwargs are global**: handlers are invoked with shared runtime context (`state`, `question`, `search_limit`, `user_email`, `conversation_history`). Every handler must accept these explicitly or via `**kwargs`.
 - **Regression guard**: keep `backend/orchestrator/tests/tools/test_handlers/test_handler_signatures.py` passing to prevent `unexpected keyword argument` runtime failures.
@@ -209,6 +215,13 @@ LLM_BASE_URL=http://localhost:11434    # Ollama or OpenAI-compatible
 LLM_CHAT_MODEL=mistral
 LLM_API_KEY=                           # Optional
 LLM_TIMEOUT=120
+LLM_CHAT_MODEL_FAST=mistral            # Optional fast profile override
+LLM_CHAT_MODEL_SMART=gpt-4o            # Optional smart profile override
+
+# Adaptive Model Routing (always enabled)
+AGENT_MODEL_ROUTING_COMPLEXITY_THRESHOLD=3
+AGENT_MODEL_ROUTING_STEP_THRESHOLD=4
+AGENT_MODEL_ROUTING_TIMEOUT_BOOST_SECONDS=30
 
 # Agent Configuration
 AGENT_MAX_STEPS=15
@@ -300,5 +313,7 @@ pytest tests/agent/test_controller.py tests/integration/test_full_flow.py tests/
 | Validation | `backend/orchestrator/tools/validators/` |
 | Tracing/Logging | `backend/orchestrator/observability/logger.py` |
 | LLM orchestration | `backend/orchestrator/llm.py` |
+| Model routing policy | `backend/orchestrator/agent/model_routing.py` |
+| Planner/verifier policy | `backend/orchestrator/agent/planning_policy.py` |
 | Vector search | `backend/orchestrator/retrieval.py` |
 | Frontend API client | `frontend/web/src/lib/api.ts` |

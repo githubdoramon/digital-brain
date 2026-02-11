@@ -93,6 +93,9 @@ sequenceDiagram
 - Tool groups are now used for runtime visibility policy (not just metadata).
 - Clarification responses follow `need_user_input` standards and map to UI directives when possible.
 - Controller tracks recovery metrics in state metadata (`tool_visibility_escalations_count`, `clarification_requests_count`).
+- Adaptive model routing is always enabled (`agent/model_routing.py`) and selects model/timeout per step.
+- Planner/verifier checks are runtime-enforced (`agent/planning_policy.py`) before final answer completion.
+- Tool execution coordinator supports parallel batches for independent read-only tool calls.
 
 ## Related Docs
 

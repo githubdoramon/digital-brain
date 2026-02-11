@@ -17,6 +17,8 @@ Key groups in `backend/orchestrator/agent/state.py`:
   - `tool_visibility_escalations_count`
   - `clarification_requests_count`
 - Runtime context: `resolution`, `information_candidates`, `ui_directives`, `request_context`.
+- Planning/verifier: `execution_plan`, `completed_plan_steps`, `verifier_notes`.
+- Episodic memory: `episodic_memory` (bounded high-salience traces used for retrieval hints).
 
 ## Lifecycle
 
@@ -53,6 +55,27 @@ Use helpers:
 - `mark_information_candidate_inspected(...)`
 - `get_best_information_candidate(...)`
 
+## Execution Plan + Verifier Notes
+
+The controller now tracks explicit plan progress and verifier feedback:
+
+- `set_execution_plan(...)`
+- `complete_plan_step(...)`
+- `add_verifier_note(...)`
+
+These fields are injected into model context and included in run metadata.
+
+## Episodic Memory
+
+`episodic_memory` stores bounded, salience-weighted summaries of important tool outcomes.
+
+Use helpers:
+
+- `remember_episode(...)`
+- `get_episodic_hints(...)`
+
+Retrieval can consume these hints to apply small salience boosts during ranking.
+
 ## Routing + Visibility Fields
 
 These fields are now operational, not just debug metadata:
@@ -79,6 +102,8 @@ This supports analysis of ambiguity rates and UX friction.
 - recent facts/actions
 - pending actions/questions
 - top evidence candidates
+- execution-plan progress + verifier notes
+- top episodic memory traces
 - request context availability
 
 Prompt bloat controls are enforced by capped candidate injection.
@@ -88,7 +113,7 @@ Prompt bloat controls are enforced by capped candidate injection.
 - `to_metadata()` provides compact run metadata for logs and persistence.
 - `to_dict()` provides full debug serialization.
 
-Both include routing/visibility and recovery counters.
+Both include routing/visibility, recovery counters, planning progress, and episodic-memory counts.
 
 ## Caveats
 

@@ -38,6 +38,7 @@ def handle_search_memories(
     contact_ids = args.get("contact_ids")  # Maps to 'people' parameter
     sort_order = args.get("sort_order", "relevance")
     tags = args.get("tags")
+    salience_hints = state.get_episodic_hints() if state is not None else []
 
     search_result = retrieval.search_memories(
         query,
@@ -47,6 +48,7 @@ def handle_search_memories(
         limit=limit,
         sort_order=sort_order,
         tags=tags,
+        salience_hints=salience_hints,
     )
     results = search_result.get("results", [])
 

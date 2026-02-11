@@ -75,7 +75,6 @@ const EVENT_CONFIRM_ACTION_ID = 'event_confirmation_action';
 const EVENT_CLARIFICATION_ACTION_PREFIX = 'event_clarification_submit';
 const MIN_CHAT_INPUT_HEIGHT = 46;
 const MAX_CHAT_INPUT_HEIGHT = 120;
-const CHAT_INPUT_VERTICAL_PADDING = 12;
 const COMPOSER_KEYBOARD_GAP = 20;
 
 function formatFieldLabel(fieldId: string): string {
@@ -1120,15 +1119,15 @@ const styles = StyleSheet.create({
   },
   input: {
     fontSize: 16,
-    lineHeight: 22,
+    lineHeight: 20,
     paddingHorizontal: 14,
-    paddingVertical: CHAT_INPUT_VERTICAL_PADDING,
+    paddingVertical: 12,
     borderRadius: theme.radius.xl,
     borderWidth: 1,
     borderColor: theme.colors.line,
     backgroundColor: '#fff',
     color: theme.colors.ink,
-    textAlignVertical: 'top',
+    textAlignVertical: 'center',
     shadowColor: theme.shadow.color,
     shadowOpacity: 0.12,
     shadowRadius: 12,
@@ -1137,7 +1136,7 @@ const styles = StyleSheet.create({
   },
   inlineSendButton: {
     position: 'absolute',
-    right: 10,
+    right: 6,
     bottom: 5,
     width: 36,
     height: 36,

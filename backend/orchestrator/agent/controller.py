@@ -54,6 +54,12 @@ from .guardrails import (
 )
 from .limits import AgentConfig, LimitChecker
 from .llm_transport import call_llm_with_tools, stream_llm_with_tools
+from .model_routing import LLMCallPolicy, select_llm_call_policy
+from .planning_policy import (
+    build_execution_plan,
+    build_verification_retry_prompt,
+    verify_final_response,
+)
 from .response_guardrails import (
     CONTINUATION_PROMPT_STREAM,
     CONTINUATION_PROMPT_SYNC,
@@ -130,6 +136,8 @@ class AgentController:
         self._post_validator = None
         self._logger = None
         self._tool_executor = None
+        self._active_llm_policy: LLMCallPolicy | None = None
+        self._last_llm_policy: LLMCallPolicy | None = None
 
     @property
     def tool_registry(self):
@@ -264,6 +272,120 @@ class AgentController:
 
         return LimitAction.OK, tools, None, None
 
+    def _start_run(
+        self, question: str, user_id: str, session_id: Optional[str]
+    ) -> tuple[float, str]:
+        """Initialize run-level logging and tracing shared by sync/stream paths."""
+        total_start = perf_counter()
+        run_id = self.logger.start_run(question, user_id, session_id)
+        self._active_llm_policy = None
+        self._last_llm_policy = None
+        self.logger.log_decision(
+            decision="Agent profile selected",
+            reason=self.runtime_profile.name,
+            details={
+                "max_steps": self.runtime_profile.max_steps,
+                "max_tool_calls": self.runtime_profile.max_tool_calls,
+            },
+        )
+        trace.trace_run_start(question, run_id)
+        return total_start, run_id
+
+    def _initialize_state(
+        self,
+        *,
+        question: str,
+        client_context: Optional[dict[str, Any]],
+        ui_submission: Optional[dict[str, Any]],
+    ) -> AgentState:
+        """Build the canonical AgentState shared by sync/stream paths."""
+        state = AgentState(goal=question)
+        state.request_context = self._normalize_client_context(client_context)
+        normalized_submission = self._normalize_ui_submission(ui_submission)
+        if normalized_submission:
+            state.request_context["ui_submission"] = normalized_submission
+        return state
+
+    def _begin_step(
+        self,
+        *,
+        state: AgentState,
+        tools: list[dict[str, Any]],
+        run_id: str,
+    ) -> tuple[LimitAction, list[dict[str, Any]], Any | None, str | None]:
+        """Run limit checks and start the next step when safe to continue."""
+        trace.trace_limit_check(
+            state.step_count,
+            self.config.max_steps,
+            state.tool_calls_count,
+            self.config.max_tool_calls,
+            state.repair_count,
+            self.config.max_repairs,
+        )
+        limit_action, tools, violation, escalation_reason = self._check_limits_and_recovery(
+            state=state,
+            tools=tools,
+            run_id=run_id,
+        )
+        if limit_action is not LimitAction.OK:
+            return limit_action, tools, violation, escalation_reason
+
+        state.step_count += 1
+        trace.trace_step_start(
+            state.step_count,
+            state.tool_calls_count,
+            len(state.known_facts),
+        )
+        self.logger.start_step(run_id, state.step_count)
+        return limit_action, tools, violation, escalation_reason
+
+    def _consume_follow_up_prompt(
+        self,
+        *,
+        state: AgentState,
+        source: str,
+        stream: bool,
+    ) -> str | None:
+        """Return user-facing follow-up prompt and apply shared bookkeeping/logging."""
+        follow_up_prompt, follow_up_source = (
+            self._agent_interface().get_follow_up_prompt_from_state(state)
+        )
+        if not follow_up_prompt:
+            return None
+
+        suffix = " (stream)" if stream else ""
+        if follow_up_source is FollowUpSource.CONTACT_CLARIFICATION:
+            trace.trace_contact_resolution_outcome(
+                "clarification_returned",
+                {"source": source},
+            )
+            trace.trace_decision(
+                f"Need user clarification{suffix}",
+                "Returning clarification prompt to user",
+                {"prompt": follow_up_prompt},
+            )
+            self.logger.log_decision(
+                decision="Requesting clarification",
+                reason=follow_up_prompt,
+            )
+            state.clarification_requests_count += 1
+            return follow_up_prompt
+
+        if follow_up_source is FollowUpSource.UI_FOLLOW_UP:
+            trace.trace_decision(
+                f"Returning UI follow-up{suffix}",
+                "Structured directive requires user input",
+                {"prompt": follow_up_prompt},
+            )
+            self.logger.log_decision(
+                decision="Requesting UI follow-up",
+                reason=follow_up_prompt,
+            )
+            state.clarification_requests_count += 1
+            return follow_up_prompt
+
+        return None
+
     async def run(
         self,
         question: str,
@@ -293,26 +415,12 @@ class AgentController:
         Returns:
             Response bundle with answer and metadata
         """
-        total_start = perf_counter()
-        run_id = self.logger.start_run(question, user_id, session_id)
-        self.logger.log_decision(
-            decision="Agent profile selected",
-            reason=self.runtime_profile.name,
-            details={
-                "max_steps": self.runtime_profile.max_steps,
-                "max_tool_calls": self.runtime_profile.max_tool_calls,
-            },
+        total_start, run_id = self._start_run(question, user_id, session_id)
+        state = self._initialize_state(
+            question=question,
+            client_context=client_context,
+            ui_submission=ui_submission,
         )
-
-        # Initialize state
-        state = AgentState(goal=question)
-        state.request_context = self._normalize_client_context(client_context)
-        normalized_submission = self._normalize_ui_submission(ui_submission)
-        if normalized_submission:
-            state.request_context["ui_submission"] = normalized_submission
-
-        # Trace run start
-        trace.trace_run_start(question, run_id)
 
         try:
             _, clarification_prompt, messages, tools = await self._prepare_execution_context(
@@ -323,6 +431,7 @@ class AgentController:
                 search_limit=search_limit,
                 run_id=run_id,
             )
+            self._initialize_execution_plan(state, question)
             if clarification_prompt:
                 trace.trace_contact_resolution_outcome(
                     "clarification_returned",
@@ -340,16 +449,7 @@ class AgentController:
 
             # Phase 2: Agent loop
             while True:
-                # Check limits
-                trace.trace_limit_check(
-                    state.step_count,
-                    self.config.max_steps,
-                    state.tool_calls_count,
-                    self.config.max_tool_calls,
-                    state.repair_count,
-                    self.config.max_repairs,
-                )
-                limit_action, tools, violation, _ = self._check_limits_and_recovery(
+                limit_action, tools, violation, _ = self._begin_step(
                     state=state,
                     tools=tools,
                     run_id=run_id,
@@ -365,19 +465,10 @@ class AgentController:
                         total_start,
                     )
 
-                state.step_count += 1
-
-                # Trace step start
-                trace.trace_step_start(
-                    state.step_count,
-                    state.tool_calls_count,
-                    len(state.known_facts),
-                )
-                self.logger.start_step(run_id, state.step_count)
-
                 # Call LLM
                 trace.trace_llm_request(len(tools))
                 llm_start = perf_counter()
+                self._set_active_llm_policy(state=state, question=question, tools_count=len(tools))
                 response = self._call_llm(messages, tools)
                 llm_duration = (perf_counter() - llm_start) * 1000
 
@@ -413,47 +504,12 @@ class AgentController:
                         conversation_history=conversation_history,
                     )
 
-                    follow_up_prompt, follow_up_source = (
-                        self._agent_interface().get_follow_up_prompt_from_state(state)
+                    follow_up_prompt = self._consume_follow_up_prompt(
+                        state=state,
+                        source="tool_loop",
+                        stream=False,
                     )
-                    if (
-                        follow_up_prompt
-                        and follow_up_source is FollowUpSource.CONTACT_CLARIFICATION
-                    ):
-                        trace.trace_contact_resolution_outcome(
-                            "clarification_returned",
-                            {"source": "tool_loop"},
-                        )
-                        trace.trace_decision(
-                            "Need user clarification",
-                            "Returning clarification prompt to user",
-                            {"prompt": follow_up_prompt},
-                        )
-                        self.logger.log_decision(
-                            decision="Requesting clarification",
-                            reason=follow_up_prompt,
-                        )
-                        state.clarification_requests_count += 1
-                        return self._finalize(
-                            question,
-                            follow_up_prompt,
-                            state,
-                            run_id,
-                            session_id,
-                            total_start,
-                        )
-
-                    if follow_up_prompt and follow_up_source is FollowUpSource.UI_FOLLOW_UP:
-                        trace.trace_decision(
-                            "Returning UI follow-up",
-                            "Structured directive requires user input",
-                            {"prompt": follow_up_prompt},
-                        )
-                        self.logger.log_decision(
-                            decision="Requesting UI follow-up",
-                            reason=follow_up_prompt,
-                        )
-                        state.clarification_requests_count += 1
+                    if follow_up_prompt:
                         return self._finalize(
                             question,
                             follow_up_prompt,
@@ -482,6 +538,7 @@ class AgentController:
                             state=state,
                             reason="Restricted tools produced repeated failures or empty results",
                         )
+                    self._update_plan_progress(state)
                     continue
 
                 # Handle empty content
@@ -555,6 +612,25 @@ class AgentController:
                     )
                     continue
 
+                verified, verify_reason, missing_actions = verify_final_response(
+                    final_content=content,
+                    goal_check=goal_check,
+                    completion_evidence=state.completion_evidence,
+                    tool_calls_count=state.tool_calls_count,
+                )
+                if not verified and state.step_count < self.config.max_steps - 1:
+                    state.add_verifier_note(verify_reason)
+                    messages.append(
+                        {
+                            "role": "user",
+                            "content": build_verification_retry_prompt(
+                                verify_reason,
+                                missing_actions,
+                            ),
+                        }
+                    )
+                    continue
+
                 # Final answer
                 messages.append(message)
                 return self._finalize(
@@ -587,25 +663,12 @@ class AgentController:
 
         Yields events similar to the original answer_question_stream.
         """
-        total_start = perf_counter()
-        run_id = self.logger.start_run(question, user_id, session_id)
-        self.logger.log_decision(
-            decision="Agent profile selected",
-            reason=self.runtime_profile.name,
-            details={
-                "max_steps": self.runtime_profile.max_steps,
-                "max_tool_calls": self.runtime_profile.max_tool_calls,
-            },
+        total_start, run_id = self._start_run(question, user_id, session_id)
+        state = self._initialize_state(
+            question=question,
+            client_context=client_context,
+            ui_submission=ui_submission,
         )
-
-        state = AgentState(goal=question)
-        state.request_context = self._normalize_client_context(client_context)
-        normalized_submission = self._normalize_ui_submission(ui_submission)
-        if normalized_submission:
-            state.request_context["ui_submission"] = normalized_submission
-
-        # Trace run start
-        trace.trace_run_start(question, run_id)
 
         try:
             _, clarification_prompt, messages, tools = await self._prepare_execution_context(
@@ -616,6 +679,7 @@ class AgentController:
                 search_limit=search_limit,
                 run_id=run_id,
             )
+            self._initialize_execution_plan(state, question)
             if clarification_prompt:
                 trace.trace_contact_resolution_outcome(
                     "clarification_returned",
@@ -636,16 +700,7 @@ class AgentController:
             accumulated_content = ""
 
             while True:
-                # Check limits
-                trace.trace_limit_check(
-                    state.step_count,
-                    self.config.max_steps,
-                    state.tool_calls_count,
-                    self.config.max_tool_calls,
-                    state.repair_count,
-                    self.config.max_repairs,
-                )
-                limit_action, tools, violation, _ = self._check_limits_and_recovery(
+                limit_action, tools, violation, escalation_reason = self._begin_step(
                     state=state,
                     tools=tools,
                     run_id=run_id,
@@ -653,7 +708,8 @@ class AgentController:
                 if limit_action is LimitAction.ESCALATED:
                     yield {
                         "type": "status",
-                        "message": "Expanding tool access to recover from no-progress.",
+                        "message": escalation_reason
+                        or "Expanding tool access to recover from no-progress.",
                     }
                     continue
                 if limit_action is LimitAction.VIOLATION and violation is not None:
@@ -667,18 +723,12 @@ class AgentController:
                         "message": f"Limit reached: {violation.message}",
                     }
                     break
-
-                state.step_count += 1
-                trace.trace_step_start(
-                    state.step_count,
-                    state.tool_calls_count,
-                    len(state.known_facts),
-                )
                 yield {"type": "status", "message": f"Thinking (step {state.step_count})..."}
 
                 tool_calls = []
                 current_content = ""
                 streamed_any = False
+                self._set_active_llm_policy(state=state, question=question, tools_count=len(tools))
 
                 async for chunk in self._stream_llm(messages, tools):
                     message = chunk.get("message", {})
@@ -750,34 +800,12 @@ class AgentController:
                             }
                         )
 
-                    follow_up_prompt, follow_up_source = (
-                        self._agent_interface().get_follow_up_prompt_from_state(state)
+                    follow_up_prompt = self._consume_follow_up_prompt(
+                        state=state,
+                        source="tool_loop_stream",
+                        stream=True,
                     )
-                    if (
-                        follow_up_prompt
-                        and follow_up_source is FollowUpSource.CONTACT_CLARIFICATION
-                    ):
-                        trace.trace_contact_resolution_outcome(
-                            "clarification_returned",
-                            {"source": "tool_loop_stream"},
-                        )
-                        trace.trace_decision(
-                            "Need user clarification (stream)",
-                            "Returning clarification prompt to user",
-                            {"prompt": follow_up_prompt},
-                        )
-                        state.clarification_requests_count += 1
-                        accumulated_content = follow_up_prompt
-                        yield {"type": "token", "content": follow_up_prompt}
-                        break
-
-                    if follow_up_prompt and follow_up_source is FollowUpSource.UI_FOLLOW_UP:
-                        trace.trace_decision(
-                            "Returning UI follow-up (stream)",
-                            "Structured directive requires user input",
-                            {"prompt": follow_up_prompt},
-                        )
-                        state.clarification_requests_count += 1
+                    if follow_up_prompt:
                         accumulated_content = follow_up_prompt
                         yield {"type": "token", "content": follow_up_prompt}
                         break
@@ -792,6 +820,8 @@ class AgentController:
                             "type": "status",
                             "message": "Expanding tool access to improve recovery.",
                         }
+
+                    self._update_plan_progress(state)
 
                     continue
 
@@ -856,6 +886,31 @@ class AgentController:
                             "role": "user",
                             "content": self._agent_interface().build_force_completion_prompt(
                                 goal_check
+                            ),
+                        }
+                    )
+                    continue
+
+                verified, verify_reason, missing_actions = verify_final_response(
+                    final_content=current_content,
+                    goal_check=goal_check,
+                    completion_evidence=state.completion_evidence,
+                    tool_calls_count=state.tool_calls_count,
+                )
+                if not verified and state.step_count < self.config.max_steps - 1:
+                    state.add_verifier_note(verify_reason)
+                    if streamed_any:
+                        yield {"type": "clear_content"}
+                    yield {
+                        "type": "status",
+                        "message": "Verifying evidence before final response...",
+                    }
+                    messages.append(
+                        {
+                            "role": "user",
+                            "content": build_verification_retry_prompt(
+                                verify_reason,
+                                missing_actions,
                             ),
                         }
                     )
@@ -989,6 +1044,57 @@ class AgentController:
         )
         return self.tool_registry.get_tool_definitions()
 
+    def _initialize_execution_plan(self, state: AgentState, question: str) -> None:
+        """Initialize controller-managed execution plan for verifier loop."""
+        if state.execution_plan:
+            return
+        plan = build_execution_plan(question, state.intent)
+        state.set_execution_plan(plan)
+        self._update_plan_progress(state)
+
+    def _update_plan_progress(self, state: AgentState) -> None:
+        """Mark plan steps complete based on current evidence and tool history."""
+        if not state.execution_plan:
+            return
+        if state.intent or state.route_confidence > 0:
+            for step in state.execution_plan:
+                if "clarify scope" in step.lower():
+                    state.complete_plan_step(step)
+                    break
+
+        if state.tool_calls_count > 0:
+            for step in state.execution_plan:
+                lowered = step.lower()
+                if "collect" in lowered or "gather" in lowered or "execute" in lowered:
+                    state.complete_plan_step(step)
+
+        if state.completion_evidence:
+            for step in state.execution_plan:
+                lowered = step.lower()
+                if "verify" in lowered or "cross-check" in lowered or "synthesize" in lowered:
+                    state.complete_plan_step(step)
+
+    def _set_active_llm_policy(self, *, state: AgentState, question: str, tools_count: int) -> None:
+        """Resolve adaptive model/timeout policy for the current LLM turn."""
+        policy = select_llm_call_policy(
+            question=question,
+            state=state,
+            tools_count=tools_count,
+            default_model=self.llm_model or None,
+            default_timeout=self.llm_timeout,
+        )
+        self._active_llm_policy = policy
+        self._last_llm_policy = policy
+        self.logger.log_decision(
+            decision="LLM routing policy",
+            reason=f"profile={policy.profile}",
+            details={
+                "model": policy.model,
+                "timeout": policy.timeout,
+                "rationale": policy.rationale,
+            },
+        )
+
     def _normalize_client_context(
         self,
         client_context: Optional[dict[str, Any]],
@@ -1088,11 +1194,14 @@ class AgentController:
         tools: list[dict[str, Any]],
     ) -> dict[str, Any]:
         """Make synchronous LLM call."""
+        policy = self._active_llm_policy
+        model = policy.model if policy else (self.llm_model or None)
+        timeout = policy.timeout if policy else self.llm_timeout
         return call_llm_with_tools(
             messages,
             tools,
-            model=self.llm_model or None,
-            timeout=self.llm_timeout,
+            model=model,
+            timeout=timeout,
         )
 
     async def _stream_llm(
@@ -1101,11 +1210,14 @@ class AgentController:
         tools: list[dict[str, Any]],
     ) -> AsyncGenerator[dict[str, Any], None]:
         """Stream LLM responses."""
+        policy = self._active_llm_policy
+        model = policy.model if policy else (self.llm_model or None)
+        timeout = policy.timeout if policy else self.llm_timeout
         async for chunk in stream_llm_with_tools(
             messages,
             tools,
-            model=self.llm_model or None,
-            timeout=self.llm_timeout,
+            model=model,
+            timeout=timeout,
         ):
             yield chunk
 
@@ -1839,6 +1951,17 @@ class AgentController:
                 "tool_visibility_escalated": state.tool_visibility_escalated,
                 "tool_visibility_escalations_count": state.tool_visibility_escalations_count,
                 "clarification_requests_count": state.clarification_requests_count,
+                "execution_plan_steps": len(state.execution_plan),
+                "execution_plan_completed_steps": len(state.completed_plan_steps),
+                "verifier_notes": state.verifier_notes,
+                "episodic_memory_count": len(state.episodic_memory),
+                "llm_routing_profile": self._last_llm_policy.profile
+                if self._last_llm_policy
+                else "default",
+                "llm_routing_model": self._last_llm_policy.model if self._last_llm_policy else None,
+                "llm_routing_rationale": self._last_llm_policy.rationale
+                if self._last_llm_policy
+                else None,
                 "profile": self.runtime_profile.name,
             },
         }
