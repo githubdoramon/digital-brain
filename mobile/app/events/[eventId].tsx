@@ -13,6 +13,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { apiFetch } from '@/api/client';
 import { Card } from '@/components/Card';
+import { EventDraftEditorScreen } from '@/components/event-draft/EventDraftEditorScreen';
 import { theme } from '@/theme';
 
 type EventDetail = {
@@ -62,9 +63,30 @@ function formatDateRange(start?: string | null, end?: string | null) {
   return `${startLabel} – ${endLabel}`;
 }
 
-export default function EventDetailScreen() {
-  const { eventId } = useLocalSearchParams<{ eventId: string }>();
-  const eventParam = Array.isArray(eventId) ? eventId[0] : eventId;
+type RouteParams = {
+  eventId: string;
+  draftSessionId?: string;
+};
+
+export default function EventScreenRoute() {
+  const params = useLocalSearchParams<RouteParams>();
+  const eventParam = Array.isArray(params.eventId) ? params.eventId[0] : params.eventId;
+  const draftSessionId = Array.isArray(params.draftSessionId)
+    ? params.draftSessionId[0]
+    : params.draftSessionId;
+
+  if (draftSessionId) {
+    return <EventDraftEditorScreen sessionId={draftSessionId} />;
+  }
+
+  return <EventDetailContent eventId={eventParam} />;
+}
+
+type EventDetailContentProps = {
+  eventId?: string;
+};
+
+function EventDetailContent({ eventId }: EventDetailContentProps) {
   const insets = useSafeAreaInsets();
   const [event, setEvent] = React.useState<EventDetail | null>(null);
   const [contactMap, setContactMap] = React.useState<Map<string, string>>(new Map());
@@ -89,11 +111,11 @@ export default function EventDetailScreen() {
 
   React.useEffect(() => {
     let mounted = true;
-    if (!eventParam) return () => undefined;
+    if (!eventId) return () => undefined;
     (async () => {
       try {
         const result = (await apiFetch(
-          `/mobile/events/${encodeURIComponent(eventParam)}`
+          `/mobile/events/${encodeURIComponent(eventId)}`
         )) as EventDetail;
         if (mounted) {
           setEvent(result);
@@ -107,7 +129,7 @@ export default function EventDetailScreen() {
     return () => {
       mounted = false;
     };
-  }, [eventParam]);
+  }, [eventId]);
 
   React.useEffect(() => {
     (async () => {

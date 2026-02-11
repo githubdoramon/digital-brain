@@ -10,6 +10,7 @@ type FloatingSaveButtonProps = {
   onPress: () => void;
   disabled?: boolean;
   loading?: boolean;
+  bottomOffset?: number;
 };
 
 export function FloatingSaveButton({
@@ -18,6 +19,7 @@ export function FloatingSaveButton({
   onPress,
   disabled,
   loading = false,
+  bottomOffset = 20,
 }: FloatingSaveButtonProps) {
   const translateY = useRef(new Animated.Value(40)).current;
   const opacity = useRef(new Animated.Value(0)).current;
@@ -41,6 +43,7 @@ export function FloatingSaveButton({
     <Animated.View
       style={[
         styles.container,
+        { bottom: bottomOffset },
         { transform: [{ translateY }], opacity },
       ]}
       pointerEvents={visible ? 'auto' : 'none'}
@@ -65,7 +68,6 @@ const styles = StyleSheet.create({
   container: {
     position: 'absolute',
     right: 20,
-    bottom: 20,
     shadowColor: '#0f1113',
     shadowOpacity: 0.36,
     shadowRadius: 22,

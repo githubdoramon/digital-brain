@@ -10,6 +10,44 @@ type Props = {
   block: UiDirectiveBlock;
 };
 
+const EVENT_PREVIEW_LABELS = new Set([
+  'Title',
+  'Summary',
+  'When',
+  'Where',
+  'Who',
+  'Tags',
+  'Types',
+]);
+
+function renderBodyLine(line: string, key: string) {
+  const separatorIndex = line.indexOf(':');
+  if (separatorIndex <= 0) {
+    return (
+      <Text key={key} style={styles.description}>
+        {line}
+      </Text>
+    );
+  }
+
+  const rawLabel = line.slice(0, separatorIndex).trim();
+  const value = line.slice(separatorIndex + 1).trimStart();
+  if (!EVENT_PREVIEW_LABELS.has(rawLabel)) {
+    return (
+      <Text key={key} style={styles.description}>
+        {line}
+      </Text>
+    );
+  }
+
+  return (
+    <Text key={key} style={styles.description}>
+      <Text style={styles.descriptionStrong}>{rawLabel}: </Text>
+      {value}
+    </Text>
+  );
+}
+
 async function openLink(url: string) {
   try {
     await Linking.openURL(url);
@@ -19,9 +57,15 @@ async function openLink(url: string) {
 }
 
 export function UiDirectiveInfoBlock({ block }: Props) {
+  const bodyLines = (block.body || '').split('\n');
+
   return (
     <View style={styles.infoWrap}>
-      {block.body ? <Text style={styles.description}>{block.body}</Text> : null}
+      {block.body
+        ? bodyLines.map((line, index) =>
+            renderBodyLine(line, `${block.id}-line-${index}`),
+          )
+        : null}
       {(block.links || []).map((link) => (
         <Pressable
           key={`${block.id}:${link.url}`}
@@ -57,6 +101,10 @@ const styles = StyleSheet.create({
     color: theme.colors.mutedInk,
     fontSize: 14,
     lineHeight: 21,
+  },
+  descriptionStrong: {
+    color: theme.colors.ink,
+    fontWeight: '700',
   },
   linkButton: {
     minHeight: 48,

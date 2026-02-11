@@ -1,4 +1,5 @@
 import { LinearGradient } from 'expo-linear-gradient';
+import { useRouter } from 'expo-router';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
@@ -15,6 +16,7 @@ import {
   View,
 } from 'react-native';
 import { useBottomTabBarHeight } from '@react-navigation/bottom-tabs';
+import { useFocusEffect } from '@react-navigation/native';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -23,13 +25,20 @@ import { useAuth } from '@/auth/AuthContext';
 import { theme } from '@/theme';
 import { UiDirectiveCard } from '@/components/ui-directive-card';
 import { SlashCommandPalette } from '@/components/SlashCommandPalette';
-import { EventDraftAdjustSheet } from '@/components/event-draft/EventDraftAdjustSheet';
-import { EventDraftEditorSheet } from '@/components/event-draft/EventDraftEditorSheet';
-import type { EventDraft, EventDraftModifications } from '@/components/event-draft/types';
+import type {
+  EventContactOption,
+  EventDraft,
+  EventDraftModifications,
+} from '@/components/event-draft/types';
 import { loadChatSession, saveChatSession, StoredChatSession } from '@/chat/session';
 import { restoreChatHistory } from '@/chat/threads';
 import type { CommandResult as ThreadCommandResult } from '@/chat/threads';
 import type { UiDirectiveBlock, UiDirectives, UiSubmissionInput } from '@/chat/uiDirectives';
+import {
+  clearEventDraftEditSession,
+  consumeEventDraftEditResult,
+  createEventDraftEditSession,
+} from '@/events/draftEditorSession';
 import { getClientContext } from '@/location/clientContext';
 
 type Message = {
@@ -67,7 +76,7 @@ type EventConfirmationResponse = {
 };
 
 type EventAction = {
-  type: 'confirm' | 'cancel' | 'edit' | 'adjust';
+  type: 'confirm' | 'cancel' | 'edit';
   previewId: string;
 };
 
@@ -82,16 +91,9 @@ type EventCommandResultPayload = {
     tags?: unknown;
     types?: unknown;
   };
-};
-
-type EventEditorState = {
-  previewId: string;
-  baseDraft: EventDraft;
-  initialDraft: EventDraft;
-};
-
-type EventAdjustState = {
-  previewId: string;
+  resolution?: {
+    contacts?: { contact_id?: unknown; display_name?: unknown }[];
+  };
 };
 
 const INLINE_MARKDOWN_PATTERN =
@@ -107,7 +109,6 @@ const EVENT_CLARIFICATION_ACTION_PREFIX = 'event_clarification_submit';
 const EVENT_CONFIRM_OPTION_PREFIX = 'confirm:';
 const EVENT_CANCEL_OPTION_PREFIX = 'cancel:';
 const EVENT_EDIT_OPTION_PREFIX = 'edit:';
-const EVENT_ADJUST_OPTION_PREFIX = 'adjust:';
 const MIN_CHAT_INPUT_HEIGHT = 46;
 const MAX_CHAT_INPUT_HEIGHT = 120;
 const COMPOSER_KEYBOARD_GAP = 20;
@@ -199,12 +200,6 @@ function parseEventAction(optionIdRaw: unknown): EventAction | null {
       return { type: 'edit', previewId };
     }
   }
-  if (optionId.startsWith(EVENT_ADJUST_OPTION_PREFIX)) {
-    const previewId = optionId.slice(EVENT_ADJUST_OPTION_PREFIX.length).trim();
-    if (previewId) {
-      return { type: 'adjust', previewId };
-    }
-  }
   if (optionId.startsWith(EVENT_CANCEL_OPTION_PREFIX)) {
     const previewId = optionId.slice(EVENT_CANCEL_OPTION_PREFIX.length).trim();
     if (previewId) {
@@ -244,6 +239,22 @@ function buildEventDraft(commandResult: CommandResult | undefined, previewId: st
   if (payloadPreviewId !== previewId) return null;
   const extracted = payload.extracted;
   if (!extracted || typeof extracted !== 'object') return null;
+  const resolvedContacts = Array.isArray(payload.resolution?.contacts)
+    ? payload.resolution?.contacts
+    : [];
+
+  const participants = resolvedContacts
+    .map((contact) => {
+      const contactId = textValue(contact.contact_id);
+      if (!contactId) return null;
+      return {
+        contactId,
+        displayName: textValue(contact.display_name) || contactId,
+      };
+    })
+    .filter((participant): participant is { contactId: string; displayName: string } =>
+      Boolean(participant),
+    );
 
   return {
     title: textValue(extracted.title),
@@ -252,11 +263,25 @@ function buildEventDraft(commandResult: CommandResult | undefined, previewId: st
     where: textValue(extracted.where),
     tags: stringArrayValue(extracted.tags),
     types: stringArrayValue(extracted.types),
+    participants,
   };
 }
 
-function applyDraftModifications(baseDraft: EventDraft, modifications: EventDraftModifications | undefined): EventDraft {
+function applyDraftModifications(
+  baseDraft: EventDraft,
+  modifications: EventDraftModifications | undefined,
+  contactNameById: Map<string, string>,
+): EventDraft {
   if (!modifications) return baseDraft;
+  const participantIds = modifications.contact_ids;
+  const participants =
+    participantIds === undefined
+      ? baseDraft.participants
+      : participantIds.map((contactId) => ({
+          contactId,
+          displayName: contactNameById.get(contactId) || contactId,
+        }));
+
   return {
     title: modifications.title ?? baseDraft.title,
     summary: modifications.summary ?? baseDraft.summary,
@@ -269,6 +294,7 @@ function applyDraftModifications(baseDraft: EventDraft, modifications: EventDraf
     where: modifications.where ?? baseDraft.where,
     tags: modifications.tags ?? baseDraft.tags,
     types: modifications.types ?? baseDraft.types,
+    participants,
   };
 }
 
@@ -298,6 +324,11 @@ function buildDraftModifications(baseDraft: EventDraft, nextDraft: EventDraft): 
   if (!sameStringList(baseDraft.types, nextDraft.types)) {
     modifications.types = nextDraft.types;
   }
+  const baseParticipantIds = baseDraft.participants.map((participant) => participant.contactId);
+  const nextParticipantIds = nextDraft.participants.map((participant) => participant.contactId);
+  if (!sameStringList(baseParticipantIds, nextParticipantIds)) {
+    modifications.contact_ids = nextParticipantIds;
+  }
 
   return modifications;
 }
@@ -310,19 +341,8 @@ function modificationSummary(modifications: EventDraftModifications): string {
   if ('where' in modifications) labels.push('where');
   if ('tags' in modifications) labels.push('tags');
   if ('types' in modifications) labels.push('types');
+  if ('contact_ids' in modifications) labels.push('participants');
   return labels.join(', ');
-}
-
-function adjustmentContext(modifications: EventDraftModifications | undefined): string {
-  if (!modifications) return '';
-  const lines: string[] = [];
-  if ('title' in modifications) lines.push(`Title: ${modifications.title || '(empty)'}`);
-  if ('summary' in modifications) lines.push(`Summary: ${modifications.summary || '(empty)'}`);
-  if ('when' in modifications) lines.push(`When: ${modifications.when || '(cleared)'}`);
-  if ('where' in modifications) lines.push(`Where: ${modifications.where || '(empty)'}`);
-  if ('tags' in modifications) lines.push(`Tags: ${(modifications.tags || []).join(', ') || '(empty)'}`);
-  if ('types' in modifications) lines.push(`Types: ${(modifications.types || []).join(', ') || '(empty)'}`);
-  return lines.join('\n');
 }
 
 function clarificationIdFromAction(actionIdRaw: string | undefined): string | null {
@@ -568,10 +588,12 @@ function renderAssistantMarkdown(markdown: string, keyPrefix: string) {
 }
 
 export default function ChatScreen() {
+  const router = useRouter();
   const { token, signOut, email, isLoading: isAuthLoading } = useAuth();
   const insets = useSafeAreaInsets();
   const tabBarHeight = useBottomTabBarHeight();
   const listRef = useRef<FlatList<Message>>(null);
+  const inputRef = useRef<TextInput>(null);
   const [input, setInput] = useState('');
   const [isSending, setIsSending] = useState(false);
   const [threadId, setThreadId] = useState<string | null>(null);
@@ -580,8 +602,8 @@ export default function ChatScreen() {
   const [eventDraftModificationsByPreview, setEventDraftModificationsByPreview] = useState<
     Record<string, EventDraftModifications>
   >({});
-  const [eventEditorState, setEventEditorState] = useState<EventEditorState | null>(null);
-  const [eventAdjustState, setEventAdjustState] = useState<EventAdjustState | null>(null);
+  const [activeDraftEditorSessionId, setActiveDraftEditorSessionId] = useState<string | null>(null);
+  const [eventEditorContacts, setEventEditorContacts] = useState<EventContactOption[]>([]);
   const isAtBottomRef = useRef(true);
   const [forceScrollNext, setForceScrollNext] = useState(false);
   const [isBootstrapping, setIsBootstrapping] = useState(true);
@@ -698,8 +720,6 @@ export default function ChatScreen() {
   useEffect(() => {
     if (!pendingEventId) {
       setEventDraftModificationsByPreview({});
-      setEventEditorState(null);
-      setEventAdjustState(null);
       return;
     }
 
@@ -707,12 +727,6 @@ export default function ChatScreen() {
       if (!prev[pendingEventId]) return {};
       return { [pendingEventId]: prev[pendingEventId] };
     });
-    setEventEditorState((prev) =>
-      prev && prev.previewId === pendingEventId ? prev : null,
-    );
-    setEventAdjustState((prev) =>
-      prev && prev.previewId === pendingEventId ? prev : null,
-    );
   }, [pendingEventId]);
 
   useEffect(() => {
@@ -847,12 +861,25 @@ export default function ChatScreen() {
     }
   }, [allowed, input, isBootstrapping, isSending, pendingEventId, signOut, threadId, token]);
 
-  const saveEventDraftEdits = useCallback(
-    (nextDraft: EventDraft) => {
-      if (!eventEditorState) return;
+  const loadEventEditorContacts = useCallback(async (): Promise<EventContactOption[]> => {
+    if (!token) return [];
+    if (eventEditorContacts.length > 0) return eventEditorContacts;
 
-      const previewId = eventEditorState.previewId;
-      const modifications = buildDraftModifications(eventEditorState.baseDraft, nextDraft);
+    try {
+      const response = (await apiFetch('/mobile/contacts', { token })) as {
+        contacts?: EventContactOption[];
+      };
+      const contacts = Array.isArray(response.contacts) ? response.contacts : [];
+      setEventEditorContacts(contacts);
+      return contacts;
+    } catch {
+      return [];
+    }
+  }, [eventEditorContacts, token]);
+
+  const applyEventDraftEdits = useCallback(
+    (previewId: string, baseDraft: EventDraft, nextDraft: EventDraft) => {
+      const modifications = buildDraftModifications(baseDraft, nextDraft);
       const modifiedFields = modificationSummary(modifications);
 
       setEventDraftModificationsByPreview((prev) => {
@@ -865,7 +892,6 @@ export default function ChatScreen() {
         return next;
       });
 
-      setEventEditorState(null);
       setMessages((prev) => [
         ...prev,
         {
@@ -878,27 +904,23 @@ export default function ChatScreen() {
       ]);
       setForceScrollNext(true);
     },
-    [eventEditorState],
+    [],
   );
 
-  const submitEventAdjustment = useCallback(
-    (instruction: string) => {
-      if (!eventAdjustState) return;
-      const previewId = eventAdjustState.previewId;
-      const modifications = eventDraftModificationsByPreview[previewId];
-      const context = adjustmentContext(modifications);
-
-      const parts = ['Please adjust this pending event draft.'];
-      if (context) {
-        parts.push('Current local edits:');
-        parts.push(context);
+  useFocusEffect(
+    useCallback(() => {
+      if (!activeDraftEditorSessionId) {
+        return () => undefined;
       }
-      parts.push(`Requested change: ${instruction.trim()}`);
 
-      setEventAdjustState(null);
-      void sendMessage(parts.join('\n\n'));
-    },
-    [eventAdjustState, eventDraftModificationsByPreview, sendMessage],
+      const result = consumeEventDraftEditResult(activeDraftEditorSessionId);
+      if (result) {
+        applyEventDraftEdits(result.previewId, result.baseDraft, result.nextDraft);
+      }
+      setActiveDraftEditorSessionId(null);
+
+      return () => undefined;
+    }, [activeDraftEditorSessionId, applyEventDraftEdits]),
   );
 
   const handleDirectiveSubmission = useCallback(
@@ -928,6 +950,10 @@ export default function ChatScreen() {
         }
 
         if (action.type === 'edit') {
+          const loadedContacts = await loadEventEditorContacts();
+          const contactNameById = new Map(
+            loadedContacts.map((contact) => [contact.contact_id, contact.display_name]),
+          );
           const baseDraft = buildEventDraft(commandResult, action.previewId);
           if (!baseDraft) {
             setMessages((prev) => [
@@ -935,7 +961,7 @@ export default function ChatScreen() {
               {
                 id: `${Date.now()}-event-edit-unavailable`,
                 role: 'assistant',
-                content: 'I could not load that draft for editing. Please ask AI to adjust and retry.',
+                content: 'I could not load that draft for editing. Please retry from the latest event preview.',
               },
             ]);
             setForceScrollNext(true);
@@ -943,16 +969,27 @@ export default function ChatScreen() {
           }
 
           const existingModifications = eventDraftModificationsByPreview[action.previewId];
-          setEventEditorState({
+          const session = createEventDraftEditSession({
             previewId: action.previewId,
             baseDraft,
-            initialDraft: applyDraftModifications(baseDraft, existingModifications),
+            initialDraft: applyDraftModifications(
+              baseDraft,
+              existingModifications,
+              contactNameById,
+            ),
+            availableContacts: loadedContacts,
           });
-          return;
-        }
-
-        if (action.type === 'adjust') {
-          setEventAdjustState({ previewId: action.previewId });
+          setActiveDraftEditorSessionId((previousSessionId) => {
+            clearEventDraftEditSession(previousSessionId);
+            return session.sessionId;
+          });
+          router.push({
+            pathname: '/events/[eventId]',
+            params: {
+              eventId: action.previewId,
+              draftSessionId: session.sessionId,
+            },
+          });
           return;
         }
 
@@ -984,12 +1021,6 @@ export default function ChatScreen() {
             delete next[action.previewId];
             return next;
           });
-          setEventEditorState((prev) =>
-            prev && prev.previewId === action.previewId ? null : prev,
-          );
-          setEventAdjustState((prev) =>
-            prev && prev.previewId === action.previewId ? null : prev,
-          );
           setMessages((prev) =>
             prev.map((message) =>
               message.id === messageId
@@ -1073,7 +1104,9 @@ export default function ChatScreen() {
     [
       eventDraftModificationsByPreview,
       isConfirmingEvent,
+      loadEventEditorContacts,
       pendingEventId,
+      router,
       sendMessage,
       token,
     ],
@@ -1205,6 +1238,7 @@ export default function ChatScreen() {
         >
           <View style={styles.inputWrap}>
             <TextInput
+              ref={inputRef}
               value={input}
               editable={allowed}
               style={[
@@ -1252,20 +1286,6 @@ export default function ChatScreen() {
           </View>
         </View>
 
-        <EventDraftEditorSheet
-          visible={Boolean(eventEditorState)}
-          initialDraft={eventEditorState?.initialDraft || null}
-          isSubmitting={isConfirmingEvent || isSending}
-          onClose={() => setEventEditorState(null)}
-          onSave={saveEventDraftEdits}
-        />
-
-        <EventDraftAdjustSheet
-          visible={Boolean(eventAdjustState)}
-          isSubmitting={isSending}
-          onClose={() => setEventAdjustState(null)}
-          onSubmit={submitEventAdjustment}
-        />
       </KeyboardAvoidingView>
     </LinearGradient>
   );

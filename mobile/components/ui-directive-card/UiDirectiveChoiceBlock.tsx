@@ -10,8 +10,14 @@ type Props = {
   onSelect: (option: UiDirectiveOption) => void;
 };
 
+const EVENT_CONFIRM_ACTION_ID = 'event_confirmation_action';
+const HIDDEN_EVENT_OPTION_PREFIXES = ['edit:'];
+
 export function UiDirectiveChoiceBlock({ block, isSubmitting, onSelect }: Props) {
-  const options = block.options || [];
+  const options = (block.options || []).filter((option) => {
+    if (block.action_id !== EVENT_CONFIRM_ACTION_ID) return true;
+    return !HIDDEN_EVENT_OPTION_PREFIXES.some((prefix) => option.id.startsWith(prefix));
+  });
 
   return (
     <View style={styles.optionColumn}>

@@ -19,7 +19,6 @@ _EVENT_CONFIRM_ACTION_ID = "event_confirmation_action"
 _EVENT_CLARIFICATION_ACTION_ID_PREFIX = "event_clarification_submit"
 _EVENT_ACTION_CONFIRM_PREFIX = "confirm:"
 _EVENT_ACTION_EDIT_PREFIX = "edit:"
-_EVENT_ACTION_ADJUST_PREFIX = "adjust:"
 _EVENT_ACTION_CANCEL_PREFIX = "cancel:"
 
 
@@ -192,10 +191,6 @@ def _event_confirmation_directive(command_result: dict[str, Any]) -> dict[str, A
                     {
                         "id": f"{_EVENT_ACTION_EDIT_PREFIX}{preview_id}",
                         "label": "Edit fields",
-                    },
-                    {
-                        "id": f"{_EVENT_ACTION_ADJUST_PREFIX}{preview_id}",
-                        "label": "Ask AI to adjust",
                     },
                     {
                         "id": f"{_EVENT_ACTION_CANCEL_PREFIX}{preview_id}",

@@ -167,6 +167,8 @@ def _normalize_event_modifications(raw: Any) -> dict[str, Any]:
         normalized["tags"] = _string_list_from_modification(raw.get("tags"))
     if "types" in raw:
         normalized["types"] = _string_list_from_modification(raw.get("types"))
+    if "contact_ids" in raw:
+        normalized["contact_ids"] = _string_list_from_modification(raw.get("contact_ids"))
 
     confirmed_relationships = raw.get("confirmed_relationships")
     if isinstance(confirmed_relationships, list):
@@ -217,12 +219,20 @@ def confirm_event_command(
         extracted["tags"] = normalized_modifications["tags"]
     if "types" in normalized_modifications:
         extracted["types"] = normalized_modifications["types"]
+    participant_override_enabled = "contact_ids" in normalized_modifications
+    participant_override_ids = normalized_modifications.get("contact_ids", [])
 
     try:
         created_contacts = []
         contact_id_map = {}
 
-        for new_contact in resolution["new_entities"]["contacts"]:
+        new_contacts_to_create = (
+            []
+            if participant_override_enabled
+            else list(resolution.get("new_entities", {}).get("contacts", []))
+        )
+
+        for new_contact in new_contacts_to_create:
             display_name = new_contact["display_name"]
             inferred_profession = new_contact.get("inferred_profession")
             comments = new_contact.get("comments")
@@ -323,11 +333,14 @@ def confirm_event_command(
             created_places.append({"place_id": place_id, "name": place_name})
             place_id_map[place_name] = place_id
 
-        all_contact_ids = []
-        for existing_contact in resolution["contacts"]:
-            all_contact_ids.append(existing_contact["contact_id"])
-        for created_contact in created_contacts:
-            all_contact_ids.append(created_contact["contact_id"])
+        if participant_override_enabled:
+            all_contact_ids = list(participant_override_ids)
+        else:
+            all_contact_ids = []
+            for existing_contact in resolution["contacts"]:
+                all_contact_ids.append(existing_contact["contact_id"])
+            for created_contact in created_contacts:
+                all_contact_ids.append(created_contact["contact_id"])
 
         place_id = None
         where = extracted.get("where")

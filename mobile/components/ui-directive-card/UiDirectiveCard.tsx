@@ -1,5 +1,6 @@
 import React, { useMemo, useState } from 'react';
-import { StyleSheet, Text, View } from 'react-native';
+import { Pressable, StyleSheet, Text, View } from 'react-native';
+import Ionicons from '@expo/vector-icons/Ionicons';
 
 import type {
   UiDirectiveBlock,
@@ -48,9 +49,38 @@ function toneForBlock(block: UiDirectiveBlock) {
   };
 }
 
+const EVENT_PREVIEW_BLOCK_PREFIX = 'event_preview:';
+const EVENT_CONFIRM_ACTION_ID = 'event_confirmation_action';
+const EVENT_EDIT_OPTION_PREFIX = 'edit:';
+
+type EventEditAction = {
+  blockId: string;
+  actionId: string;
+  option: UiDirectiveOption;
+};
+
 export function UiDirectiveCard({ directives, isSubmitting = false, onSubmit }: Props) {
   const [formValues, setFormValues] = useState<Record<string, string>>({});
   const blocks = useMemo(() => directives.blocks || [], [directives.blocks]);
+  const eventEditActionsByPreviewId = useMemo(() => {
+    const mapping = new Map<string, EventEditAction>();
+    for (const block of blocks) {
+      if (block.type !== 'choice_buttons') continue;
+      if (block.action_id !== EVENT_CONFIRM_ACTION_ID) continue;
+      const actionId = actionIdForBlock(block);
+      for (const option of block.options || []) {
+        if (!option.id.startsWith(EVENT_EDIT_OPTION_PREFIX)) continue;
+        const previewId = option.id.slice(EVENT_EDIT_OPTION_PREFIX.length).trim();
+        if (!previewId) continue;
+        mapping.set(previewId, {
+          blockId: block.id,
+          actionId,
+          option,
+        });
+      }
+    }
+    return mapping;
+  }, [blocks]);
 
   const setFieldValue = (block: UiDirectiveBlock, field: UiDirectiveField, value: string) => {
     setFormValues((prev) => ({
@@ -97,6 +127,15 @@ export function UiDirectiveCard({ directives, isSubmitting = false, onSubmit }: 
     <View style={styles.container}>
       {blocks.map((block) => {
         const tone = toneForBlock(block);
+        const previewId =
+          block.type === 'info_card' && block.id.startsWith(EVENT_PREVIEW_BLOCK_PREFIX)
+            ? block.id.slice(EVENT_PREVIEW_BLOCK_PREFIX.length).trim()
+            : '';
+        const editAction =
+          previewId && block.type === 'info_card'
+            ? eventEditActionsByPreviewId.get(previewId)
+            : undefined;
+
         return (
           <Card key={block.id} variant="elevated" style={styles.blockCard}>
             <View style={styles.headerRow}>
@@ -110,6 +149,31 @@ export function UiDirectiveCard({ directives, isSubmitting = false, onSubmit }: 
                   {tone.label}
                 </Text>
               </View>
+              {editAction ? (
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel="Edit event draft"
+                  disabled={isSubmitting}
+                  onPress={() =>
+                    onSubmit({
+                      block_id: editAction.blockId,
+                      action_id: editAction.actionId,
+                      values: {
+                        option_id: editAction.option.id,
+                        option_label: editAction.option.label,
+                      },
+                      text_fallback: editAction.option.label,
+                    })
+                  }
+                  style={({ pressed }) => [
+                    styles.editButton,
+                    pressed && styles.editButtonPressed,
+                    isSubmitting && styles.editButtonDisabled,
+                  ]}
+                >
+                  <Ionicons name="create" size={24} color={theme.colors.accentDeep} />
+                </Pressable>
+              ) : null}
             </View>
 
             {block.title ? <Text style={styles.title}>{block.title}</Text> : null}
@@ -152,7 +216,8 @@ const styles = StyleSheet.create({
   },
   headerRow: {
     flexDirection: 'row',
-    justifyContent: 'flex-start',
+    justifyContent: 'space-between',
+    alignItems: 'center',
   },
   badge: {
     borderRadius: 999,
@@ -166,6 +231,22 @@ const styles = StyleSheet.create({
     letterSpacing: 0.5,
     textTransform: 'uppercase',
     fontWeight: '700',
+  },
+  editButton: {
+    minWidth: 44,
+    minHeight: 44,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: theme.colors.line,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#fff',
+  },
+  editButtonPressed: {
+    opacity: 0.75,
+  },
+  editButtonDisabled: {
+    opacity: 0.5,
   },
   title: {
     color: theme.colors.ink,

@@ -249,6 +249,7 @@ Prefer specific types over general terms WHEN POSSIBLE (e.g., "Electric Engineer
 Use the clarification history to avoid repeating questions that were already answered.
 Never drop previously confirmed facts from the existing extraction or clarification history; only override if the user explicitly corrects them.
 Assistant questions are prompts only and are NOT facts; only treat user-provided details as facts.
+If you think there are not enough information to build a valuable event, return a clarification to the user.
 
 Return ONLY valid JSON in this exact format:
 {{
@@ -1148,7 +1149,7 @@ def handle_event(parsed: ParsedCommand, context: dict) -> dict[str, Any]:
             },
         )
 
-        from commands.storage import store_command_data
+        from commands.storage import store_command_data, store_pending_event
 
         if clarification_messages is None:
             clarification_messages = [
@@ -1173,6 +1174,9 @@ def handle_event(parsed: ParsedCommand, context: dict) -> dict[str, Any]:
                 "clarification_messages": clarification_messages,
             },
         )
+        pending_key = context.get("event_pending_key")
+        if pending_key:
+            store_pending_event(pending_key, clarification_preview_id)
         return {
             "type": "need_user_input",
             "need_user_input": need_user_input,

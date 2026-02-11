@@ -1,3 +1,13 @@
+export type EventDraftParticipant = {
+  contactId: string;
+  displayName: string;
+};
+
+export type EventContactOption = {
+  contact_id: string;
+  display_name: string;
+};
+
 export type EventDraft = {
   title: string;
   summary: string;
@@ -5,6 +15,7 @@ export type EventDraft = {
   where: string;
   tags: string[];
   types: string[];
+  participants: EventDraftParticipant[];
 };
 
 export type EventDraftModifications = {
@@ -14,6 +25,7 @@ export type EventDraftModifications = {
   where?: string;
   tags?: string[];
   types?: string[];
+  contact_ids?: string[];
 };
 
 export const EMPTY_EVENT_DRAFT: EventDraft = {
@@ -23,4 +35,5 @@ export const EMPTY_EVENT_DRAFT: EventDraft = {
   where: '',
   tags: [],
   types: [],
+  participants: [],
 };
