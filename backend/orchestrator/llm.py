@@ -108,7 +108,6 @@ async def answer_question(
             assistant_metadata = {}
             if result.get("ui_directives"):
                 assistant_metadata["ui_directives"] = result["ui_directives"]
-            # Removed: event_proposal - use /event command instead
 
             persist_result = conversations.record_exchange(
                 thread_id=session_id,

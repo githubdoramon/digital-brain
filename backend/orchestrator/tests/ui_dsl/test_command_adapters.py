@@ -35,6 +35,8 @@ def test_event_confirmation_maps_to_ui_directives():
     assert choice_block["action_id"] == "event_confirmation_action"
     option_ids = {option["id"] for option in choice_block["options"]}
     assert "confirm:event:preview:abcd1234" in option_ids
+    assert "edit:event:preview:abcd1234" in option_ids
+    assert "adjust:event:preview:abcd1234" in option_ids
     assert "cancel:event:preview:abcd1234" in option_ids
 
 

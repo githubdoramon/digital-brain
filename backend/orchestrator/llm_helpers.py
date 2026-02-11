@@ -142,9 +142,11 @@ def _call_llm_raw(
         tools=tools,
         tool_choice=tool_choice,
     )
-    content = _post_chat_completion(payload, timeout=timeout)
 
     logger.debug("[llm_helpers] LLM input: %s", json.dumps(messages, ensure_ascii=False))
+
+    content = _post_chat_completion(payload, timeout=timeout)
+
     logger.debug("[llm_helpers] LLM response: %s", json.dumps(content, ensure_ascii=False))
 
     return content

@@ -23,6 +23,9 @@ import { useAuth } from '@/auth/AuthContext';
 import { theme } from '@/theme';
 import { UiDirectiveCard } from '@/components/ui-directive-card';
 import { SlashCommandPalette } from '@/components/SlashCommandPalette';
+import { EventDraftAdjustSheet } from '@/components/event-draft/EventDraftAdjustSheet';
+import { EventDraftEditorSheet } from '@/components/event-draft/EventDraftEditorSheet';
+import type { EventDraft, EventDraftModifications } from '@/components/event-draft/types';
 import { loadChatSession, saveChatSession, StoredChatSession } from '@/chat/session';
 import { restoreChatHistory } from '@/chat/threads';
 import type { CommandResult as ThreadCommandResult } from '@/chat/threads';
@@ -63,6 +66,34 @@ type EventConfirmationResponse = {
   created_places?: { place_id: string; name: string }[];
 };
 
+type EventAction = {
+  type: 'confirm' | 'cancel' | 'edit' | 'adjust';
+  previewId: string;
+};
+
+type EventCommandResultPayload = {
+  type?: string;
+  preview_id?: string;
+  extracted?: {
+    title?: unknown;
+    summary?: unknown;
+    when?: unknown;
+    where?: unknown;
+    tags?: unknown;
+    types?: unknown;
+  };
+};
+
+type EventEditorState = {
+  previewId: string;
+  baseDraft: EventDraft;
+  initialDraft: EventDraft;
+};
+
+type EventAdjustState = {
+  previewId: string;
+};
+
 const INLINE_MARKDOWN_PATTERN =
   /(\[[^\]]+\]\((?:https?:\/\/|mailto:|www\.)[^)\s]+\)|(?:https?:\/\/|mailto:|www\.)\S+|\*\*[^*]+\*\*|`[^`]+`|\*[^*]+\*)/g;
 const MARKDOWN_LINK_PATTERN = /^\[([^\]]+)\]\(([^)\s]+)\)$/;
@@ -73,6 +104,10 @@ const NUMBERED_LINE_PATTERN = /^(\d+)\.\s+(.*)$/;
 const BLOCKQUOTE_LINE_PATTERN = /^>\s+/;
 const EVENT_CONFIRM_ACTION_ID = 'event_confirmation_action';
 const EVENT_CLARIFICATION_ACTION_PREFIX = 'event_clarification_submit';
+const EVENT_CONFIRM_OPTION_PREFIX = 'confirm:';
+const EVENT_CANCEL_OPTION_PREFIX = 'cancel:';
+const EVENT_EDIT_OPTION_PREFIX = 'edit:';
+const EVENT_ADJUST_OPTION_PREFIX = 'adjust:';
 const MIN_CHAT_INPUT_HEIGHT = 46;
 const MAX_CHAT_INPUT_HEIGHT = 120;
 const COMPOSER_KEYBOARD_GAP = 20;
@@ -149,22 +184,145 @@ function buildEventClarificationAnswer(
   return lines.join('\n');
 }
 
-function parseEventChoice(optionIdRaw: unknown): { confirmed: boolean; previewId: string } | null {
+function parseEventAction(optionIdRaw: unknown): EventAction | null {
   if (typeof optionIdRaw !== 'string') return null;
   const optionId = optionIdRaw.trim();
-  if (optionId.startsWith('confirm:')) {
-    const previewId = optionId.slice('confirm:'.length).trim();
+  if (optionId.startsWith(EVENT_CONFIRM_OPTION_PREFIX)) {
+    const previewId = optionId.slice(EVENT_CONFIRM_OPTION_PREFIX.length).trim();
     if (previewId) {
-      return { confirmed: true, previewId };
+      return { type: 'confirm', previewId };
     }
   }
-  if (optionId.startsWith('cancel:')) {
-    const previewId = optionId.slice('cancel:'.length).trim();
+  if (optionId.startsWith(EVENT_EDIT_OPTION_PREFIX)) {
+    const previewId = optionId.slice(EVENT_EDIT_OPTION_PREFIX.length).trim();
     if (previewId) {
-      return { confirmed: false, previewId };
+      return { type: 'edit', previewId };
+    }
+  }
+  if (optionId.startsWith(EVENT_ADJUST_OPTION_PREFIX)) {
+    const previewId = optionId.slice(EVENT_ADJUST_OPTION_PREFIX.length).trim();
+    if (previewId) {
+      return { type: 'adjust', previewId };
+    }
+  }
+  if (optionId.startsWith(EVENT_CANCEL_OPTION_PREFIX)) {
+    const previewId = optionId.slice(EVENT_CANCEL_OPTION_PREFIX.length).trim();
+    if (previewId) {
+      return { type: 'cancel', previewId };
     }
   }
   return null;
+}
+
+function textValue(value: unknown): string {
+  if (value === null || value === undefined) return '';
+  return String(value).trim();
+}
+
+function stringArrayValue(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((entry) => textValue(entry))
+    .filter(Boolean);
+}
+
+function normalizedDraftValue(value: string) {
+  return value.trim();
+}
+
+function extractEventPreviewId(commandResult: CommandResult | undefined): string | null {
+  if (!commandResult || typeof commandResult !== 'object') return null;
+  const payload = commandResult as EventCommandResultPayload;
+  const previewId = textValue(payload.preview_id);
+  return previewId || null;
+}
+
+function buildEventDraft(commandResult: CommandResult | undefined, previewId: string): EventDraft | null {
+  if (!commandResult || typeof commandResult !== 'object') return null;
+  const payload = commandResult as EventCommandResultPayload;
+  const payloadPreviewId = textValue(payload.preview_id);
+  if (payloadPreviewId !== previewId) return null;
+  const extracted = payload.extracted;
+  if (!extracted || typeof extracted !== 'object') return null;
+
+  return {
+    title: textValue(extracted.title),
+    summary: textValue(extracted.summary),
+    when: textValue(extracted.when),
+    where: textValue(extracted.where),
+    tags: stringArrayValue(extracted.tags),
+    types: stringArrayValue(extracted.types),
+  };
+}
+
+function applyDraftModifications(baseDraft: EventDraft, modifications: EventDraftModifications | undefined): EventDraft {
+  if (!modifications) return baseDraft;
+  return {
+    title: modifications.title ?? baseDraft.title,
+    summary: modifications.summary ?? baseDraft.summary,
+    when:
+      modifications.when === null
+        ? ''
+        : modifications.when === undefined
+          ? baseDraft.when
+          : modifications.when,
+    where: modifications.where ?? baseDraft.where,
+    tags: modifications.tags ?? baseDraft.tags,
+    types: modifications.types ?? baseDraft.types,
+  };
+}
+
+function sameStringList(left: string[], right: string[]) {
+  if (left.length !== right.length) return false;
+  return left.every((entry, index) => entry === right[index]);
+}
+
+function buildDraftModifications(baseDraft: EventDraft, nextDraft: EventDraft): EventDraftModifications {
+  const modifications: EventDraftModifications = {};
+
+  if (normalizedDraftValue(baseDraft.title) !== normalizedDraftValue(nextDraft.title)) {
+    modifications.title = normalizedDraftValue(nextDraft.title);
+  }
+  if (normalizedDraftValue(baseDraft.summary) !== normalizedDraftValue(nextDraft.summary)) {
+    modifications.summary = normalizedDraftValue(nextDraft.summary);
+  }
+  if (normalizedDraftValue(baseDraft.when) !== normalizedDraftValue(nextDraft.when)) {
+    modifications.when = normalizedDraftValue(nextDraft.when) || null;
+  }
+  if (normalizedDraftValue(baseDraft.where) !== normalizedDraftValue(nextDraft.where)) {
+    modifications.where = normalizedDraftValue(nextDraft.where);
+  }
+  if (!sameStringList(baseDraft.tags, nextDraft.tags)) {
+    modifications.tags = nextDraft.tags;
+  }
+  if (!sameStringList(baseDraft.types, nextDraft.types)) {
+    modifications.types = nextDraft.types;
+  }
+
+  return modifications;
+}
+
+function modificationSummary(modifications: EventDraftModifications): string {
+  const labels: string[] = [];
+  if ('title' in modifications) labels.push('title');
+  if ('summary' in modifications) labels.push('summary');
+  if ('when' in modifications) labels.push('when');
+  if ('where' in modifications) labels.push('where');
+  if ('tags' in modifications) labels.push('tags');
+  if ('types' in modifications) labels.push('types');
+  return labels.join(', ');
+}
+
+function adjustmentContext(modifications: EventDraftModifications | undefined): string {
+  if (!modifications) return '';
+  const lines: string[] = [];
+  if ('title' in modifications) lines.push(`Title: ${modifications.title || '(empty)'}`);
+  if ('summary' in modifications) lines.push(`Summary: ${modifications.summary || '(empty)'}`);
+  if ('when' in modifications) lines.push(`When: ${modifications.when || '(cleared)'}`);
+  if ('where' in modifications) lines.push(`Where: ${modifications.where || '(empty)'}`);
+  if ('tags' in modifications) lines.push(`Tags: ${(modifications.tags || []).join(', ') || '(empty)'}`);
+  if ('types' in modifications) lines.push(`Types: ${(modifications.types || []).join(', ') || '(empty)'}`);
+  return lines.join('\n');
 }
 
 function clarificationIdFromAction(actionIdRaw: string | undefined): string | null {
@@ -419,6 +577,11 @@ export default function ChatScreen() {
   const [threadId, setThreadId] = useState<string | null>(null);
   const [isConfirmingEvent, setIsConfirmingEvent] = useState(false);
   const [pendingEventId, setPendingEventId] = useState<string | null>(null);
+  const [eventDraftModificationsByPreview, setEventDraftModificationsByPreview] = useState<
+    Record<string, EventDraftModifications>
+  >({});
+  const [eventEditorState, setEventEditorState] = useState<EventEditorState | null>(null);
+  const [eventAdjustState, setEventAdjustState] = useState<EventAdjustState | null>(null);
   const isAtBottomRef = useRef(true);
   const [forceScrollNext, setForceScrollNext] = useState(false);
   const [isBootstrapping, setIsBootstrapping] = useState(true);
@@ -531,6 +694,26 @@ export default function ChatScreen() {
     };
     void saveChatSession(stored);
   }, [threadId, pendingEventId, isBootstrapping, isAuthLoading]);
+
+  useEffect(() => {
+    if (!pendingEventId) {
+      setEventDraftModificationsByPreview({});
+      setEventEditorState(null);
+      setEventAdjustState(null);
+      return;
+    }
+
+    setEventDraftModificationsByPreview((prev) => {
+      if (!prev[pendingEventId]) return {};
+      return { [pendingEventId]: prev[pendingEventId] };
+    });
+    setEventEditorState((prev) =>
+      prev && prev.previewId === pendingEventId ? prev : null,
+    );
+    setEventAdjustState((prev) =>
+      prev && prev.previewId === pendingEventId ? prev : null,
+    );
+  }, [pendingEventId]);
 
   useEffect(() => {
     const showEvent = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
@@ -664,28 +847,130 @@ export default function ChatScreen() {
     }
   }, [allowed, input, isBootstrapping, isSending, pendingEventId, signOut, threadId, token]);
 
+  const saveEventDraftEdits = useCallback(
+    (nextDraft: EventDraft) => {
+      if (!eventEditorState) return;
+
+      const previewId = eventEditorState.previewId;
+      const modifications = buildDraftModifications(eventEditorState.baseDraft, nextDraft);
+      const modifiedFields = modificationSummary(modifications);
+
+      setEventDraftModificationsByPreview((prev) => {
+        const next = { ...prev };
+        if (modifiedFields) {
+          next[previewId] = modifications;
+        } else {
+          delete next[previewId];
+        }
+        return next;
+      });
+
+      setEventEditorState(null);
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: `${Date.now()}-event-edit-status`,
+          role: 'assistant',
+          content: modifiedFields
+            ? `Updated draft fields: ${modifiedFields}. Tap Create event when ready.`
+            : 'No field changes were saved.',
+        },
+      ]);
+      setForceScrollNext(true);
+    },
+    [eventEditorState],
+  );
+
+  const submitEventAdjustment = useCallback(
+    (instruction: string) => {
+      if (!eventAdjustState) return;
+      const previewId = eventAdjustState.previewId;
+      const modifications = eventDraftModificationsByPreview[previewId];
+      const context = adjustmentContext(modifications);
+
+      const parts = ['Please adjust this pending event draft.'];
+      if (context) {
+        parts.push('Current local edits:');
+        parts.push(context);
+      }
+      parts.push(`Requested change: ${instruction.trim()}`);
+
+      setEventAdjustState(null);
+      void sendMessage(parts.join('\n\n'));
+    },
+    [eventAdjustState, eventDraftModificationsByPreview, sendMessage],
+  );
+
   const handleDirectiveSubmission = useCallback(
-    async (messageId: string, directives: UiDirectives | undefined, submission: UiSubmissionInput) => {
+    async (
+      messageId: string,
+      directives: UiDirectives | undefined,
+      submission: UiSubmissionInput,
+      commandResult: CommandResult | undefined,
+    ) => {
       if (submission.action_id === EVENT_CONFIRM_ACTION_ID) {
-        const choice = parseEventChoice(submission.values?.['option_id']);
-        if (!choice || isConfirmingEvent) {
+        const action = parseEventAction(submission.values?.['option_id']);
+        if (!action || isConfirmingEvent) {
+          return;
+        }
+
+        if (pendingEventId && action.previewId !== pendingEventId) {
+          setMessages((prev) => [
+            ...prev,
+            {
+              id: `${Date.now()}-event-superseded`,
+              role: 'assistant',
+              content: 'That draft is no longer active. Use the newest event preview card.',
+            },
+          ]);
+          setForceScrollNext(true);
+          return;
+        }
+
+        if (action.type === 'edit') {
+          const baseDraft = buildEventDraft(commandResult, action.previewId);
+          if (!baseDraft) {
+            setMessages((prev) => [
+              ...prev,
+              {
+                id: `${Date.now()}-event-edit-unavailable`,
+                role: 'assistant',
+                content: 'I could not load that draft for editing. Please ask AI to adjust and retry.',
+              },
+            ]);
+            setForceScrollNext(true);
+            return;
+          }
+
+          const existingModifications = eventDraftModificationsByPreview[action.previewId];
+          setEventEditorState({
+            previewId: action.previewId,
+            baseDraft,
+            initialDraft: applyDraftModifications(baseDraft, existingModifications),
+          });
+          return;
+        }
+
+        if (action.type === 'adjust') {
+          setEventAdjustState({ previewId: action.previewId });
           return;
         }
 
         setIsConfirmingEvent(true);
         try {
+          const modifications = eventDraftModificationsByPreview[action.previewId] || {};
           const result = (await apiFetch('/mobile/commands/event/confirm', {
             method: 'POST',
             body: JSON.stringify(
-              choice.confirmed
+              action.type === 'confirm'
                 ? {
-                    preview_id: choice.previewId,
+                    preview_id: action.previewId,
                     confirmed: true,
-                    modifications: {},
+                    modifications,
                     skip_entities: {},
                   }
                 : {
-                    preview_id: choice.previewId,
+                    preview_id: action.previewId,
                     confirmed: false,
                   },
             ),
@@ -693,6 +978,18 @@ export default function ChatScreen() {
           })) as EventConfirmationResponse;
 
           setPendingEventId(null);
+          setEventDraftModificationsByPreview((prev) => {
+            if (!prev[action.previewId]) return prev;
+            const next = { ...prev };
+            delete next[action.previewId];
+            return next;
+          });
+          setEventEditorState((prev) =>
+            prev && prev.previewId === action.previewId ? null : prev,
+          );
+          setEventAdjustState((prev) =>
+            prev && prev.previewId === action.previewId ? null : prev,
+          );
           setMessages((prev) =>
             prev.map((message) =>
               message.id === messageId
@@ -709,7 +1006,7 @@ export default function ChatScreen() {
             ),
           );
 
-          if (choice.confirmed) {
+          if (action.type === 'confirm') {
             const createdCount =
               (result?.created_contacts?.length ?? 0) + (result?.created_places?.length ?? 0);
             setMessages((prev) => [
@@ -732,13 +1029,17 @@ export default function ChatScreen() {
           }
           setForceScrollNext(true);
           return;
-        } catch {
+        } catch (error) {
+          const detail = error instanceof Error ? error.message.toLowerCase() : '';
+          const expired = detail.includes('not found or expired');
           setMessages((prev) => [
             ...prev,
             {
               id: `${Date.now()}-event-action-error`,
               role: 'assistant',
-              content: 'I could not complete that event action right now.',
+              content: expired
+                ? 'This event draft expired. Please run /event again.'
+                : 'I could not complete that event action right now.',
             },
           ]);
           setForceScrollNext(true);
@@ -769,7 +1070,13 @@ export default function ChatScreen() {
         uiSubmission: submission,
       });
     },
-    [isConfirmingEvent, sendMessage, token],
+    [
+      eventDraftModificationsByPreview,
+      isConfirmingEvent,
+      pendingEventId,
+      sendMessage,
+      token,
+    ],
   );
 
   const trimmedInput = input.trimStart();
@@ -824,38 +1131,51 @@ export default function ChatScreen() {
             isAtBottomRef.current = distanceFromBottom < 48;
           }}
           scrollEventThrottle={16}
-          renderItem={({ item }) => (
-            <View
-              style={[
-                styles.messageBubble,
-                item.role === 'user' ? styles.userBubble : styles.assistantBubble,
-              ]}>
-              {item.role === 'assistant' ? (
-                <View style={styles.markdownContainer}>
-                  {renderAssistantMarkdown(item.content, item.id)}
-                </View>
-              ) : (
-                <Text style={[styles.messageText, styles.userText]} selectable>
-                  {item.content}
-                </Text>
-              )}
-              {item.metadata?.ui_directives && (
-                <View style={styles.commandCardWrap}>
-                  <UiDirectiveCard
-                    directives={item.metadata.ui_directives}
-                    isSubmitting={isSending || isConfirmingEvent}
-                    onSubmit={(submission) => {
-                      void handleDirectiveSubmission(
-                        item.id,
-                        item.metadata?.ui_directives,
-                        submission,
-                      );
-                    }}
-                  />
-                </View>
-              )}
-            </View>
-          )}
+          renderItem={({ item }) => {
+            const previewId = extractEventPreviewId(item.metadata?.command_result);
+            const isSupersededEventCard = Boolean(
+              previewId && pendingEventId && previewId !== pendingEventId,
+            );
+
+            return (
+              <View
+                style={[
+                  styles.messageBubble,
+                  item.role === 'user' ? styles.userBubble : styles.assistantBubble,
+                ]}>
+                {item.role === 'assistant' ? (
+                  <View style={styles.markdownContainer}>
+                    {renderAssistantMarkdown(item.content, item.id)}
+                  </View>
+                ) : (
+                  <Text style={[styles.messageText, styles.userText]} selectable>
+                    {item.content}
+                  </Text>
+                )}
+                {item.metadata?.ui_directives && (
+                  <View style={styles.commandCardWrap}>
+                    <UiDirectiveCard
+                      directives={item.metadata.ui_directives}
+                      isSubmitting={isSending || isConfirmingEvent || isSupersededEventCard}
+                      onSubmit={(submission) => {
+                        void handleDirectiveSubmission(
+                          item.id,
+                          item.metadata?.ui_directives,
+                          submission,
+                          item.metadata?.command_result,
+                        );
+                      }}
+                    />
+                    {isSupersededEventCard ? (
+                      <Text style={styles.supersededNote}>
+                        A newer event draft is active. This card is read-only.
+                      </Text>
+                    ) : null}
+                  </View>
+                )}
+              </View>
+            );
+          }}
         />
         {showAnchoredSlashPalette && (
           <View style={[styles.slashPaletteAnchor, { bottom: composerHeight + composerBottomOffset + 8 }]}>
@@ -931,6 +1251,21 @@ export default function ChatScreen() {
             </Pressable>
           </View>
         </View>
+
+        <EventDraftEditorSheet
+          visible={Boolean(eventEditorState)}
+          initialDraft={eventEditorState?.initialDraft || null}
+          isSubmitting={isConfirmingEvent || isSending}
+          onClose={() => setEventEditorState(null)}
+          onSave={saveEventDraftEdits}
+        />
+
+        <EventDraftAdjustSheet
+          visible={Boolean(eventAdjustState)}
+          isSubmitting={isSending}
+          onClose={() => setEventAdjustState(null)}
+          onSubmit={submitEventAdjustment}
+        />
       </KeyboardAvoidingView>
     </LinearGradient>
   );
@@ -1092,6 +1427,12 @@ const styles = StyleSheet.create({
   },
   commandCardWrap: {
     marginTop: 12,
+    gap: 8,
+  },
+  supersededNote: {
+    fontSize: 12,
+    lineHeight: 17,
+    color: theme.colors.mutedInk,
   },
   slashPaletteAnchor: {
     position: 'absolute',

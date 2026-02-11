@@ -3,12 +3,10 @@ from __future__ import annotations
 import asyncio
 import json
 import os
-import re
 from contextlib import asynccontextmanager
 from datetime import date, datetime
 from time import perf_counter
 from typing import Any
-from uuid import uuid4
 
 from fastapi import (
     Depends,
@@ -40,6 +38,13 @@ import telegram_bot
 import todos as todos_service
 from agent.state import AgentState
 from auth import get_current_user
+from commands.event import (
+    confirm_event_command as confirm_event_command_impl,
+)
+from commands.event import (
+    event_pending_key,
+    handle_pending_event,
+)
 from db import get_conn
 from notifications.preferences import get_push_settings, update_push_settings
 from observability.log_stream import (
@@ -744,219 +749,10 @@ def confirm_event_command(
     payload: EventCommandConfirmation,
     user: dict = Depends(get_current_user),
 ):
-    """
-    Confirm and create an event from /event command.
-
-    This endpoint receives the user's confirmation of the extracted event data,
-    creates any new entities (contacts, places), and stores the event.
-    """
     user_email = user.get("email")
     if not user_email:
         raise HTTPException(status_code=400, detail="Authenticated user email missing")
-
-    if not payload.confirmed:
-        from commands.storage import clear_pending_event_by_preview_id, delete_command_data
-
-        delete_command_data(payload.preview_id)
-        clear_pending_event_by_preview_id(payload.preview_id)
-        return EventCommandResult(
-            success=False,
-            error="Event creation cancelled by user",
-        )
-
-    # Retrieve stored command data
-    from datetime import datetime
-
-    from commands.storage import (
-        clear_pending_event_by_preview_id,
-        delete_command_data,
-        get_command_data,
-    )
-
-    command_data = get_command_data(payload.preview_id)
-    if not command_data:
-        raise HTTPException(
-            status_code=404,
-            detail="Event preview not found or expired. Please try the /event command again.",
-        )
-
-    extracted = command_data["extracted"]
-    resolution = command_data["resolution"]
-
-    # Apply modifications to extracted data
-    if payload.modifications:
-        mods = payload.modifications
-        if "title" in mods:
-            extracted["title"] = mods["title"]
-        if "summary" in mods:
-            extracted["summary"] = mods["summary"]
-        if "when" in mods:
-            extracted["when"] = (
-                datetime.fromisoformat(mods["when"].replace("Z", "+00:00"))
-                if mods["when"]
-                else None
-            )
-        if "where" in mods:
-            extracted["where"] = mods["where"]
-        if "tags" in mods:
-            extracted["tags"] = mods["tags"]
-
-    try:
-        # 1. Create new contacts
-        created_contacts = []
-        contact_id_map = {}
-
-        for new_contact in resolution["new_entities"]["contacts"]:
-            display_name = new_contact["display_name"]
-            inferred_profession = new_contact.get("inferred_profession")
-            comments = new_contact.get("comments")
-            if inferred_profession:
-                has_profession = bool(comments) and re.search(
-                    r"\bprofession\b", comments, re.IGNORECASE
-                )
-                has_match = bool(comments) and re.search(
-                    rf"\b{re.escape(inferred_profession)}\b", comments, re.IGNORECASE
-                )
-                if not has_profession and not has_match:
-                    profession_line = f"Profession: {inferred_profession}"
-                    comments = (
-                        f"{comments}\n\n{profession_line}".strip() if comments else profession_line
-                    )
-            contact_id = f"contact:{display_name.lower().replace(' ', '_')}#{uuid4().hex[:6]}"
-
-            contact_in = ContactIn(
-                contact_id=contact_id,
-                display_name=display_name,
-                aliases=[],
-                emails=[],
-                phones=[],
-                links=[],
-                tags=[],
-                comments=comments,
-            )
-
-            contacts_service.ingest_contact(contact_in)
-            created_contacts.append({"contact_id": contact_id, "display_name": display_name})
-            contact_id_map[display_name] = contact_id
-
-        # 1b. Create confirmed relationships (after contacts exist)
-        confirmed_relationships = []
-        if payload.modifications:
-            confirmed_relationships = payload.modifications.get("confirmed_relationships") or []
-
-        if confirmed_relationships:
-            existing_contact_map = {
-                contact["display_name"]: contact["contact_id"]
-                for contact in resolution.get("contacts", [])
-                if contact.get("display_name") and contact.get("contact_id")
-            }
-            all_contact_map = {**existing_contact_map, **contact_id_map}
-
-            def _resolve_relationship_contact_id(
-                rel: dict[str, Any],
-                key_prefix: str,
-            ) -> str | None:
-                contact_id = rel.get(f"{key_prefix}_contact_id")
-                if contact_id:
-                    return contact_id
-                display_name = rel.get(f"{key_prefix}_display_name")
-                if display_name:
-                    return all_contact_map.get(display_name)
-                return None
-
-            for relationship in confirmed_relationships:
-                if not isinstance(relationship, dict):
-                    continue
-
-                from_contact_id = _resolve_relationship_contact_id(relationship, "from")
-                to_contact_id = _resolve_relationship_contact_id(relationship, "to")
-                relationship_type = relationship.get("relationship_type") or relationship.get(
-                    "type"
-                )
-                reciprocal_type = relationship.get("reciprocal_type") or relationship.get(
-                    "other_type"
-                )
-
-                if not from_contact_id or not to_contact_id or not relationship_type:
-                    continue
-
-                rel_in = ContactRelationshipIn(
-                    relationship_id=f"rel:{uuid4().hex}",
-                    from_contact_id=from_contact_id,
-                    to_contact_id=to_contact_id,
-                    relationship_type=relationship_type,
-                    reciprocal_type=reciprocal_type,
-                )
-                contacts_service.upsert_contact_relationship(rel_in)
-
-        # 2. Create new places
-        created_places = []
-        place_id_map = {}
-
-        for new_place in resolution["new_entities"]["places"]:
-            place_name = new_place["name"]
-            place_id = f"plc_{place_name.lower().replace(' ', '_')}_{uuid4().hex[:6]}"
-
-            place_in = PlaceIn(
-                place_id=place_id,
-                name=place_name,
-                city=None,
-                country=None,
-                lat=None,
-                lon=None,
-                geohash=None,
-            )
-
-            places_service.ingest_place(place_in)
-            created_places.append({"place_id": place_id, "name": place_name})
-            place_id_map[place_name] = place_id
-
-        # 3. Build list of all contact IDs (existing + new)
-        all_contact_ids = []
-        for existing_contact in resolution["contacts"]:
-            all_contact_ids.append(existing_contact["contact_id"])
-        for created_contact in created_contacts:
-            all_contact_ids.append(created_contact["contact_id"])
-
-        # 4. Get place_id (existing or newly created)
-        place_id = None
-        where = extracted.get("where")
-        if where:
-            place_id = place_id_map.get(where)
-
-        # 5. Create the event
-        event_id = f"event:{uuid4().hex}"
-        when = extracted.get("when")
-
-        event_in = EventIn(
-            id=event_id,
-            startDate=when if when else datetime.now(),
-            endDate=None,
-            placeId=place_id,
-            people=all_contact_ids,
-            tags=extracted.get("tags", []),
-            types=extracted.get("types", ["generic"]),
-            title=extracted.get("title", ""),
-            summary=extracted.get("summary", ""),
-            raw={"source": "event_command"},
-        )
-
-        events_service.ingest_event(event_in)
-
-        # Clean up stored data
-        delete_command_data(payload.preview_id)
-        clear_pending_event_by_preview_id(payload.preview_id)
-
-        return EventCommandResult(
-            success=True,
-            event_id=event_id,
-            created_contacts=created_contacts,
-            created_places=created_places,
-        )
-
-    except Exception as e:
-        logger.exception("[event_confirm] Failed to create event: %s", e)
-        raise HTTPException(status_code=500, detail=f"Failed to create event: {str(e)}")
+    return confirm_event_command_impl(payload, user_email)
 
 
 @api.post("/access/gate")
@@ -1174,11 +970,6 @@ def _make_reset_bundle(ctx: _SessionContext) -> dict[str, Any]:
     }
 
 
-def _event_pending_key(user_email: str, thread_id: str | None) -> str:
-    resolved_thread = thread_id or "main"
-    return f"{user_email}:{resolved_thread}"
-
-
 def _command_response_text(command_result: dict[str, Any]) -> str:
     result_type = CommandResultType.from_value(command_result.get("type"))
     if result_type is CommandResultType.EVENT_CONFIRMATION:
@@ -1214,89 +1005,6 @@ def _command_assistant_metadata(
     return metadata, ui_directives
 
 
-def _handle_pending_event(
-    question: str,
-    user_email: str,
-    user: dict,
-    thread_id: str | None,
-    pending_event_id: str | None,
-) -> tuple[dict[str, Any], str, dict[str, Any] | None] | None:
-    from uuid import uuid4
-
-    from commands import get_command_registry, parse_command
-    from commands.storage import (
-        clear_pending_event,
-        delete_command_data,
-        get_command_data,
-        get_pending_event,
-        store_command_data,
-        store_command_thread,
-    )
-
-    if parse_command(question):
-        return None
-
-    key = _event_pending_key(user_email, thread_id)
-    preview_id = pending_event_id or get_pending_event(key)
-    if not preview_id:
-        return None
-
-    command_data = get_command_data(preview_id)
-    if not command_data:
-        if not pending_event_id:
-            clear_pending_event(key)
-        return None
-
-    command_thread_id = command_data.get("thread_id") or thread_id
-    if command_thread_id:
-        key = _event_pending_key(user_email, command_thread_id)
-
-    clarification_id = f"event:clarification:{uuid4().hex[:8]}"
-    store_command_data(clarification_id, command_data)
-    delete_command_data(preview_id)
-    clear_pending_event(key)
-
-    original_message = command_data.get("original_message") or question
-    combined_message = (
-        f"/event {original_message}\n\nAdditional details: {question}\n\n"
-        f"[clarification_id:{clarification_id}]"
-    )
-
-    parsed_cmd = parse_command(combined_message)
-    if not parsed_cmd:
-        return None
-
-    if not command_thread_id:
-        command_thread = conversations.ensure_thread(None, user_email, title="Command: /event")
-        command_thread_id = command_thread["id"]
-        store_command_thread(key, command_thread_id)
-    else:
-        store_command_thread(key, command_thread_id)
-
-    registry = get_command_registry()
-    context = {
-        "user_email": user_email,
-        "user": user,
-        "thread_id": command_thread_id,
-        "event_pending_key": key,
-    }
-    command_result = registry.execute(parsed_cmd, context)
-
-    assistant_metadata, ui_directives = _command_assistant_metadata(command_result)
-    try:
-        conversations.record_exchange(
-            command_thread_id,
-            user_email,
-            question,
-            _command_response_text(command_result),
-            assistant_metadata=assistant_metadata,
-        )
-    except Exception as exc:
-        logger.warning("[command_thread] Failed to record exchange: %s", exc, exc_info=exc)
-
-    return command_result, command_thread_id, ui_directives
-
-
 def _handle_command(
     question: str,
     user_email: str,
@@ -1321,7 +1029,7 @@ def _handle_command(
         None, user_email, title=f"Command: /{parsed_cmd.command}"
     )
     command_thread_id = command_thread["id"]
-    pending_key = _event_pending_key(user_email, command_thread_id)
+    pending_key = event_pending_key(user_email, command_thread_id)
     store_command_thread(pending_key, command_thread_id)
 
     registry = get_command_registry()
@@ -1374,12 +1082,14 @@ async def ask(payload: AskIn, user: dict = Depends(get_current_user)):
 
     # Check for commands or pending event refinements before session resolution
     try:
-        command_payload = _handle_pending_event(
+        command_payload = handle_pending_event(
             payload.question,
             user_email,
             user,
             payload.thread_id or payload.session_id,
             payload.pending_event_id,
+            command_response_text=_command_response_text,
+            command_assistant_metadata=_command_assistant_metadata,
         )
         if not command_payload:
             command_payload = _handle_command(
@@ -1392,7 +1102,7 @@ async def ask(payload: AskIn, user: dict = Depends(get_current_user)):
             command_result, command_thread_id, command_ui_directives = command_payload
             from commands.storage import get_pending_event
 
-            pending_event_id = get_pending_event(_event_pending_key(user_email, command_thread_id))
+            pending_event_id = get_pending_event(event_pending_key(user_email, command_thread_id))
             # Return command result
             return AskOut(
                 question=payload.question,
@@ -1483,7 +1193,7 @@ async def ask(payload: AskIn, user: dict = Depends(get_current_user)):
     from commands.storage import get_pending_event
 
     bundle["pending_event_id"] = get_pending_event(
-        _event_pending_key(user_email, payload.thread_id or payload.session_id)
+        event_pending_key(user_email, payload.thread_id or payload.session_id)
     )
     return AskOut(**bundle)
 
@@ -1509,12 +1219,14 @@ async def ask_stream(payload: AskIn, user: dict = Depends(get_current_user)):
 
     # Check for commands or pending event refinements before session resolution
     try:
-        command_payload = _handle_pending_event(
+        command_payload = handle_pending_event(
             payload.question,
             user_email,
             user,
             payload.thread_id or payload.session_id,
             payload.pending_event_id,
+            command_response_text=_command_response_text,
+            command_assistant_metadata=_command_assistant_metadata,
         )
         if not command_payload:
             command_payload = _handle_command(
@@ -1527,7 +1239,7 @@ async def ask_stream(payload: AskIn, user: dict = Depends(get_current_user)):
             command_result, command_thread_id, command_ui_directives = command_payload
             from commands.storage import get_pending_event
 
-            pending_event_id = get_pending_event(_event_pending_key(user_email, command_thread_id))
+            pending_event_id = get_pending_event(event_pending_key(user_email, command_thread_id))
 
             # Return command result as SSE stream
             async def command_generator():
@@ -1640,7 +1352,7 @@ async def ask_stream(payload: AskIn, user: dict = Depends(get_current_user)):
                     bundle["session_id"] = ctx.session_id
                     bundle["is_new_session"] = ctx.is_new_session
                     bundle["pending_event_id"] = get_pending_event(
-                        _event_pending_key(user_email, payload.thread_id or payload.session_id)
+                        event_pending_key(user_email, payload.thread_id or payload.session_id)
                     )
                     event["bundle"] = bundle
 
