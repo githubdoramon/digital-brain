@@ -11,7 +11,7 @@ Components:
 - controller: Main orchestration logic
 """
 
-from .controller import AgentController, get_controller
+from .controller import AgentController
 from .limits import AgentConfig, LimitChecker, LimitViolation
 from .router import IntentClassification, IntentRouter, IntentType
 from .state import AgentState, ToolCallRecord
@@ -26,5 +26,4 @@ __all__ = [
     "IntentClassification",
     "IntentType",
     "AgentController",
-    "get_controller",
 ]

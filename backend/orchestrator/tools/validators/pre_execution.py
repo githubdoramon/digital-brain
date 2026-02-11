@@ -12,6 +12,8 @@ Validates tool calls before execution:
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Optional
 
+from tools.action_enums import HomeAssistantAction, LookupContactAction
+
 if TYPE_CHECKING:
     from tools.registry import ToolRegistry
 
@@ -192,17 +194,33 @@ class PreExecutionValidator:
     def _semantic_validate(self, tool_name: str, params: dict[str, Any]) -> str | None:
         """Run action-specific semantic validation not expressible in static JSON schema."""
         if tool_name == "home_assistant":
-            action = str(params.get("action") or "").strip()
-            if action == "call_tool" and not str(params.get("tool_name") or "").strip():
+            action = HomeAssistantAction.from_value(params.get("action"))
+            if (
+                action is HomeAssistantAction.CALL_TOOL
+                and not str(params.get("tool_name") or "").strip()
+            ):
                 return "When action='call_tool', 'tool_name' is required"
 
         if tool_name == "lookup_contact":
-            action = str(params.get("action") or "").strip()
+            action = LookupContactAction.from_value(
+                params.get("action"),
+                default=LookupContactAction.SEARCH,
+            )
+            action_label = (
+                action.value
+                if isinstance(action, LookupContactAction)
+                else LookupContactAction.SEARCH.value
+            )
             has_query = bool(str(params.get("query") or "").strip())
             has_contact_id = bool(str(params.get("contact_id") or "").strip())
-            if action in {"search", "find_related"} and not has_query:
-                return f"When action='{action}', provide a non-empty 'query'"
-            if action == "get_relationships" and not (has_contact_id or has_query):
+            if (
+                action in {LookupContactAction.SEARCH, LookupContactAction.FIND_RELATED}
+                and not has_query
+            ):
+                return f"When action='{action_label}', provide a non-empty 'query'"
+            if action is LookupContactAction.GET_RELATIONSHIPS and not (
+                has_contact_id or has_query
+            ):
                 return "When action='get_relationships', provide 'contact_id' or 'query'"
 
         return None
@@ -212,12 +230,17 @@ class PreExecutionValidator:
         hints: list[str] = []
 
         if tool_name == "home_assistant":
-            action = str(params.get("action") or "").strip()
-            if action == "call_tool" and not str(params.get("tool_name") or "").strip():
+            action = HomeAssistantAction.from_value(params.get("action"))
+            if (
+                action is HomeAssistantAction.CALL_TOOL
+                and not str(params.get("tool_name") or "").strip()
+            ):
                 hints.append(
                     "Call `home_assistant` with action='list_tools' first, then reuse a returned tool_name"
                 )
-            if action == "call_tool" and not isinstance(params.get("arguments"), dict):
+            if action is HomeAssistantAction.CALL_TOOL and not isinstance(
+                params.get("arguments"), dict
+            ):
                 hints.append("Use an object for 'arguments' when calling a Home Assistant MCP tool")
 
         if tool_name == "search_memories":

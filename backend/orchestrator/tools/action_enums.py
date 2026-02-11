@@ -1,0 +1,41 @@
+"""Shared enums for tool action parameters."""
+
+from __future__ import annotations
+
+from enum import Enum
+
+
+class HomeAssistantAction(str, Enum):
+    """Allowed action values for the `home_assistant` tool."""
+
+    LIST_TOOLS = "list_tools"
+    CALL_TOOL = "call_tool"
+
+    @classmethod
+    def from_value(cls, value: object) -> HomeAssistantAction | None:
+        normalized = str(value or "").strip().lower()
+        for member in cls:
+            if member.value == normalized:
+                return member
+        return None
+
+
+class LookupContactAction(str, Enum):
+    """Allowed action values for the `lookup_contact` tool."""
+
+    SEARCH = "search"
+    GET_RELATIONSHIPS = "get_relationships"
+    FIND_RELATED = "find_related"
+
+    @classmethod
+    def from_value(
+        cls,
+        value: object,
+        *,
+        default: LookupContactAction | None = None,
+    ) -> LookupContactAction | None:
+        normalized = str(value or "").strip().lower()
+        for member in cls:
+            if member.value == normalized:
+                return member
+        return default

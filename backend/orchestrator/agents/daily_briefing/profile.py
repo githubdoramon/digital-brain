@@ -4,7 +4,11 @@ from __future__ import annotations
 
 from typing import Any
 
-from agent.runtime_profiles import BoundedRuntimeProfile, build_daily_briefing_runtime_profile
+from agent.runtime_profiles import (
+    BoundedAgentProfile,
+    BoundedRuntimeProfile,
+    build_agent_profile,
+)
 from tools.handlers.memory import handle_get_document, handle_search_memories
 from tools.handlers.web import handle_fetch_web_page, handle_web_search
 from tools.registry import get_registry
@@ -20,7 +24,21 @@ DAILY_BRIEFING_ALLOWED_TOOLS = (
 
 def get_daily_briefing_profile() -> BoundedRuntimeProfile:
     """Return the runtime profile for daily briefing generation."""
-    return build_daily_briefing_runtime_profile()
+    return build_daily_briefing_agent_profile().runtime
+
+
+def build_daily_briefing_agent_profile() -> BoundedAgentProfile:
+    """Build daily briefing agent profile from generic profile constructor."""
+    return build_agent_profile(
+        name="daily_briefing",
+        max_steps=8,
+        max_tool_calls=12,
+        timeout_seconds=180,
+        temperature=0.1,
+        top_p=None,
+        build_tools_and_handlers=build_daily_briefing_tools_and_handlers,
+        get_system_prompt=get_daily_briefing_system_prompt,
+    )
 
 
 def build_daily_briefing_tools_and_handlers() -> tuple[list[dict[str, Any]], dict[str, Any]]:

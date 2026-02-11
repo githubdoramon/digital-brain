@@ -99,6 +99,8 @@ class AgentState:
     route_confidence_tier: str = "low"
     tool_visibility_mode: str = "full"
     tool_visibility_escalated: bool = False
+    tool_visibility_escalations_count: int = 0
+    clarification_requests_count: int = 0
 
     # Completion tracking (clawdbot-inspired)
     goal_achieved: bool = False
@@ -394,6 +396,12 @@ class AgentState:
                 f"source={self.route_source}, confidence={self.route_confidence:.2f}, "
                 f"tier={self.route_confidence_tier}, tools={self.tool_visibility_mode}"
             )
+            if self.tool_visibility_escalations_count:
+                lines.append(
+                    f"ROUTING_RECOVERY: tool_visibility_escalations={self.tool_visibility_escalations_count}"
+                )
+            if self.clarification_requests_count:
+                lines.append(f"CLARIFICATIONS_REQUESTED: {self.clarification_requests_count}")
 
         if self.known_facts:
             # Include last 5 facts to limit context size
@@ -501,6 +509,8 @@ class AgentState:
             "route_confidence_tier": self.route_confidence_tier,
             "tool_visibility_mode": self.tool_visibility_mode,
             "tool_visibility_escalated": self.tool_visibility_escalated,
+            "tool_visibility_escalations_count": self.tool_visibility_escalations_count,
+            "clarification_requests_count": self.clarification_requests_count,
             "constraints": self.constraints,
             "step_count": self.step_count,
             "tool_calls_count": self.tool_calls_count,
@@ -531,6 +541,8 @@ class AgentState:
             "route_confidence_tier": self.route_confidence_tier,
             "tool_visibility_mode": self.tool_visibility_mode,
             "tool_visibility_escalated": self.tool_visibility_escalated,
+            "tool_visibility_escalations_count": self.tool_visibility_escalations_count,
+            "clarification_requests_count": self.clarification_requests_count,
             "resolution": self.resolution,
             "information_candidates": self.information_candidates,
             "activated_skills": [s.get("name") for s in self.activated_skills],

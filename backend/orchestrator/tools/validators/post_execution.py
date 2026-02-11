@@ -22,8 +22,10 @@ from typing import Any, Optional
 # Add parent directory to path for imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
+from agent.enums import ToolStatus
 from agent.router import TOOL_GROUPS
 from observability import trace
+from tools.action_enums import LookupContactAction
 from ui_dsl.clarification import extract_need_user_input
 
 
@@ -93,9 +95,7 @@ class PostExecutionValidator:
         self.llm_api_key = llm_api_key or os.getenv(
             "POST_VALIDATOR_API_KEY", os.getenv("LLM_API_KEY", "")
         )
-        self.llm_timeout = int(
-            os.getenv("POST_VALIDATOR_TIMEOUT", str(llm_timeout))
-        )
+        self.llm_timeout = int(os.getenv("POST_VALIDATOR_TIMEOUT", str(llm_timeout)))
         self.enable_llm_validation = enable_llm_validation
 
     def validate(
@@ -128,9 +128,7 @@ class PostExecutionValidator:
 
         # Phase 2: LLM-based check for ambiguous cases
         if self.enable_llm_validation and self.llm_base_url and self.llm_model:
-            return self._llm_check(
-                tool_name, params, result, goal, known_facts, completed_actions
-            )
+            return self._llm_check(tool_name, params, result, goal, known_facts, completed_actions)
 
         # Default: needs more tools (let the main agent loop decide)
         return PostExecutionResult(
@@ -259,7 +257,7 @@ class PostExecutionValidator:
 
         # Check resolve_contacts - extract resolution status and ambiguity signals
         if tool_name == "resolve_contacts":
-            status = result.get("status", "unknown")
+            status = ToolStatus.from_value(result.get("status"))
             people = result.get("people_mentioned", [])
             resolved = result.get("resolved_contacts", [])
             need_user_input = extract_need_user_input(
@@ -281,7 +279,7 @@ class PostExecutionValidator:
                     extracted_facts=facts or ["Ambiguous contact resolution"],
                 )
 
-            if status == "no_people":
+            if status is ToolStatus.NO_PEOPLE:
                 return PostExecutionResult(
                     coverage=GoalCoverage.NEEDS_MORE_TOOLS,
                     reason="No people detected; continue without contact filters",
@@ -289,7 +287,7 @@ class PostExecutionValidator:
                     suggested_next_tools=["search_memories", "resolve_query"],
                 )
 
-            if status == "success":
+            if status is ToolStatus.SUCCESS:
                 return PostExecutionResult(
                     coverage=GoalCoverage.NEEDS_MORE_TOOLS,
                     reason="Contacts resolved and ready for downstream queries",
@@ -324,7 +322,10 @@ class PostExecutionValidator:
 
         # Check lookup_contact - extract contact search/relationship results
         if tool_name == "lookup_contact":
-            action = params.get("action", "search")
+            action = LookupContactAction.from_value(
+                params.get("action"),
+                default=LookupContactAction.SEARCH,
+            )
             facts = []
 
             if result.get("error"):
@@ -334,7 +335,7 @@ class PostExecutionValidator:
                     suggested_next_tools=["resolve_query", "search_memories"],
                 )
 
-            if action == "search":
+            if action is LookupContactAction.SEARCH:
                 count = result.get("count", 0)
                 contacts = result.get("contacts", [])
                 if contacts:
@@ -352,10 +353,15 @@ class PostExecutionValidator:
                         suggested_next_tools=["resolve_query", "search_memories"],
                     )
 
-            elif action in ("get_relationships", "find_related"):
+            elif action in {
+                LookupContactAction.GET_RELATIONSHIPS,
+                LookupContactAction.FIND_RELATED,
+            }:
                 if result.get("found"):
                     rel_count = result.get("relationship_count", 0)
-                    contact_name = result.get("primary_contact", result.get("contact", {})).get("display_name", "Unknown")
+                    contact_name = result.get("primary_contact", result.get("contact", {})).get(
+                        "display_name", "Unknown"
+                    )
                     facts.append(f"Found {rel_count} relationships for {contact_name}")
 
                     # If we found relationships, this might be the final answer
@@ -430,9 +436,7 @@ class PostExecutionValidator:
 
         facts_str = "\n".join(f"- {f}" for f in known_facts) if known_facts else "None"
         actions_str = (
-            "\n".join(f"- {a}" for a in (completed_actions or []))
-            if completed_actions
-            else "None"
+            "\n".join(f"- {a}" for a in (completed_actions or [])) if completed_actions else "None"
         )
 
         return f"""You are a goal coverage validator. Analyze if the tool result helps satisfy the user's goal.
@@ -465,7 +469,9 @@ Rules:
 
     def _call_llm(self, prompt: str) -> str:
         """Make LLM API call for validation."""
-        sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+        sys.path.insert(
+            0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        )
         from llm_helpers import call_llm
 
         return call_llm(prompt, timeout=self.llm_timeout)
@@ -530,9 +536,7 @@ Rules:
                     candidate_id = str(top_candidate.get("id") or "").strip()
                     candidate_kind = str(top_candidate.get("kind") or "information").strip()
                     if candidate_id:
-                        facts.append(
-                            f"Top {candidate_kind} candidate: {title} ({candidate_id})"
-                        )
+                        facts.append(f"Top {candidate_kind} candidate: {title} ({candidate_id})")
                     else:
                         facts.append(f"Top {candidate_kind} candidate: {title}")
 
@@ -562,27 +566,35 @@ Rules:
                 facts.append("GOAL_ACHIEVED: Device command completed")
 
         elif tool_name == "lookup_contact":
-            action = result.get("action", "search")
-            if action == "search":
+            action = LookupContactAction.from_value(
+                result.get("action"),
+                default=LookupContactAction.SEARCH,
+            )
+            if action is LookupContactAction.SEARCH:
                 count = result.get("count", 0)
                 if count > 0:
                     contacts = result.get("contacts", [])
                     names = [c.get("display_name", "Unknown") for c in contacts[:3]]
                     facts.append(f"Found {count} contacts: {', '.join(names)}")
-            elif action in ("get_relationships", "find_related"):
+            elif action in {
+                LookupContactAction.GET_RELATIONSHIPS,
+                LookupContactAction.FIND_RELATED,
+            }:
                 if result.get("found"):
                     rel_count = result.get("relationship_count", 0)
-                    contact_name = result.get("primary_contact", result.get("contact", {})).get("display_name", "Unknown")
+                    contact_name = result.get("primary_contact", result.get("contact", {})).get(
+                        "display_name", "Unknown"
+                    )
                     facts.append(f"Found {rel_count} relationships for {contact_name}")
 
         elif tool_name == "resolve_contacts":
-            status = result.get("status", "unknown")
+            status = ToolStatus.from_value(result.get("status"))
             resolved = result.get("resolved_contacts", [])
             need_user_input = extract_need_user_input(
                 result,
                 default_source=tool_name,
             )
-            if status == "success" and resolved:
+            if status is ToolStatus.SUCCESS and resolved:
                 facts.append(f"Resolved {len(resolved)} contacts from text")
             elif need_user_input:
                 facts.append("Contact resolution is ambiguous and needs clarification")
@@ -658,22 +670,61 @@ class GoalCompletionValidator:
     # Patterns that indicate an ACTION goal (user wants something done)
     ACTION_PATTERNS = [
         # Device/IoT actions
-        "turn on", "turn off", "switch on", "switch off",
-        "dim", "brighten", "set", "change", "adjust",
-        "open", "close", "lock", "unlock",
-        "start", "stop", "pause", "resume",
+        "turn on",
+        "turn off",
+        "switch on",
+        "switch off",
+        "dim",
+        "brighten",
+        "set",
+        "change",
+        "adjust",
+        "open",
+        "close",
+        "lock",
+        "unlock",
+        "start",
+        "stop",
+        "pause",
+        "resume",
         # Data actions
-        "create", "add", "insert", "save", "store",
-        "delete", "remove", "update", "modify", "edit",
-        "send", "execute", "run", "trigger",
+        "create",
+        "add",
+        "insert",
+        "save",
+        "store",
+        "delete",
+        "remove",
+        "update",
+        "modify",
+        "edit",
+        "send",
+        "execute",
+        "run",
+        "trigger",
     ]
 
     # Patterns that indicate a QUERY goal (user wants information)
     QUERY_PATTERNS = [
-        "what", "who", "when", "where", "why", "how",
-        "find", "search", "list", "show", "tell me",
-        "do i have", "is there", "are there",
-        "get", "retrieve", "fetch", "look up", "lookup",
+        "what",
+        "who",
+        "when",
+        "where",
+        "why",
+        "how",
+        "find",
+        "search",
+        "list",
+        "show",
+        "tell me",
+        "do i have",
+        "is there",
+        "are there",
+        "get",
+        "retrieve",
+        "fetch",
+        "look up",
+        "lookup",
     ]
 
     # Tool-specific discovery actions that need follow-up execution
@@ -765,25 +816,26 @@ class GoalCompletionValidator:
                         # Check if execution tool was also called
                         if execution_action not in tool_names:
                             has_successful_discovery = any(
-                                tc.tool_name == tool_name and tc.success
-                                for tc in tool_calls
+                                tc.tool_name == tool_name and tc.success for tc in tool_calls
                             )
                             if has_successful_discovery:
                                 return (
                                     False,
                                     f"Used {tool_name} for discovery but did not execute",
-                                    [f"Use {execution_action} to complete the action"]
+                                    [f"Use {execution_action} to complete the action"],
                                 )
                 else:
                     # Check action parameter (like home_assistant's action param)
                     discovery_calls = [
-                        tc for tc in tool_calls
+                        tc
+                        for tc in tool_calls
                         if tc.tool_name == tool_name
                         and tc.arguments.get("action") == discovery_action
                         and tc.success
                     ]
                     execution_calls = [
-                        tc for tc in tool_calls
+                        tc
+                        for tc in tool_calls
                         if tc.tool_name == tool_name
                         and tc.arguments.get("action") == execution_action
                     ]
@@ -792,7 +844,7 @@ class GoalCompletionValidator:
                         return (
                             False,
                             f"Used {tool_name} {discovery_action} but did not {execution_action}",
-                            [f"Call {tool_name} with action='{execution_action}' to complete"]
+                            [f"Call {tool_name} with action='{execution_action}' to complete"],
                         )
 
         return (True, "No discovery-only pattern detected", [])
@@ -810,7 +862,8 @@ class GoalCompletionValidator:
 
         # Check for GOAL_ACHIEVED marker in facts
         goal_achieved_facts = [
-            f for f in known_facts
+            f
+            for f in known_facts
             if "GOAL_ACHIEVED" in f or "successfully" in f.lower() or "completed" in f.lower()
         ]
         if goal_achieved_facts:
@@ -839,18 +892,14 @@ class GoalCompletionValidator:
             return (
                 False,
                 "Only discovery/query tools were used, action not executed",
-                ["Execute the tool that performs the actual action"]
+                ["Execute the tool that performs the actual action"],
             )
 
         # Failed calls
         failed_calls = [tc for tc in tool_calls if not tc.success]
         if failed_calls:
             last_error = failed_calls[-1].error or "unknown error"
-            return (
-                False,
-                f"Action failed: {last_error}",
-                ["Retry with corrected parameters"]
-            )
+            return (False, f"Action failed: {last_error}", ["Retry with corrected parameters"])
 
         return (False, "No action execution detected", ["Execute the required action"])
 
@@ -886,7 +935,8 @@ class GoalCompletionValidator:
         successful_query_calls = [
             tc
             for tc in tool_calls
-            if tc.tool_name in (
+            if tc.tool_name
+            in (
                 "search_memories",
                 "get_events",
                 "get_document",
@@ -899,9 +949,8 @@ class GoalCompletionValidator:
         has_successful_results = any(self._has_results(tc.result) for tc in successful_query_calls)
         best_search_candidate = self._find_best_search_candidate(tool_calls)
         required_detail_tool = self._required_detail_tool_for_candidate(best_search_candidate)
-        has_required_detail = (
-            required_detail_tool is None
-            or any(tc.tool_name == required_detail_tool for tc in successful_query_calls)
+        has_required_detail = required_detail_tool is None or any(
+            tc.tool_name == required_detail_tool for tc in successful_query_calls
         )
         candidate_kind = str((best_search_candidate or {}).get("kind") or "source")
         if required_detail_tool == "get_document":
@@ -934,7 +983,10 @@ class GoalCompletionValidator:
                 "did not find",
                 "no relevant",
             )
-            if any(marker in final_content_lower for marker in no_data_markers) and has_successful_results:
+            if (
+                any(marker in final_content_lower for marker in no_data_markers)
+                and has_successful_results
+            ):
                 return (
                     False,
                     "Final response contradicts retrieved results",
@@ -942,11 +994,16 @@ class GoalCompletionValidator:
                 )
 
         # Check if we got actual results from facts
-        result_indicators = ["found", "retrieved", "returned", "results", "rows", "items", "records"]
-        result_facts = [
-            f for f in known_facts
-            if any(w in f.lower() for w in result_indicators)
+        result_indicators = [
+            "found",
+            "retrieved",
+            "returned",
+            "results",
+            "rows",
+            "items",
+            "records",
         ]
+        result_facts = [f for f in known_facts if any(w in f.lower() for w in result_indicators)]
 
         if result_facts:
             if required_detail_tool and not has_required_detail:
@@ -963,8 +1020,7 @@ class GoalCompletionValidator:
                 )
             if temporal_goal:
                 has_temporal_resolution = any(
-                    t.success and t.tool_name == "get_events"
-                    for t in tool_calls
+                    t.success and t.tool_name == "get_events" for t in tool_calls
                 )
                 if not has_temporal_resolution:
                     return (
@@ -987,8 +1043,7 @@ class GoalCompletionValidator:
                         )
                     if temporal_goal:
                         has_temporal_resolution = any(
-                            t.success and t.tool_name == "get_events"
-                            for t in tool_calls
+                            t.success and t.tool_name == "get_events" for t in tool_calls
                         )
                         if not has_temporal_resolution:
                             return (
@@ -1002,7 +1057,7 @@ class GoalCompletionValidator:
             return (
                 False,
                 "Query executed but returned no results",
-                ["Try different search terms or alternative tools"]
+                ["Try different search terms or alternative tools"],
             )
 
         # Check if final content has substantive information
@@ -1012,7 +1067,7 @@ class GoalCompletionValidator:
         return (
             False,
             "Query did not return useful results",
-            ["Try alternative search terms or tools"]
+            ["Try alternative search terms or tools"],
         )
 
     def _has_results(self, result: dict) -> bool:
@@ -1052,7 +1107,9 @@ class GoalCompletionValidator:
         best_score = float("-inf")
 
         for call in tool_calls:
-            if getattr(call, "tool_name", "") != "search_memories" or not getattr(call, "success", False):
+            if getattr(call, "tool_name", "") != "search_memories" or not getattr(
+                call, "success", False
+            ):
                 continue
             rows = (getattr(call, "result", {}) or {}).get("results", [])
             if not isinstance(rows, list):

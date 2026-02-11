@@ -4,111 +4,102 @@
 
 **"The model proposes, the controller validates and decides."**
 
-The LLM suggests tool calls, but the controller:
-- Validates parameters before execution
-- Executes tools and captures results
-- Decides when to continue or stop
-- Maintains canonical state across all interactions
+The LLM suggests actions, but the runtime enforces contracts, validates tool usage, and decides whether to continue, escalate, clarify, or stop.
 
-## Component Diagram
+## Runtime Layers
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                        AgentController                          │
-│  ┌──────────────┐  ┌──────────────┐  ┌──────────────────────┐  │
-│  │ IntentRouter │  │ LimitChecker │  │ AgentState           │  │
-│  │ (classify)   │  │ (stop rules) │  │ (canonical state)    │  │
-│  └──────────────┘  └──────────────┘  └──────────────────────┘  │
-└─────────────────────────────────────────────────────────────────┘
-                              │
-                              ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                        Tool System                              │
-│  ┌──────────────┐  ┌──────────────┐  ┌──────────────────────┐  │
-│  │ ToolRegistry │  │ ToolContract │  │ Validators           │  │
-│  │ (grouping)   │  │ (schemas)    │  │ (pre/post execution) │  │
-│  └──────────────┘  └──────────────┘  └──────────────────────┘  │
-└─────────────────────────────────────────────────────────────────┘
-                              │
-                              ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                      Tool Handlers                              │
-│  memory.py │ resolution.py │ web.py │ homeassistant.py │ etc.  │
-└─────────────────────────────────────────────────────────────────┘
+```mermaid
+flowchart TD
+  U[User Request] --> A[app.py / llm.py]
+  A --> C[AgentController]
+  C --> R[IntentRouter]
+  C --> TV[Tool Visibility Policy]
+  C --> TE[ToolExecutionCoordinator]
+  TE --> PRE[Pre Validation]
+  PRE --> H[Tool Handler]
+  H --> POST[Post Validation]
+  POST --> S[AgentState]
+  S --> C
+  C --> RESP[Final Bundle]
 ```
 
-## Request Flow
+## Profile-Based Design
 
-```
-1. User Question
-       │
-       ▼
-2. IntentRouter.classify()
-   ├─ LLM-first classification
-   └─ Rule-based fallback (if LLM unavailable/fails)
-       │
-       ▼
-3. Build full tool list from registry
-       │
-       ▼
-4. Agent Loop:
-   ├─ Check limits (max_steps, max_tool_calls, max_repairs)
-   ├─ Inject state into prompt
-   ├─ Call LLM with full tool set
-   ├─ If tool_call:
-   │   ├─ Pre-execution validation
-   │   ├─ Execute tool handler
-   │   ├─ Post-execution validation
-   │   └─ Update state (facts, actions)
-   ├─ If content: check if final answer
-   └─ Check no-progress detection
-       │
-       ▼
-5. Return response bundle
+The architecture is split into shared runtime and agent-specific policy:
+
+- `backend/orchestrator/agent/`: shared runtime primitives (controller, limits, state, visibility policy, execution pipeline).
+- `backend/orchestrator/agents/main/`: main conversational agent policy (message building, runtime policy, profile config).
+- `backend/orchestrator/agents/daily_briefing/`: daily briefing profile, bounded tool policy, and executor integration.
+
+## Routing and Tool Visibility
+
+Routing is hybrid and conservative:
+
+1. High-precision deterministic rule short-circuit when confidence is high.
+2. LLM routing for open/ambiguous language.
+3. Confidence-tiered tool visibility:
+   - `high`: restrict to routed groups.
+   - `medium`: routed groups + `resolution`.
+   - `low`: full toolset (fail-open).
+4. If restricted mode hits no-progress, visibility escalates to full tools in-run.
+
+## Main Request Flow
+
+```mermaid
+sequenceDiagram
+  participant User
+  participant App as app.py
+  participant Ctrl as AgentController
+  participant LLM
+  participant Tools as Tool Pipeline
+
+  User->>App: POST /ask
+  App->>Ctrl: run(question, context)
+  Ctrl->>Ctrl: classify intent + choose tool visibility
+  Ctrl->>Ctrl: optional pre-resolve contacts
+  loop bounded steps
+    Ctrl->>LLM: messages + visible tools + state
+    alt tool calls
+      LLM->>Ctrl: tool_calls
+      Ctrl->>Tools: pre-validate -> execute -> post-validate
+      Tools-->>Ctrl: normalized results + facts
+      Ctrl->>Ctrl: update state, check clarification/no-progress
+    else final content
+      LLM-->>Ctrl: answer text
+      Ctrl->>Ctrl: goal completion guard
+    end
+  end
+  Ctrl-->>App: response bundle
+  App-->>User: answer + metadata
 ```
 
 ## Key Files
 
 | File | Purpose |
 |------|---------|
-| `agent/controller.py` | Main orchestration logic |
-| `agent/tool_executor.py` | Tool-call execution + validation pipeline |
-| `agent/guardrails.py` | Query shaping and contact-scope guardrails |
-| `agent/response_guardrails.py` | Malformed-output and continuation detection |
-| `agent/state.py` | AgentState and ToolCallRecord |
-| `agent/router.py` | Intent classification |
-| `agent/limits.py` | Stop rules, no-progress detection |
-| `tools/registry.py` | Tool registration and grouping |
-| `tools/contracts.py` | ToolContract with JSON Schema |
-| `tools/validators/` | Pre/post execution validation |
-| `tools/handlers/` | Actual tool implementations |
+| `agent/controller.py` | Main orchestration for sync/stream runs |
+| `agent/tool_executor.py` | Tool execution and validation coordinator |
+| `agent/tool_visibility_policy.py` | Confidence-tier visibility and escalation policy |
+| `agent/state.py` | Canonical runtime state and counters |
+| `agent/router.py` | Hybrid intent classification |
+| `agents/main/message_builder.py` | Main prompt assembly |
+| `agents/main/runtime_policy.py` | Main loop decision helpers |
+| `agents/main/profile.py` | Main runtime profile |
+| `agents/daily_briefing/profile.py` | Daily briefing bounded profile and tools |
+| `agent/tool_loop_runner.py` | Shared bounded tool loop runner utility |
 
-## Feature Flags
+## Important Notes
 
-```bash
-# Enable LLM-based intent routing
-AGENT_ENABLE_INTENT_ROUTING=true
+- Tool groups are now used for runtime visibility policy (not just metadata).
+- Clarification responses follow `need_user_input` standards and map to UI directives when possible.
+- Controller tracks recovery metrics in state metadata (`tool_visibility_escalations_count`, `clarification_requests_count`).
 
-# Enable pre/post validation
-AGENT_ENABLE_VALIDATION=true
-```
+## Related Docs
 
-## Related Documentation
-
-- [ADDING_TOOLS.md](./ADDING_TOOLS.md) - How to add new tools
-- [ADDING_INTENTS.md](./ADDING_INTENTS.md) - How to add new intent types
-- [MAIN_AGENT_FLOW.md](./MAIN_AGENT_FLOW.md) - Current runtime flow, guardrails, and decision points
-- [TOOL_GROUPS.md](./TOOL_GROUPS.md) - Tool group system reference
-- [AGENT_LIMITS.md](./AGENT_LIMITS.md) - Limit configuration
-- [STATE_MANAGEMENT.md](./STATE_MANAGEMENT.md) - Agent state guide
-- [VALIDATION.md](./VALIDATION.md) - Validation system guide
-
-## Caveats
-
-1. **Intent router checks order matters**: Rule-based classification checks intents in a specific order. Earlier matches take precedence.
-
-2. **Tool groups are metadata**: Intent router still emits groups for observability/hints, but the controller currently exposes the full tool set.
-
-3. **State is per-request**: AgentState is created fresh for each user question. Cross-request state must be handled externally.
-
-4. **LLM fallback**: If intent router LLM fails, falls back to rule-based classification with all tools available.
+- [MAIN_AGENT_FLOW.md](./MAIN_AGENT_FLOW.md)
+- [STATE_MANAGEMENT.md](./STATE_MANAGEMENT.md)
+- [TOOL_GROUPS.md](./TOOL_GROUPS.md)
+- [VALIDATION.md](./VALIDATION.md)
+- [AGENT_LIMITS.md](./AGENT_LIMITS.md)
+- [ADDING_TOOLS.md](./ADDING_TOOLS.md)
+- [ADDING_INTENTS.md](./ADDING_INTENTS.md)

@@ -26,6 +26,31 @@ if not LLM_CHAT_MODEL:
 logger.info("[llm] Bounded agent architecture ENABLED")
 
 
+_main_controller = None
+
+
+def _get_main_controller():
+    """Create/reuse the main conversational controller instance."""
+    global _main_controller
+    if _main_controller is None:
+        from agent.controller import AgentController
+        from agent.limits import AgentConfig
+        from agents.main.agent import build_main_conversational_agent
+
+        config = AgentConfig.from_env()
+        timeout_seconds = int(os.getenv("LLM_TIMEOUT", "120"))
+        main_agent = build_main_conversational_agent(
+            max_steps=config.max_steps,
+            max_tool_calls=config.max_tool_calls,
+            timeout_seconds=timeout_seconds,
+        )
+        _main_controller = AgentController(
+            config=config,
+            conversational_agent=main_agent,
+        )
+    return _main_controller
+
+
 # ---------------------------------------------------------------------------
 # Main agent functions
 # ---------------------------------------------------------------------------
@@ -57,8 +82,6 @@ async def answer_question(
     Returns:
         Response bundle with answer and metadata
     """
-    from agent.controller import get_controller
-
     # Load conversation history
     conversation_history: list[dict[str, str]] = []
     if session_id and user_email:
@@ -67,7 +90,7 @@ async def answer_question(
         except Exception as exc:
             logger.warning("[session] Failed to load history: %s", exc, exc_info=exc)
 
-    controller = get_controller()
+    controller = _get_main_controller()
     result = await controller.run(
         question=question,
         user_id=user_id,
@@ -142,8 +165,6 @@ async def answer_question_stream(
         client_context: Context from client (timezone/locale/location)
         ui_submission: Optional structured UI action or fallback text from client
     """
-    from agent.controller import get_controller
-
     # Load conversation history
     conversation_history: list[dict[str, str]] = []
     if session_id and user_email:
@@ -152,7 +173,7 @@ async def answer_question_stream(
         except Exception as exc:
             logger.warning("[session] Failed to load history: %s", exc, exc_info=exc)
 
-    controller = get_controller()
+    controller = _get_main_controller()
     final_bundle = None
 
     async for event in controller.run_stream(

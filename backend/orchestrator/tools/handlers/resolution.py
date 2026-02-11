@@ -11,6 +11,8 @@ trace module. Handlers focus purely on execution logic.
 
 from typing import TYPE_CHECKING, Any, Optional
 
+from tools.action_enums import LookupContactAction
+
 if TYPE_CHECKING:
     from agent.state import AgentState
 
@@ -119,10 +121,14 @@ def handle_lookup_contact(
     # Lazy import to avoid circular dependencies
     import contacts
 
-    action = args.get("action", "search")
+    raw_action = args.get("action")
+    action = LookupContactAction.from_value(
+        raw_action,
+        default=LookupContactAction.SEARCH if raw_action is None else None,
+    )
     query = args.get("query", "")
 
-    if action == "search":
+    if action is LookupContactAction.SEARCH:
         if not query:
             return {"error": "query is required for search action"}
 
@@ -148,14 +154,14 @@ def handle_lookup_contact(
                 state.add_fact(f"No contacts found matching '{query}'")
 
         return {
-            "action": "search",
+            "action": LookupContactAction.SEARCH.value,
             "query": query,
             "found": len(results) > 0,
             "count": len(results),
             "contacts": results,
         }
 
-    elif action == "get_relationships":
+    elif action is LookupContactAction.GET_RELATIONSHIPS:
         contact_id = args.get("contact_id")
         if not contact_id:
             # Try to resolve from query
@@ -186,11 +192,11 @@ def handle_lookup_contact(
             state.add_fact(f"Found {rel_count}{filter_desc} relationships for {contact_name}")
 
         return {
-            "action": "get_relationships",
+            "action": LookupContactAction.GET_RELATIONSHIPS.value,
             **result,
         }
 
-    elif action == "find_related":
+    elif action is LookupContactAction.FIND_RELATED:
         if not query:
             return {"error": "query is required for find_related action"}
 
@@ -213,12 +219,12 @@ def handle_lookup_contact(
                 state.add_fact(f"No contact found matching '{query}'")
 
         return {
-            "action": "find_related",
+            "action": LookupContactAction.FIND_RELATED.value,
             **result,
         }
 
     else:
         return {
-            "error": f"Unknown action: {action}",
-            "valid_actions": ["search", "get_relationships", "find_related"],
+            "error": f"Unknown action: {raw_action}",
+            "valid_actions": [member.value for member in LookupContactAction],
         }

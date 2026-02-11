@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, Any, Optional
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 from observability import trace
+from tools.action_enums import HomeAssistantAction
 
 if TYPE_CHECKING:
     from agent.state import AgentState
@@ -81,11 +82,10 @@ def handle_home_assistant(
     # Lazy import to avoid circular dependencies
     from mcp import call_ha_tool, is_ha_configured, list_ha_tools
 
-    action = args.get("action")
-    if not action or action not in ("list_tools", "call_tool"):
-        return {
-            "error": "home_assistant requires action to be 'list_tools' or 'call_tool'"
-        }
+    action = str(args.get("action") or "").strip()
+    parsed_action = HomeAssistantAction.from_value(action)
+    if parsed_action is None:
+        return {"error": "home_assistant requires action to be 'list_tools' or 'call_tool'"}
 
     step_start = perf_counter()
 
@@ -96,7 +96,7 @@ def handle_home_assistant(
             "hint": "HA_URL should be your Home Assistant URL (e.g., http://homeassistant.local:8123)",
         }
 
-    if action == "list_tools":
+    if parsed_action is HomeAssistantAction.LIST_TOOLS:
         tools = list_ha_tools()
         duration_ms = (perf_counter() - step_start) * 1000
         trace.trace_ha_list_tools(len(tools), duration_ms)
@@ -131,7 +131,7 @@ def handle_home_assistant(
             "hint": "Use action='call_tool' with tool_name set to one of the above tools and arguments matching its inputSchema.",
         }
 
-    if action == "call_tool":
+    if parsed_action is HomeAssistantAction.CALL_TOOL:
         tool_name = args.get("tool_name")
         if not tool_name or not isinstance(tool_name, str):
             return {"error": "call_tool action requires a tool_name string"}

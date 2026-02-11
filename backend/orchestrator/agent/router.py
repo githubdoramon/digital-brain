@@ -40,6 +40,17 @@ class IntentType(str, Enum):
     UNKNOWN = "unknown"  # Fallback
 
 
+class RouteSource(str, Enum):
+    """Source of routing decision."""
+
+    UNKNOWN = "unknown"
+    FALLBACK = "fallback"
+    RULE = "rule"
+    LLM = "llm"
+    LLM_ERROR = "llm_error"
+    LLM_PARSE_ERROR = "llm_parse_error"
+
+
 @dataclass
 class IntentClassification:
     """Result of intent classification."""
@@ -51,7 +62,7 @@ class IntentClassification:
     skill_hints: list[str] = field(default_factory=list)
     pre_resolve_contacts: Optional[bool] = None
     reasoning: Optional[str] = None
-    route_source: str = "unknown"
+    route_source: RouteSource = RouteSource.UNKNOWN
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -62,7 +73,7 @@ class IntentClassification:
             "skill_hints": self.skill_hints,
             "pre_resolve_contacts": self.pre_resolve_contacts,
             "reasoning": self.reasoning,
-            "route_source": self.route_source,
+            "route_source": self.route_source.value,
         }
 
 
@@ -236,7 +247,7 @@ class IntentRouter:
             allowed_tool_groups=list(TOOL_GROUPS.keys()),
             pre_resolve_contacts=INTENT_PRE_RESOLVE_CONTACTS[IntentType.UNKNOWN],
             reasoning="Fallback to all tools",
-            route_source="fallback",
+            route_source=RouteSource.FALLBACK,
         )
 
     def _rule_based_classify(self, question: str) -> Optional[IntentClassification]:
@@ -274,7 +285,7 @@ class IntentRouter:
                 skill_hints=INTENT_SKILL_HINTS[IntentType.HOME_CONTROL],
                 pre_resolve_contacts=INTENT_PRE_RESOLVE_CONTACTS[IntentType.HOME_CONTROL],
                 reasoning="Home control keywords detected",
-                route_source="rule",
+                route_source=RouteSource.RULE,
             )
 
         # Web search patterns
@@ -287,7 +298,7 @@ class IntentRouter:
                 skill_hints=INTENT_SKILL_HINTS[IntentType.WEB_SEARCH],
                 pre_resolve_contacts=INTENT_PRE_RESOLVE_CONTACTS[IntentType.WEB_SEARCH],
                 reasoning="Web search keywords detected",
-                route_source="rule",
+                route_source=RouteSource.RULE,
             )
 
         # Contact/people patterns (high precision only)
@@ -307,7 +318,7 @@ class IntentRouter:
                 skill_hints=INTENT_SKILL_HINTS[IntentType.CONTACT_LOOKUP],
                 pre_resolve_contacts=INTENT_PRE_RESOLVE_CONTACTS[IntentType.CONTACT_LOOKUP],
                 reasoning="Contact/people keywords detected",
-                route_source="rule",
+                route_source=RouteSource.RULE,
             )
 
         # Memory search patterns (high precision only)
@@ -329,7 +340,7 @@ class IntentRouter:
                 skill_hints=INTENT_SKILL_HINTS[IntentType.MEMORY_SEARCH],
                 pre_resolve_contacts=INTENT_PRE_RESOLVE_CONTACTS[IntentType.MEMORY_SEARCH],
                 reasoning="Memory search keywords detected",
-                route_source="rule",
+                route_source=RouteSource.RULE,
             )
 
         # Data query/count patterns
@@ -351,7 +362,7 @@ class IntentRouter:
                 skill_hints=INTENT_SKILL_HINTS[IntentType.DATA_QUERY],
                 pre_resolve_contacts=INTENT_PRE_RESOLVE_CONTACTS[IntentType.DATA_QUERY],
                 reasoning="Data query keywords detected",
-                route_source="rule",
+                route_source=RouteSource.RULE,
             )
 
         # System command patterns
@@ -372,7 +383,7 @@ class IntentRouter:
                 skill_hints=INTENT_SKILL_HINTS[IntentType.SYSTEM_COMMAND],
                 pre_resolve_contacts=INTENT_PRE_RESOLVE_CONTACTS[IntentType.SYSTEM_COMMAND],
                 reasoning="System command keywords detected",
-                route_source="rule",
+                route_source=RouteSource.RULE,
             )
 
         # Conversational patterns (greetings, thanks, etc.)
@@ -398,7 +409,7 @@ class IntentRouter:
                 skill_hints=[],
                 pre_resolve_contacts=INTENT_PRE_RESOLVE_CONTACTS[IntentType.CONVERSATIONAL],
                 reasoning="Conversational keywords detected",
-                route_source="rule",
+                route_source=RouteSource.RULE,
             )
 
         # No clear match - return low confidence result
@@ -408,7 +419,7 @@ class IntentRouter:
             allowed_tool_groups=list(TOOL_GROUPS.keys()),
             pre_resolve_contacts=INTENT_PRE_RESOLVE_CONTACTS[IntentType.UNKNOWN],
             reasoning="No clear keyword match",
-            route_source="rule",
+            route_source=RouteSource.RULE,
         )
 
     def _llm_classify(
@@ -434,7 +445,7 @@ class IntentRouter:
                 allowed_tool_groups=list(TOOL_GROUPS.keys()),
                 pre_resolve_contacts=INTENT_PRE_RESOLVE_CONTACTS[IntentType.UNKNOWN],
                 reasoning=f"LLM call failed: {e}",
-                route_source="llm_error",
+                route_source=RouteSource.LLM_ERROR,
             )
 
     def _build_classification_prompt(
@@ -516,7 +527,7 @@ Respond with JSON only:
                 skill_hints=data.get("skill_hints", INTENT_SKILL_HINTS.get(intent, [])),
                 pre_resolve_contacts=pre_resolve_contacts,
                 reasoning=data.get("reasoning"),
-                route_source="llm",
+                route_source=RouteSource.LLM,
             )
 
         except (json.JSONDecodeError, KeyError) as e:
@@ -529,7 +540,7 @@ Respond with JSON only:
                 allowed_tool_groups=list(TOOL_GROUPS.keys()),
                 pre_resolve_contacts=INTENT_PRE_RESOLVE_CONTACTS[IntentType.UNKNOWN],
                 reasoning="LLM response parsing failed",
-                route_source="llm_parse_error",
+                route_source=RouteSource.LLM_PARSE_ERROR,
             )
 
     def get_allowed_tools(self, classification: IntentClassification) -> list[str]:

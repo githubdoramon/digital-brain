@@ -1,302 +1,97 @@
 # Agent State Management
 
-`AgentState` is the canonical, controller-owned runtime state for one request.  
-The LLM never mutates it directly.
+`AgentState` is the canonical controller-owned runtime state for a single request.
 
-## Core Principle
+## Core Rule
 
-**The controller owns state. The LLM proposes actions.**
+The model never mutates state directly. Controller and tool pipeline are the only writers.
 
-```
-LLM: "call search_memories with query='meetings'"
-Controller: Validate → Execute → Update AgentState → Inject into next prompt
-```
+## State Model (Current)
 
-## AgentState Structure
+Key groups in `backend/orchestrator/agent/state.py`:
 
-```python
-@dataclass
-class AgentState:
-    # Core task tracking
-    goal: str
-    constraints: list[str]
+- Task/progress: `goal`, `step_count`, `repair_count`, `tool_calls`.
+- Routing metadata: `intent`, `route_source`, `route_confidence`, `route_confidence_tier`.
+- Tool visibility metadata: `tool_visibility_mode`, `tool_visibility_escalated`.
+- Recovery counters:
+  - `tool_visibility_escalations_count`
+  - `clarification_requests_count`
+- Runtime context: `resolution`, `information_candidates`, `ui_directives`, `request_context`.
 
-    # Knowledge accumulation
-    known_facts: list[str]
-    completed_actions: list[str]
-    pending_questions: list[str]
+## Lifecycle
 
-    # Progress tracking
-    tool_calls: list[ToolCallRecord]
-    step_count: int
-    repair_count: int
-
-    # Intent routing metadata
-    intent: str | None
-    allowed_tool_groups: list[str]
-    skill_hints: list[str]
-
-    # Completion tracking
-    goal_achieved: bool
-    pending_actions: list[str]
-    completion_evidence: list[str]
-
-    # Runtime context
-    resolution: dict[str, Any]
-    activated_skills: list[dict[str, Any]]
-    information_candidates: list[dict[str, Any]]
-    ui_directives: dict[str, Any] | None
-    request_context: dict[str, Any]
+```mermaid
+flowchart TD
+  A[Create AgentState] --> B[Apply routing metadata]
+  B --> C[Optional contact pre-resolution]
+  C --> D[Loop: LLM + tools]
+  D --> E[Record tool calls + facts + candidates]
+  E --> F[Track clarifications/escalations]
+  F --> G[Finalize bundle metadata]
 ```
 
-### Important Change
+## Tool Call Records
 
-`AgentState` no longer stores `search_results` / `events_results` arrays directly.  
-Those response payloads are derived from `tool_calls` at finalization time.
+Each execution appends a `ToolCallRecord` with:
 
-## ToolCallRecord Structure
+- `tool_name`
+- `arguments`
+- `result`
+- `duration_ms`
+- `success`
+- optional `error`, `validation_errors`, `was_repaired`
 
-```python
-@dataclass
-class ToolCallRecord:
-    tool_name: str
-    arguments: dict[str, Any]
-    result: dict[str, Any]
-    duration_ms: float
-    success: bool
-    error: str | None = None
-    validation_errors: list[str] | None = None
-    was_repaired: bool = False
-```
+Treat records as append-only runtime history.
 
-## Information Candidates (Reusable Evidence)
+## Information Candidates
 
-`information_candidates` is the generic evidence memory used across steps.  
-It replaces document-only candidate handling.
+`information_candidates` stores high-signal entities (document/event/contact/etc.) so the model can reuse evidence instead of repeating broad searches.
 
-Each candidate stores:
-- `kind` (`document`, `event`, `contact`, etc.)
-- `candidate_id`
-- `label`
-- `best_score`
-- `times_seen`
-- `last_query`
-- `last_source_tool`
-- `inspected` and `inspected_step`
+Use helpers:
 
-Use:
+- `remember_information_candidate(...)`
+- `mark_information_candidate_inspected(...)`
+- `get_best_information_candidate(...)`
 
-```python
-state.remember_information_candidate(
-    kind="document",
-    candidate_id="doc:abc",
-    label="Clinical Report",
-    score=1.42,
-    query="vitamin b12",
-    source_tool="search_memories",
-)
+## Routing + Visibility Fields
 
-state.mark_information_candidate_inspected("document", "doc:abc")
-best = state.get_best_information_candidate(inspected_only=True)
-```
+These fields are now operational, not just debug metadata:
 
-This supports:
-- avoiding repeated broad searches
-- revisiting previously inspected sources
-- compact prompt context over longer loops
+- `route_confidence_tier` drives visibility policy.
+- `tool_visibility_mode` reflects current allowed set (`restricted`, `restricted_with_resolution`, `full`, etc.).
+- `tool_visibility_escalated` indicates whether runtime widened tools due to no-progress.
 
-## State Lifecycle
+## Clarification Tracking
 
-### 1. Creation
+Controller increments `clarification_requests_count` when it returns:
 
-```python
-state = AgentState(goal="Find my meetings from last week")
-```
+- contact disambiguation follow-up
+- UI directive follow-up
 
-### 2. Intent Classification
+This supports analysis of ambiguity rates and UX friction.
 
-```python
-classification = router.classify(state.goal)
-state.intent = classification.intent.value
-state.allowed_tool_groups = classification.allowed_tool_groups
-state.constraints = classification.constraints
+## Context Injection
 
-# Controller currently still passes the full tool set to the LLM.
-```
+`to_context_string()` injects compact runtime context into each turn:
 
-### 3. Loop Iteration
+- goal and budgets
+- routing summary
+- recent facts/actions
+- pending actions/questions
+- top evidence candidates
+- request context availability
 
-```python
-state.step_count += 1
-
-record = ToolCallRecord(
-    tool_name="search_memories",
-    arguments={"query": "meetings last week"},
-    result={"results": [...]},
-    duration_ms=150.5,
-    success=True,
-)
-state.record_tool_call(record)
-
-state.add_fact("Found 3 meetings from last week")
-state.add_action("Searched memories for meetings")
-```
-
-### 4. Finalization
-
-Controller derives response payloads from tool history:
-- `search_results` (latest broad search rows)
-- `events_results` (expanded event details from `get_events`)
-- `document_results` (expanded document details from `get_document`)
-
-## Key Methods
-
-### Facts / Actions
-
-```python
-state.add_fact("Found 3 meetings")
-state.add_action("Retrieved event details")
-```
-
-`add_fact()` is deduplicated.
-
-### Tool Call Recording
-
-```python
-state.record_tool_call(ToolCallRecord(...))
-```
-
-### Progress Helpers
-
-```python
-state.tool_calls_count
-state.successful_tool_calls
-state.failed_tool_calls
-state.has_repeated_calls(n=3)
-state.has_empty_result_streak(n=3)
-```
-
-## State Injection
-
-`to_context_string()` injects controller state into each LLM turn:
-
-```python
-context = state.to_context_string()
-```
-
-Includes:
-- `GOAL`, `STEP`, `TOOL_CALLS_USED`
-- recent `KNOWN_FACTS` and `COMPLETED`
-- `PENDING_ACTIONS` / `PENDING_QUESTIONS`
-- top `INFORMATION_CANDIDATES`
-- request context (timezone/locale/location availability)
-
-Candidate injection is capped to avoid prompt bloat.
+Prompt bloat controls are enforced by capped candidate injection.
 
 ## Serialization
 
-### `to_dict()`
+- `to_metadata()` provides compact run metadata for logs and persistence.
+- `to_dict()` provides full debug serialization.
 
-Full debug serialization, including `tool_calls` and runtime fields.
-
-### `to_metadata()`
-
-Compact metadata for logs/traces (counts + summary flags).
-
-## No-Progress Detection
-
-State-level checks used by limits/progress guardrails:
-
-```python
-state.has_repeated_calls(n=3)
-state.has_empty_result_streak(n=3)
-```
-
-`_is_empty_result()` currently treats these as empty:
-- explicit errors
-- empty `results`
-- empty `rows`
-- `count == 0`
-
-If you add new tool result formats, update emptiness semantics accordingly.
+Both include routing/visibility and recovery counters.
 
 ## Caveats
 
-### 1. State Is Per Request
-
-`AgentState` is created fresh per request.  
-Cross-request memory comes from conversation history and storage layers.
-
-### 2. Facts Must Be Added Explicitly
-
-Facts are not auto-extracted from every tool result.  
-Add extraction in post-execution validation where needed.
-
-### 3. ToolCallRecord Should Be Treated as Append-Only
-
-Record results after execution; avoid mutating past records.
-
-### 4. Counters Are Controller-Managed
-
-`step_count`, `repair_count`, and related lifecycle counters are controller-owned.
-
-### 5. Keep Context Compact
-
-Avoid storing large ad-hoc blobs in state fields.  
-Prefer compact facts and candidate references; full data should stay in tool results.
-
-### 6. `duration_ms` Is Required
-
-Always measure and record duration in each `ToolCallRecord`.
-
-## Example Flow
-
-```python
-state = AgentState(goal="What is my latest vitamin B12 result?")
-
-# search
-state.step_count += 1
-search = search_memories(...)
-state.record_tool_call(ToolCallRecord(...))
-state.add_fact("Found a relevant lab report")
-state.remember_information_candidate(
-    kind="document",
-    candidate_id="doc:lab",
-    label="Clinical Laboratory Test Results Report",
-    score=1.3,
-    query="vitamin b12",
-    source_tool="search_memories",
-)
-
-# inspect top candidate
-state.step_count += 1
-doc = get_document(...)
-state.record_tool_call(ToolCallRecord(...))
-state.mark_information_candidate_inspected("document", "doc:lab")
-state.add_fact("Retrieved document content for extraction")
-```
-
-## Quick Reference
-
-```python
-state = AgentState(goal="User question")
-
-state.step_count += 1
-state.repair_count += 1
-
-state.add_fact("Fact")
-state.add_action("Action")
-state.record_tool_call(ToolCallRecord(...))
-
-state.remember_information_candidate(...)
-state.mark_information_candidate_inspected(...)
-state.get_best_information_candidate(inspected_only=True)
-
-state.to_dict()
-state.to_context_string()
-
-state.resolution
-state.activated_skills
-state.information_candidates
-state.ui_directives
-```
+- State is per-request; cross-request memory belongs to storage/history layers.
+- Add new empty-result formats to `_is_empty_result` semantics when introducing new tool result shapes.
+- Keep state compact; large payloads should stay inside tool results, not ad-hoc state blobs.

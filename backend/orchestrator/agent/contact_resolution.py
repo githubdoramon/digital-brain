@@ -12,6 +12,7 @@ from ui_dsl.clarification import (
     normalize_need_user_input,
 )
 
+from .enums import ToolStatus
 from .guardrails import sanitize_goal_text
 
 if TYPE_CHECKING:
@@ -96,7 +97,7 @@ def build_contact_clarification_result(
     )
 
     return {
-        "status": "need_user_input",
+        "status": ToolStatus.NEED_USER_INPUT.value,
         "message": prompt,
         "ambiguous_contacts": ambiguous_contacts,
         "people_mentioned": people_mentioned,
@@ -154,13 +155,13 @@ def resolve_contacts_for_text(
     if not normalized_text:
         return None
 
-    cached_status = str(state.resolution.get("last_contact_resolution_status", "")).strip()
+    cached_status = ToolStatus.from_value(state.resolution.get("last_contact_resolution_status"))
     cached_text = sanitize_goal_text(
         str(state.resolution.get("last_contact_resolution_text", "")).strip()
     )
-    if cached_status == "no_people" and cached_text.lower() == normalized_text.lower():
+    if cached_status is ToolStatus.NO_PEOPLE and cached_text.lower() == normalized_text.lower():
         return {
-            "status": "no_people",
+            "status": ToolStatus.NO_PEOPLE.value,
             "people_mentioned": [],
             "resolved_contacts": [],
             "ambiguous_contacts": [],

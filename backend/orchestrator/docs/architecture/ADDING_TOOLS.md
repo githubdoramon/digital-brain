@@ -275,7 +275,7 @@ def test_my_custom_validator_invalid(self):
 
 1. **Tool names must be unique**: The registry will overwrite if you register the same name twice.
 
-2. **Group assignment is metadata in main flow**: The main controller currently exposes the full tool set. Group mappings are still important for router metadata, hints, and tests.
+2. **Group assignment affects runtime visibility**: In conservative mode, routed confidence tiers can narrow tools by group. Ensure group assignment is correct or the model may not see your tool in high/medium confidence runs.
 
 3. **Handler exceptions**: Always catch exceptions in handlers and return error dicts. Unhandled exceptions may crash the agent loop.
 

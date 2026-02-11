@@ -7,10 +7,21 @@ Full integration tests would require mocking the LLM backend.
 
 import pytest
 
-from agent.controller import AgentController, get_controller
+from agent.controller import AgentController
 from agent.guardrails import build_contact_scope_context
 from agent.limits import AgentConfig, LimitType
 from agent.state import AgentState, ToolCallRecord
+from agents.main.agent import build_main_conversational_agent
+
+
+def _build_controller(config: AgentConfig | None = None) -> AgentController:
+    cfg = config or AgentConfig()
+    agent = build_main_conversational_agent(
+        max_steps=cfg.max_steps,
+        max_tool_calls=cfg.max_tool_calls,
+        timeout_seconds=120,
+    )
+    return AgentController(config=cfg, conversational_agent=agent)
 
 
 class TestAgentControllerInitialization:
@@ -18,7 +29,7 @@ class TestAgentControllerInitialization:
 
     def test_default_initialization(self):
         """Test controller with default config."""
-        controller = AgentController()
+        controller = _build_controller()
 
         assert controller.config is not None
         assert controller.config.max_steps > 0
@@ -26,7 +37,7 @@ class TestAgentControllerInitialization:
     def test_custom_config(self):
         """Test controller with custom config."""
         config = AgentConfig(max_steps=10, max_tool_calls=15)
-        controller = AgentController(config=config)
+        controller = _build_controller(config)
 
         assert controller.config.max_steps == 10
         assert controller.config.max_tool_calls == 15
@@ -34,32 +45,16 @@ class TestAgentControllerInitialization:
     def test_disable_intent_routing(self):
         """Test controller with intent routing disabled."""
         config = AgentConfig(enable_intent_routing=False)
-        controller = AgentController(config=config)
+        controller = _build_controller(config)
 
         assert controller.config.enable_intent_routing is False
 
     def test_disable_validation(self):
         """Test controller with validation disabled."""
         config = AgentConfig(enable_validation=False)
-        controller = AgentController(config=config)
+        controller = _build_controller(config)
 
         assert controller.config.enable_validation is False
-
-
-class TestGetController:
-    """Tests for get_controller singleton."""
-
-    def test_returns_controller(self):
-        """Test get_controller returns AgentController."""
-        controller = get_controller()
-        assert isinstance(controller, AgentController)
-
-    def test_singleton_behavior(self):
-        """Test get_controller returns same instance."""
-        controller1 = get_controller()
-        controller2 = get_controller()
-
-        assert controller1 is controller2
 
 
 class TestAgentState:

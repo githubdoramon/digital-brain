@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from functools import lru_cache
 from typing import TYPE_CHECKING, Any, Callable
 
 from agent.guardrails import build_contact_scope_context
@@ -20,6 +21,26 @@ logger = get_runtime_logger(__name__)
 
 if TYPE_CHECKING:
     from agent.state import AgentState
+
+
+@lru_cache(maxsize=16)
+def _cached_system_prompt(search_limit: int) -> str:
+    return get_system_prompt(search_limit)
+
+
+@lru_cache(maxsize=1)
+def _cached_bounded_protocol() -> str:
+    return get_bounded_agent_protocol()
+
+
+@lru_cache(maxsize=1)
+def _cached_tag_context() -> str:
+    return get_tag_context() or ""
+
+
+@lru_cache(maxsize=1)
+def _cached_clarification_skill_block() -> str:
+    return get_clarification_skill_prompt_block() or ""
 
 
 def inject_main_skills(
@@ -77,15 +98,15 @@ def build_main_messages(
     """Build the message list for the main bounded conversational agent."""
     messages: list[dict[str, Any]] = []
 
-    messages.append({"role": "system", "content": get_system_prompt(search_limit)})
+    messages.append({"role": "system", "content": _cached_system_prompt(search_limit)})
 
-    tags_context = get_tag_context()
+    tags_context = _cached_tag_context()
     if tags_context:
         messages.append({"role": "system", "content": tags_context})
 
-    messages.append({"role": "system", "content": get_bounded_agent_protocol()})
+    messages.append({"role": "system", "content": _cached_bounded_protocol()})
 
-    clarification_skill_block = get_clarification_skill_prompt_block()
+    clarification_skill_block = _cached_clarification_skill_block()
     if clarification_skill_block:
         messages.append({"role": "system", "content": clarification_skill_block})
 

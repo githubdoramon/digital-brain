@@ -85,6 +85,7 @@ from tools.handlers import get_handler
 from tools.registry import get_registry
 from tools.validators.pre_execution import PreExecutionValidator
 from ui_dsl import command_result_to_ui_directives
+from ui_dsl.enums import CommandResultType
 from versioning import get_service_versions
 
 logger = get_runtime_logger(__name__)
@@ -1179,10 +1180,10 @@ def _event_pending_key(user_email: str, thread_id: str | None) -> str:
 
 
 def _command_response_text(command_result: dict[str, Any]) -> str:
-    result_type = command_result.get("type")
-    if result_type == "event_confirmation":
+    result_type = CommandResultType.from_value(command_result.get("type"))
+    if result_type is CommandResultType.EVENT_CONFIRMATION:
         return command_result.get("message") or "Event proposal ready."
-    if result_type == "need_user_input":
+    if result_type is CommandResultType.NEED_USER_INPUT:
         need_user_input = command_result.get("need_user_input")
         if isinstance(need_user_input, dict):
             prompt = str(need_user_input.get("prompt") or "").strip()
@@ -1196,7 +1197,9 @@ def _sanitize_command_metadata(command_result: dict[str, Any]) -> dict[str, Any]
     try:
         return json.loads(json.dumps(command_result, default=str))
     except Exception:
-        return {"type": command_result.get("type", "command")}
+        return {
+            "type": CommandResultType.from_value(command_result.get("type")).value,
+        }
 
 
 def _command_assistant_metadata(

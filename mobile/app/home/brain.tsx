@@ -15,8 +15,6 @@ import {
   View,
 } from 'react-native';
 import { useBottomTabBarHeight } from '@react-navigation/bottom-tabs';
-import type { BottomTabNavigationProp } from '@react-navigation/bottom-tabs';
-import { useIsFocused, useNavigation } from '@react-navigation/native';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -63,17 +61,6 @@ type EventConfirmationResponse = {
   event_id?: string;
   created_contacts?: { contact_id: string; display_name: string }[];
   created_places?: { place_id: string; name: string }[];
-};
-
-type HomeTabParamList = {
-  index: undefined;
-  contacts: undefined;
-  brain:
-    | {
-        sendEnabled?: boolean;
-        isSending?: boolean;
-      }
-    | undefined;
 };
 
 const INLINE_MARKDOWN_PATTERN =
@@ -424,12 +411,10 @@ function renderAssistantMarkdown(markdown: string, keyPrefix: string) {
 }
 
 export default function ChatScreen() {
-  const { token, signOut, email } = useAuth();
+  const { token, signOut, email, isLoading: isAuthLoading } = useAuth();
   const insets = useSafeAreaInsets();
   const tabBarHeight = useBottomTabBarHeight();
   const listRef = useRef<FlatList<Message>>(null);
-  const navigation = useNavigation<BottomTabNavigationProp<HomeTabParamList, 'brain'>>();
-  const isFocused = useIsFocused();
   const [input, setInput] = useState('');
   const [isSending, setIsSending] = useState(false);
   const [threadId, setThreadId] = useState<string | null>(null);
@@ -438,6 +423,8 @@ export default function ChatScreen() {
   const isAtBottomRef = useRef(true);
   const [forceScrollNext, setForceScrollNext] = useState(false);
   const [isBootstrapping, setIsBootstrapping] = useState(true);
+  const hasHydratedSessionRef = useRef(false);
+  const restoreGenerationRef = useRef(0);
   const [composerHeight, setComposerHeight] = useState(0);
   const [keyboardVisible, setKeyboardVisible] = useState(false);
   const [keyboardHeight, setKeyboardHeight] = useState(0);
@@ -473,16 +460,43 @@ export default function ChatScreen() {
   }, [starterMessages, messages]);
 
   useEffect(() => {
+    let cancelled = false;
+    const restoreGeneration = restoreGenerationRef.current + 1;
+    restoreGenerationRef.current = restoreGeneration;
+
+    const isCurrentRestore = () =>
+      !cancelled && restoreGenerationRef.current === restoreGeneration;
+
     const restoreSession = async () => {
+      if (isAuthLoading) {
+        return;
+      }
+
       if (!token || !allowed) {
+        hasHydratedSessionRef.current = false;
+        if (!isCurrentRestore()) return;
+        setThreadId(null);
+        setPendingEventId(null);
+        setMessages(starterMessages);
         setIsBootstrapping(false);
         return;
       }
 
+      if (hasHydratedSessionRef.current) {
+        if (!isCurrentRestore()) return;
+        setIsBootstrapping(false);
+        return;
+      }
+
+      if (!isCurrentRestore()) return;
+      setIsBootstrapping(true);
       try {
         const stored = await loadChatSession();
+        if (!isCurrentRestore()) return;
         const restored = await restoreChatHistory(token, stored);
+        if (!isCurrentRestore()) return;
 
+        hasHydratedSessionRef.current = true;
         setThreadId(restored.threadId);
         setPendingEventId(restored.pendingEventId);
 
@@ -498,25 +512,26 @@ export default function ChatScreen() {
           await signOut();
         }
       } finally {
+        if (!isCurrentRestore()) return;
         setIsBootstrapping(false);
       }
     };
 
     void restoreSession();
-  }, [token, allowed, signOut, starterMessages]);
+
+    return () => {
+      cancelled = true;
+    };
+  }, [isAuthLoading, token, allowed, signOut, starterMessages]);
 
   useEffect(() => {
-    navigation.setParams({ sendEnabled: canSend, isSending });
-  }, [navigation, canSend, isSending]);
-
-  useEffect(() => {
-    if (isBootstrapping) return;
+    if (isBootstrapping || isAuthLoading) return;
     const stored: StoredChatSession = {
       threadId,
       pendingEventId,
     };
     void saveChatSession(stored);
-  }, [threadId, pendingEventId, isBootstrapping]);
+  }, [threadId, pendingEventId, isBootstrapping, isAuthLoading]);
 
   useEffect(() => {
     const showEvent = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
@@ -584,7 +599,7 @@ export default function ChatScreen() {
         token,
       })) as AskResponse;
 
-      setThreadId(response.thread_id ?? threadId);
+      setThreadId((prev) => response.thread_id ?? prev);
       const commandResult = response.command_result as CommandResult | undefined;
       const uiDirectives = response.ui_directives;
       const assistantContent =
@@ -758,17 +773,6 @@ export default function ChatScreen() {
     [isConfirmingEvent, sendMessage, token],
   );
 
-  useEffect(() => {
-    const unsubscribe = navigation.addListener('tabPress', (event) => {
-      if (!isFocused) return;
-      event.preventDefault();
-      if (!canSend) return;
-      void sendMessage();
-    });
-
-    return unsubscribe;
-  }, [navigation, isFocused, canSend, sendMessage]);
-
   const trimmedInput = input.trimStart();
   const hasCommandToken = /^\/\w+\s/.test(trimmedInput);
   const showSlashPalette = trimmedInput.startsWith('/') && !hasCommandToken;
@@ -807,11 +811,11 @@ export default function ChatScreen() {
           data={messages}
           keyExtractor={(item) => item.id}
           ListHeaderComponent={header}
+          ListFooterComponent={<View style={{ height: listBottomInset }} />}
           contentContainerStyle={[
             styles.listContent,
             {
               paddingTop: insets.top + 16,
-              paddingBottom: listBottomInset,
             },
           ]}
           onScroll={(event) => {
@@ -875,8 +879,8 @@ export default function ChatScreen() {
             {
               bottom: composerBottomOffset,
               paddingBottom: (keyboardVisible ? 24 : insets.bottom + tabBarHeight + 8),
-              paddingRight: keyboardVisible ? 12 : 16,
-              gap: keyboardVisible ? 8 : 10,
+              paddingRight: 16,
+              gap: 10,
             },
           ]}
         >
@@ -890,13 +894,15 @@ export default function ChatScreen() {
                   minHeight: MIN_CHAT_INPUT_HEIGHT,
                   maxHeight: MAX_CHAT_INPUT_HEIGHT,
                   width: '100%',
+                  paddingRight: 60,
                 },
                 !allowed && {
                   backgroundColor: '#eee',
                 },
               ]}
               onChangeText={setInput}
-              placeholder="Send a message..."
+              placeholder="Ask me anything..."
+              placeholderTextColor="#A7AFB7"
               multiline
               onFocus={() => {
                 setForceScrollNext(true);
@@ -909,8 +915,6 @@ export default function ChatScreen() {
               }}
               scrollEnabled={true}
             />
-          </View>
-          {keyboardVisible ? (
             <Pressable
               onPress={() => sendMessage()}
               disabled={!canSend}
@@ -923,10 +927,10 @@ export default function ChatScreen() {
               {isSending ? (
                 <ActivityIndicator size="small" color="#fff" />
               ) : (
-                <Ionicons name="send" size={18} color="#fff" />
+                <Ionicons name="send" size={16} color="#fff" />
               )}
             </Pressable>
-          ) : null}
+          </View>
         </View>
       </KeyboardAvoidingView>
     </LinearGradient>
@@ -1112,6 +1116,7 @@ const styles = StyleSheet.create({
   },
   inputWrap: {
     flex: 1,
+    position: 'relative',
   },
   input: {
     fontSize: 16,
@@ -1131,18 +1136,20 @@ const styles = StyleSheet.create({
     elevation: 3,
   },
   inlineSendButton: {
-    alignSelf: 'flex-end',
-    width: 46,
-    height: 46,
-    borderRadius: 23,
+    position: 'absolute',
+    right: 10,
+    bottom: 5,
+    width: 36,
+    height: 36,
+    borderRadius: 18,
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: theme.colors.accent,
     shadowColor: theme.shadow.color,
-    shadowOpacity: 0.2,
-    shadowRadius: 12,
-    shadowOffset: { width: 0, height: 8 },
-    elevation: 4,
+    shadowOpacity: 0.24,
+    shadowRadius: 10,
+    shadowOffset: { width: 0, height: 6 },
+    elevation: 5,
   },
   inlineSendButtonPressed: {
     opacity: 0.9,

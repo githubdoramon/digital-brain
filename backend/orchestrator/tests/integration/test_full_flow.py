@@ -13,7 +13,17 @@ from agent.controller import AgentController
 from agent.limits import AgentConfig, LimitChecker, LimitType
 from agent.router import TOOL_GROUPS, IntentClassification, IntentRouter, IntentType
 from agent.state import AgentState, ToolCallRecord
+from agents.main.agent import build_main_conversational_agent
 from tools.registry import get_registry
+
+
+def _build_controller(config: AgentConfig) -> AgentController:
+    main_agent = build_main_conversational_agent(
+        max_steps=config.max_steps,
+        max_tool_calls=config.max_tool_calls,
+        timeout_seconds=120,
+    )
+    return AgentController(config=config, conversational_agent=main_agent)
 
 
 class TestAgentControllerIntegration:
@@ -21,7 +31,7 @@ class TestAgentControllerIntegration:
 
     @pytest.fixture
     def controller(self, agent_config):
-        return AgentController(config=agent_config)
+        return _build_controller(agent_config)
 
     def test_controller_with_limit_checker(self, controller):
         """Test controller uses limit checker correctly."""
@@ -493,7 +503,13 @@ class TestAgentControllerIntegration:
 
         assert llm_calls["count"] == 1
         assert "Which John did you mean?" in bundle["answer"]
-        assert "John Smith" in bundle["answer"]
+        assert (
+            bundle["resolution"]
+            .get("pending_contact_ambiguous_contacts", [{}])[0]
+            .get("candidates", [{}])[0]
+            .get("display_name")
+            == "John Smith"
+        )
         assert (
             bundle["resolution"].get("pending_contact_need_user_input", {}).get("prompt")
             == "Which John did you mean?"

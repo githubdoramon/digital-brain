@@ -1,15 +1,10 @@
 # Tool Groups Reference
 
-Tool groups are the canonical mapping between logical capabilities and tools.
-
-Current role:
-- Primary: shared taxonomy for router hints, observability, and tests.
-- Secondary: optional filtering API (`ToolRegistry.get_tools_for_groups`) used by some integration/tests.
-- Runtime behavior in main agent: the controller currently exposes the **full tool set** to the LLM (no narrowing).
+Tool groups are the canonical capability taxonomy and are now used both for metadata and runtime visibility policy.
 
 ## Canonical Source
 
-`backend/orchestrator/tools/registry.py` is the source of truth:
+`backend/orchestrator/tools/registry.py` is the single source of truth.
 
 ```python
 TOOL_GROUPS = {
@@ -23,34 +18,52 @@ TOOL_GROUPS = {
 }
 ```
 
-`backend/orchestrator/agent/router.py` imports these groups to avoid drift.
+`agent/router.py` imports these definitions to avoid drift.
 
-## Intent Mapping
+## Runtime Use (Current)
 
-Router intents still map to group lists for metadata/hints:
+Tool groups are used by `agent/tool_visibility_policy.py` to determine visible tools from router confidence.
 
-- `MEMORY_SEARCH`: `["memory", "resolution"]`
-- `DATA_QUERY`: `["memory", "resolution"]`
-- `CONTACT_LOOKUP`: `["resolution", "memory"]`
-- `WEB_SEARCH`: `["web"]`
-- `HOME_CONTROL`: `["home"]`
-- `SKILL_EXECUTION`: `["skills", "memory"]`
-- `SYSTEM_COMMAND`: `["system"]`
-- `CONVERSATIONAL`: `[]`
+```mermaid
+flowchart LR
+  I[Intent + confidence] --> T{Tier}
+  T -->|high| H[Use routed groups]
+  T -->|medium| M[Use routed groups + resolution]
+  T -->|low| L[Use full toolset]
+  H --> NP{No progress?}
+  M --> NP
+  NP -->|yes| E[Escalate to full toolset]
+```
+
+## Intent-to-Group Mapping
+
+- `MEMORY_SEARCH`: `memory`, `resolution`
+- `DATA_QUERY`: `memory`, `resolution`
+- `CONTACT_LOOKUP`: `resolution`, `memory`
+- `WEB_SEARCH`: `web`
+- `HOME_CONTROL`: `home`
+- `SKILL_EXECUTION`: `skills`, `memory`
+- `SYSTEM_COMMAND`: `system`
+- `CONVERSATIONAL`: none
 - `COMPLEX` / `UNKNOWN`: all groups
 
-Important:
-- This mapping is **not** currently used to narrow the tool list passed to the LLM in `AgentController`.
+## Policy Summary
 
-## When Editing Tool Groups
+- Restriction mode: conservative by default.
+- High confidence narrows aggressively.
+- Medium confidence keeps `resolution` available for recovery/disambiguation.
+- Low confidence fails open for correctness.
+- No-progress in restricted mode triggers full-tool escalation.
 
-1. Update `TOOL_GROUPS` in `backend/orchestrator/tools/registry.py`.
-2. Ensure registered tool contracts include compatible group assignments.
-3. Keep router/tests aligned (intent mappings and expectations).
-4. If runtime narrowing is reintroduced later, update controller docs and tests accordingly.
+## When Editing Groups
+
+1. Update `TOOL_GROUPS` in `tools/registry.py`.
+2. Ensure each tool contract is registered with the correct group(s).
+3. Verify router mapping and tests still align.
+4. Re-run integration tests for routing and visibility tiers.
 
 ## Common Pitfalls
 
-- Assuming groups are enforced at runtime in the main loop.
-- Updating router mappings without updating registry groups.
-- Forgetting to keep integration tests in sync with renamed/removed tools.
+- Updating router intent mappings without updating registry groups.
+- Forgetting that medium tier always includes `resolution` by policy.
+- Assuming all requests are narrowed; low confidence intentionally fails open.

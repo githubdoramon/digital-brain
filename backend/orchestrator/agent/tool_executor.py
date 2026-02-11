@@ -8,8 +8,10 @@ from typing import Any
 
 from observability import trace
 from observability.logger import get_runtime_logger
+from tools.action_enums import HomeAssistantAction
 from ui_dsl.clarification import extract_need_user_input
 
+from .enums import ToolStatus
 from .state import AgentState, ToolCallRecord
 
 logger = get_runtime_logger(__name__)
@@ -318,10 +320,11 @@ class ToolExecutionCoordinator:
     ) -> str | None:
         """Generate completion evidence string for successful tool execution."""
         if tool_name == "home_assistant":
-            action = args.get("action")
-            if action == "list_tools":
+            action = str(args.get("action") or "").strip()
+            parsed_action = HomeAssistantAction.from_value(action)
+            if parsed_action is HomeAssistantAction.LIST_TOOLS:
                 return None
-            if action == "call_tool":
+            if parsed_action is HomeAssistantAction.CALL_TOOL:
                 return f"Executed HA tool: {args.get('tool_name', 'unknown')}"
 
         if tool_name in ("search_memories", "get_events", "web_search"):
@@ -347,9 +350,9 @@ class ToolExecutionCoordinator:
             return None
 
         if tool_name == "resolve_contacts":
-            status = result.get("status")
+            status = ToolStatus.from_value(result.get("status"))
             resolved = len(result.get("resolved_contacts", []))
-            if status == "success" and resolved > 0:
+            if status is ToolStatus.SUCCESS and resolved > 0:
                 return f"Resolved {resolved} contacts from natural language"
             return None
 
@@ -392,9 +395,7 @@ class ToolExecutionCoordinator:
         success = "error" not in result and result.get("success") is not False
         need_user_input = extract_need_user_input(result, default_source=tool_name)
         result_summary = (
-            result.get("message")
-            or (need_user_input or {}).get("prompt")
-            or default_summary
+            result.get("message") or (need_user_input or {}).get("prompt") or default_summary
         )
         trace.trace_tool_execution_result(tool_name, duration_ms, success, result_summary)
         trace.trace_tool_lifecycle_end(tool_name, call_id, success, duration_ms, result_summary)
@@ -484,7 +485,9 @@ class ToolExecutionCoordinator:
         if not isinstance(document, dict):
             return result
 
-        raw_metadata = document.get("raw_metadata") if isinstance(document.get("raw_metadata"), dict) else {}
+        raw_metadata = (
+            document.get("raw_metadata") if isinstance(document.get("raw_metadata"), dict) else {}
+        )
         preview_source = (
             document.get("content_preview")
             or raw_metadata.get("content_english_for_embedding")

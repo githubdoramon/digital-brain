@@ -9,11 +9,7 @@ import daily_briefings
 import retrieval
 import todos as todos_service
 from agent.tool_loop_runner import run_profiled_tool_loop
-from agents.daily_briefing.profile import (
-    build_daily_briefing_tools_and_handlers,
-    get_daily_briefing_profile,
-    get_daily_briefing_system_prompt,
-)
+from agents.daily_briefing.profile import build_daily_briefing_agent_profile
 from db import get_conn
 from llm_helpers import call_llm
 
@@ -357,16 +353,21 @@ def _fetch_contact_summaries(contact_ids: list[str]) -> list[dict[str, Any]]:
 
 
 def _generate_markdown(context: dict[str, Any]) -> str:
-    tools, tool_handlers = build_daily_briefing_tools_and_handlers()
-    profile = get_daily_briefing_profile()
-    system_prompt = get_daily_briefing_system_prompt()
+    agent_profile = build_daily_briefing_agent_profile()
+    if agent_profile.build_tools_and_handlers is None:
+        raise RuntimeError("daily_briefing profile missing tool policy")
+    if agent_profile.get_system_prompt is None:
+        raise RuntimeError("daily_briefing profile missing system prompt")
+    tools, tool_handlers = agent_profile.build_tools_and_handlers()
+    runtime_profile = agent_profile.runtime
+    system_prompt = agent_profile.get_system_prompt()
     prompt = _build_briefing_prompt(context)
     result = run_profiled_tool_loop(
         prompt=prompt,
         system_prompt=system_prompt,
         tools=tools,
         tool_handlers=tool_handlers,
-        profile=profile,
+        profile=runtime_profile,
     )
     content = result.get("content", "")
     if _is_invalid_briefing(content):

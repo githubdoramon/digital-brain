@@ -12,6 +12,7 @@ from ui_dsl.clarification import (
     infer_clarification_fields_from_questions,
     normalize_clarification_fields,
 )
+from ui_dsl.enums import CommandResultType
 from ui_dsl.validator import sanitize_ui_directives_payload
 
 _EVENT_CONFIRM_ACTION_ID = "event_confirmation_action"
@@ -24,8 +25,8 @@ def command_result_to_ui_directives(command_result: dict[str, Any]) -> dict[str,
         return None
 
     raw_directive: dict[str, Any] | None = None
-    result_type = str(command_result.get("type") or "").strip()
-    if result_type == "event_confirmation":
+    result_type = CommandResultType.from_value(command_result.get("type"))
+    if result_type is CommandResultType.EVENT_CONFIRMATION:
         raw_directive = _event_confirmation_directive(command_result)
     else:
         need_user_input = extract_need_user_input(
@@ -69,9 +70,8 @@ def _clarification_directive(
         fields = [default_clarification_details_field()]
     if not questions:
         questions = derive_clarification_questions_from_fields(fields)
-    fallback_text = (
-        _normalized_text(need_user_input.get("prompt"))
-        or (questions[0] if questions else "Please share the missing details.")
+    fallback_text = _normalized_text(need_user_input.get("prompt")) or (
+        questions[0] if questions else "Please share the missing details."
     )
     kind = _normalized_text(need_user_input.get("kind")).lower()
     source = _normalized_text(need_user_input.get("source")).lower()
@@ -102,11 +102,17 @@ def _clarification_directive(
 
 def _event_confirmation_directive(command_result: dict[str, Any]) -> dict[str, Any]:
     preview_id = _normalized_text(command_result.get("preview_id"))
-    extracted = command_result.get("extracted") if isinstance(command_result.get("extracted"), dict) else {}
-    resolution = (
-        command_result.get("resolution") if isinstance(command_result.get("resolution"), dict) else {}
+    extracted = (
+        command_result.get("extracted") if isinstance(command_result.get("extracted"), dict) else {}
     )
-    new_entities = resolution.get("new_entities") if isinstance(resolution.get("new_entities"), dict) else {}
+    resolution = (
+        command_result.get("resolution")
+        if isinstance(command_result.get("resolution"), dict)
+        else {}
+    )
+    new_entities = (
+        resolution.get("new_entities") if isinstance(resolution.get("new_entities"), dict) else {}
+    )
     relationships = _dict_list(command_result.get("relationship_suggestions"))
 
     preview_lines = [

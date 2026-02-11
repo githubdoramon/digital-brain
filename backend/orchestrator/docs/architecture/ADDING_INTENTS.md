@@ -3,7 +3,8 @@
 This guide covers how to add new intent types for the intent router system.
 
 Important:
-- Intent routing currently provides metadata/hints. The main controller presently exposes the full tool set at runtime.
+- Intent routing and confidence tiers now influence runtime tool visibility.
+- Conservative policy: high confidence narrows to routed groups, medium adds `resolution`, low fails open to full tools.
 
 ## Checklist
 

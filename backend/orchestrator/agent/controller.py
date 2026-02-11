@@ -22,8 +22,10 @@ from collections.abc import AsyncGenerator
 from time import perf_counter
 from typing import Any, Optional
 
-from agents.main.message_builder import build_main_messages, inject_main_skills
-from agents.main.profile import build_main_runtime_profile
+from agent.agent_interfaces import (
+    ConversationalAgentInterface,
+    build_default_conversational_interface,
+)
 from observability import trace
 from observability.logger import get_runtime_logger
 from ui_dsl.clarification import extract_need_user_input
@@ -36,6 +38,13 @@ from .contact_resolution import (
     resolve_contacts_for_text,
     should_pre_resolve_contacts,
 )
+from .enums import (
+    ConfidenceTier,
+    FollowUpSource,
+    LimitAction,
+    ToolStatus,
+    ToolVisibilityMode,
+)
 from .guardrails import (
     detect_future_temporal_intent,
     detect_temporal_sort_order,
@@ -43,19 +52,20 @@ from .guardrails import (
     sanitize_goal_text,
     utc_now_iso,
 )
-from .limits import AgentConfig, LimitChecker, LimitType
+from .limits import AgentConfig, LimitChecker
 from .llm_transport import call_llm_with_tools, stream_llm_with_tools
 from .response_guardrails import (
-    CODE_DESCRIBING_TOOL_PROMPT,
     CONTINUATION_PROMPT_STREAM,
     CONTINUATION_PROMPT_SYNC,
-    MALFORMED_TOOL_CALL_PROMPT,
-    looks_like_code_describing_tool,
     looks_like_continuation,
-    looks_like_malformed_tool_call,
 )
 from .router import IntentClassification, IntentRouter
 from .state import AgentState
+from .tool_visibility_policy import (
+    confidence_tier,
+    resolve_tool_visibility,
+    should_escalate_tool_visibility,
+)
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -78,6 +88,7 @@ class AgentController:
         self,
         config: Optional[AgentConfig] = None,
         intent_router: Optional[IntentRouter] = None,
+        conversational_agent: ConversationalAgentInterface | None = None,
     ):
         """
         Initialize the agent controller.
@@ -85,6 +96,7 @@ class AgentController:
         Args:
             config: Agent configuration (uses env vars if not provided)
             intent_router: Intent router (created if not provided)
+            conversational_agent: Agent-specific conversational interface implementation
         """
         self.config = config or AgentConfig.from_env()
         self.intent_router = intent_router or IntentRouter()
@@ -102,11 +114,15 @@ class AgentController:
         self.router_medium_confidence_threshold = float(
             os.getenv("ROUTER_MEDIUM_CONFIDENCE_THRESHOLD", "0.60")
         )
-        self.runtime_profile = build_main_runtime_profile(
-            max_steps=self.config.max_steps,
-            max_tool_calls=self.config.max_tool_calls,
-            timeout_seconds=self.llm_timeout,
-        )
+        self.conversational_agent = conversational_agent
+        if self.conversational_agent is None:
+            self.conversational_agent = build_default_conversational_interface(
+                max_steps=self.config.max_steps,
+                max_tool_calls=self.config.max_tool_calls,
+                timeout_seconds=self.llm_timeout,
+            )
+        self.agent_profile = self.conversational_agent.profile
+        self.runtime_profile = self.agent_profile.runtime
 
         # Lazy-loaded components
         self._tool_registry = None
@@ -172,6 +188,12 @@ class AgentController:
             self._tool_executor = ToolExecutionCoordinator(self)
         return self._tool_executor
 
+    def _agent_interface(self) -> ConversationalAgentInterface:
+        """Return bound conversational agent interface or raise clear error."""
+        if self.conversational_agent is None:
+            raise RuntimeError("No conversational agent interface provided to AgentController")
+        return self.conversational_agent
+
     async def _prepare_execution_context(
         self,
         *,
@@ -213,9 +235,34 @@ class AgentController:
             state.request_context,
         )
         tools, visibility_mode, selected_groups = self._resolve_tool_visibility(classification)
-        state.tool_visibility_mode = visibility_mode
+        state.tool_visibility_mode = visibility_mode.value
         state.allowed_tool_groups = selected_groups
         return classification, None, messages, tools
+
+    def _check_limits_and_recovery(
+        self,
+        *,
+        state: AgentState,
+        tools: list[dict[str, Any]],
+        run_id: str,
+    ) -> tuple[LimitAction, list[dict[str, Any]], Any | None, str | None]:
+        """Run hard/no-progress checks and attempt recovery escalation when possible."""
+        hard_violation = self.limit_checker.check(state)
+        if hard_violation:
+            return LimitAction.VIOLATION, tools, hard_violation, None
+
+        no_progress_violation = self.limit_checker.detect_no_progress(state)
+        if no_progress_violation:
+            if self._should_escalate_tool_visibility(state, no_progress_violation):
+                escalated_tools = self._escalate_tool_visibility(
+                    run_id=run_id,
+                    state=state,
+                    reason=no_progress_violation.message,
+                )
+                return LimitAction.ESCALATED, escalated_tools, None, no_progress_violation.message
+            return LimitAction.VIOLATION, tools, no_progress_violation, None
+
+        return LimitAction.OK, tools, None, None
 
     async def run(
         self,
@@ -281,6 +328,7 @@ class AgentController:
                     "clarification_returned",
                     {"source": "pre_resolution"},
                 )
+                state.clarification_requests_count += 1
                 return self._finalize(
                     question,
                     clarification_prompt,
@@ -301,24 +349,17 @@ class AgentController:
                     state.repair_count,
                     self.config.max_repairs,
                 )
-                hard_violation = self.limit_checker.check(state)
-                if hard_violation:
-                    return self._handle_limit_violation(
-                        state, hard_violation, run_id, session_id, total_start
-                    )
-
-                no_progress_violation = self.limit_checker.detect_no_progress(state)
-                if no_progress_violation:
-                    if self._should_escalate_tool_visibility(state, no_progress_violation):
-                        tools = self._escalate_tool_visibility(
-                            run_id=run_id,
-                            state=state,
-                            reason=no_progress_violation.message,
-                        )
-                        continue
+                limit_action, tools, violation, _ = self._check_limits_and_recovery(
+                    state=state,
+                    tools=tools,
+                    run_id=run_id,
+                )
+                if limit_action is LimitAction.ESCALATED:
+                    continue
+                if limit_action is LimitAction.VIOLATION and violation is not None:
                     return self._handle_limit_violation(
                         state,
-                        no_progress_violation,
+                        violation,
                         run_id,
                         session_id,
                         total_start,
@@ -372,10 +413,13 @@ class AgentController:
                         conversation_history=conversation_history,
                     )
 
-                    clarification_prompt = get_user_clarification_prompt_for_contact_resolution(
-                        state
+                    follow_up_prompt, follow_up_source = (
+                        self._agent_interface().get_follow_up_prompt_from_state(state)
                     )
-                    if clarification_prompt:
+                    if (
+                        follow_up_prompt
+                        and follow_up_source is FollowUpSource.CONTACT_CLARIFICATION
+                    ):
                         trace.trace_contact_resolution_outcome(
                             "clarification_returned",
                             {"source": "tool_loop"},
@@ -383,23 +427,23 @@ class AgentController:
                         trace.trace_decision(
                             "Need user clarification",
                             "Returning clarification prompt to user",
-                            {"prompt": clarification_prompt},
+                            {"prompt": follow_up_prompt},
                         )
                         self.logger.log_decision(
                             decision="Requesting clarification",
-                            reason=clarification_prompt,
+                            reason=follow_up_prompt,
                         )
+                        state.clarification_requests_count += 1
                         return self._finalize(
                             question,
-                            clarification_prompt,
+                            follow_up_prompt,
                             state,
                             run_id,
                             session_id,
                             total_start,
                         )
 
-                    if state.ui_directives and state.pending_questions:
-                        follow_up_prompt = state.pending_questions[-1]
+                    if follow_up_prompt and follow_up_source is FollowUpSource.UI_FOLLOW_UP:
                         trace.trace_decision(
                             "Returning UI follow-up",
                             "Structured directive requires user input",
@@ -409,6 +453,7 @@ class AgentController:
                             decision="Requesting UI follow-up",
                             reason=follow_up_prompt,
                         )
+                        state.clarification_requests_count += 1
                         return self._finalize(
                             question,
                             follow_up_prompt,
@@ -469,37 +514,17 @@ class AgentController:
                     continue
 
                 # Check for malformed tool call (JSON in content instead of proper tool call)
-                if (
-                    looks_like_malformed_tool_call(content)
-                    and state.step_count < self.config.max_steps - 1
-                ):
-                    trace.trace_malformed_output(content, "JSON tool call in text output")
-                    self.logger.log_malformed_output(content, "JSON tool call in text output")
-                    messages.append(
-                        {
-                            "role": "user",
-                            "content": MALFORMED_TOOL_CALL_PROMPT,
-                        }
-                    )
-                    continue
-
-                # Check for code describing tool usage instead of actual tool call
-                if (
-                    looks_like_code_describing_tool(content)
-                    and state.step_count < self.config.max_steps - 1
-                ):
+                malformed_prompt, malformed_reason = (
+                    self._agent_interface().classify_malformed_output(content)
+                )
+                if malformed_prompt and state.step_count < self.config.max_steps - 1:
                     trace.trace_malformed_output(
-                        content, "Code describing tool instead of calling it"
+                        content, malformed_reason or "Malformed tool output"
                     )
                     self.logger.log_malformed_output(
-                        content, "Code describing tool instead of calling it"
+                        content, malformed_reason or "Malformed tool output"
                     )
-                    messages.append(
-                        {
-                            "role": "user",
-                            "content": CODE_DESCRIBING_TOOL_PROMPT,
-                        }
-                    )
+                    messages.append({"role": "user", "content": malformed_prompt})
                     continue
 
                 # CRITICAL: Check if goal was actually achieved before returning
@@ -520,14 +545,12 @@ class AgentController:
                         reason=goal_check["reason"],
                         details={"pending_actions": goal_check["pending_actions"]},
                     )
-                    # Inject a generic prompt to force the LLM to complete the action
                     messages.append(
                         {
                             "role": "user",
-                            "content": f"INCOMPLETE: You have not completed the user's request yet. "
-                            f"Status: {goal_check['reason']}. "
-                            f"Required: {goal_check['pending_actions'][0]}. "
-                            f"Do NOT respond to the user - FIRST invoke the appropriate tool to complete the action.",
+                            "content": self._agent_interface().build_force_completion_prompt(
+                                goal_check
+                            ),
                         }
                     )
                     continue
@@ -598,6 +621,7 @@ class AgentController:
                     "clarification_returned",
                     {"source": "pre_resolution_stream"},
                 )
+                state.clarification_requests_count += 1
                 bundle = self._finalize(
                     question,
                     clarification_prompt,
@@ -621,40 +645,26 @@ class AgentController:
                     state.repair_count,
                     self.config.max_repairs,
                 )
-                hard_violation = self.limit_checker.check(state)
-                if hard_violation:
-                    trace.trace_limit_violation(
-                        hard_violation.limit_type.value,
-                        hard_violation.message,
-                        {"steps": state.step_count, "tool_calls": state.tool_calls_count},
-                    )
+                limit_action, tools, violation, _ = self._check_limits_and_recovery(
+                    state=state,
+                    tools=tools,
+                    run_id=run_id,
+                )
+                if limit_action is LimitAction.ESCALATED:
                     yield {
                         "type": "status",
-                        "message": f"Limit reached: {hard_violation.message}",
+                        "message": "Expanding tool access to recover from no-progress.",
                     }
-                    break
-
-                no_progress_violation = self.limit_checker.detect_no_progress(state)
-                if no_progress_violation:
-                    if self._should_escalate_tool_visibility(state, no_progress_violation):
-                        tools = self._escalate_tool_visibility(
-                            run_id=run_id,
-                            state=state,
-                            reason=no_progress_violation.message,
-                        )
-                        yield {
-                            "type": "status",
-                            "message": "Expanding tool access to recover from no-progress.",
-                        }
-                        continue
+                    continue
+                if limit_action is LimitAction.VIOLATION and violation is not None:
                     trace.trace_limit_violation(
-                        no_progress_violation.limit_type.value,
-                        no_progress_violation.message,
+                        violation.limit_type.value,
+                        violation.message,
                         {"steps": state.step_count, "tool_calls": state.tool_calls_count},
                     )
                     yield {
                         "type": "status",
-                        "message": f"Limit reached: {no_progress_violation.message}",
+                        "message": f"Limit reached: {violation.message}",
                     }
                     break
 
@@ -740,10 +750,13 @@ class AgentController:
                             }
                         )
 
-                    clarification_prompt = get_user_clarification_prompt_for_contact_resolution(
-                        state
+                    follow_up_prompt, follow_up_source = (
+                        self._agent_interface().get_follow_up_prompt_from_state(state)
                     )
-                    if clarification_prompt:
+                    if (
+                        follow_up_prompt
+                        and follow_up_source is FollowUpSource.CONTACT_CLARIFICATION
+                    ):
                         trace.trace_contact_resolution_outcome(
                             "clarification_returned",
                             {"source": "tool_loop_stream"},
@@ -751,19 +764,20 @@ class AgentController:
                         trace.trace_decision(
                             "Need user clarification (stream)",
                             "Returning clarification prompt to user",
-                            {"prompt": clarification_prompt},
+                            {"prompt": follow_up_prompt},
                         )
-                        accumulated_content = clarification_prompt
-                        yield {"type": "token", "content": clarification_prompt}
+                        state.clarification_requests_count += 1
+                        accumulated_content = follow_up_prompt
+                        yield {"type": "token", "content": follow_up_prompt}
                         break
 
-                    if state.ui_directives and state.pending_questions:
-                        follow_up_prompt = state.pending_questions[-1]
+                    if follow_up_prompt and follow_up_source is FollowUpSource.UI_FOLLOW_UP:
                         trace.trace_decision(
                             "Returning UI follow-up (stream)",
                             "Structured directive requires user input",
                             {"prompt": follow_up_prompt},
                         )
+                        state.clarification_requests_count += 1
                         accumulated_content = follow_up_prompt
                         yield {"type": "token", "content": follow_up_prompt}
                         break
@@ -807,43 +821,19 @@ class AgentController:
                     continue
 
                 # Check for malformed tool call (JSON in content instead of proper tool call)
-                if (
-                    looks_like_malformed_tool_call(current_content)
-                    and state.step_count < self.config.max_steps - 1
-                ):
-                    trace.trace_malformed_output(current_content, "JSON tool call in text output")
-                    self.logger.log_malformed_output(
-                        current_content, "JSON tool call in text output"
-                    )
-                    if streamed_any:
-                        yield {"type": "clear_content"}
-                    messages.append(
-                        {
-                            "role": "user",
-                            "content": MALFORMED_TOOL_CALL_PROMPT,
-                        }
-                    )
-                    continue
-
-                # Check for code describing tool usage instead of actual tool call
-                if (
-                    looks_like_code_describing_tool(current_content)
-                    and state.step_count < self.config.max_steps - 1
-                ):
+                malformed_prompt, malformed_reason = (
+                    self._agent_interface().classify_malformed_output(current_content)
+                )
+                if malformed_prompt and state.step_count < self.config.max_steps - 1:
                     trace.trace_malformed_output(
-                        current_content, "Code describing tool instead of calling it"
+                        current_content, malformed_reason or "Malformed tool output"
                     )
                     self.logger.log_malformed_output(
-                        current_content, "Code describing tool instead of calling it"
+                        current_content, malformed_reason or "Malformed tool output"
                     )
                     if streamed_any:
                         yield {"type": "clear_content"}
-                    messages.append(
-                        {
-                            "role": "user",
-                            "content": CODE_DESCRIBING_TOOL_PROMPT,
-                        }
-                    )
+                    messages.append({"role": "user", "content": malformed_prompt})
                     continue
 
                 # CRITICAL: Check if goal was actually achieved before returning
@@ -864,10 +854,9 @@ class AgentController:
                     messages.append(
                         {
                             "role": "user",
-                            "content": f"INCOMPLETE: You have not completed the user's request yet. "
-                            f"Status: {goal_check['reason']}. "
-                            f"Required: {goal_check['pending_actions'][0]}. "
-                            f"Do NOT respond to the user - FIRST invoke the appropriate tool to complete the action.",
+                            "content": self._agent_interface().build_force_completion_prompt(
+                                goal_check
+                            ),
                         }
                     )
                     continue
@@ -914,7 +903,7 @@ class AgentController:
         self.logger.log_decision(
             decision="Routing decision",
             reason=(
-                f"source={classification.route_source}, tier={route_tier}, "
+                f"source={classification.route_source.value}, tier={route_tier.value}, "
                 f"confidence={classification.confidence:.2f}"
             ),
             details={
@@ -927,20 +916,20 @@ class AgentController:
         logger.info(
             "[controller] Intent: %s (source=%s, confidence=%.2f, duration=%.1fms)",
             classification.intent.value,
-            classification.route_source,
+            classification.route_source.value,
             classification.confidence,
             router_duration,
         )
 
         return classification
 
-    def _confidence_tier(self, confidence: float) -> str:
+    def _confidence_tier(self, confidence: float) -> ConfidenceTier:
         """Map routing confidence to high/medium/low tiers."""
-        if confidence >= self.router_high_confidence_threshold:
-            return "high"
-        if confidence >= self.router_medium_confidence_threshold:
-            return "medium"
-        return "low"
+        return confidence_tier(
+            confidence,
+            high_threshold=self.router_high_confidence_threshold,
+            medium_threshold=self.router_medium_confidence_threshold,
+        )
 
     def _apply_classification_to_state(
         self,
@@ -952,46 +941,22 @@ class AgentController:
         state.allowed_tool_groups = classification.allowed_tool_groups
         state.constraints = classification.constraints
         state.skill_hints = classification.skill_hints
-        state.route_source = classification.route_source
+        state.route_source = classification.route_source.value
         state.route_confidence = classification.confidence
-        state.route_confidence_tier = self._confidence_tier(classification.confidence)
+        state.route_confidence_tier = self._confidence_tier(classification.confidence).value
 
     def _resolve_tool_visibility(
         self,
         classification: Optional[IntentClassification],
-    ) -> tuple[list[dict[str, Any]], str, list[str]]:
+    ) -> tuple[list[dict[str, Any]], ToolVisibilityMode, list[str]]:
         """Choose visible tools based on routing confidence and policy mode."""
-        all_tools = self.tool_registry.get_tool_definitions()
-        if classification is None:
-            return all_tools, "full", list(self.tool_registry.list_groups())
-
-        tier = self._confidence_tier(classification.confidence)
-        state_groups = list(classification.allowed_tool_groups or [])
-
-        if self.router_restriction_mode != "conservative":
-            selected_groups = list(dict.fromkeys(state_groups))
-            tool_defs = self.tool_registry.get_tool_definitions_for_groups(selected_groups)
-            if selected_groups and tool_defs:
-                return tool_defs, "restricted", selected_groups
-            return all_tools, "full", list(self.tool_registry.list_groups())
-
-        if tier == "high":
-            selected_groups = list(dict.fromkeys(state_groups))
-            tool_defs = self.tool_registry.get_tool_definitions_for_groups(selected_groups)
-            if selected_groups and tool_defs:
-                return tool_defs, "restricted", selected_groups
-            if not selected_groups:
-                return [], "none", []
-            return all_tools, "full", list(self.tool_registry.list_groups())
-
-        if tier == "medium":
-            selected_groups = list(dict.fromkeys([*state_groups, "resolution"]))
-            tool_defs = self.tool_registry.get_tool_definitions_for_groups(selected_groups)
-            if tool_defs:
-                return tool_defs, "restricted_with_resolution", selected_groups
-            return all_tools, "full", list(self.tool_registry.list_groups())
-
-        return all_tools, "full", list(self.tool_registry.list_groups())
+        return resolve_tool_visibility(
+            tool_registry=self.tool_registry,
+            classification=classification,
+            restriction_mode=self.router_restriction_mode,
+            high_threshold=self.router_high_confidence_threshold,
+            medium_threshold=self.router_medium_confidence_threshold,
+        )
 
     def _should_escalate_tool_visibility(
         self,
@@ -999,28 +964,7 @@ class AgentController:
         violation: Any | None = None,
     ) -> bool:
         """Decide whether restricted tool visibility should be widened."""
-        if state.tool_visibility_mode == "full":
-            return False
-        if state.tool_visibility_escalated:
-            return False
-
-        if violation is not None and getattr(violation, "limit_type", None) in {
-            LimitType.NO_PROGRESS_EMPTY,
-            LimitType.NO_PROGRESS_REPEATED,
-        }:
-            return True
-
-        recent_calls = state.get_recent_tool_calls(2)
-        if len(recent_calls) < 2:
-            return False
-
-        def _is_failed_or_empty(call: Any) -> bool:
-            if not getattr(call, "success", False):
-                return True
-            result = getattr(call, "result", {}) or {}
-            return state._is_empty_result(result)
-
-        return all(_is_failed_or_empty(call) for call in recent_calls)
+        return should_escalate_tool_visibility(state=state, violation=violation)
 
     def _escalate_tool_visibility(
         self,
@@ -1029,13 +973,14 @@ class AgentController:
         reason: str,
     ) -> list[dict[str, Any]]:
         """Escalate visibility to full toolset and log decision."""
-        state.tool_visibility_mode = "full"
+        state.tool_visibility_mode = ToolVisibilityMode.FULL.value
         state.tool_visibility_escalated = True
+        state.tool_visibility_escalations_count += 1
         state.allowed_tool_groups = list(self.tool_registry.list_groups())
         self.logger.log_decision(
             decision="Escalating tool visibility",
             reason=reason,
-            details={"mode": "full", "step": state.step_count},
+            details={"mode": ToolVisibilityMode.FULL.value, "step": state.step_count},
         )
         trace.trace_decision(
             "Escalating tool visibility",
@@ -1065,15 +1010,19 @@ class AgentController:
         location = client_context.get("location")
         if isinstance(location, dict):
             try:
-                lat = round(float(location.get("lat")), 3)
-                lon = round(float(location.get("lon")), 3)
+                raw_lat = location.get("lat")
+                raw_lon = location.get("lon")
+                if raw_lat is None or raw_lon is None:
+                    return normalized
+                lat = round(float(str(raw_lat)), 3)
+                lon = round(float(str(raw_lon)), 3)
                 if -90 <= lat <= 90 and -180 <= lon <= 180:
                     normalized_location: dict[str, Any] = {"lat": lat, "lon": lon}
 
                     accuracy = location.get("accuracy_m")
                     if accuracy is not None:
                         try:
-                            normalized_location["accuracy_m"] = round(float(accuracy), 1)
+                            normalized_location["accuracy_m"] = round(float(str(accuracy)), 1)
                         except (TypeError, ValueError):
                             pass
 
@@ -1114,14 +1063,13 @@ class AgentController:
         client_context: Optional[dict[str, Any]],
     ) -> list[dict[str, Any]]:
         """Build the message list for the main LLM run."""
-        return build_main_messages(
-            question=question,
-            state=state,
-            conversation_history=conversation_history,
-            user_email=user_email,
-            search_limit=search_limit,
-            client_context=client_context,
-            skill_injector=self._inject_skills,
+        return self._agent_interface().build_messages(
+            question,
+            state,
+            conversation_history,
+            user_email,
+            search_limit,
+            client_context,
         )
 
     def _inject_skills(
@@ -1132,12 +1080,7 @@ class AgentController:
         state: AgentState,
     ) -> None:
         """Inject matching skills into messages."""
-        inject_main_skills(
-            messages=messages,
-            question=question,
-            conversation_history=conversation_history,
-            state=state,
-        )
+        _ = (messages, question, conversation_history, state)
 
     def _call_llm(
         self,
@@ -1267,7 +1210,7 @@ class AgentController:
             cached_result = state.resolution.get("contact_resolution") or {}
             return {
                 **cached_result,
-                "status": "success",
+                "status": ToolStatus.SUCCESS.value,
                 "message": "Contact scope is already resolved for this request.",
             }
 
@@ -1280,7 +1223,7 @@ class AgentController:
             pending_prompt = str(pending_need_user_input.get("prompt") or "").strip()
         if pending_prompt and pending_text and pending_text.lower() == text.lower():
             return {
-                "status": "need_user_input",
+                "status": ToolStatus.NEED_USER_INPUT.value,
                 "ambiguous_contacts": state.resolution.get(
                     "pending_contact_ambiguous_contacts", []
                 ),
@@ -1295,20 +1238,19 @@ class AgentController:
 
         last_text = sanitize_goal_text(str(last_call.arguments.get("text", "")).strip())
         last_result = last_call.result or {}
-        last_status = last_result.get("status")
-        if not last_status and extract_need_user_input(
-            last_result, default_source="resolve_contacts"
-        ):
-            last_status = "need_user_input"
+        last_status = self._agent_interface().normalize_tool_status(
+            last_result,
+            "resolve_contacts",
+        )
         if last_text.lower() != text.lower():
             return None
-        if last_status not in {"need_user_input", "no_people"}:
+        if last_status not in {ToolStatus.NEED_USER_INPUT, ToolStatus.NO_PEOPLE}:
             return None
 
         reason = (
             "Contact resolution already returned ambiguity for this exact text. "
             "Ask the user to clarify instead of retrying the same call."
-            if last_status == "need_user_input"
+            if last_status is ToolStatus.NEED_USER_INPUT
             else "No people were detected for this text in the previous attempt."
         )
         trace.trace_decision(
@@ -1318,7 +1260,7 @@ class AgentController:
         )
         return {
             **last_result,
-            "status": last_status,
+            "status": last_status.value,
             "message": reason,
         }
 
@@ -1414,13 +1356,11 @@ class AgentController:
             )
 
             if resolution:
-                status = resolution.get("status")
-                if not status and extract_need_user_input(
+                status = self._agent_interface().normalize_tool_status(
                     resolution,
-                    default_source="resolve_contacts",
-                ):
-                    status = "need_user_input"
-                if status == "need_user_input":
+                    "resolve_contacts",
+                )
+                if status is ToolStatus.NEED_USER_INPUT:
                     preempt = build_contact_clarification_result(
                         ambiguous_contacts=state.resolution.get(
                             "pending_contact_ambiguous_contacts", []
@@ -1429,7 +1369,7 @@ class AgentController:
                     )
                     return normalized_args, preempt
 
-                if status == "success":
+                if status is ToolStatus.SUCCESS:
                     active_scope = state.resolution.get("active_contact_scope") or []
                     active_scope_ids = state.resolution.get("active_contact_scope_ids") or []
                     if active_scope_ids:
@@ -1604,17 +1544,15 @@ class AgentController:
         if not resolution:
             return None
 
-        status = resolution.get("status")
-        if not status and extract_need_user_input(
+        status = self._agent_interface().normalize_tool_status(
             resolution,
-            default_source="resolve_contacts",
-        ):
-            status = "need_user_input"
-        if status == "success":
+            "resolve_contacts",
+        )
+        if status is ToolStatus.SUCCESS:
             scope_ids = state.resolution.get("active_contact_scope_ids", [])
             if scope_ids:
                 state.add_fact(f"Pre-resolved {len(scope_ids)} contact(s) from user question")
-        elif status == "need_user_input":
+        elif status is ToolStatus.NEED_USER_INPUT:
             prompt = get_user_clarification_prompt_for_contact_resolution(state)
             if prompt:
                 state.add_question(prompt)
@@ -1633,13 +1571,14 @@ class AgentController:
             result,
             default_source="resolve_contacts",
         )
-        status = result.get("status")
-        if not status and need_user_input:
-            status = "need_user_input"
+        status = self._agent_interface().normalize_tool_status(
+            result,
+            "resolve_contacts",
+        )
 
         state.resolution["last_contact_resolution_text"] = args.get("text", "")
-        state.resolution["last_contact_resolution_status"] = status
-        if status == "success":
+        state.resolution["last_contact_resolution_status"] = status.value
+        if status is ToolStatus.SUCCESS:
             resolved_contacts = result.get("resolved_contacts", [])
             contact_ids = [
                 c.get("contact_id")
@@ -1679,19 +1618,26 @@ class AgentController:
                 state.resolution.pop("active_contact_scope", None)
             return
 
-        if status == "need_user_input":
+        if status is ToolStatus.NEED_USER_INPUT:
             ambiguous_contacts = result.get("ambiguous_contacts", [])
-            prompt = str((need_user_input or {}).get("prompt") or "").strip()
-            if not prompt:
+            if not need_user_input:
+                fallback = build_contact_clarification_result(
+                    ambiguous_contacts=ambiguous_contacts,
+                    people_mentioned=result.get("people_mentioned", []),
+                )
+                need_user_input = extract_need_user_input(
+                    fallback,
+                    default_source="resolve_contacts",
+                )
+            if not need_user_input:
                 prompt = "I found multiple matching people. Please clarify which one you mean."
-            if need_user_input:
-                state.resolution["pending_contact_need_user_input"] = need_user_input
-            else:
-                state.resolution["pending_contact_need_user_input"] = {
+                need_user_input = {
                     "kind": "disambiguation",
                     "prompt": prompt,
+                    "questions": [prompt],
                     "submission_mode": "ui_submission",
                 }
+            state.resolution["pending_contact_need_user_input"] = need_user_input
             state.resolution["pending_contact_ambiguous_contacts"] = ambiguous_contacts
             state.resolution["pending_contact_people"] = result.get("people_mentioned", [])
             state.resolution["pending_contact_scope_text"] = args.get("text", "")
@@ -1709,7 +1655,7 @@ class AgentController:
                 state.ui_directives = directive
             return
 
-        if status == "no_people":
+        if status is ToolStatus.NO_PEOPLE:
             # No person context found; clear scoped contact state.
             state.resolution.pop("active_contact_scope_ids", None)
             state.resolution.pop("active_contact_scope_text", None)
@@ -1891,6 +1837,8 @@ class AgentController:
                 "route_confidence_tier": state.route_confidence_tier,
                 "tool_visibility_mode": state.tool_visibility_mode,
                 "tool_visibility_escalated": state.tool_visibility_escalated,
+                "tool_visibility_escalations_count": state.tool_visibility_escalations_count,
+                "clarification_requests_count": state.clarification_requests_count,
                 "profile": self.runtime_profile.name,
             },
         }
@@ -1952,14 +1900,14 @@ class AgentController:
 
     def _compact_document_result(self, document: dict[str, Any]) -> dict[str, Any]:
         """Build a compact document result for response bundles."""
-        raw_metadata = (
-            document.get("raw_metadata") if isinstance(document.get("raw_metadata"), dict) else {}
-        )
+        raw_metadata_obj = document.get("raw_metadata")
+        embedding_content = ""
+        original_content = ""
+        if isinstance(raw_metadata_obj, dict):
+            embedding_content = str(raw_metadata_obj.get("content_english_for_embedding") or "")
+            original_content = str(raw_metadata_obj.get("original_content") or "")
         preview_source = (
-            document.get("content_preview")
-            or raw_metadata.get("content_english_for_embedding")
-            or raw_metadata.get("original_content")
-            or ""
+            document.get("content_preview") or embedding_content or original_content or ""
         )
         preview_text = str(preview_source or "").strip()
         if len(preview_text) > 12000:
@@ -2015,15 +1963,3 @@ class AgentController:
         after = content[end_idx + len(end) :].lstrip()
 
         return (before + " " + after).strip() if after else before
-
-
-# Singleton controller instance
-_controller: Optional[AgentController] = None
-
-
-def get_controller() -> AgentController:
-    """Get the singleton controller instance."""
-    global _controller
-    if _controller is None:
-        _controller = AgentController()
-    return _controller
