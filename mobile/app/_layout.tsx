@@ -172,11 +172,25 @@ function RootLayoutNav({ loaded }: { loaded: boolean }) {
           }}
         />
         <Stack.Screen
-          name="todos/new"
+          name="todos/index"
           options={{
             headerShown: true,
             headerTransparent: true,
             headerTitle: 'New todo',
+            headerBackTitle: ' ',
+            headerBackTitleStyle: { fontSize: 0 },
+            headerBackButtonMenuEnabled: false,
+            headerShadowVisible: false,
+            headerTintColor: theme.colors.ink,
+            headerStyle: { backgroundColor: 'transparent' },
+          }}
+        />
+        <Stack.Screen
+          name="todos/[todoId]"
+          options={{
+            headerShown: true,
+            headerTransparent: true,
+            headerTitle: 'Edit todo',
             headerBackTitle: ' ',
             headerBackTitleStyle: { fontSize: 0 },
             headerBackButtonMenuEnabled: false,

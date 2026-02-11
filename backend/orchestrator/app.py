@@ -506,6 +506,7 @@ def list_mobile_todos(
 
 
 @api.get("/todos/{todo_id}")
+@api.get("/mobile/todos/{todo_id}")
 def get_todo(todo_id: str, user: dict = Depends(get_current_user)):
     todo = todos_service.get_todo(todo_id)
     if not todo:

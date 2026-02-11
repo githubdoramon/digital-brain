@@ -1,9 +1,10 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { LinearGradient } from 'expo-linear-gradient';
-import { useRouter } from 'expo-router';
+import { useLocalSearchParams, useRouter } from 'expo-router';
 import React from 'react';
 import DateTimePicker, { DateType, useDefaultStyles } from 'react-native-ui-datepicker';
 import {
+  ActivityIndicator,
   KeyboardAvoidingView,
   Modal,
   Platform,
@@ -34,6 +35,15 @@ type EventResult = {
   title?: string | null;
   start_date?: string | null;
   end_date?: string | null;
+};
+
+type TodoDetail = {
+  todo_id: string;
+  description?: string | null;
+  status?: string | null;
+  due_date?: string | null;
+  contacts?: string[];
+  events?: EventResult[];
 };
 
 const normalizeSearch = (value: string) =>
@@ -68,10 +78,20 @@ function createTodoId() {
 function NewTodoContent() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
+  const params = useLocalSearchParams<{ todoId?: string | string[] }>();
   const { showNotice } = useTopNotice();
+  const todoIdParam = React.useMemo(() => {
+    if (Array.isArray(params.todoId)) {
+      return params.todoId[0] || '';
+    }
+    return params.todoId || '';
+  }, [params.todoId]);
+  const isEditing = todoIdParam.trim().length > 0;
   const [description, setDescription] = React.useState('');
   const [dueDate, setDueDate] = React.useState('');
   const [saving, setSaving] = React.useState(false);
+  const [loadingTodo, setLoadingTodo] = React.useState(false);
+  const [todoStatus, setTodoStatus] = React.useState('pending');
   const [contacts, setContacts] = React.useState<Contact[]>([]);
   const [contactQuery, setContactQuery] = React.useState('');
   const [selectedContacts, setSelectedContacts] = React.useState<Contact[]>([]);
@@ -85,7 +105,7 @@ function NewTodoContent() {
 
   const trimmedDescription = description.trim();
   const trimmedDueDate = dueDate.trim();
-  const canSave = trimmedDescription.length > 0 && !saving;
+  const canSave = trimmedDescription.length > 0 && !saving && !loadingTodo;
   const selectedContactIds = React.useMemo(
     () => new Set(selectedContacts.map((contact) => contact.contact_id)),
     [selectedContacts]
@@ -142,6 +162,55 @@ function NewTodoContent() {
       mounted = false;
     };
   }, []);
+
+  React.useEffect(() => {
+    if (!isEditing) {
+      setLoadingTodo(false);
+      setTodoStatus('pending');
+      return;
+    }
+    let mounted = true;
+    (async () => {
+      setLoadingTodo(true);
+      try {
+        const result = (await apiFetch(`/mobile/todos/${encodeURIComponent(todoIdParam)}`)) as TodoDetail;
+        if (!mounted) return;
+        setDescription(result.description?.trim() || '');
+        setDueDate(result.due_date || '');
+        setTodoStatus(result.status?.trim() || 'pending');
+        setSelectedContacts((result.contacts ?? []).map((contactId) => ({
+          contact_id: contactId,
+          display_name: contactId,
+        })));
+        setSelectedEvents((result.events ?? []).map((event) => ({
+          id: event.id,
+          title: event.title,
+          start_date: event.start_date,
+          end_date: event.end_date,
+        })));
+      } catch {
+        if (!mounted) return;
+        showNotice('Unable to load todo.', 'error');
+      } finally {
+        if (mounted) {
+          setLoadingTodo(false);
+        }
+      }
+    })();
+    return () => {
+      mounted = false;
+    };
+  }, [isEditing, showNotice, todoIdParam]);
+
+  React.useEffect(() => {
+    if (contacts.length === 0) return;
+    setSelectedContacts((prev) =>
+      prev.map((contact) => {
+        const match = contacts.find((item) => item.contact_id === contact.contact_id);
+        return match ? { contact_id: match.contact_id, display_name: match.display_name } : contact;
+      })
+    );
+  }, [contacts]);
 
   React.useEffect(() => {
     const trimmed = eventQuery.trim();
@@ -238,27 +307,46 @@ function NewTodoContent() {
       await apiFetch('/mobile/ingest/todo', {
         method: 'POST',
         body: JSON.stringify({
-          todo_id: createTodoId(),
+          todo_id: isEditing ? todoIdParam : createTodoId(),
           description: trimmedDescription,
-          status: 'pending',
+          status: isEditing ? todoStatus : 'pending',
           due_date: trimmedDueDate || null,
           contact_ids: selectedContacts.map((contact) => contact.contact_id),
           event_ids: selectedEvents.map((event) => event.id),
           place_ids: [],
         }),
       });
-      showNotice('Todo added.', 'success');
+      showNotice(isEditing ? 'Todo updated.' : 'Todo added.', 'success');
       router.back();
     } catch (error) {
       console.error('[todos] error adding todo', error);
-      showNotice('Unable to add todo.', 'error');
+      showNotice(isEditing ? 'Unable to update todo.' : 'Unable to add todo.', 'error');
     } finally {
       setSaving(false);
     }
-  }, [router, selectedContacts, selectedEvents, showNotice, trimmedDescription, trimmedDueDate]);
+  }, [
+    isEditing,
+    router,
+    selectedContacts,
+    selectedEvents,
+    showNotice,
+    todoIdParam,
+    todoStatus,
+    trimmedDescription,
+    trimmedDueDate,
+  ]);
 
   return (
     <LinearGradient colors={theme.gradients.dusk} style={styles.container}>
+      {isEditing && loadingTodo ? (
+        <View style={[styles.loadingContainer, { paddingTop: insets.top + 64 }]}>
+          <Card style={styles.loadingCard}>
+            <ActivityIndicator size="small" color={theme.colors.accentDeep} />
+            <Text style={styles.loadingTitle}>Loading todo</Text>
+            <Text style={styles.loadingText}>Fetching details and links...</Text>
+          </Card>
+        </View>
+      ) : null}
       <KeyboardAvoidingView
         style={styles.container}
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
@@ -277,14 +365,19 @@ function NewTodoContent() {
           <View style={styles.header}>
             <View style={styles.kickerRow}>
               <Ionicons name="sparkles" size={14} color={theme.colors.accentDeep} />
-              <Text style={styles.kicker}>New todo</Text>
+              <Text style={styles.kicker}>{isEditing ? 'Edit todo' : 'New todo'}</Text>
             </View>
-            <Text style={styles.title}>Capture what matters</Text>
-            <Text style={styles.subtitle}>Keep it simple and set a date if it helps.</Text>
+            <Text style={styles.title}>{isEditing ? 'Refine this task' : 'Capture what matters'}</Text>
+            <Text style={styles.subtitle}>
+              {isEditing
+                ? 'Update details and save when you are ready.'
+                : 'Keep it simple and set a date if it helps.'}
+            </Text>
           </View>
 
           <Card style={styles.formCard}>
             <Text style={styles.label}>Todo</Text>
+            {loadingTodo ? <Text style={styles.helper}>Loading todo details...</Text> : null}
             <TextInput
               style={[styles.input, styles.descriptionInput]}
               value={description}
@@ -432,7 +525,7 @@ function NewTodoContent() {
 
         <FloatingSaveButton
           visible
-          label={saving ? 'Saving todo' : 'Create todo'}
+          label={saving ? 'Saving todo' : isEditing ? 'Save changes' : 'Create todo'}
           onPress={handleSave}
           disabled={!canSave}
           loading={saving}
@@ -548,6 +641,28 @@ const styles = StyleSheet.create({
   formCard: {
     padding: 18,
     gap: 10,
+  },
+  loadingContainer: {
+    ...StyleSheet.absoluteFillObject,
+    alignItems: 'center',
+    justifyContent: 'flex-start',
+    paddingHorizontal: 20,
+    zIndex: 4,
+  },
+  loadingCard: {
+    width: '100%',
+    paddingVertical: 16,
+    alignItems: 'center',
+    gap: 6,
+  },
+  loadingTitle: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: theme.colors.ink,
+  },
+  loadingText: {
+    fontSize: 12,
+    color: theme.colors.mutedInk,
   },
   label: {
     fontSize: 13,

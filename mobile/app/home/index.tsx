@@ -186,7 +186,7 @@ export default function DailyScreen() {
           setTodos((prev) => prev.filter((item) => item.todo_id !== todo.todo_id));
         });
         showNotice('Todo marked as completed.', 'success');
-      } catch (err) {
+      } catch {
         showNotice('Unable to update todo.', 'error');
       } finally {
         setCompletingIds((prev) => {
@@ -294,12 +294,7 @@ export default function DailyScreen() {
           const eventCount = item.events?.length ?? 0;
           return (
             <Pressable
-              onPress={() => {
-                if (primaryEvent?.id) {
-                  router.push(`/events/${encodeURIComponent(primaryEvent.id)}`);
-                }
-              }}
-              disabled={!primaryEvent?.id}
+              onPress={() => router.push(`/todos/${encodeURIComponent(item.todo_id)}`)}
               style={({ pressed }) => [styles.todoPressable, pressed && styles.pressed]}
             >
               <AnimatedCard
@@ -323,13 +318,22 @@ export default function DailyScreen() {
                 <View style={styles.todoContent}>
                   <Text style={styles.todoText}>{item.description}</Text>
                   {primaryEvent ? (
-                    <View style={styles.todoEventRow}>
+                    <Pressable
+                      onPress={(event) => {
+                        event?.stopPropagation?.();
+                        router.push(`/events/${encodeURIComponent(primaryEvent.id)}`);
+                      }}
+                      style={({ pressed }) => [
+                        styles.todoEventRow,
+                        pressed && styles.todoEventRowPressed,
+                      ]}
+                    >
                       <Ionicons name="calendar" size={14} color={theme.colors.accentDeep} />
                       <Text style={styles.todoEventText}>{formatEventTitle(primaryEvent)}</Text>
                       {eventCount > 1 ? (
                         <Text style={styles.todoEventMeta}>+{eventCount - 1}</Text>
                       ) : null}
-                    </View>
+                    </Pressable>
                   ) : null}
                   {item.due_date ? <Text style={styles.todoMeta}>Due {item.due_date}</Text> : null}
                 </View>
@@ -361,7 +365,7 @@ export default function DailyScreen() {
         }
       />
       <Pressable
-        onPress={() => router.push('/todos/new')}
+        onPress={() => router.push('/todos')}
         accessibilityRole="button"
         accessibilityLabel="Add a todo"
         style={({ pressed }) => [
@@ -572,6 +576,14 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 6,
     marginTop: 6,
+    borderRadius: 12,
+    paddingVertical: 4,
+    paddingHorizontal: 6,
+    marginHorizontal: -6,
+    alignSelf: 'flex-start',
+  },
+  todoEventRowPressed: {
+    backgroundColor: 'rgba(47, 111, 116, 0.12)',
   },
   todoEventText: {
     fontSize: 13,
