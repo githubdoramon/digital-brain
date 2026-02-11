@@ -18,14 +18,25 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Card } from '@/components/Card';
 import { FloatingSaveButton } from '@/components/FloatingSaveButton';
 import { UiDirectiveDateTimePickerSheet } from '@/components/ui-directive-card/UiDirectiveDateTimePickerSheet';
-import type { EventContactOption, EventDraft } from '@/components/event-draft/types';
+import { EMPTY_EVENT_DRAFT, type EventContactOption, type EventDraft } from '@/components/event-draft/types';
 import {
   getEventDraftEditSession,
   submitEventDraftEditSession,
 } from '@/events/draftEditorSession';
 import { theme } from '@/theme';
 
-type Props = {
+type EventDetailsFormProps = {
+  initialDraft: EventDraft;
+  availableContacts: EventContactOption[];
+  editable: boolean;
+  headerKicker: string;
+  headerTitle: string;
+  headerSubtitle?: string;
+  doneLabel?: string;
+  onDone?: (draft: EventDraft) => void;
+};
+
+type DraftEditorScreenProps = {
   sessionId: string;
 };
 
@@ -41,7 +52,7 @@ function inputToList(value: string): string[] {
 }
 
 function formatWhen(value: string) {
-  if (!value.trim()) return 'No time selected';
+  if (!value.trim()) return 'Not specified';
   const parsed = new Date(value);
   if (Number.isNaN(parsed.getTime())) return value;
   return parsed.toLocaleString(undefined, {
@@ -54,29 +65,63 @@ function formatWhen(value: string) {
 }
 
 function floatingOffset(insetBottom: number, keyboardHeight: number) {
-  const keyboardInset = Platform.OS === 'ios' ? Math.max(0, keyboardHeight - insetBottom) : keyboardHeight;
+  const keyboardInset =
+    Platform.OS === 'ios' ? Math.max(0, keyboardHeight - insetBottom) : keyboardHeight;
   return insetBottom + 20 + keyboardInset;
 }
 
-export function EventDraftEditorScreen({ sessionId }: Props) {
-  const router = useRouter();
+function readOnlyText(value: string, fallback: string) {
+  const trimmed = value.trim();
+  return trimmed || fallback;
+}
+
+function readOnlyList(values: string[], fallback: string) {
+  const filtered = values.map((value) => value.trim()).filter(Boolean);
+  return filtered.length ? filtered : [fallback];
+}
+
+export function EventDetailsForm({
+  initialDraft,
+  availableContacts,
+  editable,
+  headerKicker,
+  headerTitle,
+  headerSubtitle,
+  doneLabel = 'Done',
+  onDone,
+}: EventDetailsFormProps) {
   const insets = useSafeAreaInsets();
-  const session = React.useMemo(() => getEventDraftEditSession(sessionId), [sessionId]);
   const [keyboardHeight, setKeyboardHeight] = React.useState(0);
   const [showDatePicker, setShowDatePicker] = React.useState(false);
 
-  const [title, setTitle] = React.useState(session?.initialDraft.title ?? '');
-  const [summary, setSummary] = React.useState(session?.initialDraft.summary ?? '');
-  const [when, setWhen] = React.useState(session?.initialDraft.when ?? '');
-  const [where, setWhere] = React.useState(session?.initialDraft.where ?? '');
-  const [tagsInput, setTagsInput] = React.useState(listToInput(session?.initialDraft.tags ?? []));
-  const [typesInput, setTypesInput] = React.useState(listToInput(session?.initialDraft.types ?? []));
+  const [title, setTitle] = React.useState(initialDraft.title);
+  const [summary, setSummary] = React.useState(initialDraft.summary);
+  const [when, setWhen] = React.useState(initialDraft.when);
+  const [where, setWhere] = React.useState(initialDraft.where);
+  const [tagsInput, setTagsInput] = React.useState(listToInput(initialDraft.tags));
+  const [typesInput, setTypesInput] = React.useState(listToInput(initialDraft.types));
   const [participantQuery, setParticipantQuery] = React.useState('');
   const [selectedParticipantIds, setSelectedParticipantIds] = React.useState<string[]>(
-    (session?.initialDraft.participants ?? []).map((participant) => participant.contactId),
+    initialDraft.participants.map((participant) => participant.contactId),
   );
 
   React.useEffect(() => {
+    setTitle(initialDraft.title);
+    setSummary(initialDraft.summary);
+    setWhen(initialDraft.when);
+    setWhere(initialDraft.where);
+    setTagsInput(listToInput(initialDraft.tags));
+    setTypesInput(listToInput(initialDraft.types));
+    setSelectedParticipantIds(initialDraft.participants.map((participant) => participant.contactId));
+    setParticipantQuery('');
+  }, [initialDraft]);
+
+  React.useEffect(() => {
+    if (!editable) {
+      setKeyboardHeight(0);
+      return;
+    }
+
     const showEvent = Platform.OS === 'ios' ? 'keyboardWillChangeFrame' : 'keyboardDidShow';
     const hideEvent = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
 
@@ -90,15 +135,11 @@ export function EventDraftEditorScreen({ sessionId }: Props) {
       showListener.remove();
       hideListener.remove();
     };
-  }, []);
+  }, [editable]);
 
-  const availableContacts: EventContactOption[] = React.useMemo(
-    () => session?.availableContacts ?? [],
-    [session?.availableContacts],
-  );
   const initialParticipants = React.useMemo(
-    () => session?.initialDraft.participants ?? [],
-    [session?.initialDraft.participants],
+    () => initialDraft.participants ?? [],
+    [initialDraft.participants],
   );
 
   const contactNameById = React.useMemo(() => {
@@ -124,6 +165,7 @@ export function EventDraftEditorScreen({ sessionId }: Props) {
   );
 
   const filteredContacts = React.useMemo(() => {
+    if (!editable) return [];
     const query = participantQuery.trim().toLowerCase();
     if (!query) return [];
     const selectedSet = new Set(selectedParticipantIds);
@@ -131,7 +173,7 @@ export function EventDraftEditorScreen({ sessionId }: Props) {
       .filter((contact) => !selectedSet.has(contact.contact_id))
       .filter((contact) => contact.display_name.toLowerCase().includes(query))
       .slice(0, 5);
-  }, [availableContacts, participantQuery, selectedParticipantIds]);
+  }, [availableContacts, editable, participantQuery, selectedParticipantIds]);
 
   const toggleParticipant = React.useCallback((contactId: string) => {
     setSelectedParticipantIds((prev) =>
@@ -140,35 +182,22 @@ export function EventDraftEditorScreen({ sessionId }: Props) {
     setParticipantQuery('');
   }, []);
 
-  const handleDone = React.useCallback(() => {
-    if (session) {
-      const nextDraft: EventDraft = {
-        title: title.trim(),
-        summary: summary.trim(),
-        when: when.trim(),
-        where: where.trim(),
-        tags: inputToList(tagsInput),
-        types: inputToList(typesInput),
-        participants: selectedParticipants,
-      };
-      submitEventDraftEditSession(session.sessionId, nextDraft);
-    }
-    router.back();
-  }, [router, selectedParticipants, session, summary, tagsInput, title, typesInput, when, where]);
+  const currentDraft: EventDraft = React.useMemo(
+    () => ({
+      title: title.trim(),
+      summary: summary.trim(),
+      when: when.trim(),
+      where: where.trim(),
+      tags: inputToList(tagsInput),
+      types: inputToList(typesInput),
+      participants: selectedParticipants,
+    }),
+    [selectedParticipants, summary, tagsInput, title, typesInput, when, where],
+  );
 
-  if (!session) {
-    return (
-      <LinearGradient colors={theme.gradients.dusk} style={styles.container}>
-        <View style={[styles.emptyState, { paddingTop: insets.top + 80 }]}>
-          <Text style={styles.emptyTitle}>Draft editor unavailable</Text>
-          <Text style={styles.emptyBody}>This draft has expired. Return to chat and re-open edit.</Text>
-          <Pressable onPress={() => router.back()} style={styles.emptyAction}>
-            <Text style={styles.emptyActionText}>Back to chat</Text>
-          </Pressable>
-        </View>
-      </LinearGradient>
-    );
-  }
+  const readOnlyParticipants = selectedParticipants;
+  const readOnlyTags = readOnlyList(inputToList(tagsInput), 'None');
+  const readOnlyTypes = readOnlyList(inputToList(typesInput), 'Generic');
 
   return (
     <LinearGradient colors={theme.gradients.dusk} style={styles.container}>
@@ -184,151 +213,206 @@ export function EventDraftEditorScreen({ sessionId }: Props) {
             styles.content,
             {
               paddingTop: insets.top + 62,
-              paddingBottom: insets.bottom + 120,
+              paddingBottom: insets.bottom + (editable ? 120 : 28),
             },
           ]}
         >
-          <Text style={styles.kicker}>Event proposal</Text>
-          <Text style={styles.title}>Edit draft</Text>
-          <Text style={styles.subtitle}>Review details before creating the event.</Text>
+          <Text style={styles.kicker}>{headerKicker}</Text>
+          <Text style={styles.title}>{headerTitle}</Text>
+          {headerSubtitle ? <Text style={styles.subtitle}>{headerSubtitle}</Text> : null}
 
           <Card style={styles.card}>
             <Text style={styles.label}>Title</Text>
-            <TextInput
-              value={title}
-              onChangeText={setTitle}
-              placeholder="Add a short title"
-              placeholderTextColor={theme.colors.mutedInk}
-              style={styles.input}
-            />
+            {editable ? (
+              <TextInput
+                value={title}
+                onChangeText={setTitle}
+                placeholder="Add a short title"
+                placeholderTextColor={theme.colors.mutedInk}
+                style={styles.input}
+              />
+            ) : (
+              <Text style={styles.readText}>{readOnlyText(title, 'Untitled event')}</Text>
+            )}
           </Card>
 
           <Card style={styles.card}>
             <Text style={styles.label}>Summary</Text>
-            <TextInput
-              value={summary}
-              onChangeText={setSummary}
-              placeholder="Capture what happened"
-              placeholderTextColor={theme.colors.mutedInk}
-              multiline
-              style={[styles.input, styles.textarea]}
-            />
+            {editable ? (
+              <TextInput
+                value={summary}
+                onChangeText={setSummary}
+                placeholder="Capture what happened"
+                placeholderTextColor={theme.colors.mutedInk}
+                multiline
+                style={[styles.input, styles.textarea]}
+              />
+            ) : (
+              <Text style={styles.readText}>{readOnlyText(summary, 'No summary provided.')}</Text>
+            )}
           </Card>
 
           <Card style={styles.card}>
             <Text style={styles.label}>When</Text>
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel="Select event time"
-              onPress={() => setShowDatePicker(true)}
-              style={({ pressed }) => [styles.dateField, pressed && styles.dateFieldPressed]}
-            >
-              <Text style={when ? styles.dateValue : styles.datePlaceholder}>
-                {when ? formatWhen(when) : 'Pick date and time'}
-              </Text>
-            </Pressable>
-            {when ? (
-              <Pressable
-                accessibilityRole="button"
-                accessibilityLabel="Clear event time"
-                onPress={() => setWhen('')}
-                style={({ pressed }) => [styles.clearLink, pressed && styles.clearLinkPressed]}
-              >
-                <Text style={styles.clearLinkText}>Clear time</Text>
-              </Pressable>
-            ) : null}
+            {editable ? (
+              <>
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel="Select event time"
+                  onPress={() => setShowDatePicker(true)}
+                  style={({ pressed }) => [styles.dateField, pressed && styles.dateFieldPressed]}
+                >
+                  <Text style={when ? styles.dateValue : styles.datePlaceholder}>
+                    {when ? formatWhen(when) : 'Pick date and time'}
+                  </Text>
+                </Pressable>
+                {when ? (
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel="Clear event time"
+                    onPress={() => setWhen('')}
+                    style={({ pressed }) => [styles.clearLink, pressed && styles.clearLinkPressed]}
+                  >
+                    <Text style={styles.clearLinkText}>Clear time</Text>
+                  </Pressable>
+                ) : null}
+              </>
+            ) : (
+              <Text style={styles.readText}>{formatWhen(when)}</Text>
+            )}
           </Card>
 
           <Card style={styles.card}>
             <Text style={styles.label}>Where</Text>
-            <TextInput
-              value={where}
-              onChangeText={setWhere}
-              placeholder="Location"
-              placeholderTextColor={theme.colors.mutedInk}
-              style={styles.input}
-            />
+            {editable ? (
+              <TextInput
+                value={where}
+                onChangeText={setWhere}
+                placeholder="Location"
+                placeholderTextColor={theme.colors.mutedInk}
+                style={styles.input}
+              />
+            ) : (
+              <Text style={styles.readText}>{readOnlyText(where, 'Not specified')}</Text>
+            )}
           </Card>
 
           <Card style={styles.card}>
             <Text style={styles.label}>Participants</Text>
-            <TextInput
-              value={participantQuery}
-              onChangeText={setParticipantQuery}
-              placeholder="Search contacts"
-              placeholderTextColor={theme.colors.mutedInk}
-              style={styles.input}
-            />
+            {editable ? (
+              <>
+                <TextInput
+                  value={participantQuery}
+                  onChangeText={setParticipantQuery}
+                  placeholder="Search contacts"
+                  placeholderTextColor={theme.colors.mutedInk}
+                  style={styles.input}
+                />
 
-            {selectedParticipants.length > 0 ? (
+                {selectedParticipants.length > 0 ? (
+                  <View style={styles.chipRow}>
+                    {selectedParticipants.map((participant) => (
+                      <Pressable
+                        key={participant.contactId}
+                        accessibilityRole="button"
+                        accessibilityLabel={`Remove ${participant.displayName}`}
+                        onPress={() => toggleParticipant(participant.contactId)}
+                        style={({ pressed }) => [styles.chip, pressed && styles.chipPressed]}
+                      >
+                        <Text style={styles.chipText}>{participant.displayName}</Text>
+                        <Ionicons name="close" size={12} color={theme.colors.mutedInk} />
+                      </Pressable>
+                    ))}
+                  </View>
+                ) : (
+                  <Text style={styles.helperText}>No participants selected.</Text>
+                )}
+
+                {participantQuery.trim().length > 0 && filteredContacts.length > 0 ? (
+                  <View style={styles.suggestionList}>
+                    {filteredContacts.map((contact) => (
+                      <Pressable
+                        key={contact.contact_id}
+                        accessibilityRole="button"
+                        accessibilityLabel={`Add ${contact.display_name}`}
+                        onPress={() => toggleParticipant(contact.contact_id)}
+                        style={({ pressed }) => [styles.suggestionRow, pressed && styles.suggestionPressed]}
+                      >
+                        <Text style={styles.suggestionText}>{contact.display_name}</Text>
+                        <Ionicons name="add" size={16} color={theme.colors.accentDeep} />
+                      </Pressable>
+                    ))}
+                  </View>
+                ) : null}
+              </>
+            ) : readOnlyParticipants.length > 0 ? (
               <View style={styles.chipRow}>
-                {selectedParticipants.map((participant) => (
-                  <Pressable
-                    key={participant.contactId}
-                    accessibilityRole="button"
-                    accessibilityLabel={`Remove ${participant.displayName}`}
-                    onPress={() => toggleParticipant(participant.contactId)}
-                    style={({ pressed }) => [styles.chip, pressed && styles.chipPressed]}
-                  >
+                {readOnlyParticipants.map((participant) => (
+                  <View key={participant.contactId} style={styles.readChip}>
                     <Text style={styles.chipText}>{participant.displayName}</Text>
-                    <Ionicons name="close" size={12} color={theme.colors.mutedInk} />
-                  </Pressable>
+                  </View>
                 ))}
               </View>
             ) : (
-              <Text style={styles.helperText}>No participants selected.</Text>
+              <Text style={styles.readText}>No participants detected</Text>
             )}
-
-            {participantQuery.trim().length > 0 && filteredContacts.length > 0 ? (
-              <View style={styles.suggestionList}>
-                {filteredContacts.map((contact) => (
-                  <Pressable
-                    key={contact.contact_id}
-                    accessibilityRole="button"
-                    accessibilityLabel={`Add ${contact.display_name}`}
-                    onPress={() => toggleParticipant(contact.contact_id)}
-                    style={({ pressed }) => [styles.suggestionRow, pressed && styles.suggestionPressed]}
-                  >
-                    <Text style={styles.suggestionText}>{contact.display_name}</Text>
-                    <Ionicons name="add" size={16} color={theme.colors.accentDeep} />
-                  </Pressable>
-                ))}
-              </View>
-            ) : null}
           </Card>
 
           <Card style={styles.card}>
             <Text style={styles.label}>Tags</Text>
-            <TextInput
-              value={tagsInput}
-              onChangeText={setTagsInput}
-              placeholder="work, meeting, personal"
-              placeholderTextColor={theme.colors.mutedInk}
-              style={styles.input}
-            />
+            {editable ? (
+              <TextInput
+                value={tagsInput}
+                onChangeText={setTagsInput}
+                placeholder="work, meeting, personal"
+                placeholderTextColor={theme.colors.mutedInk}
+                style={styles.input}
+              />
+            ) : (
+              <View style={styles.chipRow}>
+                {readOnlyTags.map((tag) => (
+                  <View key={`tag:${tag}`} style={styles.readChip}>
+                    <Text style={styles.chipText}>{tag}</Text>
+                  </View>
+                ))}
+              </View>
+            )}
           </Card>
 
           <Card style={styles.card}>
             <Text style={styles.label}>Types</Text>
-            <TextInput
-              value={typesInput}
-              onChangeText={setTypesInput}
-              placeholder="meeting, travel, personal"
-              placeholderTextColor={theme.colors.mutedInk}
-              style={styles.input}
-            />
+            {editable ? (
+              <TextInput
+                value={typesInput}
+                onChangeText={setTypesInput}
+                placeholder="meeting, travel, personal"
+                placeholderTextColor={theme.colors.mutedInk}
+                style={styles.input}
+              />
+            ) : (
+              <View style={styles.chipRow}>
+                {readOnlyTypes.map((typeValue) => (
+                  <View key={`type:${typeValue}`} style={styles.readChip}>
+                    <Text style={styles.chipText}>{typeValue}</Text>
+                  </View>
+                ))}
+              </View>
+            )}
           </Card>
         </ScrollView>
 
-        <FloatingSaveButton
-          visible
-          label="Done"
-          onPress={handleDone}
-          bottomOffset={floatingOffset(insets.bottom, keyboardHeight)}
-        />
+        {editable ? (
+          <FloatingSaveButton
+            visible
+            label={doneLabel}
+            onPress={() => onDone?.(currentDraft)}
+            disabled={!onDone}
+            bottomOffset={floatingOffset(insets.bottom, keyboardHeight)}
+          />
+        ) : null}
       </KeyboardAvoidingView>
 
-      {showDatePicker ? (
+      {editable && showDatePicker ? (
         <UiDirectiveDateTimePickerSheet
           visible
           mode="datetime"
@@ -341,6 +425,60 @@ export function EventDraftEditorScreen({ sessionId }: Props) {
         />
       ) : null}
     </LinearGradient>
+  );
+}
+
+export function EventDraftEditorScreen({ sessionId }: DraftEditorScreenProps) {
+  const router = useRouter();
+  const insets = useSafeAreaInsets();
+  const session = React.useMemo(() => getEventDraftEditSession(sessionId), [sessionId]);
+
+  const handleDone = React.useCallback(
+    (nextDraft: EventDraft) => {
+      console.info('[event-draft-session] editor-done-pressed', {
+        sessionId,
+        hasSession: Boolean(session),
+      });
+      if (session) {
+        submitEventDraftEditSession(session.sessionId, nextDraft);
+      }
+      router.back();
+    },
+    [router, session, sessionId],
+  );
+
+  React.useEffect(() => {
+    console.info('[event-draft-session] editor-screen-mounted', {
+      sessionId,
+      hasSession: Boolean(session),
+    });
+  }, [sessionId, session]);
+
+  if (!session) {
+    return (
+      <LinearGradient colors={theme.gradients.dusk} style={styles.container}>
+        <View style={[styles.emptyState, { paddingTop: insets.top + 80 }]}> 
+          <Text style={styles.emptyTitle}>Draft editor unavailable</Text>
+          <Text style={styles.emptyBody}>This draft has expired. Return to chat and re-open edit.</Text>
+          <Pressable onPress={() => router.back()} style={styles.emptyAction}>
+            <Text style={styles.emptyActionText}>Back to chat</Text>
+          </Pressable>
+        </View>
+      </LinearGradient>
+    );
+  }
+
+  return (
+    <EventDetailsForm
+      initialDraft={session.initialDraft || EMPTY_EVENT_DRAFT}
+      availableContacts={session.availableContacts}
+      editable
+      headerKicker="Event proposal"
+      headerTitle="Edit draft"
+      headerSubtitle="Review details before creating the event."
+      doneLabel="Done"
+      onDone={handleDone}
+    />
   );
 }
 
@@ -479,6 +617,15 @@ const styles = StyleSheet.create({
     backgroundColor: '#fff',
     paddingHorizontal: 10,
   },
+  readChip: {
+    minHeight: 32,
+    justifyContent: 'center',
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: theme.colors.line,
+    backgroundColor: '#fff',
+    paddingHorizontal: 10,
+  },
   chipPressed: {
     opacity: 0.78,
   },
@@ -487,6 +634,11 @@ const styles = StyleSheet.create({
     fontSize: 12,
     lineHeight: 16,
     fontWeight: '600',
+  },
+  readText: {
+    color: theme.colors.ink,
+    fontSize: 14,
+    lineHeight: 20,
   },
   emptyState: {
     flex: 1,

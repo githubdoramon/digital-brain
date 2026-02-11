@@ -15,8 +15,24 @@ export type EventDraftEditResult = {
   nextDraft: EventDraft;
 };
 
-const editSessions = new Map<string, EventDraftEditSession>();
-const editResults = new Map<string, EventDraftEditResult>();
+type EventDraftStore = {
+  sessions: Map<string, EventDraftEditSession>;
+  results: Map<string, EventDraftEditResult>;
+};
+
+function getStore(): EventDraftStore {
+  const key = '__eventDraftEditorStore';
+  const globalObj = globalThis as typeof globalThis & {
+    __eventDraftEditorStore?: EventDraftStore;
+  };
+  if (!globalObj[key]) {
+    globalObj[key] = {
+      sessions: new Map<string, EventDraftEditSession>(),
+      results: new Map<string, EventDraftEditResult>(),
+    };
+  }
+  return globalObj[key]!;
+}
 
 function nextSessionId() {
   return `event_draft_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 9)}`;
@@ -25,15 +41,27 @@ function nextSessionId() {
 export function createEventDraftEditSession(
   input: Omit<EventDraftEditSession, 'sessionId'>,
 ): EventDraftEditSession {
+  const store = getStore();
   const sessionId = nextSessionId();
   const session: EventDraftEditSession = { ...input, sessionId };
-  editSessions.set(sessionId, session);
+  store.sessions.set(sessionId, session);
+  console.info('[event-draft-session] create', {
+    sessionId,
+    previewId: session.previewId,
+    contactCount: session.availableContacts.length,
+  });
   return session;
 }
 
 export function getEventDraftEditSession(sessionId: string | null | undefined) {
   if (!sessionId) return null;
-  return editSessions.get(sessionId) ?? null;
+  const store = getStore();
+  const session = store.sessions.get(sessionId) ?? null;
+  console.info('[event-draft-session] get', {
+    sessionId,
+    found: Boolean(session),
+  });
+  return session;
 }
 
 export function submitEventDraftEditSession(
@@ -41,7 +69,8 @@ export function submitEventDraftEditSession(
   nextDraft: EventDraft,
 ): EventDraftEditResult | null {
   if (!sessionId) return null;
-  const session = editSessions.get(sessionId);
+  const store = getStore();
+  const session = store.sessions.get(sessionId);
   if (!session) return null;
   const result: EventDraftEditResult = {
     sessionId,
@@ -49,7 +78,11 @@ export function submitEventDraftEditSession(
     baseDraft: session.baseDraft,
     nextDraft,
   };
-  editResults.set(sessionId, result);
+  store.results.set(sessionId, result);
+  console.info('[event-draft-session] submit', {
+    sessionId,
+    previewId: session.previewId,
+  });
   return result;
 }
 
@@ -57,16 +90,23 @@ export function consumeEventDraftEditResult(
   sessionId: string | null | undefined,
 ): EventDraftEditResult | null {
   if (!sessionId) return null;
-  const result = editResults.get(sessionId) ?? null;
+  const store = getStore();
+  const result = store.results.get(sessionId) ?? null;
   if (result) {
-    editResults.delete(sessionId);
+    store.results.delete(sessionId);
+    store.sessions.delete(sessionId);
   }
-  editSessions.delete(sessionId);
+  console.info('[event-draft-session] consume', {
+    sessionId,
+    found: Boolean(result),
+  });
   return result;
 }
 
 export function clearEventDraftEditSession(sessionId: string | null | undefined) {
   if (!sessionId) return;
-  editResults.delete(sessionId);
-  editSessions.delete(sessionId);
+  const store = getStore();
+  store.results.delete(sessionId);
+  store.sessions.delete(sessionId);
+  console.info('[event-draft-session] clear', { sessionId });
 }

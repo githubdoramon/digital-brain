@@ -10,19 +10,16 @@ type Props = {
   block: UiDirectiveBlock;
 };
 
-const EVENT_PREVIEW_LABELS = new Set([
-  'Title',
-  'Summary',
-  'When',
-  'Where',
-  'Who',
-  'Tags',
-  'Types',
-]);
+/** True if the part before ":" is 1–3 words (we bold it). */
+function isLabelValueLine(line: string, separatorIndex: number): boolean {
+  const beforeColon = line.slice(0, separatorIndex).trim();
+  const words = beforeColon.split(/\s+/).filter(Boolean);
+  return words.length >= 1 && words.length <= 3;
+}
 
 function renderBodyLine(line: string, key: string) {
   const separatorIndex = line.indexOf(':');
-  if (separatorIndex <= 0) {
+  if (separatorIndex <= 0 || !isLabelValueLine(line, separatorIndex)) {
     return (
       <Text key={key} style={styles.description}>
         {line}
@@ -32,13 +29,6 @@ function renderBodyLine(line: string, key: string) {
 
   const rawLabel = line.slice(0, separatorIndex).trim();
   const value = line.slice(separatorIndex + 1).trimStart();
-  if (!EVENT_PREVIEW_LABELS.has(rawLabel)) {
-    return (
-      <Text key={key} style={styles.description}>
-        {line}
-      </Text>
-    );
-  }
 
   return (
     <Text key={key} style={styles.description}>

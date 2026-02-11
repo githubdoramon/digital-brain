@@ -915,9 +915,17 @@ export default function ChatScreen() {
 
       const result = consumeEventDraftEditResult(activeDraftEditorSessionId);
       if (result) {
+        console.info('[event-draft-session] apply-on-focus', {
+          sessionId: activeDraftEditorSessionId,
+          previewId: result.previewId,
+        });
         applyEventDraftEdits(result.previewId, result.baseDraft, result.nextDraft);
+        setActiveDraftEditorSessionId(null);
+      } else {
+        console.info('[event-draft-session] no-result-on-focus', {
+          sessionId: activeDraftEditorSessionId,
+        });
       }
-      setActiveDraftEditorSessionId(null);
 
       return () => undefined;
     }, [activeDraftEditorSessionId, applyEventDraftEdits]),
@@ -982,6 +990,10 @@ export default function ChatScreen() {
           setActiveDraftEditorSessionId((previousSessionId) => {
             clearEventDraftEditSession(previousSessionId);
             return session.sessionId;
+          });
+          console.info('[event-draft-session] navigate-editor', {
+            sessionId: session.sessionId,
+            previewId: action.previewId,
           });
           router.push({
             pathname: '/events/[eventId]',
