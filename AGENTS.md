@@ -64,8 +64,8 @@ backend/orchestrator/
 │       ├── pre_execution.py
 │       └── post_execution.py
 ├── observability/              # Tracing and logging
-│   ├── trace.py              # Structured trace logging
-│   └── logger.py             # Detailed request logging
+│   ├── logger.py             # Structured runtime + trace logging
+│   └── log_stream.py         # In-memory log buffer + streaming
 ├── mcp/                        # Model Context Protocol
 │   ├── client.py             # Generic MCP client
 │   └── servers/
@@ -87,7 +87,7 @@ backend/orchestrator/
 ### Request Flow
 
 ```
-User Question → Intent Router (metadata) → Agent Loop (full tool set) → Response
+User Question → Intent Router → Tool Visibility Policy → Agent Loop → Response
 ```
 
 1. **IntentRouter** classifies the question (rule-based or LLM fallback)
@@ -119,13 +119,14 @@ User Question → Intent Router (metadata) → Agent Loop (full tool set) → Re
 | `web` | web_search, fetch_web_page |
 | `home` | home_assistant |
 | `skills` | run_skill_script |
+| `ui` | emit_ui_directive |
 | `system` | bash |
 
 ### Important Rules (Recent)
 
 - **Single source of truth for tool groups**: keep router tool groups aligned with `backend/orchestrator/tools/registry.py`; do not maintain divergent copies.
 - **Prefer enums for internal control-flow values**: avoid raw string comparisons for statuses/actions/modes (for example limit actions, tool statuses, follow-up sources). Define shared enums and compare enum members to prevent typos and drift.
-- **Tool groups are metadata today**: router still classifies intents and groups, but the controller currently exposes the full tool set to the LLM.
+- **Tool visibility is runtime-enforced**: routing confidence tiers determine visible tool groups (`restricted`, `restricted_with_resolution`, or `full`) and can escalate to full tools on no-progress.
 - **LLM calls must use helpers**: all LLM requests and streams go through `backend/orchestrator/llm_helpers.py` (never call LLM endpoints via direct `requests`/`httpx` in app modules).
 - **Controller context kwargs are global**: handlers are invoked with shared runtime context (`state`, `question`, `search_limit`, `user_email`, `conversation_history`). Every handler must accept these explicitly or via `**kwargs`.
 - **Regression guard**: keep `backend/orchestrator/tests/tools/test_handlers/test_handler_signatures.py` passing to prevent `unexpected keyword argument` runtime failures.
@@ -152,7 +153,7 @@ User Question → Intent Router (metadata) → Agent Loop (full tool set) → Re
 
 ### Conversation API
 - `POST /ask` – Ask a question (returns answer + state)
-- `GET/POST /ask/stream` – Streaming responses
+- `POST /ask/stream` – Streaming responses
 - `GET /threads` – List threads
 - `POST /threads` – Create thread
 - `GET /threads/{id}` – Get thread
@@ -176,8 +177,8 @@ User Question → Intent Router (metadata) → Agent Loop (full tool set) → Re
 - `POST /webhooks/telegram/messages` – Telegram messages
 
 ### System
-- `GET /services/version` – Service versions
-- `GET /access/gate` – Face recognition (Immich)
+- `GET /system/versions` – Service versions
+- `POST /access/gate` – Face recognition (Immich)
 
 ## Frontend Structure
 
@@ -297,7 +298,7 @@ pytest tests/agent/test_controller.py tests/integration/test_full_flow.py tests/
 | Tool registry | `backend/orchestrator/tools/registry.py` |
 | Tool contracts | `backend/orchestrator/tools/contracts.py` |
 | Validation | `backend/orchestrator/tools/validators/` |
-| Tracing | `backend/orchestrator/observability/trace.py` |
+| Tracing/Logging | `backend/orchestrator/observability/logger.py` |
 | LLM orchestration | `backend/orchestrator/llm.py` |
 | Vector search | `backend/orchestrator/retrieval.py` |
 | Frontend API client | `frontend/web/src/lib/api.ts` |

@@ -27,9 +27,15 @@ def _event_row(event_id: str, start_date: datetime) -> dict:
 def test_temporal_structured_newest_is_deterministic_and_event_only(monkeypatch):
     monkeypatch.setattr(retrieval, "vector_search", lambda *_args, **_kwargs: {})
     monkeypatch.setattr(retrieval, "bm25_search", lambda *_args, **_kwargs: {})
-    monkeypatch.setattr(retrieval, "vector_search_contacts", lambda *_args, **_kwargs: [("contact-gio", 0.99)])
-    monkeypatch.setattr(retrieval, "vector_search_documents", lambda *_args, **_kwargs: {"doc-1": 0.99})
-    monkeypatch.setattr(retrieval, "bm25_search_documents", lambda *_args, **_kwargs: {"doc-1": 0.99})
+    monkeypatch.setattr(
+        retrieval, "vector_search_contacts", lambda *_args, **_kwargs: [("contact-gio", 0.99)]
+    )
+    monkeypatch.setattr(
+        retrieval, "vector_search_documents", lambda *_args, **_kwargs: {"doc-1": 0.99}
+    )
+    monkeypatch.setattr(
+        retrieval, "bm25_search_documents", lambda *_args, **_kwargs: {"doc-1": 0.99}
+    )
     monkeypatch.setattr(
         retrieval,
         "structured_candidates",
@@ -63,9 +69,15 @@ def test_temporal_structured_newest_is_deterministic_and_event_only(monkeypatch)
 def test_temporal_structured_oldest_is_deterministic_and_event_only(monkeypatch):
     monkeypatch.setattr(retrieval, "vector_search", lambda *_args, **_kwargs: {})
     monkeypatch.setattr(retrieval, "bm25_search", lambda *_args, **_kwargs: {})
-    monkeypatch.setattr(retrieval, "vector_search_contacts", lambda *_args, **_kwargs: [("contact-gio", 0.99)])
-    monkeypatch.setattr(retrieval, "vector_search_documents", lambda *_args, **_kwargs: {"doc-1": 0.99})
-    monkeypatch.setattr(retrieval, "bm25_search_documents", lambda *_args, **_kwargs: {"doc-1": 0.99})
+    monkeypatch.setattr(
+        retrieval, "vector_search_contacts", lambda *_args, **_kwargs: [("contact-gio", 0.99)]
+    )
+    monkeypatch.setattr(
+        retrieval, "vector_search_documents", lambda *_args, **_kwargs: {"doc-1": 0.99}
+    )
+    monkeypatch.setattr(
+        retrieval, "bm25_search_documents", lambda *_args, **_kwargs: {"doc-1": 0.99}
+    )
     monkeypatch.setattr(
         retrieval,
         "structured_candidates",
@@ -321,3 +333,111 @@ def test_structured_filters_do_not_force_event_first_ordering(monkeypatch):
 
     assert result["results"][0]["id"] == "doc-a"
     assert result["results"][0]["kind"] == "document"
+
+
+def test_tag_filter_constrains_event_and_document_candidates(monkeypatch):
+    monkeypatch.setattr(
+        retrieval, "vector_search", lambda *_args, **_kwargs: {"evt-a": 0.9, "evt-b": 0.95}
+    )
+    monkeypatch.setattr(
+        retrieval, "bm25_search", lambda *_args, **_kwargs: {"evt-a": 0.8, "evt-b": 0.85}
+    )
+    monkeypatch.setattr(
+        retrieval,
+        "vector_search_documents",
+        lambda *_args, **_kwargs: {"doc-a": 0.95, "doc-b": 0.99},
+    )
+    monkeypatch.setattr(
+        retrieval,
+        "bm25_search_documents",
+        lambda *_args, **_kwargs: {"doc-a": 0.85, "doc-b": 0.9},
+    )
+
+    def _structured_events(_timespan, _people, _places, tags, _limit):
+        assert tags == ["health"]
+        return {"evt-a": 1.0}
+
+    def _structured_docs(_timespan, tags, _limit):
+        assert tags == ["health"]
+        return {"doc-a": 1.0}
+
+    monkeypatch.setattr(retrieval, "structured_candidates", _structured_events)
+    monkeypatch.setattr(retrieval, "structured_document_candidates", _structured_docs)
+    monkeypatch.setattr(
+        retrieval,
+        "fetch_events",
+        lambda *_args, **_kwargs: [_event_row("evt-a", datetime(2026, 1, 1, 10, 0, 0))],
+    )
+    monkeypatch.setattr(
+        retrieval,
+        "fetch_document_summaries",
+        lambda *_args, **_kwargs: {
+            "doc-a": {
+                "document_id": "doc-a",
+                "title": "Doc A",
+                "description": "Doc A summary",
+                "tags": ["health"],
+                "document_date": datetime(2026, 1, 2, 10, 0, 0),
+                "created_at": datetime(2026, 1, 2, 10, 0, 0),
+                "updated_at": datetime(2026, 1, 2, 10, 0, 0),
+                "download_url": "/documents/doc-a/download",
+                "file_name": "doc-a.txt",
+                "file_mime": "text/plain",
+                "file_size": 123,
+                "snippet": "Doc A summary",
+            }
+        },
+    )
+
+    result = retrieval.search_memories(query="health summary", tags=["health"], limit=10)
+
+    ids = [item["id"] for item in result["results"]]
+    assert set(ids) == {"evt-a", "doc-a"}
+
+
+def test_tag_filter_without_query_uses_structured_candidates(monkeypatch):
+    monkeypatch.setattr(retrieval, "vector_search", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr(retrieval, "bm25_search", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr(retrieval, "vector_search_documents", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr(retrieval, "bm25_search_documents", lambda *_args, **_kwargs: {})
+
+    monkeypatch.setattr(
+        retrieval,
+        "structured_candidates",
+        lambda *_args, **_kwargs: {"evt-tag": 1.0},
+    )
+    monkeypatch.setattr(
+        retrieval,
+        "structured_document_candidates",
+        lambda *_args, **_kwargs: {"doc-tag": 1.0},
+    )
+    monkeypatch.setattr(
+        retrieval,
+        "fetch_events",
+        lambda *_args, **_kwargs: [_event_row("evt-tag", datetime(2026, 1, 1, 10, 0, 0))],
+    )
+    monkeypatch.setattr(
+        retrieval,
+        "fetch_document_summaries",
+        lambda *_args, **_kwargs: {
+            "doc-tag": {
+                "document_id": "doc-tag",
+                "title": "Doc Tag",
+                "description": "Tagged",
+                "tags": ["work"],
+                "document_date": datetime(2026, 1, 2, 10, 0, 0),
+                "created_at": datetime(2026, 1, 2, 10, 0, 0),
+                "updated_at": datetime(2026, 1, 2, 10, 0, 0),
+                "download_url": "/documents/doc-tag/download",
+                "file_name": "doc-tag.txt",
+                "file_mime": "text/plain",
+                "file_size": 123,
+                "snippet": "Tagged",
+            }
+        },
+    )
+
+    result = retrieval.search_memories(query="", tags=["work"], limit=10)
+
+    ids = [item["id"] for item in result["results"]]
+    assert set(ids) == {"evt-tag", "doc-tag"}

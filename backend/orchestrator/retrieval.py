@@ -131,6 +131,7 @@ def search_memories(
     query: str,
     people: Sequence[str] | None = None,
     place_ids: Sequence[str] | None = None,
+    tags: Sequence[str] | None = None,
     time_start: str | None = None,
     time_end: str | None = None,
     limit: int = 10,
@@ -154,15 +155,17 @@ def search_memories(
     ordering = (sort_order or "relevance").lower()
     if ordering not in {"relevance", "newest", "oldest"}:
         ordering = "relevance"
+    normalized_tags = [str(tag).strip().lower() for tag in (tags or []) if str(tag).strip()]
 
-    has_structured_filters = bool(span or people or place_ids)
+    has_structured_filters = bool(span or people or place_ids or normalized_tags)
     is_temporal_query = bool(span)
     use_temporal_ordering = ordering in {"newest", "oldest"}
     temporal_ordering = ordering if ordering in {"newest", "oldest"} else "newest"
     logger.info(
-        "[retrieval] search_memories filters people=%s places=%s span=%s sort_order=%s limit=%s sentence_like=%s temporal_query=%s",
+        "[retrieval] search_memories filters people=%s places=%s tags=%s span=%s sort_order=%s limit=%s sentence_like=%s temporal_query=%s",
         list(people or []),
         list(place_ids or []),
+        normalized_tags,
         span,
         ordering,
         limit,
@@ -172,11 +175,21 @@ def search_memories(
 
     vec_events = vector_search(normalized_query, 50) if normalized_query else {}
     bm_events = bm25_search(normalized_query, 50) if normalized_query else {}
-    st_events = structured_candidates(span, list(people or []), list(place_ids or []), 200)
+    st_events = structured_candidates(
+        span,
+        list(people or []),
+        list(place_ids or []),
+        normalized_tags,
+        200,
+    )
 
     vec_docs = vector_search_documents(normalized_query, 50) if normalized_query else {}
     bm_docs = bm25_search_documents(normalized_query, 50) if normalized_query else {}
-    st_docs = structured_document_candidates(span, 200) if span else {}
+    st_docs = (
+        structured_document_candidates(span, normalized_tags, 200)
+        if (span or normalized_tags)
+        else {}
+    )
 
     if sentence_like_query:
         event_semantic_weight = 0.45
@@ -210,13 +223,13 @@ def search_memories(
         v = vec_events.get(event_id, 0.0)
         b = bm_events.get(event_id, 0.0)
         s = st_events.get(event_id, 0.0)
-        score = (event_semantic_weight * v) + (event_keyword_weight * b) + (
-            event_structured_weight * s
+        score = (
+            (event_semantic_weight * v) + (event_keyword_weight * b) + (event_structured_weight * s)
         )
         event_scores[event_id] = score
 
     doc_ids = set(vec_docs) | set(bm_docs)
-    if span:
+    if span or normalized_tags:
         if normalized_query:
             doc_ids = doc_ids & set(st_docs)
         else:
@@ -506,8 +519,14 @@ def bm25_search_documents(query: str, k: int = 50) -> dict[str, float]:
         return {r["document_id"]: float(r["bscore"]) for r in cur.fetchall()}
 
 
-def structured_candidates(timespan, people_ids: list[str], place_ids: list[str], k: int = 200):
-    if not timespan and not people_ids and not place_ids:
+def structured_candidates(
+    timespan,
+    people_ids: list[str],
+    place_ids: list[str],
+    tags: Sequence[str] | None = None,
+    k: int = 200,
+):
+    if not timespan and not people_ids and not place_ids and not tags:
         return {}
     clauses = []
     params: list[Any] = []
@@ -528,6 +547,11 @@ def structured_candidates(timespan, people_ids: list[str], place_ids: list[str],
     if place_ids:
         clauses.append("place_id = ANY(%s)")
         params.append(place_ids)
+    if tags:
+        clauses.append(
+            "EXISTS (SELECT 1 FROM unnest(COALESCE(tags, ARRAY[]::text[])) AS tag WHERE lower(tag) = ANY(%s))"
+        )
+        params.append([tag.lower() for tag in tags])
     where = " AND ".join(clauses) if clauses else "TRUE"
     with get_conn() as conn, conn.cursor() as cur:
         cur.execute(
@@ -543,10 +567,16 @@ def structured_candidates(timespan, people_ids: list[str], place_ids: list[str],
         return {r["id"]: float(r["sscore"]) for r in cur.fetchall()}
 
 
-def structured_document_candidates(timespan, k: int = 200) -> dict[str, float]:
-    if not timespan:
+def structured_document_candidates(
+    timespan,
+    tags: Sequence[str] | None = None,
+    k: int = 200,
+) -> dict[str, float]:
+    if not timespan and not tags:
         return {}
-    start, end = timespan
+    start = end = None
+    if timespan:
+        start, end = timespan
     clauses = []
     params: list[Any] = []
     if start and end:
@@ -558,6 +588,11 @@ def structured_document_candidates(timespan, k: int = 200) -> dict[str, float]:
     elif end:
         clauses.append("COALESCE(document_date, created_at) <= %s")
         params.append(end)
+    if tags:
+        clauses.append(
+            "EXISTS (SELECT 1 FROM unnest(COALESCE(tags, ARRAY[]::text[])) AS tag WHERE lower(tag) = ANY(%s))"
+        )
+        params.append([tag.lower() for tag in tags])
     where = " AND ".join(clauses) if clauses else "TRUE"
     with get_conn() as conn, conn.cursor() as cur:
         cur.execute(
