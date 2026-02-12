@@ -52,9 +52,19 @@ type Contact = {
 
 const buildRelationshipId = (fromId: string, toId: string) => `rel_${fromId}_${toId}`;
 
+function normalizeRouteParam(value: string | undefined): string {
+  if (!value) return '';
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
+}
+
 export default function RelationshipManagementScreen() {
   const { contactId } = useLocalSearchParams<{ contactId: string }>();
-  const contactParam = Array.isArray(contactId) ? contactId[0] : contactId;
+  const contactParamRaw = Array.isArray(contactId) ? contactId[0] : contactId;
+  const contactParam = normalizeRouteParam(contactParamRaw);
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const [contact, setContact] = useState<Contact | null>(null);
@@ -65,6 +75,8 @@ export default function RelationshipManagementScreen() {
   const [newType, setNewType] = useState('');
   const [newReciprocal, setNewReciprocal] = useState('');
   const [isSaving, setIsSaving] = useState(false);
+  const [isLoading, setIsLoading] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [keyboardVisible, setKeyboardVisible] = useState(false);
   const [deletedRelationshipIds, setDeletedRelationshipIds] = useState<string[]>([]);
   const [existingRelationshipIds, setExistingRelationshipIds] = useState<Set<string>>(new Set());
@@ -77,6 +89,8 @@ export default function RelationshipManagementScreen() {
       };
     }
     (async () => {
+      setIsLoading(true);
+      setLoadError(null);
       try {
         const result = (await apiFetch(`/mobile/contacts/${encodeURIComponent(contactParam)}`)) as Contact;
         if (mounted) {
@@ -96,6 +110,13 @@ export default function RelationshipManagementScreen() {
         }
       } catch (error) {
         console.warn('[relationships] load failed', error);
+        if (mounted) {
+          setLoadError('Unable to load contact relationships.');
+        }
+      } finally {
+        if (mounted) {
+          setIsLoading(false);
+        }
       }
     })();
     return () => {
@@ -232,7 +253,16 @@ export default function RelationshipManagementScreen() {
   };
 
   if (!contact) {
-    return <View style={styles.container} />;
+    return (
+      <View style={styles.container}>
+        <View style={styles.emptyState}>
+          <Text style={styles.emptyTitle}>
+            {isLoading ? 'Loading relationships...' : 'Relationships unavailable'}
+          </Text>
+          {loadError ? <Text style={styles.emptySubtitle}>{loadError}</Text> : null}
+        </View>
+      </View>
+    );
   }
 
   return (
@@ -383,6 +413,23 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: theme.colors.background,
+  },
+  emptyState: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 24,
+    gap: 8,
+  },
+  emptyTitle: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: theme.colors.ink,
+  },
+  emptySubtitle: {
+    fontSize: 14,
+    color: theme.colors.mutedInk,
+    textAlign: 'center',
   },
   content: {
     paddingHorizontal: 20,

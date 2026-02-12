@@ -103,9 +103,19 @@ function buildContactId(draft: Contact): string {
   return `${slug || 'contact'}-${suffix}`;
 }
 
+function normalizeRouteParam(value: string | undefined): string {
+  if (!value) return '';
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
+}
+
 export default function ContactDetailScreen() {
   const { contactId } = useLocalSearchParams<{ contactId: string }>();
-  const contactParam = Array.isArray(contactId) ? contactId[0] : contactId;
+  const contactParamRaw = Array.isArray(contactId) ? contactId[0] : contactId;
+  const contactParam = normalizeRouteParam(contactParamRaw);
   const isCreating = !contactParam || contactParam === 'new';
   const { token } = useAuth();
   const router = useRouter();
@@ -113,6 +123,8 @@ export default function ContactDetailScreen() {
   const [contact, setContact] = useState<Contact | null>(null);
   const [draft, setDraft] = useState<Contact | null>(null);
   const [isSaving, setIsSaving] = useState(false);
+  const [isLoading, setIsLoading] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [contactsIndex, setContactsIndex] = useState<Map<string, string>>(new Map());
   const [keyboardVisible, setKeyboardVisible] = useState(false);
   const [showDatePicker, setShowDatePicker] = useState(false);
@@ -139,6 +151,8 @@ export default function ContactDetailScreen() {
       };
     }
     (async () => {
+      setIsLoading(true);
+      setLoadError(null);
       try {
         const result = (await apiFetch(`/mobile/contacts/${encodeURIComponent(contactParam)}`)) as Contact;
         if (mounted) {
@@ -147,6 +161,13 @@ export default function ContactDetailScreen() {
         }
       } catch (error) {
         console.warn('[contacts] detail load failed', error);
+        if (mounted) {
+          setLoadError('Unable to load this contact.');
+        }
+      } finally {
+        if (mounted) {
+          setIsLoading(false);
+        }
       }
     })();
     return () => {
@@ -306,7 +327,14 @@ export default function ContactDetailScreen() {
   };
 
   if (!draft) {
-    return <View style={styles.container} />;
+    return (
+      <View style={styles.container}>
+        <View style={styles.emptyState}>
+          <Text style={styles.emptyTitle}>{isLoading ? 'Loading contact...' : 'Contact unavailable'}</Text>
+          {loadError ? <Text style={styles.emptySubtitle}>{loadError}</Text> : null}
+        </View>
+      </View>
+    );
   }
 
   return (
@@ -349,7 +377,10 @@ export default function ContactDetailScreen() {
             <Pressable
               style={styles.linkButton}
               onPress={() =>
-                router.push(`/contacts/${encodeURIComponent(contactParam ?? '')}/relationships`)
+                router.push({
+                  pathname: '/contacts/[contactId]/relationships',
+                  params: { contactId: contactParam ?? '' },
+                })
               }
             >
               <Text style={styles.linkText}>Manage relationships</Text>
@@ -526,6 +557,23 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: theme.colors.background,
+  },
+  emptyState: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 24,
+    gap: 8,
+  },
+  emptyTitle: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: theme.colors.ink,
+  },
+  emptySubtitle: {
+    fontSize: 14,
+    color: theme.colors.mutedInk,
+    textAlign: 'center',
   },
   content: {
     paddingHorizontal: 20,

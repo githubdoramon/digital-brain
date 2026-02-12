@@ -190,7 +190,12 @@ export default function ContactsScreen() {
               chips={chips}
               index={index}
               token={token}
-              onPress={() => router.push(`/contacts/${encodeURIComponent(item.contact_id)}`)}
+              onPress={() =>
+                router.push({
+                  pathname: '/contacts/[contactId]',
+                  params: { contactId: item.contact_id },
+                })
+              }
             />
           );
         }}

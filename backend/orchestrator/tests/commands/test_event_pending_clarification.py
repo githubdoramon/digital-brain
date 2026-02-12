@@ -1,5 +1,6 @@
 import re
 
+import commands.event as event_command
 from commands.event import event_pending_key, handle_pending_event
 from commands.handlers import event as event_handler
 from commands.handlers.event import handle_event
@@ -182,3 +183,7 @@ def test_format_clarification_history_is_chronological_transcript():
     assert "Clarification transcript (chronological, oldest first):" in history
     assert "- assistant: Which Julia did you mean?" in history
     assert "- user: None of these. New contact named Julia." in history
+
+
+def test_safe_entity_slug_removes_reserved_characters():
+    assert event_command._safe_entity_slug("Julia #1 / New Contact") == "julia-1-new-contact"

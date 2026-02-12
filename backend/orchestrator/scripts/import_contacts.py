@@ -374,7 +374,7 @@ def main() -> None:
         if not name:
             name = _display_name_from_email(emails[0])
 
-        new_contact_id = f"contact:{_slugify_name(name)}#{uuid4().hex[:6]}"
+        new_contact_id = f"contact:{_slugify_name(name)}-{uuid4().hex[:6]}"
         contact_in = _build_contact_input(new_contact_id, None, record)
         if args.dry_run:
             print(f"[dry-run] Create {new_contact_id} ({contact_in.display_name})")

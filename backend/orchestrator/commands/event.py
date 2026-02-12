@@ -128,7 +128,9 @@ def _string_list_from_modification(raw: Any) -> list[str]:
     if raw is None:
         return []
     if not isinstance(raw, list):
-        raise HTTPException(status_code=400, detail="Event modifications list fields must be arrays.")
+        raise HTTPException(
+            status_code=400, detail="Event modifications list fields must be arrays."
+        )
 
     values: list[str] = []
     for item in raw:
@@ -179,6 +181,11 @@ def _normalize_event_modifications(raw: Any) -> dict[str, Any]:
         ]
 
     return normalized
+
+
+def _safe_entity_slug(raw: str) -> str:
+    normalized = re.sub(r"[^a-z0-9]+", "-", (raw or "").strip().lower())
+    return normalized.strip("-")
 
 
 def confirm_event_command(
@@ -248,7 +255,8 @@ def confirm_event_command(
                     comments = (
                         f"{comments}\n\n{profession_line}".strip() if comments else profession_line
                     )
-            contact_id = f"contact:{display_name.lower().replace(' ', '_')}#{uuid4().hex[:6]}"
+            contact_slug = _safe_entity_slug(display_name) or "contact"
+            contact_id = f"contact:{contact_slug}-{uuid4().hex[:6]}"
 
             contact_in = ContactIn(
                 contact_id=contact_id,
@@ -317,7 +325,8 @@ def confirm_event_command(
 
         for new_place in resolution["new_entities"]["places"]:
             place_name = new_place["name"]
-            place_id = f"plc_{place_name.lower().replace(' ', '_')}_{uuid4().hex[:6]}"
+            place_slug = _safe_entity_slug(place_name) or "place"
+            place_id = f"plc_{place_slug}_{uuid4().hex[:6]}"
 
             place_in = PlaceIn(
                 place_id=place_id,

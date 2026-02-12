@@ -147,6 +147,7 @@ User Question → Intent Router → Tool Visibility Policy → Agent Loop → Re
 - **Validation semantics**: post-execution validation must treat clarification-required search/resolution results as `need_user_input`, not generic empty-result retries.
 - **Session command hygiene**: strip leading slash commands from user text before agent execution; commands are control signals, not semantic query content.
 - **Import-time side effects**: avoid filesystem writes (like `mkdir`) during module import. Create directories lazily at the point of file operations.
+- **Entity ID hygiene**: when generating IDs from user-provided names/titles (contacts, places, etc.), always slug/sanitize to safe URL/path characters (for example lowercase `a-z0-9-`) and avoid reserved characters like `#`, `?`, `/`, `%`.
 - **Contact disambiguation policy**: ambiguity auto-resolution strictness is controlled by `CONTACT_DISAMBIGUATION_STRICTNESS` (`strict`/`balanced`/`lenient`).
 - **Logging policy**: never use `print` in orchestrator runtime code (only in scripts/tests). Use `logging.getLogger(__name__)` with `debug/info/warning/error` (or `logger.log(DECISION_LEVEL, ...)` for decisions). Logging must flow through `observability/log_stream.py` so frontend log streaming can filter by level. For streaming endpoints, rely on authenticated user context (no service API key) unless explicitly required.
 
