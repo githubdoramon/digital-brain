@@ -226,35 +226,6 @@ def test_resolve_people_marks_new_contact_from_llm_flag(monkeypatch):
     assert new == [{"original_text": "Julia", "display_name": "Julia"}]
 
 
-def test_resolve_contacts_marks_new_contact_from_initial_extraction_flag(monkeypatch):
-    monkeypatch.setattr(
-        resolver,
-        "extract_people_from_text",
-        lambda *_args, **_kwargs: ["Julia"],
-    )
-    monkeypatch.setattr(
-        resolver,
-        "_identify_new_contact_mentions",
-        lambda *_args, **_kwargs: ["Julia"],
-    )
-
-    def fail_if_called(*_args, **_kwargs):
-        raise AssertionError("resolve_contact should not run for extraction-flagged new contact")
-
-    monkeypatch.setattr(resolver, "resolve_contact", fail_if_called)
-
-    result = resolver.resolve_contacts_from_text(
-        text="I met Julia, she is a new contact",
-        user_email="user@example.com",
-    )
-
-    assert result["resolved_contacts"] == []
-    assert result["ambiguous_contacts"] == []
-    assert result["new_contacts"] == [
-        {"original_text": "Julia", "display_name": "Julia", "inferred_profession": None}
-    ]
-
-
 def test_resolve_contacts_keeps_current_text_even_with_history(monkeypatch):
     captured = {}
 

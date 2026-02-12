@@ -545,70 +545,6 @@ For possessive org titles, output ONE person mention only, formatted as "<title>
     return []
 
 
-def _identify_new_contact_mentions(
-    text: str,
-    people: list[str],
-    conversation_messages: list[dict[str, str]] | None = None,
-) -> list[str]:
-    """Return person mentions explicitly identified as new contacts by user context."""
-    if not people:
-        return []
-
-    conversation_block = ""
-    if conversation_messages:
-        conversation_json = _format_conversation_for_prompt(conversation_messages)
-        if conversation_json:
-            conversation_block = (
-                f"Conversation messages (JSON array, most recent last):\n{conversation_json}\n\n"
-            )
-
-    people_block = "\n".join(f"- {person}" for person in people)
-    prompt = f"""Determine whether any extracted people are explicitly confirmed as NEW contacts.
-
-Text:
-"{text}"
-
-Extracted people (must choose only from this list):
-{people_block}
-
-{conversation_block}
-Decision rules:
-- Mark a person as new ONLY when user wording clearly indicates they are not any existing candidate and should be created as a new contact.
-- Typical strong signals: "new contact", "none of these", "not in the list", "not one of these", "met for the first time".
-- If unsure, do not mark as new.
-- Never invent names not in the extracted people list.
-
-Return ONLY valid JSON:
-{{
-  "new_contact_people": ["person from list"]
-}}"""
-    prompt = _with_clarification_skill(prompt)
-
-    try:
-        result = call_llm_json(
-            prompt, timeout=30, temperature=0.1, top_p=0.9, use_simpler_model=True
-        )
-        flagged = result.get("new_contact_people") or []
-        if not isinstance(flagged, list):
-            return []
-
-        allowed = {_normalize_entity_for_match(person): person for person in people}
-        normalized_seen: set[str] = set()
-        cleaned: list[str] = []
-        for raw in flagged:
-            normalized = _normalize_entity_for_match(str(raw or ""))
-            if not normalized or normalized in normalized_seen:
-                continue
-            if normalized not in allowed:
-                continue
-            normalized_seen.add(normalized)
-            cleaned.append(allowed[normalized])
-        return cleaned
-    except Exception as e:
-        logger.warning("[contact_resolver] Failed to identify new-contact flags: %s", e, exc_info=e)
-        return []
-
-
 def resolve_contact(
     person_text: str,
     user_email: str,
@@ -967,19 +903,6 @@ def resolve_contacts_from_text(
     effective_text = text
 
     people = extract_people_from_text(effective_text, conversation_messages=conversation_messages)
-    new_contact_people = _identify_new_contact_mentions(
-        effective_text,
-        people,
-        conversation_messages=conversation_messages,
-    )
-    new_contact_people_set = {
-        _normalize_entity_for_match(person) for person in new_contact_people if str(person).strip()
-    }
-    if new_contact_people:
-        logger.info(
-            "[contact_resolver] New-contact flags from extraction: %s",
-            new_contact_people,
-        )
     logger.info("[contact_resolver] Extracted %s people: %s", len(people), people)
 
     if not people:
@@ -1003,7 +926,6 @@ def resolve_contacts_from_text(
         people,
         user_email,
         effective_text,
-        new_contact_people=new_contact_people_set,
         conversation_messages=conversation_messages,
     )
 
@@ -1063,7 +985,6 @@ def _resolve_people_mentions(
     people: list[str],
     user_email: str,
     full_text: str,
-    new_contact_people: set[str] | None = None,
     conversation_messages: list[dict[str, str]] | None = None,
 ) -> tuple[
     list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]], dict[str, dict[str, Any]]
@@ -1075,29 +996,8 @@ def _resolve_people_mentions(
     # Cache to avoid re-resolving the same person text multiple times
     # This is especially useful for nested relationships like "my daughter" and "my daughter's doctor"
     resolution_cache: dict[str, dict[str, Any]] = {}
-    normalized_new_contact_people = {
-        _normalize_entity_for_match(person) for person in (new_contact_people or set())
-    }
 
     for person_text in people:
-        if _normalize_entity_for_match(person_text) in normalized_new_contact_people:
-            new_contact = {
-                "original_text": person_text,
-                "display_name": person_text,
-            }
-            new_contacts.append(new_contact)
-            trace.trace_contact_resolution_outcome(
-                "new_from_extraction",
-                {
-                    "person_text": person_text,
-                },
-            )
-            logger.info(
-                "[contact_resolver] '%s' marked as new contact from extraction flag",
-                person_text,
-            )
-            continue
-
         # Check cache first
         if person_text in resolution_cache:
             logger.debug("[contact_resolver] Using cached resolution for: '%s'", person_text)
@@ -2080,7 +1980,7 @@ Event context (use only if it is relevant): "{event_context}"
 
 Interpretation hints:
 - Treat the latest user message as the clarification answer to the latest assistant question.
-- If context explicitly indicates the person is not in the candidate list and is a new person, set "new_contact": true.
+- If context explicitly indicates the person is not in the candidate list and is a new person, set "new_contact": true. Examples: the user says they met someone for the first time, or explicitly says it is a new contact.
 - Do not ignore explicit user clarification even if name similarity exists.
 
 CRITICAL RULES:
