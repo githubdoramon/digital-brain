@@ -127,6 +127,26 @@ def _format_conversation_for_prompt(conversation_messages: list[dict[str, str]])
     return json.dumps(sanitized, ensure_ascii=True)
 
 
+def _format_disambiguation_history_for_prompt(
+    conversation_messages: list[dict[str, str]] | None,
+) -> str:
+    if not conversation_messages:
+        return ""
+
+    lines: list[str] = []
+    for entry in conversation_messages:
+        role = (entry.get("role") or "").strip().lower()
+        content = (entry.get("content") or "").strip()
+        if role not in {"user", "assistant"} or not content:
+            continue
+        lines.append(f"- {role}: {content}")
+
+    if not lines:
+        return ""
+
+    return "Disambiguation history (chronological, oldest first):\n" + "\n".join(lines) + "\n\n"
+
+
 def _normalize_entity_for_match(value: str) -> str:
     normalized = re.sub(r"\s+", " ", value.strip().lower())
     for article in ("the ", "a ", "an "):
@@ -1915,6 +1935,7 @@ def _llm_disambiguate_contact(
     candidate_list = "\n".join(formatted_candidates)
 
     conversation_block = ""
+    disambiguation_history_block = _format_disambiguation_history_for_prompt(conversation_messages)
     if conversation_messages:
         conversation_json = _format_conversation_for_prompt(conversation_messages)
         if conversation_json:
@@ -1931,7 +1952,12 @@ Candidates:
 
 Event context (use only if it is relevant): "{event_context}"
 
-{conversation_block}
+{disambiguation_history_block}{conversation_block}
+
+Interpretation hints:
+- Treat the latest user message as the clarification answer to the latest assistant question.
+- If the latest user answer explicitly says none of the candidates match (for example "none of these" or "new contact"), return "cannot_decide".
+- Do not ignore explicit user clarification even if name similarity exists.
 
 CRITICAL RULES:
 1. You MUST choose from the candidates above or say "cannot_decide"

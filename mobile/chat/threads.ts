@@ -55,14 +55,9 @@ export async function restoreChatHistory(
   const threads = await apiFetch('/mobile/threads', { token });
   const resolvedThreads = Array.isArray(threads) ? (threads as ThreadSummary[]) : [];
 
-  let threadId: string | null = storedSession?.threadId ?? null;
-  if (threadId && resolvedThreads.length > 0 && !resolvedThreads.some((thread) => thread.id === threadId)) {
-    threadId = null;
-  }
-  if (!threadId && resolvedThreads.length > 0) {
-    const preferred = resolvedThreads.find((thread) => thread.last_message_preview);
-    threadId = (preferred ?? resolvedThreads[0]).id;
-  }
+  // Always sync to the latest server thread on app open.
+  // Server ordering is newest first (updated_at DESC, created_at DESC).
+  let threadId: string | null = resolvedThreads[0]?.id ?? null;
 
   let messages: ChatMessage[] = [];
   if (threadId) {
@@ -73,29 +68,12 @@ export async function restoreChatHistory(
       content: msg.content,
       metadata: msg.metadata ?? undefined,
     }));
-
-    if (messages.length === 0 && resolvedThreads.length > 1) {
-      const fallback = resolvedThreads.find(
-        (thread) => thread.id !== threadId && thread.last_message_preview,
-      );
-      if (fallback) {
-        threadId = fallback.id;
-        const fallbackDetail = (await apiFetch(`/mobile/threads/${threadId}`, { token })) as ThreadDetail;
-        messages = (fallbackDetail.messages || []).map((msg) => ({
-          id: `${msg.message_id}`,
-          role: msg.role,
-          content: msg.content,
-          metadata: msg.metadata ?? undefined,
-        }));
-      }
-    }
   }
 
   return {
     threadId,
-    pendingEventId: threadId && storedSession?.threadId === threadId
-      ? storedSession?.pendingEventId ?? null
-      : null,
+    pendingEventId:
+      threadId && storedSession?.threadId === threadId ? storedSession?.pendingEventId ?? null : null,
     messages,
   };
 }

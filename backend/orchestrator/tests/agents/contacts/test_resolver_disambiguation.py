@@ -257,6 +257,44 @@ def test_llm_disambiguation_prompt_includes_aliases_and_match_hints(monkeypatch)
     assert "Match hint: exact name match: gio" in prompt
 
 
+def test_llm_disambiguation_prompt_includes_chronological_history(monkeypatch):
+    captured = {}
+
+    def fake_call_llm_json(prompt, **_kwargs):
+        captured["prompt"] = prompt
+        return {
+            "decision": "cannot_decide",
+            "candidate_number": None,
+            "confidence": "low",
+            "reasoning": "user says none of these",
+        }
+
+    monkeypatch.setattr(resolver, "call_llm_json", fake_call_llm_json)
+
+    resolver._llm_disambiguate_contact(
+        person_text="Julia",
+        candidates=[
+            {
+                "contact_id": "contact:juliana-charles-c2092f",
+                "display_name": "Juliana Charles",
+                "aliases": [],
+                "match_reason": "name contains: juliana charles",
+            }
+        ],
+        event_context="on February 8th I went with my daughter to her friend's birthday, Julia",
+        conversation_messages=[
+            {"role": "assistant", "content": "I found multiple matching contacts. Please choose."},
+            {"role": "user", "content": "None of these. It is a new contact, named Julia"},
+        ],
+    )
+
+    prompt = captured["prompt"]
+    assert "Disambiguation history (chronological, oldest first):" in prompt
+    assert "- assistant: I found multiple matching contacts. Please choose." in prompt
+    assert "- user: None of these. It is a new contact, named Julia" in prompt
+    assert "Treat the latest user message as the clarification answer" in prompt
+
+
 def test_resolve_contact_uses_any_search_for_role_queries(monkeypatch):
     captured = {}
 

@@ -17,10 +17,6 @@ export default function SignInScreen() {
         <View style={styles.hero}>
           <Text style={styles.kicker}>Digital Brain</Text>
           <Text style={styles.title}>Your memory, but better.</Text>
-          <Text style={styles.subtitle}>
-            Capture, search, and chat with the moments that matter. Sign in to sync your personal
-            brain.
-          </Text>
         </View>
 
         <Card style={styles.card} variant="elevated">

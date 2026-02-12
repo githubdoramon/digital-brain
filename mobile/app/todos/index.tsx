@@ -46,6 +46,14 @@ type TodoDetail = {
   events?: EventResult[];
 };
 
+type TodoSnapshot = {
+  description: string;
+  dueDate: string;
+  status: string;
+  contactIds: string[];
+  eventIds: string[];
+};
+
 const normalizeSearch = (value: string) =>
   value
     .normalize('NFD')
@@ -75,6 +83,26 @@ function createTodoId() {
   return `todo_${Date.now()}_${Math.floor(Math.random() * 1000)}`;
 }
 
+function normalizeIds(values: string[]) {
+  return Array.from(new Set(values.map((value) => value.trim()).filter(Boolean))).sort();
+}
+
+function buildTodoSnapshot(params: {
+  description: string;
+  dueDate: string;
+  status: string;
+  contactIds: string[];
+  eventIds: string[];
+}): TodoSnapshot {
+  return {
+    description: params.description.trim(),
+    dueDate: params.dueDate.trim(),
+    status: (params.status || 'pending').trim(),
+    contactIds: normalizeIds(params.contactIds),
+    eventIds: normalizeIds(params.eventIds),
+  };
+}
+
 function NewTodoContent() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
@@ -101,7 +129,16 @@ function NewTodoContent() {
   const [eventsLoading, setEventsLoading] = React.useState(false);
   const [showDatePicker, setShowDatePicker] = React.useState(false);
   const [draftDate, setDraftDate] = React.useState<Date | null>(null);
-  const defaultPickerStyles = useDefaultStyles();
+  const [initialSnapshot, setInitialSnapshot] = React.useState<TodoSnapshot>(() =>
+    buildTodoSnapshot({
+      description: '',
+      dueDate: '',
+      status: 'pending',
+      contactIds: [],
+      eventIds: [],
+    })
+  );
+  const defaultPickerStyles = useDefaultStyles('light');
 
   const trimmedDescription = description.trim();
   const trimmedDueDate = dueDate.trim();
@@ -132,6 +169,21 @@ function NewTodoContent() {
     return Number.isNaN(parsed.getTime()) ? new Date() : parsed;
   }, [trimmedDueDate]);
   const activePickerDate = draftDate ?? pickerDate;
+  const currentSnapshot = React.useMemo(
+    () =>
+      buildTodoSnapshot({
+        description,
+        dueDate,
+        status: todoStatus,
+        contactIds: selectedContacts.map((contact) => contact.contact_id),
+        eventIds: selectedEvents.map((event) => event.id),
+      }),
+    [description, dueDate, todoStatus, selectedContacts, selectedEvents]
+  );
+  const isDirty = React.useMemo(
+    () => JSON.stringify(currentSnapshot) !== JSON.stringify(initialSnapshot),
+    [currentSnapshot, initialSnapshot]
+  );
 
   const filteredContacts = React.useMemo(() => {
     const trimmed = normalizeSearch(contactQuery.trim());
@@ -167,6 +219,15 @@ function NewTodoContent() {
     if (!isEditing) {
       setLoadingTodo(false);
       setTodoStatus('pending');
+      setInitialSnapshot(
+        buildTodoSnapshot({
+          description: '',
+          dueDate: '',
+          status: 'pending',
+          contactIds: [],
+          eventIds: [],
+        })
+      );
       return;
     }
     let mounted = true;
@@ -188,6 +249,15 @@ function NewTodoContent() {
           start_date: event.start_date,
           end_date: event.end_date,
         })));
+        setInitialSnapshot(
+          buildTodoSnapshot({
+            description: result.description?.trim() || '',
+            dueDate: result.due_date || '',
+            status: result.status?.trim() || 'pending',
+            contactIds: (result.contacts ?? []).map((contactId) => contactId),
+            eventIds: (result.events ?? []).map((event) => event.id),
+          })
+        );
       } catch {
         if (!mounted) return;
         showNotice('Unable to load todo.', 'error');
@@ -357,7 +427,7 @@ function NewTodoContent() {
             styles.content,
             {
               paddingTop: insets.top + 64,
-              paddingBottom: insets.bottom + 120,
+              paddingBottom: insets.bottom + (isDirty ? 120 : 32),
             },
           ]}
           keyboardShouldPersistTaps="handled"
@@ -524,7 +594,7 @@ function NewTodoContent() {
         </ScrollView>
 
         <FloatingSaveButton
-          visible
+          visible={isDirty}
           label={saving ? 'Saving todo' : isEditing ? 'Save changes' : 'Create todo'}
           onPress={handleSave}
           disabled={!canSave}

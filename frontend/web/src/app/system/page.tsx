@@ -34,6 +34,7 @@ type ServiceVersionResponse = {
 type LogRow = LogEntry & { rowKey: string };
 
 const LOG_LEVELS: LogLevel[] = ["debug", "info", "decision", "warning", "error"];
+const LOG_CONTENT_MAX_WIDTH = 1024;
 const HIDDEN_INDEX_STYLE = {
   position: "absolute",
   width: "1px",
@@ -784,47 +785,49 @@ export default function SystemStatusPage() {
         {filteredLogs.length === 0 ? (
           <div style={{ color: "#94a3b8" }}>Waiting for log events...</div>
         ) : (
-          filteredLogs.map((entry) => (
-            <div
-              key={entry.rowKey}
-              ref={(node) => {
-                if (node) {
-                  logRowRefs.current.set(entry.rowKey, node);
-                } else {
-                  logRowRefs.current.delete(entry.rowKey);
-                }
-              }}
-              style={{ display: "grid", gridTemplateColumns: "80px 70px minmax(0, 1fr)", gap: "8px", minWidth: "100%", width: "max-content" }}
-            >
-              <span style={{ color: "#94a3b8" }}>{formatLogTimestamp(entry.timestamp)}</span>
-              <span
-                style={{
-                  textTransform: "uppercase",
-                  color:
-                    entry.level === "error"
-                      ? "#fca5a5"
-                      : entry.level === "warning"
-                      ? "#fde68a"
-                      : entry.level === "info"
-                      ? "#93c5fd"
-                      : entry.level === "decision"
-                      ? "#fbcfe8"
-                      : "#cbd5f5",
-                }}
-              >
-                {entry.level}
-              </span>
+          <div style={{ minWidth: "100%", width: "max-content", maxWidth: `${LOG_CONTENT_MAX_WIDTH}px` }}>
+            {filteredLogs.map((entry) => (
               <div
-                style={
-                  activeMatchRowKey === entry.rowKey
-                    ? { outline: "1px solid #16a34a", borderRadius: "6px", padding: "2px 4px", background: "rgba(22, 163, 74, 0.08)" }
-                    : undefined
-                }
+                key={entry.rowKey}
+                ref={(node) => {
+                  if (node) {
+                    logRowRefs.current.set(entry.rowKey, node);
+                  } else {
+                    logRowRefs.current.delete(entry.rowKey);
+                  }
+                }}
+                style={{ display: "grid", gridTemplateColumns: "80px 70px minmax(0, 1fr)", gap: "8px", minWidth: "100%" }}
               >
-                <LogMessageContent entry={entry} searchQuery={logSearchQuery} />
+                <span style={{ color: "#94a3b8" }}>{formatLogTimestamp(entry.timestamp)}</span>
+                <span
+                  style={{
+                    textTransform: "uppercase",
+                    color:
+                      entry.level === "error"
+                        ? "#fca5a5"
+                        : entry.level === "warning"
+                        ? "#fde68a"
+                        : entry.level === "info"
+                        ? "#93c5fd"
+                        : entry.level === "decision"
+                        ? "#fbcfe8"
+                        : "#cbd5f5",
+                  }}
+                >
+                  {entry.level}
+                </span>
+                <div
+                  style={
+                    activeMatchRowKey === entry.rowKey
+                      ? { outline: "1px solid #16a34a", borderRadius: "6px", padding: "2px 4px", background: "rgba(22, 163, 74, 0.08)" }
+                      : undefined
+                  }
+                >
+                  <LogMessageContent entry={entry} searchQuery={logSearchQuery} />
+                </div>
               </div>
-            </div>
-          ))
+            ))}
+          </div>
         )}
       </div>
     </div>

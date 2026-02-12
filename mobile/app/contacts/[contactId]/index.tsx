@@ -75,9 +75,38 @@ function resolvePickerDate(value: DateType): Date | null {
   return null;
 }
 
+function createEmptyContact(contactId: string): Contact {
+  return {
+    contact_id: contactId,
+    display_name: '',
+    aliases: [],
+    emails: [],
+    phones: [],
+    links: [],
+    tags: [],
+    comments: '',
+    birthday: null,
+    external_id: null,
+    avatar_url: null,
+    relationships: [],
+  };
+}
+
+function buildContactId(draft: Contact): string {
+  const source = draft.display_name.trim() || draft.emails[0] || draft.phones[0] || 'contact';
+  const slug = source
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 32);
+  const suffix = Date.now().toString(36);
+  return `${slug || 'contact'}-${suffix}`;
+}
+
 export default function ContactDetailScreen() {
   const { contactId } = useLocalSearchParams<{ contactId: string }>();
   const contactParam = Array.isArray(contactId) ? contactId[0] : contactId;
+  const isCreating = !contactParam || contactParam === 'new';
   const { token } = useAuth();
   const router = useRouter();
   const insets = useSafeAreaInsets();
@@ -88,14 +117,23 @@ export default function ContactDetailScreen() {
   const [keyboardVisible, setKeyboardVisible] = useState(false);
   const [showDatePicker, setShowDatePicker] = useState(false);
   const [draftDate, setDraftDate] = useState<Date | null>(null);
-  const defaultPickerStyles = useDefaultStyles();
+  const defaultPickerStyles = useDefaultStyles('light');
 
   const heroOpacity = useRef(new Animated.Value(0)).current;
   const heroTranslate = useRef(new Animated.Value(12)).current;
 
   useEffect(() => {
+    if (!isCreating) {
+      return;
+    }
+    const emptyContact = createEmptyContact(contactParam ?? 'new');
+    setContact(emptyContact);
+    setDraft(emptyContact);
+  }, [contactParam, isCreating]);
+
+  useEffect(() => {
     let mounted = true;
-    if (!contactParam) {
+    if (!contactParam || isCreating) {
       return () => {
         mounted = false;
       };
@@ -114,7 +152,7 @@ export default function ContactDetailScreen() {
     return () => {
       mounted = false;
     };
-  }, [contactParam]);
+  }, [contactParam, isCreating]);
 
   useEffect(() => {
     (async () => {
@@ -174,7 +212,20 @@ export default function ContactDetailScreen() {
   const activePickerDate = draftDate ?? pickerDate;
 
   const isDirty = useMemo(() => {
-    if (!contact || !draft) return false;
+    if (!draft) return false;
+    if (isCreating) {
+      return Boolean(
+        draft.display_name.trim() ||
+          draft.aliases.length ||
+          draft.emails.length ||
+          draft.phones.length ||
+          draft.links.length ||
+          draft.tags.length ||
+          draft.comments.trim() ||
+          draft.birthday,
+      );
+    }
+    if (!contact) return false;
     const base = {
       display_name: contact.display_name,
       aliases: contact.aliases,
@@ -196,17 +247,22 @@ export default function ContactDetailScreen() {
       birthday: draft.birthday,
     };
     return JSON.stringify(base) !== JSON.stringify(current);
-  }, [contact, draft]);
+  }, [contact, draft, isCreating]);
 
   const handleSave = async () => {
-    if (!draft || !contact) return;
+    if (!draft) return;
     setIsSaving(true);
     try {
+      const targetContactId = isCreating ? buildContactId(draft) : contact?.contact_id;
+      if (!targetContactId) {
+        return;
+      }
+      const normalizedName = draft.display_name.trim();
       await apiFetch('/mobile/ingest/contact', {
         method: 'POST',
         body: JSON.stringify({
-          contact_id: contact.contact_id,
-          display_name: draft.display_name,
+          contact_id: targetContactId,
+          display_name: normalizedName || 'New contact',
           aliases: draft.aliases ?? [],
           birthday: draft.birthday ? draft.birthday : null,
           emails: draft.emails,
@@ -214,12 +270,17 @@ export default function ContactDetailScreen() {
           links: draft.links,
           tags: draft.tags,
           comments: draft.comments,
-          external_id: contact.external_id,
+          external_id: contact?.external_id ?? null,
         }),
       });
-      const refreshed = (await apiFetch(`/mobile/contacts/${encodeURIComponent(contact.contact_id)}`)) as Contact;
+      const refreshed = (await apiFetch(
+        `/mobile/contacts/${encodeURIComponent(targetContactId)}`,
+      )) as Contact;
       setContact(refreshed);
       setDraft(refreshed);
+      if (isCreating) {
+        router.replace(`/contacts/${encodeURIComponent(targetContactId)}`);
+      }
     } catch (error) {
       console.warn('[contacts] save failed', error);
     } finally {
@@ -272,25 +333,29 @@ export default function ContactDetailScreen() {
               style={styles.nameInput}
               value={draft.display_name}
               onChangeText={(value) => setDraft({ ...draft, display_name: value })}
-              placeholder="Name"
+              placeholder="Full name"
               placeholderTextColor={theme.colors.mutedInk}
             />
-            <Text style={styles.heroSubtitle}>Tap any field to edit.</Text>
+            <Text style={styles.heroSubtitle}>
+              {isCreating ? 'Add details for this new contact.' : 'Tap any field to edit.'}
+            </Text>
           </View>
         </Animated.View>
 
-        <Card style={styles.section}>
-          <Text style={styles.sectionTitle}>Relationship overview</Text>
-          <RelationshipChips chips={relationshipChips} />
-          <Pressable
-            style={styles.linkButton}
-            onPress={() =>
-              router.push(`/contacts/${encodeURIComponent(contactParam ?? '')}/relationships`)
-            }
-          >
-            <Text style={styles.linkText}>Manage relationships</Text>
-          </Pressable>
-        </Card>
+        {!isCreating ? (
+          <Card style={styles.section}>
+            <Text style={styles.sectionTitle}>Relationship overview</Text>
+            <RelationshipChips chips={relationshipChips} />
+            <Pressable
+              style={styles.linkButton}
+              onPress={() =>
+                router.push(`/contacts/${encodeURIComponent(contactParam ?? '')}/relationships`)
+              }
+            >
+              <Text style={styles.linkText}>Manage relationships</Text>
+            </Pressable>
+          </Card>
+        ) : null}
 
         <Card style={styles.section}>
           <Text style={styles.sectionTitle}>Contact</Text>
@@ -385,7 +450,7 @@ export default function ContactDetailScreen() {
 
       <FloatingSaveButton
         visible={isDirty}
-        label={isSaving ? 'Saving...' : 'Save changes'}
+        label={isSaving ? (isCreating ? 'Creating...' : 'Saving...') : isCreating ? 'Create contact' : 'Save changes'}
         onPress={handleSave}
         disabled={isSaving}
         loading={isSaving}

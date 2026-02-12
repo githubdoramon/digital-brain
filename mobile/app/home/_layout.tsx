@@ -31,11 +31,14 @@ const LEFT_INDICATOR_WIDTH_TRIM = -8;
 function TabBar({ state, navigation }: BottomTabBarProps) {
   const insets = useSafeAreaInsets();
   const currentRoute = state.routes[state.index]?.name;
+  const isChatFocused = currentRoute === chatRoute;
   const indicatorX = React.useRef(new Animated.Value(0)).current;
   const indicatorWidth = React.useRef(new Animated.Value(0)).current;
   const tabLayouts = React.useRef<Record<string, { x: number; width: number }>>({});
   const indicatorReady = React.useRef(false);
   const isLeftTabActive = leftTabs.some((tab) => tab.name === currentRoute);
+  const brainWiggle = React.useRef(new Animated.Value(0)).current;
+  const hasMounted = React.useRef(false);
 
   const handlePress = (routeName: string, routeKey: string) => {
     const event = navigation.emit({
@@ -65,6 +68,27 @@ function TabBar({ state, navigation }: BottomTabBarProps) {
       }),
     ]).start();
   }, [currentRoute, indicatorWidth, indicatorX, isLeftTabActive]);
+
+  React.useEffect(() => {
+    if (!hasMounted.current) {
+      hasMounted.current = true;
+      return;
+    }
+    brainWiggle.setValue(0);
+    Animated.sequence([
+      Animated.timing(brainWiggle, {
+        toValue: 1,
+        duration: 140,
+        useNativeDriver: true,
+      }),
+      Animated.spring(brainWiggle, {
+        toValue: 0,
+        useNativeDriver: true,
+        tension: 140,
+        friction: 8,
+      }),
+    ]).start();
+  }, [brainWiggle, isChatFocused]);
 
   return (
     <View style={[styles.barWrap, { paddingBottom: Math.max(insets.bottom, 14) }]}>
@@ -134,6 +158,18 @@ function TabBar({ state, navigation }: BottomTabBarProps) {
         const chat = state.routes.find((route) => route.name === chatRoute);
         if (!chat) return null;
         const focused = currentRoute === chat.name;
+        const brainWiggleRotate = brainWiggle.interpolate({
+          inputRange: [0, 1],
+          outputRange: ['0deg', focused ? '-7deg' : '7deg'],
+        });
+        const brainWiggleTranslateY = brainWiggle.interpolate({
+          inputRange: [0, 1],
+          outputRange: [0, -2],
+        });
+        const brainWiggleScale = brainWiggle.interpolate({
+          inputRange: [0, 1],
+          outputRange: [1, 1.06],
+        });
         return (
           <Pressable
             onPress={() => handlePress(chat.name, chat.key)}
@@ -145,7 +181,18 @@ function TabBar({ state, navigation }: BottomTabBarProps) {
               pressed && styles.brainButtonPressed,
             ]}
           >
-            <View style={styles.brainButtonGradient}>
+            <Animated.View
+              style={[
+                styles.brainButtonGradient,
+                {
+                  transform: [
+                    { translateY: brainWiggleTranslateY },
+                    { rotate: brainWiggleRotate },
+                    { scale: brainWiggleScale },
+                  ],
+                },
+              ]}
+            >
               {focused ? (
                 <LinearGradient
                   colors={[theme.colors.accentDeep, theme.colors.accent]}
@@ -160,7 +207,7 @@ function TabBar({ state, navigation }: BottomTabBarProps) {
                   <Digibrain width={30} height={30} color={theme.colors.mutedInk} />
                 </View>
               )}
-            </View>
+            </Animated.View>
           </Pressable>
         );
       })()}

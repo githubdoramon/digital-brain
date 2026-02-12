@@ -33,6 +33,7 @@ export async function apiFetch(path: string, options: FetchOptions = {}) {
       ...(resolvedToken ? { Authorization: `Bearer ${resolvedToken}` } : {}),
     },
   });
+  const contentType = response.headers.get('content-type') ?? '';
 
   if (!response.ok) {
     const message = await response.text();
@@ -70,11 +71,31 @@ export async function apiFetch(path: string, options: FetchOptions = {}) {
     throw error;
   }
 
+  if (
+    retryOnAuthExpired &&
+    resolvedOnAuthExpired &&
+    resolvedToken &&
+    contentType.includes('text/html')
+  ) {
+    console.warn('[apiFetch] received html, attempting refresh retry', {
+      path,
+      status: response.status,
+      contentType,
+    });
+    const refreshedToken = await resolvedOnAuthExpired();
+    if (refreshedToken) {
+      return apiFetch(path, {
+        ...options,
+        token: refreshedToken,
+        retryOnAuthExpired: false,
+      });
+    }
+  }
+
   if (response.status === 204) {
     return null;
   }
 
-  const contentType = response.headers.get('content-type') ?? '';
   if (!contentType.includes('application/json')) {
     const text = await response.text();
     throw new Error(

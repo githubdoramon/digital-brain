@@ -1,6 +1,7 @@
 import re
 
 from commands.event import event_pending_key, handle_pending_event
+from commands.handlers import event as event_handler
 from commands.handlers.event import handle_event
 from commands.parser import ParsedCommand
 from commands.storage import clear_pending_event, delete_command_data, get_pending_event
@@ -116,7 +117,9 @@ def test_pending_clarification_accepts_plain_follow_up(monkeypatch):
 
     monkeypatch.setattr("commands.event.parse_command", fake_parse_command)
     monkeypatch.setattr("commands.event.get_command_registry", lambda: _Registry())
-    monkeypatch.setattr("commands.event.conversations.record_exchange", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        "commands.event.conversations.record_exchange", lambda *args, **kwargs: None
+    )
 
     result = handle_pending_event(
         question="It was yesterday at 3pm",
@@ -140,3 +143,42 @@ def test_pending_clarification_accepts_plain_follow_up(monkeypatch):
     if match:
         delete_command_data(match.group(1))
     clear_pending_event(pending_key)
+
+
+def test_extract_clarification_detail_strips_prefixed_original_message():
+    original = "met with Alex about the roadmap"
+    message = (
+        "met with Alex about the roadmap\n\n"
+        "Additional details: None of these. It is a new contact, named Julia"
+    )
+
+    detail = event_handler._extract_clarification_detail(message, original)
+
+    assert detail == "None of these. It is a new contact, named Julia"
+
+
+def test_build_contact_context_message_formats_chronological_details():
+    message = event_handler._build_contact_context_message(
+        "met with Alex about the roadmap",
+        [
+            {"role": "assistant", "content": "Which Alex did you mean?"},
+            {"role": "user", "content": "None of these. It is a new contact, named Alex"},
+        ],
+    )
+
+    assert "Original event description: met with Alex about the roadmap" in message
+    assert "Clarification details (chronological, oldest first):" in message
+    assert "- None of these. It is a new contact, named Alex" in message
+
+
+def test_format_clarification_history_is_chronological_transcript():
+    history = event_handler._format_clarification_history(
+        [
+            {"role": "assistant", "content": "Which Julia did you mean?"},
+            {"role": "user", "content": "None of these. New contact named Julia."},
+        ]
+    )
+
+    assert "Clarification transcript (chronological, oldest first):" in history
+    assert "- assistant: Which Julia did you mean?" in history
+    assert "- user: None of these. New contact named Julia." in history

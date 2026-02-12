@@ -36,7 +36,7 @@ export function UiDirectiveDateTimePickerSheet({
   onClose,
   onConfirm,
 }: Props) {
-  const defaultPickerStyles = useDefaultStyles();
+  const defaultPickerStyles = useDefaultStyles('light');
   const isTimeOnly = mode === 'time';
   console.log('mode', mode);
   const initialDate = useMemo(() => parseValueToDate(value, mode), [mode, value]);

@@ -8,6 +8,8 @@ Personal memory orchestrator with a **bounded agent architecture**. Backend: Fas
 
 **Terminology**: When a user says "app", they mean the mobile app in `mobile`, not the web frontend.
 
+**Mobile routing convention**: For dynamic mobile routes, prefer folder-based segments with `index.tsx` (for example `mobile/app/contacts/[contactId]/index.tsx`) so nested subroutes can be added without migrating route structure later.
+
 ## Architecture Documentation
 
 Detailed architecture docs live in `backend/orchestrator/docs/architecture/`:

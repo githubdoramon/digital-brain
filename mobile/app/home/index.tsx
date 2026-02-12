@@ -56,7 +56,7 @@ function formatTimezone(): string {
 export default function DailyScreen() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
-  const { email, name, photo, token } = useAuth();
+  const { email, name, photo, token, isLoading: authLoading, refreshToken } = useAuth();
   const [expanded, setExpanded] = React.useState(false);
   const [briefing, setBriefing] = React.useState<DailyBriefing | null>(null);
   const [loading, setLoading] = React.useState(true);
@@ -85,14 +85,22 @@ export default function DailyScreen() {
         const response = await apiFetch(
           `/mobile/briefings/daily?date=${encodeURIComponent(date)}&timezone=${encodeURIComponent(
             timezone
-          )}`
+          )}`,
+          {
+            token,
+            onAuthExpired: refreshToken,
+          }
         );
         if (isMounted) {
           setBriefing(response as DailyBriefing);
         }
-      } catch {
+      } catch (err) {
         if (!isMounted) return;
         const message = err instanceof Error ? err.message : 'Unable to load briefing.';
+        if (message.toLowerCase().includes('expected json response but got text/html')) {
+          setError(null);
+          return;
+        }
         if (message.toLowerCase().includes('briefing not found')) {
           setBriefing(null);
           setError(null);
@@ -110,14 +118,17 @@ export default function DailyScreen() {
     return () => {
       isMounted = false;
     };
-  }, []);
+  }, [refreshToken, token]);
 
   const loadTodos = React.useCallback(() => {
     let isMounted = true;
     const fetchTodos = async () => {
       try {
         setTodosLoading(true);
-        const response = await apiFetch('/mobile/todos?open_only=true&order=due');
+        const response = await apiFetch('/mobile/todos?open_only=true&order=due', {
+          token,
+          onAuthExpired: refreshToken,
+        });
         if (!isMounted) return;
         const items = Array.isArray(response?.todos) ? response.todos : [];
         setTodos(items);
@@ -134,17 +145,20 @@ export default function DailyScreen() {
     return () => {
       isMounted = false;
     };
-  }, []);
+  }, [refreshToken, token]);
 
   useFocusEffect(
     React.useCallback(() => {
+      if (authLoading || !token) {
+        return;
+      }
       const briefingCleanup = loadBriefing();
       const todosCleanup = loadTodos();
       return () => {
         briefingCleanup();
         todosCleanup();
       };
-    }, [loadBriefing, loadTodos])
+    }, [authLoading, token, loadBriefing, loadTodos])
   );
 
   const getTodoAnimation = React.useCallback(
@@ -217,7 +231,7 @@ export default function DailyScreen() {
           styles.content,
           {
             paddingTop: insets.top + 18,
-            paddingBottom: insets.bottom + 110,
+            paddingBottom: insets.bottom + 220,
           },
         ]}
         ListHeaderComponent={
@@ -226,7 +240,6 @@ export default function DailyScreen() {
               <View style={styles.headerText}>
                 <Text style={styles.kicker}>Daily</Text>
                 <Text style={styles.title}>Your day, scoped</Text>
-                <Text style={styles.subtitle}>Review the briefing before you dive in.</Text>
               </View>
               <Pressable
                 onPress={() => router.push('/settings')}

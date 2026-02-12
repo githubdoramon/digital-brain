@@ -752,8 +752,7 @@ export default function ChatScreen() {
     () => (
       <View style={styles.header}>
         <Text style={styles.kicker}>Chat</Text>
-        <Text style={styles.title}>Ask your memory</Text>
-        <Text style={styles.subtitle}>Chat with your LLM in a calm, chat-first space.</Text>
+        <Text style={styles.title}>Ask "your" memory</Text>
       </View>
     ),
     [],

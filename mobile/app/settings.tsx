@@ -172,8 +172,7 @@ export default function SettingsScreen() {
     >
       <View style={styles.header}>
         <Text style={styles.kicker}>Configuration</Text>
-        <Text style={styles.title}>Control your brain</Text>
-        <Text style={styles.subtitle}>Personalize how the Digital Brain works for you.</Text>
+        <Text style={styles.title}>Control your Brain</Text>
       </View>
 
       <Card style={styles.card}>

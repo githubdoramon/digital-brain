@@ -55,28 +55,24 @@ def _format_clarification_history(
     if not clarification_messages:
         return ""
 
-    user_lines = []
-    assistant_lines = []
+    timeline_lines: list[str] = []
     for entry in clarification_messages:
-        role = entry.get("role")
-        content = entry.get("content")
+        role = (entry.get("role") or "").strip().lower()
+        content = (entry.get("content") or "").strip()
         if not role or not content:
             continue
-        if role == "assistant":
-            assistant_lines.append(f"- {content}")
-        else:
-            user_lines.append(f"- {content}")
+        if role not in {"assistant", "user"}:
+            continue
+        timeline_lines.append(f"- {role}: {content}")
 
-    sections = []
-    if user_lines:
-        sections.append("User-provided details (most recent last):\n" + "\n".join(user_lines))
-    if assistant_lines:
-        sections.append("Assistant questions asked (not facts):\n" + "\n".join(assistant_lines))
-
-    if not sections:
+    if not timeline_lines:
         return ""
 
-    return "\n\n".join(sections) + "\n\n"
+    return (
+        "Clarification transcript (chronological, oldest first):\n"
+        + "\n".join(timeline_lines)
+        + "\n\n"
+    )
 
 
 def _format_conversation_json(
@@ -103,13 +99,16 @@ def _build_contact_context_message(
     original_message: str,
     clarification_messages: list[dict[str, str]] | None,
 ) -> str:
-    user_messages = [original_message]
+    normalized_original = (original_message or "").strip()
+    user_messages: list[str] = []
     if clarification_messages:
         for entry in clarification_messages:
             if entry.get("role") != "user":
                 continue
             content = entry.get("content")
             if not content:
+                continue
+            if normalized_original and content.strip().lower() == normalized_original.lower():
                 continue
             user_messages.append(content)
 
@@ -118,11 +117,38 @@ def _build_contact_context_message(
         normalized = msg.strip()
         if not normalized:
             continue
-        if any(normalized.lower() in existing.lower() for existing in combined):
+        if any(normalized.lower() == existing.lower() for existing in combined):
             continue
         combined.append(normalized)
 
-    return " ".join(combined).strip()
+    if not combined:
+        return normalized_original
+
+    lines = [f"Original event description: {normalized_original}", ""]
+    lines.append("Clarification details (chronological, oldest first):")
+    for msg in combined:
+        lines.append(f"- {msg}")
+    return "\n".join(lines).strip()
+
+
+def _extract_clarification_detail(message: str, original_message: str) -> str:
+    normalized_message = (message or "").strip()
+    if not normalized_message:
+        return ""
+
+    marker_match = re.search(r"additional details:\s*", normalized_message, flags=re.IGNORECASE)
+    if marker_match:
+        detail = normalized_message[marker_match.end() :].strip()
+        if detail:
+            return detail
+
+    normalized_original = (original_message or "").strip()
+    if normalized_original and normalized_message.lower().startswith(normalized_original.lower()):
+        detail = normalized_message[len(normalized_original) :].strip(" \n:-")
+        if detail:
+            return detail
+
+    return normalized_message
 
 
 def _resolve_ambiguous_contacts_from_answer(
@@ -1001,10 +1027,11 @@ def handle_event(parsed: ParsedCommand, context: dict) -> dict[str, Any]:
     original_message_to_store = raw_message
     if clarification_context:
         clarification_messages = clarification_context.get("clarification_messages")
-        if raw_message:
-            clarification_messages = list(clarification_messages or [])
-            clarification_messages.append({"role": "user", "content": raw_message})
         original_message = clarification_context.get("original_message") or raw_message
+        clarification_detail = _extract_clarification_detail(raw_message, original_message)
+        if clarification_detail:
+            clarification_messages = list(clarification_messages or [])
+            clarification_messages.append({"role": "user", "content": clarification_detail})
         original_message_to_store = original_message
         event_message = original_message
         contact_message = _build_contact_context_message(

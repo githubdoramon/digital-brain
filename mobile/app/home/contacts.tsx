@@ -11,6 +11,7 @@ import {
 import { useBottomTabBarHeight } from '@react-navigation/bottom-tabs';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
+import Ionicons from '@expo/vector-icons/Ionicons';
 
 import { apiFetch } from '@/api/client';
 import { useAuth } from '@/auth/AuthContext';
@@ -146,8 +147,7 @@ export default function ContactsScreen() {
   const listHeader = (
     <View style={[styles.header, { paddingTop: insets.top + 12 }]}>
       <Text style={styles.kicker}>Contacts</Text>
-      <Text style={styles.title}>People you care about</Text>
-      <Text style={styles.subtitle}>Search, edit, and keep track of relationships.</Text>
+      <Text style={styles.title}>People you (may) care about</Text>
       <View style={styles.searchWrap}>
         <TextInput
           placeholder="Search contacts"
@@ -168,7 +168,7 @@ export default function ContactsScreen() {
         contentContainerStyle={[
           styles.listContent,
           {
-            paddingBottom: insets.bottom + tabBarHeight + 52,
+            paddingBottom: insets.bottom + tabBarHeight + 122,
           },
         ]}
         ListHeaderComponent={listHeader}
@@ -195,6 +195,18 @@ export default function ContactsScreen() {
           );
         }}
       />
+      <Pressable
+        onPress={() => router.push('/contacts/new')}
+        accessibilityRole="button"
+        accessibilityLabel="Add a contact"
+        style={({ pressed }) => [
+          styles.fab,
+          { bottom: insets.bottom + tabBarHeight + 24 },
+          pressed && styles.fabPressed,
+        ]}
+      >
+        <Ionicons name="add" size={26} color="#fff" />
+      </Pressable>
     </View>
   );
 }
@@ -267,5 +279,24 @@ const styles = StyleSheet.create({
     color: theme.colors.mutedInk,
     textAlign: 'center',
     marginTop: 24,
+  },
+  fab: {
+    position: 'absolute',
+    right: 22,
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: theme.colors.accent,
+    shadowColor: '#0f1113',
+    shadowOpacity: 0.38,
+    shadowRadius: 24,
+    shadowOffset: { width: 0, height: 16 },
+    elevation: 14,
+  },
+  fabPressed: {
+    transform: [{ scale: 0.97 }],
+    shadowOpacity: 0.18,
   },
 });

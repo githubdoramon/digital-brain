@@ -144,7 +144,7 @@ function RootLayoutNav({ loaded }: { loaded: boolean }) {
         }}
       />
         <Stack.Screen
-          name="contacts/[contactId]"
+          name="contacts/[contactId]/index"
           options={{
             headerShown: true,
             headerTransparent: true,
@@ -186,7 +186,7 @@ function RootLayoutNav({ loaded }: { loaded: boolean }) {
           }}
         />
         <Stack.Screen
-          name="todos/[todoId]"
+          name="todos/[todoId]/index"
           options={{
             headerShown: true,
             headerTransparent: true,
