@@ -186,6 +186,75 @@ def test_llm_disambiguation_lenient_accepts_without_context(monkeypatch):
     assert ambiguous == []
 
 
+def test_resolve_people_marks_new_contact_from_llm_flag(monkeypatch):
+    monkeypatch.setattr(
+        resolver,
+        "resolve_contact",
+        lambda *_args, **_kwargs: {
+            "status": "candidates",
+            "candidates": [
+                {"contact_id": "contact:juliana-a", "display_name": "Juliana A"},
+                {"contact_id": "contact:juliana-b", "display_name": "Juliana B"},
+            ],
+        },
+    )
+
+    monkeypatch.setattr(
+        resolver,
+        "_llm_disambiguate_contact",
+        lambda *_args, **_kwargs: {
+            "resolved": False,
+            "new_contact": True,
+            "contact_id": None,
+            "display_name": None,
+            "confidence": "high",
+        },
+    )
+
+    resolved, new, ambiguous, _cache = resolver._resolve_people_mentions(
+        people=["Julia"],
+        user_email="user@example.com",
+        full_text="Original event description: ...",
+        conversation_messages=[
+            {"role": "assistant", "content": "I found multiple matching contacts. Please choose."},
+            {"role": "user", "content": "It is a new contact, named Julia"},
+        ],
+    )
+
+    assert resolved == []
+    assert ambiguous == []
+    assert new == [{"original_text": "Julia", "display_name": "Julia"}]
+
+
+def test_resolve_contacts_marks_new_contact_from_initial_extraction_flag(monkeypatch):
+    monkeypatch.setattr(
+        resolver,
+        "extract_people_from_text",
+        lambda *_args, **_kwargs: ["Julia"],
+    )
+    monkeypatch.setattr(
+        resolver,
+        "_identify_new_contact_mentions",
+        lambda *_args, **_kwargs: ["Julia"],
+    )
+
+    def fail_if_called(*_args, **_kwargs):
+        raise AssertionError("resolve_contact should not run for extraction-flagged new contact")
+
+    monkeypatch.setattr(resolver, "resolve_contact", fail_if_called)
+
+    result = resolver.resolve_contacts_from_text(
+        text="I met Julia, she is a new contact",
+        user_email="user@example.com",
+    )
+
+    assert result["resolved_contacts"] == []
+    assert result["ambiguous_contacts"] == []
+    assert result["new_contacts"] == [
+        {"original_text": "Julia", "display_name": "Julia", "inferred_profession": None}
+    ]
+
+
 def test_resolve_contacts_keeps_current_text_even_with_history(monkeypatch):
     captured = {}
 
@@ -265,6 +334,7 @@ def test_llm_disambiguation_prompt_includes_chronological_history(monkeypatch):
         return {
             "decision": "cannot_decide",
             "candidate_number": None,
+            "new_contact": True,
             "confidence": "low",
             "reasoning": "user says none of these",
         }
@@ -293,6 +363,7 @@ def test_llm_disambiguation_prompt_includes_chronological_history(monkeypatch):
     assert "- assistant: I found multiple matching contacts. Please choose." in prompt
     assert "- user: None of these. It is a new contact, named Julia" in prompt
     assert "Treat the latest user message as the clarification answer" in prompt
+    assert '"new_contact": true or false' in prompt
 
 
 def test_resolve_contact_uses_any_search_for_role_queries(monkeypatch):
