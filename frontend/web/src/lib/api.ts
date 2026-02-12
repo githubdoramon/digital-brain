@@ -304,12 +304,17 @@ export type StreamCallbacks = {
 
 export type LogLevel = "debug" | "info" | "decision" | "warning" | "error";
 
+export type LogMessageSegment =
+  | { kind: "text"; content: string }
+  | { kind: "json"; content: string; value: unknown };
+
 export type LogEntry = {
   id?: number;
   timestamp: string;
   level: LogLevel;
   message: string;
   context?: Record<string, unknown> | null;
+  message_segments?: LogMessageSegment[] | null;
 };
 
 /**

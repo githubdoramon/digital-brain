@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 import sys
 import threading
@@ -22,6 +23,7 @@ class LogEntry:
     level: str
     message: str
     context: dict[str, Any] | None = None
+    message_segments: list[dict[str, Any]] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -30,7 +32,95 @@ class LogEntry:
             "level": self.level,
             "message": self.message,
             "context": self.context,
+            "message_segments": self.message_segments,
         }
+
+
+def _try_parse_json_at(text: str, start: int) -> tuple[int, Any, str] | None:
+    first = text[start]
+    if first not in {"{", "["}:
+        return None
+
+    stack: list[str] = [first]
+    in_string = False
+    is_escaped = False
+
+    for index in range(start + 1, len(text)):
+        char = text[index]
+
+        if in_string:
+            if is_escaped:
+                is_escaped = False
+                continue
+            if char == "\\":
+                is_escaped = True
+                continue
+            if char == '"':
+                in_string = False
+            continue
+
+        if char == '"':
+            in_string = True
+            continue
+
+        if char in {"{", "["}:
+            stack.append(char)
+            continue
+
+        if char in {"}", "]"}:
+            top = stack[-1]
+            is_match = (top == "{" and char == "}") or (top == "[" and char == "]")
+            if not is_match:
+                return None
+
+            stack.pop()
+            if not stack:
+                raw = text[start : index + 1]
+                try:
+                    return (index, json.loads(raw), raw)
+                except Exception:
+                    return None
+
+    return None
+
+
+def extract_message_segments(message: str) -> list[dict[str, Any]] | None:
+    if not message:
+        return None
+
+    segments: list[dict[str, Any]] = []
+    text_start = 0
+    cursor = 0
+
+    while cursor < len(message):
+        char = message[cursor]
+        if char not in {"{", "["}:
+            cursor += 1
+            continue
+
+        parsed = _try_parse_json_at(message, cursor)
+        if not parsed:
+            cursor += 1
+            continue
+
+        end, value, raw = parsed
+        if text_start < cursor:
+            segments.append({"kind": "text", "content": message[text_start:cursor]})
+
+        segments.append({"kind": "json", "content": raw, "value": value})
+        cursor = end + 1
+        text_start = cursor
+
+    if text_start < len(message):
+        segments.append({"kind": "text", "content": message[text_start:]})
+
+    if not segments:
+        return None
+
+    has_json = any(segment.get("kind") == "json" for segment in segments)
+    if not has_json:
+        return None
+    return segments
 
 
 class LogBuffer:
@@ -53,6 +143,7 @@ class LogBuffer:
                 level=normalized,
                 message=message,
                 context=context,
+                message_segments=extract_message_segments(message),
             )
             self._entries.append(entry)
             return entry

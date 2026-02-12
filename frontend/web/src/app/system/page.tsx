@@ -6,6 +6,7 @@ import {
   getSystemLogs,
   LogEntry,
   LogLevel,
+  LogMessageSegment,
   streamSystemLogs,
 } from "@/lib/api";
 
@@ -102,6 +103,229 @@ function formatLogTimestamp(input: string): string {
     minute: "2-digit",
     second: "2-digit",
   });
+}
+
+function tryParseJsonAt(text: string, start: number): { end: number; value: unknown; raw: string } | null {
+  const first = text[start];
+  if (first !== "{" && first !== "[") {
+    return null;
+  }
+
+  const stack: string[] = [first];
+  let inString = false;
+  let isEscaped = false;
+
+  for (let index = start + 1; index < text.length; index += 1) {
+    const char = text[index];
+
+    if (inString) {
+      if (isEscaped) {
+        isEscaped = false;
+        continue;
+      }
+      if (char === "\\") {
+        isEscaped = true;
+        continue;
+      }
+      if (char === '"') {
+        inString = false;
+      }
+      continue;
+    }
+
+    if (char === '"') {
+      inString = true;
+      continue;
+    }
+
+    if (char === "{" || char === "[") {
+      stack.push(char);
+      continue;
+    }
+
+    if (char === "}" || char === "]") {
+      const top = stack[stack.length - 1];
+      const isMatch = (top === "{" && char === "}") || (top === "[" && char === "]");
+      if (!isMatch) {
+        return null;
+      }
+
+      stack.pop();
+      if (stack.length === 0) {
+        const raw = text.slice(start, index + 1);
+        try {
+          const value = JSON.parse(raw);
+          return { end: index, value, raw };
+        } catch {
+          return null;
+        }
+      }
+    }
+  }
+
+  return null;
+}
+
+function splitLogMessageSegments(message: string): LogMessageSegment[] {
+  const segments: LogMessageSegment[] = [];
+  let textStart = 0;
+  let cursor = 0;
+
+  while (cursor < message.length) {
+    const char = message[cursor];
+    if (char !== "{" && char !== "[") {
+      cursor += 1;
+      continue;
+    }
+
+    const parsed = tryParseJsonAt(message, cursor);
+    if (!parsed) {
+      cursor += 1;
+      continue;
+    }
+
+    if (textStart < cursor) {
+      segments.push({ kind: "text", content: message.slice(textStart, cursor) });
+    }
+    segments.push({ kind: "json", content: parsed.raw, value: parsed.value });
+    cursor = parsed.end + 1;
+    textStart = cursor;
+  }
+
+  if (textStart < message.length) {
+    segments.push({ kind: "text", content: message.slice(textStart) });
+  }
+
+  return segments.length > 0 ? segments : [{ kind: "text", content: message }];
+}
+
+function formatJsonSummary(value: unknown): string {
+  if (Array.isArray(value)) {
+    return `Array(${value.length})`;
+  }
+  if (value && typeof value === "object") {
+    const keys = Object.keys(value as Record<string, unknown>);
+    if (keys.length === 0) {
+      return "Object";
+    }
+    const preview = keys.slice(0, 3).join(", ");
+    return keys.length > 3 ? `Object { ${preview}, ... }` : `Object { ${preview} }`;
+  }
+  return typeof value === "string" ? value : JSON.stringify(value);
+}
+
+function renderJsonValue(value: unknown): JSX.Element {
+  if (value === null) {
+    return <span style={{ color: "#fda4af" }}>null</span>;
+  }
+  if (typeof value === "string") {
+    return <span style={{ color: "#86efac" }}>&quot;{value}&quot;</span>;
+  }
+  if (typeof value === "number") {
+    return <span style={{ color: "#fcd34d" }}>{value}</span>;
+  }
+  if (typeof value === "boolean") {
+    return <span style={{ color: "#93c5fd" }}>{String(value)}</span>;
+  }
+  return <span style={{ color: "#cbd5e1" }}>{String(value)}</span>;
+}
+
+function JsonTreeNode({ name, value }: { name?: string; value: unknown }) {
+  if (Array.isArray(value)) {
+    return (
+      <details style={{ marginTop: "4px" }}>
+        <summary style={{ cursor: "pointer", color: "#93c5fd", overflowWrap: "anywhere" }}>
+          {name ? `${name}: ` : ""}
+          {formatJsonSummary(value)}
+        </summary>
+        <div style={{ marginLeft: "14px", paddingLeft: "10px", borderLeft: "1px solid #334155" }}>
+          {value.map((item, index) => (
+            <JsonTreeNode key={`${name ?? "root"}-${index}`} name={`[${index}]`} value={item} />
+          ))}
+        </div>
+      </details>
+    );
+  }
+
+  if (value && typeof value === "object") {
+    const entries = Object.entries(value as Record<string, unknown>);
+    return (
+      <details style={{ marginTop: "4px" }}>
+        <summary style={{ cursor: "pointer", color: "#93c5fd", overflowWrap: "anywhere" }}>
+          {name ? `${name}: ` : ""}
+          {formatJsonSummary(value)}
+        </summary>
+        <div style={{ marginLeft: "14px", paddingLeft: "10px", borderLeft: "1px solid #334155" }}>
+          {entries.length === 0 ? (
+            <div style={{ color: "#94a3b8", marginTop: "4px" }}>&#123;&#125;</div>
+          ) : (
+            entries.map(([key, nested]) => <JsonTreeNode key={key} name={key} value={nested} />)
+          )}
+        </div>
+      </details>
+    );
+  }
+
+  return (
+    <div style={{ marginTop: "4px", overflowWrap: "anywhere", wordBreak: "break-word" }}>
+      {name ? <span style={{ color: "#f8fafc" }}>{name}: </span> : null}
+      {renderJsonValue(value)}
+    </div>
+  );
+}
+
+function LogMessageContent({ entry }: { entry: LogRow }) {
+  const backendSegments = entry.message_segments?.filter(
+    (segment): segment is LogMessageSegment =>
+      !!segment && (segment.kind === "text" || segment.kind === "json") && typeof segment.content === "string"
+  );
+  const segments = backendSegments && backendSegments.length > 0 ? backendSegments : splitLogMessageSegments(entry.message);
+
+  const copyJson = async (value: unknown) => {
+    try {
+      await navigator.clipboard.writeText(JSON.stringify(value, null, 2));
+    } catch {
+      // noop
+    }
+  };
+
+  return (
+    <div style={{ minWidth: 0, display: "grid", gap: "4px" }}>
+      {segments.map((segment, index) => {
+        if (segment.kind === "text") {
+          return (
+            <span key={`text-${index}`} style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere", wordBreak: "break-word" }}>
+              {segment.content}
+            </span>
+          );
+        }
+
+        return (
+          <div key={`json-${index}`} style={{ border: "1px solid #334155", borderRadius: "8px", padding: "6px 8px" }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "8px", flexWrap: "wrap" }}>
+              <span style={{ color: "#93c5fd", fontSize: "0.8rem" }}>JSON payload</span>
+              <button
+                type="button"
+                onClick={() => copyJson(segment.value)}
+                style={{
+                  border: "1px solid #475569",
+                  borderRadius: "6px",
+                  background: "#0b1220",
+                  color: "#cbd5e1",
+                  fontSize: "0.75rem",
+                  padding: "4px 8px",
+                  cursor: "pointer",
+                }}
+              >
+                Copy JSON
+              </button>
+            </div>
+            <JsonTreeNode value={segment.value} />
+          </div>
+        );
+      })}
+    </div>
+  );
 }
 
 export default function SystemStatusPage() {
@@ -380,6 +604,7 @@ export default function SystemStatusPage() {
           flex: isLogFullscreen ? "1 1 auto" : undefined,
           minHeight: isLogFullscreen ? 0 : undefined,
           maxHeight: isLogFullscreen ? "none" : "320px",
+          overflowX: "hidden",
           overflowY: "auto",
           fontFamily: "var(--font-mono, monospace)",
           fontSize: "0.8rem",
@@ -389,7 +614,10 @@ export default function SystemStatusPage() {
           <div style={{ color: "#94a3b8" }}>Waiting for log events...</div>
         ) : (
           filteredLogs.map((entry) => (
-            <div key={entry.rowKey} style={{ display: "grid", gridTemplateColumns: "80px 70px 1fr", gap: "8px" }}>
+            <div
+              key={entry.rowKey}
+              style={{ display: "grid", gridTemplateColumns: "80px 70px minmax(0, 1fr)", gap: "8px" }}
+            >
               <span style={{ color: "#94a3b8" }}>{formatLogTimestamp(entry.timestamp)}</span>
               <span
                 style={{
@@ -408,7 +636,7 @@ export default function SystemStatusPage() {
               >
                 {entry.level}
               </span>
-              <span>{entry.message}</span>
+              <LogMessageContent entry={entry} />
             </div>
           ))
         )}
