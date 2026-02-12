@@ -34,6 +34,17 @@ type ServiceVersionResponse = {
 type LogRow = LogEntry & { rowKey: string };
 
 const LOG_LEVELS: LogLevel[] = ["debug", "info", "decision", "warning", "error"];
+const HIDDEN_INDEX_STYLE = {
+  position: "absolute",
+  width: "1px",
+  height: "1px",
+  margin: "-1px",
+  padding: 0,
+  border: 0,
+  overflow: "hidden",
+  clip: "rect(0 0 0 0)",
+  whiteSpace: "pre",
+} as const;
 
 function sortLogEntries(entries: LogRow[]): LogRow[] {
   return [...entries].sort((left, right) => {
@@ -199,6 +210,42 @@ function splitLogMessageSegments(message: string): LogMessageSegment[] {
   return segments.length > 0 ? segments : [{ kind: "text", content: message }];
 }
 
+function getLogSegments(entry: LogEntry): LogMessageSegment[] {
+  const backendSegments = entry.message_segments?.filter(
+    (segment): segment is LogMessageSegment =>
+      !!segment && (segment.kind === "text" || segment.kind === "json") && typeof segment.content === "string"
+  );
+  return backendSegments && backendSegments.length > 0 ? backendSegments : splitLogMessageSegments(entry.message);
+}
+
+function buildJsonSearchIndex(value: unknown, path = "root", depth = 0): string {
+  if (depth > 7) {
+    return `${path}: [max-depth]`;
+  }
+  if (value === null) {
+    return `${path}: null`;
+  }
+  if (Array.isArray(value)) {
+    const base = `${path}: [array length=${value.length}]`;
+    const nested = value.slice(0, 100).map((item, index) => buildJsonSearchIndex(item, `${path}[${index}]`, depth + 1));
+    return [base, ...nested].join("\n");
+  }
+  if (value && typeof value === "object") {
+    const entries = Object.entries(value as Record<string, unknown>);
+    const base = `${path}: {object keys=${entries.length}}`;
+    const nested = entries.slice(0, 200).map(([key, nestedValue]) => buildJsonSearchIndex(nestedValue, `${path}.${key}`, depth + 1));
+    return [base, ...nested].join("\n");
+  }
+  return `${path}: ${String(value)}`;
+}
+
+function matchesSearch(haystack: string, query: string): boolean {
+  if (!query) {
+    return false;
+  }
+  return haystack.toLowerCase().includes(query.toLowerCase());
+}
+
 function formatJsonSummary(value: unknown): string {
   if (Array.isArray(value)) {
     return `Array(${value.length})`;
@@ -274,12 +321,8 @@ function JsonTreeNode({ name, value }: { name?: string; value: unknown }) {
   );
 }
 
-function LogMessageContent({ entry }: { entry: LogRow }) {
-  const backendSegments = entry.message_segments?.filter(
-    (segment): segment is LogMessageSegment =>
-      !!segment && (segment.kind === "text" || segment.kind === "json") && typeof segment.content === "string"
-  );
-  const segments = backendSegments && backendSegments.length > 0 ? backendSegments : splitLogMessageSegments(entry.message);
+function LogMessageContent({ entry, searchQuery }: { entry: LogRow; searchQuery: string }) {
+  const segments = getLogSegments(entry);
 
   const copyJson = async (value: unknown) => {
     try {
@@ -294,32 +337,64 @@ function LogMessageContent({ entry }: { entry: LogRow }) {
       {segments.map((segment, index) => {
         if (segment.kind === "text") {
           return (
-            <span key={`text-${index}`} style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere", wordBreak: "break-word" }}>
+            <span key={`text-${index}`} style={{ whiteSpace: "pre", overflowWrap: "normal", wordBreak: "normal" }}>
               {segment.content}
             </span>
           );
         }
 
+        const searchIndex = buildJsonSearchIndex(segment.value);
+        const hasJsonMatch = matchesSearch(searchIndex, searchQuery) || matchesSearch(segment.content, searchQuery);
+
         return (
-          <div key={`json-${index}`} style={{ border: "1px solid #334155", borderRadius: "8px", padding: "6px 8px" }}>
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "8px", flexWrap: "wrap" }}>
-              <span style={{ color: "#93c5fd", fontSize: "0.8rem" }}>JSON payload</span>
-              <button
-                type="button"
-                onClick={() => copyJson(segment.value)}
+          <div key={`json-${index}`} style={{ border: "1px solid #334155", borderRadius: "8px", padding: "8px", position: "relative" }}>
+            <button
+              type="button"
+              aria-label="Copy JSON"
+              title="Copy JSON"
+              onClick={() => copyJson(segment.value)}
+              style={{
+                position: "absolute",
+                top: "6px",
+                right: "6px",
+                border: "1px solid #475569",
+                borderRadius: "6px",
+                background: "#0b1220",
+                color: "#cbd5e1",
+                width: "22px",
+                height: "22px",
+                padding: 0,
+                display: "inline-flex",
+                alignItems: "center",
+                justifyContent: "center",
+                cursor: "pointer",
+              }}
+            >
+              <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5">
+                <rect x="6" y="2.5" width="7.5" height="10.5" rx="1.5" />
+                <path d="M3.5 10.5H2.8A1.8 1.8 0 0 1 1 8.7V3.8A1.8 1.8 0 0 1 2.8 2h4.9A1.8 1.8 0 0 1 9.5 3.8v.7" />
+              </svg>
+            </button>
+            <span style={HIDDEN_INDEX_STYLE}>{searchIndex}</span>
+            {searchQuery ? (
+              <span
                 style={{
-                  border: "1px solid #475569",
-                  borderRadius: "6px",
-                  background: "#0b1220",
-                  color: "#cbd5e1",
-                  fontSize: "0.75rem",
-                  padding: "4px 8px",
-                  cursor: "pointer",
+                  position: "absolute",
+                  top: "8px",
+                  right: "34px",
+                  fontSize: "0.65rem",
+                  lineHeight: 1,
+                  padding: "3px 6px",
+                  borderRadius: "999px",
+                  border: "1px solid",
+                  borderColor: hasJsonMatch ? "#16a34a" : "#475569",
+                  color: hasJsonMatch ? "#bbf7d0" : "#94a3b8",
+                  background: hasJsonMatch ? "rgba(22, 163, 74, 0.12)" : "#0b1220",
                 }}
               >
-                Copy JSON
-              </button>
-            </div>
+                {hasJsonMatch ? "Match" : "No match"}
+              </span>
+            ) : null}
             <JsonTreeNode value={segment.value} />
           </div>
         );
@@ -336,11 +411,14 @@ export default function SystemStatusPage() {
   const [logEntries, setLogEntries] = useState<LogRow[]>([]);
   const [logError, setLogError] = useState<string | null>(null);
   const [selectedLevels, setSelectedLevels] = useState<LogLevel[]>(LOG_LEVELS);
+  const [logSearchQuery, setLogSearchQuery] = useState("");
+  const [activeLogMatchIndex, setActiveLogMatchIndex] = useState(0);
   const [isLogPaused, setIsLogPaused] = useState(false);
   const [logConnected, setLogConnected] = useState(false);
   const [isLogFullscreen, setIsLogFullscreen] = useState(false);
   const logContainerRef = useRef<HTMLDivElement | null>(null);
   const seenLogKeysRef = useRef<Set<string>>(new Set());
+  const logRowRefs = useRef<Map<string, HTMLDivElement>>(new Map());
 
   const frontendMetadata = {
     version: process.env.NEXT_PUBLIC_APP_VERSION ?? "unknown",
@@ -460,6 +538,39 @@ export default function SystemStatusPage() {
   const filteredLogs = selectedLevels.length
     ? logEntries.filter((entry) => selectedLevels.includes(entry.level))
     : [];
+  const matchedLogRowKeys = logSearchQuery
+    ? filteredLogs
+        .filter((entry) => {
+          if (matchesSearch(entry.message, logSearchQuery)) {
+            return true;
+          }
+          return getLogSegments(entry).some((segment) => {
+            if (segment.kind !== "json") {
+              return false;
+            }
+            return matchesSearch(buildJsonSearchIndex(segment.value), logSearchQuery) || matchesSearch(segment.content, logSearchQuery);
+          });
+        })
+        .map((entry) => entry.rowKey)
+    : [];
+  const hasSearchMatches = matchedLogRowKeys.length > 0;
+  const activeMatchRowKey = hasSearchMatches
+    ? matchedLogRowKeys[((activeLogMatchIndex % matchedLogRowKeys.length) + matchedLogRowKeys.length) % matchedLogRowKeys.length]
+    : null;
+
+  useEffect(() => {
+    setActiveLogMatchIndex(0);
+  }, [logSearchQuery]);
+
+  useEffect(() => {
+    if (!activeMatchRowKey) {
+      return;
+    }
+    const node = logRowRefs.current.get(activeMatchRowKey);
+    if (node) {
+      node.scrollIntoView({ behavior: "smooth", block: "nearest", inline: "nearest" });
+    }
+  }, [activeMatchRowKey]);
 
   useEffect(() => {
     const container = logContainerRef.current;
@@ -479,6 +590,10 @@ export default function SystemStatusPage() {
         gap: "12px",
         height: isLogFullscreen ? "100%" : "auto",
         width: "100%",
+        maxWidth: "100%",
+        minWidth: 0,
+        overflow: "hidden",
+        boxSizing: "border-box",
         flex: isLogFullscreen ? "1 1 auto" : undefined,
       }}
     >
@@ -489,7 +604,63 @@ export default function SystemStatusPage() {
             Live log stream via SSE. Showing {filteredLogs.length} of {logEntries.length} entries.
           </p>
         </div>
-        <div style={{ display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap", justifyContent: "flex-end" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: "6px", flexWrap: "wrap" }}>
+            <input
+              value={logSearchQuery}
+              onChange={(event) => setLogSearchQuery(event.target.value)}
+              placeholder="Search logs + JSON"
+              style={{
+                border: "1px solid #d1d5db",
+                borderRadius: "8px",
+                padding: "6px 8px",
+                fontSize: "0.8rem",
+                minWidth: "180px",
+                maxWidth: "220px",
+              }}
+            />
+            {logSearchQuery ? (
+              <>
+                <button
+                  type="button"
+                  onClick={() => setActiveLogMatchIndex((prev) => prev - 1)}
+                  disabled={!hasSearchMatches}
+                  style={{
+                    border: "1px solid #d1d5db",
+                    borderRadius: "8px",
+                    padding: "6px 8px",
+                    fontSize: "0.8rem",
+                    background: "#fff",
+                    cursor: hasSearchMatches ? "pointer" : "not-allowed",
+                    opacity: hasSearchMatches ? 1 : 0.55,
+                  }}
+                >
+                  Prev
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setActiveLogMatchIndex((prev) => prev + 1)}
+                  disabled={!hasSearchMatches}
+                  style={{
+                    border: "1px solid #d1d5db",
+                    borderRadius: "8px",
+                    padding: "6px 8px",
+                    fontSize: "0.8rem",
+                    background: "#fff",
+                    cursor: hasSearchMatches ? "pointer" : "not-allowed",
+                    opacity: hasSearchMatches ? 1 : 0.55,
+                  }}
+                >
+                  Next
+                </button>
+                <span style={{ fontSize: "0.75rem", color: hasSearchMatches ? "#475569" : "#b91c1c" }}>
+                  {hasSearchMatches
+                    ? `${((activeLogMatchIndex % matchedLogRowKeys.length) + matchedLogRowKeys.length) % matchedLogRowKeys.length + 1}/${matchedLogRowKeys.length}`
+                    : "0 matches"}
+                </span>
+              </>
+            ) : null}
+          </div>
           <div style={{ display: "flex", gap: "6px", flexWrap: "wrap" }}>
             {LOG_LEVELS.map((level) => {
               const isActive = selectedLevels.includes(level);
@@ -604,7 +775,7 @@ export default function SystemStatusPage() {
           flex: isLogFullscreen ? "1 1 auto" : undefined,
           minHeight: isLogFullscreen ? 0 : undefined,
           maxHeight: isLogFullscreen ? "none" : "320px",
-          overflowX: "hidden",
+          overflowX: "auto",
           overflowY: "auto",
           fontFamily: "var(--font-mono, monospace)",
           fontSize: "0.8rem",
@@ -616,7 +787,14 @@ export default function SystemStatusPage() {
           filteredLogs.map((entry) => (
             <div
               key={entry.rowKey}
-              style={{ display: "grid", gridTemplateColumns: "80px 70px minmax(0, 1fr)", gap: "8px" }}
+              ref={(node) => {
+                if (node) {
+                  logRowRefs.current.set(entry.rowKey, node);
+                } else {
+                  logRowRefs.current.delete(entry.rowKey);
+                }
+              }}
+              style={{ display: "grid", gridTemplateColumns: "80px 70px minmax(0, 1fr)", gap: "8px", minWidth: "100%", width: "max-content" }}
             >
               <span style={{ color: "#94a3b8" }}>{formatLogTimestamp(entry.timestamp)}</span>
               <span
@@ -636,7 +814,15 @@ export default function SystemStatusPage() {
               >
                 {entry.level}
               </span>
-              <LogMessageContent entry={entry} />
+              <div
+                style={
+                  activeMatchRowKey === entry.rowKey
+                    ? { outline: "1px solid #16a34a", borderRadius: "6px", padding: "2px 4px", background: "rgba(22, 163, 74, 0.08)" }
+                    : undefined
+                }
+              >
+                <LogMessageContent entry={entry} searchQuery={logSearchQuery} />
+              </div>
             </div>
           ))
         )}
@@ -843,6 +1029,8 @@ export default function SystemStatusPage() {
             padding: "24px",
             zIndex: 60,
             display: "flex",
+            overflow: "hidden",
+            boxSizing: "border-box",
           }}
         >
           {logPanel}
