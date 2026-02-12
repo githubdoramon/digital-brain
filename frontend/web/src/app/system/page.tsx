@@ -214,7 +214,7 @@ function formatJsonSummary(value: unknown): string {
   return typeof value === "string" ? value : JSON.stringify(value);
 }
 
-function renderJsonValue(value: unknown): JSX.Element {
+function renderJsonValue(value: unknown) {
   if (value === null) {
     return <span style={{ color: "#fda4af" }}>null</span>;
   }
