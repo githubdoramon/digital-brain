@@ -86,7 +86,7 @@ Existing groups (canonical source: `tools/registry.py`):
 | Group | Purpose | Tools |
 |-------|---------|-------|
 | `memory` | Memory/document search | search_memories, get_events, get_document |
-| `resolution` | Entity resolution | resolve_query, resolve_contacts, lookup_contact |
+| `resolution` | Entity resolution | resolve_contacts, lookup_contact |
 | `web` | External web access | web_search, fetch_web_page |
 | `home` | Home automation | home_assistant |
 | `skills` | Skill scripts | run_skill_script |

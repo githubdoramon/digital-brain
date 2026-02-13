@@ -61,15 +61,17 @@ If certain skills are relevant to this intent:
 
 ```python
 INTENT_SKILL_HINTS = {
-    IntentType.MEMORY_SEARCH: ["document-search", "event-analysis"],
+    IntentType.MEMORY_SEARCH: ["tagging-guide"],
     # ... existing hints ...
 
     # Add your hints
-    IntentType.MY_NEW_INTENT: ["relevant-skill-1", "relevant-skill-2"],
+    IntentType.MY_NEW_INTENT: ["relevant-skill-name"],
 }
 ```
 
-Skill hints help the skill matcher narrow down candidate skills.
+Skill hints help the skill matcher narrow down candidate skills. Only add hints
+for skills that exist in `skill_definitions/`. Most behavioral guidance belongs
+in the profile prompts rather than as separate skill files.
 
 ## Step 4: Create New Tool Group (If Needed)
 
@@ -78,7 +80,7 @@ If your intent needs tools not covered by existing groups:
 ```python
 TOOL_GROUPS = {
     "memory": ["search_memories", "get_events", "get_document"],
-    "resolution": ["resolve_query", "resolve_contacts", "lookup_contact"],
+    "resolution": ["resolve_contacts", "lookup_contact"],
     # ... existing groups ...
 
     # Add your new group

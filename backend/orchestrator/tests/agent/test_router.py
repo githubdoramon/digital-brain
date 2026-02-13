@@ -246,7 +246,6 @@ class TestGetAllowedTools:
 
         assert "search_memories" in tools
         assert "get_events" in tools
-        assert "resolve_query" in tools
         assert "resolve_contacts" in tools
 
     def test_get_allowed_tools_empty_groups(self, router):
@@ -267,7 +266,7 @@ class TestGetAllowedTools:
 
         # Should include tools from all groups
         assert "search_memories" in tools
-        assert "resolve_query" in tools
+        assert "resolve_contacts" in tools
         assert "web_search" in tools
         assert "home_assistant" in tools
 

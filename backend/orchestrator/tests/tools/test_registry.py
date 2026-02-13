@@ -23,6 +23,7 @@ class TestToolGroups:
         assert "get_events" in TOOL_GROUPS["memory"]
         assert "get_document" in TOOL_GROUPS["memory"]
 
+
 class TestToolRegistry:
     """Tests for ToolRegistry class."""
 
@@ -223,11 +224,6 @@ class TestPreregisteredTools:
         assert is_valid is True
         assert error is None
 
-    def test_resolve_query_registered(self, populated_registry):
-        """Test resolve_query tool is registered."""
-        contract = populated_registry.get_contract("resolve_query")
-        assert contract is not None
-
     def test_resolve_contacts_registered(self, populated_registry):
         """Test resolve_contacts tool is registered and model-facing params are minimal."""
         contract = populated_registry.get_contract("resolve_contacts")
@@ -260,6 +256,7 @@ class TestPreregisteredTools:
         assert "search_memories" in tool_names
         assert "get_events" in tool_names
         assert "get_document" in tool_names
+
 
 class TestRegistryValidation:
     """Tests for validation through registry."""

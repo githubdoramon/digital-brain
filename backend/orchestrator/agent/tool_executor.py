@@ -21,7 +21,6 @@ PARALLEL_SAFE_TOOLS = {
     "search_memories",
     "get_events",
     "get_document",
-    "resolve_query",
     "lookup_contact",
     "web_search",
     "fetch_web_page",
@@ -464,13 +463,6 @@ class ToolExecutionCoordinator:
             doc = result.get("document")
             if doc:
                 return f"Retrieved document: {doc.get('title', 'untitled')}"
-            return None
-
-        if tool_name == "resolve_query":
-            contacts = len(result.get("contacts", []))
-            places = len(result.get("places", []))
-            if contacts or places:
-                return f"Resolved {contacts} contacts, {places} places"
             return None
 
         if tool_name == "resolve_contacts":

@@ -9,7 +9,7 @@ Tool groups are the canonical capability taxonomy and are now used both for meta
 ```python
 TOOL_GROUPS = {
     "memory": ["search_memories", "get_events", "get_document"],
-    "resolution": ["resolve_query", "resolve_contacts", "lookup_contact"],
+    "resolution": ["resolve_contacts", "lookup_contact"],
     "web": ["web_search", "fetch_web_page"],
     "home": ["home_assistant"],
     "skills": ["run_skill_script"],

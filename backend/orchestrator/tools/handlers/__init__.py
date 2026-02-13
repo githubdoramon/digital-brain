@@ -10,7 +10,6 @@ from .memory import handle_get_document, handle_get_events, handle_search_memori
 from .resolution import (
     handle_lookup_contact,
     handle_resolve_contacts,
-    handle_resolve_query,
 )
 from .skills import handle_run_skill_script
 from .system import handle_bash
@@ -22,7 +21,6 @@ HANDLERS = {
     "search_memories": handle_search_memories,
     "get_events": handle_get_events,
     "get_document": handle_get_document,
-    "resolve_query": handle_resolve_query,
     "resolve_contacts": handle_resolve_contacts,
     "lookup_contact": handle_lookup_contact,
     "web_search": handle_web_search,
@@ -45,7 +43,6 @@ __all__ = [
     "handle_search_memories",
     "handle_get_events",
     "handle_get_document",
-    "handle_resolve_query",
     "handle_resolve_contacts",
     "handle_lookup_contact",
     "handle_web_search",

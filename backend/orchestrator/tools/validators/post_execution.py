@@ -239,22 +239,6 @@ class PostExecutionValidator:
                     extracted_facts=facts,
                 )
 
-        # Check resolve_query - extract entity info
-        if tool_name == "resolve_query":
-            contacts = result.get("contacts", [])
-            places = result.get("places", [])
-            facts = []
-            if contacts:
-                facts.append(f"Resolved {len(contacts)} contacts")
-            if places:
-                facts.append(f"Resolved {len(places)} places")
-
-            return PostExecutionResult(
-                coverage=GoalCoverage.NEEDS_MORE_TOOLS,
-                reason="Entities resolved, ready for queries",
-                extracted_facts=facts,
-            )
-
         # Check resolve_contacts - extract resolution status and ambiguity signals
         if tool_name == "resolve_contacts":
             status = ToolStatus.from_value(result.get("status"))
@@ -284,7 +268,7 @@ class PostExecutionValidator:
                     coverage=GoalCoverage.NEEDS_MORE_TOOLS,
                     reason="No people detected; continue without contact filters",
                     extracted_facts=facts,
-                    suggested_next_tools=["search_memories", "resolve_query"],
+                    suggested_next_tools=["search_memories"],
                 )
 
             if status is ToolStatus.SUCCESS:
@@ -298,7 +282,7 @@ class PostExecutionValidator:
             return PostExecutionResult(
                 coverage=GoalCoverage.FAILED,
                 reason=result.get("message", "Contact resolution failed"),
-                suggested_next_tools=["resolve_query", "search_memories"],
+                suggested_next_tools=["resolve_contacts", "search_memories"],
             )
 
         if tool_name == "emit_ui_directive":
@@ -317,7 +301,7 @@ class PostExecutionValidator:
             return PostExecutionResult(
                 coverage=GoalCoverage.FAILED,
                 reason=result.get("error", "Failed to emit UI directive"),
-                suggested_next_tools=["search_memories", "resolve_query"],
+                suggested_next_tools=["search_memories", "resolve_contacts"],
             )
 
         # Check lookup_contact - extract contact search/relationship results
@@ -332,7 +316,7 @@ class PostExecutionValidator:
                 return PostExecutionResult(
                     coverage=GoalCoverage.FAILED,
                     reason=f"Contact lookup failed: {result['error']}",
-                    suggested_next_tools=["resolve_query", "search_memories"],
+                    suggested_next_tools=["resolve_contacts", "search_memories"],
                 )
 
             if action is LookupContactAction.SEARCH:
@@ -350,7 +334,7 @@ class PostExecutionValidator:
                     return PostExecutionResult(
                         coverage=GoalCoverage.NEEDS_MORE_TOOLS,
                         reason="No contacts found, may need different search",
-                        suggested_next_tools=["resolve_query", "search_memories"],
+                        suggested_next_tools=["resolve_contacts", "search_memories"],
                     )
 
             elif action in {
@@ -383,7 +367,7 @@ class PostExecutionValidator:
                     return PostExecutionResult(
                         coverage=GoalCoverage.NEEDS_MORE_TOOLS,
                         reason="Contact not found for relationship lookup",
-                        suggested_next_tools=["lookup_contact", "resolve_query"],
+                        suggested_next_tools=["lookup_contact", "resolve_contacts"],
                     )
 
         # For other tools, return None to trigger LLM check

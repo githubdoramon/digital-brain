@@ -25,7 +25,7 @@ logger = get_runtime_logger(__name__)
 # Tool group definitions - maps group names to tool names
 TOOL_GROUPS = {
     "memory": ["search_memories", "get_events", "get_document"],
-    "resolution": ["resolve_query", "resolve_contacts", "lookup_contact"],
+    "resolution": ["resolve_contacts", "lookup_contact"],
     "web": ["web_search", "fetch_web_page"],
     "home": ["home_assistant"],
     "skills": ["run_skill_script"],
@@ -171,11 +171,12 @@ def _register_all_tools(registry: ToolRegistry) -> None:
         ToolContract(
             name="search_memories",
             description=(
-                "Primary semantic retrieval tool across personal events, notes, and documents. "
-                "Use this first for most memory questions to gather candidate records. It can find both formal calendar meetings "
-                "and informal interactions captured in personal event summaries/snippets. For person-ranking questions, retrieve a broad "
-                "interaction candidate set first, then inspect event details with `get_events` before final ranking. Use `contact_ids` only "
-                "when the user named specific people and identity is resolved."
+                "Semantic retrieval tool across personal events, notes, and documents. "
+                "Best for topic-based or content-based discovery (e.g. 'what did we discuss about project X'). "
+                "Can find both formal calendar meetings and informal interactions captured in personal event summaries/snippets. "
+                "Do NOT use this for time-window enumeration, counting, or ranking queries (e.g. 'who did I meet most this week') — "
+                "use `get_events(action=by_time_span)` instead, which returns all events in a window without semantic filtering. "
+                "Use `contact_ids` only when the user named specific people and identity is resolved."
             ),
             parameters=[
                 ToolParameter(
@@ -246,27 +247,6 @@ def _register_all_tools(registry: ToolRegistry) -> None:
                     ),
                     required=False,
                     items_type="string",
-                ),
-            ],
-            constraints=["read_only"],
-        )
-    )
-
-    # resolve_query
-    registry.register(
-        ToolContract(
-            name="resolve_query",
-            description=(
-                "Entity extraction helper for mixed questions. Returns structured people/place/time hints from user text before retrieval. "
-                "Use this for broad parsing of complex prompts. Prefer `resolve_contacts` only when person identity disambiguation is required."
-            ),
-            parameters=[
-                ToolParameter(
-                    name="query",
-                    type="string",
-                    description="Natural-language query to parse into contacts, places, and temporal hints.",
-                    required=True,
-                    min_length=1,
                 ),
             ],
             constraints=["read_only"],

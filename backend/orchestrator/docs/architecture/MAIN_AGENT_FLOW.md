@@ -98,19 +98,30 @@ Escalation policy:
 
 ```mermaid
 sequenceDiagram
+  participant Router as IntentRouter
   participant Ctrl as Controller
   participant Res as resolve_contacts
-  participant Mem as search_memories
+  participant Mem as search_memories / get_events
 
-  Ctrl->>Res: pre-resolve people from top-level question
-  alt ambiguous
-    Res-->>Ctrl: need_user_input(disambiguation)
-    Ctrl-->>Ctrl: store pending clarification + return
-  else resolved
-    Res-->>Ctrl: contact_ids
-    Ctrl->>Mem: search_memories with contact_ids + normalized query
+  Router->>Ctrl: classification (pre_resolve_contacts hint)
+  alt pre_resolve_contacts = false (discovery/ranking)
+    Ctrl->>Mem: get_events(by_time_span) or search_memories (no contact_ids)
+    Note over Ctrl: Agent resolves contacts during tool loop if needed
+  else pre_resolve_contacts = true (person-referential)
+    Ctrl->>Res: pre-resolve people from top-level question
+    alt ambiguous
+      Res-->>Ctrl: need_user_input(disambiguation)
+      Ctrl-->>Ctrl: store pending clarification + return
+    else resolved
+      Res-->>Ctrl: contact_ids
+      Ctrl->>Mem: search_memories with contact_ids + normalized query
+    end
   end
 ```
+
+### Pre-resolution decision policy
+
+The LLM router prompt instructs the model to set `pre_resolve_contacts=true` only when the query references a specific person by name, pronoun, or relationship term. Discovery/ranking queries (e.g. "who did I meet most this week?") get `pre_resolve_contacts=false` so the agent can use `get_events(by_time_span)` to retrieve raw interaction data and rank counterparts itself. Rule-based routes use the intent-level default from `INTENT_PRE_RESOLVE_CONTACTS`.
 
 ## Clarification Behavior
 
