@@ -162,6 +162,19 @@ class TestPreExecutionSemanticValidation:
         assert result.valid is False
         assert "query" in "; ".join(result.errors)
 
+    def test_get_events_by_ids_requires_event_ids(self, validator):
+        result = validator.validate("get_events", {"action": "by_ids"})
+        assert result.valid is False
+        assert "event_ids" in "; ".join(result.errors)
+
+    def test_get_events_by_time_span_requires_both_bounds(self, validator):
+        result = validator.validate(
+            "get_events",
+            {"action": "by_time_span", "time_start": "2026-02-01T00:00:00Z"},
+        )
+        assert result.valid is False
+        assert "time_start" in "; ".join(result.errors)
+
 
 class TestValidationFlow:
     """Tests for the overall validation flow."""

@@ -147,6 +147,7 @@ User Question → Intent Router → Conversational Profile Dispatch → Tool Vis
 - **Contact-aware memory search flow**: on unambiguous resolution, inject `contact_ids` into memory search.
 - **Contact-aware memory search flow**: on ambiguity, return a clarification-needed result instead of running unfiltered search.
 - **Contact-aware memory search flow**: avoid repeating identical `resolve_contacts` calls after `needs_clarification`/`no_people` (no-progress guard).
+- **Interaction ranking flow**: for strict "who did I meet/talk to most" windows, prefer `get_events` with `action=by_time_span` (plus optional resolved `contact_ids`) before ranking counterparts.
 - **Validation semantics**: post-execution validation must treat clarification-required search/resolution results as `need_user_input`, not generic empty-result retries.
 - **Session command hygiene**: strip leading slash commands from user text before agent execution; commands are control signals, not semantic query content.
 - **Import-time side effects**: avoid filesystem writes (like `mkdir`) during module import. Create directories lazily at the point of file operations.

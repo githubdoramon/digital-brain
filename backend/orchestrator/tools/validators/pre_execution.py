@@ -12,7 +12,7 @@ Validates tool calls before execution:
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Optional
 
-from tools.action_enums import HomeAssistantAction, LookupContactAction
+from tools.action_enums import GetEventsAction, HomeAssistantAction, LookupContactAction
 
 if TYPE_CHECKING:
     from tools.registry import ToolRegistry
@@ -223,6 +223,27 @@ class PreExecutionValidator:
             ):
                 return "When action='get_relationships', provide 'contact_id' or 'query'"
 
+        if tool_name == "get_events":
+            action = GetEventsAction.from_value(params.get("action"))
+            has_event_ids = bool(params.get("event_ids"))
+            has_time_start = bool(str(params.get("time_start") or "").strip())
+            has_time_end = bool(str(params.get("time_end") or "").strip())
+
+            if action is None:
+                if has_event_ids:
+                    action = GetEventsAction.BY_IDS
+                elif has_time_start or has_time_end:
+                    action = GetEventsAction.BY_TIME_SPAN
+
+            if action is GetEventsAction.BY_IDS and not has_event_ids:
+                return "When action='by_ids', provide non-empty 'event_ids'"
+
+            if action is GetEventsAction.BY_TIME_SPAN and (not has_time_start or not has_time_end):
+                return "When action='by_time_span', provide both 'time_start' and 'time_end'"
+
+            if action is None:
+                return "Provide either 'event_ids' or a time span ('time_start' + 'time_end') for get_events"
+
         return None
 
     def _semantic_repair_hints(self, tool_name: str, params: dict[str, Any]) -> list[str]:
@@ -246,6 +267,16 @@ class PreExecutionValidator:
         if tool_name == "search_memories":
             if not str(params.get("query") or "").strip():
                 hints.append("Provide a focused 'query' describing the topic to retrieve")
+
+        if tool_name == "get_events":
+            action = GetEventsAction.from_value(params.get("action"))
+            has_event_ids = bool(params.get("event_ids"))
+            if action is GetEventsAction.BY_IDS and not has_event_ids:
+                hints.append("Use 'event_ids' from search_memories results when action='by_ids'")
+            if action is GetEventsAction.BY_TIME_SPAN:
+                hints.append(
+                    "Provide both 'time_start' and 'time_end' in ISO 8601 for strict event windows"
+                )
 
         return hints
 

@@ -68,17 +68,133 @@ def handle_get_events(
     """
     Execute get_events tool.
 
-    Retrieves full event details by IDs.
+    Retrieves event details by explicit IDs or by time span.
     """
     # Lazy import to avoid circular dependencies
     import events as events_service
+    from db import get_conn
 
+    action = str(args.get("action") or "").strip().lower()
     event_ids = args.get("event_ids", [])
 
-    if not event_ids:
-        return {"error": "event_ids is required", "events": [], "count": 0}
+    if not action:
+        action = "by_ids" if event_ids else "by_time_span"
 
-    events = events_service.get_events(event_ids) if event_ids else []
+    events: list[dict[str, Any]] = []
+    if action == "by_ids":
+        if not event_ids:
+            return {
+                "error": "event_ids is required when action='by_ids'",
+                "events": [],
+                "count": 0,
+            }
+        events = events_service.get_events(event_ids)
+    elif action == "by_time_span":
+        time_start = str(args.get("time_start") or "").strip()
+        time_end = str(args.get("time_end") or "").strip()
+        if not time_start or not time_end:
+            return {
+                "error": "time_start and time_end are required when action='by_time_span'",
+                "events": [],
+                "count": 0,
+            }
+
+        sort_order = str(args.get("sort_order") or "newest").strip().lower()
+        order_sql = "e.start_date DESC"
+        if sort_order == "oldest":
+            order_sql = "e.start_date ASC"
+        limit_value = args.get("limit", 50)
+        try:
+            limit = max(1, min(int(limit_value), 200))
+        except (TypeError, ValueError):
+            limit = 50
+
+        contact_ids = [
+            str(contact_id).strip()
+            for contact_id in (args.get("contact_ids") or [])
+            if str(contact_id).strip()
+        ]
+
+        with get_conn() as conn, conn.cursor() as cur:
+            if contact_ids:
+                cur.execute(
+                    f"""
+                    SELECT e.id,
+                           e.start_date,
+                           e.end_date,
+                           e.people,
+                           e.tags,
+                           e.types,
+                           e.title,
+                           e.summary,
+                           e.external_id,
+                           p.place_id, p.name AS place_name, p.city, p.country, p.lat, p.lon
+                    FROM events e
+                    LEFT JOIN places p ON p.place_id = e.place_id
+                    WHERE e.start_date >= %s
+                      AND e.start_date <= %s
+                      AND e.people && %s
+                    ORDER BY {order_sql}
+                    LIMIT %s
+                    """,
+                    (time_start, time_end, contact_ids, limit),
+                )
+            else:
+                cur.execute(
+                    f"""
+                    SELECT e.id,
+                           e.start_date,
+                           e.end_date,
+                           e.people,
+                           e.tags,
+                           e.types,
+                           e.title,
+                           e.summary,
+                           e.external_id,
+                           p.place_id, p.name AS place_name, p.city, p.country, p.lat, p.lon
+                    FROM events e
+                    LEFT JOIN places p ON p.place_id = e.place_id
+                    WHERE e.start_date >= %s
+                      AND e.start_date <= %s
+                    ORDER BY {order_sql}
+                    LIMIT %s
+                    """,
+                    (time_start, time_end, limit),
+                )
+            rows = [dict(row) for row in cur.fetchall()]
+
+        events = [
+            {
+                "id": row["id"],
+                "start_date": row["start_date"].isoformat() if row.get("start_date") else None,
+                "end_date": row["end_date"].isoformat() if row.get("end_date") else None,
+                "people": row.get("people") or [],
+                "tags": row.get("tags") or [],
+                "types": row.get("types") or [],
+                "title": row.get("title"),
+                "summary": row.get("summary"),
+                "external_id": row.get("external_id"),
+                "place": (
+                    {
+                        "place_id": row.get("place_id"),
+                        "name": row.get("place_name"),
+                        "city": row.get("city"),
+                        "country": row.get("country"),
+                        "lat": row.get("lat"),
+                        "lon": row.get("lon"),
+                    }
+                    if row.get("place_id")
+                    else None
+                ),
+            }
+            for row in rows
+        ]
+    else:
+        return {
+            "error": "action must be one of: by_ids, by_time_span",
+            "events": [],
+            "count": 0,
+        }
 
     # Update state if provided
     if state is not None:

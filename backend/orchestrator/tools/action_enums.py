@@ -39,3 +39,23 @@ class LookupContactAction(str, Enum):
             if member.value == normalized:
                 return member
         return default
+
+
+class GetEventsAction(str, Enum):
+    """Allowed action values for the `get_events` tool."""
+
+    BY_IDS = "by_ids"
+    BY_TIME_SPAN = "by_time_span"
+
+    @classmethod
+    def from_value(
+        cls,
+        value: object,
+        *,
+        default: GetEventsAction | None = None,
+    ) -> GetEventsAction | None:
+        normalized = str(value or "").strip().lower()
+        for member in cls:
+            if member.value == normalized:
+                return member
+        return default

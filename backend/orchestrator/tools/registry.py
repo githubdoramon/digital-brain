@@ -171,18 +171,19 @@ def _register_all_tools(registry: ToolRegistry) -> None:
         ToolContract(
             name="search_memories",
             description=(
-                "Primary retrieval tool for personal memory data (events, documents, notes). "
-                "Use this first for most memory questions. Prefer specific topic terms in `query` "
-                "and use `contact_ids` for people filters after resolution. For temporal requests, "
-                "set `sort_order` and time bounds instead of issuing repeated broad searches."
+                "Primary semantic retrieval tool across personal events, notes, and documents. "
+                "Use this first for most memory questions to gather candidate records. It can find both formal calendar meetings "
+                "and informal interactions captured in personal event summaries/snippets. For person-ranking questions, retrieve a broad "
+                "interaction candidate set first, then inspect event details with `get_events` before final ranking. Use `contact_ids` only "
+                "when the user named specific people and identity is resolved."
             ),
             parameters=[
                 ToolParameter(
                     name="query",
                     type="string",
                     description=(
-                        "Natural-language topic to retrieve. Keep this focused on the semantic topic "
-                        "(avoid stuffing person names when `contact_ids` are provided)."
+                        "Natural-language retrieval topic. Prefer semantic intent terms (for example interactions, calls, 1:1, lunch, "
+                        "conversation) over narrow single labels. Avoid stuffing person names when `contact_ids` are provided."
                     ),
                     required=True,
                     min_length=1,
@@ -220,7 +221,8 @@ def _register_all_tools(registry: ToolRegistry) -> None:
                     name="contact_ids",
                     type="array",
                     description=(
-                        "Optional contact scope filter. Populate after `resolve_contacts`/`resolve_query` when people are involved."
+                        "Optional contact scope filter by resolved contact IDs. Use when the user explicitly asks about named people. "
+                        "Do not add broad/self filters for 'who did I meet/talk to most' style discovery queries."
                     ),
                     required=False,
                     items_type="string",
@@ -255,8 +257,8 @@ def _register_all_tools(registry: ToolRegistry) -> None:
         ToolContract(
             name="resolve_query",
             description=(
-                "Entity extraction helper for mixed questions. Use when you need structured contacts/places/time "
-                "before another tool call. Prefer this for broad parsing; use `resolve_contacts` for person-specific disambiguation."
+                "Entity extraction helper for mixed questions. Returns structured people/place/time hints from user text before retrieval. "
+                "Use this for broad parsing of complex prompts. Prefer `resolve_contacts` only when person identity disambiguation is required."
             ),
             parameters=[
                 ToolParameter(
@@ -278,7 +280,8 @@ def _register_all_tools(registry: ToolRegistry) -> None:
             description=(
                 "Person-resolution tool. Use when a question references people and you need reliable contact IDs. "
                 "Handles aliases, relationships, and ambiguity. If ambiguous, this returns clarification payloads "
-                "instead of guessing. Pass only `text`; runtime identity context is injected by the controller."
+                "instead of guessing. Pass only `text`; runtime identity context is injected by the controller. "
+                "Best for explicit person mentions in the user request, not for guessing participants from event titles."
             ),
             parameters=[
                 ToolParameter(
@@ -298,16 +301,74 @@ def _register_all_tools(registry: ToolRegistry) -> None:
         ToolContract(
             name="get_events",
             description=(
-                "Detail retrieval for events surfaced by `search_memories`. Use this to inspect event candidates "
-                "before final answers on date/time/attendee specifics."
+                "Event-detail retrieval tool with two modes: `by_ids` (fetch specific event records) and "
+                "`by_time_span` (strict chronological retrieval). This is the preferred tool when the question is "
+                "about who attended events or how often interactions happened in a time window. Use `by_time_span` "
+                "for strict event listing/ranking workflows, and `by_ids` after `search_memories` candidate discovery. "
+                "Do not use this for document content questions (use `get_document`) or pure contact profile lookup (use `lookup_contact`)."
             ),
             parameters=[
                 ToolParameter(
+                    name="action",
+                    type="string",
+                    description=(
+                        "Retrieval mode: `by_ids` for explicit event IDs, or `by_time_span` for strict time-window listing. "
+                        "Examples: use `by_ids` after `search_memories`; use `by_time_span` for queries like 'who did I meet most this week'."
+                    ),
+                    required=False,
+                    enum=["by_ids", "by_time_span"],
+                ),
+                ToolParameter(
                     name="event_ids",
                     type="array",
-                    description="One or more event IDs from prior search results.",
-                    required=True,
+                    description=(
+                        "Event IDs for action=`by_ids`. Usually sourced from `search_memories` results. "
+                        "Not used with action=`by_time_span`."
+                    ),
+                    required=False,
                     items_type="string",
+                ),
+                ToolParameter(
+                    name="time_start",
+                    type="string",
+                    description=(
+                        "ISO 8601 lower bound for action=`by_time_span` (inclusive). "
+                        "Use for strict windows like 'this week' or 'last month'."
+                    ),
+                    required=False,
+                ),
+                ToolParameter(
+                    name="time_end",
+                    type="string",
+                    description="ISO 8601 upper bound for action=`by_time_span` (inclusive).",
+                    required=False,
+                ),
+                ToolParameter(
+                    name="contact_ids",
+                    type="array",
+                    description=(
+                        "Optional contact-ID filter for action=`by_time_span`. Use when contacts are already resolved and you need "
+                        "events involving specific people."
+                    ),
+                    required=False,
+                    items_type="string",
+                ),
+                ToolParameter(
+                    name="sort_order",
+                    type="string",
+                    description="Sort order for action=`by_time_span`: `newest` or `oldest`.",
+                    required=False,
+                    default="newest",
+                    enum=["newest", "oldest"],
+                ),
+                ToolParameter(
+                    name="limit",
+                    type="integer",
+                    description="Maximum events to return for action=`by_time_span`.",
+                    required=False,
+                    default=50,
+                    minimum=1,
+                    maximum=200,
                 ),
             ],
             constraints=["read_only"],
@@ -531,7 +592,8 @@ def _register_all_tools(registry: ToolRegistry) -> None:
             name="lookup_contact",
             description=(
                 "Contact directory and relationship lookup tool. Use for contact profiles, fuzzy identity search, "
-                "and relationship traversal. Prefer this over generic memory search when the request is primarily about contacts."
+                "and relationship traversal. Prefer this over generic memory search when the request is primarily about contact profiles/"
+                "relationships (who someone is, how people are connected), not event-frequency ranking."
             ),
             parameters=[
                 ToolParameter(

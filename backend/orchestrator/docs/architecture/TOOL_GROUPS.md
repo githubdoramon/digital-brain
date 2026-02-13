@@ -55,6 +55,19 @@ flowchart LR
 - Low confidence fails open for correctness.
 - No-progress in restricted mode triggers full-tool escalation.
 
+## Memory Tool Guidance
+
+- Use `search_memories` for semantic discovery across events/documents/notes.
+- Use `get_events` for strict event evidence:
+  - `action=by_ids`: inspect specific event candidates from `search_memories`.
+  - `action=by_time_span`: strict chronological windows (for example, "who did I meet most this week").
+- Optional `contact_ids` on `get_events` can scope to linked contacts when identities are already resolved.
+
+Negative examples:
+
+- Do not use `lookup_contact` to count event interactions; it is for contact profiles/relationships.
+- Do not rely only on event title keywords (for example only searching `meeting`) when ranking interactions across a time window.
+
 ## When Editing Groups
 
 1. Update `TOOL_GROUPS` in `tools/registry.py`.
