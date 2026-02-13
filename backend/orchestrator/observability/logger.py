@@ -107,9 +107,9 @@ def _truncate(text: str, max_len: Optional[int] = None) -> str:
 def _format_args(args: dict[str, Any]) -> str:
     """Format arguments for logging."""
     try:
-        return _truncate(json.dumps(args, default=str))
+        return json.dumps(args, default=str)
     except Exception:
-        return str(args)[:100]
+        return str(args)
 
 
 def _emit(level: LogLevel, message: str) -> None:
@@ -462,7 +462,7 @@ class AgentLogger:
                     break
 
         # Log tool call details
-        args_str = json.dumps(arguments, default=str)[:100]
+        args_str = json.dumps(arguments, default=str)
         self._log(f"Tool: {tool_name}({args_str})", "TOOL")
 
         if not pre_validation_passed:
