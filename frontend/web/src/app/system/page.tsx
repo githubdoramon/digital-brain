@@ -456,7 +456,7 @@ export default function SystemStatusPage() {
 
   useEffect(() => {
     let mounted = true;
-    getSystemLogs("all", 15, 200)
+    getSystemLogs("all", 60, 1000)
       .then((entries) => {
         if (!mounted) return;
         const rows = entries.map(toLogRow);
@@ -494,8 +494,8 @@ export default function SystemStatusPage() {
         seenLogKeysRef.current.add(key);
         setLogEntries((current) => {
           const next = sortLogEntries([...current, toLogRow(entry)]);
-          const trimmed = next.length > 200 ? next.slice(-200) : next;
-          if (seenLogKeysRef.current.size > 2000) {
+          const trimmed = next.length > 1000 ? next.slice(-1000) : next;
+          if (seenLogKeysRef.current.size > 5000) {
             seenLogKeysRef.current = new Set(trimmed.map((row) => getLogKey(row)));
           }
           return trimmed;
