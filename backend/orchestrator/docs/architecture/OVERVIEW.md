@@ -28,7 +28,15 @@ flowchart TD
 The architecture is split into shared runtime and agent-specific policy:
 
 - `backend/orchestrator/agent/`: shared runtime primitives (controller, limits, state, visibility policy, execution pipeline).
-- `backend/orchestrator/agents/main/`: main conversational agent policy (message building, runtime policy, profile config).
+- `backend/orchestrator/agents/registry.py`: intent-to-conversational-profile dispatch for generic `/ask` flows.
+- `backend/orchestrator/agents/main/`: general conversational profile policy (fallback and non-memory intents).
+- `backend/orchestrator/agents/memory_expert/`: memory-focused conversational profile for memory/data/contact intents.
+
+Profile selection contract:
+
+- `ConversationalAgentInterface` includes `supports_intent`.
+- Registry dispatch asks each non-default profile if it supports the routed intent.
+- `main` remains fallback/default when no specialized profile claims the intent.
 - `backend/orchestrator/agents/daily_briefing/`: daily briefing profile, bounded tool policy, and executor integration.
 
 ## Routing and Tool Visibility
@@ -55,7 +63,7 @@ sequenceDiagram
 
   User->>App: POST /ask
   App->>Ctrl: run(question, context)
-  Ctrl->>Ctrl: classify intent + choose tool visibility
+  Ctrl->>Ctrl: classify intent + select conversational profile + choose tool visibility
   Ctrl->>Ctrl: optional pre-resolve contacts
   loop bounded steps
     Ctrl->>LLM: messages + visible tools + state
@@ -82,7 +90,9 @@ sequenceDiagram
 | `agent/tool_visibility_policy.py` | Confidence-tier visibility and escalation policy |
 | `agent/state.py` | Canonical runtime state and counters |
 | `agent/router.py` | Hybrid intent classification |
+| `agents/registry.py` | Conversational profile selection by intent |
 | `agents/main/message_builder.py` | Main prompt assembly |
+| `agents/memory_expert/message_builder.py` | Memory expert prompt assembly |
 | `agents/main/runtime_policy.py` | Main loop decision helpers |
 | `agents/main/profile.py` | Main runtime profile |
 | `agents/daily_briefing/profile.py` | Daily briefing bounded profile and tools |

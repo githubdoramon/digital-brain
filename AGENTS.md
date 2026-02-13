@@ -89,17 +89,18 @@ backend/orchestrator/
 ### Request Flow
 
 ```
-User Question → Intent Router → Tool Visibility Policy → Agent Loop → Response
+User Question → Intent Router → Conversational Profile Dispatch → Tool Visibility Policy → Agent Loop → Response
 ```
 
 1. **IntentRouter** classifies the question (rule-based or LLM fallback)
-2. **Tool groups** are emitted as routing metadata for observability/hints
-3. **AgentController** runs the loop with limits enforcement
-4. Each tool call goes through **pre-validation → execution → post-validation**
-5. **AgentState** tracks facts, actions, and tool call history
-6. **Planner/verifier checks** prevent premature final answers and require completion evidence when tools ran
-7. **Adaptive model routing** selects fast vs smart model profile per step (always enabled)
-8. **Tool execution coordinator** can run independent read-only tool calls in parallel batches
+2. **Conversational profile dispatch** selects the bounded profile (for example `memory_expert`)
+3. **Tool groups** are emitted as routing metadata for observability/hints
+4. **AgentController** runs the loop with limits enforcement
+5. Each tool call goes through **pre-validation → execution → post-validation**
+6. **AgentState** tracks facts, actions, and tool call history
+7. **Planner/verifier checks** prevent premature final answers and require completion evidence when tools ran
+8. **Adaptive model routing** selects fast vs smart model profile per step (always enabled)
+9. **Tool execution coordinator** can run independent read-only tool calls in parallel batches
 
 ### Intent Types
 
@@ -140,6 +141,8 @@ User Question → Intent Router → Tool Visibility Policy → Agent Loop → Re
 - **Regression guard**: keep `backend/orchestrator/tests/tools/test_handlers/test_handler_signatures.py` passing to prevent `unexpected keyword argument` runtime failures.
 - **`resolve_contacts` contract**: model-facing params should remain minimal (`text` only). Runtime identity/context (like `user_email`) is injected by the controller, not authored by the model.
 - **Keep code modular**: avoid bloated files that mix unrelated concerns. When a file starts owning multiple responsibilities (for example, controller loop + guardrails + tool execution internals), extract cohesive modules early.
+- **Documentation hygiene is mandatory**: when behavior, architecture, routing/profile selection, or runtime contracts change, update the corresponding docs in `backend/orchestrator/docs/architecture/` and this `AGENTS.md` in the same work.
+- **Profile intent ownership**: conversational profiles should declare intent ownership via `supports_intent` on the profile/interface implementation; avoid hardcoding intent lists inside the central registry.
 - **Contact-aware memory search flow**: if `search_memories` has no `contact_ids` and query is person-referential, controller attempts contact resolution first.
 - **Contact-aware memory search flow**: on unambiguous resolution, inject `contact_ids` into memory search.
 - **Contact-aware memory search flow**: on ambiguity, return a clarification-needed result instead of running unfiltered search.
@@ -311,6 +314,8 @@ pytest tests/agent/test_controller.py tests/integration/test_full_flow.py tests/
 |---------|------|
 | Agent loop | `backend/orchestrator/agent/controller.py` |
 | Intent routing | `backend/orchestrator/agent/router.py` |
+| Conversational profile dispatch | `backend/orchestrator/agents/registry.py` |
+| Memory expert profile | `backend/orchestrator/agents/memory_expert/` |
 | Tool registry | `backend/orchestrator/tools/registry.py` |
 | Tool contracts | `backend/orchestrator/tools/contracts.py` |
 | Validation | `backend/orchestrator/tools/validators/` |

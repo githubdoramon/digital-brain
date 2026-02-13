@@ -1,21 +1,16 @@
-"""Main-agent prompt/message construction helpers."""
+"""Memory expert prompt/message construction helpers."""
 
 from __future__ import annotations
 
 from functools import lru_cache
-from typing import TYPE_CHECKING, Any, Callable
+from typing import TYPE_CHECKING, Any
 
 from agent.guardrails import build_contact_scope_context
-from agents.main.prompts import get_main_bounded_protocol_prompt, get_main_system_prompt
 from observability.logger import get_runtime_logger
-from prompts.clarification import get_clarification_skill_prompt_block
-from prompts.context import (
-    get_location_context,
-    get_self_context,
-    get_tag_context,
-    get_time_context,
-)
+from prompts.context import get_location_context, get_self_context, get_time_context
 from prompts.state_injection import build_state_message
+
+from .prompts import get_memory_expert_protocol_prompt, get_memory_expert_system_prompt
 
 logger = get_runtime_logger(__name__)
 
@@ -25,46 +20,30 @@ if TYPE_CHECKING:
 
 @lru_cache(maxsize=16)
 def _cached_system_prompt(search_limit: int) -> str:
-    return get_main_system_prompt(search_limit)
+    return get_memory_expert_system_prompt(search_limit)
 
 
 @lru_cache(maxsize=1)
-def _cached_bounded_protocol() -> str:
-    return get_main_bounded_protocol_prompt()
+def _cached_protocol_prompt() -> str:
+    return get_memory_expert_protocol_prompt()
 
 
-@lru_cache(maxsize=1)
-def _cached_tag_context() -> str:
-    return get_tag_context() or ""
-
-
-@lru_cache(maxsize=1)
-def _cached_clarification_skill_block() -> str:
-    return get_clarification_skill_prompt_block() or ""
-
-
-def inject_main_skills(
+def inject_memory_expert_skills(
     *,
     messages: list[dict[str, Any]],
     question: str,
     conversation_history: list[dict[str, str]] | None,
     state: AgentState,
 ) -> None:
-    """Inject active skills for the main conversational agent."""
+    """Inject only matching skills to keep memory expert context compact."""
     try:
         import skills
 
         registry = skills.get_registry()
-
-        skill_index = registry.get_skill_index()
-        if skill_index:
-            messages.append({"role": "system", "content": skill_index})
-
         matching_skills = registry.find_matching_skills(
             query=question,
             conversation_history=conversation_history,
         )
-
         for match in matching_skills:
             skill_prompt = (
                 f"ACTIVE SKILL [{match.skill.name}] (confidence: {match.confidence:.2f}):\n"
@@ -77,12 +56,11 @@ def inject_main_skills(
                     "confidence": match.confidence,
                 }
             )
+    except Exception as exc:
+        logger.exception("[memory_expert.message_builder] Skills injection error: %s", exc)
 
-    except Exception as e:
-        logger.exception("[main.message_builder] Skills injection error: %s", e)
 
-
-def build_main_messages(
+def build_memory_expert_messages(
     *,
     question: str,
     state: AgentState,
@@ -90,25 +68,12 @@ def build_main_messages(
     user_email: str | None,
     search_limit: int,
     client_context: dict[str, Any] | None,
-    skill_injector: Callable[
-        [list[dict[str, Any]], str, list[dict[str, str]] | None, AgentState],
-        None,
-    ],
 ) -> list[dict[str, Any]]:
-    """Build the message list for the main bounded conversational agent."""
+    """Build the message list for the memory expert conversational agent."""
     messages: list[dict[str, Any]] = []
 
     messages.append({"role": "system", "content": _cached_system_prompt(search_limit)})
-
-    tags_context = _cached_tag_context()
-    if tags_context:
-        messages.append({"role": "system", "content": tags_context})
-
-    messages.append({"role": "system", "content": _cached_bounded_protocol()})
-
-    clarification_skill_block = _cached_clarification_skill_block()
-    if clarification_skill_block:
-        messages.append({"role": "system", "content": clarification_skill_block})
+    messages.append({"role": "system", "content": _cached_protocol_prompt()})
 
     if user_email:
         self_context = get_self_context(user_email)
@@ -121,7 +86,12 @@ def build_main_messages(
     if location_context:
         messages.append({"role": "system", "content": location_context})
 
-    skill_injector(messages, question, conversation_history, state)
+    inject_memory_expert_skills(
+        messages=messages,
+        question=question,
+        conversation_history=conversation_history,
+        state=state,
+    )
 
     messages.append(build_state_message(state))
 

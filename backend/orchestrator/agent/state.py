@@ -103,6 +103,7 @@ class AgentState:
     route_source: str = "unknown"
     route_confidence: float = 0.0
     route_confidence_tier: str = "low"
+    conversational_profile: str = "main"
     tool_visibility_mode: str = "full"
     tool_visibility_escalated: bool = False
     tool_visibility_escalations_count: int = 0
@@ -529,6 +530,7 @@ class AgentState:
                 f"source={self.route_source}, confidence={self.route_confidence:.2f}, "
                 f"tier={self.route_confidence_tier}, tools={self.tool_visibility_mode}"
             )
+            lines.append(f"PROFILE: {self.conversational_profile}")
             if self.tool_visibility_escalations_count:
                 lines.append(
                     f"ROUTING_RECOVERY: tool_visibility_escalations={self.tool_visibility_escalations_count}"
@@ -674,6 +676,7 @@ class AgentState:
             "route_source": self.route_source,
             "route_confidence": self.route_confidence,
             "route_confidence_tier": self.route_confidence_tier,
+            "conversational_profile": self.conversational_profile,
             "tool_visibility_mode": self.tool_visibility_mode,
             "tool_visibility_escalated": self.tool_visibility_escalated,
             "tool_visibility_escalations_count": self.tool_visibility_escalations_count,
@@ -709,6 +712,7 @@ class AgentState:
             "route_source": self.route_source,
             "route_confidence": self.route_confidence,
             "route_confidence_tier": self.route_confidence_tier,
+            "conversational_profile": self.conversational_profile,
             "tool_visibility_mode": self.tool_visibility_mode,
             "tool_visibility_escalated": self.tool_visibility_escalated,
             "tool_visibility_escalations_count": self.tool_visibility_escalations_count,

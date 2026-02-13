@@ -21,6 +21,8 @@ from .runtime_profiles import BoundedAgentProfile, build_agent_profile
 class ConversationalAgentInterface:
     """Interface for conversational bounded agents executed by AgentController."""
 
+    name: str
+    is_fallback: bool
     profile: BoundedAgentProfile
     build_messages: Callable[
         [str, Any, list[dict[str, str]] | None, str | None, int, dict[str, Any] | None],
@@ -30,6 +32,7 @@ class ConversationalAgentInterface:
     classify_malformed_output: Callable[[str], tuple[str | None, str | None]]
     build_force_completion_prompt: Callable[[dict[str, Any]], str]
     normalize_tool_status: Callable[[dict[str, Any], str], ToolStatus]
+    supports_intent: Callable[[Any], bool]
 
 
 def build_default_conversational_interface(
@@ -80,6 +83,9 @@ def build_default_conversational_interface(
             status = ToolStatus.NEED_USER_INPUT.value
         return ToolStatus.from_value(status)
 
+    def _supports_intent(_intent: Any) -> bool:
+        return False
+
     profile = build_agent_profile(
         name="generic",
         max_steps=max_steps,
@@ -87,10 +93,13 @@ def build_default_conversational_interface(
         timeout_seconds=timeout_seconds,
     )
     return ConversationalAgentInterface(
+        name="generic",
+        is_fallback=True,
         profile=profile,
         build_messages=_build_messages,
         get_follow_up_prompt_from_state=_get_follow_up,
         classify_malformed_output=_classify_malformed,
         build_force_completion_prompt=_force_completion,
         normalize_tool_status=_normalize_tool_status,
+        supports_intent=_supports_intent,
     )

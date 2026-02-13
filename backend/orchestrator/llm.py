@@ -30,7 +30,7 @@ _main_controller = None
 
 
 def _get_main_controller():
-    """Create/reuse the main conversational controller instance."""
+    """Create/reuse the conversational controller instance."""
     global _main_controller
     if _main_controller is None:
         from agent.controller import AgentController

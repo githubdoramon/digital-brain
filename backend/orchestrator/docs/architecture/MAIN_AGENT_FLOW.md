@@ -14,7 +14,8 @@ flowchart TD
   Q[User Question] --> APP[app.py]
   APP --> CTRL[AgentController.run]
   CTRL --> ROUTE[IntentRouter classify]
-  ROUTE --> VIS[Tool visibility policy]
+  ROUTE --> PROF[Conversational profile dispatch]
+  PROF --> VIS[Tool visibility policy]
   VIS --> PRE[Optional contact pre-resolution]
   PRE --> LOOP[Bounded loop]
   LOOP --> FIN[Finalize response bundle]
@@ -61,12 +62,25 @@ Escalation policy:
 - If restricted mode hits no-progress (repeated/empty), controller escalates to full tools within the same run.
 - Escalation is always enabled in runtime policy.
 
+## Conversational Profile Dispatch
+
+- `/ask` and `/ask/stream` are generic endpoints: controller selects conversational profile after routing.
+- Current mapping:
+  - `MEMORY_SEARCH`, `DATA_QUERY`, `CONTACT_LOOKUP` -> `memory_expert`
+  - all other intents -> `main`
+- Endpoint-specific bounded workflows (for example daily briefing) remain endpoint-owned and do not use this dispatch path.
+
 ## Main Policy Modules
 
 - `agents/main/message_builder.py`
   - system/context/state message assembly
   - skill injection
   - cached static prompt blocks (system/protocol/tag/clarification-skill)
+- `agents/memory_expert/message_builder.py`
+  - memory-focused system/context/state message assembly
+  - compact matching-skill injection (without global skill index block)
+- `agents/registry.py`
+  - intent -> conversational profile selection
 - `agents/main/runtime_policy.py`
   - malformed-output classification
   - follow-up prompt selection

@@ -1,21 +1,11 @@
-"""
-System prompts for the bounded agent.
+"""Shared prompt helpers used across bounded agents and tools."""
 
-These prompts define the agent's core behavior and protocol.
-"""
+from agents.main.prompts import get_main_bounded_protocol_prompt, get_main_system_prompt
 
 
 def get_system_prompt(search_limit: int = 30) -> str:
-    """Get the main system prompt for the agent."""
-    return (
-        "You are a personal memory assistant helping the user explore their stored memories, "
-        "moments, contacts, events, places and documents. "
-        "Be conversational and helpful - make the user feel like they're talking to a knowledgeable friend, not a robot. "
-        "Never fabricate information; if no relevant memories exist, say so honestly. "
-        "Never expose raw IDs (like contact:1761950388937) - always use human-readable names and titles. "
-        "If you choose to format the answer, use Markdown. "
-        f"Prefer returning at most {search_limit} highly relevant results unless the user requests more."
-    )
+    """Backward-compatible alias for the main agent system prompt."""
+    return get_main_system_prompt(search_limit)
 
 
 def get_protocol_prompt() -> str:
@@ -46,97 +36,5 @@ def get_protocol_prompt() -> str:
 
 
 def get_bounded_agent_protocol() -> str:
-    """
-    Get the enhanced protocol for the bounded agent.
-
-    Keep this prompt generic and push tool-specific behavior into tool contracts.
-    """
-    return (
-        "AGENT PROTOCOL:\n\n"
-        "*** CRITICAL - TOOL CALLING BEHAVIOR ***\n"
-        "You MUST invoke tools using the tool_call mechanism, NOT by outputting text.\n"
-        "ABSOLUTELY FORBIDDEN:\n"
-        "  - Outputting code like `action = 'call_tool'`\n"
-        '  - Writing JSON like `{"action": "call_tool"}`\n'
-        "  - Saying 'here is the code to...' or 'I will call...'\n"
-        "  - Describing tool parameters instead of calling the tool\n"
-        "CORRECT BEHAVIOR:\n"
-        "  - Use the tool_call mechanism to invoke tools\n"
-        "  - Your text output should ONLY be responses to the user\n"
-        "  - If you need to perform an action, CALL THE TOOL - don't describe it\n\n"
-        "1. STATE AWARENESS:\n"
-        "   - You receive CURRENT_STATE at each turn showing your progress\n"
-        "   - Track KNOWN_FACTS to avoid redundant queries\n"
-        "   - Check STEP count - you have limited iterations\n"
-        "   - Monitor TOOL_CALLS_USED against your budget\n\n"
-        "2. TOOL USAGE:\n"
-        "   - INVOKE tools via tool_call; never output pseudo-calls in text\n"
-        "   - Follow each tool's contract description for when to use it and how to set parameters\n"
-        "   - Prefer the smallest useful action: gather missing evidence, then answer\n"
-        "   - If a tool fails, repair arguments once and then switch approach\n\n"
-        "   - Self-identity guardrail:\n"
-        "     * For 'who did I meet/talk to/call most' style questions, do NOT return the user as the counterpart.\n\n"
-        "3. BOUNDED REASONING:\n"
-        "   - Work toward the GOAL efficiently\n"
-        "   - Stop when you have enough information\n"
-        "   - Don't loop on the same query\n"
-        "   - If stuck, acknowledge what you found and what's missing\n\n"
-        "4. VALIDATION:\n"
-        "   - Tool calls are validated before execution\n"
-        "   - If validation fails, you'll receive specific error feedback\n"
-        "   - Fix the parameters based on the feedback\n"
-        "   - You have limited repair attempts\n\n"
-        "5. FINAL ANSWER:\n"
-        "   - Only answer when you have the information needed\n"
-        "   - Synthesize tool results into natural language\n"
-        "   - If you apply formatting, use Markdown syntax\n"
-        "   - Never expose raw IDs or internal structures\n"
-        "   - If partially successful, explain what was found and what wasn't\n"
-    )
-
-
-def get_event_capture_prompt() -> str:
-    """Get the prompt for event capture mode."""
-    return (
-        "The user is describing something that happened to them or someone they know. "
-        "Your job is to extract a precise event record for storage. "
-        "When you do not have high confidence about key facts (start time, participants, place, title), "
-        "ask concise clarifying questions instead of inventing details. "
-        "Once you have enough information, format the event as XML:\n"
-        "<event_proposal>\n"
-        '{"title": "...", "description": "...", "start_time": "ISO8601", "end_time": "ISO8601", '
-        '"location": "...", "attendees": ["name1", "name2"], "all_day": false, "tags": ["tag1"]}\n'
-        "</event_proposal>\n"
-        "Include this XML block at the end of your response when you have enough information."
-    )
-
-
-def get_repair_prompt(
-    tool_name: str,
-    error: str,
-    suggestions: list[str],
-    attempt: int,
-    max_attempts: int,
-) -> str:
-    """
-    Get a prompt for tool call repair.
-
-    Provides specific feedback to help the model fix validation errors.
-    """
-    lines = [
-        f"TOOL VALIDATION FAILED for `{tool_name}`:",
-        f"Error: {error}",
-        "",
-        "Suggestions:",
-    ]
-
-    for s in suggestions:
-        lines.append(f"  - {s}")
-
-    lines.append("")
-    lines.append(f"Attempt {attempt}/{max_attempts}. Please fix the parameters and try again.")
-
-    if attempt >= max_attempts:
-        lines.append("WARNING: This is your last attempt. Be careful with the parameters.")
-
-    return "\n".join(lines)
+    """Backward-compatible alias for the main bounded protocol prompt."""
+    return get_main_bounded_protocol_prompt()

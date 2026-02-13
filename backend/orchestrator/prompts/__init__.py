@@ -19,7 +19,6 @@ from .state_injection import (
 )
 from .system import (
     get_bounded_agent_protocol,
-    get_event_capture_prompt,
     get_protocol_prompt,
     get_system_prompt,
 )
@@ -27,7 +26,6 @@ from .system import (
 __all__ = [
     "get_system_prompt",
     "get_protocol_prompt",
-    "get_event_capture_prompt",
     "get_bounded_agent_protocol",
     "get_time_context",
     "get_tag_context",

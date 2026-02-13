@@ -19,6 +19,7 @@ import os
 # Import with absolute paths to avoid circular imports
 import sys
 from collections.abc import AsyncGenerator
+from contextvars import ContextVar
 from time import perf_counter
 from typing import Any, Optional
 
@@ -26,6 +27,7 @@ from agent.agent_interfaces import (
     ConversationalAgentInterface,
     build_default_conversational_interface,
 )
+from agents.registry import build_conversational_profile_registry, choose_profile_interface
 from observability import trace
 from observability.logger import get_runtime_logger
 from ui_dsl.clarification import extract_need_user_input
@@ -127,7 +129,23 @@ class AgentController:
                 max_tool_calls=self.config.max_tool_calls,
                 timeout_seconds=self.llm_timeout,
             )
-        self.agent_profile = self.conversational_agent.profile
+        base_interface = self.conversational_agent
+        if base_interface is None:
+            raise RuntimeError("No conversational agent interface provided to AgentController")
+        self._profile_registry: dict[str, ConversationalAgentInterface] = (
+            build_conversational_profile_registry(
+                max_steps=self.config.max_steps,
+                max_tool_calls=self.config.max_tool_calls,
+                timeout_seconds=self.llm_timeout,
+            )
+        )
+        # Controller is process-global in llm.py and can serve concurrent async requests.
+        # Keep selected conversational profile request-scoped to avoid cross-request leakage.
+        self._agent_interface_context: ContextVar[ConversationalAgentInterface | None] = ContextVar(
+            "agent_interface_context",
+            default=base_interface,
+        )
+        self.agent_profile = base_interface.profile
         self.runtime_profile = self.agent_profile.runtime
 
         # Lazy-loaded components
@@ -198,9 +216,19 @@ class AgentController:
 
     def _agent_interface(self) -> ConversationalAgentInterface:
         """Return bound conversational agent interface or raise clear error."""
+        current_interface = self._agent_interface_context.get()
+        if current_interface is not None:
+            return current_interface
         if self.conversational_agent is None:
             raise RuntimeError("No conversational agent interface provided to AgentController")
         return self.conversational_agent
+
+    def _resolve_agent_interface(
+        self,
+        classification: IntentClassification | None,
+    ) -> ConversationalAgentInterface:
+        """Resolve conversational profile from routed intent metadata."""
+        return choose_profile_interface(classification, self._profile_registry)
 
     async def _prepare_execution_context(
         self,
@@ -219,6 +247,12 @@ class AgentController:
         if self.config.enable_intent_routing:
             classification = await self._run_intent_router(question, conversation_history, run_id)
             self._apply_classification_to_state(state, classification)
+
+        selected_interface = self._resolve_agent_interface(classification)
+        self._agent_interface_context.set(selected_interface)
+        self.agent_profile = selected_interface.profile
+        self.runtime_profile = selected_interface.profile.runtime
+        state.conversational_profile = selected_interface.profile.name
 
         clarification_prompt: Optional[str] = None
         pre_resolve_hint = (
@@ -277,17 +311,15 @@ class AgentController:
     ) -> tuple[float, str]:
         """Initialize run-level logging and tracing shared by sync/stream paths."""
         total_start = perf_counter()
+        base_interface = self.conversational_agent
+        if base_interface is None:
+            raise RuntimeError("No conversational agent interface provided to AgentController")
+        self._agent_interface_context.set(base_interface)
+        self.agent_profile = base_interface.profile
+        self.runtime_profile = base_interface.profile.runtime
         run_id = self.logger.start_run(question, user_id, session_id)
         self._active_llm_policy = None
         self._last_llm_policy = None
-        self.logger.log_decision(
-            decision="Agent profile selected",
-            reason=self.runtime_profile.name,
-            details={
-                "max_steps": self.runtime_profile.max_steps,
-                "max_tool_calls": self.runtime_profile.max_tool_calls,
-            },
-        )
         trace.trace_run_start(question, run_id)
         return total_start, run_id
 
@@ -304,7 +336,21 @@ class AgentController:
         normalized_submission = self._normalize_ui_submission(ui_submission)
         if normalized_submission:
             state.request_context["ui_submission"] = normalized_submission
+        state.conversational_profile = self.runtime_profile.name
         return state
+
+    def _log_selected_profile(self) -> None:
+        """Log active conversational profile metadata for current run."""
+        interface = self._agent_interface()
+        runtime = interface.profile.runtime
+        self.logger.log_decision(
+            decision="Agent profile selected",
+            reason=interface.profile.name,
+            details={
+                "max_steps": runtime.max_steps,
+                "max_tool_calls": runtime.max_tool_calls,
+            },
+        )
 
     def _begin_step(
         self,
@@ -431,6 +477,7 @@ class AgentController:
                 search_limit=search_limit,
                 run_id=run_id,
             )
+            self._log_selected_profile()
             self._initialize_execution_plan(state, question)
             if clarification_prompt:
                 trace.trace_contact_resolution_outcome(
@@ -679,6 +726,7 @@ class AgentController:
                 search_limit=search_limit,
                 run_id=run_id,
             )
+            self._log_selected_profile()
             self._initialize_execution_plan(state, question)
             if clarification_prompt:
                 trace.trace_contact_resolution_outcome(
@@ -964,7 +1012,9 @@ class AgentController:
             details={
                 "intent": classification.intent.value,
                 "allowed_tool_groups": classification.allowed_tool_groups,
-                "profile": self.runtime_profile.name,
+                "profile_selection": choose_profile_interface(
+                    classification, self._profile_registry
+                ).name,
             },
         )
 

@@ -5,6 +5,11 @@ from __future__ import annotations
 from agent.runtime_profiles import BoundedAgentProfile, BoundedRuntimeProfile, build_agent_profile
 
 
+def supports_intent(_intent: object) -> bool:
+    """Main profile acts as the fallback profile, not an explicit intent owner."""
+    return False
+
+
 def build_main_runtime_profile(
     *,
     max_steps: int,
