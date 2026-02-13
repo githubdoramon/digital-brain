@@ -6,7 +6,6 @@ import {
   FlatList,
   LayoutAnimation,
   Platform,
-  Pressable,
   StyleSheet,
   Text,
   UIManager,
@@ -18,6 +17,7 @@ import Ionicons from '@expo/vector-icons/Ionicons';
 
 import { apiFetch } from '@/api/client';
 import { useAuth } from '@/auth/AuthContext';
+import { AppPressable as Pressable } from '@/components/AppPressable';
 import { Avatar } from '@/components/Avatar';
 import { Card } from '@/components/Card';
 import { useTopNotice } from '@/components/top-notice';
@@ -306,27 +306,27 @@ export default function DailyScreen() {
           const primaryEvent = item.events?.[0];
           const eventCount = item.events?.length ?? 0;
           return (
-            <Pressable
-              onPress={() => router.push(`/todos/${encodeURIComponent(item.todo_id)}`)}
-              style={({ pressed }) => [styles.todoPressable, pressed && styles.pressed]}
-            >
-              <AnimatedCard
-                variant="elevated"
-                style={[
-                  styles.todoCard,
-                  {
-                    transform: [{ translateX }],
-                    opacity,
-                    maxHeight: height.interpolate({
-                      inputRange: [0, 1],
+            <AnimatedCard
+              variant="elevated"
+              style={[
+                styles.todoCard,
+                {
+                  transform: [{ translateX }],
+                  opacity,
+                  maxHeight: height.interpolate({
+                    inputRange: [0, 1],
                     outputRange: [220, 0],
-                    }),
-                    marginBottom: height.interpolate({
-                      inputRange: [0, 1],
-                      outputRange: [0, -12],
-                    }),
-                  },
-                ]}
+                  }),
+                  marginBottom: height.interpolate({
+                    inputRange: [0, 1],
+                    outputRange: [0, -12],
+                  }),
+                },
+              ]}
+            >
+              <Pressable
+                onPress={() => router.push(`/todos/${encodeURIComponent(item.todo_id)}`)}
+                style={styles.todoCardTapArea}
               >
                 <View style={styles.todoContent}>
                   <Text style={styles.todoText}>{item.description}</Text>
@@ -367,8 +367,8 @@ export default function DailyScreen() {
                     <Text style={styles.todoActionText}>Done</Text>
                   </Pressable>
                 </View>
-              </AnimatedCard>
-            </Pressable>
+              </Pressable>
+            </AnimatedCard>
           );
         }}
         ListEmptyComponent={
@@ -610,12 +610,12 @@ const styles = StyleSheet.create({
   },
   todoCard: {
     marginTop: 12,
+  },
+  todoCardTapArea: {
+    borderRadius: theme.radius.lg,
     padding: 16,
     gap: 12,
     flexDirection: 'column',
-  },
-  todoPressable: {
-    alignSelf: 'stretch',
   },
   todoContent: {
     gap: 6,

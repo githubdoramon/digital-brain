@@ -1,7 +1,8 @@
 import DateTimePicker, { DateType, useDefaultStyles } from 'react-native-ui-datepicker';
 import React, { useEffect, useMemo, useState } from 'react';
-import { Modal, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Modal, StyleSheet, Text, View } from 'react-native';
 
+import { AppPressable as Pressable } from '@/components/AppPressable';
 import { theme } from '@/theme';
 
 import { formatValueForMode, parseValueToDate, PickerMode } from './helpers';

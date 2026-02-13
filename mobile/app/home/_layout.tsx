@@ -3,9 +3,10 @@ import Ionicons from '@expo/vector-icons/Ionicons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Tabs } from 'expo-router';
 import { BottomTabBarProps } from '@react-navigation/bottom-tabs';
-import { Animated, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Animated, GestureResponderEvent, Platform, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import { AppPressable as Pressable } from '@/components/AppPressable';
 import { theme } from '@/theme';
 import Digibrain from '@/assets/images/digibrain.svg';
 import { TopNoticeProvider } from '@/components/top-notice';
@@ -51,6 +52,33 @@ function TabBar({ state, navigation }: BottomTabBarProps) {
     }
   };
 
+  const handleLeftGroupPress = (event: GestureResponderEvent) => {
+    const locationX = event.nativeEvent.locationX;
+    let targetTab = leftTabs.find((tab) => {
+      const layout = tabLayouts.current[tab.name];
+      if (!layout) return false;
+      return locationX >= layout.x && locationX <= layout.x + layout.width;
+    });
+
+    if (!targetTab) {
+      targetTab = leftTabs.reduce<(typeof leftTabs)[number] | null>((closest, tab) => {
+        const layout = tabLayouts.current[tab.name];
+        if (!layout) return closest;
+        const center = layout.x + layout.width / 2;
+        if (!closest) return tab;
+        const closestLayout = tabLayouts.current[closest.name];
+        if (!closestLayout) return tab;
+        const closestCenter = closestLayout.x + closestLayout.width / 2;
+        return Math.abs(locationX - center) < Math.abs(locationX - closestCenter) ? tab : closest;
+      }, null);
+    }
+
+    if (!targetTab) return;
+    const route = state.routes.find((item) => item.name === targetTab.name);
+    if (!route) return;
+    handlePress(route.name, route.key);
+  };
+
   React.useEffect(() => {
     if (!currentRoute || !isLeftTabActive) return;
     const layout = tabLayouts.current[currentRoute];
@@ -92,7 +120,7 @@ function TabBar({ state, navigation }: BottomTabBarProps) {
 
   return (
     <View style={[styles.barWrap, { paddingBottom: Math.max(insets.bottom, 14) }]}>
-      <View style={styles.leftGroup}>
+      <Pressable style={styles.leftGroup} onPress={handleLeftGroupPress}>
         {isLeftTabActive ? (
           <Animated.View
             pointerEvents="none"
@@ -110,9 +138,10 @@ function TabBar({ state, navigation }: BottomTabBarProps) {
           if (!route) return null;
           const focused = currentRoute === route.name;
           return (
-            <Pressable
+            <View
               key={route.key}
-              onPress={() => handlePress(route.name, route.key)}
+              pointerEvents="none"
+              style={styles.tabButtonShell}
               onLayout={(event) => {
                 const layout = event.nativeEvent.layout;
                 tabLayouts.current[route.name] = { x: layout.x, width: layout.width };
@@ -136,24 +165,19 @@ function TabBar({ state, navigation }: BottomTabBarProps) {
                   }),
                 ]).start();
               }}
-              accessibilityRole="button"
-              accessibilityState={focused ? { selected: true } : {}}
-              style={({ pressed }) => [
-                styles.tabButton,
-                focused && styles.tabButtonActive,
-                pressed && styles.tabButtonPressed,
-              ]}
             >
-              <Ionicons
-                name={tab.icon}
-                size={22}
-                color={focused ? theme.colors.accentDeep : theme.colors.mutedInk}
-              />
-              {focused ? <Text style={styles.tabLabel}>{tab.label}</Text> : null}
-            </Pressable>
+              <View style={[styles.tabButton, focused && styles.tabButtonActive]}>
+                <Ionicons
+                  name={tab.icon}
+                  size={22}
+                  color={focused ? theme.colors.accentDeep : theme.colors.mutedInk}
+                />
+                {focused ? <Text style={styles.tabLabel}>{tab.label}</Text> : null}
+              </View>
+            </View>
           );
         })}
-      </View>
+      </Pressable>
       {(() => {
         const chat = state.routes.find((route) => route.name === chatRoute);
         if (!chat) return null;
@@ -171,44 +195,42 @@ function TabBar({ state, navigation }: BottomTabBarProps) {
           outputRange: [1, 1.06],
         });
         return (
-          <Pressable
-            onPress={() => handlePress(chat.name, chat.key)}
-            accessibilityRole="button"
-            accessibilityState={focused ? { selected: true } : {}}
-            style={({ pressed }) => [
-              styles.brainButton,
-              focused && styles.brainButtonActive,
-              pressed && styles.brainButtonPressed,
-            ]}
-          >
-            <Animated.View
-              style={[
-                styles.brainButtonGradient,
-                {
-                  transform: [
-                    { translateY: brainWiggleTranslateY },
-                    { rotate: brainWiggleRotate },
-                    { scale: brainWiggleScale },
-                  ],
-                },
-              ]}
+          <View style={[styles.brainButtonShell, focused && styles.brainButtonActive]}>
+            <Pressable
+              onPress={() => handlePress(chat.name, chat.key)}
+              accessibilityRole="button"
+              accessibilityState={focused ? { selected: true } : {}}
+              style={({ pressed }) => [styles.brainButton, pressed && styles.brainButtonPressed]}
             >
-              {focused ? (
-                <LinearGradient
-                  colors={[theme.colors.accentDeep, theme.colors.accent]}
-                  start={{ x: 0.2, y: 0 }}
-                  end={{ x: 0.9, y: 1 }}
-                  style={styles.brainButtonFill}
-                >
-                  <Digibrain width={30} height={30} color="#fff" />
-                </LinearGradient>
-              ) : (
-                <View style={[styles.brainButtonFill, styles.brainButtonIdle]}>
-                  <Digibrain width={30} height={30} color={theme.colors.mutedInk} />
-                </View>
-              )}
-            </Animated.View>
-          </Pressable>
+              <Animated.View
+                style={[
+                  styles.brainButtonGradient,
+                  {
+                    transform: [
+                      { translateY: brainWiggleTranslateY },
+                      { rotate: brainWiggleRotate },
+                      { scale: brainWiggleScale },
+                    ],
+                  },
+                ]}
+              >
+                {focused ? (
+                  <LinearGradient
+                    colors={[theme.colors.accentDeep, theme.colors.accent]}
+                    start={{ x: 0.2, y: 0 }}
+                    end={{ x: 0.9, y: 1 }}
+                    style={styles.brainButtonFill}
+                  >
+                    <Digibrain width={30} height={30} color="#fff" />
+                  </LinearGradient>
+                ) : (
+                  <View style={[styles.brainButtonFill, styles.brainButtonIdle]}>
+                    <Digibrain width={30} height={30} color={theme.colors.mutedInk} />
+                  </View>
+                )}
+              </Animated.View>
+            </Pressable>
+          </View>
         );
       })()}
     </View>
@@ -290,6 +312,11 @@ const styles = StyleSheet.create({
     borderRadius: 30,
     zIndex: 1,
   },
+  tabButtonShell: {
+    borderRadius: 30,
+    overflow: 'hidden',
+    zIndex: 1,
+  },
   tabButtonActive: {
     backgroundColor: 'transparent',
   },
@@ -302,13 +329,17 @@ const styles = StyleSheet.create({
     color: theme.colors.ink,
     letterSpacing: 0.2,
   },
-  brainButton: {
+  brainButtonShell: {
     borderRadius: 30,
     shadowColor: theme.shadow.color,
     shadowOpacity: 0.2,
     shadowRadius: 16,
     shadowOffset: { width: 0, height: 8 },
     elevation: 6,
+    overflow: 'hidden',
+  },
+  brainButton: {
+    borderRadius: 30,
   },
   brainButtonActive: {
     shadowOpacity: 0.3,

@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { StyleSheet, Text, View } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
 
 import type {
@@ -9,6 +9,7 @@ import type {
   UiDirectives,
   UiSubmissionInput,
 } from '@/chat/uiDirectives';
+import { AppPressable as Pressable } from '@/components/AppPressable';
 import { Card } from '@/components/Card';
 import { theme } from '@/theme';
 

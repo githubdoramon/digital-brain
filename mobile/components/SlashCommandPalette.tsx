@@ -1,6 +1,7 @@
 import React, { useMemo } from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { StyleSheet, Text, View } from 'react-native';
 
+import { AppPressable as Pressable } from '@/components/AppPressable';
 import { theme } from '@/theme';
 
 type CommandOption = {

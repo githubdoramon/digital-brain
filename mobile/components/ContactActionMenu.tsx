@@ -1,6 +1,7 @@
 import React, { useMemo, useState } from 'react';
-import { Linking, Modal, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Linking, Modal, StyleSheet, Text, View } from 'react-native';
 
+import { AppPressable as Pressable } from '@/components/AppPressable';
 import { theme } from '@/theme';
 
 type ContactActionMenuProps = {

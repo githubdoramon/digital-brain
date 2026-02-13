@@ -8,7 +8,6 @@ import {
   KeyboardEvent,
   KeyboardAvoidingView,
   Platform,
-  Pressable,
   Linking,
   StyleSheet,
   Text,
@@ -22,6 +21,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { apiFetch } from '@/api/client';
 import { useAuth } from '@/auth/AuthContext';
+import { AppPressable as Pressable } from '@/components/AppPressable';
 import { theme } from '@/theme';
 import { UiDirectiveCard } from '@/components/ui-directive-card';
 import { SlashCommandPalette } from '@/components/SlashCommandPalette';

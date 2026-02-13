@@ -1,7 +1,8 @@
 import React, { useEffect, useRef } from 'react';
-import { ActivityIndicator, Animated, Pressable, StyleSheet } from 'react-native';
+import { ActivityIndicator, Animated, StyleSheet } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
 
+import { AppPressable as Pressable } from '@/components/AppPressable';
 import { theme } from '@/theme';
 
 type FloatingSaveButtonProps = {

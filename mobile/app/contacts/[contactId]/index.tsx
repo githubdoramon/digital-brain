@@ -7,7 +7,6 @@ import {
   KeyboardAvoidingView,
   Modal,
   Platform,
-  Pressable,
   ScrollView,
   StyleSheet,
   Text,
@@ -19,6 +18,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { apiFetch } from '@/api/client';
 import { useAuth } from '@/auth/AuthContext';
+import { AppPressable as Pressable } from '@/components/AppPressable';
 import { Avatar } from '@/components/Avatar';
 import { Card } from '@/components/Card';
 import { ContactActionMenu } from '@/components/ContactActionMenu';

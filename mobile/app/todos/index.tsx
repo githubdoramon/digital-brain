@@ -8,7 +8,6 @@ import {
   KeyboardAvoidingView,
   Modal,
   Platform,
-  Pressable,
   ScrollView,
   StyleSheet,
   Text,
@@ -18,6 +17,7 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { apiFetch } from '@/api/client';
+import { AppPressable as Pressable } from '@/components/AppPressable';
 import { Card } from '@/components/Card';
 import { FloatingSaveButton } from '@/components/FloatingSaveButton';
 import { TopNoticeProvider, useTopNotice } from '@/components/top-notice';

@@ -2,7 +2,6 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Animated,
   FlatList,
-  Pressable,
   StyleSheet,
   Text,
   TextInput,
@@ -15,6 +14,7 @@ import Ionicons from '@expo/vector-icons/Ionicons';
 
 import { apiFetch } from '@/api/client';
 import { useAuth } from '@/auth/AuthContext';
+import { AppPressable as Pressable } from '@/components/AppPressable';
 import { Avatar } from '@/components/Avatar';
 import { Card } from '@/components/Card';
 import { RelationshipChips } from '@/components/RelationshipChips';
@@ -39,8 +39,6 @@ type Contact = {
   avatar_url?: string | null;
   relationships: Relationship[];
 };
-
-const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
 
 const normalizeSearch = (value: string) =>
   value
@@ -84,19 +82,18 @@ function ContactCard({
   }, [index, opacity, translateY]);
 
   return (
-    <AnimatedPressable
-      style={[styles.cardPressable, { opacity, transform: [{ translateY }] }]}
-      onPress={onPress}
-    >
-      <Card style={styles.card} variant="elevated">
-        <Avatar name={contact.display_name} uri={contact.avatar_url ?? undefined} token={token} />
-        <View style={styles.cardBody}>
-          <Text style={styles.cardTitle}>{contact.display_name}</Text>
-          <Text style={styles.cardSubtitle}>{subtitle}</Text>
-          <RelationshipChips chips={chips} />
-        </View>
+    <Animated.View style={[styles.cardPressable, { opacity, transform: [{ translateY }] }]}>
+      <Card variant="elevated">
+        <Pressable onPress={onPress} style={styles.cardTapArea}>
+          <Avatar name={contact.display_name} uri={contact.avatar_url ?? undefined} token={token} />
+          <View style={styles.cardBody}>
+            <Text style={styles.cardTitle}>{contact.display_name}</Text>
+            <Text style={styles.cardSubtitle}>{subtitle}</Text>
+            <RelationshipChips chips={chips} />
+          </View>
+        </Pressable>
       </Card>
-    </AnimatedPressable>
+    </Animated.View>
   );
 }
 
@@ -258,10 +255,11 @@ const styles = StyleSheet.create({
     paddingVertical: 12,
     color: theme.colors.ink,
   },
-  card: {
+  cardTapArea: {
     flexDirection: 'row',
     gap: 14,
     padding: 16,
+    borderRadius: theme.radius.lg,
   },
   cardPressable: {
     alignSelf: 'stretch',

@@ -1,9 +1,10 @@
 import { LinearGradient } from 'expo-linear-gradient';
 import React from 'react';
 import FontAwesome from '@expo/vector-icons/FontAwesome';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { StyleSheet, Text, View } from 'react-native';
 
 import { useAuth } from '@/auth/AuthContext';
+import { AppPressable as Pressable } from '@/components/AppPressable';
 import { Card } from '@/components/Card';
 import { theme } from '@/theme';
 

@@ -1,8 +1,9 @@
 import React, { useState } from 'react';
-import { Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import { StyleSheet, Text, TextInput, View } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
 
 import type { UiDirectiveBlock, UiDirectiveField } from '@/chat/uiDirectives';
+import { AppPressable as Pressable } from '@/components/AppPressable';
 import { Button } from '@/components/Button';
 import { theme } from '@/theme';
 

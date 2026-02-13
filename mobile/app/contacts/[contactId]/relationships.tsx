@@ -4,7 +4,6 @@ import {
   Keyboard,
   KeyboardAvoidingView,
   Platform,
-  Pressable,
   ScrollView,
   StyleSheet,
   Text,
@@ -17,6 +16,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Ionicons from '@expo/vector-icons/Ionicons';
 
 import { apiFetch } from '@/api/client';
+import { AppPressable as Pressable } from '@/components/AppPressable';
 import { Card } from '@/components/Card';
 import { FloatingSaveButton } from '@/components/FloatingSaveButton';
 import { theme } from '@/theme';

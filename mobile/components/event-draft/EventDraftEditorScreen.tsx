@@ -6,7 +6,6 @@ import {
   Keyboard,
   KeyboardAvoidingView,
   Platform,
-  Pressable,
   ScrollView,
   StyleSheet,
   Text,
@@ -16,6 +15,7 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { Card } from '@/components/Card';
+import { AppPressable as Pressable } from '@/components/AppPressable';
 import { FloatingSaveButton } from '@/components/FloatingSaveButton';
 import { UiDirectiveDateTimePickerSheet } from '@/components/ui-directive-card/UiDirectiveDateTimePickerSheet';
 import { EMPTY_EVENT_DRAFT, type EventContactOption, type EventDraft } from '@/components/event-draft/types';
