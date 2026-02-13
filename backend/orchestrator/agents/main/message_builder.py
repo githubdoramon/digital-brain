@@ -8,7 +8,6 @@ from typing import TYPE_CHECKING, Any, Callable
 from agent.guardrails import build_contact_scope_context
 from agents.main.prompts import get_main_bounded_protocol_prompt, get_main_system_prompt
 from observability.logger import get_runtime_logger
-from prompts.clarification import get_clarification_skill_prompt_block
 from prompts.context import (
     get_location_context,
     get_self_context,
@@ -36,11 +35,6 @@ def _cached_bounded_protocol() -> str:
 @lru_cache(maxsize=1)
 def _cached_tag_context() -> str:
     return get_tag_context() or ""
-
-
-@lru_cache(maxsize=1)
-def _cached_clarification_skill_block() -> str:
-    return get_clarification_skill_prompt_block() or ""
 
 
 def inject_main_skills(
@@ -105,10 +99,6 @@ def build_main_messages(
         messages.append({"role": "system", "content": tags_context})
 
     messages.append({"role": "system", "content": _cached_bounded_protocol()})
-
-    clarification_skill_block = _cached_clarification_skill_block()
-    if clarification_skill_block:
-        messages.append({"role": "system", "content": clarification_skill_block})
 
     if user_email:
         self_context = get_self_context(user_email)

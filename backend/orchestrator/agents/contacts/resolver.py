@@ -28,7 +28,7 @@ import contacts as contacts_service
 from llm_helpers import call_llm_json
 from observability import trace
 from observability.logger import get_runtime_logger
-from prompts.clarification import append_clarification_skill_to_prompt
+from prompts.clarification import append_clarification_guidelines
 from ui_dsl.clarification import (
     build_need_user_input,
     clarification_fields_from_ambiguous_contacts,
@@ -37,8 +37,8 @@ from ui_dsl.clarification import (
 logger = get_runtime_logger(__name__)
 
 
-def _with_clarification_skill(prompt: str) -> str:
-    return append_clarification_skill_to_prompt(prompt)
+def _with_clarification_guidelines(prompt: str) -> str:
+    return append_clarification_guidelines(prompt)
 
 
 def _build_contact_need_user_input(
@@ -414,7 +414,7 @@ Return ONLY a valid JSON, nothing more, no other text or explanation:
 {{
     "people": ["person1", "my daughter", "person2's doctor"]
 }}"""
-    prompt = _with_clarification_skill(prompt)
+    prompt = _with_clarification_guidelines(prompt)
 
     max_retries = 3
     for attempt in range(max_retries):
@@ -1687,7 +1687,7 @@ Return ONLY valid JSON:
   "confidence": "high" | "medium" | "low",
   "reasoning": "brief explanation"
 }}"""
-    prompt = _with_clarification_skill(prompt)
+    prompt = _with_clarification_guidelines(prompt)
 
     try:
         llm_result = call_llm_json(
@@ -2001,7 +2001,7 @@ Return ONLY a valid JSON, nothing more, no other text or explanation:
     "confidence": "high" | "medium" | "low",
     "reasoning": "brief explanation"
 }}"""
-    prompt = _with_clarification_skill(prompt)
+    prompt = _with_clarification_guidelines(prompt)
 
     try:
         # Use low temperature for consistent disambiguation
@@ -2066,7 +2066,7 @@ Return ONLY a valid JSON, nothing more, no other text or explanation:
 {{
     "profession": str or null
 }}"""
-    prompt = _with_clarification_skill(prompt)
+    prompt = _with_clarification_guidelines(prompt)
 
     try:
         # Use low temperature for consistent profession inference
@@ -2121,7 +2121,7 @@ Return ONLY valid JSON:
     }}
   ]
 }}"""
-    prompt = _with_clarification_skill(prompt)
+    prompt = _with_clarification_guidelines(prompt)
 
     try:
         result = call_llm_json(
@@ -2193,7 +2193,7 @@ Return ONLY a valid JSON:
     "type": str or null,
     "other_type": str or null
 }}"""
-    prompt = _with_clarification_skill(prompt)
+    prompt = _with_clarification_guidelines(prompt)
 
     try:
         result = call_llm_json(

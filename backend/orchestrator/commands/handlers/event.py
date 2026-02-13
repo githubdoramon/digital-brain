@@ -223,7 +223,7 @@ def _extract_event_entities_with_llm(
         Dict with extracted entities and optional need_user_input envelope
     """
     from llm_helpers import call_llm_json
-    from prompts.clarification import append_clarification_skill_to_prompt
+    from prompts.clarification import append_clarification_guidelines
     from prompts.context import get_time_context
     from tags_manager import MAJOR_TAGS
 
@@ -288,7 +288,7 @@ Return ONLY valid JSON in this exact format:
     "tags": ["tag1", "tag2"],
     "types": ["generic"]
 }}"""
-    extraction_prompt = append_clarification_skill_to_prompt(extraction_prompt)
+    extraction_prompt = append_clarification_guidelines(extraction_prompt)
 
     try:
         logger.info("[event_extraction] Calling LLM for extraction...")

@@ -97,11 +97,11 @@ INTENT_TOOL_MAP = {
 
 # Intent to skill hints mapping
 INTENT_SKILL_HINTS = {
-    IntentType.MEMORY_SEARCH: ["document-search", "event-analysis"],
-    IntentType.DATA_QUERY: [],
-    IntentType.CONTACT_LOOKUP: ["contact-lookup"],
+    IntentType.MEMORY_SEARCH: ["tagging-guide"],
+    IntentType.DATA_QUERY: ["tagging-guide"],
+    IntentType.CONTACT_LOOKUP: [],
     IntentType.WEB_SEARCH: [],
-    IntentType.HOME_CONTROL: ["homeassistant"],
+    IntentType.HOME_CONTROL: [],
     IntentType.SKILL_EXECUTION: [],
     IntentType.SYSTEM_COMMAND: [],
     IntentType.CONVERSATIONAL: [],
@@ -306,7 +306,7 @@ class IntentRouter:
             r"\bphone number\b",
             r"\bemail address\b",
             r"\bwho is\b",
-            r"\bwho do I know\b",
+            r"\bwho do i know\b",
             r"\brelationship[s]?\b",
             r"\bbirthday\b",
         ]
@@ -476,9 +476,16 @@ INTENT TYPES:
 - complex: Multi-step task needing multiple tool groups
 
 Also decide whether the controller should pre-resolve contacts before the tool loop:
-- Set `pre_resolve_contacts` to true when early contact identification or disambiguation is likely useful
-  (for example person-referential memory/data/contact queries).
-- Set it to false for web/home/system/conversational requests.
+- Set `pre_resolve_contacts` to true ONLY when the query references a specific person by name,
+  pronoun, or relationship term (e.g. "my mom", "him", "John") AND early identification would help.
+- Set `pre_resolve_contacts` to false for:
+  - Discovery/ranking queries that ask "who" without naming anyone
+    (e.g. "who did I meet most this week?", "who do I talk to the most?",
+     "which colleagues have I met recently?", "list everyone I met last month")
+  - Aggregation or counting queries over interactions without a named person
+    (e.g. "how many people did I meet this week?", "how many meetings did I have?")
+  - Web/home/system/conversational requests
+  The agent can resolve contacts later during tool execution if needed.
 
 Respond with JSON only:
 {{

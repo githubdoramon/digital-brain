@@ -1228,16 +1228,6 @@ class AgentController:
             client_context,
         )
 
-    def _inject_skills(
-        self,
-        messages: list[dict[str, Any]],
-        question: str,
-        conversation_history: Optional[list[dict[str, str]]],
-        state: AgentState,
-    ) -> None:
-        """Inject matching skills into messages."""
-        _ = (messages, question, conversation_history, state)
-
     def _call_llm(
         self,
         messages: list[dict[str, Any]],

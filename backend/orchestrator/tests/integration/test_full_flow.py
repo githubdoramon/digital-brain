@@ -371,7 +371,6 @@ class TestAgentControllerIntegration:
             return {"message": {"content": "unexpected"}}
 
         monkeypatch.setattr(controller, "_call_llm", fake_call_llm)
-        monkeypatch.setattr(controller, "_inject_skills", lambda *args, **kwargs: None)
         monkeypatch.setattr(
             "contact_resolution_service.resolve_contacts_request",
             lambda _payload: {
@@ -491,7 +490,6 @@ class TestAgentControllerIntegration:
 
         monkeypatch.setattr(controller, "_call_llm", fake_call_llm)
         monkeypatch.setattr(controller, "_execute_handler", fake_execute_handler)
-        monkeypatch.setattr(controller, "_inject_skills", lambda *args, **kwargs: None)
         monkeypatch.setattr(
             controller, "_prime_contact_scope_for_question", lambda *args, **kwargs: None
         )

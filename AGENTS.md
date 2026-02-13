@@ -121,7 +121,7 @@ User Question → Intent Router → Conversational Profile Dispatch → Tool Vis
 | Group | Tools |
 |-------|-------|
 | `memory` | search_memories, get_events, get_document |
-| `resolution` | resolve_query, resolve_contacts, lookup_contact |
+| `resolution` | resolve_contacts, lookup_contact |
 | `web` | web_search, fetch_web_page |
 | `home` | home_assistant |
 | `skills` | run_skill_script |
@@ -148,11 +148,13 @@ User Question → Intent Router → Conversational Profile Dispatch → Tool Vis
 - **Contact-aware memory search flow**: on ambiguity, return a clarification-needed result instead of running unfiltered search.
 - **Contact-aware memory search flow**: avoid repeating identical `resolve_contacts` calls after `needs_clarification`/`no_people` (no-progress guard).
 - **Interaction ranking flow**: for strict "who did I meet/talk to most" windows, prefer `get_events` with `action=by_time_span` (plus optional resolved `contact_ids`) before ranking counterparts.
+- **Pre-resolve contacts policy**: router sets `pre_resolve_contacts=false` for discovery/ranking queries that don't reference a specific person (e.g. "who did I meet most this week?"). Only person-referential queries (naming someone by name, pronoun, or relationship term) trigger pre-resolution. The LLM router prompt provides explicit guidance for this decision; rule-based routes use the intent-level default from `INTENT_PRE_RESOLVE_CONTACTS`.
 - **Validation semantics**: post-execution validation must treat clarification-required search/resolution results as `need_user_input`, not generic empty-result retries.
 - **Session command hygiene**: strip leading slash commands from user text before agent execution; commands are control signals, not semantic query content.
 - **Import-time side effects**: avoid filesystem writes (like `mkdir`) during module import. Create directories lazily at the point of file operations.
 - **Entity ID hygiene**: when generating IDs from user-provided names/titles (contacts, places, etc.), always slug/sanitize to safe URL/path characters (for example lowercase `a-z0-9-`) and avoid reserved characters like `#`, `?`, `/`, `%`.
 - **Contact disambiguation policy**: ambiguity auto-resolution strictness is controlled by `CONTACT_DISAMBIGUATION_STRICTNESS` (`strict`/`balanced`/`lenient`).
+- **Skills vs prompts policy**: behavioral guidance that overlaps with tool contracts or profile prompts belongs in the prompt, not as a separate skill definition. Skill definitions (`skill_definitions/`) are reserved for genuinely unique guidance not covered elsewhere (e.g. `tagging-guide`). Do not create skills that restate tool contracts or profile protocol.
 - **Logging policy**: never use `print` in orchestrator runtime code (only in scripts/tests). Use `logging.getLogger(__name__)` with `debug/info/warning/error` (or `logger.log(DECISION_LEVEL, ...)` for decisions). Logging must flow through `observability/log_stream.py` so frontend log streaming can filter by level. For streaming endpoints, rely on authenticated user context (no service API key) unless explicitly required.
 
 ### Limits & Safety
