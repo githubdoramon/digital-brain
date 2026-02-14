@@ -155,54 +155,6 @@ def _create_coworker_relationships(new_contacts_by_domain: dict[str, list[str]])
             contacts_service.upsert_contact_relationship(rel)
 
 
-def _extract_attendee_emails_from_event(event: EventIn) -> list[str]:
-    def _from_value(value: Any) -> str | None:
-        if isinstance(value, str):
-            candidate = value.strip()
-            if not candidate:
-                return None
-            if "<" in candidate and ">" in candidate:
-                match = re.search(r"[\w\.\+-]+@[\w\.-]+\.[\w\.-]+", candidate)
-                if match:
-                    candidate = match.group(0)
-            if "@" not in candidate:
-                return None
-            return candidate
-        if isinstance(value, dict):
-            for key in ("email", "emailAddress", "address"):
-                nested = value.get(key)
-                email = _from_value(nested)
-                if email:
-                    return email
-        return None
-
-    emails: list[str] = []
-    raw_payload = event.raw if isinstance(event.raw, dict) else {}
-    raw_attendees = raw_payload.get("attendees") if raw_payload else None
-    if isinstance(raw_attendees, (list, tuple)):
-        for attendee in raw_attendees:
-            email = _from_value(attendee)
-            if email:
-                emails.append(email)
-
-    fallback_people = event.people or []
-    for person in fallback_people:
-        if isinstance(person, str) and "@" in person:
-            trimmed = person.strip()
-            if trimmed:
-                emails.append(trimmed)
-
-    cleaned: list[str] = []
-    seen = set()
-    for email in emails:
-        normalized = email.strip()
-        if not normalized or normalized in seen:
-            continue
-        seen.add(normalized)
-        cleaned.append(normalized)
-    return cleaned
-
-
 def ingest_external_event(payload: ExternalEventPayload) -> str:
     event = payload.event
     external_identifier = _format_external_event_id(payload.external_type, payload.event.id)
@@ -226,9 +178,9 @@ def ingest_external_event(payload: ExternalEventPayload) -> str:
     if existing_event:
         event = _merge_event(existing_event, event)
 
+    attendee_emails = event.attendees_emails or []
     contact_cache: dict[str, tuple[str | None, bool]] = {}
     current_user = _load_current_user_from_env()
-    attendee_emails = _extract_attendee_emails_from_event(event)
     unique_contacts, new_contacts_by_domain = _resolve_attendee_contacts(
         attendee_emails,
         contact_cache=contact_cache,
@@ -236,12 +188,6 @@ def ingest_external_event(payload: ExternalEventPayload) -> str:
     )
     if unique_contacts:
         event.people = unique_contacts
-        raw_source = event.raw if isinstance(event.raw, dict) else {}
-        raw_payload = dict(raw_source)
-        if attendee_emails and "attendees" not in raw_payload:
-            raw_payload["attendees"] = attendee_emails
-        raw_payload["attendee_contact_ids"] = unique_contacts
-        event.raw = raw_payload
     _create_coworker_relationships(new_contacts_by_domain)
 
     ingest_event(event)
@@ -260,7 +206,7 @@ def ingest_meeting_notes(
 
     user_tokens = _build_user_tokens(current_user)
     for meeting in meetings:
-        attendee_emails = meeting.attendees or []
+        attendee_emails = meeting.attendees_emails or []
         unique_contacts, new_contacts_by_domain = _resolve_attendee_contacts(
             attendee_emails,
             contact_cache=contact_cache,

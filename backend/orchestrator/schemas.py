@@ -36,6 +36,7 @@ class EventIn(BaseModel):
     end_date: datetime | None = Field(default=None, alias="endDate")
     place_id: str | None = Field(default=None, alias="placeId")
     people: list[str] | None = Field(default_factory=list, alias="people")
+    attendees_emails: list[str] | None = Field(default=None, alias="attendeesEmails")
     tags: list[str] | None = Field(default_factory=list)
     types: list[str] | None = Field(default_factory=list)
     title: str | None = ""
@@ -58,7 +59,7 @@ class MeetingIn(BaseModel):
     content: str | None = None
     date: datetime
     link: str | None = None
-    attendees: list[str] | None = Field(default_factory=list)
+    attendees_emails: list[str] | None = Field(default=None, alias="attendeesEmails")
     tags: list[str] | None = Field(default_factory=list)
 
 
@@ -244,15 +245,18 @@ class ClientLocationIn(BaseModel):
     lon: float
     accuracy_m: float | None = None
     captured_at: datetime | None = None
-    source: Literal[
-        "gps",
-        "network",
-        "browser",
-        "manual",
-        "unknown",
-        "mobile_geolocation",
-        "expo_location",
-    ] | None = None
+    source: (
+        Literal[
+            "gps",
+            "network",
+            "browser",
+            "manual",
+            "unknown",
+            "mobile_geolocation",
+            "expo_location",
+        ]
+        | None
+    ) = None
 
 
 class ClientContextIn(BaseModel):
