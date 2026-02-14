@@ -310,6 +310,7 @@ pytest tests/agent/test_controller.py tests/integration/test_full_flow.py tests/
 - **Database schema**: `backend/db/init.sql`
 - **Document files**: `backend/orchestrator/storage/documents` (volume-mounted)
 - **Vector embeddings**: pgvector in PostgreSQL
+- **Junction tables**: entity associations use dedicated junction tables with composite PKs and FK cascades: `event_contacts`, `todo_contacts`, `todo_events`, `todo_places`. The `events` table does **not** have a `people` column — use `event_contacts` and `db.fetch_event_people()` instead.
 
 ## Key Implementation Files
 

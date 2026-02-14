@@ -129,6 +129,8 @@ def _resolve_timezone(name: str) -> ZoneInfo:
 
 
 def _fetch_events_for_span(start: datetime, end: datetime) -> list[dict[str, Any]]:
+    from db import fetch_event_people
+
     with get_conn() as conn, conn.cursor() as cur:
         cur.execute(
             """
@@ -136,7 +138,6 @@ def _fetch_events_for_span(start: datetime, end: datetime) -> list[dict[str, Any
               e.id,
               e.start_date,
               e.end_date,
-              e.people,
               e.tags,
               e.types,
               e.title,
@@ -157,6 +158,10 @@ def _fetch_events_for_span(start: datetime, end: datetime) -> list[dict[str, Any
             (start, end),
         )
         rows = [dict(row) for row in cur.fetchall()]
+        event_ids = [r["id"] for r in rows]
+        people_map = fetch_event_people(cur, event_ids)
+        for r in rows:
+            r["people"] = people_map.get(r["id"], [])
     return [_normalize_event_row(row) for row in rows]
 
 
@@ -238,6 +243,8 @@ def _fetch_similar_by_title(
     day_start: datetime,
     limit: int,
 ) -> list[dict[str, Any]]:
+    from db import fetch_event_people
+
     with get_conn() as conn, conn.cursor() as cur:
         cur.execute(
             """
@@ -245,7 +252,6 @@ def _fetch_similar_by_title(
               e.id,
               e.start_date,
               e.end_date,
-              e.people,
               e.tags,
               e.types,
               e.title,
@@ -270,6 +276,10 @@ def _fetch_similar_by_title(
             (event_id, title, day_start, limit),
         )
         rows = [dict(row) for row in cur.fetchall()]
+        event_ids = [r["id"] for r in rows]
+        people_map = fetch_event_people(cur, event_ids)
+        for r in rows:
+            r["people"] = people_map.get(r["id"], [])
     return [_normalize_event_row(row) for row in rows]
 
 
@@ -281,6 +291,8 @@ def _fetch_similar_by_recurrence(
 ) -> list[dict[str, Any]]:
     if not recurrence_key:
         return []
+    from db import fetch_event_people
+
     with get_conn() as conn, conn.cursor() as cur:
         cur.execute(
             """
@@ -288,7 +300,6 @@ def _fetch_similar_by_recurrence(
               e.id,
               e.start_date,
               e.end_date,
-              e.people,
               e.tags,
               e.types,
               e.title,
@@ -325,6 +336,10 @@ def _fetch_similar_by_recurrence(
             ),
         )
         rows = [dict(row) for row in cur.fetchall()]
+        event_ids = [r["id"] for r in rows]
+        people_map = fetch_event_people(cur, event_ids)
+        for r in rows:
+            r["people"] = people_map.get(r["id"], [])
     return [_normalize_event_row(row) for row in rows]
 
 

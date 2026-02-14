@@ -87,7 +87,6 @@ CREATE TABLE IF NOT EXISTS events (
   start_date TIMESTAMPTZ NOT NULL,
   end_date TIMESTAMPTZ,
   place_id TEXT REFERENCES places(place_id),
-  people TEXT[] DEFAULT '{}'::TEXT[],
   tags TEXT[] DEFAULT '{}'::TEXT[],
   types TEXT[] DEFAULT ARRAY['generic']::TEXT[],
   title TEXT,
@@ -217,7 +216,38 @@ CREATE TABLE IF NOT EXISTS daily_briefings (
 
 CREATE INDEX IF NOT EXISTS idx_daily_briefings_user_date
   ON daily_briefings (user_email, briefing_date);
-CREATE INDEX IF NOT EXISTS idx_events_people ON events USING GIN (people);
+
+-- Event-contact junction table (replaces legacy events.people TEXT[] column)
+CREATE TABLE IF NOT EXISTS event_contacts (
+  event_id TEXT NOT NULL REFERENCES events(id) ON DELETE CASCADE,
+  contact_id TEXT NOT NULL REFERENCES contacts(contact_id) ON DELETE CASCADE,
+  PRIMARY KEY (event_id, contact_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_event_contacts_contact_id ON event_contacts (contact_id);
+
+-- Migrate legacy events.people array data into event_contacts (idempotent)
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_schema = current_schema()
+      AND table_name = 'events'
+      AND column_name = 'people'
+  ) THEN
+    INSERT INTO event_contacts (event_id, contact_id)
+    SELECT e.id, unnest(e.people)
+    FROM events e
+    WHERE e.people IS NOT NULL AND array_length(e.people, 1) > 0
+    ON CONFLICT DO NOTHING;
+    EXECUTE 'ALTER TABLE events DROP COLUMN people';
+  END IF;
+END;
+$$;
+
+-- Drop legacy GIN index on events.people (if still present from older schema)
+DROP INDEX IF EXISTS idx_events_people;
+
 CREATE INDEX IF NOT EXISTS idx_events_tags ON events USING GIN (tags);
 CREATE INDEX IF NOT EXISTS idx_events_what_tsv ON events USING GIN (what_tsv);
 -- Vector index (IVFFLAT) – build after some rows exist for best perf.

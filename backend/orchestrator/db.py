@@ -72,6 +72,20 @@ def enrich_people(
     return [{"contact_id": cid, "display_name": contact_names.get(cid, cid)} for cid in raw_people]
 
 
+def fetch_event_people(cur: Any, event_ids: list[str]) -> dict[str, list[str]]:
+    """Fetch contact IDs per event from the event_contacts junction table."""
+    if not event_ids:
+        return {}
+    cur.execute(
+        "SELECT event_id, contact_id FROM event_contacts WHERE event_id = ANY(%s)",
+        (event_ids,),
+    )
+    result: dict[str, list[str]] = {}
+    for row in cur.fetchall():
+        result.setdefault(row["event_id"], []).append(row["contact_id"])
+    return result
+
+
 def fetch_events(ids: list[str]):
     if not ids:
         return []
@@ -81,7 +95,6 @@ def fetch_events(ids: list[str]):
             SELECT e.id,
                    e.start_date,
                    e.end_date,
-                   e.people,
                    e.tags,
                    e.types,
                    e.title,
@@ -96,14 +109,15 @@ def fetch_events(ids: list[str]):
         )
         rows: list[dict[str, Any]] = [dict(row) for row in cur.fetchall()]
 
-        # Batch-resolve people contact IDs to display names.
+        # Fetch people from junction table + resolve display names.
+        people_map = fetch_event_people(cur, ids)
         all_people: set[str] = set()
-        for r in rows:
-            for cid in r.get("people") or []:
-                all_people.add(cid)
+        for cids in people_map.values():
+            all_people.update(cids)
         contact_names = resolve_contact_names(cur, all_people)
 
         for r in rows:
+            r["people"] = people_map.get(r["id"], [])
             r["_contact_names"] = contact_names
 
     index = {id_: i for i, id_ in enumerate(ids)}

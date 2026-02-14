@@ -355,6 +355,8 @@ def ingest_meeting_notes(
 
 
 def get_meeting(meeting_id: str) -> dict[str, Any] | None:
+    from db import fetch_event_people
+
     with get_conn() as conn, conn.cursor() as cur:
         cur.execute(
             """
@@ -362,7 +364,6 @@ def get_meeting(meeting_id: str) -> dict[str, Any] | None:
               e.id,
               e.start_date,
               e.end_date,
-              e.people,
               e.tags,
               e.types,
               e.title,
@@ -385,6 +386,9 @@ def get_meeting(meeting_id: str) -> dict[str, Any] | None:
         if not row:
             return None
 
+        people_map = fetch_event_people(cur, [meeting_id])
+        people = people_map.get(meeting_id, [])
+
         raw_data = row.get("raw") or {}
         if isinstance(raw_data, str):
             try:
@@ -402,7 +406,7 @@ def get_meeting(meeting_id: str) -> dict[str, Any] | None:
             "end_date": end_value.isoformat() if end_value else None,
             "title": row.get("title"),
             "summary": row.get("summary"),
-            "people": row.get("people") or [],
+            "people": people,
             "tags": row.get("tags") or [],
             "types": row.get("types") or [],
             "external_id": row.get("external_id"),
@@ -445,6 +449,7 @@ def ingest_event(event: EventIn) -> None:
 
     embedding_payload = {**event.dict(), "tags": merged_tags, "types": types}
     emb = _generate_event_embedding(embedding_payload)
+    people_ids = list(dict.fromkeys(event.people or []))
     with get_conn() as conn, conn.cursor() as cur:
         cur.execute(
             """
@@ -453,7 +458,6 @@ def ingest_event(event: EventIn) -> None:
               start_date,
               end_date,
               place_id,
-              people,
               tags,
               types,
               title,
@@ -462,12 +466,11 @@ def ingest_event(event: EventIn) -> None:
               external_id,
               what_embed
             )
-            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
             ON CONFLICT (id) DO UPDATE
               SET start_date=EXCLUDED.start_date,
                   end_date=EXCLUDED.end_date,
                   place_id=EXCLUDED.place_id,
-                  people=EXCLUDED.people,
                   tags=EXCLUDED.tags,
                   types=EXCLUDED.types,
                   title=EXCLUDED.title,
@@ -481,7 +484,6 @@ def ingest_event(event: EventIn) -> None:
                 event.start_date,
                 event.end_date,
                 event.place_id,
-                event.people or [],
                 merged_tags,
                 types,
                 event.title or "",
@@ -491,6 +493,13 @@ def ingest_event(event: EventIn) -> None:
                 emb,
             ),
         )
+        # Replace event_contacts rows (DELETE + INSERT) in same transaction.
+        cur.execute("DELETE FROM event_contacts WHERE event_id = %s", (event.id,))
+        if people_ids:
+            cur.executemany(
+                "INSERT INTO event_contacts (event_id, contact_id) VALUES (%s, %s)",
+                [(event.id, cid) for cid in people_ids],
+            )
         conn.commit()
 
 
@@ -639,6 +648,8 @@ def _get_event_by_id(event_id: str | None) -> dict[str, Any] | None:
     normalized = event_id.strip()
     if not normalized:
         return None
+    from db import fetch_event_people
+
     with get_conn() as conn, conn.cursor() as cur:
         cur.execute(
             """
@@ -647,7 +658,6 @@ def _get_event_by_id(event_id: str | None) -> dict[str, Any] | None:
               start_date,
               end_date,
               place_id,
-              people,
               tags,
               types,
               title,
@@ -663,6 +673,8 @@ def _get_event_by_id(event_id: str | None) -> dict[str, Any] | None:
         row = cur.fetchone()
         if not row:
             return None
+        people_map = fetch_event_people(cur, [normalized])
+        people = people_map.get(normalized, [])
         raw_data = row["raw"] or {}
         if isinstance(raw_data, str):
             try:
@@ -674,7 +686,7 @@ def _get_event_by_id(event_id: str | None) -> dict[str, Any] | None:
             "start_date": row["start_date"],
             "end_date": row["end_date"],
             "place_id": row["place_id"],
-            "people": row["people"] or [],
+            "people": people,
             "tags": row["tags"] or [],
             "types": row["types"] or [],
             "title": row["title"],

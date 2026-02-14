@@ -200,18 +200,30 @@ def count_records(table: str, id_col: str) -> int:
 
 
 def fetch_events_batch(offset: int, limit: int) -> list[dict[str, Any]]:
-    """Fetch a batch of events."""
+    """Fetch a batch of events with people from the event_contacts junction table."""
     with get_conn() as conn, conn.cursor() as cur:
         cur.execute(
             """
-            SELECT id, title, summary, tags, types, people, place_id, raw
+            SELECT id, title, summary, tags, types, place_id, raw
             FROM events
             ORDER BY id
             OFFSET %s LIMIT %s
             """,
             (offset, limit),
         )
-        return [dict(row) for row in cur.fetchall()]
+        rows = [dict(row) for row in cur.fetchall()]
+        if rows:
+            event_ids = [r["id"] for r in rows]
+            cur.execute(
+                "SELECT event_id, contact_id FROM event_contacts WHERE event_id = ANY(%s)",
+                (event_ids,),
+            )
+            people_map: dict[str, list[str]] = {}
+            for r in cur.fetchall():
+                people_map.setdefault(r["event_id"], []).append(r["contact_id"])
+            for r in rows:
+                r["people"] = people_map.get(r["id"], [])
+        return rows
 
 
 def fetch_documents_batch(offset: int, limit: int) -> list[dict[str, Any]]:

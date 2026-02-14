@@ -72,7 +72,7 @@ def handle_get_events(
     """
     # Lazy import to avoid circular dependencies
     import events as events_service
-    from db import enrich_people, get_conn, resolve_contact_names
+    from db import enrich_people, fetch_event_people, get_conn, resolve_contact_names
 
     action = str(args.get("action") or "").strip().lower()
     event_ids = args.get("event_ids", [])
@@ -122,7 +122,6 @@ def handle_get_events(
                     SELECT e.id,
                            e.start_date,
                            e.end_date,
-                           e.people,
                            e.tags,
                            e.types,
                            e.title,
@@ -133,7 +132,10 @@ def handle_get_events(
                     LEFT JOIN places p ON p.place_id = e.place_id
                     WHERE e.start_date >= %s
                       AND e.start_date <= %s
-                      AND e.people && %s
+                      AND EXISTS (
+                        SELECT 1 FROM event_contacts ec
+                        WHERE ec.event_id = e.id AND ec.contact_id = ANY(%s)
+                      )
                     ORDER BY {order_sql}
                     LIMIT %s
                     """,
@@ -145,7 +147,6 @@ def handle_get_events(
                     SELECT e.id,
                            e.start_date,
                            e.end_date,
-                           e.people,
                            e.tags,
                            e.types,
                            e.title,
@@ -163,12 +164,15 @@ def handle_get_events(
                 )
             rows = [dict(row) for row in cur.fetchall()]
 
-            # Batch-resolve people contact IDs to display names in same connection.
+            # Fetch people from junction table + resolve display names.
+            event_ids_list = [r["id"] for r in rows]
+            people_map = fetch_event_people(cur, event_ids_list)
             all_people: set[str] = set()
-            for r in rows:
-                for cid in r.get("people") or []:
-                    all_people.add(cid)
+            for cids in people_map.values():
+                all_people.update(cids)
             contact_names = resolve_contact_names(cur, all_people)
+            for r in rows:
+                r["people"] = people_map.get(r["id"], [])
 
         events = [
             {

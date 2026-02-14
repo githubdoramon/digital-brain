@@ -608,7 +608,9 @@ def structured_candidates(
             clauses.append("start_date <= %s")
             params.append(end)
     if people_ids:
-        clauses.append("people && %s")
+        clauses.append(
+            "EXISTS (SELECT 1 FROM event_contacts ec WHERE ec.event_id = id AND ec.contact_id = ANY(%s))"
+        )
         params.append(people_ids)
     if place_ids:
         clauses.append("place_id = ANY(%s)")
