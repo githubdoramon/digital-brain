@@ -235,9 +235,25 @@ BEGIN
       AND table_name = 'events'
       AND column_name = 'people'
   ) THEN
+    -- Auto-create stub contacts for orphaned IDs before migrating.
+    INSERT INTO contacts (contact_id, display_name, tags)
+    SELECT DISTINCT p,
+           initcap(replace(
+             regexp_replace(
+               regexp_replace(p, '^contact:', ''),
+               '(-gmail-com|-outlook-com|-yahoo-com|-hotmail-com|-com|-org|-net|#.*)$', ''
+             ),
+             '-', ' '
+           )),
+           ARRAY['autocreated']
+    FROM events e, unnest(e.people) AS p
+    WHERE e.people IS NOT NULL AND array_length(e.people, 1) > 0
+      AND NOT EXISTS (SELECT 1 FROM contacts c WHERE c.contact_id = p)
+    ON CONFLICT (contact_id) DO NOTHING;
+
     INSERT INTO event_contacts (event_id, contact_id)
-    SELECT e.id, unnest(e.people)
-    FROM events e
+    SELECT e.id, p
+    FROM events e, unnest(e.people) AS p
     WHERE e.people IS NOT NULL AND array_length(e.people, 1) > 0
     ON CONFLICT DO NOTHING;
     EXECUTE 'ALTER TABLE events DROP COLUMN people';

@@ -12,6 +12,7 @@ from uuid import uuid4
 import contacts as contacts_service
 from db import enrich_people, fetch_events, get_conn
 from embeddings import embed_text
+from observability.logger import get_runtime_logger
 from schemas import (
     ContactRelationshipIn,
     EventIn,
@@ -24,6 +25,8 @@ from tags_manager import (
     _normalize_strings,
     _suggest_event_tags,
 )
+
+logger = get_runtime_logger(__name__)
 
 MAX_EVENT_EMBED_CHARS = 6000
 
@@ -439,6 +442,48 @@ def normalize_event_types(types: Sequence[str] | None) -> list[str]:
     return normalized or ["generic"]
 
 
+def _display_name_from_contact_id(contact_id: str) -> str:
+    """Derive a human-readable display name from a contact ID.
+
+    Examples:
+        contact:robin-lake-example-com -> Robin Lake
+        contact:alice#001               -> Alice
+    """
+    name = contact_id.removeprefix("contact:")
+    # Strip trailing hash disambiguators (e.g. #001)
+    if "#" in name:
+        name = name.rsplit("#", 1)[0]
+    # Strip email-domain suffixes baked into the ID
+    for suffix in (
+        "-gmail-com",
+        "-outlook-com",
+        "-yahoo-com",
+        "-hotmail-com",
+        "-com",
+        "-org",
+        "-net",
+    ):
+        if name.endswith(suffix):
+            name = name[: -len(suffix)]
+            break
+    return name.replace("-", " ").strip().title() or contact_id
+
+
+def _ensure_stub_contacts(contact_ids: list[str]) -> None:
+    """Auto-create minimal contact records for IDs that don't exist yet."""
+    from schemas import ContactIn
+
+    for cid in contact_ids:
+        display_name = _display_name_from_contact_id(cid)
+        stub = ContactIn(
+            contact_id=cid,
+            display_name=display_name,
+            tags=["autocreated"],
+        )
+        contacts_service.ingest_contact(stub)
+        logger.info("[ingest_event] Auto-created stub contact %s (%s)", cid, display_name)
+
+
 def ingest_event(event: EventIn) -> None:
     types = normalize_event_types(event.types)
     normalized_tags = _normalize_strings(event.tags)
@@ -494,8 +539,17 @@ def ingest_event(event: EventIn) -> None:
             ),
         )
         # Replace event_contacts rows (DELETE + INSERT) in same transaction.
+        # Auto-create stub contacts for any IDs that don't exist yet.
         cur.execute("DELETE FROM event_contacts WHERE event_id = %s", (event.id,))
         if people_ids:
+            cur.execute(
+                "SELECT contact_id FROM contacts WHERE contact_id = ANY(%s)",
+                (people_ids,),
+            )
+            existing_ids = {row["contact_id"] for row in cur.fetchall()}
+            missing_ids = [cid for cid in people_ids if cid not in existing_ids]
+            if missing_ids:
+                _ensure_stub_contacts(missing_ids)
             cur.executemany(
                 "INSERT INTO event_contacts (event_id, contact_id) VALUES (%s, %s)",
                 [(event.id, cid) for cid in people_ids],
