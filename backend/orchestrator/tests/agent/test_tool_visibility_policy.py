@@ -25,7 +25,6 @@ def test_resolve_tool_visibility_medium_adds_resolution():
         confidence=0.7,
         allowed_tool_groups=["memory"],
         constraints=[],
-        skill_hints=[],
     )
     tools, mode, groups = resolve_tool_visibility(
         tool_registry=registry,

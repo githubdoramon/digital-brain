@@ -573,7 +573,7 @@ class ToolExecutionCoordinator:
             return result
 
         compact_rows: list[dict[str, Any]] = []
-        for row_obj in rows[:10]:
+        for row_obj in rows:
             row = row_obj if isinstance(row_obj, dict) else None
             if not isinstance(row, dict):
                 continue
@@ -632,18 +632,26 @@ class ToolExecutionCoordinator:
             return result
 
         compact_events: list[dict[str, Any]] = []
-        for event in events[:10]:
+        for event in events:
             if not isinstance(event, dict):
                 continue
-            compact_event = {
+            compact_event: dict[str, Any] = {
                 "id": event.get("id") or event.get("event_id"),
                 "title": event.get("title"),
                 "start_date": event.get("start_date"),
                 "end_date": event.get("end_date"),
                 "summary": self._truncate_text(event.get("summary"), 280),
+                "people": event.get("people") or [],
                 "tags": event.get("tags"),
                 "types": event.get("types"),
             }
+            place = event.get("place")
+            if isinstance(place, dict):
+                compact_event["place"] = {
+                    "place_id": place.get("place_id"),
+                    "name": place.get("name"),
+                    "city": place.get("city"),
+                }
             compact_events.append(compact_event)
         return {"events": compact_events, "count": int(result.get("count", len(events)) or 0)}
 

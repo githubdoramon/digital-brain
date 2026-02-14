@@ -12,7 +12,6 @@ When adding a new intent, you must update:
 
 - [ ] `agent/router.py` - Add to `IntentType` enum
 - [ ] `agent/router.py` - Add to `INTENT_TOOL_MAP`
-- [ ] `agent/router.py` - Add to `INTENT_SKILL_HINTS` (optional)
 - [ ] `tools/registry.py` - Add to `TOOL_GROUPS` (if new group needed)
 - [ ] `agent/router.py` - Add rule-based keywords in `_rule_based_classify()`
 - [ ] `agent/router.py` - Update LLM classification prompt
@@ -55,25 +54,7 @@ INTENT_TOOL_MAP = {
 - **Resolution often helps**: Include "resolution" if entity lookups might help
 - **Multiple groups OK**: Intent can access multiple groups
 
-## Step 3: Add Skill Hints (Optional)
-
-If certain skills are relevant to this intent:
-
-```python
-INTENT_SKILL_HINTS = {
-    IntentType.MEMORY_SEARCH: ["tagging-guide"],
-    # ... existing hints ...
-
-    # Add your hints
-    IntentType.MY_NEW_INTENT: ["relevant-skill-name"],
-}
-```
-
-Skill hints help the skill matcher narrow down candidate skills. Only add hints
-for skills that exist in `skill_definitions/`. Most behavioral guidance belongs
-in the profile prompts rather than as separate skill files.
-
-## Step 4: Create New Tool Group (If Needed)
+## Step 3: Create New Tool Group (If Needed)
 
 If your intent needs tools not covered by existing groups:
 
@@ -90,7 +71,7 @@ TOOL_GROUPS = {
 
 **Note**: Tools must be registered in `tools/registry.py` with this group.
 
-## Step 5: Add Rule-Based Keywords
+## Step 4: Add Rule-Based Keywords
 
 In `_rule_based_classify()`, add keyword detection:
 
@@ -112,7 +93,6 @@ def _rule_based_classify(self, question: str) -> Optional[IntentClassification]:
             intent=IntentType.MY_NEW_INTENT,
             confidence=0.85,
             allowed_tool_groups=INTENT_TOOL_MAP[IntentType.MY_NEW_INTENT],
-            skill_hints=INTENT_SKILL_HINTS.get(IntentType.MY_NEW_INTENT, []),
             reasoning="My intent keywords detected",
         )
 
@@ -138,7 +118,7 @@ Place your intent based on:
 - **Avoid keyword overlap**: Check for conflicts with existing intents
 - **Confidence affects fallthrough**: Low confidence (< 0.8) triggers LLM classification
 
-## Step 6: Update LLM Classification Prompt
+## Step 5: Update LLM Classification Prompt
 
 In `_build_classification_prompt()`, update the intent descriptions:
 
@@ -159,7 +139,7 @@ Respond with JSON:
 """
 ```
 
-## Step 7: Add Tests
+## Step 6: Add Tests
 
 ```python
 # tests/agent/test_router.py
@@ -267,17 +247,12 @@ INTENT_TOOL_MAP = {
     IntentType.CALENDAR_MANAGEMENT: ["calendar", "memory"],
 }
 
-# 3. Add skill hints
-INTENT_SKILL_HINTS = {
-    IntentType.CALENDAR_MANAGEMENT: ["calendar-create", "calendar-query"],
-}
-
-# 4. Add tool group (if new)
+# 3. Add tool group (if new)
 TOOL_GROUPS = {
     "calendar": ["create_event", "list_events", "delete_event"],
 }
 
-# 5. Add rule-based detection
+# 4. Add rule-based detection
 calendar_keywords = [
     "schedule", "calendar", "appointment", "book a meeting",
     "create event", "add to calendar",
@@ -287,7 +262,6 @@ if any(kw in q_lower for kw in calendar_keywords):
         intent=IntentType.CALENDAR_MANAGEMENT,
         confidence=0.9,
         allowed_tool_groups=INTENT_TOOL_MAP[IntentType.CALENDAR_MANAGEMENT],
-        skill_hints=INTENT_SKILL_HINTS[IntentType.CALENDAR_MANAGEMENT],
         reasoning="Calendar keywords detected",
     )
 ```

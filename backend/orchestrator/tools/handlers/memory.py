@@ -72,7 +72,7 @@ def handle_get_events(
     """
     # Lazy import to avoid circular dependencies
     import events as events_service
-    from db import get_conn
+    from db import enrich_people, get_conn, resolve_contact_names
 
     action = str(args.get("action") or "").strip().lower()
     event_ids = args.get("event_ids", [])
@@ -163,12 +163,19 @@ def handle_get_events(
                 )
             rows = [dict(row) for row in cur.fetchall()]
 
+            # Batch-resolve people contact IDs to display names in same connection.
+            all_people: set[str] = set()
+            for r in rows:
+                for cid in r.get("people") or []:
+                    all_people.add(cid)
+            contact_names = resolve_contact_names(cur, all_people)
+
         events = [
             {
                 "id": row["id"],
                 "start_date": row["start_date"].isoformat() if row.get("start_date") else None,
                 "end_date": row["end_date"].isoformat() if row.get("end_date") else None,
-                "people": row.get("people") or [],
+                "people": enrich_people(row.get("people"), contact_names),
                 "tags": row.get("tags") or [],
                 "types": row.get("types") or [],
                 "title": row.get("title"),

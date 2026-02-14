@@ -204,8 +204,6 @@ class AgentRunLog:
     # Intent routing
     intent: Optional[str] = None
     allowed_tool_groups: Optional[list[str]] = None
-    skill_hints: Optional[list[str]] = None
-
     # Execution trace
     steps: list[StepLog] = field(default_factory=list)
 
@@ -231,7 +229,6 @@ class AgentRunLog:
             "duration_ms": self.duration_ms,
             "intent": self.intent,
             "allowed_tool_groups": self.allowed_tool_groups,
-            "skill_hints": self.skill_hints,
             "steps": [s.to_dict() for s in self.steps],
             "total_steps": self.total_steps,
             "total_tool_calls": self.total_tool_calls,
@@ -340,7 +337,6 @@ class AgentLogger:
         run_id: str,
         intent: str,
         allowed_tool_groups: list[str],
-        skill_hints: Optional[list[str]] = None,
     ) -> None:
         """Log intent routing results."""
         with self._lock:
@@ -348,12 +344,9 @@ class AgentLogger:
                 log = self._logs[run_id]
                 log.intent = intent
                 log.allowed_tool_groups = allowed_tool_groups
-                log.skill_hints = skill_hints
 
         self._log(f"Intent classified: {intent}", "DECISION")
         self._log(f"  Allowed tool groups: {allowed_tool_groups}", "DECISION")
-        if skill_hints:
-            self._log(f"  Skill hints: {skill_hints}", "DECISION")
 
     def start_step(
         self,

@@ -59,7 +59,6 @@ class IntentClassification:
     confidence: float
     allowed_tool_groups: list[str]
     constraints: list[str] = field(default_factory=list)
-    skill_hints: list[str] = field(default_factory=list)
     pre_resolve_contacts: Optional[bool] = None
     reasoning: Optional[str] = None
     route_source: RouteSource = RouteSource.UNKNOWN
@@ -70,7 +69,6 @@ class IntentClassification:
             "confidence": self.confidence,
             "allowed_tool_groups": self.allowed_tool_groups,
             "constraints": self.constraints,
-            "skill_hints": self.skill_hints,
             "pre_resolve_contacts": self.pre_resolve_contacts,
             "reasoning": self.reasoning,
             "route_source": self.route_source.value,
@@ -93,20 +91,6 @@ INTENT_TOOL_MAP = {
     IntentType.CONVERSATIONAL: [],  # No tools
     IntentType.COMPLEX: list(TOOL_GROUPS.keys()),  # All tools
     IntentType.UNKNOWN: list(TOOL_GROUPS.keys()),  # All tools
-}
-
-# Intent to skill hints mapping
-INTENT_SKILL_HINTS = {
-    IntentType.MEMORY_SEARCH: ["tagging-guide"],
-    IntentType.DATA_QUERY: ["tagging-guide"],
-    IntentType.CONTACT_LOOKUP: [],
-    IntentType.WEB_SEARCH: [],
-    IntentType.HOME_CONTROL: [],
-    IntentType.SKILL_EXECUTION: [],
-    IntentType.SYSTEM_COMMAND: [],
-    IntentType.CONVERSATIONAL: [],
-    IntentType.COMPLEX: [],
-    IntentType.UNKNOWN: [],
 }
 
 # Intent-level fallback policy for contact pre-resolution.
@@ -282,7 +266,6 @@ class IntentRouter:
                 intent=IntentType.HOME_CONTROL,
                 confidence=0.9,
                 allowed_tool_groups=INTENT_TOOL_MAP[IntentType.HOME_CONTROL],
-                skill_hints=INTENT_SKILL_HINTS[IntentType.HOME_CONTROL],
                 pre_resolve_contacts=INTENT_PRE_RESOLVE_CONTACTS[IntentType.HOME_CONTROL],
                 reasoning="Home control keywords detected",
                 route_source=RouteSource.RULE,
@@ -295,7 +278,6 @@ class IntentRouter:
                 intent=IntentType.WEB_SEARCH,
                 confidence=0.85,
                 allowed_tool_groups=INTENT_TOOL_MAP[IntentType.WEB_SEARCH],
-                skill_hints=INTENT_SKILL_HINTS[IntentType.WEB_SEARCH],
                 pre_resolve_contacts=INTENT_PRE_RESOLVE_CONTACTS[IntentType.WEB_SEARCH],
                 reasoning="Web search keywords detected",
                 route_source=RouteSource.RULE,
@@ -315,7 +297,6 @@ class IntentRouter:
                 intent=IntentType.CONTACT_LOOKUP,
                 confidence=0.85,
                 allowed_tool_groups=INTENT_TOOL_MAP[IntentType.CONTACT_LOOKUP],
-                skill_hints=INTENT_SKILL_HINTS[IntentType.CONTACT_LOOKUP],
                 pre_resolve_contacts=INTENT_PRE_RESOLVE_CONTACTS[IntentType.CONTACT_LOOKUP],
                 reasoning="Contact/people keywords detected",
                 route_source=RouteSource.RULE,
@@ -337,7 +318,6 @@ class IntentRouter:
                 intent=IntentType.MEMORY_SEARCH,
                 confidence=0.8,
                 allowed_tool_groups=INTENT_TOOL_MAP[IntentType.MEMORY_SEARCH],
-                skill_hints=INTENT_SKILL_HINTS[IntentType.MEMORY_SEARCH],
                 pre_resolve_contacts=INTENT_PRE_RESOLVE_CONTACTS[IntentType.MEMORY_SEARCH],
                 reasoning="Memory search keywords detected",
                 route_source=RouteSource.RULE,
@@ -359,7 +339,6 @@ class IntentRouter:
                 intent=IntentType.DATA_QUERY,
                 confidence=0.8,
                 allowed_tool_groups=INTENT_TOOL_MAP[IntentType.DATA_QUERY],
-                skill_hints=INTENT_SKILL_HINTS[IntentType.DATA_QUERY],
                 pre_resolve_contacts=INTENT_PRE_RESOLVE_CONTACTS[IntentType.DATA_QUERY],
                 reasoning="Data query keywords detected",
                 route_source=RouteSource.RULE,
@@ -380,7 +359,6 @@ class IntentRouter:
                 intent=IntentType.SYSTEM_COMMAND,
                 confidence=0.85,
                 allowed_tool_groups=INTENT_TOOL_MAP[IntentType.SYSTEM_COMMAND],
-                skill_hints=INTENT_SKILL_HINTS[IntentType.SYSTEM_COMMAND],
                 pre_resolve_contacts=INTENT_PRE_RESOLVE_CONTACTS[IntentType.SYSTEM_COMMAND],
                 reasoning="System command keywords detected",
                 route_source=RouteSource.RULE,
@@ -406,7 +384,6 @@ class IntentRouter:
                 intent=IntentType.CONVERSATIONAL,
                 confidence=0.9,
                 allowed_tool_groups=[],
-                skill_hints=[],
                 pre_resolve_contacts=INTENT_PRE_RESOLVE_CONTACTS[IntentType.CONVERSATIONAL],
                 reasoning="Conversational keywords detected",
                 route_source=RouteSource.RULE,
@@ -492,7 +469,6 @@ Respond with JSON only:
   "intent": "one of the intent types above",
   "confidence": 0.0 to 1.0,
   "constraints": ["read_only"] or [],
-  "skill_hints": ["relevant-skill-names"] or [],
   "pre_resolve_contacts": true or false,
   "reasoning": "brief explanation"
 }}"""
@@ -531,7 +507,6 @@ Respond with JSON only:
                 confidence=float(data.get("confidence", 0.7)),
                 allowed_tool_groups=INTENT_TOOL_MAP.get(intent, list(TOOL_GROUPS.keys())),
                 constraints=data.get("constraints", []),
-                skill_hints=data.get("skill_hints", INTENT_SKILL_HINTS.get(intent, [])),
                 pre_resolve_contacts=pre_resolve_contacts,
                 reasoning=data.get("reasoning"),
                 route_source=RouteSource.LLM,

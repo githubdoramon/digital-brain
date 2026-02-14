@@ -48,6 +48,30 @@ def get_conn():
         conn.close()
 
 
+def resolve_contact_names(
+    cur: Any,
+    contact_ids: list[str] | set[str],
+) -> dict[str, str]:
+    """Batch-resolve contact IDs to display names using an existing cursor."""
+    if not contact_ids:
+        return {}
+    cur.execute(
+        "SELECT contact_id, display_name FROM contacts WHERE contact_id = ANY(%s)",
+        (list(contact_ids),),
+    )
+    return {row["contact_id"]: row["display_name"] for row in cur.fetchall()}
+
+
+def enrich_people(
+    raw_people: list[str] | None,
+    contact_names: dict[str, str],
+) -> list[dict[str, str]]:
+    """Map raw contact ID list to [{contact_id, display_name}]."""
+    if not raw_people:
+        return []
+    return [{"contact_id": cid, "display_name": contact_names.get(cid, cid)} for cid in raw_people]
+
+
 def fetch_events(ids: list[str]):
     if not ids:
         return []
@@ -71,6 +95,17 @@ def fetch_events(ids: list[str]):
             (ids,),
         )
         rows: list[dict[str, Any]] = [dict(row) for row in cur.fetchall()]
+
+        # Batch-resolve people contact IDs to display names.
+        all_people: set[str] = set()
+        for r in rows:
+            for cid in r.get("people") or []:
+                all_people.add(cid)
+        contact_names = resolve_contact_names(cur, all_people)
+
+        for r in rows:
+            r["_contact_names"] = contact_names
+
     index = {id_: i for i, id_ in enumerate(ids)}
     rows.sort(key=lambda r: index[r["id"]])
     return rows

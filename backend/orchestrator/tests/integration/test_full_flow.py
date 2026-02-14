@@ -358,7 +358,6 @@ class TestAgentControllerIntegration:
                 confidence=0.9,
                 allowed_tool_groups=["memory", "resolution"],
                 constraints=[],
-                skill_hints=[],
                 reasoning="memory intent",
             )
 

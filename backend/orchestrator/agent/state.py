@@ -99,7 +99,6 @@ class AgentState:
     # Intent routing results
     intent: Optional[str] = None
     allowed_tool_groups: list[str] = field(default_factory=list)
-    skill_hints: list[str] = field(default_factory=list)
     route_source: str = "unknown"
     route_confidence: float = 0.0
     route_confidence_tier: str = "low"
@@ -708,7 +707,6 @@ class AgentState:
             "repair_count": self.repair_count,
             "intent": self.intent,
             "allowed_tool_groups": self.allowed_tool_groups,
-            "skill_hints": self.skill_hints,
             "route_source": self.route_source,
             "route_confidence": self.route_confidence,
             "route_confidence_tier": self.route_confidence_tier,

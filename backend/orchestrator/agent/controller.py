@@ -999,7 +999,6 @@ class AgentController:
             run_id,
             classification.intent.value,
             classification.allowed_tool_groups,
-            classification.skill_hints,
         )
 
         route_tier = self._confidence_tier(classification.confidence)
@@ -1045,7 +1044,6 @@ class AgentController:
         state.intent = classification.intent.value
         state.allowed_tool_groups = classification.allowed_tool_groups
         state.constraints = classification.constraints
-        state.skill_hints = classification.skill_hints
         state.route_source = classification.route_source.value
         state.route_confidence = classification.confidence
         state.route_confidence_tier = self._confidence_tier(classification.confidence).value

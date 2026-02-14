@@ -51,7 +51,6 @@ class TestIntentClassification:
             confidence=0.95,
             allowed_tool_groups=["memory", "resolution"],
             constraints=["read_only"],
-            skill_hints=["document-search"],
             reasoning="Memory search keywords detected",
         )
 
@@ -59,7 +58,6 @@ class TestIntentClassification:
         assert classification.confidence == 0.95
         assert classification.allowed_tool_groups == ["memory", "resolution"]
         assert classification.constraints == ["read_only"]
-        assert classification.skill_hints == ["document-search"]
 
     def test_to_dict(self):
         """Test IntentClassification serialization."""
@@ -289,7 +287,6 @@ class TestLLMClassification:
             "intent": "memory_search",
             "confidence": 0.92,
             "constraints": ["read_only"],
-            "skill_hints": ["document-search"],
             "reasoning": "User is looking for past meetings"
         }"""
 
@@ -298,7 +295,6 @@ class TestLLMClassification:
         assert result.intent == IntentType.MEMORY_SEARCH
         assert result.confidence == 0.92
         assert result.constraints == ["read_only"]
-        assert result.skill_hints == ["document-search"]
         assert result.pre_resolve_contacts is True
 
     def test_parse_llm_response_with_markdown(self, router_with_llm):

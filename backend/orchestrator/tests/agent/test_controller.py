@@ -218,26 +218,6 @@ class TestNoProgressDetection:
         assert violation is None
 
 
-class TestSkillsIntegration:
-    """Tests for skills integration concepts."""
-
-    def test_skill_hints_in_classification(self):
-        """Test skill hints are extracted from classification."""
-        from agent.router import IntentClassification, IntentType
-
-        classification = IntentClassification(
-            intent=IntentType.MEMORY_SEARCH,
-            confidence=0.9,
-            allowed_tool_groups=["memory"],
-            skill_hints=["document-search", "event-analysis"],
-        )
-
-        hints = classification.skill_hints
-
-        assert "document-search" in hints
-        assert "event-analysis" in hints
-
-
 class TestResponseBundle:
     """Tests for response bundle structure."""
 
@@ -288,7 +268,6 @@ class TestToolExposurePolicy:
                 confidence=0.95,
                 allowed_tool_groups=["home"],
                 constraints=[],
-                skill_hints=[],
                 reasoning="home intent",
             )
 
@@ -351,7 +330,6 @@ class TestToolExposurePolicy:
                 confidence=0.7,
                 allowed_tool_groups=["memory"],
                 constraints=[],
-                skill_hints=[],
                 reasoning="memory intent",
             )
 
@@ -410,7 +388,6 @@ class TestToolExposurePolicy:
                 confidence=0.4,
                 allowed_tool_groups=["web"],
                 constraints=[],
-                skill_hints=[],
                 reasoning="uncertain",
             )
 
@@ -467,7 +444,6 @@ class TestToolExposurePolicy:
                 confidence=0.9,
                 allowed_tool_groups=["web"],
                 constraints=[],
-                skill_hints=[],
                 reasoning="web intent",
             )
 
@@ -522,7 +498,6 @@ class TestToolExposurePolicy:
                 confidence=0.9,
                 allowed_tool_groups=["memory", "resolution"],
                 constraints=[],
-                skill_hints=[],
                 reasoning="memory intent",
             )
 

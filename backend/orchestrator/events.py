@@ -10,7 +10,7 @@ from typing import Any, Callable
 from uuid import uuid4
 
 import contacts as contacts_service
-from db import fetch_events, get_conn
+from db import enrich_people, fetch_events, get_conn
 from embeddings import embed_text
 from schemas import (
     ContactRelationshipIn,
@@ -501,7 +501,7 @@ def get_events(ids: list[str]) -> list[dict[str, Any]]:
             "id": r["id"],
             "start_date": r["start_date"].isoformat() if r.get("start_date") else None,
             "end_date": r["end_date"].isoformat() if r.get("end_date") else None,
-            "people": r["people"],
+            "people": enrich_people(r.get("people"), r.get("_contact_names", {})),
             "tags": r["tags"],
             "types": r.get("types", []),
             "title": r.get("title"),
