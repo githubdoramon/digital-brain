@@ -1721,6 +1721,22 @@ class AgentController:
             scope_ids = state.resolution.get("active_contact_scope_ids", [])
             if scope_ids:
                 state.add_fact(f"Pre-resolved {len(scope_ids)} contact(s) from user question")
+            else:
+                # Resolution ran but found no existing contacts — record this
+                # so the agent loop does not redundantly call resolve_contacts.
+                new_contacts = resolution.get("new_contacts", [])
+                people = resolution.get("people_mentioned", [])
+                state.resolution["pre_resolution_attempted"] = True
+                state.resolution["pre_resolution_people"] = people
+                state.resolution["pre_resolution_new_contacts"] = [
+                    str(c.get("display_name") or c.get("original_text", ""))
+                    for c in new_contacts
+                    if isinstance(c, dict)
+                ]
+                if people:
+                    state.add_fact(
+                        f"Pre-resolved contacts for {people}: no existing contacts found"
+                    )
         elif status is ToolStatus.NEED_USER_INPUT:
             prompt = get_user_clarification_prompt_for_contact_resolution(state)
             if prompt:

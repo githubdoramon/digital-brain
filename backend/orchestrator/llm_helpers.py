@@ -5,8 +5,10 @@ This module provides a unified interface for making LLM requests across the appl
 ensuring consistent configuration, error handling, and response parsing.
 """
 
+import asyncio
 import json
 import os
+import time
 from collections.abc import AsyncGenerator
 from typing import Any, Optional
 
@@ -23,6 +25,8 @@ LLM_API_KEY = os.getenv("LLM_API_KEY", "")
 LLM_CHAT_MODEL = os.getenv("LLM_CHAT_MODEL")
 LLM_CHAT_MODEL_SIMPLER = os.getenv("LLM_CHAT_MODEL_SIMPLER")
 LLM_TIMEOUT = int(os.getenv("LLM_TIMEOUT", "120"))
+LLM_MAX_RETRIES = int(os.getenv("LLM_MAX_RETRIES", "3"))
+LLM_RETRY_BASE_DELAY = float(os.getenv("LLM_RETRY_BASE_DELAY", "1.0"))
 
 # Validate configuration
 if not LLM_BASE_URL:
@@ -93,22 +97,64 @@ def _raise_for_llm_error(data: dict[str, Any]) -> None:
         raise RuntimeError(f"LLM API error: {error_msg}")
 
 
+def _is_retryable_status(status_code: int) -> bool:
+    """Return True for HTTP status codes that warrant a retry."""
+    return status_code >= 500 or status_code == 429
+
+
 def _post_chat_completion(
     payload: dict[str, Any],
     *,
     timeout: Optional[int] = None,
 ) -> dict[str, Any]:
-    response = requests.post(
-        f"{LLM_BASE_URL}/chat/completions",
-        headers=get_llm_headers(),
-        json=payload,
-        timeout=timeout or LLM_TIMEOUT,
-    )
-    response.raise_for_status()
+    last_exception: Exception | None = None
 
-    content = response.json()
-    _raise_for_llm_error(content)
-    return content
+    for attempt in range(1, LLM_MAX_RETRIES + 1):
+        try:
+            response = requests.post(
+                f"{LLM_BASE_URL}/chat/completions",
+                headers=get_llm_headers(),
+                json=payload,
+                timeout=timeout or LLM_TIMEOUT,
+            )
+            if response.status_code and _is_retryable_status(response.status_code):
+                last_exception = requests.HTTPError(
+                    f"HTTP {response.status_code}", response=response
+                )
+                if attempt < LLM_MAX_RETRIES:
+                    delay = LLM_RETRY_BASE_DELAY * (2 ** (attempt - 1))
+                    logger.warning(
+                        "[llm_helpers] LLM request failed (HTTP %s), retrying in %.1fs (attempt %d/%d)",
+                        response.status_code,
+                        delay,
+                        attempt,
+                        LLM_MAX_RETRIES,
+                    )
+                    time.sleep(delay)
+                    continue
+                response.raise_for_status()
+
+            response.raise_for_status()
+            content = response.json()
+            _raise_for_llm_error(content)
+            return content
+
+        except (requests.ConnectionError, requests.Timeout) as exc:
+            last_exception = exc
+            if attempt < LLM_MAX_RETRIES:
+                delay = LLM_RETRY_BASE_DELAY * (2 ** (attempt - 1))
+                logger.warning(
+                    "[llm_helpers] LLM request failed (%s), retrying in %.1fs (attempt %d/%d)",
+                    type(exc).__name__,
+                    delay,
+                    attempt,
+                    LLM_MAX_RETRIES,
+                )
+                time.sleep(delay)
+            else:
+                raise
+
+    raise last_exception  # type: ignore[misc]
 
 
 def _build_messages(prompt: str, system_prompt: Optional[str] = None) -> list[dict[str, str]]:
@@ -194,17 +240,57 @@ async def stream_llm_chat(
     )
     resolved_timeout = timeout or LLM_TIMEOUT
     timeout_config = httpx.Timeout(resolved_timeout, connect=10.0)
+    last_exception: Exception | None = None
 
-    async with httpx.AsyncClient(timeout=timeout_config) as client:
-        async with client.stream(
-            "POST",
-            f"{LLM_BASE_URL}/chat/completions",
-            headers=get_llm_headers(),
-            json=payload,
-        ) as response:
-            response.raise_for_status()
-            async for line in response.aiter_lines():
-                yield line
+    for attempt in range(1, LLM_MAX_RETRIES + 1):
+        try:
+            async with httpx.AsyncClient(timeout=timeout_config) as client:
+                async with client.stream(
+                    "POST",
+                    f"{LLM_BASE_URL}/chat/completions",
+                    headers=get_llm_headers(),
+                    json=payload,
+                ) as response:
+                    if _is_retryable_status(response.status_code):
+                        last_exception = httpx.HTTPStatusError(
+                            f"HTTP {response.status_code}",
+                            request=response.request,
+                            response=response,
+                        )
+                        if attempt < LLM_MAX_RETRIES:
+                            delay = LLM_RETRY_BASE_DELAY * (2 ** (attempt - 1))
+                            logger.warning(
+                                "[llm_helpers] Stream request failed (HTTP %s), retrying in %.1fs (attempt %d/%d)",
+                                response.status_code,
+                                delay,
+                                attempt,
+                                LLM_MAX_RETRIES,
+                            )
+                            await asyncio.sleep(delay)
+                            continue
+                        response.raise_for_status()
+
+                    response.raise_for_status()
+                    async for line in response.aiter_lines():
+                        yield line
+                    return  # success, stop retrying
+
+        except (httpx.ConnectError, httpx.ConnectTimeout, httpx.ReadTimeout) as exc:
+            last_exception = exc
+            if attempt < LLM_MAX_RETRIES:
+                delay = LLM_RETRY_BASE_DELAY * (2 ** (attempt - 1))
+                logger.warning(
+                    "[llm_helpers] Stream request failed (%s), retrying in %.1fs (attempt %d/%d)",
+                    type(exc).__name__,
+                    delay,
+                    attempt,
+                    LLM_MAX_RETRIES,
+                )
+                await asyncio.sleep(delay)
+            else:
+                raise
+
+    raise last_exception  # type: ignore[misc]
 
 
 def call_llm(

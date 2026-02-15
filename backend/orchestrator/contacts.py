@@ -11,6 +11,7 @@ from uuid import uuid4
 from db import get_conn
 from embeddings import embed_text
 from schemas import ContactIn, ContactRelationshipIn, ExternalPerson
+from search_normalization import normalize_search_text
 
 __all__ = [
     "ingest_contact",
@@ -491,13 +492,13 @@ def sync_external_contact(
             contact_id = str(row["contact_id"])
             existing_row = _fetch_contact_row(cur, contact_id)
         else:
-            normalized_display = display_name.lower()
+            normalized_display = normalize_search_text(display_name)
             cur.execute(
                 """
                 SELECT contact_id
                 FROM contacts
                 WHERE external_id IS NULL
-                  AND LOWER(display_name) = %s
+                  AND unaccent(LOWER(display_name)) = %s
                 LIMIT 1
                 """,
                 (normalized_display,),
@@ -801,7 +802,10 @@ def list_contact_merge_candidates() -> dict[str, Any]:
                 for target_name in target_names:
                     if not target_name:
                         continue
-                    score = fuzz.token_sort_ratio(candidate_name, target_name)
+                    score = fuzz.token_sort_ratio(
+                        normalize_search_text(candidate_name),
+                        normalize_search_text(target_name),
+                    )
                     if score > best_score:
                         best_score = score
                         best_match_name = target_name
@@ -969,19 +973,19 @@ def resolve_query(query: str) -> dict[str, Any]:
 
     # Get all contacts and do fuzzy matching
     all_contacts = list_contacts()
-    query_lower = query.lower()
+    query_norm = normalize_search_text(query)
 
     for contact in all_contacts:
-        display_name = (contact.get("display_name") or "").lower()
-        aliases = [a.lower() for a in (contact.get("aliases") or [])]
-        comments = (contact.get("comments") or "").lower()
+        display_name = normalize_search_text(contact.get("display_name") or "")
+        aliases = [normalize_search_text(a) for a in (contact.get("aliases") or [])]
+        comments = normalize_search_text(contact.get("comments") or "")
 
         # Check if any name appears in the query
-        if display_name and display_name in query_lower:
+        if display_name and display_name in query_norm:
             contacts_found.append(contact)
-        elif any(alias in query_lower for alias in aliases):
+        elif any(alias in query_norm for alias in aliases):
             contacts_found.append(contact)
-        elif comments and query_lower in comments:
+        elif comments and query_norm in comments:
             contacts_found.append(contact)
 
     return {
@@ -1018,7 +1022,7 @@ def search_contacts(
     """
     from rapidfuzz import fuzz
 
-    query_lower = query.strip().lower()
+    query_lower = normalize_search_text(query)
     if not query_lower:
         return []
 
@@ -1134,8 +1138,8 @@ def _score_contacts(
                         match_reason = f"phone match: {phone}"
 
         if search_mode in {"name", "any"}:
-            display_name = (contact.get("display_name") or "").lower()
-            aliases = [a.lower() for a in (contact.get("aliases") or [])]
+            display_name = normalize_search_text(contact.get("display_name") or "")
+            aliases = [normalize_search_text(a) for a in (contact.get("aliases") or [])]
             all_names = [display_name, *aliases]
 
             for name in all_names:
@@ -1201,7 +1205,7 @@ def _score_contacts(
                     match_reason = f"vector match ({similarity:.3f})"
 
         if search_mode == "any":
-            comments = (contact.get("comments") or "").lower()
+            comments = normalize_search_text(contact.get("comments") or "")
             if comments and query_lower in comments:
                 # Prioritize contextual role/company metadata in comments.
                 score = 92
@@ -1280,11 +1284,11 @@ def _lexical_candidate_contact_ids(
         conditions.append(
             """
             (
-              LOWER(display_name) LIKE %s
+              unaccent(LOWER(display_name)) LIKE %s
               OR EXISTS (
                 SELECT 1
                 FROM unnest(aliases) AS alias
-                WHERE LOWER(alias) LIKE %s
+                WHERE unaccent(LOWER(alias)) LIKE %s
               )
             )
             """
@@ -1316,7 +1320,7 @@ def _lexical_candidate_contact_ids(
         params.append(f"%{query_digits}%")
 
     if search_by == "any":
-        conditions.append("LOWER(COALESCE(comments, '')) LIKE %s")
+        conditions.append("unaccent(LOWER(COALESCE(comments, ''))) LIKE %s")
         params.append(query_like)
 
     if not conditions:
@@ -1328,7 +1332,7 @@ def _lexical_candidate_contact_ids(
             SELECT contact_id
             FROM contacts
             WHERE (display_name IS NULL OR LOWER(display_name) NOT LIKE %s)
-              AND ({' OR '.join(conditions)})
+              AND ({" OR ".join(conditions)})
             ORDER BY display_name
             LIMIT %s
             """,
@@ -1468,14 +1472,14 @@ def find_related_contacts(
 
 def _get_search_suggestions(query: str) -> list[str]:
     """Generate suggestions when no contacts match."""
-    query_lower = query.lower()
+    query_norm = normalize_search_text(query)
     all_contacts = list_contacts()
 
     # Get contacts that partially match
     partial_matches = []
     for contact in all_contacts:
-        display_name = (contact.get("display_name") or "").lower()
-        if any(part in display_name for part in query_lower.split()):
+        display_name = normalize_search_text(contact.get("display_name") or "")
+        if any(part in display_name for part in query_norm.split()):
             partial_matches.append(contact["display_name"])
 
     if partial_matches:

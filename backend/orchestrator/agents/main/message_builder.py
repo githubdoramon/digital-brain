@@ -116,7 +116,8 @@ def build_main_messages(
     messages.append(build_state_message(state))
 
     contact_scope_context = build_contact_scope_context(
-        state.resolution.get("active_contact_scope") or []
+        state.resolution.get("active_contact_scope") or [],
+        resolution_state=state.resolution,
     )
     if contact_scope_context:
         messages.append({"role": "system", "content": contact_scope_context})

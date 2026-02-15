@@ -29,6 +29,7 @@ from llm_helpers import call_llm_json
 from observability import trace
 from observability.logger import get_runtime_logger
 from prompts.clarification import append_clarification_guidelines
+from search_normalization import normalize_search_text
 from ui_dsl.clarification import (
     build_need_user_input,
     clarification_fields_from_ambiguous_contacts,
@@ -148,7 +149,7 @@ def _format_disambiguation_history_for_prompt(
 
 
 def _normalize_entity_for_match(value: str) -> str:
-    normalized = re.sub(r"\s+", " ", value.strip().lower())
+    normalized = re.sub(r"\s+", " ", normalize_search_text(value))
     for article in ("the ", "a ", "an "):
         if normalized.startswith(article):
             normalized = normalized[len(article) :].strip()
@@ -1267,9 +1268,11 @@ def _is_name_level_match(person_text: str, display_name: str) -> bool:
     Example: "gio" -> "Giovanni Panerai"
     """
     mention_tokens = [
-        token for token in re.findall(r"[a-z0-9']+", person_text.lower()) if len(token) >= 3
+        token
+        for token in re.findall(r"[a-z0-9']+", normalize_search_text(person_text))
+        if len(token) >= 3
     ]
-    name_tokens = re.findall(r"[a-z0-9']+", display_name.lower())
+    name_tokens = re.findall(r"[a-z0-9']+", normalize_search_text(display_name))
     if not mention_tokens or not name_tokens:
         return False
 
@@ -1296,7 +1299,7 @@ def _infer_professions_for_new_contacts(
 
 
 def _normalize_person_key(text: str) -> str:
-    return text.lower().strip()
+    return normalize_search_text(text)
 
 
 def _unordered_text_pair_key(person_text: str, anchor_text: str) -> Optional[tuple[str, str]]:
@@ -1610,10 +1613,10 @@ def _build_related_contact_candidates(relationship_context: dict[str, Any]) -> l
         if not contact_id or not display_name:
             continue
 
-        if contact_id in seen_ids or display_name.lower() in seen_names:
+        if contact_id in seen_ids or normalize_search_text(display_name) in seen_names:
             continue
         seen_ids.add(contact_id)
-        seen_names.add(display_name.lower())
+        seen_names.add(normalize_search_text(display_name))
 
         rel_type = str(rel.get("type") or "").strip().lower()
         other_type = str(rel.get("other_type") or "").strip().lower()
@@ -1807,14 +1810,15 @@ def _resolve_via_relationship(
         for candidate in candidates:
             contact_id = str(candidate.get("contact_id") or "")
             display_name = (candidate.get("display_name") or "").strip()
+            name_key = normalize_search_text(display_name)
             if contact_id and contact_id in seen_ids:
                 continue
-            if display_name and display_name.lower() in seen_names:
+            if name_key and name_key in seen_names:
                 continue
             if contact_id:
                 seen_ids.add(contact_id)
-            if display_name:
-                seen_names.add(display_name.lower())
+            if name_key:
+                seen_names.add(name_key)
             deduped.append(candidate)
         return deduped
 

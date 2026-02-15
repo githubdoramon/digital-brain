@@ -230,6 +230,19 @@ def confirm_event_command(
     resolution = command_data["resolution"]
     normalized_modifications = _normalize_event_modifications(payload.modifications)
 
+    logger.info(
+        "[event_confirm] preview_id=%s, raw_modifications=%s",
+        payload.preview_id,
+        payload.modifications,
+    )
+    logger.info(
+        "[event_confirm] resolution_contacts=%d, new_entity_contacts=%d, "
+        "normalized_modification_keys=%s",
+        len(resolution.get("contacts", [])),
+        len(resolution.get("new_entities", {}).get("contacts", [])),
+        list(normalized_modifications.keys()),
+    )
+
     if "title" in normalized_modifications:
         extracted["title"] = normalized_modifications["title"]
     if "summary" in normalized_modifications:
@@ -249,11 +262,73 @@ def confirm_event_command(
         created_contacts = []
         contact_id_map = {}
 
-        new_contacts_to_create = (
-            []
-            if participant_override_enabled
-            else list(resolution.get("new_entities", {}).get("contacts", []))
-        )
+        # When participant override is enabled, the client sends the full list
+        # of desired contact IDs.  IDs prefixed with ``new:`` are placeholder
+        # tokens for contacts that haven't been created yet – the display_name
+        # is encoded after the prefix.  We need to:
+        #   1. Create those new contacts (matching them against new_entities
+        #      from the original resolution where possible).
+        #   2. Replace the placeholder IDs with real IDs in the override list.
+        if participant_override_enabled:
+            new_entity_lookup: dict[str, dict] = {}
+            for entity in resolution.get("new_entities", {}).get("contacts", []):
+                name = (entity.get("display_name") or "").strip()
+                if name:
+                    new_entity_lookup[name] = entity
+
+            resolved_override_ids: list[str] = []
+            for oid in participant_override_ids:
+                if oid.startswith("new:"):
+                    placeholder_name = oid[4:]
+                    entity = new_entity_lookup.get(placeholder_name, {})
+                    display_name = entity.get("display_name") or placeholder_name
+                    inferred_profession = entity.get("inferred_profession")
+                    comments = entity.get("comments")
+                    if inferred_profession:
+                        has_profession = bool(comments) and re.search(
+                            r"\bprofession\b", comments, re.IGNORECASE
+                        )
+                        has_match = bool(comments) and re.search(
+                            rf"\b{re.escape(inferred_profession)}\b",
+                            comments,
+                            re.IGNORECASE,
+                        )
+                        if not has_profession and not has_match:
+                            profession_line = f"Profession: {inferred_profession}"
+                            comments = (
+                                f"{comments}\n\n{profession_line}".strip()
+                                if comments
+                                else profession_line
+                            )
+                    contact_slug = _safe_entity_slug(display_name) or "contact"
+                    contact_id = f"contact:{contact_slug}-{uuid4().hex[:6]}"
+                    contact_in = ContactIn(
+                        contact_id=contact_id,
+                        display_name=display_name,
+                        aliases=[],
+                        emails=[],
+                        phones=[],
+                        links=[],
+                        tags=[],
+                        comments=comments,
+                    )
+                    contacts_service.ingest_contact(contact_in)
+                    created_contacts.append(
+                        {"contact_id": contact_id, "display_name": display_name}
+                    )
+                    contact_id_map[display_name] = contact_id
+                    resolved_override_ids.append(contact_id)
+                    logger.info(
+                        "[event_confirm] Created new contact from override placeholder: %s -> %s",
+                        placeholder_name,
+                        contact_id,
+                    )
+                else:
+                    resolved_override_ids.append(oid)
+            participant_override_ids = resolved_override_ids
+            new_contacts_to_create: list[dict] = []
+        else:
+            new_contacts_to_create = list(resolution.get("new_entities", {}).get("contacts", []))
 
         for new_contact in new_contacts_to_create:
             display_name = new_contact["display_name"]
@@ -360,12 +435,37 @@ def confirm_event_command(
 
         if participant_override_enabled:
             all_contact_ids = list(participant_override_ids)
+            # Defensive: if override produced zero contacts but the original
+            # resolution had contacts, fall back to the non-override path so
+            # we don't silently drop everyone.
+            if not all_contact_ids and (resolution.get("contacts") or created_contacts):
+                logger.warning(
+                    "[event_confirm] Participant override produced 0 contacts "
+                    "but resolution had %d + %d created — falling back to "
+                    "non-override path",
+                    len(resolution.get("contacts", [])),
+                    len(created_contacts),
+                )
+                all_contact_ids = []
+                for existing_contact in resolution["contacts"]:
+                    all_contact_ids.append(existing_contact["contact_id"])
+                for created_contact in created_contacts:
+                    all_contact_ids.append(created_contact["contact_id"])
         else:
             all_contact_ids = []
             for existing_contact in resolution["contacts"]:
                 all_contact_ids.append(existing_contact["contact_id"])
             for created_contact in created_contacts:
                 all_contact_ids.append(created_contact["contact_id"])
+
+        logger.info(
+            "[event_confirm] Participant override=%s, contact_ids=%d, "
+            "resolution_contacts=%d, created_contacts=%d",
+            participant_override_enabled,
+            len(all_contact_ids),
+            len(resolution.get("contacts", [])),
+            len(created_contacts),
+        )
 
         place_id = None
         where = extracted.get("where")
@@ -388,6 +488,12 @@ def confirm_event_command(
             raw={"source": "event_command"},
         )
 
+        logger.info(
+            "[event_confirm] Creating event %s with %d people: %s",
+            event_id,
+            len(all_contact_ids),
+            all_contact_ids[:10],  # Log first 10 to avoid huge log lines
+        )
         events_service.ingest_event(event_in)
 
         delete_command_data(payload.preview_id)

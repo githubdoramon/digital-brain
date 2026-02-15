@@ -94,6 +94,9 @@ type EventCommandResultPayload = {
   };
   resolution?: {
     contacts?: { contact_id?: unknown; display_name?: unknown }[];
+    new_entities?: {
+      contacts?: { display_name?: unknown; contact_id?: unknown }[];
+    };
   };
 };
 
@@ -235,19 +238,38 @@ function buildEventDraft(commandResult: CommandResult | undefined, previewId: st
   const resolvedContacts = Array.isArray(payload.resolution?.contacts)
     ? payload.resolution?.contacts
     : [];
+  const newEntityContacts = Array.isArray(payload.resolution?.new_entities?.contacts)
+    ? payload.resolution?.new_entities?.contacts
+    : [];
 
-  const participants = resolvedContacts
-    .map((contact) => {
-      const contactId = textValue(contact.contact_id);
-      if (!contactId) return null;
-      return {
-        contactId,
-        displayName: textValue(contact.display_name) || contactId,
-      };
-    })
-    .filter((participant): participant is { contactId: string; displayName: string } =>
-      Boolean(participant),
-    );
+  const seenIds = new Set<string>();
+  const participants: { contactId: string; displayName: string }[] = [];
+
+  for (const contact of resolvedContacts) {
+    const contactId = textValue(contact.contact_id);
+    if (!contactId || seenIds.has(contactId)) continue;
+    seenIds.add(contactId);
+    participants.push({
+      contactId,
+      displayName: textValue(contact.display_name) || contactId,
+    });
+  }
+
+  // Include new (not-yet-created) contacts so that edits don't silently drop
+  // people detected by the LLM resolution. These use a synthetic placeholder ID
+  // (prefixed with `new:`) that the backend will recognize and create on confirm.
+  for (const newContact of newEntityContacts) {
+    const displayName = textValue(newContact.display_name);
+    if (!displayName) continue;
+    // new_entities contacts don't have contact_id yet — use a stable placeholder
+    const placeholderId = `new:${displayName}`;
+    if (seenIds.has(placeholderId)) continue;
+    seenIds.add(placeholderId);
+    participants.push({
+      contactId: placeholderId,
+      displayName,
+    });
+  }
 
   return {
     title: textValue(extracted.title),
@@ -725,6 +747,14 @@ export default function ChatScreen() {
             loadedContacts.map((contact) => [contact.contact_id, contact.display_name]),
           );
           const baseDraft = buildEventDraft(commandResult, action.previewId);
+          // Populate display names for new: placeholder participants from the base draft
+          if (baseDraft) {
+            for (const participant of baseDraft.participants) {
+              if (!contactNameById.has(participant.contactId)) {
+                contactNameById.set(participant.contactId, participant.displayName);
+              }
+            }
+          }
           if (!baseDraft) {
             setMessages((prev) => [
               ...prev,

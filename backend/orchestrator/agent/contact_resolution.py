@@ -6,6 +6,7 @@ import re
 from typing import TYPE_CHECKING, Any, Callable
 
 from observability import trace
+from search_normalization import normalize_search_text
 from ui_dsl.clarification import (
     build_need_user_input,
     clarification_fields_from_ambiguous_contacts,
@@ -133,8 +134,8 @@ def get_user_clarification_prompt_for_contact_resolution(state: AgentState) -> s
 
     if candidate_names:
         options_preview = ", ".join(candidate_names[:4])
-        lower_prompt = prompt.lower()
-        if not any(name.lower() in lower_prompt for name in candidate_names[:4]):
+        norm_prompt = normalize_search_text(prompt)
+        if not any(normalize_search_text(name) in norm_prompt for name in candidate_names[:4]):
             prompt = f"{prompt} Options: {options_preview}."
 
     return prompt

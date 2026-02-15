@@ -64,10 +64,35 @@ def optimize_query_for_scoped_contacts(
         scrubbed = re.sub(rf"\b{escaped}\b", " ", scrubbed, flags=re.IGNORECASE)
 
     stop_words = {
-        "a", "an", "and", "about", "did", "do", "does", "event", "events",
-        "first", "i", "last", "latest", "meet", "meeting", "meetings", "met",
-        "most", "recent", "talk", "talked", "the", "time", "was", "we",
-        "when", "where", "who", "with",
+        "a",
+        "an",
+        "and",
+        "about",
+        "did",
+        "do",
+        "does",
+        "event",
+        "events",
+        "first",
+        "i",
+        "last",
+        "latest",
+        "meet",
+        "meeting",
+        "meetings",
+        "met",
+        "most",
+        "recent",
+        "talk",
+        "talked",
+        "the",
+        "time",
+        "was",
+        "we",
+        "when",
+        "where",
+        "who",
+        "with",
     }
     semantic_terms: list[str] = []
     seen_terms: set[str] = set()
@@ -83,29 +108,60 @@ def optimize_query_for_scoped_contacts(
     return "events"
 
 
-def build_contact_scope_context(active_scope: list[dict[str, Any]]) -> str | None:
-    """Build explicit resolver context for the model when contact scope exists."""
-    if not active_scope:
-        return None
+def build_contact_scope_context(
+    active_scope: list[dict[str, Any]],
+    resolution_state: dict[str, Any] | None = None,
+) -> str | None:
+    """Build explicit resolver context for the model when contact scope exists.
 
-    lines = ["RESOLVED CONTACT SCOPE (controller authoritative mapping):"]
-    for entry in active_scope[:8]:
-        mention = str(entry.get("mention_text") or "").strip() or "<unknown mention>"
-        display_name = str(entry.get("display_name") or "").strip() or "<unknown contact>"
-        contact_id = str(entry.get("contact_id") or "").strip()
-        lines.append(f"- '{mention}' -> '{display_name}' (contact_id: {contact_id})")
+    Also informs the model when pre-resolution was already attempted but found
+    no existing contacts, so it does not redundantly call ``resolve_contacts``.
+    """
+    if active_scope:
+        lines = ["RESOLVED CONTACT SCOPE (controller authoritative mapping):"]
+        for entry in active_scope[:8]:
+            mention = str(entry.get("mention_text") or "").strip() or "<unknown mention>"
+            display_name = str(entry.get("display_name") or "").strip() or "<unknown contact>"
+            contact_id = str(entry.get("contact_id") or "").strip()
+            lines.append(f"- '{mention}' -> '{display_name}' (contact_id: {contact_id})")
 
-    lines.extend(
-        [
-            "",
-            "When calling `search_memories` with scoped contacts:",
-            "- Always pass the mapped IDs via `contact_ids`.",
-            "- Use `query` only for extra semantic topic terms (for example, 'birds').",
-            "- Do not repeat resolved person names in `query` unless the name itself is the topic.",
-            "- If no extra semantic topic exists, set query to 'events'.",
+        lines.extend(
+            [
+                "",
+                "When calling `search_memories` with scoped contacts:",
+                "- Always pass the mapped IDs via `contact_ids`.",
+                "- Use `query` only for extra semantic topic terms (for example, 'birds').",
+                "- Do not repeat resolved person names in `query` unless the name itself is the topic.",
+                "- If no extra semantic topic exists, set query to 'events'.",
+            ]
+        )
+        return "\n".join(lines)
+
+    # Pre-resolution was attempted but no existing contacts matched.
+    if resolution_state and resolution_state.get("pre_resolution_attempted"):
+        people = resolution_state.get("pre_resolution_people") or []
+        new_names = resolution_state.get("pre_resolution_new_contacts") or []
+        lines = [
+            "PRE-RESOLUTION ALREADY ATTEMPTED (do NOT call resolve_contacts again for these):",
         ]
-    )
-    return "\n".join(lines)
+        if people:
+            lines.append(f"- People mentioned: {', '.join(str(p) for p in people)}")
+        if new_names:
+            lines.append(
+                f"- No existing contacts found for: {', '.join(new_names)}. "
+                "These are new/unknown to the contact directory."
+            )
+        lines.extend(
+            [
+                "",
+                "Since these people are not in the contact database, use `lookup_contact` "
+                "or `search_memories` to find information about them without contact_ids.",
+                "Do NOT call resolve_contacts again for the same names.",
+            ]
+        )
+        return "\n".join(lines)
+
+    return None
 
 
 def detect_temporal_sort_order(query: str) -> str | None:
