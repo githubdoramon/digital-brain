@@ -1683,6 +1683,18 @@ def delete_news_topic(
     return {"ok": True}
 
 
+@api.get("/news-topics/preview")
+@api.get("/mobile/news-topics/preview")
+def preview_news(user: dict = Depends(get_current_user)):
+    """Fetch news from all sources to preview topic matching."""
+    try:
+        articles = news_feeds.fetch_news()
+    except Exception as exc:
+        logger.warning("News preview fetch failed", exc_info=True)
+        raise HTTPException(status_code=502, detail=f"News fetch failed: {exc}") from exc
+    return {"articles": articles}
+
+
 # ---------------------------------------------------------------------------
 # Emergency Stock Endpoint
 # ---------------------------------------------------------------------------

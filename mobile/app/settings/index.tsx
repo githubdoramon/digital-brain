@@ -1,4 +1,6 @@
+import Ionicons from '@expo/vector-icons/Ionicons';
 import { LinearGradient } from 'expo-linear-gradient';
+import { useRouter } from 'expo-router';
 import React, { useCallback, useEffect, useState } from 'react';
 import * as SecureStore from 'expo-secure-store';
 import {
@@ -15,6 +17,7 @@ import { useHeaderHeight } from '@react-navigation/elements';
 
 import { apiFetch } from '@/api/client';
 import { useAuth } from '@/auth/AuthContext';
+import { AppPressable as Pressable } from '@/components/AppPressable';
 import { Button } from '@/components/Button';
 import { Card } from '@/components/Card';
 import {
@@ -30,6 +33,7 @@ type SettingsResponse = {
 const TOKEN_KEY = 'digitalbrain.expoPushToken';
 
 export default function SettingsScreen() {
+  const router = useRouter();
   const { token, signOut } = useAuth();
   const insets = useSafeAreaInsets();
   const headerHeight = useHeaderHeight();
@@ -206,6 +210,21 @@ export default function SettingsScreen() {
         {isSaving && <Text style={styles.saving}>Saving preference…</Text>}
       </Card>
 
+      <Card style={[styles.card, styles.navCard]}>
+        <Pressable
+          style={styles.navRow}
+          onPress={() => router.push('/settings/news-topics')}
+        >
+          <View style={styles.textBlock}>
+            <Text style={styles.rowTitle}>News topics</Text>
+            <Text style={styles.rowSubtitle}>
+              Manage tracked topics for your daily briefing news feed.
+            </Text>
+          </View>
+          <Ionicons name="chevron-forward" size={20} color={theme.colors.mutedInk} />
+        </Pressable>
+      </Card>
+
       <Button
         label="Sign out"
         onPress={signOut}
@@ -269,6 +288,16 @@ const styles = StyleSheet.create({
     marginTop: 12,
     fontSize: 12,
     color: theme.colors.mutedInk,
+  },
+  navCard: {
+    marginTop: 16,
+  },
+  navRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    padding: 20,
+    gap: 12,
   },
   signOutButton: {
     marginTop: 20,
