@@ -20,6 +20,7 @@ import hashlib
 import os
 import re
 from datetime import datetime, timezone
+from time import perf_counter
 from typing import Any
 
 import feedparser
@@ -29,6 +30,11 @@ from db import get_conn
 from observability.logger import get_runtime_logger
 
 logger = get_runtime_logger(__name__)
+
+
+def _ms_since(start: float) -> float:
+    return (perf_counter() - start) * 1000
+
 
 # ---------------------------------------------------------------------------
 # Constants / feed registry
@@ -82,23 +88,46 @@ def fetch_news(
             "topic_matches": list[str],   # topic labels that matched (may be empty for RSS)
         }
     """
+    t0 = perf_counter()
     topics = list_topics(enabled_only=True)
-    keyword_lists = [t["keywords"] for t in topics]
     all_keywords: list[str] = []
-    for kws in keyword_lists:
-        all_keywords.extend(kws)
+    for t in topics:
+        all_keywords.extend(t["keywords"])
+
+    logger.info(
+        "[news] Starting news aggregation: %d topic(s), %d keyword(s), %d RSS feed(s)",
+        len(topics),
+        len(all_keywords),
+        len(RSS_FEEDS),
+    )
+    if topics:
+        logger.info(
+            "[news] Active topics: %s",
+            ", ".join(f"{t['label']} ({len(t['keywords'])} kw)" for t in topics),
+        )
 
     articles: list[NewsArticle] = []
 
     # -- 1. Tavily topic searches (one search per topic) ---------------------
+    tavily_start = perf_counter()
+    tavily_total = 0
     for topic in topics:
         for kw in topic["keywords"]:
             results = _search_tavily_news(kw, max_results=max_tavily_per_topic)
             for r in results:
                 r["topic_matches"] = [topic["label"]]
+            tavily_total += len(results)
             articles.extend(results)
+    logger.info(
+        "[news] Tavily: %d article(s) from %d keyword search(es) (%.0fms)",
+        tavily_total,
+        len(all_keywords),
+        _ms_since(tavily_start),
+    )
 
     # -- 2. RSS feeds --------------------------------------------------------
+    rss_start = perf_counter()
+    rss_total = 0
     for feed_id, feed_meta in RSS_FEEDS.items():
         rss_articles = _fetch_rss_feed(
             feed_meta["url"],
@@ -107,13 +136,36 @@ def fetch_news(
             limit=feed_limit_per_source,
         )
         # tag any RSS article whose title/summary matches a tracked keyword
+        matched_count = 0
         for article in rss_articles:
             article["topic_matches"] = _match_topics(article, topics)
+            if article["topic_matches"]:
+                matched_count += 1
+        rss_total += len(rss_articles)
         articles.extend(rss_articles)
+        logger.info(
+            "[news] RSS %s: %d article(s), %d topic-matched",
+            feed_meta["label"],
+            len(rss_articles),
+            matched_count,
+        )
+    logger.info("[news] RSS total: %d article(s) (%.0fms)", rss_total, _ms_since(rss_start))
 
     # -- 3. Deduplicate & sort -----------------------------------------------
+    before_dedup = len(articles)
     articles = _deduplicate(articles)
     articles.sort(key=_sort_key, reverse=True)
+
+    topic_matched = [a for a in articles if a.get("topic_matches")]
+    unmatched = [a for a in articles if not a.get("topic_matches")]
+    logger.info(
+        "[news] Final: %d article(s) (%d topic-matched, %d general, %d duplicates removed) (%.0fms total)",
+        len(articles),
+        len(topic_matched),
+        len(unmatched),
+        before_dedup - len(articles),
+        _ms_since(t0),
+    )
 
     return articles
 
@@ -204,9 +256,16 @@ def _search_tavily_news(
     }
 
     try:
+        t0 = perf_counter()
         resp = requests.post(api_url, json=payload, timeout=timeout)
         resp.raise_for_status()
         data = resp.json()
+        logger.debug(
+            "[news.tavily] Search '%s': %d result(s) (%.0fms)",
+            query,
+            len(data.get("results") or []),
+            _ms_since(t0),
+        )
     except Exception:
         logger.warning("Tavily news search failed for '%s'", query, exc_info=True)
         return []
@@ -240,9 +299,16 @@ def _fetch_rss_feed(
 ) -> list[NewsArticle]:
     """Parse an RSS feed and return up to *limit* articles."""
     try:
+        t0 = perf_counter()
         feed = feedparser.parse(
             feed_url,
             request_headers={"User-Agent": "digital-brain/1.0"},
+        )
+        logger.debug(
+            "[news.rss] Fetched '%s': %d entries (%.0fms)",
+            label,
+            len(feed.entries),
+            _ms_since(t0),
         )
     except Exception:
         logger.warning("Failed to fetch RSS feed '%s'", label, exc_info=True)

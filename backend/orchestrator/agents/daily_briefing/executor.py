@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 from datetime import date, datetime, time, timedelta, timezone
+from time import perf_counter
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -52,6 +53,7 @@ def build_daily_briefing(
     timezone_name: str,
     user_email: str | None = None,
 ) -> dict[str, Any]:
+    pipeline_start = perf_counter()
     local_date = _parse_date(date_value)
     tz = _resolve_timezone(timezone_name)
     start_local = datetime.combine(local_date, time.min).replace(tzinfo=tz)
@@ -59,7 +61,15 @@ def build_daily_briefing(
     start_utc = start_local.astimezone(timezone.utc)
     end_utc = end_local.astimezone(timezone.utc)
 
+    logger.info(
+        "[briefing] Starting pipeline for %s (%s), user=%s",
+        local_date.isoformat(),
+        timezone_name,
+        user_email or "default_user",
+    )
+
     # -- 1. Gather raw event data ------------------------------------------------
+    t0 = perf_counter()
     events = [_apply_timezone(event, tz) for event in _fetch_events_for_span(start_utc, end_utc)]
     event_contexts: list[dict[str, Any]] = []
     for event in events:
@@ -79,23 +89,67 @@ def build_daily_briefing(
                 "contacts": contacts,
             }
         )
+    logger.info(
+        "[briefing] Events: %d found, %d with similar history (%.0fms)",
+        len(events),
+        sum(1 for ec in event_contexts if ec.get("similar_events")),
+        (perf_counter() - t0) * 1000,
+    )
+    for ec in event_contexts:
+        logger.info(
+            "[briefing]   - %s | %s | %d people, %d todos, %d similar",
+            ec.get("local_start", "?"),
+            ec.get("title", "Untitled"),
+            len(ec.get("contacts") or []),
+            len(ec.get("todos") or []),
+            len(ec.get("similar_events") or []),
+        )
 
     # -- 2. Per-event deep analysis (dedicated LLM call each) --------------------
+    t0 = perf_counter()
     for ec in event_contexts:
         ec["deep_summary"] = _summarize_event(ec, timezone_name)
+    logger.info(
+        "[briefing] Deep analysis: %d event(s) analyzed (%.0fms)",
+        len(event_contexts),
+        (perf_counter() - t0) * 1000,
+    )
 
     # -- 3. Upcoming birthdays ---------------------------------------------------
     upcoming_birthdays = _fetch_upcoming_birthdays(local_date)
+    if upcoming_birthdays:
+        bday_parts = []
+        for b in upcoming_birthdays:
+            name = b["display_name"]
+            label = "today" if b.get("is_today") else f"{b.get('days_away')}d"
+            bday_parts.append(f"{name} ({label})")
+        logger.info(
+            "[briefing] Birthdays: %d upcoming (%s)",
+            len(upcoming_birthdays),
+            ", ".join(bday_parts),
+        )
+    else:
+        logger.info("[briefing] Birthdays: none in next %d days", BIRTHDAY_LOOKAHEAD_DAYS)
 
     # -- 4. News aggregation -----------------------------------------------------
+    t0 = perf_counter()
     try:
         news_articles = news_feeds.fetch_news()
     except Exception:
         logger.warning("News feed aggregation failed, continuing without news", exc_info=True)
         news_articles = []
+    topic_matched_count = sum(1 for a in news_articles if a.get("topic_matches"))
+    logger.info(
+        "[briefing] News: %d article(s) (%d topic-matched, %d general) (%.0fms)",
+        len(news_articles),
+        topic_matched_count,
+        len(news_articles) - topic_matched_count,
+        (perf_counter() - t0) * 1000,
+    )
 
     # -- 5. Unlinked todos -------------------------------------------------------
     all_todos = todos_service.list_unlinked_relevant_todos()
+    logger.info("[briefing] Unlinked todos: %d", len(all_todos))
 
     context = {
         "date": local_date.isoformat(),
@@ -109,8 +163,18 @@ def build_daily_briefing(
     }
 
     # -- 6. Assemble final markdown & summary ------------------------------------
+    t0 = perf_counter()
     markdown = _generate_markdown(context)
+    logger.info(
+        "[briefing] Markdown generated: %d chars (%.0fms)",
+        len(markdown),
+        (perf_counter() - t0) * 1000,
+    )
+
+    t0 = perf_counter()
     summary = _generate_summary(context, markdown)
+    logger.info("[briefing] Summary generated (%.0fms)", (perf_counter() - t0) * 1000)
+
     todo_count = _count_todos(event_contexts, all_todos)
     stored = daily_briefings.upsert_daily_briefing(
         user_email=user_email,
@@ -121,6 +185,16 @@ def build_daily_briefing(
         event_count=len(events),
         todo_count=todo_count,
     )
+
+    total_ms = (perf_counter() - pipeline_start) * 1000
+    logger.info(
+        "[briefing] Pipeline complete: %d event(s), %d todo(s), %d news, %.1fs total",
+        len(events),
+        todo_count,
+        len(news_articles),
+        total_ms / 1000,
+    )
+
     return {
         "briefing_id": stored.get("briefing_id"),
         "date": local_date.isoformat(),
@@ -462,12 +536,35 @@ def _summarize_event(event_context: dict[str, Any], timezone_name: str) -> str:
     """
     title = event_context.get("title") or "Untitled"
     event_text = _format_event_for_analysis(event_context)
+    logger.info("[briefing.event] Analyzing: '%s'", title)
 
     # -- Phase 1: optional web research via tool loop -------------------------
+    t0 = perf_counter()
     research_notes = _research_event(event_text, title, timezone_name)
+    if research_notes:
+        logger.info(
+            "[briefing.event] Research for '%s': %d chars (%.0fms)",
+            title,
+            len(research_notes),
+            (perf_counter() - t0) * 1000,
+        )
+    else:
+        logger.info(
+            "[briefing.event] Research for '%s': skipped/none (%.0fms)",
+            title,
+            (perf_counter() - t0) * 1000,
+        )
 
     # -- Phase 2: synthesise everything into a structured summary -------------
-    return _synthesise_event_summary(event_text, research_notes, title, timezone_name)
+    t0 = perf_counter()
+    summary = _synthesise_event_summary(event_text, research_notes, title, timezone_name)
+    logger.info(
+        "[briefing.event] Synthesis for '%s': %d chars (%.0fms)",
+        title,
+        len(summary),
+        (perf_counter() - t0) * 1000,
+    )
+    return summary
 
 
 def _format_event_for_analysis(event_context: dict[str, Any]) -> str:
@@ -566,11 +663,23 @@ def _research_event(event_text: str, title: str, timezone_name: str) -> str:
             profile=runtime,
         )
         content = (result.get("content") or "").strip()
+        tool_calls_made = result.get("tool_calls", 0)
         if content.upper().startswith("NO_RESEARCH_NEEDED"):
+            logger.info(
+                "[briefing.event] Research for '%s': NO_RESEARCH_NEEDED (%d tool call(s))",
+                title,
+                tool_calls_made,
+            )
             return ""
+        logger.info(
+            "[briefing.event] Research for '%s': %d chars, %d tool call(s)",
+            title,
+            len(content),
+            tool_calls_made,
+        )
         return content
     except Exception:
-        logger.warning("Research step failed for event '%s', skipping", title, exc_info=True)
+        logger.warning("[briefing.event] Research failed for '%s', skipping", title, exc_info=True)
         return ""
 
 
@@ -632,11 +741,22 @@ def _generate_markdown(context: dict[str, Any]) -> str:
     )
     content = result.get("content", "")
     if _is_invalid_briefing(content):
+        logger.warning(
+            "[briefing] Markdown failed validation, triggering rewrite (draft %d chars)",
+            len(content),
+        )
+        t_rewrite = perf_counter()
         retry_prompt = _build_rewrite_prompt(context, content)
         content = call_llm(
             retry_prompt,
             system_prompt="Rewrite strictly to the required format.",
             temperature=0.1,
+        )
+        logger.info(
+            "[briefing] Rewrite complete: %d chars, valid=%s (%.0fms)",
+            len(content),
+            not _is_invalid_briefing(content),
+            (perf_counter() - t_rewrite) * 1000,
         )
     return content
 
