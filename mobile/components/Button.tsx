@@ -4,7 +4,7 @@ import { StyleSheet, Text, View, ViewStyle } from 'react-native';
 import { AppPressable as Pressable } from '@/components/AppPressable';
 import { theme } from '@/theme';
 
-type ButtonVariant = 'primary' | 'secondary' | 'clear';
+type ButtonVariant = 'primary' | 'secondary' | 'clear' | 'danger';
 
 type ButtonProps = {
   label: string;
@@ -18,6 +18,7 @@ const rippleByVariant: Record<ButtonVariant, string> = {
   primary: 'rgba(255,255,255,0.2)',
   secondary: 'rgba(0,0,0,0.08)',
   clear: 'rgba(0,0,0,0.08)',
+  danger: 'rgba(192,57,43,0.12)',
 };
 
 export function Button({ label, variant = 'primary', disabled, onPress, style }: ButtonProps) {
@@ -64,6 +65,11 @@ const styles = StyleSheet.create({
   clear: {
     backgroundColor: 'transparent',
   },
+  danger: {
+    backgroundColor: '#fdf4f3',
+    borderWidth: 1,
+    borderColor: '#e8c4c0',
+  },
   label: {
     fontWeight: '600',
   },
@@ -75,6 +81,9 @@ const styles = StyleSheet.create({
   },
   clearLabel: {
     color: theme.colors.ink,
+  },
+  dangerLabel: {
+    color: '#c0392b',
   },
   disabled: {
     opacity: 0.6,

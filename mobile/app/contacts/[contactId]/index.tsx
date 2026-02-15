@@ -21,6 +21,7 @@ import { apiFetch } from '@/api/client';
 import { useAuth } from '@/auth/AuthContext';
 import { AppPressable as Pressable } from '@/components/AppPressable';
 import { Avatar } from '@/components/Avatar';
+import { Button } from '@/components/Button';
 import { Card } from '@/components/Card';
 import { ContactActionMenu } from '@/components/ContactActionMenu';
 import { FloatingSaveButton } from '@/components/FloatingSaveButton';
@@ -515,16 +516,12 @@ export default function ContactDetailScreen() {
         </Card>
 
         {!isCreating ? (
-          <Pressable
-            style={({ pressed }) => [styles.deleteButton, pressed && styles.deleteButtonPressed]}
+          <Button
+            label={isDeleting ? 'Deleting...' : 'Delete contact'}
+            variant="danger"
             onPress={handleDelete}
             disabled={isDeleting}
-          >
-            <Ionicons name="trash-outline" size={18} color="#c0392b" />
-            <Text style={styles.deleteButtonText}>
-              {isDeleting ? 'Deleting...' : 'Delete contact'}
-            </Text>
-          </Pressable>
+          />
         ) : null}
       </ScrollView>
 
@@ -753,24 +750,5 @@ const styles = StyleSheet.create({
   },
   datePicker: {
     height: 360,
-  },
-  deleteButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 8,
-    paddingVertical: 14,
-    borderRadius: theme.radius.md,
-    borderWidth: 1,
-    borderColor: '#e8c4c0',
-    backgroundColor: '#fdf4f3',
-  },
-  deleteButtonPressed: {
-    backgroundColor: '#f9e4e2',
-  },
-  deleteButtonText: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: '#c0392b',
   },
 });
