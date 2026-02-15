@@ -265,6 +265,55 @@ def record_exchange(
     }
 
 
+def set_message_metadata_field(
+    message_id: int,
+    field: str,
+    value: Any,
+) -> bool:
+    """Merge a single key into a message's metadata JSONB column.
+
+    Returns True if the row was updated, False otherwise.
+    """
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            UPDATE conversation_messages
+            SET metadata = metadata || %s
+            WHERE message_id = %s
+            RETURNING 1
+            """,
+            (Json({field: value}), message_id),
+        )
+        updated = cur.fetchone() is not None
+        if updated:
+            conn.commit()
+        else:
+            conn.rollback()
+        return updated
+
+
+def find_message_id_by_metadata_preview(preview_id: str) -> int | None:
+    """Find the assistant message whose metadata contains a given preview_id.
+
+    Searches ``metadata -> 'command_result' -> 'preview_id'`` in
+    ``conversation_messages``. Returns the ``message_id`` or ``None``.
+    """
+    with get_conn() as conn, conn.cursor(row_factory=dict_row) as cur:
+        cur.execute(
+            """
+            SELECT message_id
+            FROM conversation_messages
+            WHERE role = 'assistant'
+              AND metadata -> 'command_result' ->> 'preview_id' = %s
+            ORDER BY created_at DESC
+            LIMIT 1
+            """,
+            (preview_id,),
+        )
+        row = cur.fetchone()
+        return row["message_id"] if row else None
+
+
 def delete_thread(thread_id: str, user_email: str) -> bool:
     if not thread_id or not user_email:
         return False

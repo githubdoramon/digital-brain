@@ -2,6 +2,7 @@ import React, { useMemo, useState } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
 
+import type { EventResolvedStatus } from '@/chat/threads';
 import type {
   UiDirectiveBlock,
   UiDirectiveField,
@@ -21,6 +22,7 @@ import { UiDirectiveInfoBlock } from './UiDirectiveInfoBlock';
 type Props = {
   directives: UiDirectives;
   isSubmitting?: boolean;
+  resolvedStatus?: EventResolvedStatus;
   onSubmit: (submission: UiSubmissionInput) => void;
 };
 
@@ -60,7 +62,8 @@ type EventEditAction = {
   option: UiDirectiveOption;
 };
 
-export function UiDirectiveCard({ directives, isSubmitting = false, onSubmit }: Props) {
+export function UiDirectiveCard({ directives, isSubmitting = false, resolvedStatus, onSubmit }: Props) {
+  const isResolved = Boolean(resolvedStatus);
   const [formValues, setFormValues] = useState<Record<string, string>>({});
   const blocks = useMemo(() => directives.blocks || [], [directives.blocks]);
   const eventEditActionsByPreviewId = useMemo(() => {
@@ -126,6 +129,32 @@ export function UiDirectiveCard({ directives, isSubmitting = false, onSubmit }: 
 
   return (
     <View style={styles.container}>
+      {isResolved && (
+        <View
+          style={[
+            styles.resolvedBanner,
+            resolvedStatus === 'created'
+              ? styles.resolvedBannerCreated
+              : styles.resolvedBannerCancelled,
+          ]}
+        >
+          <Ionicons
+            name={resolvedStatus === 'created' ? 'checkmark-circle' : 'close-circle'}
+            size={16}
+            color={resolvedStatus === 'created' ? theme.colors.teal : theme.colors.mutedInk}
+          />
+          <Text
+            style={[
+              styles.resolvedBannerText,
+              resolvedStatus === 'created'
+                ? styles.resolvedTextCreated
+                : styles.resolvedTextCancelled,
+            ]}
+          >
+            {resolvedStatus === 'created' ? 'Event created' : 'Event cancelled'}
+          </Text>
+        </View>
+      )}
       {blocks.map((block) => {
         const tone = toneForBlock(block);
         const previewId =
@@ -150,7 +179,7 @@ export function UiDirectiveCard({ directives, isSubmitting = false, onSubmit }: 
                   {tone.label}
                 </Text>
               </View>
-              {editAction ? (
+              {editAction && !isResolved ? (
                 <Pressable
                   accessibilityRole="button"
                   accessibilityLabel="Edit event draft"
@@ -180,7 +209,7 @@ export function UiDirectiveCard({ directives, isSubmitting = false, onSubmit }: 
             {block.title ? <Text style={styles.title}>{block.title}</Text> : null}
             {block.description ? <Text style={styles.description}>{block.description}</Text> : null}
 
-            {block.type === 'clarification_form' ? (
+            {block.type === 'clarification_form' && !isResolved ? (
               <UiDirectiveFormBlock
                 block={block}
                 isSubmitting={isSubmitting}
@@ -194,6 +223,7 @@ export function UiDirectiveCard({ directives, isSubmitting = false, onSubmit }: 
               <UiDirectiveChoiceBlock
                 block={block}
                 isSubmitting={isSubmitting}
+                resolvedStatus={resolvedStatus}
                 onSelect={(option) => submitChoice(block, option)}
               />
             ) : null}
@@ -259,5 +289,30 @@ const styles = StyleSheet.create({
     color: theme.colors.mutedInk,
     fontSize: 14,
     lineHeight: 21,
+  },
+  resolvedBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: theme.radius.md,
+  },
+  resolvedBannerCreated: {
+    backgroundColor: theme.colors.paleTeal,
+  },
+  resolvedBannerCancelled: {
+    backgroundColor: '#f2f0ed',
+  },
+  resolvedBannerText: {
+    fontSize: 13,
+    fontWeight: '600',
+    lineHeight: 18,
+  },
+  resolvedTextCreated: {
+    color: theme.colors.teal,
+  },
+  resolvedTextCancelled: {
+    color: theme.colors.mutedInk,
   },
 });

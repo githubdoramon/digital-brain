@@ -32,6 +32,8 @@ export type ThreadDetail = ThreadSummary & {
   messages: ThreadMessage[];
 };
 
+export type EventResolvedStatus = 'created' | 'cancelled';
+
 export type ChatMessage = {
   id: string;
   role: 'user' | 'assistant';
@@ -39,6 +41,7 @@ export type ChatMessage = {
   metadata?: {
     command_result?: CommandResult;
     ui_directives?: UiDirectives;
+    event_resolved?: EventResolvedStatus;
   };
 };
 
@@ -62,12 +65,21 @@ export async function restoreChatHistory(
   let messages: ChatMessage[] = [];
   if (threadId) {
     const threadDetail = (await apiFetch(`/mobile/threads/${threadId}`, { token })) as ThreadDetail;
-    messages = (threadDetail.messages || []).map((msg) => ({
-      id: `${msg.message_id}`,
-      role: msg.role,
-      content: msg.content,
-      metadata: msg.metadata ?? undefined,
-    }));
+    messages = (threadDetail.messages || []).map((msg) => {
+      const meta = msg.metadata ?? undefined;
+      return {
+        id: `${msg.message_id}`,
+        role: msg.role,
+        content: msg.content,
+        metadata: meta
+          ? {
+              command_result: meta.command_result,
+              ui_directives: meta.ui_directives,
+              event_resolved: meta.event_resolved as EventResolvedStatus | undefined,
+            }
+          : undefined,
+      };
+    });
   }
 
   return {

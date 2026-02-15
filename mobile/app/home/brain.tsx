@@ -8,7 +8,6 @@ import {
   KeyboardEvent,
   KeyboardAvoidingView,
   Platform,
-  Linking,
   StyleSheet,
   Text,
   TextInput,
@@ -25,6 +24,7 @@ import { AppPressable as Pressable } from '@/components/AppPressable';
 import { theme } from '@/theme';
 import { UiDirectiveCard } from '@/components/ui-directive-card';
 import { SlashCommandPalette } from '@/components/SlashCommandPalette';
+import { renderAssistantMarkdown } from '@/components/MarkdownRenderer';
 import type {
   EventContactOption,
   EventDraft,
@@ -32,7 +32,7 @@ import type {
 } from '@/components/event-draft/types';
 import { loadChatSession, saveChatSession, StoredChatSession } from '@/chat/session';
 import { restoreChatHistory } from '@/chat/threads';
-import type { CommandResult as ThreadCommandResult } from '@/chat/threads';
+import type { CommandResult as ThreadCommandResult, EventResolvedStatus } from '@/chat/threads';
 import type { UiDirectiveBlock, UiDirectives, UiSubmissionInput } from '@/chat/uiDirectives';
 import {
   clearEventDraftEditSession,
@@ -49,6 +49,7 @@ type Message = {
   metadata?: {
     command_result?: CommandResult;
     ui_directives?: UiDirectives;
+    event_resolved?: EventResolvedStatus;
   };
 };
 
@@ -96,14 +97,6 @@ type EventCommandResultPayload = {
   };
 };
 
-const INLINE_MARKDOWN_PATTERN =
-  /(\[[^\]]+\]\((?:https?:\/\/|mailto:|www\.)[^)\s]+\)|(?:https?:\/\/|mailto:|www\.)\S+|\*\*[^*]+\*\*|`[^`]+`|\*[^*]+\*)/g;
-const MARKDOWN_LINK_PATTERN = /^\[([^\]]+)\]\(([^)\s]+)\)$/;
-const URL_TOKEN_PATTERN = /^(?:https?:\/\/|mailto:|www\.)\S+$/;
-const TRAILING_URL_PUNCTUATION_PATTERN = /[),.!?;:]+$/;
-const BULLET_LINE_PATTERN = /^[-*]\s+/;
-const NUMBERED_LINE_PATTERN = /^(\d+)\.\s+(.*)$/;
-const BLOCKQUOTE_LINE_PATTERN = /^>\s+/;
 const EVENT_CONFIRM_ACTION_ID = 'event_confirmation_action';
 const EVENT_CLARIFICATION_ACTION_PREFIX = 'event_clarification_submit';
 const EVENT_CONFIRM_OPTION_PREFIX = 'confirm:';
@@ -357,236 +350,6 @@ function clarificationIdFromAction(actionIdRaw: string | undefined): string | nu
   return clarificationId || null;
 }
 
-function normalizeLinkUrl(url: string) {
-  const trimmed = url.trim();
-  if (trimmed.startsWith('www.')) {
-    return `https://${trimmed}`;
-  }
-  return trimmed;
-}
-
-async function openMarkdownLink(rawUrl: string) {
-  const url = normalizeLinkUrl(rawUrl);
-  try {
-    await Linking.openURL(url);
-  } catch (error) {
-    console.warn('Failed to open markdown link', error);
-  }
-}
-
-function splitTrailingUrlPunctuation(token: string) {
-  const trailing = token.match(TRAILING_URL_PUNCTUATION_PATTERN)?.[0] ?? '';
-  if (!trailing) {
-    return { url: token, trailingText: '' };
-  }
-  return {
-    url: token.slice(0, -trailing.length),
-    trailingText: trailing,
-  };
-}
-
-function renderInlineMarkdown(text: string, keyPrefix: string) {
-  const parts = text.split(INLINE_MARKDOWN_PATTERN).filter(Boolean);
-  return parts.map((part, index) => {
-    const markdownLinkMatch = part.match(MARKDOWN_LINK_PATTERN);
-    if (markdownLinkMatch) {
-      const [, label, rawUrl] = markdownLinkMatch;
-      return (
-        <Text
-          key={`${keyPrefix}-link-${index}`}
-          style={styles.markdownLink}
-          accessibilityRole="link"
-          selectable={false}
-          onPress={() => {
-            void openMarkdownLink(rawUrl);
-          }}
-        >
-          {label}
-        </Text>
-      );
-    }
-
-    if (URL_TOKEN_PATTERN.test(part)) {
-      const { url, trailingText } = splitTrailingUrlPunctuation(part);
-      return (
-        <React.Fragment key={`${keyPrefix}-url-${index}`}>
-          <Text
-            style={styles.markdownLink}
-            accessibilityRole="link"
-            selectable={false}
-            onPress={() => {
-              void openMarkdownLink(url);
-            }}
-          >
-            {url}
-          </Text>
-          {trailingText ? <Text selectable>{trailingText}</Text> : null}
-        </React.Fragment>
-      );
-    }
-
-    if (part.startsWith('**') && part.endsWith('**')) {
-      return (
-        <Text key={`${keyPrefix}-bold-${index}`} style={styles.markdownBold} selectable>
-          {part.slice(2, -2)}
-        </Text>
-      );
-    }
-    if (part.startsWith('*') && part.endsWith('*')) {
-      return (
-        <Text key={`${keyPrefix}-italic-${index}`} style={styles.markdownItalic} selectable>
-          {part.slice(1, -1)}
-        </Text>
-      );
-    }
-    if (part.startsWith('`') && part.endsWith('`')) {
-      return (
-        <Text key={`${keyPrefix}-code-${index}`} style={styles.markdownInlineCode} selectable>
-          {part.slice(1, -1)}
-        </Text>
-      );
-    }
-    return (
-      <Text key={`${keyPrefix}-text-${index}`} selectable>
-        {part}
-      </Text>
-    );
-  });
-}
-
-function flushCodeBlock(
-  blocks: React.ReactNode[],
-  codeLines: string[],
-  keyPrefix: string,
-  codeBlockCount: number,
-) {
-  blocks.push(
-    <View key={`${keyPrefix}-code-block-${codeBlockCount}`} style={styles.markdownCodeBlock}>
-      <Text style={styles.markdownCodeText} selectable>
-        {codeLines.join('\n')}
-      </Text>
-    </View>,
-  );
-}
-
-function renderAssistantMarkdown(markdown: string, keyPrefix: string) {
-  const blocks: React.ReactNode[] = [];
-  let inCodeBlock = false;
-  let codeBlockCount = 0;
-  let codeLines: string[] = [];
-
-  markdown.split('\n').forEach((line, index) => {
-    const trimmedLine = line.trim();
-
-    if (trimmedLine.startsWith('```')) {
-      if (inCodeBlock) {
-        flushCodeBlock(blocks, codeLines, keyPrefix, codeBlockCount);
-        codeLines = [];
-        inCodeBlock = false;
-        codeBlockCount += 1;
-      } else {
-        inCodeBlock = true;
-      }
-      return;
-    }
-
-    if (inCodeBlock) {
-      codeLines.push(line);
-      return;
-    }
-
-    if (!trimmedLine) {
-      blocks.push(<View key={`${keyPrefix}-space-${index}`} style={styles.markdownSpacer} />);
-      return;
-    }
-
-    if (line.startsWith('### ')) {
-      blocks.push(
-        <Text key={`${keyPrefix}-h3-${index}`} style={styles.markdownH3} selectable>
-          {renderInlineMarkdown(line.replace('### ', ''), `${keyPrefix}-h3-${index}`)}
-        </Text>,
-      );
-      return;
-    }
-
-    if (line.startsWith('## ')) {
-      blocks.push(
-        <Text key={`${keyPrefix}-h2-${index}`} style={styles.markdownH2} selectable>
-          {renderInlineMarkdown(line.replace('## ', ''), `${keyPrefix}-h2-${index}`)}
-        </Text>,
-      );
-      return;
-    }
-
-    if (line.startsWith('# ')) {
-      blocks.push(
-        <Text key={`${keyPrefix}-h1-${index}`} style={styles.markdownH1} selectable>
-          {renderInlineMarkdown(line.replace('# ', ''), `${keyPrefix}-h1-${index}`)}
-        </Text>,
-      );
-      return;
-    }
-
-    if (BULLET_LINE_PATTERN.test(line)) {
-      blocks.push(
-        <View key={`${keyPrefix}-bullet-${index}`} style={styles.markdownListRow}>
-          <Text style={styles.markdownListMarker} selectable>
-            •
-          </Text>
-          <Text style={styles.markdownListText} selectable>
-            {renderInlineMarkdown(
-              line.replace(BULLET_LINE_PATTERN, ''),
-              `${keyPrefix}-bullet-${index}`,
-            )}
-          </Text>
-        </View>,
-      );
-      return;
-    }
-
-    const numberedMatch = line.match(NUMBERED_LINE_PATTERN);
-    if (numberedMatch) {
-      blocks.push(
-        <View key={`${keyPrefix}-numbered-${index}`} style={styles.markdownListRow}>
-          <Text style={styles.markdownListMarker} selectable>
-            {numberedMatch[1]}.
-          </Text>
-          <Text style={styles.markdownListText} selectable>
-            {renderInlineMarkdown(numberedMatch[2], `${keyPrefix}-numbered-${index}`)}
-          </Text>
-        </View>,
-      );
-      return;
-    }
-
-    if (BLOCKQUOTE_LINE_PATTERN.test(line)) {
-      blocks.push(
-        <View key={`${keyPrefix}-quote-${index}`} style={styles.markdownQuote}>
-          <Text style={styles.markdownQuoteText} selectable>
-            {renderInlineMarkdown(
-              line.replace(BLOCKQUOTE_LINE_PATTERN, ''),
-              `${keyPrefix}-quote-${index}`,
-            )}
-          </Text>
-        </View>,
-      );
-      return;
-    }
-
-    blocks.push(
-      <Text key={`${keyPrefix}-paragraph-${index}`} style={styles.markdownParagraph} selectable>
-        {renderInlineMarkdown(line, `${keyPrefix}-paragraph-${index}`)}
-      </Text>,
-    );
-  });
-
-  if (codeLines.length > 0) {
-    flushCodeBlock(blocks, codeLines, keyPrefix, codeBlockCount);
-  }
-
-  return blocks;
-}
-
 export default function ChatScreen() {
   const router = useRouter();
   const { token, signOut, email, isLoading: isAuthLoading } = useAuth();
@@ -618,7 +381,7 @@ export default function ChatScreen() {
       : Math.max(0, keyboardHeight - insets.bottom) + 2*COMPOSER_KEYBOARD_GAP
     : 0;
   const listBottomInset =
-    composerHeight > 0 ? composerHeight + 16 : insets.bottom + tabBarHeight + 120;
+    composerHeight > 0 ? composerHeight + 16 : insets.bottom + tabBarHeight + 80;
 
   const allowed = email === 'REDACTED-EMAIL';
   const canSend = input.trim().length > 0 && !isSending && allowed;
@@ -1032,43 +795,21 @@ export default function ChatScreen() {
             delete next[action.previewId];
             return next;
           });
+          const resolvedStatus: EventResolvedStatus =
+            action.type === 'confirm' ? 'created' : 'cancelled';
           setMessages((prev) =>
             prev.map((message) =>
               message.id === messageId
                 ? {
                     ...message,
-                    metadata: message.metadata
-                      ? {
-                          ...message.metadata,
-                          ui_directives: undefined,
-                        }
-                      : undefined,
+                    metadata: {
+                      ...message.metadata,
+                      event_resolved: resolvedStatus,
+                    },
                   }
                 : message,
             ),
           );
-
-          if (action.type === 'confirm') {
-            const createdCount =
-              (result?.created_contacts?.length ?? 0) + (result?.created_places?.length ?? 0);
-            setMessages((prev) => [
-              ...prev,
-              {
-                id: `${Date.now()}-event-success`,
-                role: 'assistant',
-                content: `Event created.${createdCount > 0 ? ` Created ${createdCount} new entities.` : ''}`,
-              },
-            ]);
-          } else {
-            setMessages((prev) => [
-              ...prev,
-              {
-                id: `${Date.now()}-event-cancel`,
-                role: 'assistant',
-                content: 'Event creation canceled.',
-              },
-            ]);
-          }
           setForceScrollNext(true);
           return;
         } catch (error) {
@@ -1201,6 +942,7 @@ export default function ChatScreen() {
                     <UiDirectiveCard
                       directives={item.metadata.ui_directives}
                       isSubmitting={isSending || isConfirmingEvent || isSupersededEventCard}
+                      resolvedStatus={item.metadata.event_resolved}
                       onSubmit={(submission) => {
                         void handleDirectiveSubmission(
                           item.id,
@@ -1342,7 +1084,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     borderRadius: theme.radius.lg,
     marginBottom: 12,
-    maxWidth: '82%',
+    maxWidth: '90%',
   },
   userBubble: {
     alignSelf: 'flex-end',
@@ -1365,96 +1107,6 @@ const styles = StyleSheet.create({
   },
   userText: {
     color: '#fff',
-  },
-  markdownH1: {
-    fontSize: 18,
-    lineHeight: 26,
-    fontWeight: '700',
-    color: theme.colors.ink,
-  },
-  markdownH2: {
-    fontSize: 16,
-    lineHeight: 24,
-    fontWeight: '700',
-    color: theme.colors.ink,
-  },
-  markdownH3: {
-    fontSize: 15,
-    lineHeight: 22,
-    fontWeight: '700',
-    color: theme.colors.ink,
-  },
-  markdownParagraph: {
-    fontSize: 15,
-    lineHeight: 24,
-    color: theme.colors.ink,
-  },
-  markdownListRow: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    gap: 8,
-  },
-  markdownListMarker: {
-    minWidth: 16,
-    fontSize: 15,
-    lineHeight: 24,
-    color: theme.colors.ink,
-    fontWeight: '600',
-  },
-  markdownListText: {
-    flex: 1,
-    fontSize: 15,
-    lineHeight: 24,
-    color: theme.colors.ink,
-  },
-  markdownQuote: {
-    borderLeftWidth: 3,
-    borderLeftColor: theme.colors.line,
-    paddingLeft: 10,
-    paddingVertical: 2,
-  },
-  markdownQuoteText: {
-    fontSize: 15,
-    lineHeight: 24,
-    color: theme.colors.mutedInk,
-  },
-  markdownCodeBlock: {
-    borderWidth: 1,
-    borderColor: theme.colors.line,
-    backgroundColor: '#F5F7FA',
-    borderRadius: theme.radius.md,
-    paddingVertical: 10,
-    paddingHorizontal: 12,
-  },
-  markdownCodeText: {
-    fontFamily: Platform.select({ ios: 'Menlo', android: 'monospace', default: 'monospace' }),
-    fontSize: 13,
-    lineHeight: 20,
-    color: theme.colors.ink,
-  },
-  markdownInlineCode: {
-    fontFamily: Platform.select({ ios: 'Menlo', android: 'monospace', default: 'monospace' }),
-    fontSize: 14,
-    lineHeight: 22,
-    borderWidth: 1,
-    borderColor: theme.colors.line,
-    backgroundColor: '#F5F7FA',
-    borderRadius: theme.radius.md,
-    paddingHorizontal: 4,
-    color: theme.colors.ink,
-  },
-  markdownLink: {
-    color: theme.colors.accentDeep,
-    textDecorationLine: 'underline',
-  },
-  markdownBold: {
-    fontWeight: '700',
-  },
-  markdownItalic: {
-    fontStyle: 'italic',
-  },
-  markdownSpacer: {
-    height: 6,
   },
   commandCardWrap: {
     marginTop: 12,

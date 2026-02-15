@@ -188,6 +188,21 @@ def _safe_entity_slug(raw: str) -> str:
     return normalized.strip("-")
 
 
+def _persist_event_resolved(preview_id: str, status: str) -> None:
+    """Best-effort: stamp ``event_resolved`` on the DB message for this preview."""
+    try:
+        msg_id = conversations.find_message_id_by_metadata_preview(preview_id)
+        if msg_id is not None:
+            conversations.set_message_metadata_field(msg_id, "event_resolved", status)
+    except Exception as exc:
+        logger.warning(
+            "[event_confirm] Could not persist event_resolved=%s for %s: %s",
+            status,
+            preview_id,
+            exc,
+        )
+
+
 def confirm_event_command(
     payload: EventCommandConfirmation,
     user_email: str,
@@ -198,6 +213,7 @@ def confirm_event_command(
     if not payload.confirmed:
         delete_command_data(payload.preview_id)
         clear_pending_event_by_preview_id(payload.preview_id)
+        _persist_event_resolved(payload.preview_id, "cancelled")
         return EventCommandResult(
             success=False,
             error="Event creation cancelled by user",
@@ -376,6 +392,7 @@ def confirm_event_command(
 
         delete_command_data(payload.preview_id)
         clear_pending_event_by_preview_id(payload.preview_id)
+        _persist_event_resolved(payload.preview_id, "created")
 
         return EventCommandResult(
             success=True,
