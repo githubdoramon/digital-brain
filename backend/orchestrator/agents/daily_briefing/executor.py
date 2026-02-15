@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from datetime import date, datetime, time, timedelta, timezone
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -9,11 +10,17 @@ import daily_briefings
 import retrieval
 import todos as todos_service
 from agent.tool_loop_runner import run_profiled_tool_loop
-from agents.daily_briefing.profile import build_daily_briefing_agent_profile
+from agents.daily_briefing.profile import (
+    build_daily_briefing_agent_profile,
+    build_event_research_profile,
+)
 from db import get_conn
 from llm_helpers import call_llm
 
+logger = logging.getLogger(__name__)
+
 DEFAULT_SIMILAR_LIMIT = 4
+BIRTHDAY_LOOKAHEAD_DAYS = 7
 
 
 def handle_daily_briefing_request(payload: dict[str, Any]) -> dict[str, Any]:
@@ -51,6 +58,7 @@ def build_daily_briefing(
     start_utc = start_local.astimezone(timezone.utc)
     end_utc = end_local.astimezone(timezone.utc)
 
+    # -- 1. Gather raw event data ------------------------------------------------
     events = [_apply_timezone(event, tz) for event in _fetch_events_for_span(start_utc, end_utc)]
     event_contexts: list[dict[str, Any]] = []
     for event in events:
@@ -71,6 +79,14 @@ def build_daily_briefing(
             }
         )
 
+    # -- 2. Per-event deep analysis (dedicated LLM call each) --------------------
+    for ec in event_contexts:
+        ec["deep_summary"] = _summarize_event(ec, timezone_name)
+
+    # -- 3. Upcoming birthdays ---------------------------------------------------
+    upcoming_birthdays = _fetch_upcoming_birthdays(local_date)
+
+    # -- 4. Unlinked todos -------------------------------------------------------
     all_todos = todos_service.list_unlinked_relevant_todos()
 
     context = {
@@ -80,8 +96,10 @@ def build_daily_briefing(
         "day_end": end_local.isoformat(),
         "events": event_contexts,
         "all_todos": all_todos,
+        "upcoming_birthdays": upcoming_birthdays,
     }
 
+    # -- 5. Assemble final markdown & summary ------------------------------------
     markdown = _generate_markdown(context)
     summary = _generate_summary(context, markdown)
     todo_count = _count_todos(event_contexts, all_todos)
@@ -367,6 +385,225 @@ def _fetch_contact_summaries(contact_ids: list[str]) -> list[dict[str, Any]]:
     return [summaries[cid] for cid in contact_ids if cid in summaries]
 
 
+def _fetch_upcoming_birthdays(
+    local_date: date,
+    lookahead_days: int = BIRTHDAY_LOOKAHEAD_DAYS,
+) -> list[dict[str, Any]]:
+    """Fetch contacts whose birthday falls within the next *lookahead_days* days.
+
+    The query compares month/day only so it works across year boundaries
+    (e.g. Dec 29 with a 7-day window wraps into Jan).
+    """
+    dates_to_check: list[tuple[int, int]] = []
+    for offset in range(lookahead_days + 1):
+        d = local_date + timedelta(days=offset)
+        dates_to_check.append((d.month, d.day))
+
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT contact_id, display_name, birthday
+            FROM contacts
+            WHERE birthday IS NOT NULL
+              AND (EXTRACT(MONTH FROM birthday), EXTRACT(DAY FROM birthday))
+                  IN (SELECT unnest(%s::int[]), unnest(%s::int[]))
+            ORDER BY display_name
+            """,
+            (
+                [m for m, _ in dates_to_check],
+                [d for _, d in dates_to_check],
+            ),
+        )
+        rows = [dict(row) for row in cur.fetchall()]
+
+    results: list[dict[str, Any]] = []
+    for row in rows:
+        bday: date = row["birthday"]
+        bday_this_year = bday.replace(year=local_date.year)
+        # handle year wrap (birthday in early Jan when today is late Dec)
+        if bday_this_year < local_date:
+            bday_this_year = bday.replace(year=local_date.year + 1)
+        days_away = (bday_this_year - local_date).days
+        results.append(
+            {
+                "contact_id": row["contact_id"],
+                "display_name": row["display_name"],
+                "birthday": bday.isoformat(),
+                "days_away": days_away,
+                "is_today": days_away == 0,
+            }
+        )
+    results.sort(key=lambda r: r["days_away"])
+    return results
+
+
+def _summarize_event(event_context: dict[str, Any], timezone_name: str) -> str:
+    """Produce a focused summary for a single event.
+
+    Two phases:
+    1. **Research** – a lightweight tool loop with ``web_search`` and
+       ``fetch_web_page``.  The LLM decides whether external research would
+       help (company background, public agenda, venue info, etc.) or skips
+       tool use for routine/internal events.
+    2. **Synthesis** – a plain ``call_llm`` that combines the event data with
+       any research findings into a structured preparation summary.
+
+    Using a per-event call avoids the "wall of text" problem where the model
+    has to juggle many events at once and produces shallow output.
+    """
+    title = event_context.get("title") or "Untitled"
+    event_text = _format_event_for_analysis(event_context)
+
+    # -- Phase 1: optional web research via tool loop -------------------------
+    research_notes = _research_event(event_text, title, timezone_name)
+
+    # -- Phase 2: synthesise everything into a structured summary -------------
+    return _synthesise_event_summary(event_text, research_notes, title, timezone_name)
+
+
+def _format_event_for_analysis(event_context: dict[str, Any]) -> str:
+    """Build a concise text block describing a single event for LLM consumption."""
+    lines: list[str] = []
+    title = event_context.get("title") or "Untitled"
+    lines.append(f"Event: {title}")
+    lines.append(
+        f"Time: {event_context.get('local_start')} to {event_context.get('local_end') or 'TBD'}"
+    )
+
+    place = event_context.get("place") or {}
+    if place:
+        place_bits = [place.get("name"), place.get("city"), place.get("country")]
+        location = ", ".join([b for b in place_bits if b])
+        if location:
+            lines.append(f"Location: {location}")
+
+    lines.append(f"Type: {_format_list(event_context.get('types'))}")
+    lines.append(f"Tags: {_format_list(event_context.get('tags'))}")
+
+    contacts = event_context.get("contacts") or []
+    lines.append(f"People: {_format_contacts(contacts)}")
+
+    summary = event_context.get("summary") or ""
+    if summary:
+        lines.append("Notes from this event:")
+        lines.append(_condense_notes(summary))
+
+    similar = event_context.get("similar_events") or []
+    if similar:
+        lines.append(f"Past occurrences ({len(similar)}):")
+        for s in similar:
+            s_title = s.get("title") or "Untitled"
+            s_date = s.get("local_start") or s.get("start_date") or ""
+            s_summary = s.get("summary") or ""
+            lines.append(f"  - {s_date} | {s_title}")
+            if s_summary:
+                lines.append(f"    Notes: {_condense_notes(s_summary, limit=6)}")
+
+    todos = event_context.get("todos") or []
+    if todos:
+        lines.append(f"Linked todos ({len(todos)}):")
+        for todo in todos:
+            lines.append(
+                f"  - [{todo.get('status')}] {todo.get('description')}"
+                f" (updated {todo.get('updated_at') or todo.get('created_at')})"
+            )
+
+    related_todos = event_context.get("related_todos") or []
+    if related_todos:
+        lines.append(f"Todos from past occurrences ({len(related_todos)}):")
+        for todo in related_todos:
+            source = todo.get("source_event") or "past event"
+            lines.append(f"  - [{todo.get('status')}] {todo.get('description')} (from {source})")
+
+    return "\n".join(lines)
+
+
+def _research_event(event_text: str, title: str, timezone_name: str) -> str:
+    """Run a bounded web-research tool loop for a single event.
+
+    Returns the LLM's research notes (may be empty if no research was needed
+    or the call failed).
+    """
+    research_profile = build_event_research_profile()
+    if research_profile.build_tools_and_handlers is None:
+        return ""
+    tools, tool_handlers = research_profile.build_tools_and_handlers()
+    if not tools:
+        return ""
+    runtime = research_profile.runtime
+    system_prompt = (
+        research_profile.get_system_prompt() if research_profile.get_system_prompt else ""
+    )
+
+    research_prompt = (
+        "You are preparing background research for an upcoming calendar event.\n"
+        "If external context would help the user prepare (company info, public agenda, "
+        "venue details, relevant news, suggested reading material), use the web_search "
+        "and fetch_web_page tools to gather it. Keep searches targeted and concise.\n"
+        "If the event is routine or internal with no obvious research angle, "
+        "respond with: NO_RESEARCH_NEEDED\n\n"
+        f"Timezone: {timezone_name}\n\n"
+        f"{event_text}\n\n"
+        "Return your research findings as concise bullet points. "
+        "Include source URLs when available."
+    )
+
+    try:
+        result = run_profiled_tool_loop(
+            prompt=research_prompt,
+            system_prompt=system_prompt,
+            tools=tools,
+            tool_handlers=tool_handlers,
+            profile=runtime,
+        )
+        content = (result.get("content") or "").strip()
+        if content.upper().startswith("NO_RESEARCH_NEEDED"):
+            return ""
+        return content
+    except Exception:
+        logger.warning("Research step failed for event '%s', skipping", title, exc_info=True)
+        return ""
+
+
+def _synthesise_event_summary(
+    event_text: str, research_notes: str, title: str, timezone_name: str
+) -> str:
+    """Combine event data + research into a structured preparation summary."""
+    research_block = ""
+    if research_notes:
+        research_block = (
+            f"\n\nWEB RESEARCH FINDINGS (incorporate relevant points):\n{research_notes}"
+        )
+
+    system_prompt = (
+        "You are a concise briefing analyst. Analyze the event context below and produce a "
+        "focused preparation summary. Output plain text with bullet points. No greetings, no "
+        "meta-commentary. Be specific and actionable."
+    )
+    user_prompt = (
+        f"Analyze this upcoming event and produce a preparation summary.\n"
+        f"Timezone: {timezone_name}\n\n"
+        f"{event_text}"
+        f"{research_block}\n\n"
+        "Respond with exactly these sections (skip a section if nothing relevant):\n"
+        "KEY POINTS:\n"
+        "- Important context from past occurrences or notes\n\n"
+        "ACTION ITEMS:\n"
+        "- Pending todos, follow-ups, or preparation tasks\n\n"
+        "SUGGESTED READING:\n"
+        "- Links or material worth reviewing before this event (from research or notes)\n\n"
+        "PREP FOCUS:\n"
+        "- One sentence on what to prioritize before this event"
+    )
+
+    try:
+        result = call_llm(user_prompt, system_prompt=system_prompt, temperature=0.1)
+        return result.strip()
+    except Exception:
+        logger.warning("Failed to summarize event '%s', using fallback", title, exc_info=True)
+        return ""
+
+
 def _generate_markdown(context: dict[str, Any]) -> str:
     agent_profile = build_daily_briefing_agent_profile()
     if agent_profile.build_tools_and_handlers is None:
@@ -396,6 +633,22 @@ def _generate_markdown(context: dict[str, Any]) -> str:
 
 
 def _build_briefing_prompt(context: dict[str, Any]) -> str:
+    has_birthdays = bool(context.get("upcoming_birthdays"))
+    birthdays_section = (
+        (
+            "## Upcoming Birthdays\n"
+            "- List each person with their birthday date and how many days away.\n"
+            "- If a birthday is today, highlight it.\n"
+        )
+        if has_birthdays
+        else ""
+    )
+    birthdays_note = (
+        ("\nIf there are upcoming birthdays, include the Upcoming Birthdays section.\n")
+        if has_birthdays
+        else ""
+    )
+
     return (
         "DAILY BRIEFING TASK (PREP DOCUMENT)\n"
         "You are preparing the user for upcoming events. Use future tense (will, upcoming, prepare, review).\n"
@@ -405,7 +658,9 @@ def _build_briefing_prompt(context: dict[str, Any]) -> str:
         "- Do not ask questions.\n"
         "- Do not explain the input.\n"
         "- Do not say 'you provided' or 'the text appears'.\n"
-        "- Focus ONLY on today's events (and their past context if any) and their linked todos.\n"
+        "- Focus ONLY on today's events and their linked todos.\n"
+        "- Each event already has a pre-computed analysis with key points, action items, and prep\n"
+        "  focus. Incorporate that analysis into the Event Prep section -- do NOT ignore it.\n"
         "\n"
         "TOOL GUIDANCE:\n"
         "- Use search_memories for event-specific past notes.\n"
@@ -421,15 +676,16 @@ def _build_briefing_prompt(context: dict[str, Any]) -> str:
         "- One bullet per event: <local time> - <title> (location if available)\n"
         "## Event Prep\n"
         "### <local time> - <title>\n"
-        "- Past context (from similar events or documents that match this event)\n"
-        "- Open actions and pending todos tied to this event\n"
-        "- Documents or materials to review for this event\n"
-        "- Suggested prep focus for this event\n"
+        "- Key points (from the per-event analysis)\n"
+        "- Action items and pending todos\n"
+        "- Suggested prep focus\n"
+        f"{birthdays_section}"
         "## Outstanding Todos\n"
         "- List pending todos and recently completed ones (last 2 weeks).\n"
         "\n"
         "If there are no events, say so in Day Overview and skip Schedule/Event Prep sections.\n"
         "If there are no relevant todos, still include Outstanding Todos with a short note.\n"
+        f"{birthdays_note}"
         "\n"
         "CONTEXT FOR TODAY (already filtered; every event below is UPCOMING today):\n"
         f"{_format_context_text(context)}"
@@ -519,50 +775,43 @@ def _format_context_text(context: dict[str, Any]) -> str:
             location = ", ".join([b for b in place_bits if b])
             if location:
                 lines.append(f"- Location: {location}")
-        summary = event.get("summary") or ""
-        if summary:
-            lines.append("- Context from prior notes (for prep):")
-            lines.append(_condense_notes(summary))
 
         contacts = event.get("contacts") or []
         lines.append(f"- People: {_format_contacts(contacts)}")
 
-        similar = event.get("similar_events") or []
-        lines.append(f"- This event has context from {len(similar)} past events. Past event list:")
-        if not similar:
-            lines.append("  - None")
-        for similar_event in similar:
-            lines.append(
-                "  - "
-                f"{similar_event.get('local_start') or similar_event.get('start_date')}"
-                f" | {similar_event.get('title')}"
-            )
+        # Use the pre-computed deep summary instead of raw similar events / todos
+        deep_summary = event.get("deep_summary") or ""
+        if deep_summary:
+            lines.append("- Analysis (key points, action items, prep focus):")
+            for dl in deep_summary.split("\n"):
+                stripped = dl.strip()
+                if stripped:
+                    lines.append(f"  {stripped}")
+        else:
+            # Fallback: include minimal raw data if per-event LLM failed
+            summary = event.get("summary") or ""
+            if summary:
+                lines.append("- Context from prior notes (for prep):")
+                lines.append(_condense_notes(summary))
+            todos = event.get("todos") or []
+            if todos:
+                lines.append(f"- Event Todos ({len(todos)}):")
+                for todo in todos:
+                    lines.append(f"  - [{todo.get('status')}] {todo.get('description')}")
+        lines.append("")
 
-        todos = event.get("todos") or []
-        lines.append(f"- Event Todos (linked to this event) ({len(todos)}):")
-        if not todos:
-            lines.append("  - None")
-        for todo in todos:
-            lines.append(
-                "  - "
-                f"[{todo.get('status')}] {todo.get('description')}"
-                f" (updated {todo.get('updated_at') or todo.get('created_at')})"
-            )
-
-        related_todos = event.get("related_todos") or []
-        lines.append(f"- Related Past Event Todos ({len(related_todos)}):")
-        if not related_todos:
-            lines.append("  - None")
-        for todo in related_todos:
-            source = todo.get("source_event") or "past event"
-            lines.append(
-                "  - "
-                f"[{todo.get('status')}] {todo.get('description')}"
-                f" (from {source}, updated {todo.get('updated_at') or todo.get('created_at')})"
-            )
-        lines.append(
-            "- Prep expectation: summarize past context and propose what the user should do."
-        )
+    # -- Upcoming birthdays section --
+    birthdays = context.get("upcoming_birthdays") or []
+    if birthdays:
+        lines.append(f"Upcoming Birthdays ({len(birthdays)}):")
+        for b in birthdays:
+            name = b.get("display_name") or "Unknown"
+            if b.get("is_today"):
+                lines.append(f"- {name} - TODAY!")
+            else:
+                days = b.get("days_away", "?")
+                bday = b.get("birthday") or ""
+                lines.append(f"- {name} - in {days} day(s) ({bday})")
         lines.append("")
 
     all_todos = context.get("all_todos") or []

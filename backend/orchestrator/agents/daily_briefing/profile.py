@@ -21,10 +21,19 @@ DAILY_BRIEFING_ALLOWED_TOOLS = (
     "fetch_web_page",
 )
 
+# Per-event research uses only web tools with tight limits.
+EVENT_RESEARCH_ALLOWED_TOOLS = (
+    "web_search",
+    "fetch_web_page",
+)
+
 
 def get_daily_briefing_profile() -> BoundedRuntimeProfile:
     """Return the runtime profile for daily briefing generation."""
     return build_daily_briefing_agent_profile().runtime
+
+
+# -- Main briefing assembly profile ------------------------------------------
 
 
 def build_daily_briefing_agent_profile() -> BoundedAgentProfile:
@@ -61,3 +70,46 @@ def build_daily_briefing_tools_and_handlers() -> tuple[list[dict[str, Any]], dic
 def get_daily_briefing_system_prompt() -> str:
     """System prompt for daily briefing writing behavior."""
     return "You are a precise writing engine. Follow the user instructions exactly."
+
+
+# -- Per-event research profile ----------------------------------------------
+
+
+def build_event_research_profile() -> BoundedAgentProfile:
+    """Lightweight profile for per-event web research.
+
+    Each event gets at most 3 steps / 4 tool calls (one search + a couple of
+    page fetches) with a 60-second timeout so we don't block the pipeline.
+    """
+    return build_agent_profile(
+        name="daily_briefing_event_research",
+        max_steps=3,
+        max_tool_calls=4,
+        timeout_seconds=60,
+        temperature=0.1,
+        top_p=None,
+        build_tools_and_handlers=build_event_research_tools_and_handlers,
+        get_system_prompt=get_event_research_system_prompt,
+    )
+
+
+def build_event_research_tools_and_handlers() -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Web-only tools for per-event research."""
+    registry = get_registry()
+    tools = registry.get_tool_definitions(list(EVENT_RESEARCH_ALLOWED_TOOLS))
+    tool_handlers = {
+        "web_search": lambda args: handle_web_search(args),
+        "fetch_web_page": lambda args: handle_fetch_web_page(args),
+    }
+    return tools, tool_handlers
+
+
+def get_event_research_system_prompt() -> str:
+    """System prompt for per-event research step."""
+    return (
+        "You are a research assistant preparing context for a calendar event. "
+        "Use tools ONLY when the event would clearly benefit from external context "
+        "(e.g. a meeting with a company you could look up, a conference with a public "
+        "agenda, a restaurant you could check). If the event is routine or internal "
+        "with no obvious research angle, skip tool use and respond directly."
+    )
