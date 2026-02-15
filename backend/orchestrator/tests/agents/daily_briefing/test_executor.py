@@ -389,6 +389,7 @@ class TestFormatContextNews:
             _make_news_article(
                 title="Stock Market Rally",
                 url="https://bbc.com/rally",
+                summary="Markets surged on positive data",
                 source="bbc_world",
                 topic_matches=[],
             ),
@@ -398,6 +399,7 @@ class TestFormatContextNews:
         assert "General Headlines (1)" in text
         assert "Stock Market Rally" in text
         assert "URL: https://bbc.com/rally" in text
+        assert "Markets surged on positive data" in text
 
     def test_no_news_omits_section(self):
         ctx = _make_context(news_articles=[])
@@ -451,6 +453,12 @@ class TestBriefingPromptNews:
         ctx = _make_context(news_articles=articles)
         prompt = _build_briefing_prompt(ctx)
         assert "markdown link" in prompt.lower()
+
+    def test_prompt_emphasises_summaries(self):
+        articles = [_make_news_article(topic_matches=["AI"])]
+        ctx = _make_context(news_articles=articles)
+        prompt = _build_briefing_prompt(ctx)
+        assert "MUST include a brief summary" in prompt
 
     def test_prompt_omits_news_section_when_empty(self):
         ctx = _make_context(news_articles=[])

@@ -664,8 +664,10 @@ def _build_briefing_prompt(context: dict[str, Any]) -> str:
             "- Summarize the most relevant news items that match the user's tracked topics.\n"
             "- Group by topic when possible.\n"
             "- Include a few notable general headlines if space allows.\n"
-            "- Keep each item to 1-2 sentences. Include source name.\n"
-            "- IMPORTANT: include the article URL as a markdown link so the user can open it directly.\n"
+            "- IMPORTANT: each item MUST include a brief summary (1-2 sentences) so the user\n"
+            "  understands the story at a glance without clicking. The summary is the most\n"
+            "  valuable part of this section.\n"
+            "- Include the article URL as a markdown link so the user can open it directly.\n"
             "  Format: [Article Title](url) - summary. (Source)\n"
         )
         if has_news
@@ -873,6 +875,9 @@ def _format_context_text(context: dict[str, Any]) -> str:
                 lines.append(f"- {title} ({a.get('source', '')})")
                 if url:
                     lines.append(f"  URL: {url}")
+                summary = (a.get("summary") or "").strip()
+                if summary:
+                    lines.append(f"  {summary[:200]}")
             lines.append("")
 
     all_todos = context.get("all_todos") or []
