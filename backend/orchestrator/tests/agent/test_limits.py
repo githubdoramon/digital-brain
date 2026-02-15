@@ -62,7 +62,7 @@ class TestAgentConfig:
 
         assert config.max_steps == 15
         assert config.max_tool_calls == 20
-        assert config.max_repairs == 2
+        assert config.max_repairs == 5
 
 
 class TestLimitChecker:

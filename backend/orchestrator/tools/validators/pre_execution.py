@@ -65,7 +65,7 @@ class PreExecutionValidator:
     def __init__(
         self,
         registry: "ToolRegistry",
-        max_repairs: int = 2,
+        max_repairs: int = 5,
     ):
         """
         Initialize the validator.

@@ -7,7 +7,7 @@ The bounded agent uses hard limits plus no-progress detection.
 ```bash
 AGENT_MAX_STEPS=15
 AGENT_MAX_TOOL_CALLS=20
-AGENT_MAX_REPAIRS=2
+AGENT_MAX_REPAIRS=5
 AGENT_ENABLE_INTENT_ROUTING=true
 AGENT_ENABLE_VALIDATION=true
 ```

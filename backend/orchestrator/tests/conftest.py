@@ -180,4 +180,4 @@ def setup_test_env(monkeypatch):
     monkeypatch.setenv("LLM_CHAT_MODEL", "llama3.3:70b")
     monkeypatch.setenv("AGENT_MAX_STEPS", "5")
     monkeypatch.setenv("AGENT_MAX_TOOL_CALLS", "10")
-    monkeypatch.setenv("AGENT_MAX_REPAIRS", "2")
+    monkeypatch.setenv("AGENT_MAX_REPAIRS", "5")
