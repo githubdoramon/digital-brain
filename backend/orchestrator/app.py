@@ -393,6 +393,7 @@ def delete_contact_relationship_mobile(
 
 
 @api.delete("/contacts/{contact_id}")
+@api.delete("/mobile/contacts/{contact_id}")
 def delete_contact(contact_id: str, user: dict = Depends(get_current_user)):
     deleted = contacts_service.delete_contact(contact_id)
     if not deleted:

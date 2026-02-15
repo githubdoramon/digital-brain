@@ -2,6 +2,7 @@ import Ionicons from '@expo/vector-icons/Ionicons';
 import DateTimePicker, { DateType, useDefaultStyles } from 'react-native-ui-datepicker';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
+  Alert,
   Animated,
   Keyboard,
   KeyboardAvoidingView,
@@ -122,7 +123,9 @@ export default function ContactDetailScreen() {
   const insets = useSafeAreaInsets();
   const [contact, setContact] = useState<Contact | null>(null);
   const [draft, setDraft] = useState<Contact | null>(null);
+  const [aliasesText, setAliasesText] = useState('');
   const [isSaving, setIsSaving] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [contactsIndex, setContactsIndex] = useState<Map<string, string>>(new Map());
@@ -141,6 +144,7 @@ export default function ContactDetailScreen() {
     const emptyContact = createEmptyContact(contactParam ?? 'new');
     setContact(emptyContact);
     setDraft(emptyContact);
+    setAliasesText(listToText(emptyContact.aliases));
   }, [contactParam, isCreating]);
 
   useEffect(() => {
@@ -158,6 +162,7 @@ export default function ContactDetailScreen() {
         if (mounted) {
           setContact(result);
           setDraft(result);
+          setAliasesText(listToText(result.aliases ?? []));
         }
       } catch (error) {
         console.warn('[contacts] detail load failed', error);
@@ -234,10 +239,11 @@ export default function ContactDetailScreen() {
 
   const isDirty = useMemo(() => {
     if (!draft) return false;
+    const parsedAliases = textToList(aliasesText);
     if (isCreating) {
       return Boolean(
         draft.display_name.trim() ||
-          draft.aliases.length ||
+          parsedAliases.length ||
           draft.emails.length ||
           draft.phones.length ||
           draft.links.length ||
@@ -259,7 +265,7 @@ export default function ContactDetailScreen() {
     };
     const current = {
       display_name: draft.display_name,
-      aliases: draft.aliases,
+      aliases: parsedAliases,
       emails: draft.emails,
       phones: draft.phones,
       links: draft.links,
@@ -268,7 +274,7 @@ export default function ContactDetailScreen() {
       birthday: draft.birthday,
     };
     return JSON.stringify(base) !== JSON.stringify(current);
-  }, [contact, draft, isCreating]);
+  }, [contact, draft, isCreating, aliasesText]);
 
   const handleSave = async () => {
     if (!draft) return;
@@ -284,7 +290,7 @@ export default function ContactDetailScreen() {
         body: JSON.stringify({
           contact_id: targetContactId,
           display_name: normalizedName || 'New contact',
-          aliases: draft.aliases ?? [],
+          aliases: textToList(aliasesText),
           birthday: draft.birthday ? draft.birthday : null,
           emails: draft.emails,
           phones: draft.phones,
@@ -299,6 +305,7 @@ export default function ContactDetailScreen() {
       )) as Contact;
       setContact(refreshed);
       setDraft(refreshed);
+      setAliasesText(listToText(refreshed.aliases ?? []));
       if (isCreating) {
         router.replace(`/contacts/${encodeURIComponent(targetContactId)}`);
       }
@@ -324,6 +331,35 @@ export default function ContactDetailScreen() {
       setDraft({ ...draft, birthday: formatIsoDate(draftDate) });
     }
     handleCloseDatePicker();
+  };
+
+  const handleDelete = () => {
+    if (!contact || isCreating) return;
+    Alert.alert(
+      'Delete contact',
+      `Are you sure you want to delete ${contact.display_name || 'this contact'}? This action cannot be undone.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete',
+          style: 'destructive',
+          onPress: async () => {
+            setIsDeleting(true);
+            try {
+              await apiFetch(`/mobile/contacts/${encodeURIComponent(contact.contact_id)}`, {
+                method: 'DELETE',
+              });
+              router.back();
+            } catch (error) {
+              console.warn('[contacts] delete failed', error);
+              Alert.alert('Error', 'Unable to delete this contact. Please try again.');
+            } finally {
+              setIsDeleting(false);
+            }
+          },
+        },
+      ],
+    );
   };
 
   if (!draft) {
@@ -397,8 +433,8 @@ export default function ContactDetailScreen() {
           <Text style={styles.sectionTitle}>Aliases</Text>
           <TextInput
             style={styles.input}
-            value={listToText(draft.aliases)}
-            onChangeText={(value) => setDraft({ ...draft, aliases: textToList(value) })}
+            value={aliasesText}
+            onChangeText={setAliasesText}
             placeholder="nicknames, alternate names"
             placeholderTextColor={theme.colors.mutedInk}
           />
@@ -477,6 +513,19 @@ export default function ContactDetailScreen() {
             multiline
           />
         </Card>
+
+        {!isCreating ? (
+          <Pressable
+            style={({ pressed }) => [styles.deleteButton, pressed && styles.deleteButtonPressed]}
+            onPress={handleDelete}
+            disabled={isDeleting}
+          >
+            <Ionicons name="trash-outline" size={18} color="#c0392b" />
+            <Text style={styles.deleteButtonText}>
+              {isDeleting ? 'Deleting...' : 'Delete contact'}
+            </Text>
+          </Pressable>
+        ) : null}
       </ScrollView>
 
       <FloatingSaveButton
@@ -704,5 +753,24 @@ const styles = StyleSheet.create({
   },
   datePicker: {
     height: 360,
+  },
+  deleteButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    paddingVertical: 14,
+    borderRadius: theme.radius.md,
+    borderWidth: 1,
+    borderColor: '#e8c4c0',
+    backgroundColor: '#fdf4f3',
+  },
+  deleteButtonPressed: {
+    backgroundColor: '#f9e4e2',
+  },
+  deleteButtonText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#c0392b',
   },
 });
