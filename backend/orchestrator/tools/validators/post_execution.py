@@ -725,6 +725,7 @@ class GoalCompletionValidator:
         tool_calls: list,
         known_facts: list[str],
         final_content: str,
+        intent: str | None = None,
     ) -> tuple[bool, str, list[str]]:
         """
         Check if the user's goal was actually achieved.
@@ -734,10 +735,23 @@ class GoalCompletionValidator:
             tool_calls: List of ToolCallRecord objects
             known_facts: Facts accumulated during execution
             final_content: The final response content
+            intent: The routed intent type (e.g. "conversational", "memory_search")
 
         Returns:
             Tuple of (achieved: bool, reason: str, pending_actions: list[str])
         """
+        # Conversational intent: don't require tool execution or document
+        # inspection. A substantive text response is sufficient.
+        if intent == "conversational":
+            if final_content and len(final_content.strip()) > 20:
+                return (True, "Conversational response generated", [])
+            if not tool_calls:
+                # No tool calls and no content yet — let the loop continue
+                # but don't impose query/action obligations
+                if final_content:
+                    return (True, "Response generated", [])
+                return (False, "No response generated yet", [])
+
         goal_lower = goal.lower()
 
         # Determine goal type

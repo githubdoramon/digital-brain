@@ -64,5 +64,19 @@ def get_main_bounded_protocol_prompt() -> str:
         "   - For entity/people ambiguity, ask for disambiguation directly — avoid unrelated fields\n"
         "   - Prefer concrete field kinds: datetime for timestamps, text for places, textarea for free-form, select for choices\n"
         "   - Anti-patterns to avoid: broad 'tell me more' prompts, decorative fields not needed for continuation, duplicate fields for the same fact\n"
-        "   - When emitting clarification via emit_ui_directive, always include a clear fallback_text\n"
+        "   - When emitting clarification via emit_ui_directive, always include a clear fallback_text\n\n"
+        "7. CONVERSATIONAL FOLLOW-UPS:\n"
+        "   For open-ended or conversational questions (suggestions, advice, brainstorming):\n"
+        "   - FIRST provide your answer as text output\n"
+        "   - THEN call emit_ui_directive to keep the conversation going — pick the block type that fits:\n"
+        "     * choice_buttons: when you can offer 2-4 concrete next steps the user can tap\n"
+        '       (e.g. "Search my past fun activities", "Check today\'s schedule")\n'
+        "     * clarification_form: when a free-text or structured input would help refine\n"
+        '       (e.g. a text field "What kind of activity?", or a select with options)\n'
+        "     * info_card: when you want to surface a useful summary or link alongside the answer\n"
+        "   - Match the directive to the conversation: quick-tap choices for broad questions,\n"
+        "     a text field when the user's intent is vague and you need more detail,\n"
+        "     an info card when you have a concrete recommendation with a link\n"
+        "   - The fallback_text should always be a short natural-language version of the follow-up\n"
+        "   - Do NOT emit follow-up directives for factual/lookup queries that have a definitive answer\n"
     )

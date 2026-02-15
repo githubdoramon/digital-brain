@@ -268,6 +268,9 @@ class AgentController:
         if clarification_prompt:
             return classification, clarification_prompt, [], []
 
+        tools, visibility_mode, selected_groups = self._resolve_tool_visibility(classification)
+        state.tool_visibility_mode = visibility_mode.value
+        state.allowed_tool_groups = selected_groups
         messages = self._build_messages(
             question,
             state,
@@ -276,9 +279,6 @@ class AgentController:
             search_limit,
             state.request_context,
         )
-        tools, visibility_mode, selected_groups = self._resolve_tool_visibility(classification)
-        state.tool_visibility_mode = visibility_mode.value
-        state.allowed_tool_groups = selected_groups
         return classification, None, messages, tools
 
     def _check_limits_and_recovery(
@@ -557,9 +557,14 @@ class AgentController:
                         stream=False,
                     )
                     if follow_up_prompt:
+                        # If the LLM also produced text content alongside tool
+                        # calls (e.g. a conversational answer + UI follow-up
+                        # buttons), prefer the text as the answer. The
+                        # ui_directives are included in the bundle via state.
+                        answer = content if content else follow_up_prompt
                         return self._finalize(
                             question,
-                            follow_up_prompt,
+                            answer,
                             state,
                             run_id,
                             session_id,
@@ -795,7 +800,14 @@ class AgentController:
                         break
 
                 if tool_calls:
-                    if streamed_any:
+                    # When the only tool call is emit_ui_directive and we
+                    # already streamed a text answer, keep the content visible
+                    # so the directives are supplementary (follow-up buttons).
+                    ui_only_tool_calls = all(
+                        (call.get("function") or {}).get("name") == "emit_ui_directive"
+                        for call in tool_calls
+                    )
+                    if streamed_any and not ui_only_tool_calls:
                         yield {"type": "clear_content"}
 
                     messages.append(
@@ -854,8 +866,15 @@ class AgentController:
                         stream=True,
                     )
                     if follow_up_prompt:
-                        accumulated_content = follow_up_prompt
-                        yield {"type": "token", "content": follow_up_prompt}
+                        # If the LLM already streamed a text answer alongside
+                        # the UI directive, keep that as the accumulated
+                        # content. The ui_directives are in state and will be
+                        # included in the final bundle.
+                        if current_content.strip():
+                            accumulated_content = current_content
+                        else:
+                            accumulated_content = follow_up_prompt
+                            yield {"type": "token", "content": follow_up_prompt}
                         break
 
                     if self._should_escalate_tool_visibility(state):
@@ -1836,6 +1855,7 @@ class AgentController:
             tool_calls=state.tool_calls,
             known_facts=state.known_facts,
             final_content=final_content,
+            intent=state.intent,
         )
 
         # Trace the goal check

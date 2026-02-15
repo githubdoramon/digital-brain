@@ -88,7 +88,7 @@ INTENT_TOOL_MAP = {
     IntentType.HOME_CONTROL: ["home"],
     IntentType.SKILL_EXECUTION: ["skills", "memory"],
     IntentType.SYSTEM_COMMAND: ["system"],
-    IntentType.CONVERSATIONAL: [],  # No tools
+    IntentType.CONVERSATIONAL: ["web", "ui"],  # Web search + UI follow-up directives
     IntentType.COMPLEX: list(TOOL_GROUPS.keys()),  # All tools
     IntentType.UNKNOWN: list(TOOL_GROUPS.keys()),  # All tools
 }

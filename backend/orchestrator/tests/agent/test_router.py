@@ -108,10 +108,10 @@ class TestIntentToolMap:
         assert "memory" in groups
         assert "resolution" in groups
 
-    def test_conversational_no_tools(self):
-        """Test CONVERSATIONAL intent has no tool groups."""
+    def test_conversational_has_web_and_ui_tools(self):
+        """Test CONVERSATIONAL intent has web search and UI tools for follow-ups."""
         groups = INTENT_TOOL_MAP[IntentType.CONVERSATIONAL]
-        assert groups == []
+        assert groups == ["web", "ui"]
 
     def test_complex_all_tools(self):
         """Test COMPLEX intent has all tool groups."""
