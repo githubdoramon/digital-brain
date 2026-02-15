@@ -20,6 +20,7 @@ import { useAuth } from '@/auth/AuthContext';
 import { AppPressable as Pressable } from '@/components/AppPressable';
 import { Avatar } from '@/components/Avatar';
 import { Card } from '@/components/Card';
+import { renderAssistantMarkdown } from '@/components/MarkdownRenderer';
 import { useTopNotice } from '@/components/top-notice';
 import { theme } from '@/theme';
 
@@ -275,7 +276,7 @@ export default function DailyScreen() {
                 <View style={styles.briefingBlock}>
                   <Text style={styles.briefingLabel}>Full briefing</Text>
                   <View style={styles.markdownBlock}>
-                    {renderMarkdown(briefing?.markdown || 'No briefing yet.')}
+                    {renderAssistantMarkdown(briefing?.markdown || 'No briefing yet.', 'briefing')}
                   </View>
                 </View>
               ) : null}
@@ -393,48 +394,6 @@ export default function DailyScreen() {
   );
 }
 
-function renderMarkdown(markdown: string) {
-  return markdown.split('\n').map((line, index) => {
-    if (line.startsWith('# ')) {
-      return (
-        <Text key={`h1-${index}`} style={styles.markdownH1}>
-          {line.replace('# ', '')}
-        </Text>
-      );
-    }
-    if (line.startsWith('## ')) {
-      return (
-        <Text key={`h2-${index}`} style={styles.markdownH2}>
-          {line.replace('## ', '')}
-        </Text>
-      );
-    }
-    if (line.startsWith('### ')) {
-      return (
-        <Text key={`h3-${index}`} style={styles.markdownH3}>
-          {line.replace('### ', '')}
-        </Text>
-      );
-    }
-    if (line.startsWith('- ')) {
-      return (
-        <View key={`bullet-${index}`} style={styles.markdownBulletRow}>
-          <Text style={styles.markdownBullet}>•</Text>
-          <Text style={styles.markdownBulletText}>{line.replace('- ', '')}</Text>
-        </View>
-      );
-    }
-    if (!line.trim()) {
-      return <View key={`space-${index}`} style={styles.markdownSpacer} />;
-    }
-    return (
-      <Text key={`p-${index}`} style={styles.markdownParagraph}>
-        {line}
-      </Text>
-    );
-  });
-}
-
 const styles = StyleSheet.create({
   container: {
     flex: 1,
@@ -522,46 +481,6 @@ const styles = StyleSheet.create({
   },
   markdownBlock: {
     gap: 6,
-  },
-  markdownH1: {
-    fontSize: 18,
-    fontWeight: '700',
-    color: theme.colors.ink,
-  },
-  markdownH2: {
-    fontSize: 16,
-    fontWeight: '700',
-    color: theme.colors.ink,
-    marginTop: 6,
-  },
-  markdownH3: {
-    fontSize: 14,
-    fontWeight: '700',
-    color: theme.colors.ink,
-    marginTop: 4,
-  },
-  markdownParagraph: {
-    fontSize: 13,
-    color: theme.colors.mutedInk,
-    lineHeight: 19,
-  },
-  markdownBulletRow: {
-    flexDirection: 'row',
-    gap: 8,
-  },
-  markdownBullet: {
-    fontSize: 12,
-    color: theme.colors.accentDeep,
-    marginTop: 2,
-  },
-  markdownBulletText: {
-    flex: 1,
-    fontSize: 13,
-    color: theme.colors.mutedInk,
-    lineHeight: 19,
-  },
-  markdownSpacer: {
-    height: 6,
   },
   statusText: {
     fontSize: 12,

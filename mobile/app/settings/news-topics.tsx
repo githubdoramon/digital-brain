@@ -305,8 +305,28 @@ function TopicRow({
 // Article row
 // ---------------------------------------------------------------------------
 
+function formatPublishedDate(iso: string | null): string | null {
+  if (!iso) return null;
+  try {
+    const d = new Date(iso);
+    if (isNaN(d.getTime())) return null;
+    const now = new Date();
+    const diffMs = now.getTime() - d.getTime();
+    const diffH = Math.floor(diffMs / (1000 * 60 * 60));
+    if (diffH < 1) return 'Just now';
+    if (diffH < 24) return `${diffH}h ago`;
+    const diffD = Math.floor(diffH / 24);
+    if (diffD === 1) return 'Yesterday';
+    if (diffD < 7) return `${diffD}d ago`;
+    return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+  } catch {
+    return null;
+  }
+}
+
 function ArticleRow({ article }: { article: NewsArticle }) {
   const topicBadges = article.topic_matches ?? [];
+  const dateLabel = formatPublishedDate(article.published_at);
   return (
     <Card style={styles.articleCard}>
       <Pressable
@@ -331,7 +351,15 @@ function ArticleRow({ article }: { article: NewsArticle }) {
           </Text>
         )}
         <View style={styles.articleMeta}>
-          <Text style={styles.articleSource}>{article.source}</Text>
+          <View style={styles.articleMetaLeft}>
+            <Text style={styles.articleSource}>{article.source}</Text>
+            {!!dateLabel && (
+              <>
+                <Text style={styles.metaDot}>&middot;</Text>
+                <Text style={styles.articleDate}>{dateLabel}</Text>
+              </>
+            )}
+          </View>
           {!!article.url && (
             <Ionicons name="open-outline" size={14} color={theme.colors.teal} />
           )}
@@ -571,12 +599,26 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     marginTop: 8,
   },
+  articleMetaLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    flex: 1,
+  },
   articleSource: {
     fontSize: 12,
     fontWeight: '600',
     color: theme.colors.mutedInk,
     textTransform: 'uppercase',
     letterSpacing: 0.5,
+  },
+  metaDot: {
+    fontSize: 12,
+    color: theme.colors.mutedInk,
+  },
+  articleDate: {
+    fontSize: 12,
+    color: theme.colors.mutedInk,
   },
 
   // -- Modal --

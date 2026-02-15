@@ -372,6 +372,7 @@ class TestFormatContextNews:
         articles = [
             _make_news_article(
                 title="OpenAI releases GPT-5",
+                url="https://example.com/gpt5",
                 source="tavily",
                 topic_matches=["AI"],
             ),
@@ -381,11 +382,13 @@ class TestFormatContextNews:
         assert "News Matching Your Topics (1)" in text
         assert "[AI]" in text
         assert "OpenAI releases GPT-5" in text
+        assert "URL: https://example.com/gpt5" in text
 
     def test_general_headlines_included(self):
         articles = [
             _make_news_article(
                 title="Stock Market Rally",
+                url="https://bbc.com/rally",
                 source="bbc_world",
                 topic_matches=[],
             ),
@@ -394,6 +397,7 @@ class TestFormatContextNews:
         text = _format_context_text(ctx)
         assert "General Headlines (1)" in text
         assert "Stock Market Rally" in text
+        assert "URL: https://bbc.com/rally" in text
 
     def test_no_news_omits_section(self):
         ctx = _make_context(news_articles=[])
@@ -441,6 +445,12 @@ class TestBriefingPromptNews:
         prompt = _build_briefing_prompt(ctx)
         assert "## News & Topics" in prompt
         assert "include the News & Topics section" in prompt
+
+    def test_prompt_instructs_markdown_links(self):
+        articles = [_make_news_article(topic_matches=["AI"])]
+        ctx = _make_context(news_articles=articles)
+        prompt = _build_briefing_prompt(ctx)
+        assert "markdown link" in prompt.lower()
 
     def test_prompt_omits_news_section_when_empty(self):
         ctx = _make_context(news_articles=[])

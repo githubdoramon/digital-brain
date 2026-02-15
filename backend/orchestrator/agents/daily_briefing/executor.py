@@ -665,6 +665,8 @@ def _build_briefing_prompt(context: dict[str, Any]) -> str:
             "- Group by topic when possible.\n"
             "- Include a few notable general headlines if space allows.\n"
             "- Keep each item to 1-2 sentences. Include source name.\n"
+            "- IMPORTANT: include the article URL as a markdown link so the user can open it directly.\n"
+            "  Format: [Article Title](url) - summary. (Source)\n"
         )
         if has_news
         else ""
@@ -854,7 +856,11 @@ def _format_context_text(context: dict[str, Any]) -> str:
             lines.append(f"News Matching Your Topics ({len(topic_matched)}):")
             for a in topic_matched:
                 topics_str = ", ".join(a["topic_matches"])
-                lines.append(f"- [{topics_str}] {a.get('title', '')} ({a.get('source', '')})")
+                url = (a.get("url") or "").strip()
+                title = a.get("title", "")
+                lines.append(f"- [{topics_str}] {title} ({a.get('source', '')})")
+                if url:
+                    lines.append(f"  URL: {url}")
                 summary = (a.get("summary") or "").strip()
                 if summary:
                     lines.append(f"  {summary[:200]}")
@@ -862,7 +868,11 @@ def _format_context_text(context: dict[str, Any]) -> str:
         if unmatched:
             lines.append(f"General Headlines ({len(unmatched)}):")
             for a in unmatched[:15]:  # cap to avoid context bloat
-                lines.append(f"- {a.get('title', '')} ({a.get('source', '')})")
+                url = (a.get("url") or "").strip()
+                title = a.get("title", "")
+                lines.append(f"- {title} ({a.get('source', '')})")
+                if url:
+                    lines.append(f"  URL: {url}")
             lines.append("")
 
     all_todos = context.get("all_todos") or []

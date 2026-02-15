@@ -8,7 +8,7 @@ import { theme } from '@/theme';
 // ---------------------------------------------------------------------------
 
 const INLINE_MARKDOWN_PATTERN =
-  /(\[[^\]]+\]\((?:https?:\/\/|mailto:|www\.)[^)\s]+\)|(?:https?:\/\/|mailto:|www\.)\S+|\*\*[^*]+\*\*|`[^`]+`|\*[^*]+\*)/g;
+  /(\[[^\]]+\]\((?:https?:\/\/|mailto:|www\.)[^)\s]+\)|(?:https?:\/\/|mailto:|www\.)\S+|\*\*[^*]+\*\*|__[^_]+__|`[^`]+`|\*[^*]+\*|(?<=^|[\s(])\b_[^_]+_\b)/g;
 const MARKDOWN_LINK_PATTERN = /^\[([^\]]+)\]\(([^)\s]+)\)$/;
 const URL_TOKEN_PATTERN = /^(?:https?:\/\/|mailto:|www\.)\S+$/;
 const TRAILING_URL_PUNCTUATION_PATTERN = /[),.!?;:]+$/;
@@ -92,14 +92,14 @@ function renderInlineMarkdown(text: string, keyPrefix: string) {
       );
     }
 
-    if (part.startsWith('**') && part.endsWith('**')) {
+    if ((part.startsWith('**') && part.endsWith('**')) || (part.startsWith('__') && part.endsWith('__'))) {
       return (
         <Text key={`${keyPrefix}-bold-${index}`} style={styles.markdownBold} selectable>
           {part.slice(2, -2)}
         </Text>
       );
     }
-    if (part.startsWith('*') && part.endsWith('*')) {
+    if ((part.startsWith('*') && part.endsWith('*')) || (part.startsWith('_') && part.endsWith('_'))) {
       return (
         <Text key={`${keyPrefix}-italic-${index}`} style={styles.markdownItalic} selectable>
           {part.slice(1, -1)}
