@@ -7,6 +7,7 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 import daily_briefings
+import news_feeds
 import retrieval
 import todos as todos_service
 from agent.tool_loop_runner import run_profiled_tool_loop
@@ -86,7 +87,14 @@ def build_daily_briefing(
     # -- 3. Upcoming birthdays ---------------------------------------------------
     upcoming_birthdays = _fetch_upcoming_birthdays(local_date)
 
-    # -- 4. Unlinked todos -------------------------------------------------------
+    # -- 4. News aggregation -----------------------------------------------------
+    try:
+        news_articles = news_feeds.fetch_news()
+    except Exception:
+        logger.warning("News feed aggregation failed, continuing without news", exc_info=True)
+        news_articles = []
+
+    # -- 5. Unlinked todos -------------------------------------------------------
     all_todos = todos_service.list_unlinked_relevant_todos()
 
     context = {
@@ -97,9 +105,10 @@ def build_daily_briefing(
         "events": event_contexts,
         "all_todos": all_todos,
         "upcoming_birthdays": upcoming_birthdays,
+        "news_articles": news_articles,
     }
 
-    # -- 5. Assemble final markdown & summary ------------------------------------
+    # -- 6. Assemble final markdown & summary ------------------------------------
     markdown = _generate_markdown(context)
     summary = _generate_summary(context, markdown)
     todo_count = _count_todos(event_contexts, all_todos)
@@ -648,6 +657,26 @@ def _build_briefing_prompt(context: dict[str, Any]) -> str:
         if has_birthdays
         else ""
     )
+    has_news = bool(context.get("news_articles"))
+    news_section = (
+        (
+            "## News & Topics\n"
+            "- Summarize the most relevant news items that match the user's tracked topics.\n"
+            "- Group by topic when possible.\n"
+            "- Include a few notable general headlines if space allows.\n"
+            "- Keep each item to 1-2 sentences. Include source name.\n"
+        )
+        if has_news
+        else ""
+    )
+    news_note = (
+        (
+            "\nIf there are news articles, include the News & Topics section after "
+            "Outstanding Todos.\n"
+        )
+        if has_news
+        else ""
+    )
 
     return (
         "DAILY BRIEFING TASK (PREP DOCUMENT)\n"
@@ -682,10 +711,12 @@ def _build_briefing_prompt(context: dict[str, Any]) -> str:
         f"{birthdays_section}"
         "## Outstanding Todos\n"
         "- List pending todos and recently completed ones (last 2 weeks).\n"
+        f"{news_section}"
         "\n"
         "If there are no events, say so in Day Overview and skip Schedule/Event Prep sections.\n"
         "If there are no relevant todos, still include Outstanding Todos with a short note.\n"
         f"{birthdays_note}"
+        f"{news_note}"
         "\n"
         "CONTEXT FOR TODAY (already filtered; every event below is UPCOMING today):\n"
         f"{_format_context_text(context)}"
@@ -813,6 +844,26 @@ def _format_context_text(context: dict[str, Any]) -> str:
                 bday = b.get("birthday") or ""
                 lines.append(f"- {name} - in {days} day(s) ({bday})")
         lines.append("")
+
+    # -- News & Topics section --
+    news_articles = context.get("news_articles") or []
+    if news_articles:
+        topic_matched = [a for a in news_articles if a.get("topic_matches")]
+        unmatched = [a for a in news_articles if not a.get("topic_matches")]
+        if topic_matched:
+            lines.append(f"News Matching Your Topics ({len(topic_matched)}):")
+            for a in topic_matched:
+                topics_str = ", ".join(a["topic_matches"])
+                lines.append(f"- [{topics_str}] {a.get('title', '')} ({a.get('source', '')})")
+                summary = (a.get("summary") or "").strip()
+                if summary:
+                    lines.append(f"  {summary[:200]}")
+            lines.append("")
+        if unmatched:
+            lines.append(f"General Headlines ({len(unmatched)}):")
+            for a in unmatched[:15]:  # cap to avoid context bloat
+                lines.append(f"- {a.get('title', '')} ({a.get('source', '')})")
+            lines.append("")
 
     all_todos = context.get("all_todos") or []
     lines.append(f"Unlinked Relevant Todos ({len(all_todos)}):")

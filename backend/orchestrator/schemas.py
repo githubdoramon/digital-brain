@@ -391,3 +391,23 @@ class EventCommandResult(BaseModel):
     created_contacts: list[dict[str, Any]] = Field(default_factory=list)
     created_places: list[dict[str, Any]] = Field(default_factory=list)
     error: str | None = None
+
+
+class NewsTopicIn(BaseModel):
+    """Create or update a news topic."""
+
+    topic_id: str
+    label: str
+    keywords: list[str]
+    enabled: bool = True
+
+
+class NewsTopicOut(BaseModel):
+    """News topic as returned from the API."""
+
+    topic_id: str
+    label: str
+    keywords: list[str]
+    enabled: bool
+    created_at: datetime | None = None
+    updated_at: datetime | None = None

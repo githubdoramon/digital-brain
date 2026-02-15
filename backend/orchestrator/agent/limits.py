@@ -75,7 +75,7 @@ class AgentConfig:
         return cls(
             max_steps=int(os.getenv("AGENT_MAX_STEPS", "15")),
             max_tool_calls=int(os.getenv("AGENT_MAX_TOOL_CALLS", "20")),
-            max_repairs=int(os.getenv("AGENT_MAX_REPAIRS", "2")),
+            max_repairs=int(os.getenv("AGENT_MAX_REPAIRS", "5")),
             repeated_calls_threshold=int(
                 os.getenv("AGENT_REPEATED_CALLS_THRESHOLD", "3")
             ),

@@ -32,6 +32,7 @@ import documents
 import events as events_service
 import immich_client
 import llm
+import news_feeds
 import places as places_service
 import skills
 import telegram_bot
@@ -73,6 +74,7 @@ from schemas import (
     ExternalContactWebhook,
     ExternalEventPayload,
     MeetingIn,
+    NewsTopicIn,
     NotificationSettingsOut,
     PlaceIn,
     PushNotificationsUpdateIn,
@@ -1640,6 +1642,45 @@ def resolve_contacts_endpoint(
     request_data["user_email"] = user_email
 
     return resolve_contacts_request(request_data)
+
+
+# ---------------------------------------------------------------------------
+# News Topics
+# ---------------------------------------------------------------------------
+
+
+@api.get("/news-topics")
+@api.get("/mobile/news-topics")
+def list_news_topics(user: dict = Depends(get_current_user)):
+    topics = news_feeds.list_topics()
+    return {"topics": topics}
+
+
+@api.post("/news-topics")
+@api.post("/mobile/news-topics")
+def upsert_news_topic(
+    payload: NewsTopicIn,
+    user: dict = Depends(get_current_user),
+):
+    topic = news_feeds.upsert_topic(
+        topic_id=payload.topic_id,
+        label=payload.label,
+        keywords=payload.keywords,
+        enabled=payload.enabled,
+    )
+    return topic
+
+
+@api.delete("/news-topics/{topic_id}")
+@api.delete("/mobile/news-topics/{topic_id}")
+def delete_news_topic(
+    topic_id: str,
+    user: dict = Depends(get_current_user),
+):
+    deleted = news_feeds.delete_topic(topic_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Topic not found")
+    return {"ok": True}
 
 
 # ---------------------------------------------------------------------------

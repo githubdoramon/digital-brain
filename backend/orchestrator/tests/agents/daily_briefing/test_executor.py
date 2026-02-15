@@ -57,11 +57,30 @@ def _make_birthday(name: str, birthday: str, days_away: int, is_today: bool = Fa
     }
 
 
+def _make_news_article(
+    *,
+    title: str = "AI Breakthrough",
+    url: str = "https://example.com/news/1",
+    summary: str = "Big AI news today",
+    source: str = "hacker_news",
+    topic_matches: list | None = None,
+) -> dict:
+    return {
+        "title": title,
+        "url": url,
+        "summary": summary,
+        "source": source,
+        "published_at": "2026-02-15T10:00:00+00:00",
+        "topic_matches": topic_matches or [],
+    }
+
+
 def _make_context(
     *,
     events: list | None = None,
     all_todos: list | None = None,
     upcoming_birthdays: list | None = None,
+    news_articles: list | None = None,
 ) -> dict:
     return {
         "date": "2026-02-15",
@@ -71,6 +90,7 @@ def _make_context(
         "events": events or [],
         "all_todos": all_todos or [],
         "upcoming_birthdays": upcoming_birthdays or [],
+        "news_articles": news_articles or [],
     }
 
 
@@ -340,3 +360,90 @@ class TestSummarizeEvent:
 
 def test_birthday_lookahead_is_seven():
     assert BIRTHDAY_LOOKAHEAD_DAYS == 7
+
+
+# ---------------------------------------------------------------------------
+# _format_context_text – news articles section
+# ---------------------------------------------------------------------------
+
+
+class TestFormatContextNews:
+    def test_topic_matched_news_included(self):
+        articles = [
+            _make_news_article(
+                title="OpenAI releases GPT-5",
+                source="tavily",
+                topic_matches=["AI"],
+            ),
+        ]
+        ctx = _make_context(news_articles=articles)
+        text = _format_context_text(ctx)
+        assert "News Matching Your Topics (1)" in text
+        assert "[AI]" in text
+        assert "OpenAI releases GPT-5" in text
+
+    def test_general_headlines_included(self):
+        articles = [
+            _make_news_article(
+                title="Stock Market Rally",
+                source="bbc_world",
+                topic_matches=[],
+            ),
+        ]
+        ctx = _make_context(news_articles=articles)
+        text = _format_context_text(ctx)
+        assert "General Headlines (1)" in text
+        assert "Stock Market Rally" in text
+
+    def test_no_news_omits_section(self):
+        ctx = _make_context(news_articles=[])
+        text = _format_context_text(ctx)
+        assert "News Matching" not in text
+        assert "General Headlines" not in text
+
+    def test_mixed_topic_and_general(self):
+        articles = [
+            _make_news_article(title="AI News", topic_matches=["AI"]),
+            _make_news_article(title="Sports Update", url="https://x.com/2", topic_matches=[]),
+        ]
+        ctx = _make_context(news_articles=articles)
+        text = _format_context_text(ctx)
+        assert "News Matching Your Topics (1)" in text
+        assert "General Headlines (1)" in text
+
+    def test_general_headlines_capped(self):
+        """General headlines should be capped to avoid context bloat."""
+        articles = [
+            _make_news_article(
+                title=f"Headline {i}",
+                url=f"https://x.com/{i}",
+                topic_matches=[],
+            )
+            for i in range(25)
+        ]
+        ctx = _make_context(news_articles=articles)
+        text = _format_context_text(ctx)
+        # We cap at 15 general headlines
+        assert "General Headlines (25)" in text
+        assert "Headline 14" in text  # 0-indexed, the 15th item
+        assert "Headline 15" not in text  # 16th should be excluded
+
+
+# ---------------------------------------------------------------------------
+# _build_briefing_prompt – news section in required structure
+# ---------------------------------------------------------------------------
+
+
+class TestBriefingPromptNews:
+    def test_prompt_includes_news_section_when_present(self):
+        articles = [_make_news_article(topic_matches=["AI"])]
+        ctx = _make_context(news_articles=articles)
+        prompt = _build_briefing_prompt(ctx)
+        assert "## News & Topics" in prompt
+        assert "include the News & Topics section" in prompt
+
+    def test_prompt_omits_news_section_when_empty(self):
+        ctx = _make_context(news_articles=[])
+        prompt = _build_briefing_prompt(ctx)
+        assert "## News & Topics" not in prompt
+        assert "News & Topics section" not in prompt

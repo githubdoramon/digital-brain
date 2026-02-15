@@ -426,6 +426,16 @@ CREATE TABLE IF NOT EXISTS action_logs (
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+-- News topics (user-defined keywords the daily briefing tracks)
+CREATE TABLE IF NOT EXISTS news_topics (
+  topic_id TEXT PRIMARY KEY,
+  label TEXT NOT NULL,
+  keywords TEXT[] NOT NULL DEFAULT '{}'::TEXT[],
+  enabled BOOLEAN NOT NULL DEFAULT TRUE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
 -- Helpful view
 CREATE OR REPLACE VIEW events_with_places AS
 SELECT e.*, p.name AS place_name, p.city, p.country, p.lat, p.lon

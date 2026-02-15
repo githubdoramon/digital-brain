@@ -156,6 +156,8 @@ User Question → Intent Router → Conversational Profile Dispatch → Tool Vis
 - **Contact disambiguation policy**: ambiguity auto-resolution strictness is controlled by `CONTACT_DISAMBIGUATION_STRICTNESS` (`strict`/`balanced`/`lenient`).
 - **Skills vs prompts policy**: behavioral guidance that overlaps with tool contracts or profile prompts belongs in the prompt, not as a separate skill definition. Skill definitions (`skill_definitions/`) are reserved for genuinely unique guidance not covered elsewhere (e.g. `tagging-guide`). Do not create skills that restate tool contracts or profile protocol.
 - **Logging policy**: never use `print` in orchestrator runtime code (only in scripts/tests). Use `logging.getLogger(__name__)` with `debug/info/warning/error` (or `logger.log(DECISION_LEVEL, ...)` for decisions). Logging must flow through `observability/log_stream.py` so frontend log streaming can filter by level. For streaming endpoints, rely on authenticated user context (no service API key) unless explicitly required.
+- **Componentize aggressively**: never let a single file grow into a monolith. Extract reusable UI components (web and mobile), utility functions, hooks, and sub-modules into their own files as soon as a file starts handling multiple concerns. For React (web and mobile): split pages into small, focused components; co-locate them in a nearby `components/` folder or a feature-scoped directory. For backend: extract helpers, data transforms, and sub-handlers into dedicated modules. A file doing layout + data fetching + business logic + styling is a sign it needs to be broken up. Aim for each file to have a single clear responsibility.
+- **Reuse before creating**: before building a new UI element, search `mobile/components/` and `frontend/web/src/` for existing components that serve the same purpose. Extend an existing component with a new variant or prop rather than creating a one-off inline implementation. Key mobile primitives: `AppPressable` (tap primitive), `Button` (labeled button with `primary`/`secondary`/`clear`/`danger` variants), `FloatingSaveButton` (FAB), `Card` (container). The same principle applies to backend utilities — check existing helpers before writing new ones.
 
 ### Limits & Safety
 
@@ -186,6 +188,11 @@ User Question → Intent Router → Conversational Profile Dispatch → Tool Vis
 - `POST /documents/search` – Search documents
 - `GET /contacts` – List contacts
 - `GET /meetings/{id}` – Get meeting
+
+### News Topics
+- `GET /news-topics` – List tracked topics
+- `POST /news-topics` – Create/update topic
+- `DELETE /news-topics/{id}` – Delete topic
 
 ### Webhooks
 - `POST /webhooks/contacts` – Sync/unlink contacts
@@ -235,7 +242,7 @@ AGENT_MODEL_ROUTING_TIMEOUT_BOOST_SECONDS=30
 # Agent Configuration
 AGENT_MAX_STEPS=15
 AGENT_MAX_TOOL_CALLS=20
-AGENT_MAX_REPAIRS=2
+AGENT_MAX_REPAIRS=5
 AGENT_ENABLE_INTENT_ROUTING=true
 AGENT_ENABLE_VALIDATION=true
 
@@ -328,4 +335,6 @@ pytest tests/agent/test_controller.py tests/integration/test_full_flow.py tests/
 | Model routing policy | `backend/orchestrator/agent/model_routing.py` |
 | Planner/verifier policy | `backend/orchestrator/agent/planning_policy.py` |
 | Vector search | `backend/orchestrator/retrieval.py` |
+| News feed aggregation | `backend/orchestrator/news_feeds.py` |
+| Daily briefing agent | `backend/orchestrator/agents/daily_briefing/executor.py` |
 | Frontend API client | `frontend/web/src/lib/api.ts` |
