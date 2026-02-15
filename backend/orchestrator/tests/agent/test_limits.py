@@ -15,7 +15,7 @@ class TestAgentConfig:
 
         assert config.max_steps == 15
         assert config.max_tool_calls == 20
-        assert config.max_repairs == 2
+        assert config.max_repairs == 5
         assert config.enable_intent_routing is True
         assert config.enable_validation is True
 
@@ -39,7 +39,7 @@ class TestAgentConfig:
         """Test AgentConfig.from_env() reads environment variables."""
         monkeypatch.setenv("AGENT_MAX_STEPS", "25")
         monkeypatch.setenv("AGENT_MAX_TOOL_CALLS", "30")
-        monkeypatch.setenv("AGENT_MAX_REPAIRS", "5")
+        monkeypatch.setenv("AGENT_MAX_REPAIRS", "7")
         monkeypatch.setenv("AGENT_ENABLE_INTENT_ROUTING", "false")
         monkeypatch.setenv("AGENT_ENABLE_VALIDATION", "false")
 
@@ -47,7 +47,7 @@ class TestAgentConfig:
 
         assert config.max_steps == 25
         assert config.max_tool_calls == 30
-        assert config.max_repairs == 5
+        assert config.max_repairs == 7
         assert config.enable_intent_routing is False
         assert config.enable_validation is False
 
