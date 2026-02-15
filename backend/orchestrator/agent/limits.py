@@ -58,7 +58,7 @@ class AgentConfig:
     # Hard limits
     max_steps: int = 15
     max_tool_calls: int = 20
-    max_repairs: int = 2
+    max_repairs: int = 5
 
     # No-progress detection thresholds
     repeated_calls_threshold: int = 3
