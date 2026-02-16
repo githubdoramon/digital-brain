@@ -9,6 +9,7 @@ from time import perf_counter
 from typing import Any
 
 from fastapi import (
+    BackgroundTasks,
     Depends,
     FastAPI,
     File,
@@ -87,6 +88,8 @@ from schemas import (
     TodoStatusUpdateIn,
     ToolRunIn,
     ToolRunOut,
+    UserFactOut,
+    UserFactUpdateIn,
 )
 from tools.handlers import get_handler
 from tools.registry import get_registry
@@ -1078,7 +1081,9 @@ def _should_reset_command_thread(
 
 @api.post("/ask", response_model=AskOut)
 @api.post("/mobile/ask", response_model=AskOut)
-async def ask(payload: AskIn, user: dict = Depends(get_current_user)):
+async def ask(
+    payload: AskIn, background_tasks: BackgroundTasks, user: dict = Depends(get_current_user)
+):
     start_time = perf_counter()
     user_email = user.get("email")
     if not user_email:
@@ -1166,6 +1171,11 @@ async def ask(payload: AskIn, user: dict = Depends(get_current_user)):
         preview,
     )
 
+    def _schedule_fact_extraction(**kwargs):
+        from fact_extraction import maybe_extract_facts
+
+        background_tasks.add_task(maybe_extract_facts, **kwargs)
+
     bundle = await llm.answer_question(
         ctx.question,
         search_limit=limit,
@@ -1178,6 +1188,7 @@ async def ask(payload: AskIn, user: dict = Depends(get_current_user)):
         ui_submission=payload.ui_submission.model_dump(exclude_none=True)
         if payload.ui_submission
         else None,
+        on_exchange_persisted=_schedule_fact_extraction,
     )
     bundle["thread_id"] = ctx.session_id
     bundle["session_id"] = ctx.session_id
@@ -1204,7 +1215,9 @@ async def ask(payload: AskIn, user: dict = Depends(get_current_user)):
 
 @api.post("/ask/stream")
 @api.post("/mobile/ask/stream")
-async def ask_stream(payload: AskIn, user: dict = Depends(get_current_user)):
+async def ask_stream(
+    payload: AskIn, background_tasks: BackgroundTasks, user: dict = Depends(get_current_user)
+):
     """
     Stream LLM responses as Server-Sent Events (SSE).
 
@@ -1331,6 +1344,11 @@ async def ask_stream(payload: AskIn, user: dict = Depends(get_current_user)):
         preview,
     )
 
+    def _schedule_fact_extraction(**kwargs):
+        from fact_extraction import maybe_extract_facts
+
+        background_tasks.add_task(maybe_extract_facts, **kwargs)
+
     async def event_generator():
         try:
             yield f"data: {json.dumps({'type': 'session_info', 'thread_id': ctx.session_id, 'is_new_session': ctx.is_new_session})}\n\n"
@@ -1347,6 +1365,7 @@ async def ask_stream(payload: AskIn, user: dict = Depends(get_current_user)):
                 ui_submission=payload.ui_submission.model_dump(exclude_none=True)
                 if payload.ui_submission
                 else None,
+                on_exchange_persisted=_schedule_fact_extraction,
             ):
                 if event.get("type") == "done":
                     from commands.storage import get_pending_event
@@ -1466,6 +1485,71 @@ def delete_conversation_thread(thread_id: str, user: dict = Depends(get_current_
     deleted = conversations.delete_thread(thread_id, user_email)
     if not deleted:
         raise HTTPException(status_code=404, detail="Conversation thread not found")
+    return Response(status_code=204)
+
+
+# --------------------------- User Facts Endpoints ---------------------------
+
+
+@api.get("/user/facts", response_model=list[UserFactOut])
+@api.get("/mobile/user/facts", response_model=list[UserFactOut])
+def list_user_facts(user: dict = Depends(get_current_user)):
+    """List all known facts about the authenticated user."""
+    import user_facts
+
+    user_email = user.get("email")
+    if not user_email:
+        raise HTTPException(status_code=400, detail="Authenticated user email missing")
+    facts = user_facts.get_user_facts(user_email)
+    return [UserFactOut(**f) for f in facts]
+
+
+@api.put("/user/facts/{fact_id}", response_model=UserFactOut)
+@api.put("/mobile/user/facts/{fact_id}", response_model=UserFactOut)
+def update_user_fact(
+    fact_id: str,
+    payload: UserFactUpdateIn,
+    user: dict = Depends(get_current_user),
+):
+    """Update (correct) a user fact."""
+    import user_facts
+
+    user_email = user.get("email")
+    if not user_email:
+        raise HTTPException(status_code=400, detail="Authenticated user email missing")
+
+    # Verify ownership
+    existing = user_facts.get_fact(fact_id)
+    if not existing or existing.get("user_email") != user_email:
+        raise HTTPException(status_code=404, detail="Fact not found")
+
+    updated = user_facts.update_fact(
+        fact_id,
+        content=payload.content,
+        category=payload.category,
+        importance=payload.importance,
+    )
+    if not updated:
+        raise HTTPException(status_code=404, detail="Fact not found")
+    return UserFactOut(**updated)
+
+
+@api.delete("/user/facts/{fact_id}", status_code=204)
+@api.delete("/mobile/user/facts/{fact_id}", status_code=204)
+def delete_user_fact(fact_id: str, user: dict = Depends(get_current_user)):
+    """Delete a user fact the user disagrees with."""
+    import user_facts
+
+    user_email = user.get("email")
+    if not user_email:
+        raise HTTPException(status_code=400, detail="Authenticated user email missing")
+
+    # Verify ownership
+    existing = user_facts.get_fact(fact_id)
+    if not existing or existing.get("user_email") != user_email:
+        raise HTTPException(status_code=404, detail="Fact not found")
+
+    user_facts.delete_fact(fact_id)
     return Response(status_code=204)
 
 

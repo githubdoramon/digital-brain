@@ -436,6 +436,44 @@ CREATE TABLE IF NOT EXISTS news_topics (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+-- User facts (persistent user preferences, traits, habits, opinions, constraints)
+CREATE TABLE IF NOT EXISTS user_facts (
+  fact_id       TEXT PRIMARY KEY,
+  user_email    TEXT NOT NULL,
+  content       TEXT NOT NULL,
+  category      TEXT NOT NULL DEFAULT 'general'
+                CHECK (category IN ('preference','biographical','behavioral','goal','opinion','constraint','general')),
+  importance    SMALLINT NOT NULL DEFAULT 5
+                CHECK (importance BETWEEN 1 AND 10),
+  content_embed VECTOR(768),
+  content_tsv   TSVECTOR,
+  source_thread_id TEXT,
+  access_count  INTEGER NOT NULL DEFAULT 0,
+  last_accessed_at TIMESTAMPTZ,
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_user_facts_user ON user_facts (user_email);
+CREATE INDEX IF NOT EXISTS idx_user_facts_tsv ON user_facts USING gin(content_tsv);
+CREATE INDEX IF NOT EXISTS idx_user_facts_embed
+  ON user_facts USING ivfflat (content_embed vector_cosine_ops) WITH (lists = 50);
+
+-- FTS trigger for user_facts
+CREATE OR REPLACE FUNCTION user_facts_tsv_update() RETURNS trigger AS $$
+BEGIN
+  NEW.content_tsv := to_tsvector(
+    'english',
+    unaccent(coalesce(NEW.content, ''))
+  );
+  RETURN NEW;
+END; $$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS user_facts_tsv_trg ON user_facts;
+CREATE TRIGGER user_facts_tsv_trg
+BEFORE INSERT OR UPDATE OF content ON user_facts
+FOR EACH ROW EXECUTE FUNCTION user_facts_tsv_update();
+
 -- Helpful view
 CREATE OR REPLACE VIEW events_with_places AS
 SELECT e.*, p.name AS place_name, p.city, p.country, p.lat, p.lon

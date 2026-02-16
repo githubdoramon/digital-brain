@@ -79,6 +79,8 @@ backend/orchestrator/
 ├── events.py                   # Event management
 ├── contacts.py                 # Contact management
 ├── retrieval.py                # Vector search
+├── user_facts.py               # User facts/preferences (persistent)
+├── fact_extraction.py          # Background fact extraction pipeline
 ├── skills.py                   # Skill management
 ├── auth.py                     # Authentication
 └── db.py                       # Database helpers
@@ -160,6 +162,11 @@ User Question → Intent Router → Conversational Profile Dispatch → Tool Vis
 - **Reuse before creating**: before building a new UI element, search `mobile/components/` and `frontend/web/src/` for existing components that serve the same purpose. Extend an existing component with a new variant or prop rather than creating a one-off inline implementation. Key mobile primitives: `AppPressable` (tap primitive), `Button` (labeled button with `primary`/`secondary`/`clear`/`danger` variants), `FloatingSaveButton` (FAB), `Card` (container). The same principle applies to backend utilities — check existing helpers before writing new ones.
 - **Accent-insensitive text matching is mandatory**: any code that compares, searches, or fuzzy-matches user-provided text (names, titles, tags, comments, or any free-text field) must strip diacritics before comparison. Use `normalize_search_text()` from `search_normalization.py` for Python-side comparisons and PostgreSQL `unaccent()` for SQL queries. Never use raw `.lower()` or `LOWER()` alone for text matching — "Jordan" must match "José", "São Paulo" must match "Sao Paulo". The `unaccent` extension is installed in the database schema (`init.sql`).
 - **Pre-resolution results must be surfaced to the agent loop**: when the controller runs `pre_resolve_contacts` before the tool loop, the outcome (whether contacts were found or not) must be injected into the LLM context via `build_contact_scope_context()`. This includes the "no matches found" case — otherwise the LLM will redundantly call `resolve_contacts` again for the same names.
+- **User facts are persistent cross-conversation knowledge**: the `user_facts` table stores atomic personal facts (preferences, traits, habits, opinions, constraints, goals) that don't belong in contacts, events, places, todos, or documents. Facts are automatically extracted from conversations via a background pipeline (`fact_extraction.py`) and injected into every LLM prompt via `get_user_facts_context()`.
+- **User facts extraction boundary**: the extraction pipeline must NOT extract information that belongs in other entities (relationships → contacts, specific events → events, tasks → todos, locations → places). The extraction prompt includes the user's existing contacts as context to prevent duplication.
+- **User facts vs AgentState.known_facts**: these are completely different. `AgentState.known_facts` is transient per-request working memory (tool result summaries). `user_facts` is persistent long-term memory across all conversations. They occupy different positions in the prompt and serve different purposes.
+- **User facts retrieval scoring**: facts are ranked by a composite score: `0.5 * semantic_similarity + 0.25 * (importance/10) + 0.25 * recency_decay`. Recency uses exponential decay based on `last_accessed_at` with a ~30-day half-life.
+- **User facts extraction runs as BackgroundTask**: triggered after conversation persistence in `llm.py` via a callback from `app.py`. It must never block or crash user-facing responses. Short/trivial messages and slash commands skip extraction.
 
 ### Limits & Safety
 
@@ -190,6 +197,11 @@ User Question → Intent Router → Conversational Profile Dispatch → Tool Vis
 - `POST /documents/search` – Search documents
 - `GET /contacts` – List contacts
 - `GET /meetings/{id}` – Get meeting
+
+### User Facts
+- `GET /user/facts` – List all known facts about the user
+- `PUT /user/facts/{id}` – Update/correct a fact
+- `DELETE /user/facts/{id}` – Delete a fact
 
 ### News Topics
 - `GET /news-topics` – List tracked topics
@@ -337,6 +349,8 @@ pytest tests/agent/test_controller.py tests/integration/test_full_flow.py tests/
 | Model routing policy | `backend/orchestrator/agent/model_routing.py` |
 | Planner/verifier policy | `backend/orchestrator/agent/planning_policy.py` |
 | Vector search | `backend/orchestrator/retrieval.py` |
+| User facts service | `backend/orchestrator/user_facts.py` |
+| Fact extraction pipeline | `backend/orchestrator/fact_extraction.py` |
 | News feed aggregation | `backend/orchestrator/news_feeds.py` |
 | Daily briefing agent | `backend/orchestrator/agents/daily_briefing/executor.py` |
 | Frontend API client | `frontend/web/src/lib/api.ts` |

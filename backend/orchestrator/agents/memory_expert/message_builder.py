@@ -7,7 +7,12 @@ from typing import TYPE_CHECKING, Any
 
 from agent.guardrails import build_contact_scope_context
 from observability.logger import get_runtime_logger
-from prompts.context import get_location_context, get_self_context, get_time_context
+from prompts.context import (
+    get_location_context,
+    get_self_context,
+    get_time_context,
+    get_user_facts_context,
+)
 from prompts.state_injection import build_state_message
 
 from .prompts import get_memory_expert_protocol_prompt, get_memory_expert_system_prompt
@@ -79,6 +84,10 @@ def build_memory_expert_messages(
         self_context = get_self_context(user_email)
         if self_context:
             messages.append({"role": "system", "content": self_context})
+
+        user_facts_ctx = get_user_facts_context(user_email, question)
+        if user_facts_ctx:
+            messages.append({"role": "system", "content": user_facts_ctx})
 
     messages.append({"role": "system", "content": get_time_context()})
 

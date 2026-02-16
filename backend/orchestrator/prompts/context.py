@@ -75,6 +75,22 @@ def get_self_context(email: str) -> Optional[str]:
     return f"You are assisting the user with email: {email}.{behavioral_guidance}"
 
 
+def get_user_facts_context(email: str, query: str) -> Optional[str]:
+    """Retrieve relevant user facts and format for prompt injection."""
+    if not email:
+        return None
+    try:
+        import user_facts
+
+        facts_text = user_facts.get_facts_for_context(email, query)
+        if not facts_text:
+            return None
+        return f"Known facts about this user:\n{facts_text}"
+    except Exception as exc:
+        logger.warning("[context] Failed to get user facts: %s", exc)
+        return None
+
+
 def get_location_context(client_context: Optional[dict[str, Any]]) -> Optional[str]:
     """Format client-provided runtime location/timezone context for prompt injection."""
     if not client_context:

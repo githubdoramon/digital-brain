@@ -13,6 +13,7 @@ from prompts.context import (
     get_self_context,
     get_tag_context,
     get_time_context,
+    get_user_facts_context,
 )
 from prompts.state_injection import build_state_message
 
@@ -104,6 +105,10 @@ def build_main_messages(
         self_context = get_self_context(user_email)
         if self_context:
             messages.append({"role": "system", "content": self_context})
+
+        user_facts_ctx = get_user_facts_context(user_email, question)
+        if user_facts_ctx:
+            messages.append({"role": "system", "content": user_facts_ctx})
 
     messages.append({"role": "system", "content": get_time_context()})
 

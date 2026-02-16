@@ -402,6 +402,29 @@ class NewsTopicIn(BaseModel):
     enabled: bool = True
 
 
+class UserFactOut(BaseModel):
+    """User fact as returned from the API."""
+
+    fact_id: str
+    user_email: str
+    content: str
+    category: str
+    importance: int
+    source_thread_id: str | None = None
+    access_count: int = 0
+    last_accessed_at: datetime | str | None = None
+    created_at: datetime | str | None = None
+    updated_at: datetime | str | None = None
+
+
+class UserFactUpdateIn(BaseModel):
+    """Partial update for a user fact."""
+
+    content: str | None = None
+    category: str | None = None
+    importance: int | None = Field(default=None, ge=1, le=10)
+
+
 class NewsTopicOut(BaseModel):
     """News topic as returned from the API."""
 

@@ -64,6 +64,7 @@ async def answer_question(
     user_email: str | None = None,
     client_context: dict[str, Any] | None = None,
     ui_submission: dict[str, Any] | None = None,
+    on_exchange_persisted: Any | None = None,
 ) -> dict[str, Any]:
     """
     Answer a question using the LLM with tool calling.
@@ -129,6 +130,15 @@ async def answer_question(
                     )
                     if updated:
                         result["thread_title"] = updated.get("title")
+
+            # Trigger background fact extraction
+            if on_exchange_persisted:
+                on_exchange_persisted(
+                    user_email=user_email,
+                    user_message=question,
+                    assistant_message=result["answer"],
+                    thread_id=session_id,
+                )
         except Exception as exc:
             logger.warning("[session] Failed to persist exchange: %s", exc, exc_info=exc)
 
@@ -143,6 +153,7 @@ async def answer_question_stream(
     user_email: str | None = None,
     client_context: dict[str, Any] | None = None,
     ui_submission: dict[str, Any] | None = None,
+    on_exchange_persisted: Any | None = None,
 ) -> AsyncGenerator[dict[str, Any], None]:
     """
     Stream LLM responses with tool calling support.
@@ -221,6 +232,15 @@ async def answer_question_stream(
                             "type": "title_update",
                             "title": updated.get("title"),
                         }
+
+            # Trigger background fact extraction
+            if on_exchange_persisted:
+                on_exchange_persisted(
+                    user_email=user_email,
+                    user_message=question,
+                    assistant_message=final_bundle["answer"],
+                    thread_id=session_id,
+                )
         except Exception as exc:
             logger.warning("[session] Failed to persist exchange: %s", exc, exc_info=exc)
 
