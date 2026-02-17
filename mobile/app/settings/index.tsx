@@ -213,6 +213,21 @@ export default function SettingsScreen() {
       <Card style={[styles.card, styles.navCard]}>
         <Pressable
           style={styles.navRow}
+          onPress={() => router.push('/settings/about-me')}
+        >
+          <View style={styles.textBlock}>
+            <Text style={styles.rowTitle}>About me</Text>
+            <Text style={styles.rowSubtitle}>
+              View and manage what your Brain has learned about you.
+            </Text>
+          </View>
+          <Ionicons name="chevron-forward" size={20} color={theme.colors.mutedInk} />
+        </Pressable>
+      </Card>
+
+      <Card style={[styles.card, styles.navCard]}>
+        <Pressable
+          style={styles.navRow}
           onPress={() => router.push('/settings/news-topics')}
         >
           <View style={styles.textBlock}>

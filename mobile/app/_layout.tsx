@@ -159,6 +159,22 @@ function RootLayoutNav({ loaded }: { loaded: boolean }) {
           },
         }}
       />
+      <Stack.Screen
+        name="settings/about-me"
+        options={{
+          headerShown: true,
+          headerTransparent: Platform.OS !== 'android',
+          headerTitle: '',
+          headerBackTitle: ' ',
+          headerBackTitleStyle: { fontSize: 0 },
+          headerBackButtonMenuEnabled: false,
+          headerShadowVisible: false,
+          headerTintColor: theme.colors.ink,
+          headerStyle: {
+            backgroundColor: Platform.OS === 'android' ? theme.colors.background : 'transparent',
+          },
+        }}
+      />
         <Stack.Screen
           name="contacts/[contactId]/index"
           options={{
