@@ -175,6 +175,29 @@ class TestBriefingPromptBirthdays:
 
 
 # ---------------------------------------------------------------------------
+# _build_briefing_prompt – output rules ban meta-commentary
+# ---------------------------------------------------------------------------
+
+
+class TestBriefingPromptOutputRules:
+    def test_bans_meta_commentary_patterns(self):
+        ctx = _make_context()
+        prompt = _build_briefing_prompt(ctx)
+        assert "NEVER use meta-commentary" in prompt
+        assert "the text includes" in prompt  # listed as banned example
+
+    def test_bans_generic_category_lists(self):
+        ctx = _make_context()
+        prompt = _build_briefing_prompt(ctx)
+        assert "NEVER produce generic category lists" in prompt
+
+    def test_bans_asking_questions(self):
+        ctx = _make_context()
+        prompt = _build_briefing_prompt(ctx)
+        assert "NEVER ask questions or offer to do more" in prompt
+
+
+# ---------------------------------------------------------------------------
 # _format_event_for_analysis – event text block
 # ---------------------------------------------------------------------------
 
@@ -417,8 +440,8 @@ class TestFormatContextNews:
         assert "News Matching Your Topics (1)" in text
         assert "General Headlines (1)" in text
 
-    def test_general_headlines_capped(self):
-        """General headlines should be capped to avoid context bloat."""
+    def test_general_headlines_capped_at_five(self):
+        """General headlines should be capped to top 5 worldwide items."""
         articles = [
             _make_news_article(
                 title=f"Headline {i}",
@@ -429,10 +452,10 @@ class TestFormatContextNews:
         ]
         ctx = _make_context(news_articles=articles)
         text = _format_context_text(ctx)
-        # We cap at 15 general headlines
+        # We cap at 5 general headlines
         assert "General Headlines (25)" in text
-        assert "Headline 14" in text  # 0-indexed, the 15th item
-        assert "Headline 15" not in text  # 16th should be excluded
+        assert "Headline 4" in text  # 0-indexed, the 5th item
+        assert "Headline 5" not in text  # 6th should be excluded
 
 
 # ---------------------------------------------------------------------------
@@ -448,20 +471,87 @@ class TestBriefingPromptNews:
         assert "## News & Topics" in prompt
         assert "include the News & Topics section" in prompt
 
-    def test_prompt_instructs_markdown_links(self):
+    def test_prompt_instructs_article_format_with_url(self):
         articles = [_make_news_article(topic_matches=["AI"])]
         ctx = _make_context(news_articles=articles)
         prompt = _build_briefing_prompt(ctx)
-        assert "markdown link" in prompt.lower()
+        assert "[Article Title](url)" in prompt
 
     def test_prompt_emphasises_summaries(self):
         articles = [_make_news_article(topic_matches=["AI"])]
         ctx = _make_context(news_articles=articles)
         prompt = _build_briefing_prompt(ctx)
-        assert "MUST include a brief summary" in prompt
+        assert "1-sentence summary" in prompt
+
+    def test_prompt_bans_generic_category_lists(self):
+        articles = [_make_news_article(topic_matches=["AI"])]
+        ctx = _make_context(news_articles=articles)
+        prompt = _build_briefing_prompt(ctx)
+        assert "NEVER produce generic category lists" in prompt
+
+    def test_prompt_bans_meta_commentary(self):
+        articles = [_make_news_article(topic_matches=["AI"])]
+        ctx = _make_context(news_articles=articles)
+        prompt = _build_briefing_prompt(ctx)
+        assert "there are several" in prompt.lower()  # mentioned as banned example
+
+    def test_prompt_requires_concrete_articles_only(self):
+        articles = [_make_news_article(topic_matches=["AI"])]
+        ctx = _make_context(news_articles=articles)
+        prompt = _build_briefing_prompt(ctx)
+        assert "ONLY concrete articles" in prompt
+
+    def test_prompt_caps_general_headlines_at_five(self):
+        articles = [_make_news_article(topic_matches=["AI"])]
+        ctx = _make_context(news_articles=articles)
+        prompt = _build_briefing_prompt(ctx)
+        assert "up to 5" in prompt
 
     def test_prompt_omits_news_section_when_empty(self):
         ctx = _make_context(news_articles=[])
         prompt = _build_briefing_prompt(ctx)
         assert "## News & Topics" not in prompt
         assert "News & Topics section" not in prompt
+
+
+# ---------------------------------------------------------------------------
+# _is_invalid_briefing – expanded banned patterns
+# ---------------------------------------------------------------------------
+
+
+class TestIsInvalidBriefingExpandedBans:
+    def test_rejects_generic_category_language(self):
+        from agents.daily_briefing.executor import _is_invalid_briefing
+
+        bad = "# Daily Briefing - 2026-02-15\n## News\nThere are several articles on various topics"
+        assert _is_invalid_briefing(bad) is True
+
+    def test_rejects_if_youd_like(self):
+        from agents.daily_briefing.executor import _is_invalid_briefing
+
+        bad = "# Daily Briefing - 2026-02-15\nIf you'd like me to extract specific information"
+        assert _is_invalid_briefing(bad) is True
+
+    def test_rejects_none_mentioned_explicitly(self):
+        from agents.daily_briefing.executor import _is_invalid_briefing
+
+        bad = "# Daily Briefing - 2026-02-15\nNone mentioned explicitly, but there are news"
+        assert _is_invalid_briefing(bad) is True
+
+    def test_rejects_eg_pattern(self):
+        from agents.daily_briefing.executor import _is_invalid_briefing
+
+        bad = "# Daily Briefing - 2026-02-15\n- AI (e.g., machine learning)"
+        assert _is_invalid_briefing(bad) is True
+
+    def test_accepts_valid_briefing(self):
+        from agents.daily_briefing.executor import _is_invalid_briefing
+
+        good = (
+            "# Daily Briefing - 2026-02-15 (UTC)\n"
+            "## Day Overview\nQuiet day with one meeting.\n"
+            "## Outstanding Todos\n- Review budget proposal\n"
+            "## News & Topics\n"
+            "- [OpenAI releases GPT-5](https://example.com) - Major model upgrade. (TechCrunch)\n"
+        )
+        assert _is_invalid_briefing(good) is False

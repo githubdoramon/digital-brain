@@ -781,14 +781,17 @@ def _build_briefing_prompt(context: dict[str, Any]) -> str:
     news_section = (
         (
             "## News & Topics\n"
-            "- Summarize the most relevant news items that match the user's tracked topics.\n"
-            "- Group by topic when possible.\n"
-            "- Include a few notable general headlines if space allows.\n"
-            "- IMPORTANT: each item MUST include a brief summary (1-2 sentences) so the user\n"
-            "  understands the story at a glance without clicking. The summary is the most\n"
-            "  valuable part of this section.\n"
-            "- Include the article URL as a markdown link so the user can open it directly.\n"
-            "  Format: [Article Title](url) - summary. (Source)\n"
+            "- Use ONLY concrete articles from the context below. Do NOT invent or generalize.\n"
+            "- First list topic-matched articles (grouped by topic label), then up to 5 notable\n"
+            "  general headlines that cover important worldwide events.\n"
+            "- Each item MUST follow this exact format:\n"
+            "  [Article Title](url) - one sentence explaining why it matters or what happened. (Source)\n"
+            "- The 1-sentence summary is the most valuable part -- the user should understand the\n"
+            "  story at a glance without clicking.\n"
+            "- NEVER produce generic category lists like 'AI and machine learning' or\n"
+            "  'Politics (e.g., ...)'. Every bullet must reference a specific article with its URL.\n"
+            "- NEVER say 'there are several articles' or describe the data -- just write the items.\n"
+            "- If no articles have useful content, write: 'No notable news today.'\n"
         )
         if has_news
         else ""
@@ -807,10 +810,12 @@ def _build_briefing_prompt(context: dict[str, Any]) -> str:
         "You are preparing the user for upcoming events. Use future tense (will, upcoming, prepare, review).\n"
         "\n"
         "OUTPUT RULES (MANDATORY):\n"
-        "- Output Markdown only.\n"
-        "- Do not ask questions.\n"
-        "- Do not explain the input.\n"
-        "- Do not say 'you provided' or 'the text appears'.\n"
+        "- Output Markdown only. No preamble, no sign-off.\n"
+        "- NEVER ask questions or offer to do more.\n"
+        "- NEVER use meta-commentary about the input ('the text includes', 'there are several',\n"
+        "  'you provided', 'the text appears', 'it appears', 'none mentioned explicitly').\n"
+        "- NEVER produce generic category lists — every bullet must contain a specific fact,\n"
+        "  title, action item, or recommendation.\n"
         "- Focus ONLY on today's events and their linked todos.\n"
         "- Each event already has a pre-computed analysis with key points, action items, and prep\n"
         "  focus. Incorporate that analysis into the Event Prep section -- do NOT ignore it.\n"
@@ -850,6 +855,14 @@ def _build_briefing_prompt(context: dict[str, Any]) -> str:
 def _build_rewrite_prompt(context: dict[str, Any], draft: str) -> str:
     return (
         "Rewrite the draft into the REQUIRED STRUCTURE. Output Markdown only.\n"
+        "RULES:\n"
+        "- NEVER use meta-commentary ('the text includes', 'there are several', 'it appears').\n"
+        "- NEVER produce generic category lists — every bullet must reference a specific item.\n"
+        "- NEVER ask questions or offer to do more.\n"
+        "- For News & Topics: each item must be a specific article with URL and 1-sentence summary.\n"
+        "  Format: [Title](url) - why it matters. (Source)\n"
+        "- If no useful news, write: 'No notable news today.'\n"
+        "\n"
         "Draft (do not include any of this meta text in output):\n"
         f"{draft}\n\n"
         "Context (use only for content):\n"
@@ -869,6 +882,17 @@ def _is_invalid_briefing(content: str) -> bool:
         "let me know",
         "clarify",
         "if you have",
+        "if you'd like",
+        "if you would like",
+        "there are several",
+        "none mentioned explicitly",
+        "please let me know",
+        "the text includes",
+        "various topics",
+        "including ai,",
+        "e.g.,",
+        "and more.",
+        "extract specific information",
     ]
     return any(phrase in lower for phrase in banned)
 
@@ -889,7 +913,7 @@ def _generate_summary(context: dict[str, Any], markdown: str) -> str:
     return call_llm(prompt, system_prompt=system_prompt, temperature=0.2)
 
 
-def _condense_notes(notes: str, limit: int = 12) -> str:
+def _condense_notes(notes: str, limit: int = 48) -> str:
     cleaned = notes.replace("\r\n", "\n")
     lines = [line.strip() for line in cleaned.split("\n") if line.strip()]
     condensed: list[str] = []
@@ -989,7 +1013,7 @@ def _format_context_text(context: dict[str, Any]) -> str:
             lines.append("")
         if unmatched:
             lines.append(f"General Headlines ({len(unmatched)}):")
-            for a in unmatched[:15]:  # cap to avoid context bloat
+            for a in unmatched[:5]:  # cap to top 5 important worldwide headlines
                 url = (a.get("url") or "").strip()
                 title = a.get("title", "")
                 lines.append(f"- {title} ({a.get('source', '')})")

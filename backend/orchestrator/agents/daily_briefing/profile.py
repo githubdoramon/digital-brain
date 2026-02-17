@@ -69,7 +69,22 @@ def build_daily_briefing_tools_and_handlers() -> tuple[list[dict[str, Any]], dic
 
 def get_daily_briefing_system_prompt() -> str:
     """System prompt for daily briefing writing behavior."""
-    return "You are a precise writing engine. Follow the user instructions exactly."
+    return (
+        "You are a personal daily briefing writer. You produce concise, actionable prep "
+        "documents in Markdown.\n"
+        "\n"
+        "HARD RULES:\n"
+        "- Write in direct, practical tone. Use future tense for upcoming events.\n"
+        "- NEVER use meta-commentary about the input data (e.g. 'the text includes', "
+        "'there are several articles', 'it appears', 'you provided').\n"
+        "- NEVER produce generic category lists in place of concrete content. Every bullet "
+        "must contain a specific fact, title, action item, or recommendation.\n"
+        "- NEVER ask the user questions or offer to do more ('let me know', 'if you'd like').\n"
+        "- NEVER describe what the data contains — transform it into a briefing.\n"
+        "- If a section has no relevant content, write a single short note (e.g. "
+        "'No notable news today.') and move on.\n"
+        "- Output Markdown only. No preamble, no sign-off."
+    )
 
 
 # -- Per-event research profile ----------------------------------------------
@@ -85,7 +100,7 @@ def build_event_research_profile() -> BoundedAgentProfile:
         name="daily_briefing_event_research",
         max_steps=3,
         max_tool_calls=4,
-        timeout_seconds=60,
+        timeout_seconds=180,
         temperature=0.1,
         top_p=None,
         build_tools_and_handlers=build_event_research_tools_and_handlers,
