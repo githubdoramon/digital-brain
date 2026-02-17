@@ -149,6 +149,7 @@ def _call_llm_text(
         prompt,
         system_prompt=system_prompt,
         model=LLM_CHAT_MODEL,
+        use_simpler_model=False,
         timeout=timeout,
     )
 

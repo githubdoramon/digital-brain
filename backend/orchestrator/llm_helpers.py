@@ -23,6 +23,7 @@ logger = get_runtime_logger(__name__)
 LLM_BASE_URL = os.getenv("LLM_BASE_URL")
 LLM_API_KEY = os.getenv("LLM_API_KEY", "")
 LLM_CHAT_MODEL = os.getenv("LLM_CHAT_MODEL")
+LLM_CHAT_MODEL_FAST = os.getenv("LLM_CHAT_MODEL_FAST")
 LLM_CHAT_MODEL_SIMPLER = os.getenv("LLM_CHAT_MODEL_SIMPLER")
 LLM_TIMEOUT = int(os.getenv("LLM_TIMEOUT", "120"))
 LLM_MAX_RETRIES = int(os.getenv("LLM_MAX_RETRIES", "3"))
@@ -49,9 +50,14 @@ def get_llm_headers() -> dict[str, str]:
 
 
 def _resolve_model(model: Optional[str], use_simpler_model: Optional[bool]) -> str:
-    if not model and use_simpler_model and LLM_CHAT_MODEL_SIMPLER:
-        return LLM_CHAT_MODEL_SIMPLER
-    return model or LLM_CHAT_MODEL
+    regular_model = LLM_CHAT_MODEL or ""
+    if model:
+        return str(model)
+    if use_simpler_model is True and LLM_CHAT_MODEL_SIMPLER:
+        return str(LLM_CHAT_MODEL_SIMPLER)
+    if use_simpler_model is False:
+        return regular_model
+    return str(LLM_CHAT_MODEL_FAST or regular_model)
 
 
 def build_chat_payload(

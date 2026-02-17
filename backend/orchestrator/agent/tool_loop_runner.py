@@ -23,6 +23,7 @@ def run_profiled_tool_loop(
         tools=tools,
         tool_handlers=tool_handlers,
         system_prompt=system_prompt,
+        use_simpler_model=False,
         timeout=profile.timeout_seconds,
         temperature=profile.temperature,
         top_p=profile.top_p,

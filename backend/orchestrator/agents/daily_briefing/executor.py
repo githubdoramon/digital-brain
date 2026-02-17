@@ -715,7 +715,12 @@ def _synthesise_event_summary(
     )
 
     try:
-        result = call_llm(user_prompt, system_prompt=system_prompt, temperature=0.1)
+        result = call_llm(
+            user_prompt,
+            system_prompt=system_prompt,
+            temperature=0.1,
+            use_simpler_model=False,
+        )
         return result.strip()
     except Exception:
         logger.warning("Failed to summarize event '%s', using fallback", title, exc_info=True)
@@ -751,6 +756,7 @@ def _generate_markdown(context: dict[str, Any]) -> str:
             retry_prompt,
             system_prompt="Rewrite strictly to the required format.",
             temperature=0.1,
+            use_simpler_model=False,
         )
         logger.info(
             "[briefing] Rewrite complete: %d chars, valid=%s (%.0fms)",
@@ -910,7 +916,12 @@ def _generate_summary(context: dict[str, Any], markdown: str) -> str:
         "Briefing markdown (reference only):\n"
         f"{markdown}"
     )
-    return call_llm(prompt, system_prompt=system_prompt, temperature=0.2)
+    return call_llm(
+        prompt,
+        system_prompt=system_prompt,
+        temperature=0.2,
+        use_simpler_model=False,
+    )
 
 
 def _condense_notes(notes: str, limit: int = 48) -> str:
