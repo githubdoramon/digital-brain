@@ -417,11 +417,6 @@ def _display_name_from_contact_id(contact_id: str) -> str:
 
 def _ensure_stub_contacts(contact_ids: list[str]) -> None:
     """Auto-create minimal contact records for IDs that don't exist yet."""
-    logger.debug(
-        "[ingest_event] Ensuring stub contacts for %d contacts: %s",
-        len(contact_ids),
-        contact_ids[:10],
-    )
     from schemas import ContactIn
 
     for cid in contact_ids:
@@ -446,19 +441,7 @@ def ingest_event(event: EventIn) -> None:
     embedding_payload = {**event.dict(), "tags": merged_tags, "types": types}
     emb = _generate_event_embedding(embedding_payload)
     people_ids = list(dict.fromkeys(event.people or []))
-    logger.debug("[ingest_event] event: %s", event.dict())
-    logger.info(
-        "[ingest_event] Start event_id=%s external_id=%s people_count=%d source=%s",
-        event.id,
-        event.external_id,
-        len(people_ids),
-        (event.raw or {}).get("source") if isinstance(event.raw, dict) else None,
-    )
     with get_conn() as conn, conn.cursor() as cur:
-        cur.execute("SELECT txid_current() AS txid")
-        txid_row = cur.fetchone() or {}
-        txid = txid_row.get("txid")
-        logger.info("[ingest_event] txid=%s event_id=%s upsert_events_begin", txid, event.id)
         cur.execute(
             """
             INSERT INTO events (
@@ -501,72 +484,23 @@ def ingest_event(event: EventIn) -> None:
                 emb,
             ),
         )
-        logger.info(
-            "[ingest_event] txid=%s event_id=%s upsert_events_done rowcount=%s",
-            txid,
-            event.id,
-            cur.rowcount,
-        )
         # Replace event_contacts rows (DELETE + INSERT) in same transaction.
         # Auto-create stub contacts for any IDs that don't exist yet.
         cur.execute("DELETE FROM event_contacts WHERE event_id = %s", (event.id,))
-        deleted_links = cur.rowcount
-        logger.info(
-            "[ingest_event] txid=%s event_id=%s delete_event_contacts rowcount=%s",
-            txid,
-            event.id,
-            deleted_links,
-        )
-        inserted_links = 0
         if people_ids:
-            logger.debug(
-                "[ingest_event] Ensuring stub contacts for %d people: %s",
-                len(people_ids),
-                people_ids[:10],
-            )
             cur.execute(
                 "SELECT contact_id FROM contacts WHERE contact_id = ANY(%s)",
                 (people_ids,),
             )
             existing_ids = {row["contact_id"] for row in cur.fetchall()}
-            logger.debug("[ingest_event] Existing contacts: %s", existing_ids)
             missing_ids = [cid for cid in people_ids if cid not in existing_ids]
-            logger.debug("[ingest_event] Missing contacts: %s", missing_ids)
             if missing_ids:
                 _ensure_stub_contacts(missing_ids)
             cur.executemany(
                 "INSERT INTO event_contacts (event_id, contact_id) VALUES (%s, %s)",
                 [(event.id, cid) for cid in people_ids],
             )
-            inserted_links = cur.rowcount
-            logger.info(
-                "[ingest_event] txid=%s event_id=%s insert_event_contacts rowcount=%s people_ids=%s",
-                txid,
-                event.id,
-                inserted_links,
-                people_ids,
-            )
-        else:
-            logger.info(
-                "[ingest_event] txid=%s event_id=%s no_people_ids_skip_insert", txid, event.id
-            )
-
-        cur.execute(
-            "SELECT contact_id FROM event_contacts WHERE event_id = %s ORDER BY contact_id",
-            (event.id,),
-        )
-        persisted_contact_ids = [row["contact_id"] for row in cur.fetchall()]
-        logger.info(
-            "[ingest_event] txid=%s event_id=%s pre_commit_event_contacts final_count=%d deleted=%d inserted=%d persisted=%s",
-            txid,
-            event.id,
-            len(persisted_contact_ids),
-            deleted_links,
-            inserted_links,
-            persisted_contact_ids,
-        )
         conn.commit()
-        logger.info("[ingest_event] txid=%s event_id=%s commit_done", txid, event.id)
 
 
 def get_events(ids: list[str]) -> list[dict[str, Any]]:

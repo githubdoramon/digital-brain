@@ -542,18 +542,22 @@ def extract_people_from_text(
     text: str,
     conversation_messages: list[dict[str, str]] | None = None,
     include_collective_selectors: bool = False,
+    user_email: str | None = None,
 ) -> list[str] | tuple[list[str], list[dict[str, str]]]:
     """
     Extract person mentions from text using LLM.
 
     Args:
         text: The input text to analyze
-        user_email: User's email (used to get their name for LLM context)
+        conversation_messages: Prior conversation for context
+        include_collective_selectors: Whether to also return group selectors
+        user_email: User's email for retrieving user facts context
 
     Returns:
         By default: list of people.
         When include_collective_selectors=True: (people, selectors).
     """
+    from prompts.context import get_user_facts_context
 
     logger.debug("[contact_resolver] extract_people_from_text: %s", text)
     conversation_block = ""
@@ -564,13 +568,17 @@ def extract_people_from_text(
                 f"Conversation messages (JSON array, most recent last):\n{conversation_json}\n\n"
             )
 
+    user_facts_block = ""
+    if user_email:
+        facts_ctx = get_user_facts_context(user_email, text)
+        if facts_ctx:
+            user_facts_block = f"\n{facts_ctx}\n\n"
+
     prompt = f"""Extract all person references from this text.
 
 Text: "{text}"
 
-{conversation_block}
-
-IMPORTANT CONTEXT USAGE:
+{conversation_block}{user_facts_block}IMPORTANT CONTEXT USAGE:
 - Focus on the current Text above.
 - Use Conversation messages only to resolve references inside this Text (e.g., pronouns, ellipsis).
 - Do NOT include people that appear only in conversation history.
@@ -1111,6 +1119,7 @@ def resolve_contact(
                 person_text=person_text,
                 candidates=result["candidates"],
                 event_context=event_context,
+                user_email=user_email,
             )
 
             if llm_result["resolved"]:
@@ -1199,7 +1208,10 @@ def resolve_contacts_from_text(
     logger.info("[contact_resolver] Step 1: Extracting people...")
     effective_text = text
 
-    extract_kwargs: dict[str, Any] = {"conversation_messages": conversation_messages}
+    extract_kwargs: dict[str, Any] = {
+        "conversation_messages": conversation_messages,
+        "user_email": user_email,
+    }
     try:
         signature = inspect.signature(extract_people_from_text)
         if "include_collective_selectors" in signature.parameters:
@@ -1419,6 +1431,7 @@ def _resolve_people_mentions(
                     resolution["candidates"],
                     full_text,
                     conversation_messages=conversation_messages,
+                    user_email=user_email,
                 )
             if llm_result.get("resolved") and _should_accept_llm_disambiguation(
                 person_text=person_text,
@@ -2282,6 +2295,7 @@ def _llm_disambiguate_contact(
     candidates: list[dict[str, Any]],
     event_context: str,
     conversation_messages: list[dict[str, str]] | None = None,
+    user_email: str | None = None,
 ) -> dict[str, Any]:
     """
     Use LLM to disambiguate between multiple contact candidates.
@@ -2298,6 +2312,7 @@ def _llm_disambiguate_contact(
             "confidence": str,
         }
     """
+    from prompts.context import get_user_facts_context
 
     formatted_candidates: list[str] = []
     for i, candidate in enumerate(candidates):
@@ -2322,6 +2337,12 @@ def _llm_disambiguate_contact(
                 f"Conversation messages (JSON array, most recent last):\n{conversation_json}\n\n"
             )
 
+    user_facts_block = ""
+    if user_email:
+        facts_ctx = get_user_facts_context(user_email, f"{person_text} {event_context[:200]}")
+        if facts_ctx:
+            user_facts_block = f"{facts_ctx}\n\n"
+
     prompt = f"""Disambiguate a person reference from the list of candidates.
 
 Person you are trying to find: "{person_text}"
@@ -2331,7 +2352,7 @@ Candidates:
 
 Event context (use only if it is relevant): "{event_context}"
 
-{disambiguation_history_block}{conversation_block}
+{disambiguation_history_block}{conversation_block}{user_facts_block}
 
 Interpretation hints:
 - Treat the latest user message as the clarification answer to the latest assistant question.
