@@ -8,6 +8,7 @@ import {
   View,
 } from 'react-native';
 import { useBottomTabBarHeight } from '@react-navigation/bottom-tabs';
+import { useFocusEffect } from '@react-navigation/native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import Ionicons from '@expo/vector-icons/Ionicons';
@@ -105,27 +106,49 @@ export default function ContactsScreen() {
   const [contacts, setContacts] = useState<Contact[]>([]);
   const [query, setQuery] = useState('');
   const [isLoading, setIsLoading] = useState(true);
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const hasLoadedOnceRef = useRef(false);
 
-  useEffect(() => {
-    let mounted = true;
-    (async () => {
+  const loadContacts = React.useCallback(
+    async ({ showInitialLoader = false, showRefreshSpinner = false } = {}) => {
+      const refreshStartedAt = showRefreshSpinner ? Date.now() : null;
+      if (showInitialLoader) {
+        setIsLoading(true);
+      }
+      if (showRefreshSpinner) {
+        setIsRefreshing(true);
+      }
       try {
         const result = (await apiFetch('/mobile/contacts')) as { contacts: Contact[] };
-        if (mounted) {
-          setContacts(result.contacts ?? []);
-        }
+        setContacts(result.contacts ?? []);
       } catch (error) {
         console.warn('[contacts] load failed', error);
       } finally {
-        if (mounted) {
-          setIsLoading(false);
+        if (refreshStartedAt !== null) {
+          const elapsed = Date.now() - refreshStartedAt;
+          const minVisibleMs = 450;
+          if (elapsed < minVisibleMs) {
+            await new Promise((resolve) => setTimeout(resolve, minVisibleMs - elapsed));
+          }
         }
+        setIsLoading(false);
+        setIsRefreshing(false);
       }
-    })();
-    return () => {
-      mounted = false;
-    };
-  }, []);
+    },
+    [],
+  );
+
+  useFocusEffect(
+    React.useCallback(() => {
+      void loadContacts({ showInitialLoader: !hasLoadedOnceRef.current });
+      hasLoadedOnceRef.current = true;
+      return undefined;
+    }, [loadContacts]),
+  );
+
+  const handleRefresh = React.useCallback(() => {
+    void loadContacts({ showRefreshSpinner: true });
+  }, [loadContacts]);
 
   const contactMap = useMemo(() => {
     const map = new Map<string, string>();
@@ -162,6 +185,9 @@ export default function ContactsScreen() {
       <FlatList
         data={filtered}
         keyExtractor={(item) => item.contact_id}
+        refreshing={isRefreshing}
+        onRefresh={handleRefresh}
+        progressViewOffset={insets.top + 16}
         contentContainerStyle={[
           styles.listContent,
           {

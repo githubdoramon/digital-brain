@@ -278,7 +278,7 @@ def set_message_metadata_field(
         cur.execute(
             """
             UPDATE conversation_messages
-            SET metadata = metadata || %s
+            SET metadata = COALESCE(metadata, '{}'::jsonb) || %s::jsonb
             WHERE message_id = %s
             RETURNING 1
             """,

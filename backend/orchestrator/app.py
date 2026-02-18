@@ -418,14 +418,11 @@ def get_place(place_id: str, user: dict = Depends(get_current_user)):
 
 @api.get("/mobile/contacts/{contact_id}/avatar")
 def get_contact_avatar(contact_id: str, _: dict = Depends(get_current_user)):
-    logger.debug("[get_contact_avatar] contact_id=%s", contact_id)
     contact = contacts_service.get_contact(contact_id)
-    logger.debug("[get_contact_avatar] contact=%s", contact)
     if contact is None or contacts_service.is_external_placeholder(contact.get("display_name")):
         raise HTTPException(status_code=404, detail="Contact not found")
 
     external_id = contact.get("external_id")
-    logger.debug("[get_contact_avatar] external_id=%s", external_id)
     if not external_id:
         raise HTTPException(status_code=404, detail="Avatar not available")
 
