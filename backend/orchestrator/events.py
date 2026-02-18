@@ -417,6 +417,7 @@ def _display_name_from_contact_id(contact_id: str) -> str:
 
 def _ensure_stub_contacts(contact_ids: list[str]) -> None:
     """Auto-create minimal contact records for IDs that don't exist yet."""
+    logger.debug("[ingest_event] Ensuring stub contacts for %d contacts: %s", len(contact_ids), contact_ids[:10])
     from schemas import ContactIn
 
     for cid in contact_ids:
@@ -441,6 +442,7 @@ def ingest_event(event: EventIn) -> None:
     embedding_payload = {**event.dict(), "tags": merged_tags, "types": types}
     emb = _generate_event_embedding(embedding_payload)
     people_ids = list(dict.fromkeys(event.people or []))
+    logger.debug("[ingest_event] event: %s", event.dict())
     with get_conn() as conn, conn.cursor() as cur:
         cur.execute(
             """
@@ -488,12 +490,15 @@ def ingest_event(event: EventIn) -> None:
         # Auto-create stub contacts for any IDs that don't exist yet.
         cur.execute("DELETE FROM event_contacts WHERE event_id = %s", (event.id,))
         if people_ids:
+            logger.debug("[ingest_event] Ensuring stub contacts for %d people: %s", len(people_ids), people_ids[:10])
             cur.execute(
                 "SELECT contact_id FROM contacts WHERE contact_id = ANY(%s)",
                 (people_ids,),
             )
             existing_ids = {row["contact_id"] for row in cur.fetchall()}
+            logger.debug("[ingest_event] Existing contacts: %s", existing_ids)
             missing_ids = [cid for cid in people_ids if cid not in existing_ids]
+            logger.debug("[ingest_event] Missing contacts: %s", missing_ids)
             if missing_ids:
                 _ensure_stub_contacts(missing_ids)
             cur.executemany(
