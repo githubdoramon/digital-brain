@@ -108,7 +108,7 @@ def build_daily_briefing(
     # -- 2. Per-event deep analysis (dedicated LLM call each) --------------------
     t0 = perf_counter()
     for ec in event_contexts:
-        ec["deep_summary"] = _summarize_event(ec, timezone_name)
+        ec["deep_summary"] = _summarize_event(ec, timezone_name, user_email=user_email)
     logger.info(
         "[briefing] Deep analysis: %d event(s) analyzed (%.0fms)",
         len(event_contexts),
@@ -164,7 +164,7 @@ def build_daily_briefing(
 
     # -- 6. Assemble final markdown & summary ------------------------------------
     t0 = perf_counter()
-    markdown = _generate_markdown(context)
+    markdown = _generate_markdown(context, user_email=user_email)
     logger.info(
         "[briefing] Markdown generated: %d chars (%.0fms)",
         len(markdown),
@@ -520,7 +520,9 @@ def _fetch_upcoming_birthdays(
     return results
 
 
-def _summarize_event(event_context: dict[str, Any], timezone_name: str) -> str:
+def _summarize_event(
+    event_context: dict[str, Any], timezone_name: str, *, user_email: str | None = None
+) -> str:
     """Produce a focused summary for a single event.
 
     Two phases:
@@ -557,7 +559,9 @@ def _summarize_event(event_context: dict[str, Any], timezone_name: str) -> str:
 
     # -- Phase 2: synthesise everything into a structured summary -------------
     t0 = perf_counter()
-    summary = _synthesise_event_summary(event_text, research_notes, title, timezone_name)
+    summary = _synthesise_event_summary(
+        event_text, research_notes, title, timezone_name, user_email=user_email
+    )
     logger.info(
         "[briefing.event] Synthesis for '%s': %d chars (%.0fms)",
         title,
@@ -684,14 +688,27 @@ def _research_event(event_text: str, title: str, timezone_name: str) -> str:
 
 
 def _synthesise_event_summary(
-    event_text: str, research_notes: str, title: str, timezone_name: str
+    event_text: str,
+    research_notes: str,
+    title: str,
+    timezone_name: str,
+    *,
+    user_email: str | None = None,
 ) -> str:
     """Combine event data + research into a structured preparation summary."""
+    from prompts.context import get_user_facts_context
+
     research_block = ""
     if research_notes:
         research_block = (
             f"\n\nWEB RESEARCH FINDINGS (incorporate relevant points):\n{research_notes}"
         )
+
+    user_facts_block = ""
+    if user_email:
+        facts_ctx = get_user_facts_context(user_email, f"{title} {event_text[:200]}")
+        if facts_ctx:
+            user_facts_block = f"\n\n{facts_ctx}\n"
 
     system_prompt = (
         "You are a concise briefing analyst. Analyze the event context below and produce a "
@@ -702,7 +719,8 @@ def _synthesise_event_summary(
         f"Analyze this upcoming event and produce a preparation summary.\n"
         f"Timezone: {timezone_name}\n\n"
         f"{event_text}"
-        f"{research_block}\n\n"
+        f"{research_block}"
+        f"{user_facts_block}\n\n"
         "Respond with exactly these sections (skip a section if nothing relevant):\n"
         "KEY POINTS:\n"
         "- Important context from past occurrences or notes\n\n"
@@ -727,7 +745,9 @@ def _synthesise_event_summary(
         return ""
 
 
-def _generate_markdown(context: dict[str, Any]) -> str:
+def _generate_markdown(context: dict[str, Any], *, user_email: str | None = None) -> str:
+    from prompts.context import get_user_facts_context
+
     agent_profile = build_daily_briefing_agent_profile()
     if agent_profile.build_tools_and_handlers is None:
         raise RuntimeError("daily_briefing profile missing tool policy")
@@ -736,6 +756,14 @@ def _generate_markdown(context: dict[str, Any]) -> str:
     tools, tool_handlers = agent_profile.build_tools_and_handlers()
     runtime_profile = agent_profile.runtime
     system_prompt = agent_profile.get_system_prompt()
+
+    # Inject user facts for personalization
+    if user_email:
+        briefing_query = f"daily briefing {context.get('date', '')}"
+        facts_ctx = get_user_facts_context(user_email, briefing_query)
+        if facts_ctx:
+            system_prompt = f"{system_prompt}\n\n{facts_ctx}"
+
     prompt = _build_briefing_prompt(context)
     result = run_profiled_tool_loop(
         prompt=prompt,

@@ -330,7 +330,7 @@ def _extract_event_entities_with_llm(
     """
     from llm_helpers import call_llm_json
     from prompts.clarification import append_clarification_guidelines
-    from prompts.context import get_time_context
+    from prompts.context import get_time_context, get_user_facts_context
     from tags_manager import MAJOR_TAGS
 
     logger.info("[event_extraction] Starting extraction for: '%s'", message)
@@ -339,8 +339,12 @@ def _extract_event_entities_with_llm(
     time_context = get_time_context()
     user_email = context.get("user_email", "")
 
+    # Get user facts for personalization (timezone, preferences, common locations, etc.)
+    user_facts_ctx = get_user_facts_context(user_email, message) if user_email else None
+
     logger.debug("[event_extraction] Time context: %s", time_context)
     logger.debug("[event_extraction] User: %s", user_email)
+    logger.debug("[event_extraction] User facts: %s", "yes" if user_facts_ctx else "none")
 
     # Build tag context
     tag_examples = ", ".join(MAJOR_TAGS[:5])  # Show first 5 major tags as examples
@@ -354,12 +358,13 @@ def _extract_event_entities_with_llm(
         f"Conversation messages (JSON array, most recent last):\n{conversation_json}\n\n"
     )
 
+    user_facts_block = f"\n{user_facts_ctx}\n" if user_facts_ctx else ""
     extraction_prompt = f"""You are extracting structured information from a user's event description to create a memory entry.
 
 Current context:
 - Date/time: {time_context}
 - User: {user_email}
-
+{user_facts_block}
 Event description: "{message}"
 
 {existing_context}{conversation_context}{clarification_context}
