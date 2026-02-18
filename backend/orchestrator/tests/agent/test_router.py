@@ -140,6 +140,27 @@ class TestRuleBasedClassification:
             assert result is not None
             assert result.intent == IntentType.HOME_CONTROL
 
+    def test_contacts_query_with_account_does_not_route_to_home(self, router):
+        """Regression: avoid matching 'ac' inside 'account'."""
+        result = router._rule_based_classify("list me all contacts with a gmail account")
+        assert result is not None
+        assert result.intent == IntentType.DATA_QUERY
+
+    @pytest.mark.parametrize(
+        "question",
+        [
+            "show account details for john",
+            "what are office hours for support?",
+            "i need an AC adapter recommendation for my laptop",
+            "can you help me switch careers",
+        ],
+    )
+    def test_non_home_queries_do_not_route_to_home_control(self, router, question):
+        """Regression: avoid generic-term false positives in home routing."""
+        result = router._rule_based_classify(question)
+        assert result is not None
+        assert result.intent != IntentType.HOME_CONTROL
+
     def test_web_search_keywords(self, router):
         """Test web search intent detection via rule-based."""
         questions = [

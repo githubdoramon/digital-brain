@@ -248,6 +248,64 @@ class TestPreregisteredTools:
         assert is_valid is True
         assert error is None
 
+    def test_lookup_contact_limit_supports_unbounded_values(self, populated_registry):
+        contract = populated_registry.get_contract("lookup_contact")
+        assert contract is not None
+
+        is_valid, error, _ = contract.validate_params(
+            {
+                "action": "search",
+                "query": "gmail.com",
+                "search_by": "email",
+                "limit": 1000,
+            }
+        )
+        assert is_valid is True
+        assert error is None
+
+    def test_search_memories_limit_supports_unbounded_values(self, populated_registry):
+        contract = populated_registry.get_contract("search_memories")
+        assert contract is not None
+
+        is_valid, error, _ = contract.validate_params(
+            {
+                "query": "project updates",
+                "limit": 1000,
+            }
+        )
+        assert is_valid is True
+        assert error is None
+
+    def test_get_events_limit_supports_unbounded_values(self, populated_registry):
+        contract = populated_registry.get_contract("get_events")
+        assert contract is not None
+
+        is_valid, error, _ = contract.validate_params(
+            {
+                "action": "by_time_span",
+                "time_start": "2026-01-01T00:00:00Z",
+                "time_end": "2026-01-31T23:59:59Z",
+                "limit": 1000,
+            }
+        )
+        assert is_valid is True
+        assert error is None
+
+    def test_select_contacts_limit_supports_unbounded_values(self, populated_registry):
+        contract = populated_registry.get_contract("select_contacts")
+        assert contract is not None
+
+        is_valid, error, _ = contract.validate_params(
+            {
+                "action": "select",
+                "selector_kind": "email_domain",
+                "value": "gmail.com",
+                "limit": 1000,
+            }
+        )
+        assert is_valid is True
+        assert error is None
+
     def test_web_search_registered(self, populated_registry):
         """Test web_search tool is registered."""
         contract = populated_registry.get_contract("web_search")

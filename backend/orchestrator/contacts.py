@@ -1015,7 +1015,7 @@ def search_contacts(
     *,
     search_by: str = "any",
     fuzzy_threshold: int = 75,
-    limit: int = 10,
+    limit: int | None = 10,
 ) -> list[dict[str, Any]]:
     """
     Smart contact search with fuzzy matching and multiple search modes.
@@ -1030,7 +1030,7 @@ def search_contacts(
         query: Search string (name, email, phone, or any)
         search_by: "name", "email", "phone", or "any" (default)
         fuzzy_threshold: Minimum fuzzy match score (0-100, default 75)
-        limit: Maximum results to return
+        limit: Maximum results to return. Use None to return all matches.
 
     Returns:
         List of matching contacts with match_score and match_reason
@@ -1043,8 +1043,19 @@ def search_contacts(
 
     search_mode = search_by if search_by in {"name", "email", "phone", "any"} else "any"
     email_intent = _is_email_intent_query(query_lower)
+    parsed_limit: int | None
+    if limit is None:
+        parsed_limit = None
+    else:
+        try:
+            parsed_limit = max(1, int(limit))
+        except (TypeError, ValueError):
+            parsed_limit = 10
+
     candidate_multiplier = 20
-    candidate_limit = min(max(limit * candidate_multiplier, 100), 500)
+    candidate_limit = (
+        500 if parsed_limit is None else min(max(parsed_limit * candidate_multiplier, 100), 500)
+    )
     query_digits = "".join(c for c in query_lower if c.isdigit())
 
     candidate_ids: list[str] = []
@@ -1072,7 +1083,11 @@ def search_contacts(
         _append_candidates(vector_scores.keys())
 
     used_prefilter = bool(candidate_ids)
-    all_contacts = _load_contacts(candidate_ids) if candidate_ids else list_contacts()
+    if parsed_limit is None:
+        used_prefilter = False
+        all_contacts = list_contacts()
+    else:
+        all_contacts = _load_contacts(candidate_ids) if candidate_ids else list_contacts()
     minimum_match_score = max(float(fuzzy_threshold), MIN_CONTACT_MATCH_SCORE)
 
     matches = _score_contacts(
@@ -1104,7 +1119,8 @@ def search_contacts(
 
     # Return top matches with score and reason
     results = []
-    for contact, score, reason in matches[:limit]:
+    selected_matches = matches if parsed_limit is None else matches[:parsed_limit]
+    for contact, score, reason in selected_matches:
         result = dict(contact)
         result["match_score"] = score
         result["match_reason"] = reason
@@ -1284,7 +1300,9 @@ def _is_email_intent_query(query_lower: str) -> bool:
     return bool(re.search(r"\bemail\b", query_lower))
 
 
-def search_contacts_by_email_domain(domain: str, *, limit: int = 200) -> list[dict[str, Any]]:
+def search_contacts_by_email_domain(
+    domain: str, *, limit: int | None = 200
+) -> list[dict[str, Any]]:
     """Find contacts with at least one email at the provided domain."""
     cleaned = normalize_search_text(domain)
     if not cleaned:
@@ -1298,8 +1316,7 @@ def search_contacts_by_email_domain(domain: str, *, limit: int = 200) -> list[di
 
     query_value = f"%@{cleaned}"
     with get_conn() as conn, conn.cursor() as cur:
-        cur.execute(
-            """
+        base_query = """
             SELECT contact_id, display_name, aliases, birthday, emails, phones, links, tags, comments, external_id
             FROM contacts
             WHERE (display_name IS NULL OR LOWER(display_name) NOT LIKE %s)
@@ -1309,14 +1326,14 @@ def search_contacts_by_email_domain(domain: str, *, limit: int = 200) -> list[di
                 WHERE LOWER(email) LIKE %s
               )
             ORDER BY display_name ASC
-            LIMIT %s
-            """,
-            (
-                f"{EXTERNAL_CONTACT_PREFIX}%",
-                query_value,
-                limit,
-            ),
-        )
+            """
+        params: tuple[Any, ...]
+        if limit is None:
+            params = (f"{EXTERNAL_CONTACT_PREFIX}%", query_value)
+            cur.execute(base_query, params)
+        else:
+            params = (f"{EXTERNAL_CONTACT_PREFIX}%", query_value, limit)
+            cur.execute(base_query + "\n            LIMIT %s", params)
         rows_dict: list[dict[str, Any]] = [dict(row) for row in cur.fetchall()]
 
     return [
@@ -1336,7 +1353,7 @@ def search_contacts_by_email_domain(domain: str, *, limit: int = 200) -> list[di
     ]
 
 
-def search_contacts_by_company(company: str, *, limit: int = 200) -> list[dict[str, Any]]:
+def search_contacts_by_company(company: str, *, limit: int | None = 200) -> list[dict[str, Any]]:
     """
     Find contacts likely associated with a company using comments/tags/email heuristics.
 
@@ -1352,8 +1369,7 @@ def search_contacts_by_company(company: str, *, limit: int = 200) -> list[dict[s
 
     query_like = f"%{company_query}%"
     with get_conn() as conn, conn.cursor() as cur:
-        cur.execute(
-            """
+        base_query = """
             SELECT contact_id, display_name, aliases, birthday, emails, phones, links, tags, comments, external_id
             FROM contacts
             WHERE (display_name IS NULL OR LOWER(display_name) NOT LIKE %s)
@@ -1371,16 +1387,28 @@ def search_contacts_by_company(company: str, *, limit: int = 200) -> list[dict[s
                 )
               )
             ORDER BY display_name ASC
-            LIMIT %s
-            """,
-            (
-                f"{EXTERNAL_CONTACT_PREFIX}%",
-                query_like,
-                query_like,
-                f"%@{company_query}%",
-                limit,
-            ),
-        )
+            """
+        if limit is None:
+            cur.execute(
+                base_query,
+                (
+                    f"{EXTERNAL_CONTACT_PREFIX}%",
+                    query_like,
+                    query_like,
+                    f"%@{company_query}%",
+                ),
+            )
+        else:
+            cur.execute(
+                base_query + "\n            LIMIT %s",
+                (
+                    f"{EXTERNAL_CONTACT_PREFIX}%",
+                    query_like,
+                    query_like,
+                    f"%@{company_query}%",
+                    limit,
+                ),
+            )
         rows_dict: list[dict[str, Any]] = [dict(row) for row in cur.fetchall()]
 
     return [
@@ -1400,7 +1428,9 @@ def search_contacts_by_company(company: str, *, limit: int = 200) -> list[dict[s
     ]
 
 
-def search_contacts_by_group_hint(group_hint: str, *, limit: int = 120) -> list[dict[str, Any]]:
+def search_contacts_by_group_hint(
+    group_hint: str, *, limit: int | None = 120
+) -> list[dict[str, Any]]:
     """
     Find contacts associated with a free-form group hint.
 
@@ -1413,8 +1443,7 @@ def search_contacts_by_group_hint(group_hint: str, *, limit: int = 120) -> list[
 
     query_like = f"%{hint}%"
     with get_conn() as conn, conn.cursor() as cur:
-        cur.execute(
-            """
+        base_query = """
             WITH event_scores AS (
               SELECT ec.contact_id, COUNT(*)::int AS event_hits
               FROM event_contacts ec
@@ -1471,24 +1500,25 @@ def search_contacts_by_group_hint(group_hint: str, *, limit: int = 120) -> list[
                 OR COALESCE(es.event_hits, 0) > 0
               )
             ORDER BY score DESC, c.display_name ASC
-            LIMIT %s
-            """,
-            (
-                query_like,
-                query_like,
-                query_like,
-                query_like,
-                query_like,
-                query_like,
-                query_like,
-                f"{EXTERNAL_CONTACT_PREFIX}%",
-                query_like,
-                query_like,
-                query_like,
-                query_like,
-                limit,
-            ),
+            """
+        params = (
+            query_like,
+            query_like,
+            query_like,
+            query_like,
+            query_like,
+            query_like,
+            query_like,
+            f"{EXTERNAL_CONTACT_PREFIX}%",
+            query_like,
+            query_like,
+            query_like,
+            query_like,
         )
+        if limit is None:
+            cur.execute(base_query, params)
+        else:
+            cur.execute(base_query + "\n            LIMIT %s", (*params, limit))
         rows_dict: list[dict[str, Any]] = [dict(row) for row in cur.fetchall()]
 
     return [

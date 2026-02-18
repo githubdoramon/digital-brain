@@ -278,7 +278,9 @@ def upsert_group_from_selector(
     }
 
 
-def resolve_group_members(user_email: str, query: str, *, limit: int = 200) -> dict[str, Any]:
+def resolve_group_members(
+    user_email: str, query: str, *, limit: int | None = 200
+) -> dict[str, Any]:
     owner_contact_id = contacts.get_self_contact_id(user_email)
     if not owner_contact_id:
         return {"found": False, "group": None, "contacts": []}
@@ -313,17 +315,18 @@ def resolve_group_members(user_email: str, query: str, *, limit: int = 200) -> d
         if not group_row:
             return {"found": False, "group": None, "contacts": []}
 
-        cur.execute(
-            """
+        base_query = """
             SELECT c.contact_id, c.display_name, c.aliases, c.emails, c.phones, c.tags, c.comments
             FROM contact_group_members gm
             JOIN contacts c ON c.contact_id = gm.contact_id
             WHERE gm.group_id = %s
             ORDER BY c.display_name ASC
-            LIMIT %s
-            """,
-            (str(group_row.get("group_id") or "").strip(), limit),
-        )
+            """
+        group_id = str(group_row.get("group_id") or "").strip()
+        if limit is None:
+            cur.execute(base_query, (group_id,))
+        else:
+            cur.execute(base_query + "\n            LIMIT %s", (group_id, limit))
         rows = cur.fetchall() or []
 
     contacts_payload: list[dict[str, Any]] = []

@@ -70,6 +70,7 @@ Validation outcomes feed no-progress and escalation logic:
 
 - repeated invalid/empty paths are detected by limit checker and state
 - restricted tool visibility can escalate to full tools when no-progress is reached
+- when user phrasing explicitly requests full coverage (for example "all/everyone/entire"), query handlers may treat result limits as unbounded to avoid partial truncation
 
 ## Testing Expectations
 

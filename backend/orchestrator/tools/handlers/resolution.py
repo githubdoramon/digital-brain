@@ -12,6 +12,7 @@ trace module. Handlers focus purely on execution logic.
 from typing import TYPE_CHECKING, Any, Optional
 
 from tools.action_enums import LookupContactAction, SelectContactsAction
+from tools.limit_policy import wants_all_results
 
 if TYPE_CHECKING:
     from agent.state import AgentState
@@ -100,7 +101,8 @@ def handle_lookup_contact(
 
         search_by = args.get("search_by", "any")
         fuzzy_threshold = args.get("fuzzy_threshold", 75)
-        limit = args.get("limit", 10)
+        question = str(kwargs.get("question") or "")
+        limit = None if wants_all_results(question) else args.get("limit", 10)
 
         results = contacts.search_contacts(
             query,
@@ -222,7 +224,11 @@ def handle_select_contacts(
         selector_kind = str(args.get("selector_kind") or "").strip().lower()
         value = str(args.get("value") or "").strip()
         auto_activate = bool(args.get("auto_activate", True))
-        limit = int(args.get("limit", 120) or 120)
+        question = str(kwargs.get("question") or "")
+        if wants_all_results(question):
+            limit: int | None = None
+        else:
+            limit = int(args.get("limit", 120) or 120)
 
         if selector_kind not in {"email_domain", "company", "group", "tag"}:
             return {"error": "selector_kind must be one of: email_domain, company, group, tag"}

@@ -1,5 +1,5 @@
-import React from 'react';
-import { StyleSheet, Text, View } from 'react-native';
+import React, { useEffect, useRef, useState } from 'react';
+import { ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import { theme } from '@/theme';
 
@@ -8,12 +8,34 @@ type StreamingAssistantCardProps = {
   progressChip?: string;
 };
 
+const MAX_CONTENT_HEIGHT = 90;
+
 export function StreamingAssistantCard({ content, progressChip }: StreamingAssistantCardProps) {
+  const contentScrollRef = useRef<ScrollView>(null);
+  const [isOverflowing, setIsOverflowing] = useState(false);
+
+  useEffect(() => {
+    if (isOverflowing) {
+      contentScrollRef.current?.scrollToEnd({ animated: true });
+    }
+  }, [content, isOverflowing]);
+
   return (
     <View style={styles.container}>
-      <Text style={styles.content} selectable>
-        {content}
-      </Text>
+      <ScrollView
+        ref={contentScrollRef}
+        style={[styles.contentScrollBase, isOverflowing ? styles.contentScrollCapped : null]}
+        contentContainerStyle={styles.contentScrollInner}
+        showsVerticalScrollIndicator={false}
+        nestedScrollEnabled
+        onContentSizeChange={(_, contentHeight) => {
+          setIsOverflowing(contentHeight > MAX_CONTENT_HEIGHT);
+        }}
+      >
+        <Text style={styles.content} selectable>
+          {content}
+        </Text>
+      </ScrollView>
       {progressChip ? (
         <View style={styles.progressChipWrap}>
           <View style={styles.progressChip}>
@@ -41,6 +63,16 @@ const styles = StyleSheet.create({
     fontSize: 13,
     lineHeight: 18,
     color: '#3A4756',
+  },
+  contentScrollBase: {
+    minHeight: 0,
+    flexGrow: 0,
+  },
+  contentScrollCapped: {
+    maxHeight: MAX_CONTENT_HEIGHT,
+  },
+  contentScrollInner: {
+    paddingBottom: 2,
   },
   progressChipWrap: {
     marginTop: 10,

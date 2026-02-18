@@ -243,25 +243,26 @@ class IntentRouter:
         q_lower = question.lower()
 
         # Home control patterns
-        home_keywords = [
-            "turn on",
-            "turn off",
-            "switch",
-            "light",
-            "lamp",
-            "thermostat",
-            "temperature",
-            "home assistant",
-            "smart home",
-            "alexa",
-            "google home",
-            "hvac",
-            "ac",
-            "heater",
-            "office",
-            "heater",
+        # Use word-aware regex matching and action-oriented phrases to avoid
+        # substring and generic-term false positives.
+        home_patterns = [
+            r"\bturn\s+on\b",
+            r"\bturn\s+off\b",
+            r"\bswitch\s+(on|off)\b",
+            r"\blights?\b",
+            r"\blamps?\b",
+            r"\bthermostat\b",
+            r"\b(set|adjust|change)\s+(the\s+)?temperature\b",
+            r"\bhome assistant\b",
+            r"\bsmart home\b",
+            r"\balexa\b",
+            r"\bgoogle home\b",
+            r"\bhvac\b",
+            r"\ba/c\b",
+            r"\bair conditioner\b",
+            r"\bheater\b",
         ]
-        if any(kw in q_lower for kw in home_keywords):
+        if any(re.search(pattern, q_lower) for pattern in home_patterns):
             return IntentClassification(
                 intent=IntentType.HOME_CONTROL,
                 confidence=0.9,

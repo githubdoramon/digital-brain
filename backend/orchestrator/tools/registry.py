@@ -17,7 +17,7 @@ from ui_dsl.validator import validate_ui_directive_tool_param
 from .contracts import (
     ToolContract,
     ToolParameter,
-    validate_limit,
+    validate_positive_int,
 )
 
 logger = get_runtime_logger(__name__)
@@ -199,8 +199,7 @@ def _register_all_tools(registry: ToolRegistry) -> None:
                     required=False,
                     default=30,
                     minimum=1,
-                    maximum=50,
-                    validator=validate_limit,
+                    validator=validate_positive_int,
                 ),
                 ToolParameter(
                     name="time_start",
@@ -347,7 +346,7 @@ def _register_all_tools(registry: ToolRegistry) -> None:
                     required=False,
                     default=50,
                     minimum=1,
-                    maximum=200,
+                    validator=validate_positive_int,
                 ),
             ],
             constraints=["read_only"],
@@ -624,8 +623,7 @@ def _register_all_tools(registry: ToolRegistry) -> None:
                     required=False,
                     default=10,
                     minimum=1,
-                    maximum=50,
-                    validator=validate_limit,
+                    validator=validate_positive_int,
                 ),
             ],
             constraints=["read_only"],
@@ -730,7 +728,7 @@ def _register_all_tools(registry: ToolRegistry) -> None:
                     required=False,
                     default=120,
                     minimum=1,
-                    maximum=500,
+                    validator=validate_positive_int,
                 ),
             ],
             constraints=["read_only"],

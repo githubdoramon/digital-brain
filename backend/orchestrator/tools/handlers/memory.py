@@ -12,6 +12,8 @@ trace module. Handlers focus purely on execution logic.
 
 from typing import TYPE_CHECKING, Any, Optional
 
+from tools.limit_policy import wants_all_results
+
 if TYPE_CHECKING:
     from agent.state import AgentState
 
@@ -32,7 +34,10 @@ def handle_search_memories(
     import retrieval
 
     query = args.get("query", question)
-    limit = args.get("limit", search_limit)
+    if wants_all_results(question):
+        limit = None
+    else:
+        limit = args.get("limit", search_limit)
     time_start = args.get("time_start")
     time_end = args.get("time_end")
     contact_ids = args.get("contact_ids")  # Maps to 'people' parameter
@@ -103,11 +108,15 @@ def handle_get_events(
         order_sql = "e.start_date DESC"
         if sort_order == "oldest":
             order_sql = "e.start_date ASC"
-        limit_value = args.get("limit", 50)
-        try:
-            limit = max(1, min(int(limit_value), 200))
-        except (TypeError, ValueError):
-            limit = 50
+        question = str(kwargs.get("question") or "")
+        if wants_all_results(question):
+            limit: int | None = None
+        else:
+            limit_value = args.get("limit", 50)
+            try:
+                limit = max(1, int(limit_value))
+            except (TypeError, ValueError):
+                limit = 50
 
         contact_ids = [
             str(contact_id).strip()
@@ -117,8 +126,7 @@ def handle_get_events(
 
         with get_conn() as conn, conn.cursor() as cur:
             if contact_ids:
-                cur.execute(
-                    f"""
+                base_query = f"""
                     SELECT e.id,
                            e.start_date,
                            e.end_date,
@@ -137,13 +145,16 @@ def handle_get_events(
                         WHERE ec.event_id = e.id AND ec.contact_id = ANY(%s)
                       )
                     ORDER BY {order_sql}
-                    LIMIT %s
-                    """,
-                    (time_start, time_end, contact_ids, limit),
-                )
+                    """
+                if limit is None:
+                    cur.execute(base_query, (time_start, time_end, contact_ids))
+                else:
+                    cur.execute(
+                        base_query + "\n                    LIMIT %s",
+                        (time_start, time_end, contact_ids, limit),
+                    )
             else:
-                cur.execute(
-                    f"""
+                base_query = f"""
                     SELECT e.id,
                            e.start_date,
                            e.end_date,
@@ -158,10 +169,13 @@ def handle_get_events(
                     WHERE e.start_date >= %s
                       AND e.start_date <= %s
                     ORDER BY {order_sql}
-                    LIMIT %s
-                    """,
-                    (time_start, time_end, limit),
-                )
+                    """
+                if limit is None:
+                    cur.execute(base_query, (time_start, time_end))
+                else:
+                    cur.execute(
+                        base_query + "\n                    LIMIT %s", (time_start, time_end, limit)
+                    )
             rows = [dict(row) for row in cur.fetchall()]
 
             # Fetch people from junction table + resolve display names.

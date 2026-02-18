@@ -85,7 +85,9 @@ def test_search_contacts_email_mode_skips_vector_candidates(monkeypatch):
     calls = {"vector_called": 0}
 
     monkeypatch.setattr(contacts, "_lexical_candidate_contact_ids", lambda *_a, **_k: ["contact-1"])
-    monkeypatch.setattr(contacts, "_load_contacts", lambda *_a, **_k: [_contact("contact-1", "Jane")])
+    monkeypatch.setattr(
+        contacts, "_load_contacts", lambda *_a, **_k: [_contact("contact-1", "Jane")]
+    )
     monkeypatch.setattr(contacts, "list_contacts", lambda: [])
 
     def fake_vector(*_args, **_kwargs):
@@ -161,7 +163,9 @@ def test_search_contacts_rejects_low_vector_confidence(monkeypatch):
     monkeypatch.setattr(
         contacts,
         "_load_contacts",
-        lambda *_a, **_k: [_contact("c1", "Low Vector", comments="Chief Executive Officer at Acme")],
+        lambda *_a, **_k: [
+            _contact("c1", "Low Vector", comments="Chief Executive Officer at Acme")
+        ],
     )
     monkeypatch.setattr(contacts, "list_contacts", lambda: [])
 
@@ -201,3 +205,21 @@ def test_search_contacts_comment_weight_can_beat_email_match(monkeypatch):
     assert len(results) >= 1
     assert results[0]["contact_id"] == "contact-comment"
     assert results[0]["match_reason"] == "comment match"
+
+
+def test_search_contacts_with_none_limit_returns_all_matches(monkeypatch):
+    monkeypatch.setattr(contacts, "_lexical_candidate_contact_ids", lambda *_a, **_k: [])
+    monkeypatch.setattr(contacts, "_vector_candidate_contact_scores", lambda *_a, **_k: {})
+    monkeypatch.setattr(
+        contacts,
+        "list_contacts",
+        lambda: [
+            _contact("c1", "Ana", emails=["ana@gmail.com"]),
+            _contact("c2", "Bruno", emails=["bruno@gmail.com"]),
+            _contact("c3", "Carla", emails=["carla@gmail.com"]),
+        ],
+    )
+
+    results = contacts.search_contacts("gmail.com", search_by="email", limit=None)
+
+    assert len(results) == 3

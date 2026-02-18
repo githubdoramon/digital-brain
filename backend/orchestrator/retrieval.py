@@ -135,7 +135,7 @@ def search_memories(
     salience_hints: Sequence[str] | None = None,
     time_start: str | None = None,
     time_end: str | None = None,
-    limit: int = 10,
+    limit: int | None = 10,
     sort_order: str = "relevance",
 ) -> dict[str, Any]:
     span_start = None
@@ -309,8 +309,11 @@ def search_memories(
     if not combined:
         return {"results": []}
 
-    final_limit = max(1, int(limit))
-    top_combined = combined[:final_limit]
+    if limit is None:
+        top_combined = combined
+    else:
+        final_limit = max(1, int(limit))
+        top_combined = combined[:final_limit]
 
     event_ids_top = [item_id for item_id, kind, _ in top_combined if kind == "event"]
     doc_ids_top = [item_id for item_id, kind, _ in top_combined if kind == "document"]
