@@ -15,7 +15,7 @@ type EventDetail = {
   start_date?: string | null;
   end_date?: string | null;
   tags?: string[] | null;
-  people?: string[] | null;
+  people?: (string | { contact_id?: string | null; display_name?: string | null })[] | null;
   place?: {
     place_id: string;
     name?: string | null;
@@ -61,6 +61,44 @@ function formatDateRange(start?: string | null, end?: string | null) {
   return `${startLabel} – ${endLabel}`;
 }
 
+type EventPerson = {
+  contactId: string;
+  displayName: string;
+};
+
+function normalizeEventPeople(
+  people: EventDetail['people'],
+  contactMap: Map<string, string>,
+): EventPerson[] {
+  if (!Array.isArray(people)) return [];
+
+  const uniqueByContactId = new Map<string, EventPerson>();
+  for (const person of people) {
+    if (typeof person === 'string') {
+      const contactId = person.trim();
+      if (!contactId || uniqueByContactId.has(contactId)) continue;
+      uniqueByContactId.set(contactId, {
+        contactId,
+        displayName: contactMap.get(contactId) || contactId,
+      });
+      continue;
+    }
+
+    if (!person || typeof person !== 'object') continue;
+
+    const contactId = String(person.contact_id || '').trim();
+    if (!contactId || uniqueByContactId.has(contactId)) continue;
+
+    const rawDisplayName = String(person.display_name || '').trim();
+    uniqueByContactId.set(contactId, {
+      contactId,
+      displayName: rawDisplayName || contactMap.get(contactId) || contactId,
+    });
+  }
+
+  return Array.from(uniqueByContactId.values());
+}
+
 function toDraft(event: EventDetail, contactMap: Map<string, string>): EventDraft {
   const placeLabel = [event.place?.name, event.place?.city, event.place?.country]
     .map((value) => String(value || '').trim())
@@ -74,10 +112,7 @@ function toDraft(event: EventDetail, contactMap: Map<string, string>): EventDraf
     where: placeLabel,
     tags: Array.isArray(event.tags) ? event.tags.map((tag) => String(tag || '').trim()).filter(Boolean) : [],
     types: Array.isArray(event.types) ? event.types.map((typeValue) => String(typeValue || '').trim()).filter(Boolean) : [],
-    participants: (event.people || []).map((id) => ({
-      contactId: id,
-      displayName: contactMap.get(id) || id,
-    })),
+    participants: normalizeEventPeople(event.people, contactMap),
   };
 }
 

@@ -50,7 +50,13 @@ type Message = {
     command_result?: CommandResult;
     ui_directives?: UiDirectives;
     event_resolved?: EventResolvedStatus;
+    request_error?: RequestErrorMetadata;
   };
+};
+
+type RequestErrorMetadata = {
+  summary: string;
+  details: string;
 };
 
 type CommandResult = ThreadCommandResult;
@@ -108,6 +114,43 @@ const EVENT_EDIT_OPTION_PREFIX = 'edit:';
 const MIN_CHAT_INPUT_HEIGHT = 46;
 const MAX_CHAT_INPUT_HEIGHT = 120;
 const COMPOSER_KEYBOARD_GAP = 20;
+
+function backendErrorDetails(error: unknown): RequestErrorMetadata {
+  const fallbackSummary = 'Request failed';
+  const fallbackDetails = 'No extra error details were available.';
+
+  if (error instanceof Error) {
+    const err = error as Error & { status?: number };
+    const message = err.message?.trim() || fallbackDetails;
+    const statusPrefix = typeof err.status === 'number' ? `HTTP ${err.status}: ` : '';
+    const details = `${statusPrefix}${message}`.slice(0, 4000);
+    return {
+      summary: fallbackSummary,
+      details,
+    };
+  }
+
+  if (typeof error === 'string') {
+    const details = error.trim() || fallbackDetails;
+    return {
+      summary: fallbackSummary,
+      details: details.slice(0, 4000),
+    };
+  }
+
+  try {
+    const serialized = JSON.stringify(error, null, 2);
+    return {
+      summary: fallbackSummary,
+      details: (serialized || fallbackDetails).slice(0, 4000),
+    };
+  } catch {
+    return {
+      summary: fallbackSummary,
+      details: fallbackDetails,
+    };
+  }
+}
 
 function formatFieldLabel(fieldId: string): string {
   return fieldId
@@ -392,6 +435,7 @@ export default function ChatScreen() {
   const isAtBottomRef = useRef(true);
   const [forceScrollNext, setForceScrollNext] = useState(false);
   const [isBootstrapping, setIsBootstrapping] = useState(true);
+  const [expandedErrorMessageIds, setExpandedErrorMessageIds] = useState<Record<string, boolean>>({});
   const hasHydratedSessionRef = useRef(false);
   const restoreGenerationRef = useRef(0);
   const [composerHeight, setComposerHeight] = useState(0);
@@ -628,6 +672,7 @@ export default function ChatScreen() {
         );
         return;
       }
+      const requestError = backendErrorDetails(error);
       setForceScrollNext(true);
       setMessages((prev) =>
         prev.map((message) =>
@@ -636,6 +681,10 @@ export default function ChatScreen() {
                 ...message,
                 content: 'I hit a snag reaching the brain. Try again in a moment.',
                 pending: false,
+                metadata: {
+                  ...message.metadata,
+                  request_error: requestError,
+                },
               }
             : message,
         ),
@@ -951,6 +1000,8 @@ export default function ChatScreen() {
             const isSupersededEventCard = Boolean(
               previewId && pendingEventId && previewId !== pendingEventId,
             );
+            const requestError = item.metadata?.request_error;
+            const isErrorExpanded = Boolean(expandedErrorMessageIds[item.id]);
 
             return (
               <View
@@ -989,6 +1040,34 @@ export default function ChatScreen() {
                     ) : null}
                   </View>
                 )}
+                {requestError ? (
+                  <View style={styles.errorCardWrap}>
+                    <Pressable
+                      onPress={() => {
+                        setExpandedErrorMessageIds((prev) => ({
+                          ...prev,
+                          [item.id]: !prev[item.id],
+                        }));
+                      }}
+                      style={({ pressed }) => [
+                        styles.errorToggle,
+                        pressed && styles.errorTogglePressed,
+                      ]}
+                    >
+                      <Text style={styles.errorToggleText}>
+                        {isErrorExpanded ? 'Hide backend error' : 'Show backend error'}
+                      </Text>
+                    </Pressable>
+                    {isErrorExpanded ? (
+                      <View style={styles.errorDetailsWrap}>
+                        <Text style={styles.errorSummary}>{requestError.summary}</Text>
+                        <Text style={styles.errorDetails} selectable>
+                          {requestError.details}
+                        </Text>
+                      </View>
+                    ) : null}
+                  </View>
+                ) : null}
               </View>
             );
           }}
@@ -1146,6 +1225,46 @@ const styles = StyleSheet.create({
     fontSize: 12,
     lineHeight: 17,
     color: theme.colors.mutedInk,
+  },
+  errorCardWrap: {
+    marginTop: 10,
+    gap: 8,
+  },
+  errorToggle: {
+    alignSelf: 'flex-start',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 999,
+    backgroundColor: '#FDECEC',
+    borderWidth: 1,
+    borderColor: '#F3B4B4',
+  },
+  errorTogglePressed: {
+    opacity: 0.85,
+  },
+  errorToggleText: {
+    fontSize: 12,
+    color: '#8A1F1F',
+    fontWeight: '600',
+  },
+  errorDetailsWrap: {
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#F3B4B4',
+    backgroundColor: '#FFF6F6',
+    padding: 10,
+    gap: 6,
+  },
+  errorSummary: {
+    fontSize: 12,
+    lineHeight: 16,
+    fontWeight: '700',
+    color: '#8A1F1F',
+  },
+  errorDetails: {
+    fontSize: 12,
+    lineHeight: 17,
+    color: '#8A1F1F',
   },
   slashPaletteAnchor: {
     position: 'absolute',
