@@ -28,6 +28,12 @@ from ui_dsl.clarification import (
 logger = get_runtime_logger(__name__)
 
 
+def _emit_progress(context: dict[str, Any], message: str) -> None:
+    callback = context.get("progress_callback")
+    if callable(callback):
+        callback(message)
+
+
 def _format_existing_extraction_for_prompt(existing: dict[str, Any] | None) -> str:
     if not existing:
         return ""
@@ -1141,6 +1147,7 @@ def handle_event(parsed: ParsedCommand, context: dict) -> dict[str, Any]:
         Dict with event_confirmation or need_user_input type
     """
     logger.info("[handle_event] NEW EVENT COMMAND")
+    _emit_progress(context, "Preparing event details...")
 
     if not parsed.args:
         return {
@@ -1239,6 +1246,7 @@ def handle_event(parsed: ParsedCommand, context: dict) -> dict[str, Any]:
 
     # Extract entities using LLM with time context
     logger.info("[handle_event] STEP 1: Extracting entities with LLM...")
+    _emit_progress(context, "Extracting event entities...")
     with ThreadPoolExecutor(max_workers=2) as executor:
         extraction_future = executor.submit(
             _extract_event_entities_with_llm,
@@ -1348,6 +1356,7 @@ def handle_event(parsed: ParsedCommand, context: dict) -> dict[str, Any]:
 
     if needs_follow_up:
         logger.warning("[handle_event] Clarification needed, returning questions to user")
+        _emit_progress(context, "Building clarification request...")
         clarification_preview_id = f"event:clarification:{uuid4().hex[:8]}"
         action_id = f"event_clarification_submit:{clarification_preview_id}"
         need_user_input = build_need_user_input(
@@ -1406,6 +1415,7 @@ def handle_event(parsed: ParsedCommand, context: dict) -> dict[str, Any]:
 
     # Resolve existing entities and generic terms
     logger.info("[handle_event] STEP 2: Contact resolution complete")
+    _emit_progress(context, "Resolving contacts...")
 
     # Keep place handling aligned with existing flow
     where = extracted.get("where")
@@ -1444,6 +1454,7 @@ def handle_event(parsed: ParsedCommand, context: dict) -> dict[str, Any]:
 
     # Suggest relationships between contacts based on context
     logger.info("[handle_event] STEP 4: Suggesting relationships...")
+    _emit_progress(context, "Inferring relationships...")
     relationship_suggestions = _format_relationship_suggestions(
         contact_result.get("suggested_relationships", []),
         resolution,
@@ -1477,6 +1488,7 @@ def handle_event(parsed: ParsedCommand, context: dict) -> dict[str, Any]:
         "[handle_event] STEP 5: Storing preview data (ID: %s)",
         preview_id,
     )
+    _emit_progress(context, "Preparing confirmation card...")
     store_command_data(
         preview_id,
         {

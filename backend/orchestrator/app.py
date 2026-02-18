@@ -6,7 +6,7 @@ import os
 from contextlib import asynccontextmanager, suppress
 from datetime import date, datetime
 from time import perf_counter
-from typing import Any
+from typing import Any, Callable
 
 from fastapi import (
     BackgroundTasks,
@@ -1083,6 +1083,7 @@ def _handle_command(
     user_email: str,
     user: dict,
     thread_id: str | None,
+    progress_callback: Callable[[str], None] | None = None,
 ) -> tuple[dict[str, Any], str, dict[str, Any] | None] | None:
     """
     Check if the question is a command and handle it.
@@ -1111,6 +1112,7 @@ def _handle_command(
         "user": user,
         "thread_id": command_thread_id,
         "event_pending_key": pending_key,
+        "progress_callback": progress_callback,
     }
     command_result = registry.execute(parsed_cmd, context)
 
@@ -1165,6 +1167,7 @@ async def ask(
             payload.pending_event_id,
             command_response_text=_command_response_text,
             command_assistant_metadata=_command_assistant_metadata,
+            progress_callback=None,
         )
         if not command_payload:
             command_payload = _handle_command(
@@ -1172,6 +1175,7 @@ async def ask(
                 user_email,
                 user,
                 payload.thread_id or payload.session_id,
+                progress_callback=None,
             )
         if command_payload:
             command_result, command_thread_id, command_ui_directives = command_payload
@@ -1298,58 +1302,119 @@ async def ask_stream(
     if not user_email:
         raise HTTPException(status_code=400, detail="Authenticated user email missing")
 
-    # Check for commands or pending event refinements before session resolution
-    try:
-        command_payload = handle_pending_event(
-            payload.question,
-            user_email,
-            user,
-            payload.thread_id or payload.session_id,
-            payload.pending_event_id,
-            command_response_text=_command_response_text,
-            command_assistant_metadata=_command_assistant_metadata,
+    # Check for command flows (slash commands or pending event refinements)
+    from commands import parse_command
+    from commands.storage import get_pending_event
+
+    hint_thread_id = payload.thread_id or payload.session_id
+    has_command_hint = parse_command(payload.question) is not None
+    has_pending_event_hint = bool(
+        payload.pending_event_id or get_pending_event(event_pending_key(user_email, hint_thread_id))
+    )
+
+    if has_command_hint or has_pending_event_hint:
+
+        async def command_generator():
+            heartbeat_seconds = 5.0
+            queue: asyncio.Queue[dict[str, Any] | None] = asyncio.Queue()
+            loop = asyncio.get_running_loop()
+
+            def emit_status(message: str) -> None:
+                loop.call_soon_threadsafe(
+                    queue.put_nowait,
+                    {"type": "status", "message": message},
+                )
+
+            def execute_command_flow() -> dict[str, Any]:
+                try:
+                    emit_status("Understanding request...")
+                    command_payload = handle_pending_event(
+                        payload.question,
+                        user_email,
+                        user,
+                        payload.thread_id or payload.session_id,
+                        payload.pending_event_id,
+                        command_response_text=_command_response_text,
+                        command_assistant_metadata=_command_assistant_metadata,
+                        progress_callback=emit_status,
+                    )
+                    if not command_payload:
+                        command_payload = _handle_command(
+                            payload.question,
+                            user_email,
+                            user,
+                            payload.thread_id or payload.session_id,
+                            progress_callback=emit_status,
+                        )
+                    if not command_payload:
+                        return {
+                            "type": "error",
+                            "message": "Command processing could not be completed.",
+                        }
+
+                    command_result, command_thread_id, command_ui_directives = command_payload
+                    pending_event_id = get_pending_event(
+                        event_pending_key(user_email, command_thread_id)
+                    )
+
+                    emit_status("Finalizing response...")
+                    bundle = {
+                        "question": payload.question,
+                        "answer": _command_response_text(command_result),
+                        "resolution": {},
+                        "search_results": [],
+                        "events_results": [],
+                        "thread_id": command_thread_id,
+                        "session_id": command_thread_id,
+                        "is_new_session": True,
+                        "command_result": command_result,
+                        "ui_directives": command_ui_directives,
+                        "pending_event_id": pending_event_id,
+                    }
+                    return {"type": "done", "bundle": bundle}
+                except ValueError as exc:
+                    return {"type": "error", "message": str(exc)}
+                except Exception as exc:
+                    logger.exception("[ask/stream] command error user=%s", user_email)
+                    return {"type": "error", "message": str(exc)}
+
+            async def _produce() -> None:
+                try:
+                    final_event = await asyncio.to_thread(execute_command_flow)
+                    await queue.put(final_event)
+                finally:
+                    await queue.put(None)
+
+            producer_task = asyncio.create_task(_produce())
+            try:
+                while True:
+                    try:
+                        event = await asyncio.wait_for(queue.get(), timeout=heartbeat_seconds)
+                    except asyncio.TimeoutError:
+                        yield ": keep-alive\n\n"
+                        continue
+
+                    if event is None:
+                        break
+
+                    yield f"data: {json.dumps(event, default=str)}\n\n"
+                    if event.get("type") in {"done", "error"}:
+                        break
+            finally:
+                if not producer_task.done():
+                    producer_task.cancel()
+                    with suppress(asyncio.CancelledError):
+                        await producer_task
+
+        return StreamingResponse(
+            command_generator(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no",
+            },
         )
-        if not command_payload:
-            command_payload = _handle_command(
-                payload.question,
-                user_email,
-                user,
-                payload.thread_id or payload.session_id,
-            )
-        if command_payload:
-            command_result, command_thread_id, command_ui_directives = command_payload
-            from commands.storage import get_pending_event
-
-            pending_event_id = get_pending_event(event_pending_key(user_email, command_thread_id))
-
-            # Return command result as SSE stream
-            async def command_generator():
-                bundle = {
-                    "question": payload.question,
-                    "answer": _command_response_text(command_result),
-                    "resolution": {},
-                    "search_results": [],
-                    "events_results": [],
-                    "thread_id": command_thread_id,
-                    "session_id": command_thread_id,
-                    "is_new_session": True,
-                    "command_result": command_result,
-                    "ui_directives": command_ui_directives,
-                    "pending_event_id": pending_event_id,
-                }
-                yield f"data: {json.dumps({'type': 'done', 'bundle': bundle}, default=str)}\n\n"
-
-            return StreamingResponse(
-                command_generator(),
-                media_type="text/event-stream",
-                headers={
-                    "Cache-Control": "no-cache",
-                    "Connection": "keep-alive",
-                    "X-Accel-Buffering": "no",
-                },
-            )
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
 
     from commands.storage import clear_command_thread_by_id
 

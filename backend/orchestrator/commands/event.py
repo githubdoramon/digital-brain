@@ -44,6 +44,7 @@ CommandAssistantMetadataFn = Callable[
     [dict[str, Any]],
     tuple[dict[str, Any], dict[str, Any] | None],
 ]
+ProgressCallbackFn = Callable[[str], None]
 
 
 def event_pending_key(user_email: str, thread_id: str | None) -> str:
@@ -60,6 +61,7 @@ def handle_pending_event(
     *,
     command_response_text: CommandResponseTextFn,
     command_assistant_metadata: CommandAssistantMetadataFn,
+    progress_callback: ProgressCallbackFn | None = None,
 ) -> CommandResultPayload | None:
     if parse_command(question):
         return None
@@ -107,6 +109,7 @@ def handle_pending_event(
         "user": user,
         "thread_id": command_thread_id,
         "event_pending_key": key,
+        "progress_callback": progress_callback,
     }
     command_result = registry.execute(parsed_cmd, context)
 
