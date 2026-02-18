@@ -8,14 +8,6 @@ export type CommandResult = {
   [key: string]: unknown;
 };
 
-export type ThreadSummary = {
-  id: string;
-  title: string | null;
-  created_at: string;
-  updated_at: string;
-  last_message_preview?: string | null;
-};
-
 export type ThreadMessage = {
   message_id: number;
   role: 'user' | 'assistant';
@@ -28,7 +20,11 @@ export type ThreadMessage = {
   created_at: string;
 };
 
-export type ThreadDetail = ThreadSummary & {
+export type MainSession = {
+  thread_id: string;
+  thread_title?: string | null;
+  is_new_session: boolean;
+  pending_event_id?: string | null;
   messages: ThreadMessage[];
 };
 
@@ -55,37 +51,33 @@ export async function restoreChatHistory(
   token: string,
   storedSession: StoredChatSession | null,
 ): Promise<RestoreResult> {
-  const threads = await apiFetch('/mobile/threads', { token });
-  const resolvedThreads = Array.isArray(threads) ? (threads as ThreadSummary[]) : [];
+  const mainSession = (await apiFetch('/mobile/main-session', { token })) as MainSession;
 
-  // Always sync to the latest server thread on app open.
-  // Server ordering is newest first (updated_at DESC, created_at DESC).
-  let threadId: string | null = resolvedThreads[0]?.id ?? null;
+  const threadId = mainSession.thread_id ?? null;
+  const resolvedPendingEventId = mainSession.pending_event_id ?? null;
 
   let messages: ChatMessage[] = [];
-  if (threadId) {
-    const threadDetail = (await apiFetch(`/mobile/threads/${threadId}`, { token })) as ThreadDetail;
-    messages = (threadDetail.messages || []).map((msg) => {
-      const meta = msg.metadata ?? undefined;
-      return {
-        id: `${msg.message_id}`,
-        role: msg.role,
-        content: msg.content,
-        metadata: meta
-          ? {
-              command_result: meta.command_result,
-              ui_directives: meta.ui_directives,
-              event_resolved: meta.event_resolved as EventResolvedStatus | undefined,
-            }
-          : undefined,
-      };
-    });
-  }
+  messages = (mainSession.messages || []).map((msg) => {
+    const meta = msg.metadata ?? undefined;
+    return {
+      id: `${msg.message_id}`,
+      role: msg.role,
+      content: msg.content,
+      metadata: meta
+        ? {
+            command_result: meta.command_result,
+            ui_directives: meta.ui_directives,
+            event_resolved: meta.event_resolved as EventResolvedStatus | undefined,
+          }
+        : undefined,
+    };
+  });
 
   return {
     threadId,
     pendingEventId:
-      threadId && storedSession?.threadId === threadId ? storedSession?.pendingEventId ?? null : null,
+      resolvedPendingEventId ??
+      (threadId && storedSession?.threadId === threadId ? storedSession?.pendingEventId ?? null : null),
     messages,
   };
 }

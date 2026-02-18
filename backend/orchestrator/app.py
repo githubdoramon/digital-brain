@@ -77,6 +77,7 @@ from schemas import (
     EventIn,
     ExternalContactWebhook,
     ExternalEventPayload,
+    MainSessionOut,
     MeetingIn,
     NewsTopicIn,
     NotificationSettingsOut,
@@ -1275,9 +1276,7 @@ async def ask(
 
     from commands.storage import get_pending_event
 
-    bundle["pending_event_id"] = get_pending_event(
-        event_pending_key(user_email, payload.thread_id or payload.session_id)
-    )
+    bundle["pending_event_id"] = get_pending_event(event_pending_key(user_email, ctx.session_id))
     return AskOut(**bundle)
 
 
@@ -1443,7 +1442,7 @@ async def ask_stream(
                     bundle["session_id"] = ctx.session_id
                     bundle["is_new_session"] = ctx.is_new_session
                     bundle["pending_event_id"] = get_pending_event(
-                        event_pending_key(user_email, payload.thread_id or payload.session_id)
+                        event_pending_key(user_email, ctx.session_id)
                     )
                     event["bundle"] = bundle
 
@@ -1480,6 +1479,30 @@ def list_conversation_threads(user: dict = Depends(get_current_user)):
         raise HTTPException(status_code=400, detail="Authenticated user email missing")
     threads = conversations.list_threads(user_email)
     return [ThreadOut(**thread) for thread in threads]
+
+
+@api.get("/main-session", response_model=MainSessionOut)
+@api.get("/mobile/main-session", response_model=MainSessionOut)
+def get_main_session_thread(user: dict = Depends(get_current_user)):
+    user_email = user.get("email")
+    if not user_email:
+        raise HTTPException(status_code=400, detail="Authenticated user email missing")
+
+    thread, is_new_session, _ = conversations.resolve_main_session(user_email, "")
+    thread_id = str(thread["id"])
+    thread_detail = conversations.get_thread_with_messages(thread_id, user_email) or {}
+
+    from commands.storage import get_pending_event
+
+    pending_event_id = get_pending_event(event_pending_key(user_email, thread_id))
+
+    return MainSessionOut(
+        thread_id=thread_id,
+        thread_title=thread_detail.get("title") or thread.get("title"),
+        is_new_session=is_new_session,
+        pending_event_id=pending_event_id,
+        messages=thread_detail.get("messages") or [],
+    )
 
 
 @api.post("/threads", response_model=ThreadOut)

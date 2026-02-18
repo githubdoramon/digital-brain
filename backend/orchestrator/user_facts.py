@@ -226,11 +226,11 @@ def search_user_facts(
             """
             SELECT fact_id, content, category, importance,
                    access_count, last_accessed_at, created_at, updated_at,
-                   1 - (content_embed <=> %s) AS semantic_score
+                   1 - (content_embed <=> %s::vector) AS semantic_score
             FROM user_facts
             WHERE user_email = %s
               AND content_embed IS NOT NULL
-            ORDER BY content_embed <=> %s
+            ORDER BY content_embed <=> %s::vector
             LIMIT %s
             """,
             (query_embedding, user_email, query_embedding, limit * 3),

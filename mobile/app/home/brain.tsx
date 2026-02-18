@@ -76,12 +76,6 @@ type SendMessageInput =
       uiSubmission?: UiSubmissionInput;
     };
 
-type EventConfirmationResponse = {
-  event_id?: string;
-  created_contacts?: { contact_id: string; display_name: string }[];
-  created_places?: { place_id: string; name: string }[];
-};
-
 type EventAction = {
   type: 'confirm' | 'cancel' | 'edit';
   previewId: string;
@@ -108,6 +102,7 @@ type EventCommandResultPayload = {
 
 const EVENT_CONFIRM_ACTION_ID = 'event_confirmation_action';
 const EVENT_CLARIFICATION_ACTION_PREFIX = 'event_clarification_submit';
+const EVENT_CLARIFICATION_BLOCK_PREFIX = 'event_clarification:';
 const EVENT_CONFIRM_OPTION_PREFIX = 'confirm:';
 const EVENT_CANCEL_OPTION_PREFIX = 'cancel:';
 const EVENT_EDIT_OPTION_PREFIX = 'edit:';
@@ -612,7 +607,6 @@ export default function ChatScreen() {
     try {
       const payload = {
         question: outboundText,
-        thread_id: threadId,
         pending_event_id: pendingEventId ?? undefined,
         client_context: getClientContext(),
         ui_submission: uiSubmission ?? undefined,
@@ -692,7 +686,7 @@ export default function ChatScreen() {
     } finally {
       setIsSending(false);
     }
-  }, [allowed, input, isBootstrapping, isSending, pendingEventId, signOut, threadId, token]);
+  }, [allowed, input, isBootstrapping, isSending, pendingEventId, signOut, token]);
 
   const loadEventEditorContacts = useCallback(async (): Promise<EventContactOption[]> => {
     if (!token) return [];
@@ -849,7 +843,7 @@ export default function ChatScreen() {
         setIsConfirmingEvent(true);
         try {
           const modifications = eventDraftModificationsByPreview[action.previewId] || {};
-          const result = (await apiFetch('/mobile/commands/event/confirm', {
+          await apiFetch('/mobile/commands/event/confirm', {
             method: 'POST',
             body: JSON.stringify(
               action.type === 'confirm'
@@ -865,7 +859,7 @@ export default function ChatScreen() {
                   },
             ),
             token,
-          })) as EventConfirmationResponse;
+          });
 
           setPendingEventId(null);
           setEventDraftModificationsByPreview((prev) => {
@@ -911,7 +905,12 @@ export default function ChatScreen() {
         }
       }
 
-      if (submission.action_id?.startsWith(EVENT_CLARIFICATION_ACTION_PREFIX)) {
+      const submissionBlockId = submission.block_id?.trim() || '';
+      const isEventClarificationSubmission =
+        submission.action_id?.startsWith(EVENT_CLARIFICATION_ACTION_PREFIX) &&
+        submissionBlockId.startsWith(EVENT_CLARIFICATION_BLOCK_PREFIX);
+
+      if (isEventClarificationSubmission) {
         const answer = buildEventClarificationAnswer(submission, directives);
         if (!answer) {
           return;

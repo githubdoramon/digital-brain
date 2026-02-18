@@ -373,6 +373,14 @@ class ThreadDetailOut(ThreadOut):
     messages: list[ThreadMessageOut] = Field(default_factory=list)
 
 
+class MainSessionOut(BaseModel):
+    thread_id: str
+    thread_title: str | None = None
+    is_new_session: bool = False
+    pending_event_id: str | None = None
+    messages: list[ThreadMessageOut] = Field(default_factory=list)
+
+
 class ServiceVersion(BaseModel):
     id: str
     name: str

@@ -30,6 +30,41 @@ function fieldStateKey(block: UiDirectiveBlock, field: UiDirectiveField) {
   return `${block.id}:${field.id}`;
 }
 
+function formatFieldLabel(fieldId: string) {
+  return fieldId
+    .replace(/_/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/^\w/, (char) => char.toUpperCase());
+}
+
+function optionLabelForField(field: UiDirectiveField | undefined, value: string): string {
+  if (!field || !value) return value;
+  const match = (field.options || []).find((option) => option.id === value);
+  return match?.label || value;
+}
+
+function fallbackTextForForm(block: UiDirectiveBlock, values: Record<string, unknown>, defaultText: string) {
+  const entries = Object.entries(values)
+    .map(([fieldId, rawValue]) => {
+      const value = String(rawValue ?? '').trim();
+      if (!value) return null;
+      const field = (block.fields || []).find((candidate) => candidate.id === fieldId);
+      const normalizedValue = optionLabelForField(field, value);
+      const label = field?.label || formatFieldLabel(fieldId);
+      return {
+        fieldId,
+        value: normalizedValue,
+        label,
+      };
+    })
+    .filter((entry): entry is { fieldId: string; value: string; label: string } => Boolean(entry));
+
+  if (entries.length === 0) return defaultText;
+  if (entries.length === 1) return entries[0].value;
+  return entries.map((entry) => `${entry.label}: ${entry.value}`).join('; ');
+}
+
 function toneForBlock(block: UiDirectiveBlock) {
   if (block.type === 'choice_buttons') {
     return {
@@ -123,7 +158,7 @@ export function UiDirectiveCard({ directives, isSubmitting = false, resolvedStat
       block_id: block.id,
       action_id: actionIdForBlock(block),
       values,
-      text_fallback: directives.fallback_text,
+      text_fallback: fallbackTextForForm(block, values, directives.fallback_text),
     });
   };
 
