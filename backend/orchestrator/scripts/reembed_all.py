@@ -14,11 +14,14 @@ Options:
     --documents-only    Only re-embed documents
     --dry-run           Show what would be done without making changes
     --contacts-only     Only re-embed contacts
+    --debug-documents   Emit detailed per-document reprocessing logs
+    --debug-document-id Emit detailed logs only for one document_id
 """
 
 from __future__ import annotations
 
 import argparse
+import builtins
 import json
 import logging
 import os
@@ -32,8 +35,10 @@ from typing import Any, cast
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from db import get_conn  # noqa: E402
-from documents import MAX_CONTENT_CHARS  # noqa: E402
-from documents import _extract_text as extract_document_text  # noqa: E402
+from documents import (
+    MAX_CONTENT_CHARS,  # noqa: E402
+    reprocess_document_content,  # noqa: E402
+)
 from documents import _generate_document_embeddings as generate_document_embeddings  # noqa: E402
 from documents import _replace_document_chunks as replace_document_chunks  # noqa: E402
 from embeddings import embed_text  # noqa: E402
@@ -42,16 +47,20 @@ logger = logging.getLogger(__name__)
 
 
 def _log_print(*args: object, **kwargs: object) -> None:
-    sep = kwargs.get("sep", " ")
-    end = kwargs.get("end", "")
+    sep_raw = kwargs.get("sep", " ")
+    end_raw = kwargs.get("end", "")
+    sep = sep_raw if isinstance(sep_raw, str) else str(sep_raw)
+    end = end_raw if isinstance(end_raw, str) else str(end_raw)
     message = f"{sep.join(str(arg) for arg in args)}{end}".rstrip("\n")
     if not message:
         return
     lowered = message.lower()
-    if "error" in lowered or "failed" in lowered or "✗" in message:
+    is_error = "error" in lowered or "failed" in lowered or "✗" in message
+    if is_error:
         logger.warning(message)
     else:
         logger.info(message)
+    builtins.print(message, file=sys.stderr if is_error else sys.stdout, flush=True)
 
 
 print = _log_print
@@ -250,6 +259,15 @@ def fetch_documents_batch(offset: int, limit: int) -> list[dict[str, Any]]:
         return [dict(row) for row in cur.fetchall()]
 
 
+def document_exists(document_id: str) -> bool:
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT 1 FROM documents WHERE document_id = %s LIMIT 1",
+            (document_id,),
+        )
+        return cur.fetchone() is not None
+
+
 def fetch_contacts_batch(offset: int, limit: int) -> list[dict[str, Any]]:
     """Fetch a batch of contacts."""
     with get_conn() as conn, conn.cursor() as cur:
@@ -344,8 +362,8 @@ def recover_document_content(doc: dict[str, Any]) -> str:
         )
         return ""
 
-    extracted = extract_document_text(path, doc.get("file_mime"))
-    recovered = (extracted or "").strip()
+    result = reprocess_document_content(path=path, mime_type=doc.get("file_mime"))
+    recovered = (result.get("normalized_content") or "").strip()
     if not recovered:
         print(
             "[documents] failed to recover content from file "
@@ -359,6 +377,114 @@ def recover_document_content(doc: dict[str, Any]) -> str:
         f"document_id={doc.get('document_id')} chars={len(clipped)}"
     )
     return clipped
+
+
+def reprocess_document(
+    doc: dict[str, Any], raw_metadata: dict[str, Any]
+) -> tuple[str, dict[str, Any], dict[str, Any]]:
+    debug: dict[str, Any] = {
+        "used_file_reprocess": False,
+        "used_fallback_content": False,
+        "fallback_reason": None,
+        "file_exists": False,
+        "file_path": doc.get("file_path"),
+        "parser_used": None,
+        "parser_warnings": [],
+        "normalized_sections": 0,
+        "normalized_chars": 0,
+        "raw_chars": 0,
+    }
+    current_content = doc.get("content")
+    fallback_content = (
+        current_content[:MAX_CONTENT_CHARS]
+        if isinstance(current_content, str) and current_content.strip()
+        else ""
+    )
+
+    file_path = doc.get("file_path")
+    if not isinstance(file_path, str) or not file_path.strip():
+        if fallback_content:
+            debug["used_fallback_content"] = True
+            debug["fallback_reason"] = "missing_file_path"
+            return fallback_content, raw_metadata, debug
+        debug["fallback_reason"] = "missing_file_path"
+        return "", raw_metadata, debug
+
+    path = Path(file_path)
+    debug["file_exists"] = path.exists()
+    if not path.exists():
+        if fallback_content:
+            debug["used_fallback_content"] = True
+            debug["fallback_reason"] = "file_not_found"
+            return fallback_content, raw_metadata, debug
+        print(
+            "[documents] content missing and file path not found "
+            f"document_id={doc.get('document_id')} file_path={file_path}"
+        )
+        debug["fallback_reason"] = "file_not_found"
+        return "", raw_metadata, debug
+
+    result = reprocess_document_content(path=path, mime_type=doc.get("file_mime"))
+    debug["used_file_reprocess"] = True
+    normalized_content = (result.get("normalized_content") or "").strip()[:MAX_CONTENT_CHARS]
+    debug["normalized_chars"] = len(normalized_content)
+    debug["raw_chars"] = len((result.get("raw_extracted_text") or "").strip())
+    debug["parser_used"] = result.get("parser_used")
+    debug["parser_warnings"] = result.get("parser_warnings") or []
+    debug["normalized_sections"] = len(result.get("normalized_sections") or [])
+    if not normalized_content:
+        debug["fallback_reason"] = "empty_normalized_content"
+        if fallback_content:
+            debug["used_fallback_content"] = True
+        return fallback_content, raw_metadata, debug
+
+    if result.get("raw_extracted_text"):
+        raw_metadata["raw_extracted_text"] = result["raw_extracted_text"]
+    if result.get("parser_used"):
+        raw_metadata["parser_used"] = result["parser_used"]
+    if result.get("parser_warnings"):
+        raw_metadata["parser_warnings"] = result["parser_warnings"]
+    if result.get("normalized_sections"):
+        raw_metadata["normalized_sections"] = result["normalized_sections"]
+    if result.get("normalization_metadata"):
+        raw_metadata["normalization_metadata"] = result["normalization_metadata"]
+    return normalized_content, raw_metadata, debug
+
+
+def _should_debug_document(
+    document_id: str,
+    *,
+    debug_documents: bool,
+    debug_document_id: str | None,
+) -> bool:
+    if debug_document_id:
+        return document_id == debug_document_id
+    return debug_documents
+
+
+def _log_document_reprocess_debug(
+    document_id: str,
+    *,
+    debug_info: dict[str, Any],
+    chunk_count: int | None = None,
+    persisted_content: bool | None = None,
+) -> None:
+    print(
+        "[documents][debug] "
+        f"document_id={document_id} "
+        f"file_path={debug_info.get('file_path')} "
+        f"file_exists={debug_info.get('file_exists')} "
+        f"used_file_reprocess={debug_info.get('used_file_reprocess')} "
+        f"used_fallback_content={debug_info.get('used_fallback_content')} "
+        f"fallback_reason={debug_info.get('fallback_reason')} "
+        f"parser_used={debug_info.get('parser_used')} "
+        f"parser_warnings={debug_info.get('parser_warnings')} "
+        f"raw_chars={debug_info.get('raw_chars')} "
+        f"normalized_chars={debug_info.get('normalized_chars')} "
+        f"normalized_sections={debug_info.get('normalized_sections')} "
+        f"chunk_count={chunk_count if chunk_count is not None else 'n/a'} "
+        f"persisted_content={persisted_content if persisted_content is not None else 'n/a'}"
+    )
 
 
 def update_contact_embedding(contact_id: str, embedding: Sequence[float]) -> None:
@@ -423,6 +549,9 @@ def reembed_events(batch_size: int, dry_run: bool) -> int:
 def reembed_documents(
     batch_size: int,
     dry_run: bool,
+    *,
+    debug_documents: bool = False,
+    debug_document_id: str | None = None,
 ) -> int:
     """Re-embed all documents. Returns count of processed records."""
     total = count_records("documents", "document_id")
@@ -433,6 +562,7 @@ def reembed_documents(
 
     processed = 0
     failed = 0
+    debug_matches = 0
     offset = 0
 
     while offset < total:
@@ -444,18 +574,35 @@ def reembed_documents(
             doc_id = doc["document_id"]
             try:
                 raw_metadata = normalize_raw_metadata(doc.get("raw_metadata"))
-                recovered_content = recover_document_content(doc)
+                rebuilt_content, raw_metadata, debug_info = reprocess_document(doc, raw_metadata)
                 should_persist_content = False
-                if recovered_content:
+                if rebuilt_content:
+                    existing_content = doc.get("content")
                     had_content = bool(
-                        isinstance(doc.get("content"), str) and doc.get("content").strip()
+                        isinstance(existing_content, str) and existing_content.strip()
                     )
-                    doc["content"] = recovered_content
-                    should_persist_content = not had_content
+                    doc["content"] = rebuilt_content
+                    should_persist_content = (not had_content) or (
+                        isinstance(existing_content, str)
+                        and existing_content[:MAX_CONTENT_CHARS] != rebuilt_content
+                    )
 
                 if dry_run:
                     embed_text_str = generate_document_embed_text(doc)
                     print(f"  [dry-run] Would re-embed document {doc_id}: {embed_text_str[:80]}...")
+                    should_debug = _should_debug_document(
+                        doc_id,
+                        debug_documents=debug_documents,
+                        debug_document_id=debug_document_id,
+                    )
+                    if should_debug:
+                        debug_matches += 1
+                        _log_document_reprocess_debug(
+                            doc_id,
+                            debug_info=debug_info,
+                            chunk_count=None,
+                            persisted_content=should_persist_content,
+                        )
                 else:
                     embedding, chunk_embeddings = generate_document_embeddings(
                         doc, raw_metadata=raw_metadata
@@ -465,8 +612,21 @@ def reembed_documents(
                         embedding,
                         chunk_embeddings,
                         raw_metadata,
-                        content=doc["content"] if should_persist_content else None,
+                        content=rebuilt_content if should_persist_content else None,
                     )
+                    should_debug = _should_debug_document(
+                        doc_id,
+                        debug_documents=debug_documents,
+                        debug_document_id=debug_document_id,
+                    )
+                    if should_debug:
+                        debug_matches += 1
+                        _log_document_reprocess_debug(
+                            doc_id,
+                            debug_info=debug_info,
+                            chunk_count=len(chunk_embeddings),
+                            persisted_content=should_persist_content,
+                        )
 
                 processed += 1
 
@@ -486,6 +646,12 @@ def reembed_documents(
             time.sleep(0.1)
 
     print(f"[documents] Completed: {processed} processed, {failed} failed")
+    if debug_document_id and debug_matches == 0:
+        exists = document_exists(debug_document_id)
+        print(
+            "[documents][debug] no matching document was debugged "
+            f"document_id={debug_document_id} exists_in_db={exists}"
+        )
     return processed
 
 
@@ -570,6 +736,17 @@ def main():
         action="store_true",
         help="Show what would be done without making changes",
     )
+    parser.add_argument(
+        "--debug-documents",
+        action="store_true",
+        help="Emit detailed per-document reprocessing logs",
+    )
+    parser.add_argument(
+        "--debug-document-id",
+        type=str,
+        default=None,
+        help="Emit debug logs only for one document_id",
+    )
     args = parser.parse_args()
 
     print("=" * 60)
@@ -596,6 +773,8 @@ def main():
             total_processed += reembed_documents(
                 args.batch_size,
                 args.dry_run,
+                debug_documents=args.debug_documents,
+                debug_document_id=args.debug_document_id,
             )
 
         if not args.events_only and not args.documents_only:

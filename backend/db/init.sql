@@ -1,1 +1,1 @@
-/Users/ramon/workspace/digital-brain-conf/init.sql
+/Users/ramon/workspace/digital-brain-server-conf/init.sql

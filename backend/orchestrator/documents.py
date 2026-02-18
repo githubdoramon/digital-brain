@@ -7,15 +7,22 @@ import shutil
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-from docx import Document as DocxDocument
 from fastapi import UploadFile
-from pdfminer.high_level import extract_text as extract_pdf_text
 
 from db import get_conn
+from document_processing import (
+    NormalizedDocument,
+    ParsedSection,
+    StructuredChunk,
+    chunk_normalized_document,
+    normalize_document,
+    parse_document,
+)
 from embeddings import embed_text
 from observability.logger import get_runtime_logger
 from search_normalization import normalize_search_list, normalize_search_text
@@ -122,6 +129,11 @@ class DocumentChunkEmbedding:
     chunk_index: int
     chunk_text: str
     embedding: Sequence[float]
+    section_title: str | None = None
+    page_start: int | None = None
+    page_end: int | None = None
+    content_type: str | None = None
+    parser_used: str | None = None
 
 
 def _ensure_document_storage_dir() -> Path:
@@ -146,10 +158,9 @@ def ingest_document(
     document_id = f"doc:{uuid4().hex}"
     stored = _store_upload(upload, document_id)
 
-    content_text = _extract_text(stored.path, stored.mime_type)
-    if content_text:
-        content_text = content_text[:MAX_CONTENT_CHARS]
-    else:
+    extraction = _extract_and_normalize_document(stored.path, stored.mime_type)
+    content_text = extraction["normalized_content"]
+    if not content_text:
         fallback = filter(None, [description, provided_title, stored.file_name, document_id])
         content_text = " ".join(fallback)
 
@@ -159,6 +170,16 @@ def ingest_document(
         "stored_mime_type": stored.mime_type,
         "file_size": stored.size,
     }
+    if extraction.get("raw_extracted_text"):
+        base_raw_metadata["raw_extracted_text"] = extraction["raw_extracted_text"]
+    if extraction.get("parser_used"):
+        base_raw_metadata["parser_used"] = extraction["parser_used"]
+    if extraction.get("parser_warnings"):
+        base_raw_metadata["parser_warnings"] = extraction["parser_warnings"]
+    if extraction.get("normalized_sections"):
+        base_raw_metadata["normalized_sections"] = extraction["normalized_sections"]
+    if extraction.get("normalization_metadata"):
+        base_raw_metadata["normalization_metadata"] = extraction["normalization_metadata"]
     original_content = content_text
     translated_content, translated_for_storage = _translate_content_for_storage(
         original_content,
@@ -322,10 +343,20 @@ def update_document_metadata(
 
     content_text = (row.get("content") or "")[:MAX_CONTENT_CHARS]
     if not content_text and stored.path.exists():
-        extracted = _extract_text(stored.path, stored.mime_type)
-        recovered = (extracted or "").strip()
+        extracted_payload = _extract_and_normalize_document(stored.path, stored.mime_type)
+        recovered = (extracted_payload.get("normalized_content") or "").strip()
         if recovered:
             content_text = recovered[:MAX_CONTENT_CHARS]
+            if extracted_payload.get("raw_extracted_text"):
+                raw_metadata["raw_extracted_text"] = extracted_payload["raw_extracted_text"]
+            if extracted_payload.get("parser_used"):
+                raw_metadata["parser_used"] = extracted_payload["parser_used"]
+            if extracted_payload.get("parser_warnings"):
+                raw_metadata["parser_warnings"] = extracted_payload["parser_warnings"]
+            if extracted_payload.get("normalized_sections"):
+                raw_metadata["normalized_sections"] = extracted_payload["normalized_sections"]
+            if extracted_payload.get("normalization_metadata"):
+                raw_metadata["normalization_metadata"] = extracted_payload["normalization_metadata"]
             logger.info(
                 "[documents] recovered missing content from file document_id=%s chars=%s",
                 document_id,
@@ -496,28 +527,87 @@ def _store_upload(upload: UploadFile, document_id: str) -> StoredFileInfo:
 
 
 def _extract_text(path: Path, mime_type: str | None) -> str:
-    suffix = path.suffix.lower()
+    extracted = _extract_and_normalize_document(path, mime_type)
+    return extracted["normalized_content"]
+
+
+def reprocess_document_content(
+    *,
+    path: Path,
+    mime_type: str | None,
+) -> dict[str, Any]:
+    """Re-extract and normalize a document file for full re-embedding workflows."""
+    return _extract_and_normalize_document(path, mime_type)
+
+
+def _extract_and_normalize_document(path: Path, mime_type: str | None) -> dict[str, Any]:
+    parsed = parse_document(path, mime_type)
+    normalized = normalize_document(parsed, max_chars=MAX_CONTENT_CHARS)
+    section_payload = _serialize_normalized_sections(normalized.sections)
+    return {
+        "normalized_content": normalized.normalized_text,
+        "raw_extracted_text": normalized.raw_extracted_text,
+        "parser_used": normalized.parser_used,
+        "parser_warnings": normalized.warnings,
+        "normalized_sections": section_payload,
+        "normalization_metadata": normalized.metadata,
+    }
+
+
+def _serialize_normalized_sections(sections: Sequence[ParsedSection]) -> list[dict[str, Any]]:
+    payload: list[dict[str, Any]] = []
+    for section in sections:
+        text = (section.text or "").strip()
+        if not text:
+            continue
+        item: dict[str, Any] = {
+            "title": section.title,
+            "text": text,
+            "page_start": section.page_start,
+            "page_end": section.page_end,
+            "content_type": section.content_type,
+        }
+        payload.append(item)
+    return payload
+
+
+def _deserialize_sections(raw_sections: Any) -> list[ParsedSection]:
+    if not isinstance(raw_sections, list):
+        return []
+    sections: list[ParsedSection] = []
+    for item in raw_sections:
+        if not isinstance(item, dict):
+            continue
+        text = _safe_str(item.get("text"))
+        if not text:
+            continue
+        title = _safe_str(item.get("title"))
+        sections.append(
+            ParsedSection(
+                title=title,
+                text=text,
+                page_start=_safe_int(item.get("page_start")),
+                page_end=_safe_int(item.get("page_end")),
+                content_type=_safe_str(item.get("content_type")) or "paragraph",
+            )
+        )
+    return sections
+
+
+def _safe_str(value: Any) -> str | None:
+    if isinstance(value, str):
+        cleaned = value.strip()
+        return cleaned or None
+    return None
+
+
+def _safe_int(value: Any) -> int | None:
     try:
-        if suffix == ".pdf" or mime_type == "application/pdf":
-            return extract_pdf_text(path)
-        if suffix in {".docx"} or mime_type in {
-            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        }:
-            doc = DocxDocument(path)
-            return "\n".join(paragraph.text for paragraph in doc.paragraphs)
-        if suffix in {".txt", ".md"} or (mime_type and mime_type.startswith("text/")):
-            with open(path, encoding="utf-8", errors="ignore") as handle:
-                return handle.read()
-    except Exception as exc:
-        logger.warning("[documents] Failed to extract text from %s: %s", path, exc, exc_info=exc)
-    # Fallback: attempt binary read and decode
-    try:
-        with open(path, "rb") as handle:
-            data = handle.read()
-        return data.decode("utf-8", errors="ignore")
-    except Exception as exc:
-        logger.warning("[documents] Failed binary decode for %s: %s", path, exc, exc_info=exc)
-        return ""
+        if value is None:
+            return None
+        return int(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _suggest_document_date(content: str, fallback: str | None) -> datetime | None:
@@ -898,13 +988,24 @@ def _vector_search_documents(query: str, k: int) -> dict[str, float]:
         return {}
     query_vector = embed_text(cleaned_query)
     with get_conn() as conn, conn.cursor() as cur:
+        chunk_columns = _get_document_chunk_columns(cur)
+        has_section_title = "section_title" in chunk_columns
+        has_content_type = "content_type" in chunk_columns
+
+        quality_boost_sql = "0.0"
+        quality_boost_params: list[Any] = []
+        if has_section_title:
+            quality_boost_sql = f"{quality_boost_sql} + (CASE WHEN COALESCE(NULLIF(TRIM(section_title), ''), '') <> '' THEN 0.03 ELSE 0 END)"
+        if has_content_type:
+            quality_boost_sql = f"{quality_boost_sql} + (CASE WHEN content_type = 'table' AND %s ~ '[0-9]' THEN 0.04 ELSE 0 END)"
+            quality_boost_params.append(cleaned_query)
+
         chunk_candidate_limit = max(k, k * max(1, CHUNK_SEARCH_CANDIDATE_MULTIPLIER))
-        cur.execute(
-            """
+        query_sql = f"""
             WITH ranked_chunks AS (
                 SELECT
                     document_id,
-                    1 - (chunk_embed <=> %s::vector) AS score
+                    (1 - (chunk_embed <=> %s::vector)) + ({quality_boost_sql}) AS score
                 FROM document_chunks
                 ORDER BY chunk_embed <=> %s::vector
                 LIMIT %s
@@ -930,8 +1031,13 @@ def _vector_search_documents(query: str, k: int) -> dict[str, float]:
             LEFT JOIN documents d ON d.document_id = a.document_id
             ORDER BY a.best_score DESC, a.mean_score DESC
             LIMIT %s
-            """,
-            (query_vector, query_vector, chunk_candidate_limit, query_vector, k),
+        """
+        query_params: list[Any] = [query_vector]
+        query_params.extend(quality_boost_params)
+        query_params.extend([query_vector, chunk_candidate_limit, query_vector, k])
+        cur.execute(
+            query_sql,
+            tuple(query_params),
         )
         rows = cur.fetchall()
         document_scores = {
@@ -1032,21 +1138,77 @@ def _replace_document_chunks(
     cur.execute("DELETE FROM document_chunks WHERE document_id = %s", (document_id,))
     if not chunk_embeddings:
         return
-    cur.executemany(
-        """
-        INSERT INTO document_chunks (document_id, chunk_index, chunk_text, chunk_embed)
-        VALUES (%s, %s, %s, %s)
-        """,
-        [
-            (
-                document_id,
-                chunk.chunk_index,
-                chunk.chunk_text,
-                list(chunk.embedding),
-            )
-            for chunk in chunk_embeddings
-        ],
-    )
+
+    columns = _get_document_chunk_columns(cur)
+    has_section_title = "section_title" in columns
+    has_page_start = "page_start" in columns
+    has_page_end = "page_end" in columns
+    has_content_type = "content_type" in columns
+    has_parser_used = "parser_used" in columns
+
+    insert_columns = ["document_id", "chunk_index", "chunk_text", "chunk_embed"]
+    if has_section_title:
+        insert_columns.append("section_title")
+    if has_page_start:
+        insert_columns.append("page_start")
+    if has_page_end:
+        insert_columns.append("page_end")
+    if has_content_type:
+        insert_columns.append("content_type")
+    if has_parser_used:
+        insert_columns.append("parser_used")
+
+    placeholders = ", ".join(["%s"] * len(insert_columns))
+    query = f"INSERT INTO document_chunks ({', '.join(insert_columns)}) VALUES ({placeholders})"
+    rows: list[tuple[Any, ...]] = []
+    for chunk in chunk_embeddings:
+        values: list[Any] = [
+            document_id,
+            chunk.chunk_index,
+            chunk.chunk_text,
+            list(chunk.embedding),
+        ]
+        if has_section_title:
+            values.append(chunk.section_title)
+        if has_page_start:
+            values.append(chunk.page_start)
+        if has_page_end:
+            values.append(chunk.page_end)
+        if has_content_type:
+            values.append(chunk.content_type)
+        if has_parser_used:
+            values.append(chunk.parser_used)
+        rows.append(tuple(values))
+    cur.executemany(query, rows)
+
+
+@lru_cache(maxsize=1)
+def _cached_document_chunk_columns() -> set[str]:
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT column_name
+            FROM information_schema.columns
+            WHERE table_schema = 'public' AND table_name = 'document_chunks'
+            """
+        )
+        return {str(row["column_name"]) for row in cur.fetchall()}
+
+
+def _get_document_chunk_columns(cur: Any | None = None) -> set[str]:
+    if cur is None:
+        return _cached_document_chunk_columns()
+    try:
+        return _cached_document_chunk_columns()
+    except Exception:
+        cur.execute(
+            """
+            SELECT column_name
+            FROM information_schema.columns
+            WHERE table_schema = 'public' AND table_name = 'document_chunks'
+            """
+        )
+        return {str(row["column_name"]) for row in cur.fetchall()}
 
 
 def _bm25_search_documents(query: str, k: int) -> dict[str, float]:
@@ -1365,21 +1527,64 @@ def _generate_document_embeddings(
     *,
     raw_metadata: dict[str, Any] | None = None,
 ) -> tuple[Sequence[float], list[DocumentChunkEmbedding]]:
-    _ = raw_metadata
+    metadata = dict(raw_metadata or {})
     content_source = _build_chunk_embedding_source(document)
     metadata_prefix = _build_chunk_metadata_prefix(document)
-    chunk_inputs = _chunk_text_for_embedding(content_source)
-    if not chunk_inputs:
-        chunk_inputs = [""]
+
+    section_payload = metadata.get("normalized_sections")
+    structured_sections = _deserialize_sections(section_payload)
+    if metadata.get("content_translated_for_storage"):
+        structured_sections = []
+    parser_used = _safe_str(metadata.get("parser_used")) or "unknown_parser"
+
+    structured_chunks: list[StructuredChunk]
+    if structured_sections:
+        normalized_doc = NormalizedDocument(
+            normalized_text=content_source,
+            raw_extracted_text="",
+            parser_used=parser_used,
+            sections=structured_sections,
+        )
+        structured_chunks = chunk_normalized_document(
+            normalized_doc,
+            chunk_chars=EMBED_CHUNK_CHARS,
+            overlap_chars=EMBED_CHUNK_OVERLAP_CHARS,
+            max_chunks=EMBED_MAX_CHUNKS,
+        )
+    else:
+        structured_chunks = []
+
+    if not structured_chunks:
+        chunk_inputs = _chunk_text_for_embedding(content_source)
+        if not chunk_inputs:
+            chunk_inputs = [""]
+        structured_chunks = [
+            StructuredChunk(
+                chunk_text=chunk_text,
+                section_title=None,
+                page_start=None,
+                page_end=None,
+                content_type="paragraph",
+                parser_used=parser_used,
+            )
+            for chunk_text in chunk_inputs
+        ]
 
     chunk_embeddings: list[DocumentChunkEmbedding] = []
-    for idx, content_chunk in enumerate(chunk_inputs):
-        chunk_payload = _compose_chunk_embedding_payload(metadata_prefix, content_chunk)
+    for idx, structured_chunk in enumerate(structured_chunks):
+        chunk_payload = _compose_chunk_embedding_payload(
+            metadata_prefix, structured_chunk.chunk_text
+        )
         chunk_embeddings.append(
             DocumentChunkEmbedding(
                 chunk_index=idx,
                 chunk_text=chunk_payload,
                 embedding=embed_text(chunk_payload),
+                section_title=structured_chunk.section_title,
+                page_start=structured_chunk.page_start,
+                page_end=structured_chunk.page_end,
+                content_type=structured_chunk.content_type,
+                parser_used=structured_chunk.parser_used,
             )
         )
 
