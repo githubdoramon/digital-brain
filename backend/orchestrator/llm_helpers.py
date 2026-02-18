@@ -29,11 +29,24 @@ LLM_TIMEOUT = int(os.getenv("LLM_TIMEOUT", "120"))
 LLM_MAX_RETRIES = int(os.getenv("LLM_MAX_RETRIES", "3"))
 LLM_RETRY_BASE_DELAY = float(os.getenv("LLM_RETRY_BASE_DELAY", "1.0"))
 
-# Validate configuration
-if not LLM_BASE_URL:
-    raise RuntimeError("LLM_BASE_URL environment variable is required")
-if not LLM_CHAT_MODEL:
-    raise RuntimeError("LLM_CHAT_MODEL environment variable is required")
+
+def _get_required_setting(name: str, fallback: str | None = None) -> str:
+    """Return env setting value, raising only when an actual LLM call needs it."""
+    value = os.getenv(name)
+    if value is None:
+        value = fallback
+    normalized = str(value or "").strip()
+    if not normalized:
+        raise RuntimeError(f"{name} environment variable is required")
+    return normalized
+
+
+def _get_optional_setting(name: str, fallback: str | None = None) -> str:
+    """Return env setting value if available, otherwise a normalized fallback."""
+    value = os.getenv(name)
+    if value is None:
+        value = fallback
+    return str(value or "").strip()
 
 
 def get_llm_headers() -> dict[str, str]:
@@ -44,20 +57,23 @@ def get_llm_headers() -> dict[str, str]:
         Dict with Content-Type and optional Authorization headers
     """
     headers = {"Content-Type": "application/json"}
-    if LLM_API_KEY:
-        headers["Authorization"] = f"Bearer {LLM_API_KEY}"
+    api_key = _get_optional_setting("LLM_API_KEY", LLM_API_KEY)
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
     return headers
 
 
 def _resolve_model(model: Optional[str], use_simpler_model: Optional[bool]) -> str:
-    regular_model = LLM_CHAT_MODEL or ""
+    regular_model = _get_required_setting("LLM_CHAT_MODEL", LLM_CHAT_MODEL)
+    fast_model = _get_optional_setting("LLM_CHAT_MODEL_FAST", LLM_CHAT_MODEL_FAST)
+    simpler_model = _get_optional_setting("LLM_CHAT_MODEL_SIMPLER", LLM_CHAT_MODEL_SIMPLER)
     if model:
         return str(model)
-    if use_simpler_model is True and LLM_CHAT_MODEL_SIMPLER:
-        return str(LLM_CHAT_MODEL_SIMPLER)
+    if use_simpler_model is True and simpler_model:
+        return simpler_model
     if use_simpler_model is False:
         return regular_model
-    return str(LLM_CHAT_MODEL_FAST or regular_model)
+    return fast_model or regular_model
 
 
 def build_chat_payload(
@@ -113,12 +129,13 @@ def _post_chat_completion(
     *,
     timeout: Optional[int] = None,
 ) -> dict[str, Any]:
+    base_url = _get_required_setting("LLM_BASE_URL", LLM_BASE_URL)
     last_exception: Exception | None = None
 
     for attempt in range(1, LLM_MAX_RETRIES + 1):
         try:
             response = requests.post(
-                f"{LLM_BASE_URL}/chat/completions",
+                f"{base_url}/chat/completions",
                 headers=get_llm_headers(),
                 json=payload,
                 timeout=timeout or LLM_TIMEOUT,
@@ -236,6 +253,7 @@ async def stream_llm_chat(
     use_simpler_model: Optional[bool] = None,
     timeout: Optional[int] = None,
 ) -> AsyncGenerator[str, None]:
+    base_url = _get_required_setting("LLM_BASE_URL", LLM_BASE_URL)
     payload = build_chat_payload(
         messages,
         model=model,
@@ -253,7 +271,7 @@ async def stream_llm_chat(
             async with httpx.AsyncClient(timeout=timeout_config) as client:
                 async with client.stream(
                     "POST",
-                    f"{LLM_BASE_URL}/chat/completions",
+                    f"{base_url}/chat/completions",
                     headers=get_llm_headers(),
                     json=payload,
                 ) as response:

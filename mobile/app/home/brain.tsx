@@ -25,11 +25,13 @@ import { theme } from '@/theme';
 import { UiDirectiveCard } from '@/components/ui-directive-card';
 import { SlashCommandPalette } from '@/components/SlashCommandPalette';
 import { renderAssistantMarkdown } from '@/components/MarkdownRenderer';
+import { StreamingAssistantCard } from '@/components/StreamingAssistantCard';
 import type {
   EventContactOption,
   EventDraft,
   EventDraftModifications,
 } from '@/components/event-draft/types';
+import { askWithStreaming } from '@/chat/streaming';
 import { loadChatSession, saveChatSession, StoredChatSession } from '@/chat/session';
 import { restoreChatHistory } from '@/chat/threads';
 import type { CommandResult as ThreadCommandResult, EventResolvedStatus } from '@/chat/threads';
@@ -39,7 +41,6 @@ import {
   consumeEventDraftEditResult,
   createEventDraftEditSession,
 } from '@/events/draftEditorSession';
-import { getClientContext } from '@/location/clientContext';
 
 type Message = {
   id: string;
@@ -51,6 +52,7 @@ type Message = {
     ui_directives?: UiDirectives;
     event_resolved?: EventResolvedStatus;
     request_error?: RequestErrorMetadata;
+    progress_chip?: string;
   };
 };
 
@@ -60,14 +62,6 @@ type RequestErrorMetadata = {
 };
 
 type CommandResult = ThreadCommandResult;
-
-type AskResponse = {
-  answer?: string;
-  thread_id?: string | null;
-  pending_event_id?: string | null;
-  command_result?: CommandResult;
-  ui_directives?: UiDirectives;
-};
 
 type SendMessageInput =
   | string
@@ -576,7 +570,7 @@ export default function ChatScreen() {
     () => (
       <View style={styles.header}>
         <Text style={styles.kicker}>Chat</Text>
-        <Text style={styles.title}>Ask "your" memory</Text>
+        <Text style={styles.title}>Talk to "your" memory</Text>
       </View>
     ),
     [],
@@ -603,19 +597,72 @@ export default function ChatScreen() {
       { id: pendingId, role: 'assistant', content: 'Thinking...', pending: true },
     ]);
 
+    const updatePendingMessage = (nextContent: string) => {
+      setMessages((prev) =>
+        prev.map((message) =>
+          message.id === pendingId
+            ? {
+                ...message,
+                content: nextContent,
+                pending: true,
+              }
+            : message,
+        ),
+      );
+    };
+
+    const setProgressChip = (chipLabelRaw: string) => {
+      const chipLabel = chipLabelRaw.trim();
+      if (!chipLabel) return;
+      setMessages((prev) =>
+        prev.map((message) => {
+          if (message.id !== pendingId) {
+            return message;
+          }
+          if (message.metadata?.progress_chip === chipLabel) {
+            return message;
+          }
+          return {
+            ...message,
+            metadata: {
+              ...message.metadata,
+              progress_chip: chipLabel,
+            },
+          };
+        }),
+      );
+    };
+
     setIsSending(true);
     try {
-      const payload = {
-        question: outboundText,
-        pending_event_id: pendingEventId ?? undefined,
-        client_context: getClientContext(),
-        ui_submission: uiSubmission ?? undefined,
-      };
-      const response = (await apiFetch('/mobile/ask', {
-        method: 'POST',
-        body: JSON.stringify(payload),
+      let streamedContent = '';
+      let lastStatus = 'Thinking...';
+      const response = await askWithStreaming({
         token,
-      })) as AskResponse;
+        question: outboundText,
+        pendingEventId,
+        uiSubmission,
+        callbacks: {
+          onSessionInfo: (threadIdFromStream) => {
+            setThreadId((prev) => threadIdFromStream ?? prev);
+          },
+          onStatus: (statusMessage) => {
+            lastStatus = statusMessage;
+            if (!streamedContent) {
+              updatePendingMessage(lastStatus);
+            }
+          },
+          onToken: (delta) => {
+            streamedContent += delta;
+            updatePendingMessage(streamedContent);
+          },
+          onClearContent: () => {
+            streamedContent = '';
+            updatePendingMessage(lastStatus || 'Thinking...');
+          },
+          onProgressChip: setProgressChip,
+        },
+      });
 
       setThreadId((prev) => response.thread_id ?? prev);
       const commandResult = response.command_result as CommandResult | undefined;
@@ -995,6 +1042,15 @@ export default function ChatScreen() {
           }}
           scrollEventThrottle={16}
           renderItem={({ item }) => {
+            if (item.role === 'assistant' && item.pending) {
+              return (
+                <StreamingAssistantCard
+                  content={item.content}
+                  progressChip={item.metadata?.progress_chip}
+                />
+              );
+            }
+
             const previewId = extractEventPreviewId(item.metadata?.command_result);
             const isSupersededEventCard = Boolean(
               previewId && pendingEventId && previewId !== pendingEventId,

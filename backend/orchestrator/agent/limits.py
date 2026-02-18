@@ -76,18 +76,11 @@ class AgentConfig:
             max_steps=int(os.getenv("AGENT_MAX_STEPS", "15")),
             max_tool_calls=int(os.getenv("AGENT_MAX_TOOL_CALLS", "20")),
             max_repairs=int(os.getenv("AGENT_MAX_REPAIRS", "5")),
-            repeated_calls_threshold=int(
-                os.getenv("AGENT_REPEATED_CALLS_THRESHOLD", "3")
-            ),
-            empty_results_threshold=int(
-                os.getenv("AGENT_EMPTY_RESULTS_THRESHOLD", "3")
-            ),
-            enable_intent_routing=os.getenv(
-                "AGENT_ENABLE_INTENT_ROUTING", "true"
-            ).lower()
+            repeated_calls_threshold=int(os.getenv("AGENT_REPEATED_CALLS_THRESHOLD", "3")),
+            empty_results_threshold=int(os.getenv("AGENT_EMPTY_RESULTS_THRESHOLD", "3")),
+            enable_intent_routing=os.getenv("AGENT_ENABLE_INTENT_ROUTING", "true").lower()
             == "true",
-            enable_validation=os.getenv("AGENT_ENABLE_VALIDATION", "true").lower()
-            == "true",
+            enable_validation=os.getenv("AGENT_ENABLE_VALIDATION", "true").lower() == "true",
             enable_no_progress_detection=os.getenv(
                 "AGENT_ENABLE_NO_PROGRESS_DETECTION", "true"
             ).lower()
@@ -226,9 +219,7 @@ class LimitChecker:
             "repairs_remaining": self.config.max_repairs - state.repair_count,
         }
 
-    def format_stop_message(
-        self, state: "AgentState", violation: LimitViolation
-    ) -> str:
+    def format_stop_message(self, state: "AgentState", violation: LimitViolation) -> str:
         """
         Format a user-friendly message when stopping due to a limit.
 
@@ -239,7 +230,7 @@ class LimitChecker:
         Returns:
             Formatted message for the user
         """
-        parts = [violation.message]
+        parts = [f"Sorry, I couldn't complete your request. Reason: {violation.message}."]
 
         if violation.suggestion:
             parts.append(f"Suggestion: {violation.suggestion}")

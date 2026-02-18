@@ -5,6 +5,8 @@ Note: These tests verify the controller interface and configuration.
 Full integration tests would require mocking the LLM backend.
 """
 
+from time import perf_counter
+
 import pytest
 
 from agent.controller import AgentController
@@ -241,6 +243,32 @@ class TestResponseBundle:
         assert "known_facts" in data
         assert "tool_calls" in data
         assert len(data["tool_calls"]) == 1
+
+    def test_finalize_empty_tool_output_explains_failure_reason(self):
+        controller = _build_controller(AgentConfig(max_steps=3, max_tool_calls=5))
+        state = AgentState(goal="Find latest update")
+        state.add_verifier_note("missing completion evidence")
+        state.record_tool_call(
+            ToolCallRecord(
+                tool_name="web_search",
+                arguments={"query": "latest update"},
+                result={"results": [{"title": "Example"}]},
+                duration_ms=50,
+                success=True,
+            )
+        )
+
+        bundle = controller._finalize(
+            question="Find latest update",
+            answer="",
+            state=state,
+            run_id="test-run",
+            session_id=None,
+            total_start=perf_counter(),
+        )
+
+        assert "Sorry, I couldn't complete your request." in bundle["answer"]
+        assert "Reason: verification failed (missing completion evidence)." in bundle["answer"]
 
 
 class TestToolExposurePolicy:

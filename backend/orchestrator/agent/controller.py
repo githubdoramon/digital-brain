@@ -605,7 +605,9 @@ class AgentController:
                         )
                         continue
                     # Give up after a few empty responses
-                    content = "I apologize, but I wasn't able to complete this request."
+                    content = self._format_unable_to_complete_message(
+                        "agent returned empty responses repeatedly"
+                    )
 
                 # Check if this is a continuation intent
                 if (
@@ -775,7 +777,15 @@ class AgentController:
                         "type": "status",
                         "message": f"Limit reached: {violation.message}",
                     }
-                    break
+                    bundle = self._handle_limit_violation(
+                        state,
+                        violation,
+                        run_id,
+                        session_id,
+                        total_start,
+                    )
+                    yield {"type": "done", "bundle": bundle}
+                    return
                 yield {"type": "status", "message": f"Thinking (step {state.step_count})..."}
 
                 tool_calls = []
@@ -826,7 +836,7 @@ class AgentController:
                         yield {
                             "type": "tool_call",
                             "name": func_name,
-                            "args": func_args if isinstance(func_args, dict) else {},
+                            "args": self._normalize_stream_tool_args(func_args),
                         }
 
                         result = await self._execute_tool_call(
@@ -1321,6 +1331,20 @@ class AgentController:
             user_email=user_email,
             conversation_history=conversation_history,
         )
+
+    def _normalize_stream_tool_args(self, raw_args: Any) -> dict[str, Any]:
+        if isinstance(raw_args, dict):
+            return raw_args
+        if isinstance(raw_args, str):
+            text = raw_args.strip()
+            if not text:
+                return {}
+            try:
+                parsed = json.loads(text)
+            except (TypeError, ValueError):
+                return {}
+            return parsed if isinstance(parsed, dict) else {}
+        return {}
 
     def _get_completion_evidence(
         self,
@@ -1949,6 +1973,30 @@ class AgentController:
             "profile": self.runtime_profile.name,
         }
 
+    def _format_unable_to_complete_message(self, reason: str) -> str:
+        """Build a clear user-facing failure message with an explicit reason."""
+        normalized_reason = str(reason or "Agent could not finalize the response").strip()
+        return f"Sorry, I couldn't complete your request. Reason: {normalized_reason}."
+
+    def _infer_unfinalized_reason(self, state: AgentState) -> str:
+        """Infer the best available reason when the run has no final answer."""
+        if state.verifier_notes:
+            return f"verification failed ({state.verifier_notes[-1]})"
+
+        if state.pending_actions:
+            pending = ", ".join(state.pending_actions[:2])
+            return f"required actions still pending ({pending})"
+
+        last_call = state.last_tool_call
+        if last_call and not last_call.success:
+            detail = str(last_call.error or "tool execution failed").strip()
+            return f"last tool call `{last_call.tool_name}` failed ({detail})"
+
+        if state.tool_calls_count > 0:
+            return "agent produced no final response after tool execution"
+
+        return "agent produced empty responses"
+
     def _finalize(
         self,
         question: str,
@@ -1967,18 +2015,13 @@ class AgentController:
         has_content = bool(answer and answer.strip() and len(answer.strip()) > 10)
         if not has_content and state.tool_calls_count > 0:
             # We did work but have no answer - this is suspicious
+            reason = self._infer_unfinalized_reason(state)
             trace.trace_decision(
                 "Empty response with tool calls",
                 "Generated fallback response",
-                {"tool_calls": state.tool_calls_count},
+                {"tool_calls": state.tool_calls_count, "reason": reason},
             )
-            # Generate a minimal response based on what was done
-            if state.completion_evidence:
-                answer = f"Done. {state.completion_evidence[-1]}"
-            elif state.known_facts:
-                answer = f"Based on my search: {state.known_facts[-1]}"
-            else:
-                answer = "I completed the requested action."
+            answer = self._format_unable_to_complete_message(reason)
 
         # Log completion
         self.logger.complete_run(run_id, success=True, final_answer=answer)

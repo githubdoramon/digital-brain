@@ -190,6 +190,24 @@ class TestNoProgressDetection:
 
         assert violation is None
 
+
+class TestNoProgressAndStopMessages:
+    """Tests for no-progress behavior and stop explanations."""
+
+    def test_format_stop_message_includes_failure_reason(self, agent_config):
+        checker = LimitChecker(agent_config)
+        state = AgentState(goal="Test")
+        violation = LimitViolation(
+            limit_type=LimitType.MAX_STEPS,
+            message="Maximum steps (5) reached",
+            suggestion="Try breaking your request into smaller parts",
+        )
+
+        message = checker.format_stop_message(state, violation)
+
+        assert "Sorry, I couldn't complete your request." in message
+        assert "Reason: Maximum steps (5) reached." in message
+
     def test_no_progress_consecutive_empty_results(self, agent_config):
         """Test detection of consecutive empty results."""
         checker = LimitChecker(agent_config)
