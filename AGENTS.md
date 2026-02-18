@@ -123,7 +123,7 @@ User Question → Intent Router → Conversational Profile Dispatch → Tool Vis
 | Group | Tools |
 |-------|-------|
 | `memory` | search_memories, get_events, get_document |
-| `resolution` | resolve_contacts, lookup_contact |
+| `resolution` | resolve_contacts, lookup_contact, select_contacts |
 | `web` | web_search, fetch_web_page |
 | `home` | home_assistant |
 | `skills` | run_skill_script |
@@ -149,6 +149,10 @@ User Question → Intent Router → Conversational Profile Dispatch → Tool Vis
 - **Contact-aware memory search flow**: on unambiguous resolution, inject `contact_ids` into memory search.
 - **Contact-aware memory search flow**: on ambiguity, return a clarification-needed result instead of running unfiltered search.
 - **Contact-aware memory search flow**: avoid repeating identical `resolve_contacts` calls after `needs_clarification`/`no_people` (no-progress guard).
+- **Collective participant selectors are supported in contact resolution**: phrases like "everyone with @domain", "all employees from company X", and "my <team> team" can resolve to multiple contacts even when no explicit person names are present.
+- **Deterministic selector auto-activation**: selector-based groups that are deterministic (for example email domain/company matches) are persisted as reusable contact groups with confirmed status.
+- **Contact groups are user-scoped by owner contact**: ownership is linked to the current user's self-contact record (resolved from authenticated email), not authored by the model.
+- **Inferred group confirmation happens through event preview UX**: non-deterministic selector groups (for example "my soccer team") are shown in event preview UI directives and only persisted when the user confirms event creation.
 - **Interaction ranking flow**: for strict "who did I meet/talk to most" windows, prefer `get_events` with `action=by_time_span` (plus optional resolved `contact_ids`) before ranking counterparts.
 - **Pre-resolve contacts policy**: router sets `pre_resolve_contacts=false` for discovery/ranking queries that don't reference a specific person (e.g. "who did I meet most this week?"). Only person-referential queries (naming someone by name, pronoun, or relationship term) trigger pre-resolution. The LLM router prompt provides explicit guidance for this decision; rule-based routes use the intent-level default from `INTENT_PRE_RESOLVE_CONTACTS`.
 - **Validation semantics**: post-execution validation must treat clarification-required search/resolution results as `need_user_input`, not generic empty-result retries.
@@ -196,6 +200,10 @@ User Question → Intent Router → Conversational Profile Dispatch → Tool Vis
 - `GET /documents` – List documents
 - `POST /documents/search` – Search documents
 - `GET /contacts` – List contacts
+- `GET /contact-groups` – List contact groups
+- `POST /contact-groups` – Create contact group
+- `GET /contact-groups/{id}` – Get contact group
+- `DELETE /contact-groups/{id}` – Archive contact group
 - `GET /meetings/{id}` – Get meeting
 
 ### User Facts

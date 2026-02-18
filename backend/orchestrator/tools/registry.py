@@ -25,7 +25,7 @@ logger = get_runtime_logger(__name__)
 # Tool group definitions - maps group names to tool names
 TOOL_GROUPS = {
     "memory": ["search_memories", "get_events", "get_document"],
-    "resolution": ["resolve_contacts", "lookup_contact"],
+    "resolution": ["resolve_contacts", "lookup_contact", "select_contacts"],
     "web": ["web_search", "fetch_web_page"],
     "home": ["home_assistant"],
     "skills": ["run_skill_script"],
@@ -249,7 +249,6 @@ def _register_all_tools(registry: ToolRegistry) -> None:
                     items_type="string",
                 ),
             ],
-            constraints=["read_only"],
         )
     )
 
@@ -627,6 +626,111 @@ def _register_all_tools(registry: ToolRegistry) -> None:
                     minimum=1,
                     maximum=50,
                     validator=validate_limit,
+                ),
+            ],
+            constraints=["read_only"],
+        )
+    )
+
+    # select_contacts - Collective selectors and reusable contact groups
+    registry.register(
+        ToolContract(
+            name="select_contacts",
+            description=(
+                "Selector-based contact resolution and reusable contact-group management. "
+                "Use this when the user refers to collections of people (for example domain/company/team/group) "
+                "or when creating/listing/contact-group records."
+                "Do not use this for pure relationship grouping (for example someone's family members), as that comes from 'resolve_contacts'."
+            ),
+            parameters=[
+                ToolParameter(
+                    name="action",
+                    type="string",
+                    description=(
+                        "Operation to perform: `select`, `list_groups`, `get_group`, "
+                        "`create_group`, or `archive_group`."
+                    ),
+                    required=False,
+                    default="select",
+                    enum=[
+                        "select",
+                        "list_groups",
+                        "get_group",
+                        "create_group",
+                        "archive_group",
+                    ],
+                ),
+                ToolParameter(
+                    name="selector_kind",
+                    type="string",
+                    description=(
+                        "Selector type for action=`select`: `email_domain`, `company`, `group`, or `tag`."
+                    ),
+                    required=False,
+                    enum=["email_domain", "company", "group", "tag"],
+                ),
+                ToolParameter(
+                    name="value",
+                    type="string",
+                    description="Selector value for action=`select`.",
+                    required=False,
+                ),
+                ToolParameter(
+                    name="auto_activate",
+                    type="boolean",
+                    description=(
+                        "When true (default), deterministic selectors may persist reusable contact groups."
+                    ),
+                    required=False,
+                    default=True,
+                ),
+                ToolParameter(
+                    name="group_id",
+                    type="string",
+                    description="Group id for `get_group` or `archive_group`.",
+                    required=False,
+                ),
+                ToolParameter(
+                    name="name",
+                    type="string",
+                    description="Group name for `create_group`.",
+                    required=False,
+                ),
+                ToolParameter(
+                    name="member_contact_ids",
+                    type="array",
+                    description="Member contact IDs for `create_group`.",
+                    required=False,
+                    items_type="string",
+                ),
+                ToolParameter(
+                    name="aliases",
+                    type="array",
+                    description="Optional aliases for `create_group`.",
+                    required=False,
+                    items_type="string",
+                ),
+                ToolParameter(
+                    name="description",
+                    type="string",
+                    description="Optional description for `create_group`.",
+                    required=False,
+                ),
+                ToolParameter(
+                    name="include_archived",
+                    type="boolean",
+                    description="Include archived groups for `list_groups`.",
+                    required=False,
+                    default=False,
+                ),
+                ToolParameter(
+                    name="limit",
+                    type="integer",
+                    description="Maximum contacts returned for `select`.",
+                    required=False,
+                    default=120,
+                    minimum=1,
+                    maximum=500,
                 ),
             ],
             constraints=["read_only"],

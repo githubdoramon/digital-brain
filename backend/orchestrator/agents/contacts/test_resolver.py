@@ -82,6 +82,32 @@ def mock_call_llm_json(prompt: str, **kwargs) -> dict[str, Any]:
             "reasoning": "No candidates provided",
         }
 
+    # Mock collective selector extraction
+    elif "extract collective participant selectors" in prompt_lower:
+        if "@acme.example" in prompt_lower:
+            return {
+                "selectors": [
+                    {
+                        "kind": "email_domain",
+                        "value": "acme.example",
+                        "raw": "@acme.example",
+                        "deterministic": True,
+                    }
+                ]
+            }
+        if "soccer team" in prompt_lower:
+            return {
+                "selectors": [
+                    {
+                        "kind": "group",
+                        "value": "soccer team",
+                        "raw": "my soccer team",
+                        "deterministic": False,
+                    }
+                ]
+            }
+        return {"selectors": []}
+
     return {}
 
 
@@ -102,6 +128,7 @@ sys.modules["contacts"] = mock_contacts_module
 # Now import after mocking
 from agents.contacts.resolver import (  # noqa: E402
     _detect_relational_term,
+    _extract_collective_selectors,
     _parse_nested_relationship,
     _strip_generic_markers,
     extract_people_from_text,
@@ -205,6 +232,99 @@ def test_extract_people_from_text():
     assert "Acme" not in people
     assert "CEO" not in people
     assert "CEO at Acme" in people
+
+
+def test_extract_collective_selectors():
+    selectors = _extract_collective_selectors(
+        "having a meeting with all acme employees about AI and everyone with @acme.example"
+    )
+    kinds = {selector["kind"] for selector in selectors}
+    assert "email_domain" in kinds
+    assert "company" in kinds
+
+
+def test_resolve_contacts_from_text_uses_llm_collective_selectors():
+    with (
+        patch("agents.contacts.resolver.contacts_service") as mock_contacts,
+        patch("agents.contacts.resolver.contact_groups_service") as mock_groups,
+    ):
+        mock_groups.resolve_group_members.return_value = {"found": False, "contacts": []}
+        mock_contacts.search_contacts_by_email_domain.return_value = [
+            {"contact_id": "contact-1", "display_name": "Alice", "emails": ["alice@acme.example"]}
+        ]
+        mock_contacts.search_contacts_by_company.return_value = []
+        mock_contacts.search_contacts_by_group_hint.return_value = []
+        mock_contacts.search_contacts.return_value = []
+
+        result = resolve_contacts_from_text(
+            "meeting with everyone that has @acme.example email",
+            "user@example.com",
+        )
+
+        assert result["status"] == "success"
+        assert result["resolved_contacts"]
+        assert any(
+            selector.get("kind") == "email_domain"
+            for selector in result.get("selector_mentions", [])
+        )
+
+
+@patch("agents.contacts.resolver.contacts_service")
+@patch("agents.contacts.resolver.contact_groups_service")
+def test_resolve_contacts_from_text_email_domain_selector(mock_groups, mock_contacts):
+    mock_contacts.search_contacts_by_email_domain.return_value = [
+        {
+            "contact_id": "contact-1",
+            "display_name": "Alice",
+            "emails": ["alice@acme.example"],
+        },
+        {
+            "contact_id": "contact-2",
+            "display_name": "Bob",
+            "emails": ["bob@acme.example"],
+        },
+    ]
+    mock_contacts.search_contacts_by_company.return_value = []
+    mock_contacts.search_contacts.return_value = []
+    mock_groups.resolve_group_members.return_value = {"found": False, "contacts": []}
+
+    result = resolve_contacts_from_text(
+        "meeting with everyone that has @acme.example email",
+        "user@example.com",
+    )
+
+    assert result["status"] == "success"
+    assert len(result["resolved_contacts"]) == 2
+    assert result["group_upsert_candidates"]
+    assert result["group_upsert_candidates"][0]["source"] == "deterministic"
+
+
+@patch("agents.contacts.resolver.contacts_service")
+@patch("agents.contacts.resolver.contact_groups_service")
+def test_resolve_contacts_from_text_group_selector_requires_confirmation(
+    mock_groups, mock_contacts
+):
+    mock_groups.resolve_group_members.return_value = {"found": False, "contacts": []}
+    mock_contacts.search_contacts_by_email_domain.return_value = []
+    mock_contacts.search_contacts_by_company.return_value = []
+    mock_contacts.search_contacts_by_group_hint.return_value = [
+        {"contact_id": "contact-1", "display_name": "Ana"},
+        {"contact_id": "contact-2", "display_name": "Bruno"},
+    ]
+    mock_contacts.search_contacts.return_value = []
+
+    result = resolve_contacts_from_text(
+        "I hang out with all people from my soccer team",
+        "user@example.com",
+    )
+
+    assert result["status"] == "success"
+    assert len(result["resolved_contacts"]) == 2
+    assert result["group_upsert_candidates"] == []
+    assert len(result.get("group_confirmation_candidates", [])) == 1
+    candidate = result["group_confirmation_candidates"][0]
+    assert candidate["name"] == "soccer team"
+    assert candidate["source"] == "inferred"
 
 
 @patch("agents.contacts.resolver.contacts_service")

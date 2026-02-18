@@ -25,6 +25,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
 
 import action_logs
+import contact_groups as contact_groups_service
 import contacts as contacts_service
 import conversations
 import daily_briefings
@@ -59,6 +60,8 @@ from observability.logger import get_runtime_logger
 from schemas import (
     AskIn,
     AskOut,
+    ContactGroupIn,
+    ContactGroupOut,
     ContactIn,
     ContactMergeIn,
     ContactRelationshipIn,
@@ -309,6 +312,71 @@ def ingest_contact(c: ContactIn, user: dict = Depends(get_current_user)):
 @api.get("/mobile/contacts")
 def list_contacts(user: dict = Depends(get_current_user)):
     return {"contacts": contacts_service.list_contacts()}
+
+
+@api.get("/contact-groups")
+@api.get("/mobile/contact-groups")
+def list_contact_groups(
+    include_archived: bool = Query(default=False, alias="includeArchived"),
+    user: dict = Depends(get_current_user),
+):
+    user_email = user.get("email")
+    if not user_email:
+        raise HTTPException(status_code=400, detail="Authenticated user email missing")
+    groups = contact_groups_service.list_contact_groups(
+        user_email,
+        include_archived=include_archived,
+    )
+    return {"groups": groups}
+
+
+@api.post("/contact-groups", response_model=ContactGroupOut)
+@api.post("/mobile/contact-groups", response_model=ContactGroupOut)
+def create_contact_group(payload: ContactGroupIn, user: dict = Depends(get_current_user)):
+    user_email = user.get("email")
+    if not user_email:
+        raise HTTPException(status_code=400, detail="Authenticated user email missing")
+
+    group = contact_groups_service.create_contact_group(
+        user_email=user_email,
+        name=payload.name,
+        member_contact_ids=list(payload.member_contact_ids or []),
+        aliases=list(payload.aliases or []),
+        description=payload.description,
+    )
+    if not group:
+        raise HTTPException(status_code=400, detail="Failed to create contact group")
+
+    full_group = contact_groups_service.get_contact_group(
+        user_email, str(group.get("group_id") or "")
+    )
+    if not full_group:
+        raise HTTPException(status_code=404, detail="Created contact group not found")
+    return ContactGroupOut(**full_group)
+
+
+@api.get("/contact-groups/{group_id}", response_model=ContactGroupOut)
+@api.get("/mobile/contact-groups/{group_id}", response_model=ContactGroupOut)
+def get_contact_group(group_id: str, user: dict = Depends(get_current_user)):
+    user_email = user.get("email")
+    if not user_email:
+        raise HTTPException(status_code=400, detail="Authenticated user email missing")
+    group = contact_groups_service.get_contact_group(user_email, group_id)
+    if not group:
+        raise HTTPException(status_code=404, detail="Contact group not found")
+    return ContactGroupOut(**group)
+
+
+@api.delete("/contact-groups/{group_id}")
+@api.delete("/mobile/contact-groups/{group_id}")
+def archive_contact_group(group_id: str, user: dict = Depends(get_current_user)):
+    user_email = user.get("email")
+    if not user_email:
+        raise HTTPException(status_code=400, detail="Authenticated user email missing")
+    archived = contact_groups_service.archive_contact_group(user_email, group_id)
+    if not archived:
+        raise HTTPException(status_code=404, detail="Contact group not found")
+    return {"ok": True}
 
 
 @api.get("/contacts/merge-candidates")

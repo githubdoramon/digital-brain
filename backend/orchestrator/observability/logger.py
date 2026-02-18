@@ -49,7 +49,7 @@ class TraceConfig:
     """Configuration for tracing."""
 
     enabled: bool = True
-    min_level: LogLevel = LogLevel.INFO
+    min_level: LogLevel = LogLevel.DEBUG
     show_timestamps: bool = False
     truncate_length: int = 150
 

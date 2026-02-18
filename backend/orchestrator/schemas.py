@@ -131,6 +131,26 @@ class ContactMergeIn(BaseModel):
     duplicate_contact_id: str
 
 
+class ContactGroupIn(BaseModel):
+    name: str
+    member_contact_ids: list[str] = Field(default_factory=list)
+    aliases: list[str] = Field(default_factory=list)
+    description: str | None = None
+
+
+class ContactGroupOut(BaseModel):
+    group_id: str
+    owner_contact_id: str
+    name: str
+    description: str | None = None
+    status: str
+    source: str
+    confirmed: bool
+    aliases: list[str] = Field(default_factory=list)
+    members: list[dict[str, Any]] = Field(default_factory=list)
+    member_count: int = 0
+
+
 class TodoIn(BaseModel):
     todo_id: str
     description: str
@@ -381,6 +401,7 @@ class EventCommandConfirmation(BaseModel):
     confirmed: bool
     modifications: dict[str, Any] | None = Field(default_factory=dict)
     skip_entities: dict[str, list[str]] | None = Field(default_factory=dict)
+    group_confirmations: dict[str, bool] | None = Field(default_factory=dict)
 
 
 class EventCommandResult(BaseModel):
@@ -390,6 +411,7 @@ class EventCommandResult(BaseModel):
     event_id: str | None = None
     created_contacts: list[dict[str, Any]] = Field(default_factory=list)
     created_places: list[dict[str, Any]] = Field(default_factory=list)
+    created_groups: list[dict[str, Any]] = Field(default_factory=list)
     error: str | None = None
 
 

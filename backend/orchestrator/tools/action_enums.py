@@ -41,6 +41,29 @@ class LookupContactAction(str, Enum):
         return default
 
 
+class SelectContactsAction(str, Enum):
+    """Allowed action values for the `select_contacts` tool."""
+
+    SELECT = "select"
+    LIST_GROUPS = "list_groups"
+    GET_GROUP = "get_group"
+    CREATE_GROUP = "create_group"
+    ARCHIVE_GROUP = "archive_group"
+
+    @classmethod
+    def from_value(
+        cls,
+        value: object,
+        *,
+        default: SelectContactsAction | None = None,
+    ) -> SelectContactsAction | None:
+        normalized = str(value or "").strip().lower()
+        for member in cls:
+            if member.value == normalized:
+                return member
+        return default
+
+
 class GetEventsAction(str, Enum):
     """Allowed action values for the `get_events` tool."""
 

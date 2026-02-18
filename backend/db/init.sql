@@ -46,6 +46,52 @@ CREATE TABLE IF NOT EXISTS contact_relationships (
 CREATE INDEX IF NOT EXISTS idx_contact_relationships_from ON contact_relationships (from_contact_id);
 CREATE INDEX IF NOT EXISTS idx_contact_relationships_to ON contact_relationships (to_contact_id);
 
+-- Contact groups (user-scoped reusable cohorts)
+CREATE TABLE IF NOT EXISTS contact_groups (
+  group_id TEXT PRIMARY KEY,
+  owner_contact_id TEXT NOT NULL REFERENCES contacts(contact_id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  description TEXT,
+  status TEXT NOT NULL DEFAULT 'active',
+  source TEXT NOT NULL DEFAULT 'manual',
+  confirmed BOOLEAN NOT NULL DEFAULT FALSE,
+  group_embed VECTOR(768),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  CHECK (btrim(name) <> ''),
+  CHECK (status IN ('active', 'archived')),
+  CHECK (source IN ('manual', 'inferred', 'deterministic'))
+);
+
+CREATE TABLE IF NOT EXISTS contact_group_members (
+  group_id TEXT NOT NULL REFERENCES contact_groups(group_id) ON DELETE CASCADE,
+  contact_id TEXT NOT NULL REFERENCES contacts(contact_id) ON DELETE CASCADE,
+  added_via TEXT NOT NULL DEFAULT 'manual',
+  confidence DOUBLE PRECISION,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (group_id, contact_id)
+);
+
+CREATE TABLE IF NOT EXISTS group_aliases (
+  group_id TEXT NOT NULL REFERENCES contact_groups(group_id) ON DELETE CASCADE,
+  alias TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (group_id, alias),
+  CHECK (btrim(alias) <> '')
+);
+
+CREATE INDEX IF NOT EXISTS idx_contact_groups_owner_status
+  ON contact_groups (owner_contact_id, status);
+CREATE INDEX IF NOT EXISTS idx_contact_groups_name
+  ON contact_groups (owner_contact_id, name);
+CREATE INDEX IF NOT EXISTS idx_contact_group_members_group
+  ON contact_group_members (group_id);
+CREATE INDEX IF NOT EXISTS idx_contact_group_members_contact
+  ON contact_group_members (contact_id);
+CREATE INDEX IF NOT EXISTS idx_group_aliases_group
+  ON group_aliases (group_id);
+
 -- Places (canonical venue rows)
 CREATE TABLE IF NOT EXISTS places (
   place_id TEXT PRIMARY KEY,           -- e.g., 'plc_cafe_martim_moniz'

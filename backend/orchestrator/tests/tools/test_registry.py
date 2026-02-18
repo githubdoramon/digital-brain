@@ -233,6 +233,21 @@ class TestPreregisteredTools:
         assert is_valid is True
         assert error is None
 
+    def test_select_contacts_registered(self, populated_registry):
+        contract = populated_registry.get_contract("select_contacts")
+        assert contract is not None
+        assert "select_contacts" in TOOL_GROUPS["resolution"]
+
+        is_valid, error, _ = contract.validate_params(
+            {
+                "action": "select",
+                "selector_kind": "group",
+                "value": "soccer team",
+            }
+        )
+        assert is_valid is True
+        assert error is None
+
     def test_web_search_registered(self, populated_registry):
         """Test web_search tool is registered."""
         contract = populated_registry.get_contract("web_search")

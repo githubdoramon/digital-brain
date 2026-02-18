@@ -105,17 +105,14 @@ def _clarification_directive(
 
 def _event_confirmation_directive(command_result: dict[str, Any]) -> dict[str, Any]:
     preview_id = _normalized_text(command_result.get("preview_id"))
-    extracted = (
-        command_result.get("extracted") if isinstance(command_result.get("extracted"), dict) else {}
-    )
-    resolution = (
-        command_result.get("resolution")
-        if isinstance(command_result.get("resolution"), dict)
-        else {}
-    )
-    new_entities = (
-        resolution.get("new_entities") if isinstance(resolution.get("new_entities"), dict) else {}
-    )
+    extracted_raw = command_result.get("extracted")
+    extracted: dict[str, Any] = extracted_raw if isinstance(extracted_raw, dict) else {}
+
+    resolution_raw = command_result.get("resolution")
+    resolution: dict[str, Any] = resolution_raw if isinstance(resolution_raw, dict) else {}
+
+    new_entities_raw = resolution.get("new_entities")
+    new_entities: dict[str, Any] = new_entities_raw if isinstance(new_entities_raw, dict) else {}
     relationships = _dict_list(command_result.get("relationship_suggestions"))
 
     preview_lines = [

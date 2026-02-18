@@ -24,6 +24,7 @@ import os
 import re
 from typing import Any, Optional
 
+import contact_groups as contact_groups_service
 import contacts as contacts_service
 from llm_helpers import call_llm_json
 from observability import trace
@@ -36,6 +37,8 @@ from ui_dsl.clarification import (
 )
 
 logger = get_runtime_logger(__name__)
+
+EMAIL_DOMAIN_PATTERN = re.compile(r"@([a-z0-9][a-z0-9.-]*\.[a-z]{2,})", re.IGNORECASE)
 
 
 def _with_clarification_guidelines(prompt: str) -> str:
@@ -126,6 +129,245 @@ def _format_conversation_for_prompt(conversation_messages: list[dict[str, str]])
         return ""
 
     return json.dumps(sanitized, ensure_ascii=True)
+
+
+def _extract_collective_selectors(text: str) -> list[dict[str, str]]:
+    """Extract collective participant selectors from free-form text."""
+    selectors: list[dict[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+
+    raw_text = str(text or "")
+    normalized_text = raw_text.lower()
+
+    def _append(
+        kind: str, value: str, *, raw: str | None = None, deterministic: bool = False
+    ) -> None:
+        cleaned_value = str(value or "").strip()
+        normalized_value = normalize_search_text(cleaned_value)
+        if not normalized_value:
+            return
+        key = (kind, normalized_value)
+        if key in seen:
+            return
+        seen.add(key)
+        selectors.append(
+            {
+                "kind": kind,
+                "value": cleaned_value,
+                "raw": str(raw or cleaned_value).strip(),
+                "deterministic": "true" if deterministic else "false",
+            }
+        )
+
+    for match in EMAIL_DOMAIN_PATTERN.finditer(normalized_text):
+        domain = (match.group(1) or "").strip().lower()
+        if domain:
+            _append("email_domain", domain, raw=match.group(0), deterministic=True)
+
+    company_patterns = [
+        r"(?:all|everyone|everybody)\s+(?:people\s+)?(?:from|at)\s+company\s+([a-z0-9][a-z0-9 .&'\-]{1,80})",
+        r"(?:all|everyone|everybody)\s+(?:people\s+)?(?:from|at)\s+([a-z0-9][a-z0-9 .&'\-]{1,80})",
+        r"all\s+([a-z0-9][a-z0-9 .&'\-]{1,80})\s+employees",
+    ]
+    for pattern in company_patterns:
+        for match in re.finditer(pattern, normalized_text, flags=re.IGNORECASE):
+            candidate = (match.group(1) or "").strip(" .")
+            if not candidate:
+                continue
+            candidate = re.split(
+                r"\b(?:about|regarding|concerning|to discuss|for)\b",
+                candidate,
+                maxsplit=1,
+            )[0].strip()
+            candidate = re.sub(r"\b(inc|ltd|llc|corp|corporation|company)$", "", candidate).strip()
+            if candidate:
+                _append("company", candidate, raw=match.group(0), deterministic=True)
+
+    team_patterns = [
+        r"(?:all|everyone|everybody)\s+(?:people\s+)?from\s+my\s+([a-z0-9][a-z0-9 '\-]{1,80}team)",
+        r"my\s+([a-z0-9][a-z0-9 '\-]{1,80}team)",
+    ]
+    for pattern in team_patterns:
+        for match in re.finditer(pattern, normalized_text, flags=re.IGNORECASE):
+            team_name = (match.group(1) or "").strip(" .")
+            if team_name:
+                _append("group", team_name, raw=match.group(0), deterministic=False)
+
+    if "employees" in normalized_text and not any(s["kind"] == "company" for s in selectors):
+        for token in re.findall(r"\b([a-z0-9][a-z0-9\-]{2,})\b", normalized_text):
+            if token in {"all", "with", "from", "about", "employees", "everyone", "having"}:
+                continue
+            if token in {"meeting", "team", "work", "people", "participant", "participants"}:
+                continue
+            if token == "my":
+                continue
+            _append("company", token, raw=f"{token} employees", deterministic=True)
+            break
+
+    return selectors
+
+
+def _merge_collective_selectors(*batches: list[dict[str, str]]) -> list[dict[str, str]]:
+    merged: list[dict[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    for batch in batches:
+        for selector in batch:
+            if not isinstance(selector, dict):
+                continue
+            kind = str(selector.get("kind") or "").strip().lower()
+            value = normalize_search_text(str(selector.get("value") or "").strip())
+            if not kind or not value:
+                continue
+            key = (kind, value)
+            if key in seen:
+                continue
+            seen.add(key)
+            merged.append(
+                {
+                    "kind": kind,
+                    "value": str(selector.get("value") or "").strip(),
+                    "raw": str(selector.get("raw") or selector.get("value") or "").strip(),
+                    "deterministic": "true"
+                    if _is_true_flag(selector.get("deterministic"))
+                    else "false",
+                }
+            )
+    return merged
+
+
+def _is_true_flag(value: Any) -> bool:
+    return str(value).strip().lower() == "true"
+
+
+def _dedupe_resolved_contacts(resolved_contacts: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    deduped: list[dict[str, Any]] = []
+    seen_ids: set[str] = set()
+    for contact in resolved_contacts:
+        contact_id = str(contact.get("contact_id") or "").strip()
+        if not contact_id or contact_id in seen_ids:
+            continue
+        seen_ids.add(contact_id)
+        deduped.append(contact)
+    return deduped
+
+
+def _resolve_collective_selectors(
+    selectors: list[dict[str, str]],
+    *,
+    user_email: str,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
+    resolved_contacts: list[dict[str, Any]] = []
+    group_upsert_candidates: list[dict[str, Any]] = []
+    group_confirmation_candidates: list[dict[str, Any]] = []
+
+    for selector in selectors:
+        kind = str(selector.get("kind") or "").strip().lower()
+        value = str(selector.get("value") or "").strip()
+        raw_reference = str(selector.get("raw") or value).strip()
+        deterministic = _is_true_flag(selector.get("deterministic"))
+
+        matches: list[dict[str, Any]] = []
+        group_name = ""
+        description = ""
+        aliases: list[str] = []
+        added_via = f"selector_{kind}"
+
+        if kind == "email_domain":
+            matches = contacts_service.search_contacts_by_email_domain(value, limit=300)
+            group_name = f"People at @{value}"
+            description = f"Contacts matched by email domain @{value}."
+            aliases = [f"@{value}", value]
+
+        elif kind == "company":
+            matches = contacts_service.search_contacts_by_company(value, limit=300)
+            group_name = f"{value} team"
+            description = f"Contacts matched for company '{value}'."
+            aliases = [value, f"company {value}"]
+
+        elif kind == "group":
+            group_lookup = contact_groups_service.resolve_group_members(
+                user_email, value, limit=300
+            )
+            if group_lookup.get("found"):
+                matches = group_lookup.get("contacts", [])
+            else:
+                matches = contacts_service.search_contacts_by_group_hint(value, limit=120)
+                if not matches:
+                    matches = contacts_service.search_contacts(
+                        value, search_by="any", fuzzy_threshold=80, limit=60
+                    )
+            group_name = value
+            description = f"Contacts associated with group '{value}'."
+            aliases = [value]
+            deterministic = bool(group_lookup.get("found"))
+
+        elif kind == "tag":
+            matches = contacts_service.search_contacts_by_group_hint(value, limit=120)
+            group_name = value
+            description = f"Contacts matched for tag/group hint '{value}'."
+            aliases = [value]
+            deterministic = False
+
+        if not matches:
+            continue
+
+        selector_confidence = "high" if deterministic else "medium"
+        for match in matches:
+            contact_id = str(match.get("contact_id") or "").strip()
+            display_name = str(match.get("display_name") or "").strip()
+            if not contact_id or not display_name:
+                continue
+            resolved_contacts.append(
+                {
+                    "original_text": raw_reference,
+                    "contact_id": contact_id,
+                    "display_name": display_name,
+                    "matched_via": f"selector_{kind}",
+                    "confidence": selector_confidence,
+                    "resolution_path": None,
+                }
+            )
+
+        if deterministic:
+            group_upsert_candidates.append(
+                {
+                    "name": group_name,
+                    "description": description,
+                    "aliases": aliases,
+                    "source": "deterministic",
+                    "selector_kind": kind,
+                    "added_via": added_via,
+                    "contact_ids": [str(match.get("contact_id") or "") for match in matches],
+                    "replace_members": True,
+                    "confirmed": True,
+                }
+            )
+        elif kind == "group":
+            candidate_contact_ids = [
+                str(match.get("contact_id") or "").strip()
+                for match in matches
+                if str(match.get("contact_id") or "").strip()
+            ]
+            if len(candidate_contact_ids) >= 2:
+                group_confirmation_candidates.append(
+                    {
+                        "name": group_name,
+                        "description": description,
+                        "aliases": aliases,
+                        "source": "inferred",
+                        "selector_kind": kind,
+                        "added_via": added_via,
+                        "contact_ids": candidate_contact_ids,
+                        "replace_members": True,
+                        "confirmed": False,
+                    }
+                )
+
+    return (
+        _dedupe_resolved_contacts(resolved_contacts),
+        group_upsert_candidates,
+        group_confirmation_candidates,
+    )
 
 
 def _format_disambiguation_history_for_prompt(
@@ -291,7 +533,8 @@ def _repair_split_possessive_title_entities(
 def extract_people_from_text(
     text: str,
     conversation_messages: list[dict[str, str]] | None = None,
-) -> list[str]:
+    include_collective_selectors: bool = False,
+) -> list[str] | tuple[list[str], list[dict[str, str]]]:
     """
     Extract person mentions from text using LLM.
 
@@ -300,10 +543,8 @@ def extract_people_from_text(
         user_email: User's email (used to get their name for LLM context)
 
     Returns:
-        {
-            "people": ["John", "my daughter", "my daughter's doctor"],
-            "ambiguous_text": true | false
-        }
+        By default: list of people.
+        When include_collective_selectors=True: (people, selectors).
     """
 
     logger.debug("[contact_resolver] extract_people_from_text: %s", text)
@@ -411,9 +652,27 @@ Examples:
 - "Who is the person I've met the most in the last 2 weeks?" -> []
 - "Who did I meet the most in the last 2 weeks?" -> []
 
+COLLECTIVE GROUP SELECTORS (ALSO EXTRACT):
+- If the text includes participant groups by attribute/cohort, return them in "collective_selectors".
+- Allowed selector kinds: email_domain, company, group, tag.
+- Examples:
+  * "everyone with @acme.example" -> {{"kind":"email_domain","value":"acme.example","raw":"@acme.example","deterministic":true}}
+  * "everyone from company Acme" -> {{"kind":"company","value":"Acme","raw":"everyone from company Acme","deterministic":true}}
+  * "all people from my soccer team" -> {{"kind":"group","value":"soccer team","raw":"my soccer team","deterministic":false}}
+- Keep people and selectors independently; a message may contain both.
+- Do not use collective groups for pure relationship grouping (for example someone's family members).
+
 Return ONLY a valid JSON, nothing more, no other text or explanation:
 {{
-    "people": ["person1", "my daughter", "person2's doctor"]
+    "people": ["person1", "my daughter", "person2's doctor"],
+    "collective_selectors": [
+      {{
+        "kind": "group",
+        "value": "soccer team",
+        "raw": "my soccer team",
+        "deterministic": false
+      }}
+    ]
 }}"""
     prompt = _with_clarification_guidelines(prompt)
 
@@ -425,6 +684,29 @@ Return ONLY a valid JSON, nothing more, no other text or explanation:
                 prompt, timeout=60, temperature=0.1, top_p=0.9, use_simpler_model=True
             )
             people = result.get("people", [])
+            raw_collective_selectors = result.get("collective_selectors", [])
+
+            llm_collective_selectors: list[dict[str, str]] = []
+            if isinstance(raw_collective_selectors, list):
+                for selector in raw_collective_selectors:
+                    if not isinstance(selector, dict):
+                        continue
+                    kind = str(selector.get("kind") or "").strip().lower()
+                    if kind not in {"email_domain", "company", "group", "tag"}:
+                        continue
+                    value = str(selector.get("value") or "").strip()
+                    if not value:
+                        continue
+                    llm_collective_selectors.append(
+                        {
+                            "kind": kind,
+                            "value": value,
+                            "raw": str(selector.get("raw") or value).strip(),
+                            "deterministic": "true"
+                            if bool(selector.get("deterministic"))
+                            else "false",
+                        }
+                    )
 
             # Validate extraction: check for unresolved pronouns
             invalid_extractions = []
@@ -525,6 +807,8 @@ For possessive org titles, output ONE person mention only, formatted as "<title>
                     )
                 cleaned_people = without_user
 
+            if include_collective_selectors:
+                return cleaned_people, llm_collective_selectors
             return cleaned_people
         except Exception as e:
             if attempt < max_retries - 1:
@@ -541,8 +825,12 @@ For possessive org titles, output ONE person mention only, formatted as "<title>
                 e,
                 exc_info=e,
             )
+            if include_collective_selectors:
+                return [], []
             return []
 
+    if include_collective_selectors:
+        return [], []
     return []
 
 
@@ -903,14 +1191,39 @@ def resolve_contacts_from_text(
     logger.info("[contact_resolver] Step 1: Extracting people...")
     effective_text = text
 
-    people = extract_people_from_text(effective_text, conversation_messages=conversation_messages)
+    extraction_result: tuple[list[str], list[dict[str, str]]] = extract_people_from_text(
+        effective_text,
+        conversation_messages=conversation_messages,
+        include_collective_selectors=True,
+    )  # type: ignore[assignment]
+    people = extraction_result[0]
+    llm_selector_mentions = extraction_result[1]
     logger.info("[contact_resolver] Extracted %s people: %s", len(people), people)
 
-    if not people:
+    selector_mentions = _extract_collective_selectors(effective_text)
+    selector_mentions = _merge_collective_selectors(selector_mentions, llm_selector_mentions)
+    logger.info(
+        "[contact_resolver] Extracted %s collective selectors: %s",
+        len(selector_mentions),
+        selector_mentions,
+    )
+
+    (
+        selector_resolved_contacts,
+        group_upsert_candidates,
+        group_confirmation_candidates,
+    ) = _resolve_collective_selectors(selector_mentions, user_email=user_email)
+    logger.info(
+        "[contact_resolver] Selector-based resolutions: %s",
+        len(selector_resolved_contacts),
+    )
+
+    if not people and not selector_resolved_contacts:
         return {
             "status": "no_people",
             "text": effective_text,
             "people_mentioned": [],
+            "selector_mentions": selector_mentions,
             "resolved_contacts": [],
             "new_contacts": [],
             "ambiguous_contacts": [],
@@ -918,17 +1231,28 @@ def resolve_contacts_from_text(
 
     # Step 2: Resolve each person (DB lookup or mark as new)
     logger.info("[contact_resolver] Step 2: Resolving %s people...", len(people))
-    (
-        resolved_contacts,
-        new_contacts,
-        ambiguous_contacts,
-        resolution_cache,
-    ) = _resolve_people_mentions(
-        people,
-        user_email,
-        effective_text,
-        conversation_messages=conversation_messages,
-    )
+    if people:
+        (
+            resolved_contacts,
+            new_contacts,
+            ambiguous_contacts,
+            resolution_cache,
+        ) = _resolve_people_mentions(
+            people,
+            user_email,
+            effective_text,
+            conversation_messages=conversation_messages,
+        )
+    else:
+        resolved_contacts = []
+        new_contacts = []
+        ambiguous_contacts = []
+        resolution_cache = {}
+
+    if selector_resolved_contacts:
+        resolved_contacts = _dedupe_resolved_contacts(
+            resolved_contacts + selector_resolved_contacts
+        )
 
     # Step 3: Infer professions for new contacts
     logger.info("[contact_resolver] Step 3: Inferring professions for new contacts...")
@@ -960,10 +1284,13 @@ def resolve_contacts_from_text(
     result = {
         "text": effective_text,
         "people_mentioned": people,
+        "selector_mentions": selector_mentions,
         "resolved_contacts": resolved_contacts,
         "new_contacts": new_contacts,
         "ambiguous_contacts": ambiguous_contacts,
         "suggested_relationships": suggested_relationships,
+        "group_upsert_candidates": group_upsert_candidates,
+        "group_confirmation_candidates": group_confirmation_candidates,
     }
     if ambiguous_contacts:
         result["status"] = "need_user_input"

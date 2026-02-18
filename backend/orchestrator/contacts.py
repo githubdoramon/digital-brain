@@ -30,8 +30,12 @@ __all__ = [
     "normalize_email",
     # Smart contact lookup functions
     "search_contacts",
+    "search_contacts_by_email_domain",
+    "search_contacts_by_company",
+    "search_contacts_by_group_hint",
     "get_contact_relationships",
     "find_related_contacts",
+    "get_self_contact_id",
     # Relationship resolution functions
     "get_relationship_type_mappings",
     "find_related_types",
@@ -245,7 +249,7 @@ def _load_contacts(contact_ids: Sequence[str] | None = None) -> list[dict[str, A
     where_clause = " AND ".join(filters)
 
     with get_conn() as conn, conn.cursor() as cur:
-        cur.execute(
+        cur.execute(  # type: ignore[arg-type]
             f"""
             SELECT contact_id, display_name, aliases, birthday, emails, phones, links, tags, comments, external_id
             FROM contacts
@@ -955,6 +959,17 @@ def find_self_contact(email: str) -> dict[str, Any] | None:
     return get_contact_by_email(email)
 
 
+def get_self_contact_id(email: str) -> str | None:
+    """Return the current user's self-contact ID resolved by email."""
+    contact = find_self_contact(email)
+    if not contact:
+        return None
+    contact_id = str(contact.get("contact_id") or "").strip()
+    if not contact_id:
+        return None
+    return contact_id
+
+
 def resolve_query(query: str) -> dict[str, Any]:
     """
     Extract structured entities from a natural-language query.
@@ -1250,12 +1265,16 @@ def _vector_candidate_contact_scores(query: str, *, limit: int) -> dict[str, flo
             ),
         )
         scores: dict[str, float] = {}
-        for row in cur.fetchall():
-            raw_score = float(row.get("vscore") or 0.0)
+        for raw_row in cur.fetchall():
+            row_dict: dict[str, Any] = dict(raw_row)
+            raw_score = float(row_dict.get("vscore") or 0.0)
             similarity = max(0.0, min(1.0, raw_score))
             if similarity < MIN_VECTOR_CONFIDENCE:
                 continue
-            scores[row["contact_id"]] = similarity
+            contact_id = str(row_dict.get("contact_id") or "").strip()
+            if not contact_id:
+                continue
+            scores[contact_id] = similarity
         return scores
 
 
@@ -1263,6 +1282,232 @@ def _is_email_intent_query(query_lower: str) -> bool:
     if "@" in query_lower:
         return True
     return bool(re.search(r"\bemail\b", query_lower))
+
+
+def search_contacts_by_email_domain(domain: str, *, limit: int = 200) -> list[dict[str, Any]]:
+    """Find contacts with at least one email at the provided domain."""
+    cleaned = normalize_search_text(domain)
+    if not cleaned:
+        return []
+
+    if cleaned.startswith("@"):
+        cleaned = cleaned[1:]
+
+    if "." not in cleaned:
+        return []
+
+    query_value = f"%@{cleaned}"
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT contact_id, display_name, aliases, birthday, emails, phones, links, tags, comments, external_id
+            FROM contacts
+            WHERE (display_name IS NULL OR LOWER(display_name) NOT LIKE %s)
+              AND EXISTS (
+                SELECT 1
+                FROM unnest(emails) AS email
+                WHERE LOWER(email) LIKE %s
+              )
+            ORDER BY display_name ASC
+            LIMIT %s
+            """,
+            (
+                f"{EXTERNAL_CONTACT_PREFIX}%",
+                query_value,
+                limit,
+            ),
+        )
+        rows_dict: list[dict[str, Any]] = [dict(row) for row in cur.fetchall()]
+
+    return [
+        {
+            "contact_id": row["contact_id"],
+            "display_name": row["display_name"],
+            "aliases": row["aliases"] or [],
+            "birthday": row["birthday"],
+            "emails": row["emails"] or [],
+            "phones": row["phones"] or [],
+            "links": row["links"] or [],
+            "tags": row["tags"] or [],
+            "comments": row["comments"],
+            "external_id": row["external_id"],
+        }
+        for row in rows_dict
+    ]
+
+
+def search_contacts_by_company(company: str, *, limit: int = 200) -> list[dict[str, Any]]:
+    """
+    Find contacts likely associated with a company using comments/tags/email heuristics.
+
+    This is intentionally lexical and deterministic to avoid over-selecting contacts.
+    """
+    company_query = normalize_search_text(company)
+    if not company_query:
+        return []
+
+    domain_matches = search_contacts_by_email_domain(company_query, limit=limit)
+    if domain_matches:
+        return domain_matches
+
+    query_like = f"%{company_query}%"
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT contact_id, display_name, aliases, birthday, emails, phones, links, tags, comments, external_id
+            FROM contacts
+            WHERE (display_name IS NULL OR LOWER(display_name) NOT LIKE %s)
+              AND (
+                unaccent(LOWER(COALESCE(comments, ''))) LIKE %s
+                OR EXISTS (
+                  SELECT 1
+                  FROM unnest(tags) AS tag
+                  WHERE unaccent(LOWER(tag)) LIKE %s
+                )
+                OR EXISTS (
+                  SELECT 1
+                  FROM unnest(emails) AS email
+                  WHERE LOWER(email) LIKE %s
+                )
+              )
+            ORDER BY display_name ASC
+            LIMIT %s
+            """,
+            (
+                f"{EXTERNAL_CONTACT_PREFIX}%",
+                query_like,
+                query_like,
+                f"%@{company_query}%",
+                limit,
+            ),
+        )
+        rows_dict: list[dict[str, Any]] = [dict(row) for row in cur.fetchall()]
+
+    return [
+        {
+            "contact_id": row["contact_id"],
+            "display_name": row["display_name"],
+            "aliases": row["aliases"] or [],
+            "birthday": row["birthday"],
+            "emails": row["emails"] or [],
+            "phones": row["phones"] or [],
+            "links": row["links"] or [],
+            "tags": row["tags"] or [],
+            "comments": row["comments"],
+            "external_id": row["external_id"],
+        }
+        for row in rows_dict
+    ]
+
+
+def search_contacts_by_group_hint(group_hint: str, *, limit: int = 120) -> list[dict[str, Any]]:
+    """
+    Find contacts associated with a free-form group hint.
+
+    Combines contact profile lexical matches (name/aliases/tags/comments)
+    with event co-occurrence evidence where event title/summary/tags mention the hint.
+    """
+    hint = normalize_search_text(group_hint)
+    if not hint:
+        return []
+
+    query_like = f"%{hint}%"
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            WITH event_scores AS (
+              SELECT ec.contact_id, COUNT(*)::int AS event_hits
+              FROM event_contacts ec
+              JOIN events e ON e.id = ec.event_id
+              WHERE (
+                unaccent(LOWER(COALESCE(e.title, ''))) LIKE %s
+                OR unaccent(LOWER(COALESCE(e.summary, ''))) LIKE %s
+                OR EXISTS (
+                  SELECT 1
+                  FROM unnest(e.tags) AS tag
+                  WHERE unaccent(LOWER(tag)) LIKE %s
+                )
+              )
+              GROUP BY ec.contact_id
+            )
+            SELECT
+              c.contact_id,
+              c.display_name,
+              c.aliases,
+              c.birthday,
+              c.emails,
+              c.phones,
+              c.links,
+              c.tags,
+              c.comments,
+              c.external_id,
+              (
+                CASE WHEN unaccent(LOWER(COALESCE(c.display_name, ''))) LIKE %s THEN 3 ELSE 0 END
+                + CASE WHEN EXISTS (
+                    SELECT 1 FROM unnest(c.aliases) AS alias
+                    WHERE unaccent(LOWER(alias)) LIKE %s
+                  ) THEN 2 ELSE 0 END
+                + CASE WHEN EXISTS (
+                    SELECT 1 FROM unnest(c.tags) AS tag
+                    WHERE unaccent(LOWER(tag)) LIKE %s
+                  ) THEN 2 ELSE 0 END
+                + CASE WHEN unaccent(LOWER(COALESCE(c.comments, ''))) LIKE %s THEN 1 ELSE 0 END
+                + COALESCE(es.event_hits, 0)
+              ) AS score
+            FROM contacts c
+            LEFT JOIN event_scores es ON es.contact_id = c.contact_id
+            WHERE (c.display_name IS NULL OR LOWER(c.display_name) NOT LIKE %s)
+              AND (
+                unaccent(LOWER(COALESCE(c.display_name, ''))) LIKE %s
+                OR EXISTS (
+                  SELECT 1 FROM unnest(c.aliases) AS alias
+                  WHERE unaccent(LOWER(alias)) LIKE %s
+                )
+                OR EXISTS (
+                  SELECT 1 FROM unnest(c.tags) AS tag
+                  WHERE unaccent(LOWER(tag)) LIKE %s
+                )
+                OR unaccent(LOWER(COALESCE(c.comments, ''))) LIKE %s
+                OR COALESCE(es.event_hits, 0) > 0
+              )
+            ORDER BY score DESC, c.display_name ASC
+            LIMIT %s
+            """,
+            (
+                query_like,
+                query_like,
+                query_like,
+                query_like,
+                query_like,
+                query_like,
+                query_like,
+                f"{EXTERNAL_CONTACT_PREFIX}%",
+                query_like,
+                query_like,
+                query_like,
+                query_like,
+                limit,
+            ),
+        )
+        rows_dict: list[dict[str, Any]] = [dict(row) for row in cur.fetchall()]
+
+    return [
+        {
+            "contact_id": row["contact_id"],
+            "display_name": row["display_name"],
+            "aliases": row["aliases"] or [],
+            "birthday": row["birthday"],
+            "emails": row["emails"] or [],
+            "phones": row["phones"] or [],
+            "links": row["links"] or [],
+            "tags": row["tags"] or [],
+            "comments": row["comments"],
+            "external_id": row["external_id"],
+            "match_score": row.get("score", 0),
+            "match_reason": "group_hint",
+        }
+        for row in rows_dict
+    ]
 
 
 def _lexical_candidate_contact_ids(
@@ -1327,7 +1572,7 @@ def _lexical_candidate_contact_ids(
         return []
 
     with get_conn() as conn, conn.cursor() as cur:
-        cur.execute(
+        cur.execute(  # type: ignore[arg-type]
             f"""
             SELECT contact_id
             FROM contacts
@@ -1338,7 +1583,11 @@ def _lexical_candidate_contact_ids(
             """,
             (*params, limit),
         )
-        return [row["contact_id"] for row in cur.fetchall()]
+        return [
+            str(dict(row).get("contact_id") or "")
+            for row in cur.fetchall()
+            if dict(row).get("contact_id")
+        ]
 
 
 def get_contact_relationships(

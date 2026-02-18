@@ -206,6 +206,112 @@ def _should_skip_contact_resolution(
     return has_candidate and short_answer
 
 
+def _normalize_group_confirmation_token(value: str) -> bool | None:
+    token = (value or "").strip().lower()
+    if not token:
+        return None
+    if token in {"yes", "y", "true", "confirm", "confirmed", "save", "keep"}:
+        return True
+    if token in {"no", "n", "false", "skip", "dont", "don't", "ignore", "discard"}:
+        return False
+    return None
+
+
+def _apply_group_confirmation_from_answer(
+    groups: list[dict[str, Any]],
+    answer: str,
+) -> tuple[list[dict[str, Any]], bool]:
+    if not groups:
+        return groups, False
+
+    text = (answer or "").strip()
+    if not text:
+        return groups, False
+
+    updated_groups: list[dict[str, Any]] = []
+    any_updates = False
+    answer_lower = text.lower()
+
+    # Global shortcut for single-group flows.
+    global_decision = _normalize_group_confirmation_token(answer_lower)
+
+    for group in groups:
+        current = dict(group)
+        if isinstance(current.get("confirmed"), bool):
+            updated_groups.append(current)
+            continue
+
+        group_name = str(current.get("name") or "").strip()
+        if not group_name:
+            updated_groups.append(current)
+            continue
+
+        decision: bool | None = None
+        escaped = re.escape(group_name.lower())
+
+        # Prefer explicit "<group>: yes/no" style.
+        explicit = re.search(
+            rf"{escaped}\s*[:=-]\s*(yes|no|y|n|true|false|save|skip|confirm|ignore)",
+            answer_lower,
+        )
+        if explicit:
+            decision = _normalize_group_confirmation_token(explicit.group(1))
+
+        # Fallback: local phrase with group mention + positive/negative cue.
+        if decision is None and group_name.lower() in answer_lower:
+            window = answer_lower
+            if re.search(
+                rf"(?:save|confirm|keep)\s+{escaped}|{escaped}\s+(?:yes|save|confirm|keep)", window
+            ):
+                decision = True
+            elif re.search(
+                rf"(?:do\s+not\s+save|dont\s+save|don't\s+save|skip|ignore)\s+{escaped}|{escaped}\s+(?:no|skip|ignore)",
+                window,
+            ):
+                decision = False
+
+        # Final fallback: single-group answer with global yes/no token.
+        if decision is None and len(groups) == 1:
+            decision = global_decision
+        if decision is None and len(groups) == 1:
+            if re.search(r"\b(yes|save|confirm|keep)\b", answer_lower):
+                decision = True
+            elif re.search(r"\b(no|skip|ignore|dont|don't)\b", answer_lower):
+                decision = False
+
+        if decision is not None:
+            current["confirmed"] = decision
+            any_updates = True
+
+        updated_groups.append(current)
+
+    return updated_groups, any_updates
+
+
+def _clarification_fields_from_proposed_groups(
+    groups: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    fields: list[dict[str, Any]] = []
+    for idx, group in enumerate(groups[:6]):
+        name = str(group.get("name") or "").strip()
+        if not name:
+            continue
+        field_id = f"group_confirm_{idx + 1}"
+        fields.append(
+            {
+                "id": field_id,
+                "kind": "select",
+                "label": f'Save reusable group "{name}"?',
+                "required": True,
+                "options": [
+                    {"id": "yes", "label": "Yes"},
+                    {"id": "no", "label": "No"},
+                ],
+            }
+        )
+    return fields
+
+
 def _extract_event_entities_with_llm(
     message: str,
     context: dict,
@@ -599,6 +705,44 @@ def _resolve_contacts_with_agent(
         conversation_messages=conversation_messages,
     )
 
+    group_upsert_candidates = contact_result.get("group_upsert_candidates", [])
+    if isinstance(group_upsert_candidates, list) and group_upsert_candidates:
+        try:
+            import contact_groups as contact_groups_service
+
+            for candidate in group_upsert_candidates:
+                if not isinstance(candidate, dict):
+                    continue
+                member_contact_ids = [
+                    str(contact_id or "").strip()
+                    for contact_id in (candidate.get("contact_ids") or [])
+                    if str(contact_id or "").strip()
+                ]
+                if not member_contact_ids:
+                    continue
+                contact_groups_service.upsert_group_from_selector(
+                    user_email=user_email,
+                    name=str(candidate.get("name") or "").strip(),
+                    member_contact_ids=member_contact_ids,
+                    aliases=[
+                        str(alias).strip()
+                        for alias in (candidate.get("aliases") or [])
+                        if str(alias).strip()
+                    ],
+                    description=str(candidate.get("description") or "").strip() or None,
+                    source=str(candidate.get("source") or "deterministic"),
+                    confirmed=bool(candidate.get("confirmed", True)),
+                    replace_members=bool(candidate.get("replace_members", False)),
+                    added_via=str(candidate.get("added_via") or "selector"),
+                    confidence=0.9,
+                )
+        except Exception as exc:
+            logger.warning(
+                "[handle_event] Failed to upsert inferred contact groups: %s",
+                exc,
+                exc_info=exc,
+            )
+
     resolution = {
         "contacts": [],
         "places": [],
@@ -609,7 +753,12 @@ def _resolve_contacts_with_agent(
             "documents": [],
         },
         "name_replacements": {},
+        "proposed_contact_groups": [],
     }
+
+    for candidate in contact_result.get("group_confirmation_candidates", []):
+        if isinstance(candidate, dict):
+            resolution["proposed_contact_groups"].append(candidate)
 
     for resolved in contact_result.get("resolved_contacts", []):
         resolution["contacts"].append(
@@ -1074,6 +1223,15 @@ def handle_event(parsed: ParsedCommand, context: dict) -> dict[str, Any]:
                     ambiguous_contacts,
                 )
 
+        if raw_message and previous_resolution.get("proposed_contact_groups"):
+            updated_groups, changed = _apply_group_confirmation_from_answer(
+                list(previous_resolution.get("proposed_contact_groups") or []),
+                raw_message,
+            )
+            if changed:
+                previous_resolution["proposed_contact_groups"] = updated_groups
+                resolution = previous_resolution
+
     # Extract entities using LLM with time context
     logger.info("[handle_event] STEP 1: Extracting entities with LLM...")
     with ThreadPoolExecutor(max_workers=2) as executor:
@@ -1132,6 +1290,33 @@ def handle_event(parsed: ParsedCommand, context: dict) -> dict[str, Any]:
             clarification_questions.extend(contact_need_user_input.get("questions", []))
             clarification_fields.extend(contact_need_user_input.get("fields", []))
 
+    proposed_groups = list(resolution.get("proposed_contact_groups") or [])
+    unresolved_groups = [
+        group for group in proposed_groups if not isinstance(group.get("confirmed"), bool)
+    ]
+    group_need_user_input = None
+    if unresolved_groups:
+        group_names = [str(group.get("name") or "").strip() for group in unresolved_groups]
+        group_names = [name for name in group_names if name]
+        if group_names:
+            prompt = (
+                "Should I save these participant groups for reuse? " + ", ".join(group_names) + "."
+            )
+            group_need_user_input = build_need_user_input(
+                kind="confirmation",
+                source="event_command",
+                prompt=prompt,
+                questions=[
+                    "Should I save these participant groups as reusable contact groups?",
+                    "You can answer like 'soccer team: yes' or 'soccer team: no'.",
+                ],
+                fields=_clarification_fields_from_proposed_groups(unresolved_groups),
+                submission_mode="ui_submission",
+            )
+            if group_need_user_input:
+                clarification_questions.extend(group_need_user_input.get("questions", []))
+                clarification_fields.extend(group_need_user_input.get("fields", []))
+
     # Keep order while deduping repeated questions.
     seen_questions: set[str] = set()
     deduped_questions: list[str] = []
@@ -1146,7 +1331,9 @@ def handle_event(parsed: ParsedCommand, context: dict) -> dict[str, Any]:
         deduped_questions.append(text)
     clarification_questions = deduped_questions
 
-    needs_follow_up = bool(event_need_user_input or contact_need_user_input)
+    needs_follow_up = bool(
+        event_need_user_input or contact_need_user_input or group_need_user_input
+    )
     if needs_follow_up and not clarification_fields:
         clarification_fields = [default_clarification_details_field()]
     if needs_follow_up and not clarification_questions:

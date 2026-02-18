@@ -10,6 +10,7 @@ from uuid import uuid4
 
 from fastapi import HTTPException
 
+import contact_groups as contact_groups_service
 import contacts as contacts_service
 import conversations
 import events as events_service
@@ -172,6 +173,12 @@ def _normalize_event_modifications(raw: Any) -> dict[str, Any]:
     if "contact_ids" in raw:
         normalized["contact_ids"] = _string_list_from_modification(raw.get("contact_ids"))
 
+    group_confirmations = raw.get("group_confirmations")
+    if isinstance(group_confirmations, dict):
+        normalized["group_confirmations"] = {
+            str(key): bool(value) for key, value in group_confirmations.items() if str(key).strip()
+        }
+
     confirmed_relationships = raw.get("confirmed_relationships")
     if isinstance(confirmed_relationships, list):
         normalized["confirmed_relationships"] = [
@@ -229,6 +236,13 @@ def confirm_event_command(
     extracted = command_data["extracted"]
     resolution = command_data["resolution"]
     normalized_modifications = _normalize_event_modifications(payload.modifications)
+    group_confirmations = payload.group_confirmations or {}
+    if not group_confirmations:
+        raw_group_confirmations = normalized_modifications.get("group_confirmations")
+        if isinstance(raw_group_confirmations, dict):
+            group_confirmations = {
+                str(key): bool(value) for key, value in raw_group_confirmations.items()
+            }
 
     logger.info(
         "[event_confirm] preview_id=%s, raw_modifications=%s",
@@ -261,6 +275,7 @@ def confirm_event_command(
     try:
         created_contacts = []
         contact_id_map = {}
+        created_groups = []
 
         # When participant override is enabled, the client sends the full list
         # of desired contact IDs.  IDs prefixed with ``new:`` are placeholder
@@ -496,6 +511,48 @@ def confirm_event_command(
         )
         events_service.ingest_event(event_in)
 
+        for proposed_group in resolution.get("proposed_contact_groups", []):
+            if not isinstance(proposed_group, dict):
+                continue
+            group_name = str(proposed_group.get("name") or "").strip()
+            if not group_name:
+                continue
+            is_deterministic = (
+                str(proposed_group.get("source") or "").strip().lower() == "deterministic"
+            )
+            should_persist = bool(proposed_group.get("confirmed", False))
+            if group_name in group_confirmations:
+                should_persist = bool(group_confirmations.get(group_name))
+            elif is_deterministic:
+                should_persist = True
+            if not should_persist:
+                continue
+            member_contact_ids = [
+                str(contact_id or "").strip()
+                for contact_id in (proposed_group.get("contact_ids") or [])
+                if str(contact_id or "").strip()
+            ]
+            if not member_contact_ids:
+                continue
+            created_group = contact_groups_service.upsert_group_from_selector(
+                user_email=user_email,
+                name=group_name,
+                member_contact_ids=member_contact_ids,
+                aliases=[
+                    str(alias).strip()
+                    for alias in (proposed_group.get("aliases") or [])
+                    if str(alias).strip()
+                ],
+                description=str(proposed_group.get("description") or "").strip() or None,
+                source=str(proposed_group.get("source") or "inferred"),
+                confirmed=bool(proposed_group.get("confirmed", False)),
+                replace_members=bool(proposed_group.get("replace_members", True)),
+                added_via=str(proposed_group.get("added_via") or "selector_group"),
+                confidence=0.75,
+            )
+            if created_group:
+                created_groups.append(created_group)
+
         delete_command_data(payload.preview_id)
         clear_pending_event_by_preview_id(payload.preview_id)
         _persist_event_resolved(payload.preview_id, "created")
@@ -505,6 +562,7 @@ def confirm_event_command(
             event_id=event_id,
             created_contacts=created_contacts,
             created_places=created_places,
+            created_groups=created_groups,
         )
 
     except Exception as exc:

@@ -84,6 +84,93 @@ def test_handle_event_sets_pending_key_for_clarification(monkeypatch):
     delete_command_data(clarification_id)
 
 
+def test_handle_event_surfaces_proposed_contact_groups(monkeypatch):
+    def fake_extract_event_entities(
+        event_message,
+        context,
+        existing_extracted=None,
+        clarification_messages=None,
+    ):
+        return {
+            "title": "Soccer meetup",
+            "summary": "Met with my soccer team",
+            "when": None,
+            "where": "Field",
+            "tags": ["personal"],
+            "types": ["meeting"],
+            "need_user_input": None,
+        }
+
+    def fake_resolve_contacts(*_args, **_kwargs):
+        return (
+            {
+                "contacts": [
+                    {
+                        "contact_id": "contact-1",
+                        "display_name": "Ana",
+                        "query": "my soccer team",
+                        "confidence": "medium",
+                    },
+                    {
+                        "contact_id": "contact-2",
+                        "display_name": "Bruno",
+                        "query": "my soccer team",
+                        "confidence": "medium",
+                    },
+                ],
+                "new_entities": {
+                    "contacts": [],
+                    "places": [],
+                    "documents": [],
+                },
+                "name_replacements": {},
+                "proposed_contact_groups": [
+                    {
+                        "name": "soccer team",
+                        "contact_ids": ["contact-1", "contact-2"],
+                        "source": "inferred",
+                    }
+                ],
+            },
+            {
+                "ambiguous_contacts": [],
+                "suggested_relationships": [],
+            },
+        )
+
+    monkeypatch.setattr(
+        "commands.handlers.event._extract_event_entities_with_llm",
+        fake_extract_event_entities,
+    )
+    monkeypatch.setattr(
+        "commands.handlers.event._resolve_contacts_with_agent",
+        fake_resolve_contacts,
+    )
+
+    parsed = ParsedCommand(
+        command="event",
+        args="met with my soccer team",
+        raw_message="/event met with my soccer team",
+    )
+    context = {
+        "user_email": "user@example.com",
+        "event_pending_key": "user@example.com:thread-abc",
+    }
+
+    result = handle_event(parsed, context)
+
+    assert result.get("type") == "need_user_input"
+    need_user_input = result.get("need_user_input") or {}
+    fields = need_user_input.get("fields") or []
+    assert fields
+    assert any("Save reusable group" in str(field.get("label") or "") for field in fields)
+
+    preview_id = result.get("preview_id")
+    if preview_id:
+        delete_command_data(preview_id)
+    clear_pending_event(context["event_pending_key"])
+
+
 def test_pending_clarification_accepts_plain_follow_up(monkeypatch):
     user_email = "user@example.com"
     thread_id = "thread-123"
@@ -187,3 +274,47 @@ def test_format_clarification_history_is_chronological_transcript():
 
 def test_safe_entity_slug_removes_reserved_characters():
     assert event_command._safe_entity_slug("Julia #1 / New Contact") == "julia-1-new-contact"
+
+
+def test_apply_group_confirmation_from_answer_single_group_yes():
+    groups = [
+        {
+            "name": "soccer team",
+            "contact_ids": ["contact-1", "contact-2"],
+            "source": "inferred",
+        }
+    ]
+
+    updated, changed = event_handler._apply_group_confirmation_from_answer(
+        groups,
+        "yes, save this group",
+    )
+
+    assert changed is True
+    assert updated[0].get("confirmed") is True
+
+
+def test_apply_group_confirmation_from_answer_explicit_name_no():
+    groups = [
+        {
+            "name": "soccer team",
+            "contact_ids": ["contact-1", "contact-2"],
+            "source": "inferred",
+        },
+        {
+            "name": "startup friends",
+            "contact_ids": ["contact-3", "contact-4"],
+            "source": "inferred",
+        },
+    ]
+
+    updated, changed = event_handler._apply_group_confirmation_from_answer(
+        groups,
+        "soccer team: no",
+    )
+
+    assert changed is True
+    soccer = next(group for group in updated if group.get("name") == "soccer team")
+    startup = next(group for group in updated if group.get("name") == "startup friends")
+    assert soccer.get("confirmed") is False
+    assert "confirmed" not in startup
