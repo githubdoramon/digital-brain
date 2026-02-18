@@ -274,10 +274,17 @@ def _resolve_collective_selectors(
         added_via = f"selector_{kind}"
 
         if kind == "email_domain":
-            matches = contacts_service.search_contacts_by_email_domain(value, limit=300)
-            group_name = f"People at @{value}"
-            description = f"Contacts matched by email domain @{value}."
-            aliases = [f"@{value}", value]
+            domain_value = str(value or "").strip().lstrip("@").lower()
+            matches = contacts_service.search_contacts_by_email_domain(domain_value, limit=300)
+            # Support shorthand user phrasing like "@acme email" by falling back to
+            # broader company/email lexical matching when a full domain is not provided.
+            if not matches and "." not in normalize_search_text(domain_value):
+                matches = contacts_service.search_contacts_by_company(domain_value, limit=300)
+                deterministic = False
+
+            group_name = f"People at @{domain_value}"
+            description = f"Contacts matched by email domain @{domain_value}."
+            aliases = [f"@{domain_value}", domain_value]
 
         elif kind == "company":
             matches = contacts_service.search_contacts_by_company(value, limit=300)

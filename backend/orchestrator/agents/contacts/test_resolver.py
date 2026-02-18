@@ -301,6 +301,38 @@ def test_resolve_contacts_from_text_email_domain_selector(mock_groups, mock_cont
 
 @patch("agents.contacts.resolver.contacts_service")
 @patch("agents.contacts.resolver.contact_groups_service")
+def test_resolve_contacts_from_text_email_domain_shorthand_falls_back_to_company(
+    mock_groups, mock_contacts
+):
+    mock_contacts.search_contacts_by_email_domain.return_value = []
+    mock_contacts.search_contacts_by_company.return_value = [
+        {
+            "contact_id": "contact-1",
+            "display_name": "Alice",
+            "emails": ["alice@acme.example"],
+        }
+    ]
+    mock_contacts.search_contacts_by_group_hint.return_value = []
+    mock_contacts.search_contacts.return_value = []
+    mock_groups.resolve_group_members.return_value = {"found": False, "contacts": []}
+
+    result = resolve_contacts_from_text(
+        "just met everyone with a @acme email",
+        "user@example.com",
+    )
+
+    assert result["status"] == "success"
+    assert len(result["resolved_contacts"]) == 2  # user + selector match
+    selector_match = next(
+        contact
+        for contact in result["resolved_contacts"]
+        if contact.get("matched_via") == "selector_email_domain"
+    )
+    assert selector_match["display_name"] == "Alice"
+
+
+@patch("agents.contacts.resolver.contacts_service")
+@patch("agents.contacts.resolver.contact_groups_service")
 def test_resolve_contacts_from_text_group_selector_requires_confirmation(
     mock_groups, mock_contacts
 ):
