@@ -100,7 +100,7 @@ def build_event_research_profile() -> BoundedAgentProfile:
         name="daily_briefing_event_research",
         max_steps=3,
         max_tool_calls=4,
-        timeout_seconds=180,
+        timeout_seconds=60,
         temperature=0.1,
         top_p=None,
         build_tools_and_handlers=build_event_research_tools_and_handlers,

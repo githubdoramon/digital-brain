@@ -20,6 +20,7 @@ Design principles:
 4. Clear confidence scoring
 """
 
+import inspect
 import os
 import re
 from typing import Any, Optional
@@ -1191,13 +1192,29 @@ def resolve_contacts_from_text(
     logger.info("[contact_resolver] Step 1: Extracting people...")
     effective_text = text
 
-    extraction_result: tuple[list[str], list[dict[str, str]]] = extract_people_from_text(
+    extract_kwargs: dict[str, Any] = {"conversation_messages": conversation_messages}
+    try:
+        signature = inspect.signature(extract_people_from_text)
+        if "include_collective_selectors" in signature.parameters:
+            extract_kwargs["include_collective_selectors"] = True
+    except (TypeError, ValueError):
+        pass
+
+    extraction_raw = extract_people_from_text(
         effective_text,
-        conversation_messages=conversation_messages,
-        include_collective_selectors=True,
-    )  # type: ignore[assignment]
-    people = extraction_result[0]
-    llm_selector_mentions = extraction_result[1]
+        **extract_kwargs,
+    )
+    if (
+        isinstance(extraction_raw, tuple)
+        and len(extraction_raw) == 2
+        and isinstance(extraction_raw[0], list)
+        and isinstance(extraction_raw[1], list)
+    ):
+        people = extraction_raw[0]
+        llm_selector_mentions = extraction_raw[1]
+    else:
+        people = extraction_raw if isinstance(extraction_raw, list) else []
+        llm_selector_mentions = []
     logger.info("[contact_resolver] Extracted %s people: %s", len(people), people)
 
     selector_mentions = _extract_collective_selectors(effective_text)
