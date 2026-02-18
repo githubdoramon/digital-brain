@@ -229,7 +229,7 @@ def test_resolve_people_marks_new_contact_from_llm_flag(monkeypatch):
 def test_resolve_contacts_keeps_current_text_even_with_history(monkeypatch):
     captured = {}
 
-    def fake_extract_people(text, conversation_messages=None):
+    def fake_extract_people(text, conversation_messages=None, **kwargs):
         captured["text"] = text
         captured["conversation_messages"] = conversation_messages
         return []
