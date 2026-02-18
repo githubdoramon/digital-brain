@@ -215,7 +215,7 @@ async def stream_system_logs(
             if entries:
                 for entry in entries:
                     last_id = entry.entry_id
-                    yield f"data: {json.dumps(entry.to_dict())}\n\n"
+                    yield f"data: {json.dumps(entry.to_dict(), default=str)}\n\n"
             await asyncio.sleep(0.5)
 
     return StreamingResponse(
@@ -1337,7 +1337,7 @@ async def ask_stream(
                     "ui_directives": command_ui_directives,
                     "pending_event_id": pending_event_id,
                 }
-                yield f"data: {json.dumps({'type': 'done', 'bundle': bundle})}\n\n"
+                yield f"data: {json.dumps({'type': 'done', 'bundle': bundle}, default=str)}\n\n"
 
             return StreamingResponse(
                 command_generator(),
@@ -1378,9 +1378,9 @@ async def ask_stream(
         reset_bundle = _make_reset_bundle(ctx)
 
         async def reset_generator():
-            yield f"data: {json.dumps({'type': 'session_info', 'thread_id': ctx.session_id, 'is_new_session': True})}\n\n"
-            yield f"data: {json.dumps({'type': 'token', 'content': _RESET_MESSAGE})}\n\n"
-            yield f"data: {json.dumps({'type': 'done', 'bundle': reset_bundle})}\n\n"
+            yield f"data: {json.dumps({'type': 'session_info', 'thread_id': ctx.session_id, 'is_new_session': True}, default=str)}\n\n"
+            yield f"data: {json.dumps({'type': 'token', 'content': _RESET_MESSAGE}, default=str)}\n\n"
+            yield f"data: {json.dumps({'type': 'done', 'bundle': reset_bundle}, default=str)}\n\n"
 
         return StreamingResponse(
             reset_generator(),
@@ -1452,7 +1452,7 @@ async def ask_stream(
                 await queue.put(None)
 
         try:
-            yield f"data: {json.dumps({'type': 'session_info', 'thread_id': ctx.session_id, 'is_new_session': ctx.is_new_session})}\n\n"
+            yield f"data: {json.dumps({'type': 'session_info', 'thread_id': ctx.session_id, 'is_new_session': ctx.is_new_session}, default=str)}\n\n"
 
             queue: asyncio.Queue[dict[str, Any] | None] = asyncio.Queue()
             producer_task = asyncio.create_task(_stream_events(queue))
@@ -1484,7 +1484,7 @@ async def ask_stream(
                         await producer_task
         except Exception as exc:
             logger.exception("[ask/stream] error session=%s", ctx.session_id)
-            yield f"data: {json.dumps({'type': 'error', 'message': str(exc)})}\n\n"
+            yield f"data: {json.dumps({'type': 'error', 'message': str(exc)}, default=str)}\n\n"
 
     return StreamingResponse(
         event_generator(),
