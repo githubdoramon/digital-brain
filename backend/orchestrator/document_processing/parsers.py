@@ -57,6 +57,46 @@ def _parse_pdf(path: Path) -> DocumentParseResult:
 
 
 def _parse_pdf_layout(path: Path) -> DocumentParseResult:
+    markdown_result = _parse_pdf_pymupdf4llm(path)
+    if markdown_result is not None:
+        return markdown_result
+
+    return _parse_pdf_pymupdf_blocks(path)
+
+
+def _parse_pdf_pymupdf4llm(path: Path) -> DocumentParseResult | None:
+    try:
+        import pymupdf4llm  # type: ignore
+    except Exception:
+        logger.info("[documents] pymupdf4llm not available; falling back to PyMuPDF blocks")
+        return None
+
+    warnings: list[str] = []
+    try:
+        markdown_output = pymupdf4llm.to_markdown(str(path), page_chunks=True)
+    except Exception as exc:
+        logger.warning("[documents] pymupdf4llm parse failed for %s: %s", path, exc, exc_info=exc)
+        return None
+
+    pages = _extract_markdown_pages(markdown_output)
+    raw_text = "\n\n".join(page for page in pages if page).strip()
+    if not raw_text and isinstance(markdown_output, str):
+        raw_text = markdown_output.strip()
+    sections = _derive_sections_from_markdown(raw_text)
+    if not raw_text:
+        warnings.append("pymupdf4llm_no_text")
+    return DocumentParseResult(
+        text=raw_text,
+        raw_text=raw_text,
+        parser_used="pdf_layout_pymupdf4llm",
+        warnings=warnings,
+        pages=pages,
+        sections=sections,
+        metadata={"page_count": len(pages)},
+    )
+
+
+def _parse_pdf_pymupdf_blocks(path: Path) -> DocumentParseResult:
     try:
         import fitz  # type: ignore
     except Exception:
@@ -91,7 +131,7 @@ def _parse_pdf_layout(path: Path) -> DocumentParseResult:
     return DocumentParseResult(
         text=raw_text,
         raw_text=raw_text,
-        parser_used="pdf_layout_pymupdf",
+        parser_used="pdf_layout_pymupdf_blocks",
         warnings=warnings,
         pages=pages,
         sections=sections,
@@ -263,6 +303,57 @@ def _derive_sections_from_text(text: str) -> list[ParsedSection]:
     if not cleaned_text:
         return []
     return [ParsedSection(title=None, text=cleaned_text)]
+
+
+def _derive_sections_from_markdown(text: str) -> list[ParsedSection]:
+    lines = [line.rstrip() for line in text.splitlines()]
+    sections: list[ParsedSection] = []
+    current_title: str | None = None
+    current_lines: list[str] = []
+
+    for line in lines:
+        stripped = line.strip()
+        if not stripped:
+            if current_lines:
+                current_lines.append("")
+            continue
+        if stripped.startswith("#"):
+            _flush_section(sections, current_title, current_lines)
+            current_title = stripped.lstrip("#").strip() or None
+            current_lines = []
+            continue
+        current_lines.append(stripped)
+
+    _flush_section(sections, current_title, current_lines)
+    if sections:
+        return sections
+    return _derive_sections_from_text(text)
+
+
+def _extract_markdown_pages(markdown_output: object) -> list[str]:
+    if isinstance(markdown_output, str):
+        cleaned = markdown_output.strip()
+        return [cleaned] if cleaned else []
+    if isinstance(markdown_output, list):
+        pages: list[str] = []
+        for item in markdown_output:
+            if isinstance(item, dict):
+                candidates = [item.get("text"), item.get("md"), item.get("markdown")]
+                page_text = next(
+                    (
+                        value.strip()
+                        for value in candidates
+                        if isinstance(value, str) and value.strip()
+                    ),
+                    "",
+                )
+                if page_text:
+                    pages.append(page_text)
+                continue
+            if isinstance(item, str) and item.strip():
+                pages.append(item.strip())
+        return pages
+    return []
 
 
 def _looks_like_heading(text: str) -> bool:

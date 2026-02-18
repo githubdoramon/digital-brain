@@ -1307,7 +1307,8 @@ async def ask_stream(
     from commands.storage import get_pending_event
 
     hint_thread_id = payload.thread_id or payload.session_id
-    has_command_hint = parse_command(payload.question) is not None
+    parsed_command_hint = parse_command(payload.question)
+    has_command_hint = bool(parsed_command_hint and parsed_command_hint.command != "new")
     has_pending_event_hint = bool(
         payload.pending_event_id or get_pending_event(event_pending_key(user_email, hint_thread_id))
     )
