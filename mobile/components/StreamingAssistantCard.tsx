@@ -28,9 +28,9 @@ export function StreamingAssistantCard({ content, progressChip }: StreamingAssis
 const styles = StyleSheet.create({
   container: {
     alignSelf: 'flex-start',
-    backgroundColor: '#EEF1F4',
+    backgroundColor: '#E9ECF0',
     borderWidth: 1,
-    borderColor: '#D7DEE6',
+    borderColor: '#CCD2D9',
     borderRadius: theme.radius.lg,
     marginBottom: 12,
     maxWidth: '90%',

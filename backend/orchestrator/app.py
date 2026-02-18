@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from datetime import date, datetime
 from time import perf_counter
 from typing import Any
@@ -1414,45 +1414,74 @@ async def ask_stream(
         background_tasks.add_task(maybe_extract_facts, **kwargs)
 
     async def event_generator():
+        heartbeat_seconds = 5.0
+
+        async def _stream_events(queue: asyncio.Queue[dict[str, Any] | None]) -> None:
+            try:
+                async for event in llm.answer_question_stream(
+                    ctx.question,
+                    search_limit=limit,
+                    user_id=user_email,
+                    session_id=ctx.session_id,
+                    user_email=user_email,
+                    client_context=payload.client_context.model_dump(exclude_none=True)
+                    if payload.client_context
+                    else None,
+                    ui_submission=payload.ui_submission.model_dump(exclude_none=True)
+                    if payload.ui_submission
+                    else None,
+                    on_exchange_persisted=_schedule_fact_extraction,
+                ):
+                    if event.get("type") == "done":
+                        from commands.storage import get_pending_event
+
+                        bundle = event.get("bundle", {})
+                        bundle["thread_id"] = ctx.session_id
+                        bundle["session_id"] = ctx.session_id
+                        bundle["is_new_session"] = ctx.is_new_session
+                        bundle["pending_event_id"] = get_pending_event(
+                            event_pending_key(user_email, ctx.session_id)
+                        )
+                        event["bundle"] = bundle
+
+                    await queue.put(event)
+            except Exception as exc:
+                logger.exception("[ask/stream] error session=%s", ctx.session_id)
+                await queue.put({"type": "error", "message": str(exc)})
+            finally:
+                await queue.put(None)
+
         try:
             yield f"data: {json.dumps({'type': 'session_info', 'thread_id': ctx.session_id, 'is_new_session': ctx.is_new_session})}\n\n"
 
-            async for event in llm.answer_question_stream(
-                ctx.question,
-                search_limit=limit,
-                user_id=user_email,
-                session_id=ctx.session_id,
-                user_email=user_email,
-                client_context=payload.client_context.model_dump(exclude_none=True)
-                if payload.client_context
-                else None,
-                ui_submission=payload.ui_submission.model_dump(exclude_none=True)
-                if payload.ui_submission
-                else None,
-                on_exchange_persisted=_schedule_fact_extraction,
-            ):
-                if event.get("type") == "done":
-                    from commands.storage import get_pending_event
+            queue: asyncio.Queue[dict[str, Any] | None] = asyncio.Queue()
+            producer_task = asyncio.create_task(_stream_events(queue))
+            try:
+                while True:
+                    try:
+                        event = await asyncio.wait_for(queue.get(), timeout=heartbeat_seconds)
+                    except asyncio.TimeoutError:
+                        yield ": keep-alive\n\n"
+                        continue
 
-                    bundle = event.get("bundle", {})
-                    bundle["thread_id"] = ctx.session_id
-                    bundle["session_id"] = ctx.session_id
-                    bundle["is_new_session"] = ctx.is_new_session
-                    bundle["pending_event_id"] = get_pending_event(
-                        event_pending_key(user_email, ctx.session_id)
-                    )
-                    event["bundle"] = bundle
+                    if event is None:
+                        break
 
-                yield f"data: {json.dumps(event, default=str)}\n\n"
+                    yield f"data: {json.dumps(event, default=str)}\n\n"
 
-                if event.get("type") == "done":
-                    elapsed = perf_counter() - start_time
-                    logger.info(
-                        "[ask/stream] complete session=%s user=%s elapsed=%.3fs",
-                        ctx.session_id,
-                        user_email,
-                        elapsed,
-                    )
+                    if event.get("type") == "done":
+                        elapsed = perf_counter() - start_time
+                        logger.info(
+                            "[ask/stream] complete session=%s user=%s elapsed=%.3fs",
+                            ctx.session_id,
+                            user_email,
+                            elapsed,
+                        )
+            finally:
+                if not producer_task.done():
+                    producer_task.cancel()
+                    with suppress(asyncio.CancelledError):
+                        await producer_task
         except Exception as exc:
             logger.exception("[ask/stream] error session=%s", ctx.session_id)
             yield f"data: {json.dumps({'type': 'error', 'message': str(exc)})}\n\n"

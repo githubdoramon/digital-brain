@@ -187,76 +187,107 @@ export async function askWithStreaming({
   const decoder = new TextDecoder();
   let buffer = '';
 
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) {
-      break;
+  const handleParsedEvent = (event: StreamEvent): AskResponse | null => {
+    if (event.type === 'session_info') {
+      if (event.thread_id) {
+        callbacks?.onSessionInfo?.(event.thread_id);
+      }
+      return null;
     }
 
-    buffer += decoder.decode(value, { stream: true });
+    if (event.type === 'status') {
+      const statusMessage = typeof event.message === 'string' ? event.message.trim() : '';
+      if (statusMessage) {
+        callbacks?.onStatus?.(statusMessage);
+      }
+      return null;
+    }
+
+    if (event.type === 'tool_call') {
+      const toolName = typeof event.name === 'string' ? event.name.trim() : '';
+      if (toolName) {
+        const chip = buildToolProgressChip(toolName, event.args);
+        if (chip) {
+          callbacks?.onProgressChip?.(chip);
+        }
+      }
+      return null;
+    }
+
+    if (event.type === 'tool_result') {
+      return null;
+    }
+
+    if (event.type === 'token') {
+      const delta = typeof event.content === 'string' ? event.content : '';
+      if (delta) {
+        callbacks?.onToken?.(delta);
+      }
+      return null;
+    }
+
+    if (event.type === 'clear_content') {
+      callbacks?.onClearContent?.();
+      return null;
+    }
+
+    if (event.type === 'error') {
+      throw new Error(event.message || 'Stream ended with an error');
+    }
+
+    if (event.type === 'done') {
+      return event.bundle ?? null;
+    }
+
+    return null;
+  };
+
+  const consumeBuffer = (flushRemainder: boolean): AskResponse | null => {
     const lines = buffer.split('\n');
     buffer = lines.pop() || '';
 
     for (const line of lines) {
       const event = parseSseEventLine(line);
-      if (!event) {
-        continue;
-      }
-
-      if (event.type === 'session_info') {
-        if (event.thread_id) {
-          callbacks?.onSessionInfo?.(event.thread_id);
-        }
-        continue;
-      }
-
-      if (event.type === 'status') {
-        const statusMessage = typeof event.message === 'string' ? event.message.trim() : '';
-        if (statusMessage) {
-          callbacks?.onStatus?.(statusMessage);
-        }
-        continue;
-      }
-
-      if (event.type === 'tool_call') {
-        const toolName = typeof event.name === 'string' ? event.name.trim() : '';
-        if (toolName) {
-          const chip = buildToolProgressChip(toolName, event.args);
-          if (chip) {
-            callbacks?.onProgressChip?.(chip);
-          }
-        }
-        continue;
-      }
-
-      if (event.type === 'tool_result') {
-        continue;
-      }
-
-      if (event.type === 'token') {
-        const delta = typeof event.content === 'string' ? event.content : '';
-        if (delta) {
-          callbacks?.onToken?.(delta);
-        }
-        continue;
-      }
-
-      if (event.type === 'clear_content') {
-        callbacks?.onClearContent?.();
-        continue;
-      }
-
-      if (event.type === 'error') {
-        throw new Error(event.message || 'Stream ended with an error');
-      }
-
-      if (event.type === 'done') {
-        doneBundle = event.bundle ?? null;
-        break;
+      if (!event) continue;
+      const maybeDoneBundle = handleParsedEvent(event);
+      if (maybeDoneBundle) {
+        return maybeDoneBundle;
       }
     }
 
-    if (doneBundle) {
+    if (flushRemainder) {
+      const tail = buffer.trim();
+      if (tail) {
+        const event = parseSseEventLine(tail);
+        if (event) {
+          const maybeDoneBundle = handleParsedEvent(event);
+          if (maybeDoneBundle) {
+            return maybeDoneBundle;
+          }
+        }
+      }
+      buffer = '';
+    }
+
+    return null;
+  };
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (value) {
+      buffer += decoder.decode(value, { stream: !done });
+      const maybeDoneBundle = consumeBuffer(done);
+      if (maybeDoneBundle) {
+        doneBundle = maybeDoneBundle;
+      }
+    } else if (done) {
+      const maybeDoneBundle = consumeBuffer(true);
+      if (maybeDoneBundle) {
+        doneBundle = maybeDoneBundle;
+      }
+    }
+
+    if (done || doneBundle) {
       break;
     }
   }
