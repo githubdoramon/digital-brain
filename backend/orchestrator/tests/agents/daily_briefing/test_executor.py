@@ -515,37 +515,42 @@ class TestBriefingPromptNews:
 
 
 # ---------------------------------------------------------------------------
-# _is_invalid_briefing – expanded banned patterns
+# Banned-phrase validation (via validators module)
 # ---------------------------------------------------------------------------
 
 
-class TestIsInvalidBriefingExpandedBans:
+class TestBannedPhraseValidation:
+    """These tests previously covered _is_invalid_briefing; now they test the
+    structural tier of the validators module directly."""
+
     def test_rejects_generic_category_language(self):
-        from agents.daily_briefing.executor import _is_invalid_briefing
+        from agents.daily_briefing.validators import validate_briefing
 
         bad = "# Daily Briefing - 2026-02-15\n## News\nThere are several articles on various topics"
-        assert _is_invalid_briefing(bad) is True
+        assert not validate_briefing(bad, {}).valid
 
     def test_rejects_if_youd_like(self):
-        from agents.daily_briefing.executor import _is_invalid_briefing
+        from agents.daily_briefing.validators import validate_briefing
 
         bad = "# Daily Briefing - 2026-02-15\nIf you'd like me to extract specific information"
-        assert _is_invalid_briefing(bad) is True
+        assert not validate_briefing(bad, {}).valid
 
     def test_rejects_none_mentioned_explicitly(self):
-        from agents.daily_briefing.executor import _is_invalid_briefing
+        from agents.daily_briefing.validators import validate_briefing
 
         bad = "# Daily Briefing - 2026-02-15\nNone mentioned explicitly, but there are news"
-        assert _is_invalid_briefing(bad) is True
+        assert not validate_briefing(bad, {}).valid
 
     def test_rejects_eg_pattern(self):
-        from agents.daily_briefing.executor import _is_invalid_briefing
+        from agents.daily_briefing.validators import validate_briefing
 
         bad = "# Daily Briefing - 2026-02-15\n- AI (e.g., machine learning)"
-        assert _is_invalid_briefing(bad) is True
+        assert not validate_briefing(bad, {}).valid
 
     def test_accepts_valid_briefing(self):
-        from agents.daily_briefing.executor import _is_invalid_briefing
+        from unittest.mock import patch
+
+        from agents.daily_briefing.validators import validate_briefing
 
         good = (
             "# Daily Briefing - 2026-02-15 (UTC)\n"
@@ -554,4 +559,5 @@ class TestIsInvalidBriefingExpandedBans:
             "## News & Topics\n"
             "- [OpenAI releases GPT-5](https://example.com) - Major model upgrade. (TechCrunch)\n"
         )
-        assert _is_invalid_briefing(good) is False
+        with patch("llm_helpers.call_llm", return_value="PASS"):
+            assert validate_briefing(good, {}).valid

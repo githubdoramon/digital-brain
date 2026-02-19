@@ -75,15 +75,17 @@ def get_daily_briefing_system_prompt() -> str:
         "\n"
         "HARD RULES:\n"
         "- Write in direct, practical tone. Use future tense for upcoming events.\n"
+        "- Output ONLY the final briefing Markdown. No preamble, no sign-off.\n"
+        "- NEVER include internal reasoning, thinking steps, or chain-of-thought.\n"
+        "- NEVER prefix output with explanations of what you will do or how you will approach it.\n"
         "- NEVER use meta-commentary about the input data (e.g. 'the text includes', "
-        "'there are several articles', 'it appears', 'you provided').\n"
+        "'there are several articles', 'it appears', 'you provided', 'based on what was provided').\n"
         "- NEVER produce generic category lists in place of concrete content. Every bullet "
         "must contain a specific fact, title, action item, or recommendation.\n"
         "- NEVER ask the user questions or offer to do more ('let me know', 'if you'd like').\n"
         "- NEVER describe what the data contains — transform it into a briefing.\n"
         "- If a section has no relevant content, write a single short note (e.g. "
-        "'No notable news today.') and move on.\n"
-        "- Output Markdown only. No preamble, no sign-off."
+        "'No notable news today.') and move on."
     )
 
 

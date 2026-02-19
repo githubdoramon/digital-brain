@@ -16,6 +16,7 @@ from agents.daily_briefing.profile import (
     build_daily_briefing_agent_profile,
     build_event_research_profile,
 )
+from agents.daily_briefing.validators import validate_briefing, validate_summary
 from db import get_conn
 from llm_helpers import call_llm
 
@@ -77,7 +78,7 @@ def build_daily_briefing(
             _apply_timezone(similar, tz)
             for similar in _fetch_similar_events(event, start_utc, DEFAULT_SIMILAR_LIMIT)
         ]
-        event_todos = todos_service.list_event_todos(event["id"])
+        event_todos = todos_service.list_event_todos(event["id"], pending_only=True)
         related_todos = _collect_related_event_todos(similar_events)
         contacts = _fetch_contact_summaries(event.get("people") or [])
         event_contexts.append(
@@ -148,7 +149,7 @@ def build_daily_briefing(
     )
 
     # -- 5. Unlinked todos -------------------------------------------------------
-    all_todos = todos_service.list_unlinked_relevant_todos()
+    all_todos = todos_service.list_unlinked_relevant_todos(pending_only=True)
     logger.info("[briefing] Unlinked todos: %d", len(all_todos))
 
     context = {
@@ -745,6 +746,9 @@ def _synthesise_event_summary(
         return ""
 
 
+MAX_REWRITES = 3
+
+
 def _generate_markdown(context: dict[str, Any], *, user_email: str | None = None) -> str:
     from prompts.context import get_user_facts_context
 
@@ -773,25 +777,47 @@ def _generate_markdown(context: dict[str, Any], *, user_email: str | None = None
         profile=runtime_profile,
     )
     content = result.get("content", "")
-    if _is_invalid_briefing(content):
+
+    # -- Validation loop: up to MAX_REWRITES targeted rewrites ----------------
+    for attempt in range(MAX_REWRITES):
+        vresult = validate_briefing(content, context)
+        if vresult.valid:
+            if attempt > 0:
+                logger.info("[briefing] Validation passed after %d rewrite(s)", attempt)
+            break
         logger.warning(
-            "[briefing] Markdown failed validation, triggering rewrite (draft %d chars)",
+            "[briefing] Attempt %d/%d failed tier=%s: %s (draft %d chars)",
+            attempt + 1,
+            MAX_REWRITES,
+            vresult.tier,
+            vresult.reasons,
             len(content),
         )
         t_rewrite = perf_counter()
-        retry_prompt = _build_rewrite_prompt(context, content)
+        retry_prompt = _build_targeted_rewrite_prompt(context, content, vresult.reasons)
         content = call_llm(
             retry_prompt,
-            system_prompt="Rewrite strictly to the required format.",
-            temperature=0.1,
+            system_prompt="Rewrite strictly to the required format. Fix ONLY the listed issues.",
+            temperature=0.05,
             use_simpler_model=False,
         )
         logger.info(
-            "[briefing] Rewrite complete: %d chars, valid=%s (%.0fms)",
+            "[briefing] Rewrite %d complete: %d chars (%.0fms)",
+            attempt + 1,
             len(content),
-            not _is_invalid_briefing(content),
             (perf_counter() - t_rewrite) * 1000,
         )
+    else:
+        # All rewrite attempts exhausted — run final validation for logging
+        final = validate_briefing(content, context)
+        if not final.valid:
+            logger.error(
+                "[briefing] All %d rewrite attempts failed (tier=%s: %s), returning best-effort",
+                MAX_REWRITES,
+                final.tier,
+                final.reasons,
+            )
+
     return content
 
 
@@ -844,10 +870,13 @@ def _build_briefing_prompt(context: dict[str, Any]) -> str:
         "You are preparing the user for upcoming events. Use future tense (will, upcoming, prepare, review).\n"
         "\n"
         "OUTPUT RULES (MANDATORY):\n"
-        "- Output Markdown only. No preamble, no sign-off.\n"
+        "- Output ONLY the final briefing Markdown. No preamble, no sign-off, no reasoning.\n"
+        "- NEVER include internal thinking, chain-of-thought, or step-by-step planning.\n"
+        "- NEVER prefix with explanations of what you will do ('Let me analyze', 'First I will').\n"
         "- NEVER ask questions or offer to do more.\n"
         "- NEVER use meta-commentary about the input ('the text includes', 'there are several',\n"
-        "  'you provided', 'the text appears', 'it appears', 'none mentioned explicitly').\n"
+        "  'you provided', 'the text appears', 'it appears', 'none mentioned explicitly',\n"
+        "  'based on the data provided', 'based on what was provided').\n"
         "- NEVER produce generic category lists — every bullet must contain a specific fact,\n"
         "  title, action item, or recommendation.\n"
         "- Focus ONLY on today's events and their linked todos.\n"
@@ -873,7 +902,7 @@ def _build_briefing_prompt(context: dict[str, Any]) -> str:
         "- Suggested prep focus\n"
         f"{birthdays_section}"
         "## Outstanding Todos\n"
-        "- List pending todos and recently completed ones (last 2 weeks).\n"
+        "- List pending todos only.\n"
         f"{news_section}"
         "\n"
         "If there are no events, say so in Day Overview and skip Schedule/Event Prep sections.\n"
@@ -886,10 +915,16 @@ def _build_briefing_prompt(context: dict[str, Any]) -> str:
     )
 
 
-def _build_rewrite_prompt(context: dict[str, Any], draft: str) -> str:
+def _build_targeted_rewrite_prompt(context: dict[str, Any], draft: str, reasons: list[str]) -> str:
+    issues = "\n".join(f"- {r}" for r in reasons)
     return (
         "Rewrite the draft into the REQUIRED STRUCTURE. Output Markdown only.\n"
+        "\n"
+        "ISSUES TO FIX:\n"
+        f"{issues}\n"
+        "\n"
         "RULES:\n"
+        "- Output ONLY the final briefing. No reasoning, no thinking, no preamble.\n"
         "- NEVER use meta-commentary ('the text includes', 'there are several', 'it appears').\n"
         "- NEVER produce generic category lists — every bullet must reference a specific item.\n"
         "- NEVER ask questions or offer to do more.\n"
@@ -904,38 +939,16 @@ def _build_rewrite_prompt(context: dict[str, Any], draft: str) -> str:
     )
 
 
-def _is_invalid_briefing(content: str) -> bool:
-    if not content.strip().startswith("# Daily Briefing"):
-        return True
-    lower = content.lower()
-    banned = [
-        "it appears",
-        "you provided",
-        "the text",
-        "to help you",
-        "let me know",
-        "clarify",
-        "if you have",
-        "if you'd like",
-        "if you would like",
-        "there are several",
-        "none mentioned explicitly",
-        "please let me know",
-        "the text includes",
-        "various topics",
-        "including ai,",
-        "e.g.,",
-        "and more.",
-        "extract specific information",
-    ]
-    return any(phrase in lower for phrase in banned)
+_MAX_SUMMARY_RETRIES = 1
 
 
 def _generate_summary(context: dict[str, Any], markdown: str) -> str:
     system_prompt = (
         "You summarize daily briefings into a single short paragraph. This is future-oriented prep. "
-        "Output plain text only. Keep it under 2 sentences. Use ASCII characters only. Mention "
-        "meeting count and todo count when available. Be practical and direct."
+        "Output plain text only — no markdown, no headers, no bullet points. "
+        "Keep it under 2 sentences. Use ASCII characters only. Mention "
+        "meeting count and todo count when available. Be practical and direct. "
+        "Output ONLY the summary text. No reasoning, no preamble."
     )
     prompt = (
         "Generate a daily summary for the user based on this information.\n"
@@ -944,12 +957,28 @@ def _generate_summary(context: dict[str, Any], markdown: str) -> str:
         "Briefing markdown (reference only):\n"
         f"{markdown}"
     )
-    return call_llm(
+    summary = call_llm(
         prompt,
         system_prompt=system_prompt,
         temperature=0.2,
         use_simpler_model=False,
     )
+
+    # Validate and retry once if needed
+    vresult = validate_summary(summary)
+    if not vresult.valid:
+        logger.warning("[briefing] Summary failed validation: %s — retrying", vresult.reasons)
+        summary = call_llm(
+            f"Rewrite this as a plain-text summary in 1-2 sentences. No markdown. No reasoning.\n\n{summary}",
+            system_prompt=system_prompt,
+            temperature=0.1,
+            use_simpler_model=False,
+        )
+        vresult = validate_summary(summary)
+        if not vresult.valid:
+            logger.error("[briefing] Summary retry still invalid: %s", vresult.reasons)
+
+    return summary
 
 
 def _condense_notes(notes: str, limit: int = 48) -> str:
@@ -1103,7 +1132,7 @@ def _collect_related_event_todos(similar_events: list[dict[str, Any]]) -> list[d
         event_id = similar.get("id")
         if not event_id:
             continue
-        todos = todos_service.list_event_todos(event_id)
+        todos = todos_service.list_event_todos(event_id, pending_only=True)
         source_label = similar.get("title") or event_id
         for todo in todos:
             todo_id = todo.get("todo_id") or ""

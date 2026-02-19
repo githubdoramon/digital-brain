@@ -120,13 +120,32 @@ def list_todos(*, open_only: bool = False, order: str | None = None) -> list[dic
         return todos
 
 
-def list_event_todos(event_id: str, days: int = 14) -> list[dict[str, Any]]:
+def list_event_todos(
+    event_id: str,
+    days: int = 14,
+    *,
+    pending_only: bool = False,
+) -> list[dict[str, Any]]:
     if not event_id:
         return []
-    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+    if pending_only:
+        status_filter = "AND lower(coalesce(t.status, '')) = ANY(%s)"
+        params: tuple = (event_id, list(PENDING_STATUSES))
+    else:
+        cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+        status_filter = (
+            "AND ("
+            "  lower(coalesce(t.status, '')) = ANY(%s)"
+            "  OR ("
+            "    lower(coalesce(t.status, '')) = ANY(%s)"
+            "    AND (t.updated_at >= %s OR (t.updated_at IS NULL AND t.created_at >= %s))"
+            "  )"
+            ")"
+        )
+        params = (event_id, list(PENDING_STATUSES), list(COMPLETED_STATUSES), cutoff, cutoff)
     with get_conn() as conn, conn.cursor() as cur:
         cur.execute(
-            """
+            f"""
             SELECT
               t.todo_id,
               t.description,
@@ -137,29 +156,41 @@ def list_event_todos(event_id: str, days: int = 14) -> list[dict[str, Any]]:
             FROM todos AS t
             INNER JOIN todo_events AS te ON te.todo_id = t.todo_id
             WHERE te.event_id = %s
-              AND (
-                lower(coalesce(t.status, '')) = ANY(%s)
-                OR (
-                  lower(coalesce(t.status, '')) = ANY(%s)
-                  AND (t.updated_at >= %s OR (t.updated_at IS NULL AND t.created_at >= %s))
-                )
-              )
+              {status_filter}
             ORDER BY
               CASE WHEN t.due_date IS NULL THEN 1 ELSE 0 END,
               t.due_date ASC NULLS LAST,
               t.created_at DESC
             """,
-            (event_id, list(PENDING_STATUSES), list(COMPLETED_STATUSES), cutoff, cutoff),
+            params,
         )
         rows = [dict(row) for row in cur.fetchall()]
     return _serialize_todo_rows(rows)
 
 
-def list_unlinked_relevant_todos(days: int = 14) -> list[dict[str, Any]]:
-    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+def list_unlinked_relevant_todos(
+    days: int = 14,
+    *,
+    pending_only: bool = False,
+) -> list[dict[str, Any]]:
+    if pending_only:
+        status_filter = "AND lower(coalesce(t.status, '')) = ANY(%s)"
+        params: tuple = (list(PENDING_STATUSES),)
+    else:
+        cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+        status_filter = (
+            "AND ("
+            "  lower(coalesce(t.status, '')) = ANY(%s)"
+            "  OR ("
+            "    lower(coalesce(t.status, '')) = ANY(%s)"
+            "    AND (t.updated_at >= %s OR (t.updated_at IS NULL AND t.created_at >= %s))"
+            "  )"
+            ")"
+        )
+        params = (list(PENDING_STATUSES), list(COMPLETED_STATUSES), cutoff, cutoff)
     with get_conn() as conn, conn.cursor() as cur:
         cur.execute(
-            """
+            f"""
             SELECT
               t.todo_id,
               t.description,
@@ -173,19 +204,13 @@ def list_unlinked_relevant_todos(days: int = 14) -> list[dict[str, Any]]:
               FROM todo_events AS te
               WHERE te.todo_id = t.todo_id
             )
-              AND (
-                lower(coalesce(t.status, '')) = ANY(%s)
-                OR (
-                  lower(coalesce(t.status, '')) = ANY(%s)
-                  AND (t.updated_at >= %s OR (t.updated_at IS NULL AND t.created_at >= %s))
-                )
-              )
+              {status_filter}
             ORDER BY
               CASE WHEN t.due_date IS NULL THEN 1 ELSE 0 END,
               t.due_date ASC NULLS LAST,
               t.created_at DESC
             """,
-            (list(PENDING_STATUSES), list(COMPLETED_STATUSES), cutoff, cutoff),
+            params,
         )
         rows = [dict(row) for row in cur.fetchall()]
     return _serialize_todo_rows(rows)
