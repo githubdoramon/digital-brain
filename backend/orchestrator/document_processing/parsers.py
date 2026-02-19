@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 import os
 import re
 import shutil
@@ -174,7 +175,8 @@ def _parse_pdf_with_markdown_extractor(
         return None
 
     try:
-        markdown_output = extractor(doc, **MARKDOWN_EXTRACTION_KWARGS)
+        markdown_kwargs = _supported_markdown_kwargs(extractor)
+        markdown_output = extractor(doc, **markdown_kwargs)
     except Exception as exc:
         logger.warning(
             "[documents] markdown parse failed parser=%s path=%s error=%s",
@@ -208,11 +210,34 @@ def _parse_pdf_with_markdown_extractor(
         metadata={
             "page_count": len(pages),
             "layout_enabled": layout_enabled,
-            "markdown_kwargs": dict(MARKDOWN_EXTRACTION_KWARGS),
-            "ocr_requested": bool(MARKDOWN_EXTRACTION_KWARGS.get("use_ocr")),
-            "ocr_forced": bool(MARKDOWN_EXTRACTION_KWARGS.get("force_ocr")),
+            "markdown_kwargs": markdown_kwargs,
+            "ocr_requested": bool(markdown_kwargs.get("use_ocr")),
+            "ocr_forced": bool(markdown_kwargs.get("force_ocr")),
         },
     )
+
+
+def _supported_markdown_kwargs(extractor: object) -> dict[str, object]:
+    if not callable(extractor):
+        return {}
+
+    try:
+        parameters = inspect.signature(extractor).parameters
+    except (TypeError, ValueError):
+        return {"page_chunks": True}
+
+    supported: dict[str, object] = {}
+    accepts_var_kwargs = any(
+        param.kind == inspect.Parameter.VAR_KEYWORD for param in parameters.values()
+    )
+    logger.info("[documents] parameters: %s", parameters)
+    logger.info("[documents] accepts_var_kwargs: %s", accepts_var_kwargs)
+    logger.info("[documents] MARKDOWN_EXTRACTION_KWARGS: %s", MARKDOWN_EXTRACTION_KWARGS)
+    for key, value in MARKDOWN_EXTRACTION_KWARGS.items():
+        if accepts_var_kwargs or key in parameters:
+            supported[key] = value
+    logger.info("[documents] supported markdown kwargs: %s", supported)
+    return supported
 
 
 def _try_enable_pymupdf_layout() -> bool:
