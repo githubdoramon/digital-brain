@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from datetime import date, datetime, time, timedelta, timezone
 from time import perf_counter
 from typing import Any
@@ -19,11 +20,42 @@ from agents.daily_briefing.profile import (
 from agents.daily_briefing.validators import validate_briefing, validate_summary
 from db import get_conn
 from llm_helpers import call_llm
+from search_normalization import normalize_search_text
 
 logger = logging.getLogger(__name__)
 
 DEFAULT_SIMILAR_LIMIT = 4
 BIRTHDAY_LOOKAHEAD_DAYS = 7
+MAX_NEWS_TOPIC_ARTICLES = 24
+MAX_NEWS_ARTICLES_PER_TOPIC = 4
+MAX_NEWS_GENERAL_ARTICLES = 5
+_NEWS_SOURCE_QUALITY: dict[str, int] = {
+    "reuters": 4,
+    "bbc_world": 4,
+    "nytimes": 4,
+    "bloomberg": 4,
+    "wsj": 4,
+    "techcrunch": 3,
+    "hacker_news": 2,
+    "tavily": 1,
+}
+_NEWS_STOPWORDS = {
+    "the",
+    "and",
+    "for",
+    "with",
+    "this",
+    "that",
+    "from",
+    "into",
+    "your",
+    "today",
+    "news",
+    "meeting",
+    "work",
+    "update",
+    "project",
+}
 
 
 def handle_daily_briefing_request(payload: dict[str, Any]) -> dict[str, Any]:
@@ -768,15 +800,34 @@ def _generate_markdown(context: dict[str, Any], *, user_email: str | None = None
         if facts_ctx:
             system_prompt = f"{system_prompt}\n\n{facts_ctx}"
 
-    prompt = _build_briefing_prompt(context)
-    result = run_profiled_tool_loop(
-        prompt=prompt,
+    core_context = {**context, "news_articles": []}
+    core_prompt = _build_core_briefing_prompt(core_context)
+    core_result = run_profiled_tool_loop(
+        prompt=core_prompt,
         system_prompt=system_prompt,
         tools=tools,
         tool_handlers=tool_handlers,
         profile=runtime_profile,
     )
-    content = result.get("content", "")
+    core_content = core_result.get("content", "")
+
+    news_section = ""
+    if context.get("news_articles"):
+        t_news = perf_counter()
+        selected_news = _select_news_for_generation(context)
+        logger.info(
+            "[briefing] News generation context: %d topic article(s), %d general headline(s)",
+            len(selected_news["topic_articles"]),
+            len(selected_news["general_articles"]),
+        )
+        news_section = _generate_news_section_markdown(selected_news)
+        logger.info(
+            "[briefing] News section generated: %d chars (%.0fms)",
+            len(news_section),
+            (perf_counter() - t_news) * 1000,
+        )
+
+    content = _merge_briefing_sections(core_content, news_section)
 
     # -- Validation loop: up to MAX_REWRITES targeted rewrites ----------------
     for attempt in range(MAX_REWRITES):
@@ -819,6 +870,275 @@ def _generate_markdown(context: dict[str, Any], *, user_email: str | None = None
             )
 
     return content
+
+
+def _build_core_briefing_prompt(context: dict[str, Any]) -> str:
+    """Prompt for all sections except News & Topics.
+
+    The objective is to keep the model focused on event preparation without a
+    large news payload in the same completion.
+    """
+    has_birthdays = bool(context.get("upcoming_birthdays"))
+    birthdays_section = (
+        (
+            "## Upcoming Birthdays\n"
+            "- List each person with their birthday date and how many days away.\n"
+            "- If a birthday is today, highlight it.\n"
+        )
+        if has_birthdays
+        else ""
+    )
+    birthdays_note = (
+        ("\nIf there are upcoming birthdays, include the Upcoming Birthdays section.\n")
+        if has_birthdays
+        else ""
+    )
+
+    return (
+        "DAILY BRIEFING TASK (PREP DOCUMENT)\n"
+        "You are preparing the user for upcoming events. Use future tense (will, upcoming, prepare, review).\n"
+        "\n"
+        "OUTPUT RULES (MANDATORY):\n"
+        "- Output ONLY the final briefing Markdown. No preamble, no sign-off, no reasoning.\n"
+        "- NEVER include internal thinking, chain-of-thought, or step-by-step planning.\n"
+        "- NEVER prefix with explanations of what you will do ('Let me analyze', 'First I will').\n"
+        "- NEVER ask questions or offer to do more.\n"
+        "- NEVER use meta-commentary about the input ('the text includes', 'there are several',\n"
+        "  'you provided', 'the text appears', 'it appears', 'none mentioned explicitly',\n"
+        "  'based on the data provided', 'based on what was provided').\n"
+        "- NEVER produce generic category lists — every bullet must contain a specific fact,\n"
+        "  title, action item, or recommendation.\n"
+        "- Focus ONLY on today's events and their linked todos.\n"
+        "- Each event already has a pre-computed analysis with key points, action items, and prep\n"
+        "  focus. Incorporate that analysis into the Event Prep section -- do NOT ignore it.\n"
+        "- Do NOT include the News & Topics section in this response. It will be generated separately.\n"
+        "\n"
+        "TOOL GUIDANCE:\n"
+        "- Use search_memories for event-specific past notes.\n"
+        "- Use get_document only when a document should be reviewed for a specific event.\n"
+        "- Use web_search for external prep (company background, agenda context, travel).\n"
+        "- Use fetch_web_page only for URLs discovered via web_search.\n"
+        "\n"
+        "REQUIRED STRUCTURE:\n"
+        "# Daily Briefing - <date> (<timezone>)\n"
+        "## Day Overview\n"
+        "- Summarize the day, key prep actions, and conflicts.\n"
+        "## Schedule\n"
+        "- One bullet per event: <local time> - <title> (location if available)\n"
+        "## Event Prep\n"
+        "### <local time> - <title>\n"
+        "- Key points (from the per-event analysis)\n"
+        "- Action items and pending todos\n"
+        "- Suggested prep focus\n"
+        f"{birthdays_section}"
+        "## Outstanding Todos\n"
+        "- List pending todos only.\n"
+        "\n"
+        "If there are no events, say so in Day Overview and skip Schedule/Event Prep sections.\n"
+        "If there are no relevant todos, still include Outstanding Todos with a short note.\n"
+        f"{birthdays_note}"
+        "\n"
+        "CONTEXT FOR TODAY (already filtered; every event below is UPCOMING today):\n"
+        f"{_format_context_text(context)}"
+    )
+
+
+def _select_news_for_generation(context: dict[str, Any]) -> dict[str, Any]:
+    """Select a bounded and relevance-ranked subset for news generation."""
+    news_articles = context.get("news_articles") or []
+    relevance_terms = _build_news_relevance_terms(context)
+
+    seen_keys: set[str] = set()
+    scored_topic: list[tuple[float, dict[str, Any], str]] = []
+    scored_general: list[tuple[float, dict[str, Any]]] = []
+
+    for article in news_articles:
+        url = (article.get("url") or "").strip().lower()
+        title = (article.get("title") or "").strip().lower()
+        key = url or title
+        if not key or key in seen_keys:
+            continue
+        seen_keys.add(key)
+
+        score = _score_news_article(article, relevance_terms)
+        matches = article.get("topic_matches") or []
+        if matches:
+            topic_label = str(matches[0]).strip() or "General"
+            scored_topic.append((score, article, topic_label))
+            continue
+
+        scored_general.append((score, article))
+
+    scored_topic.sort(key=lambda x: x[0], reverse=True)
+    scored_general.sort(key=lambda x: x[0], reverse=True)
+
+    topic_articles: list[dict[str, Any]] = []
+    general_articles: list[dict[str, Any]] = []
+    topic_counts: dict[str, int] = {}
+
+    for _, article, topic in scored_topic:
+        if len(topic_articles) >= MAX_NEWS_TOPIC_ARTICLES:
+            break
+        if topic_counts.get(topic, 0) >= MAX_NEWS_ARTICLES_PER_TOPIC:
+            continue
+        topic_counts[topic] = topic_counts.get(topic, 0) + 1
+        topic_articles.append(article)
+
+    for _, article in scored_general:
+        if len(general_articles) >= MAX_NEWS_GENERAL_ARTICLES:
+            break
+        general_articles.append(article)
+
+    return {
+        "topic_articles": topic_articles,
+        "general_articles": general_articles,
+    }
+
+
+def _build_news_relevance_terms(context: dict[str, Any]) -> set[str]:
+    raw_terms: list[str] = []
+    events = context.get("events") or []
+    for event in events:
+        raw_terms.append(event.get("title") or "")
+        raw_terms.extend(event.get("tags") or [])
+        for contact in event.get("contacts") or []:
+            raw_terms.append(contact.get("display_name") or "")
+
+    for todo in context.get("all_todos") or []:
+        raw_terms.append(todo.get("description") or "")
+
+    terms: set[str] = set()
+    for value in raw_terms:
+        normalized = normalize_search_text(value)
+        if not normalized:
+            continue
+        for token in re.split(r"[^a-z0-9]+", normalized):
+            if len(token) < 3 or token in _NEWS_STOPWORDS:
+                continue
+            terms.add(token)
+    return terms
+
+
+def _score_news_article(article: dict[str, Any], relevance_terms: set[str]) -> float:
+    score = 0.0
+    source = normalize_search_text(str(article.get("source") or ""))
+    for source_key, weight in _NEWS_SOURCE_QUALITY.items():
+        if source_key in source:
+            score += weight
+            break
+
+    topic_matches = article.get("topic_matches") or []
+    score += min(len(topic_matches), 3) * 2.0
+
+    title = normalize_search_text(str(article.get("title") or ""))
+    summary = normalize_search_text(str(article.get("summary") or ""))
+    haystack = f"{title} {summary}"
+    overlap = sum(1 for term in relevance_terms if term and term in haystack)
+    score += overlap * 1.5
+
+    published_at = article.get("published_at")
+    published_dt = _parse_datetime(published_at)
+    if published_dt:
+        if published_dt.tzinfo is None:
+            published_dt = published_dt.replace(tzinfo=timezone.utc)
+        age_hours = max((datetime.now(timezone.utc) - published_dt).total_seconds() / 3600, 0)
+        if age_hours <= 12:
+            score += 2.0
+        elif age_hours <= 24:
+            score += 1.0
+
+    return score
+
+
+def _generate_news_section_markdown(selected_news: dict[str, Any]) -> str:
+    topic_articles = selected_news.get("topic_articles") or []
+    general_articles = selected_news.get("general_articles") or []
+    news_context = _format_news_context(topic_articles, general_articles)
+
+    prompt = (
+        "Generate ONLY the `## News & Topics` markdown section for a daily briefing.\n"
+        "\n"
+        "STRICT REQUIREMENTS:\n"
+        "- Start with exactly: `## News & Topics`\n"
+        "- Use ONLY concrete articles from the provided context.\n"
+        "- First list topic-matched articles grouped by topic label, then list up to 5 general headlines.\n"
+        "- Each item MUST use this exact format:\n"
+        "  [Article Title](url) - one sentence explaining why it matters or what happened. (Source)\n"
+        "- Do NOT invent details or generic categories.\n"
+        "- Make each sentence high-signal and decision-useful: include one concrete implication, risk,\n"
+        "  or why-it-matters angle for the user in that sentence.\n"
+        "- Prefer business impact, regulatory implications, market shifts, security risk, or strategic\n"
+        "  relevance over vague descriptions.\n"
+        "- If no useful articles are available, output exactly:\n"
+        "  ## News & Topics\n"
+        "  No notable news today.\n"
+        "- Output markdown only, no preamble, no reasoning.\n"
+        "\n"
+        "NEWS CONTEXT:\n"
+        f"{news_context}"
+    )
+
+    return call_llm(
+        prompt,
+        system_prompt=(
+            "You write concise daily briefing news sections. "
+            "Output markdown only and strictly follow the requested format."
+        ),
+        temperature=0.1,
+        use_simpler_model=False,
+    ).strip()
+
+
+def _format_news_context(
+    topic_articles: list[dict[str, Any]], general_articles: list[dict[str, Any]]
+) -> str:
+    lines: list[str] = []
+    lines.append(f"Topic-matched articles ({len(topic_articles)}):")
+    if not topic_articles:
+        lines.append("- None")
+    for article in topic_articles:
+        topic = ", ".join(article.get("topic_matches") or ["General"])
+        title = article.get("title") or "Untitled"
+        source = article.get("source") or "Unknown"
+        url = (article.get("url") or "").strip()
+        summary = (article.get("summary") or "").strip()
+        lines.append(f"- [{topic}] {title} ({source})")
+        if url:
+            lines.append(f"  URL: {url}")
+        if summary:
+            lines.append(f"  Summary: {summary[:300]}")
+
+    lines.append("")
+    lines.append(f"General headlines ({len(general_articles)}):")
+    if not general_articles:
+        lines.append("- None")
+    for article in general_articles:
+        title = article.get("title") or "Untitled"
+        source = article.get("source") or "Unknown"
+        url = (article.get("url") or "").strip()
+        summary = (article.get("summary") or "").strip()
+        lines.append(f"- {title} ({source})")
+        if url:
+            lines.append(f"  URL: {url}")
+        if summary:
+            lines.append(f"  Summary: {summary[:300]}")
+
+    return "\n".join(lines)
+
+
+def _merge_briefing_sections(core_content: str, news_section: str) -> str:
+    """Merge a core briefing document with a separately generated news section."""
+    merged = core_content.strip()
+    # Remove any pre-existing News section from the core draft to avoid duplicates.
+    merged = re.sub(r"\n## News & Topics\n[\s\S]*$", "", merged, flags=re.MULTILINE).rstrip()
+
+    if not news_section.strip():
+        return merged
+
+    cleaned_news = news_section.strip()
+    if not cleaned_news.startswith("## News & Topics"):
+        cleaned_news = f"## News & Topics\n{cleaned_news}"
+    return f"{merged}\n\n{cleaned_news}\n"
 
 
 def _build_briefing_prompt(context: dict[str, Any]) -> str:

@@ -24,6 +24,8 @@ Detailed architecture docs live in `backend/orchestrator/docs/architecture/`:
 | [VALIDATION.md](backend/orchestrator/docs/architecture/VALIDATION.md) | Pre/post validation system |
 | [AGENT_LIMITS.md](backend/orchestrator/docs/architecture/AGENT_LIMITS.md) | Limits and stop rules configuration |
 | [CLIENT_API_PROXY.md](CLIENT_API_PROXY.md) | Client API proxy requirements and routing |
+| [agents/DAILY_BRIEFING.md](backend/orchestrator/docs/agents/DAILY_BRIEFING.md) | Daily briefing agent behavior, generation flow, and quality rules |
+| [agents/MEMORY_EXPERT.md](backend/orchestrator/docs/agents/MEMORY_EXPERT.md) | Memory expert retrieval/disambiguation behavior and contact-aware rules |
 
 
 ## Services & Runtime
@@ -145,16 +147,7 @@ User Question → Intent Router → Conversational Profile Dispatch → Tool Vis
 - **Keep code modular**: avoid bloated files that mix unrelated concerns. When a file starts owning multiple responsibilities (for example, controller loop + guardrails + tool execution internals), extract cohesive modules early.
 - **Documentation hygiene is mandatory**: when behavior, architecture, routing/profile selection, or runtime contracts change, update the corresponding docs in `backend/orchestrator/docs/architecture/` and this `AGENTS.md` in the same work.
 - **Profile intent ownership**: conversational profiles should declare intent ownership via `supports_intent` on the profile/interface implementation; avoid hardcoding intent lists inside the central registry.
-- **Contact-aware memory search flow**: if `search_memories` has no `contact_ids` and query is person-referential, controller attempts contact resolution first.
-- **Contact-aware memory search flow**: on unambiguous resolution, inject `contact_ids` into memory search.
-- **Contact-aware memory search flow**: on ambiguity, return a clarification-needed result instead of running unfiltered search.
-- **Contact-aware memory search flow**: avoid repeating identical `resolve_contacts` calls after `needs_clarification`/`no_people` (no-progress guard).
-- **Collective participant selectors are supported in contact resolution**: phrases like "everyone with @domain", "all employees from company X", and "my <team> team" can resolve to multiple contacts even when no explicit person names are present.
-- **Deterministic selector auto-activation**: selector-based groups that are deterministic (for example email domain/company matches) are persisted as reusable contact groups with confirmed status.
-- **Contact groups are user-scoped by owner contact**: ownership is linked to the current user's self-contact record (resolved from authenticated email), not authored by the model.
-- **Inferred group confirmation happens through event preview UX**: non-deterministic selector groups (for example "my soccer team") are shown in event preview UI directives and only persisted when the user confirms event creation.
-- **Interaction ranking flow**: for strict "who did I meet/talk to most" windows, prefer `get_events` with `action=by_time_span` (plus optional resolved `contact_ids`) before ranking counterparts.
-- **Pre-resolve contacts policy**: router sets `pre_resolve_contacts=false` for discovery/ranking queries that don't reference a specific person (e.g. "who did I meet most this week?"). Only person-referential queries (naming someone by name, pronoun, or relationship term) trigger pre-resolution. The LLM router prompt provides explicit guidance for this decision; rule-based routes use the intent-level default from `INTENT_PRE_RESOLVE_CONTACTS`.
+- **Agent-specific behavior docs**: detailed profile behavior for memory/disambiguation and briefing generation is documented in `backend/orchestrator/docs/agents/MEMORY_EXPERT.md` and `backend/orchestrator/docs/agents/DAILY_BRIEFING.md`.
 - **Validation semantics**: post-execution validation must treat clarification-required search/resolution results as `need_user_input`, not generic empty-result retries.
 - **Session command hygiene**: strip leading slash commands from user text before agent execution; commands are control signals, not semantic query content.
 - **All-results limit policy**: when users explicitly ask for "all/everyone/entire" results, query handlers should honor unbounded retrieval semantics instead of silently capping to a fixed maximum.
@@ -175,7 +168,6 @@ User Question → Intent Router → Conversational Profile Dispatch → Tool Vis
 - **User facts vs AgentState.known_facts**: these are completely different. `AgentState.known_facts` is transient per-request working memory (tool result summaries). `user_facts` is persistent long-term memory across all conversations. They occupy different positions in the prompt and serve different purposes.
 - **User facts retrieval scoring**: facts are ranked by a composite score: `0.5 * semantic_similarity + 0.25 * (importance/10) + 0.25 * recency_decay`. Recency uses exponential decay based on `last_accessed_at` with a ~30-day half-life.
 - **User facts extraction runs as BackgroundTask**: triggered after conversation persistence in `llm.py` via a callback from `app.py`. It must never block or crash user-facing responses. Short/trivial messages and slash commands skip extraction.
-- **Daily briefing post-generation validation**: the daily briefing pipeline validates final markdown through a 3-tier pipeline in `agents/daily_briefing/validators.py`: (1) **Structural** — header, required sections, length, expanded banned phrases including thinking/reasoning patterns; (2) **Coherence** — event titles present in output, news links present when expected, no raw tool/JSON artifacts; (3) **LLM judge** — fast-model call to catch subtle quality issues that bypass deterministic checks. On failure, up to 2 targeted rewrites are attempted, each receiving the specific failure reasons so the LLM knows exactly what to fix. Summary output is also validated (length, no markdown, no thinking patterns) with 1 retry.
 
 ### Limits & Safety
 
