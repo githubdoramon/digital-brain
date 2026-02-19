@@ -191,13 +191,22 @@ def _parse_pdf_with_markdown_extractor(
                 exc_info=exc,
             )
             return None
-        markdown_output, markdown_kwargs = _retry_markdown_without_tables(
-            extractor,
-            doc,
-            base_kwargs=markdown_kwargs,
-            parser_name=parser_name,
-            path=path,
-        )
+        try:
+            markdown_output, markdown_kwargs = _retry_markdown_without_tables(
+                extractor,
+                doc,
+                base_kwargs=markdown_kwargs,
+                parser_name=parser_name,
+                path=path,
+            )
+        except Exception as retry_exc:
+            logger.warning(
+                "[documents] markdown table parse retry failed parser=%s path=%s error=%s; falling back",
+                parser_name,
+                path,
+                retry_exc,
+            )
+            return None
     except Exception as exc:
         logger.warning(
             "[documents] markdown parse failed parser=%s path=%s error=%s",
@@ -258,7 +267,10 @@ def _supported_markdown_kwargs(extractor: object) -> dict[str, object]:
 
 
 def _is_empty_table_sequence_error(exc: ValueError) -> bool:
-    return "min() arg is an empty sequence" in str(exc)
+    message = str(exc).lower()
+    return "empty sequence" in message and (
+        "min() arg" in message or "max() arg" in message or "bbox" in message or "table" in message
+    )
 
 
 def _retry_markdown_without_tables(
@@ -283,12 +295,11 @@ def _retry_markdown_without_tables(
     try:
         output = cast(Callable[..., object], extractor)(doc, **retry_kwargs)
     except Exception as exc:
-        logger.warning(
-            "[documents] markdown parse failed after table-disabled retry parser=%s path=%s error=%s",
+        logger.info(
+            "[documents] markdown table-disabled retry failed parser=%s path=%s error=%s",
             parser_name,
             path,
             exc,
-            exc_info=exc,
         )
         raise
 

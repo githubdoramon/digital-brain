@@ -542,6 +542,11 @@ def prepare_document_content_for_storage(
     """Apply storage-time normalization policies shared by ingest and re-embed workflows."""
     metadata = dict(raw_metadata or {})
     original_content = (content or "").strip()
+    logger.info(
+        "[documents] storage normalization start document_id=%s original_chars=%s",
+        document_id or "unknown",
+        len(original_content),
+    )
     translated_content, translated_for_storage = _translate_content_for_storage(
         original_content,
         document_id=document_id,
@@ -552,6 +557,13 @@ def prepare_document_content_for_storage(
         original_content=original_content,
         stored_content=stored_content,
         translated=translated_for_storage,
+    )
+    logger.info(
+        "[documents] storage normalization complete document_id=%s translated=%s translated_chars=%s stored_chars=%s",
+        document_id or "unknown",
+        translated_for_storage,
+        len(translated_content),
+        len(stored_content),
     )
     return stored_content, metadata
 
@@ -780,12 +792,24 @@ def _build_document_fields(
     )
 
 
-def _translate_text_to_english(text: str, max_chars: int) -> str:
+def _translate_text_to_english(
+    text: str,
+    max_chars: int,
+    *,
+    document_id: str | None = None,
+    chunk_index: int | None = None,
+    total_chunks: int | None = None,
+) -> str:
     trimmed = (text or "").strip()
     if not trimmed:
         return text
     if not LLM_CHAT_MODEL:
-        logger.info("[documents] Translation skipped: no LLM_CHAT_MODEL configured")
+        logger.info(
+            "[documents] translation skipped document_id=%s chunk=%s/%s reason=no_llm_model",
+            document_id or "unknown",
+            "?" if chunk_index is None else chunk_index + 1,
+            "?" if total_chunks is None else total_chunks,
+        )
         return text
     excerpt = trimmed[:max_chars]
     system_prompt = (
@@ -799,9 +823,26 @@ def _translate_text_to_english(text: str, max_chars: int) -> str:
             system_prompt=system_prompt,
             timeout=OLLAMA_TIMEOUT,
         ).strip()
-        return candidate or text
+        output = candidate or text
+        logger.debug(
+            "[documents] translation llm response document_id=%s chunk=%s/%s input_chars=%s output_chars=%s changed=%s",
+            document_id or "unknown",
+            "?" if chunk_index is None else chunk_index + 1,
+            "?" if total_chunks is None else total_chunks,
+            len(excerpt),
+            len(output),
+            output != text,
+        )
+        return output
     except Exception as exc:
-        logger.warning("[documents] Failed to translate text: %s", exc, exc_info=exc)
+        logger.warning(
+            "[documents] translation failed document_id=%s chunk=%s/%s error=%s",
+            document_id or "unknown",
+            "?" if chunk_index is None else chunk_index + 1,
+            "?" if total_chunks is None else total_chunks,
+            exc,
+            exc_info=exc,
+        )
         return text
 
 
@@ -840,16 +881,62 @@ def _translate_content_for_storage(
     _ = document_id
     cleaned = (content or "").strip()
     if not cleaned or not LLM_CHAT_MODEL:
+        logger.info(
+            "[documents] translation bypassed document_id=%s cleaned_chars=%s has_llm_model=%s",
+            document_id or "unknown",
+            len(cleaned),
+            bool(LLM_CHAT_MODEL),
+        )
         return cleaned, False
 
     chunk_chars = max(200, min(MAX_TRANSLATION_CHUNK_CHARS, MAX_CONTENT_CHARS))
+    chunks = _chunk_text_for_translation(cleaned, chunk_chars)
+    logger.info(
+        "[documents] translation start document_id=%s input_chars=%s chunk_chars=%s chunk_count=%s",
+        document_id or "unknown",
+        len(cleaned),
+        chunk_chars,
+        len(chunks),
+    )
     translated_parts: list[str] = []
-    for chunk in _chunk_text_for_translation(cleaned, chunk_chars):
-        translated_chunk = _translate_text_to_english(chunk, len(chunk)).strip()
-        translated_parts.append(translated_chunk or chunk)
+    fallback_chunks = 0
+    changed_chunks = 0
+    for idx, chunk in enumerate(chunks):
+        translated_chunk = _translate_text_to_english(
+            chunk,
+            len(chunk),
+            document_id=document_id,
+            chunk_index=idx,
+            total_chunks=len(chunks),
+        ).strip()
+        output_chunk = translated_chunk or chunk
+        if not translated_chunk:
+            fallback_chunks += 1
+        if output_chunk != chunk:
+            changed_chunks += 1
+        translated_parts.append(output_chunk)
+        logger.info(
+            "[documents] translation chunk document_id=%s chunk=%s/%s input_chars=%s output_chars=%s changed=%s fallback_to_original=%s",
+            document_id or "unknown",
+            idx + 1,
+            len(chunks),
+            len(chunk),
+            len(output_chunk),
+            output_chunk != chunk,
+            not translated_chunk,
+        )
 
     translated = "".join(translated_parts).strip() or cleaned
-    return translated, translated != cleaned
+    translated_for_storage = translated != cleaned
+    logger.info(
+        "[documents] translation complete document_id=%s translated=%s changed_chunks=%s fallback_chunks=%s output_chars=%s",
+        document_id or "unknown",
+        translated_for_storage,
+        changed_chunks,
+        fallback_chunks,
+        len(translated),
+    )
+    return translated, translated_for_storage
 
 
 def _update_content_storage_metadata(
