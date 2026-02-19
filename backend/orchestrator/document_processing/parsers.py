@@ -5,6 +5,7 @@ import re
 import shutil
 import subprocess
 import tempfile
+from importlib import import_module
 from pathlib import Path
 
 from docx import Document as DocxDocument
@@ -22,6 +23,13 @@ ENABLE_OCR_FALLBACK = os.getenv("DOCUMENT_ENABLE_OCR_FALLBACK", "true").lower() 
     "yes",
 }
 LOW_TEXT_DENSITY_CHARS_PER_PAGE = int(os.getenv("DOCUMENT_LOW_TEXT_DENSITY_CHARS_PER_PAGE", "160"))
+MARKDOWN_EXTRACTION_KWARGS: dict[str, object] = {
+    "page_chunks": True,
+    "header": False,
+    "footer": False,
+    "use_ocr": True,
+    "force_ocr": False,
+}
 
 
 def parse_document(path: Path, mime_type: str | None) -> DocumentParseResult:
@@ -57,48 +65,168 @@ def _parse_pdf(path: Path) -> DocumentParseResult:
 
 
 def _parse_pdf_layout(path: Path) -> DocumentParseResult:
-    markdown_result = _parse_pdf_pymupdf4llm(path)
-    if markdown_result is not None:
+    layout_enabled = _try_enable_pymupdf_layout()
+    markdown_result = _parse_pdf_pymupdf4llm(path, layout_enabled=layout_enabled)
+    if markdown_result is not None and markdown_result.text.strip():
         return markdown_result
 
-    return _parse_pdf_pymupdf_blocks(path)
+    if markdown_result is not None:
+        logger.info(
+            "[documents] pymupdf4llm produced empty text for %s; trying PyMuPDF markdown",
+            path,
+        )
+    pymupdf_markdown_result = _parse_pdf_pymupdf_markdown(path, layout_enabled=layout_enabled)
+    if pymupdf_markdown_result is not None and pymupdf_markdown_result.text.strip():
+        if markdown_result is not None:
+            pymupdf_markdown_result.warnings.extend(markdown_result.warnings)
+            pymupdf_markdown_result.warnings.append(
+                "pymupdf4llm_empty_fallback_to_pymupdf_markdown"
+            )
+        return pymupdf_markdown_result
+
+    if pymupdf_markdown_result is not None:
+        logger.info(
+            "[documents] pymupdf markdown produced empty text for %s; falling back to PyMuPDF blocks",
+            path,
+        )
+
+    block_result = _parse_pdf_pymupdf_blocks(path)
+    if markdown_result is not None:
+        block_result.warnings.extend(markdown_result.warnings)
+    if pymupdf_markdown_result is not None:
+        block_result.warnings.extend(pymupdf_markdown_result.warnings)
+    if markdown_result is not None or pymupdf_markdown_result is not None:
+        block_result.warnings.append("markdown_fallback_to_blocks")
+    return block_result
 
 
-def _parse_pdf_pymupdf4llm(path: Path) -> DocumentParseResult | None:
+def _parse_pdf_pymupdf_markdown(
+    path: Path,
+    *,
+    layout_enabled: bool,
+) -> DocumentParseResult | None:
+    try:
+        import pymupdf  # type: ignore
+    except Exception:
+        logger.info("[documents] PyMuPDF not available; skipping PyMuPDF markdown parser")
+        return None
+
+    to_markdown = getattr(pymupdf, "to_markdown", None)
+    if not callable(to_markdown):
+        logger.info("[documents] pymupdf.to_markdown not available; skipping PyMuPDF markdown")
+        return None
+
+    return _parse_pdf_with_markdown_extractor(
+        path,
+        extractor=to_markdown,
+        parser_name="pdf_layout_pymupdf_markdown",
+        empty_warning="pymupdf_markdown_no_text",
+        layout_enabled=layout_enabled,
+    )
+
+
+def _parse_pdf_pymupdf4llm(
+    path: Path,
+    *,
+    layout_enabled: bool,
+) -> DocumentParseResult | None:
     try:
         import pymupdf4llm  # type: ignore
     except Exception:
         logger.info("[documents] pymupdf4llm not available; falling back to PyMuPDF blocks")
         return None
 
-    warnings: list[str] = []
-    try:
-        markdown_output = pymupdf4llm.to_markdown(str(path), page_chunks=True)
-    except Exception as exc:
-        logger.warning("[documents] pymupdf4llm parse failed for %s: %s", path, exc, exc_info=exc)
+    return _parse_pdf_with_markdown_extractor(
+        path,
+        extractor=pymupdf4llm.to_markdown,
+        parser_name="pdf_layout_pymupdf4llm",
+        empty_warning="pymupdf4llm_no_text",
+        layout_enabled=layout_enabled,
+    )
+
+
+def _parse_pdf_with_markdown_extractor(
+    path: Path,
+    *,
+    extractor: object,
+    parser_name: str,
+    empty_warning: str,
+    layout_enabled: bool,
+) -> DocumentParseResult | None:
+    if not callable(extractor):
         return None
+
+    try:
+        import pymupdf  # type: ignore
+    except Exception as exc:
+        logger.warning(
+            "[documents] PyMuPDF not available for markdown parsing %s: %s",
+            path,
+            exc,
+            exc_info=exc,
+        )
+        return None
+
+    try:
+        doc = pymupdf.open(str(path))
+    except Exception as exc:
+        logger.warning("[documents] pymupdf open failed for %s: %s", path, exc, exc_info=exc)
+        return None
+
+    try:
+        markdown_output = extractor(doc, **MARKDOWN_EXTRACTION_KWARGS)
+    except Exception as exc:
+        logger.warning(
+            "[documents] markdown parse failed parser=%s path=%s error=%s",
+            parser_name,
+            path,
+            exc,
+            exc_info=exc,
+        )
+        return None
+    finally:
+        try:
+            doc.close()
+        except Exception:
+            pass
 
     pages = _extract_markdown_pages(markdown_output)
     raw_text = "\n\n".join(page for page in pages if page).strip()
     if not raw_text and isinstance(markdown_output, str):
         raw_text = markdown_output.strip()
-    sections = _derive_sections_from_markdown(raw_text)
+
+    warnings: list[str] = []
     if not raw_text:
-        warnings.append("pymupdf4llm_no_text")
+        warnings.append(empty_warning)
     return DocumentParseResult(
         text=raw_text,
         raw_text=raw_text,
-        parser_used="pdf_layout_pymupdf4llm",
+        parser_used=parser_name,
         warnings=warnings,
         pages=pages,
-        sections=sections,
-        metadata={"page_count": len(pages)},
+        sections=_derive_sections_from_markdown(raw_text),
+        metadata={
+            "page_count": len(pages),
+            "layout_enabled": layout_enabled,
+            "markdown_kwargs": dict(MARKDOWN_EXTRACTION_KWARGS),
+            "ocr_requested": bool(MARKDOWN_EXTRACTION_KWARGS.get("use_ocr")),
+            "ocr_forced": bool(MARKDOWN_EXTRACTION_KWARGS.get("force_ocr")),
+        },
     )
+
+
+def _try_enable_pymupdf_layout() -> bool:
+    try:
+        import_module("pymupdf.layout")
+        return True
+    except Exception:
+        logger.info("[documents] pymupdf.layout not available; continuing without layout module")
+        return False
 
 
 def _parse_pdf_pymupdf_blocks(path: Path) -> DocumentParseResult:
     try:
-        import fitz  # type: ignore
+        import pymupdf  # type: ignore
     except Exception:
         logger.info("[documents] PyMuPDF not available; using pdfminer for PDF parsing")
         return _parse_pdf_pdfminer(path, parser_name="pdfminer")
@@ -106,7 +234,7 @@ def _parse_pdf_pymupdf_blocks(path: Path) -> DocumentParseResult:
     pages: list[str] = []
     warnings: list[str] = []
     try:
-        doc = fitz.open(str(path))
+        doc = pymupdf.open(str(path))
         for page in doc:
             blocks = page.get_text("blocks")
             blocks_sorted = sorted(
