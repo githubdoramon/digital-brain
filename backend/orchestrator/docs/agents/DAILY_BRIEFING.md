@@ -15,10 +15,20 @@ This document captures behavior and quality rules for the daily briefing profile
 3. Gather birthdays and unlinked pending todos.
 4. Aggregate news via `news_feeds.fetch_news()`.
 5. Generate final markdown in focused passes:
-   - Core sections first: Day Overview, Schedule, Event Prep, Birthdays, Outstanding Todos.
-   - `## News & Topics` in a dedicated call from a bounded news subset.
-   - Merge sections into final markdown.
+   - Event-critical sections first (`Day Overview`, `Schedule`, `Event Prep`) in an isolated prompt.
+   - Build deterministic sections in code for birthdays and outstanding todos.
+   - Generate `## News & Topics` in a dedicated call from a bounded news subset.
+   - Assemble final markdown in code (no full-document rewrite pass).
 6. Run summary generation (plain text 1-2 sentences).
+
+## Parallelism
+
+- The pipeline executes independent work in parallel with bounded worker pools:
+  - per-event enrichment (similar history, linked todos, contacts),
+  - per-event deep summary generation,
+  - birthdays/news/unlinked-todos fetches,
+  - final event-section and news-section generation.
+- Results are merged back in deterministic event order.
 
 ## News Relevance and Selection
 
@@ -45,13 +55,13 @@ This document captures behavior and quality rules for the daily briefing profile
 
 ## Validation Pipeline
 
-Final markdown is validated in `agents/daily_briefing/validators.py`:
+Focused validation runs in `agents/daily_briefing/validators.py`:
 
-1. Structural: required header/sections, minimum length, banned meta/thinking phrases.
-2. Coherence: event-title presence, news links when expected, no tool/JSON artifacts.
-3. LLM judge: lightweight quality gate for subtle failures.
+1. Event section validation (`validate_event_sections`): checks event-critical sections and title coverage.
+2. News section validation (`validate_news_section`): checks article presentation format (title + link + summary + source).
 
-On failure, targeted rewrites are attempted with explicit failure reasons.
+If event section generation fails validation, the executor falls back to deterministic event-section construction.
+If news validation fails, the executor falls back to `No notable news today.`
 
 ## Key Files
 

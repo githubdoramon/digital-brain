@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date, datetime, time, timedelta, timezone
 from time import perf_counter
 from typing import Any
@@ -14,10 +15,13 @@ import retrieval
 import todos as todos_service
 from agent.tool_loop_runner import run_profiled_tool_loop
 from agents.daily_briefing.profile import (
-    build_daily_briefing_agent_profile,
     build_event_research_profile,
 )
-from agents.daily_briefing.validators import validate_briefing, validate_summary
+from agents.daily_briefing.validators import (
+    validate_event_sections,
+    validate_news_section,
+    validate_summary,
+)
 from db import get_conn
 from llm_helpers import call_llm
 from search_normalization import normalize_search_text
@@ -29,6 +33,9 @@ BIRTHDAY_LOOKAHEAD_DAYS = 7
 MAX_NEWS_TOPIC_ARTICLES = 24
 MAX_NEWS_ARTICLES_PER_TOPIC = 3
 MAX_NEWS_GENERAL_ARTICLES = 5
+EVENT_ENRICHMENT_MAX_WORKERS = 4
+EVENT_SUMMARY_MAX_WORKERS = 3
+BRIEFING_SECTION_MAX_WORKERS = 2
 _NEWS_SOURCE_QUALITY: dict[str, int] = {
     "reuters": 4,
     "bbc_world": 4,
@@ -124,24 +131,7 @@ def build_daily_briefing(
     # -- 1. Gather raw event data ------------------------------------------------
     t0 = perf_counter()
     events = [_apply_timezone(event, tz) for event in _fetch_events_for_span(start_utc, end_utc)]
-    event_contexts: list[dict[str, Any]] = []
-    for event in events:
-        similar_events = [
-            _apply_timezone(similar, tz)
-            for similar in _fetch_similar_events(event, start_utc, DEFAULT_SIMILAR_LIMIT)
-        ]
-        event_todos = todos_service.list_event_todos(event["id"], pending_only=True)
-        related_todos = _collect_related_event_todos(similar_events)
-        contacts = _fetch_contact_summaries(event.get("people") or [])
-        event_contexts.append(
-            {
-                **event,
-                "similar_events": similar_events,
-                "todos": event_todos,
-                "related_todos": related_todos,
-                "contacts": contacts,
-            }
-        )
+    event_contexts = _build_event_contexts_parallel(events, tz, start_utc)
     logger.info(
         "[briefing] Events: %d found, %d with similar history (%.0fms)",
         len(events),
@@ -158,18 +148,34 @@ def build_daily_briefing(
             len(ec.get("similar_events") or []),
         )
 
-    # -- 2. Per-event deep analysis (dedicated LLM call each) --------------------
+    # -- 2. Per-event deep analysis (parallel dedicated LLM call each) -----------
     t0 = perf_counter()
-    for ec in event_contexts:
-        ec["deep_summary"] = _summarize_event(ec, timezone_name, user_email=user_email)
+    event_contexts = _summarize_events_parallel(
+        event_contexts,
+        timezone_name,
+        user_email=user_email,
+    )
     logger.info(
         "[briefing] Deep analysis: %d event(s) analyzed (%.0fms)",
         len(event_contexts),
         (perf_counter() - t0) * 1000,
     )
 
-    # -- 3. Upcoming birthdays ---------------------------------------------------
-    upcoming_birthdays = _fetch_upcoming_birthdays(local_date)
+    # -- 3-5. Fetch birthdays, news, and unlinked todos in parallel --------------
+    t0 = perf_counter()
+    with ThreadPoolExecutor(max_workers=3) as pool:
+        birthdays_future = pool.submit(_fetch_upcoming_birthdays, local_date)
+        news_future = pool.submit(_fetch_news_safely)
+        todos_future = pool.submit(todos_service.list_unlinked_relevant_todos, pending_only=True)
+
+        upcoming_birthdays = birthdays_future.result()
+        news_articles = news_future.result()
+        all_todos = todos_future.result()
+
+    logger.info(
+        "[briefing] Parallel background fetches complete (%.0fms)", (perf_counter() - t0) * 1000
+    )
+
     if upcoming_birthdays:
         bday_parts = []
         for b in upcoming_birthdays:
@@ -184,24 +190,14 @@ def build_daily_briefing(
     else:
         logger.info("[briefing] Birthdays: none in next %d days", BIRTHDAY_LOOKAHEAD_DAYS)
 
-    # -- 4. News aggregation -----------------------------------------------------
-    t0 = perf_counter()
-    try:
-        news_articles = news_feeds.fetch_news()
-    except Exception:
-        logger.warning("News feed aggregation failed, continuing without news", exc_info=True)
-        news_articles = []
     topic_matched_count = sum(1 for a in news_articles if a.get("topic_matches"))
     logger.info(
-        "[briefing] News: %d article(s) (%d topic-matched, %d general) (%.0fms)",
+        "[briefing] News: %d article(s) (%d topic-matched, %d general)",
         len(news_articles),
         topic_matched_count,
         len(news_articles) - topic_matched_count,
-        (perf_counter() - t0) * 1000,
     )
 
-    # -- 5. Unlinked todos -------------------------------------------------------
-    all_todos = todos_service.list_unlinked_relevant_todos(pending_only=True)
     logger.info("[briefing] Unlinked todos: %d", len(all_todos))
 
     context = {
@@ -363,6 +359,100 @@ def _apply_timezone(event: dict[str, Any], tz: ZoneInfo) -> dict[str, Any]:
         "local_start": _format_local(start_value, tz),
         "local_end": _format_local(end_value, tz),
     }
+
+
+def _build_event_contexts_parallel(
+    events: list[dict[str, Any]],
+    tz: ZoneInfo,
+    start_utc: datetime,
+) -> list[dict[str, Any]]:
+    if not events:
+        return []
+
+    contexts: list[dict[str, Any] | None] = [None] * len(events)
+    max_workers = min(EVENT_ENRICHMENT_MAX_WORKERS, len(events))
+    with ThreadPoolExecutor(max_workers=max_workers) as pool:
+        future_map = {
+            pool.submit(_build_single_event_context, event, tz, start_utc): idx
+            for idx, event in enumerate(events)
+        }
+        for future in as_completed(future_map):
+            idx = future_map[future]
+            event = events[idx]
+            try:
+                contexts[idx] = future.result()
+            except Exception:
+                logger.warning(
+                    "[briefing] Failed to enrich event '%s', using minimal context",
+                    event.get("title") or "Untitled",
+                    exc_info=True,
+                )
+                contexts[idx] = {
+                    **event,
+                    "similar_events": [],
+                    "todos": [],
+                    "related_todos": [],
+                    "contacts": [],
+                }
+    return [ctx for ctx in contexts if ctx is not None]
+
+
+def _build_single_event_context(
+    event: dict[str, Any],
+    tz: ZoneInfo,
+    start_utc: datetime,
+) -> dict[str, Any]:
+    similar_events = [
+        _apply_timezone(similar, tz)
+        for similar in _fetch_similar_events(event, start_utc, DEFAULT_SIMILAR_LIMIT)
+    ]
+    event_todos = todos_service.list_event_todos(event["id"], pending_only=True)
+    related_todos = _collect_related_event_todos(similar_events)
+    contacts = _fetch_contact_summaries(event.get("people") or [])
+    return {
+        **event,
+        "similar_events": similar_events,
+        "todos": event_todos,
+        "related_todos": related_todos,
+        "contacts": contacts,
+    }
+
+
+def _summarize_events_parallel(
+    event_contexts: list[dict[str, Any]],
+    timezone_name: str,
+    *,
+    user_email: str | None = None,
+) -> list[dict[str, Any]]:
+    if not event_contexts:
+        return []
+
+    max_workers = min(EVENT_SUMMARY_MAX_WORKERS, len(event_contexts))
+    with ThreadPoolExecutor(max_workers=max_workers) as pool:
+        future_map = {
+            pool.submit(_summarize_event, ec, timezone_name, user_email=user_email): idx
+            for idx, ec in enumerate(event_contexts)
+        }
+        for future in as_completed(future_map):
+            idx = future_map[future]
+            try:
+                event_contexts[idx]["deep_summary"] = future.result()
+            except Exception:
+                logger.warning(
+                    "[briefing] Failed deep analysis for '%s'",
+                    event_contexts[idx].get("title") or "Untitled",
+                    exc_info=True,
+                )
+                event_contexts[idx]["deep_summary"] = ""
+    return event_contexts
+
+
+def _fetch_news_safely() -> list[dict[str, Any]]:
+    try:
+        return news_feeds.fetch_news()
+    except Exception:
+        logger.warning("News feed aggregation failed, continuing without news", exc_info=True)
+        return []
 
 
 def _fetch_similar_events(
@@ -812,175 +902,258 @@ def _synthesise_event_summary(
         return ""
 
 
-MAX_REWRITES = 3
-
-
 def _generate_markdown(context: dict[str, Any], *, user_email: str | None = None) -> str:
-    agent_profile = build_daily_briefing_agent_profile()
-    if agent_profile.build_tools_and_handlers is None:
-        raise RuntimeError("daily_briefing profile missing tool policy")
-    if agent_profile.get_system_prompt is None:
-        raise RuntimeError("daily_briefing profile missing system prompt")
-    tools, tool_handlers = agent_profile.build_tools_and_handlers()
-    runtime_profile = agent_profile.runtime
-    system_prompt = agent_profile.get_system_prompt()
-
-    # Inject user identity + facts for personalization
-    user_context = _get_daily_briefing_user_context(
-        user_email,
-        f"daily briefing {context.get('date', '')}",
+    header = f"# Daily Briefing - {context.get('date')} ({context.get('timezone')})"
+    news_input = context.get("news_articles") or []
+    selected_news = (
+        _select_news_for_generation(context)
+        if news_input
+        else {"topic_articles": [], "general_articles": []}
     )
-    if user_context:
-        system_prompt = f"{system_prompt}\n\n{user_context}"
 
-    core_context = {**context, "news_articles": []}
-    core_prompt = _build_core_briefing_prompt(core_context)
-    core_result = run_profiled_tool_loop(
-        prompt=core_prompt,
-        system_prompt=system_prompt,
-        tools=tools,
-        tool_handlers=tool_handlers,
-        profile=runtime_profile,
-    )
-    core_content = core_result.get("content", "")
-
+    core_sections = ""
     news_section = ""
-    if context.get("news_articles"):
-        t_news = perf_counter()
-        selected_news = _select_news_for_generation(context)
+
+    if news_input:
         logger.info(
             "[briefing] News generation context: %d topic article(s), %d general headline(s)",
             len(selected_news["topic_articles"]),
             len(selected_news["general_articles"]),
         )
-        news_section = _generate_news_section_markdown(selected_news, user_email=user_email)
+        t_parallel = perf_counter()
+        with ThreadPoolExecutor(max_workers=BRIEFING_SECTION_MAX_WORKERS) as pool:
+            core_future = pool.submit(
+                _generate_event_sections_markdown, context, user_email=user_email
+            )
+            news_future = pool.submit(
+                _generate_news_section_markdown,
+                selected_news,
+                user_email=user_email,
+            )
+            core_sections = core_future.result()
+            news_section = news_future.result()
         logger.info(
-            "[briefing] News section generated: %d chars (%.0fms)",
-            len(news_section),
-            (perf_counter() - t_news) * 1000,
-        )
-
-    content = _merge_briefing_sections(core_content, news_section)
-
-    # -- Validation loop: up to MAX_REWRITES targeted rewrites ----------------
-    for attempt in range(MAX_REWRITES):
-        vresult = validate_briefing(content, context)
-        if vresult.valid:
-            if attempt > 0:
-                logger.info("[briefing] Validation passed after %d rewrite(s)", attempt)
-            break
-        logger.warning(
-            "[briefing] Attempt %d/%d failed tier=%s: %s (draft %d chars)",
-            attempt + 1,
-            MAX_REWRITES,
-            vresult.tier,
-            vresult.reasons,
-            len(content),
-        )
-        t_rewrite = perf_counter()
-        retry_prompt = _build_targeted_rewrite_prompt(
-            context,
-            content,
-            vresult.reasons,
-            user_email=user_email,
-        )
-        content = call_llm(
-            retry_prompt,
-            system_prompt="Rewrite strictly to the required format. Fix ONLY the listed issues.",
-            temperature=0.05,
-            use_simpler_model=False,
-        )
-        logger.info(
-            "[briefing] Rewrite %d complete: %d chars (%.0fms)",
-            attempt + 1,
-            len(content),
-            (perf_counter() - t_rewrite) * 1000,
+            "[briefing] Parallel section generation complete (%.0fms)",
+            (perf_counter() - t_parallel) * 1000,
         )
     else:
-        # All rewrite attempts exhausted — run final validation for logging
-        final = validate_briefing(content, context)
-        if not final.valid:
-            logger.error(
-                "[briefing] All %d rewrite attempts failed (tier=%s: %s), returning best-effort",
-                MAX_REWRITES,
-                final.tier,
-                final.reasons,
-            )
+        core_sections = _generate_event_sections_markdown(context, user_email=user_email)
 
-    return content
-
-
-def _build_core_briefing_prompt(context: dict[str, Any]) -> str:
-    """Prompt for all sections except News & Topics.
-
-    The objective is to keep the model focused on event preparation without a
-    large news payload in the same completion.
-    """
-    has_birthdays = bool(context.get("upcoming_birthdays"))
-    birthdays_section = (
-        (
-            "## Upcoming Birthdays\n"
-            "- List each person with their birthday date and how many days away.\n"
-            "- If a birthday is today, highlight it.\n"
+    event_validation = validate_event_sections(core_sections, context)
+    if not event_validation.valid:
+        logger.warning(
+            "[briefing] Event section validation failed: %s; using deterministic fallback",
+            event_validation.reasons,
         )
-        if has_birthdays
-        else ""
+        core_sections = _build_event_sections_deterministic(context)
+
+    birthdays_section = _render_birthdays_section(context.get("upcoming_birthdays") or [])
+    todos_section = _render_outstanding_todos_section(context.get("all_todos") or [])
+
+    sections = [header, core_sections, birthdays_section, todos_section]
+
+    if news_input:
+        news_validation = validate_news_section(news_section, has_news_input=True)
+        if not news_validation.valid:
+            logger.warning(
+                "[briefing] News section validation failed: %s; using fallback",
+                news_validation.reasons,
+            )
+            news_section = "## News & Topics\nNo notable news today."
+        logger.info("[briefing] News section generated: %d chars", len(news_section))
+        sections.append(news_section)
+
+    return "\n\n".join(s.strip() for s in sections if s and s.strip())
+
+
+def _generate_event_sections_markdown(
+    context: dict[str, Any], *, user_email: str | None = None
+) -> str:
+    """Generate only event-critical sections in a focused call."""
+    event_context = _format_event_generation_context(context)
+    user_context = _get_daily_briefing_user_context(
+        user_email,
+        f"daily briefing events {context.get('date', '')}",
     )
-    birthdays_note = (
-        ("\nIf there are upcoming birthdays, include the Upcoming Birthdays section.\n")
-        if has_birthdays
-        else ""
+    prompt = (
+        "Generate ONLY these markdown sections, in this order:\n"
+        "## Day Overview\n"
+        "## Schedule\n"
+        "## Event Prep\n\n"
+        "Rules:\n"
+        "- Focus only on today's events and linked prep/actions.\n"
+        "- Use future-oriented prep language.\n"
+        "- The reader is the calendar owner; use second-person framing where useful.\n"
+        "- Do not output birthdays, outstanding todos, or news sections.\n"
+        "- Do not include any preamble or extra headers.\n\n"
+        "If there are no events, output only:\n"
+        "## Day Overview\n"
+        "- No events scheduled today.\n\n"
+        "Context:\n"
+        f"{event_context}"
+    )
+    if user_context:
+        prompt = f"{prompt}\n\nUSER CONTEXT:\n{user_context}"
+
+    return call_llm(
+        prompt,
+        system_prompt=(
+            "You write concise daily prep sections. Output markdown only with the requested sections."
+        ),
+        temperature=0.1,
+        use_simpler_model=False,
+    ).strip()
+
+
+def _build_event_sections_deterministic(context: dict[str, Any]) -> str:
+    events = context.get("events") or []
+    if not events:
+        return "## Day Overview\n- No events scheduled today."
+
+    lines: list[str] = []
+    lines.append("## Day Overview")
+    lines.append(
+        f"- You have {len(events)} upcoming event(s) today. Prioritize prep for the highest-impact meetings first."
     )
 
-    return (
-        "DAILY BRIEFING TASK (PREP DOCUMENT)\n"
-        "You are preparing the user for upcoming events. Use future tense (will, upcoming, prepare, review).\n"
-        "The reader is the calendar owner. Write directly to the owner using 'you' when helpful.\n"
-        "Avoid phrasing that treats the owner as a third person participant.\n"
-        "\n"
-        "OUTPUT RULES (MANDATORY):\n"
-        "- Output ONLY the final briefing Markdown. No preamble, no sign-off, no reasoning.\n"
-        "- NEVER include internal thinking, chain-of-thought, or step-by-step planning.\n"
-        "- NEVER prefix with explanations of what you will do ('Let me analyze', 'First I will').\n"
-        "- NEVER ask questions or offer to do more.\n"
-        "- NEVER use meta-commentary about the input ('the text includes', 'there are several',\n"
-        "  'you provided', 'the text appears', 'it appears', 'none mentioned explicitly',\n"
-        "  'based on the data provided', 'based on what was provided').\n"
-        "- NEVER produce generic category lists — every bullet must contain a specific fact,\n"
-        "  title, action item, or recommendation.\n"
-        "- Focus ONLY on today's events and their linked todos.\n"
-        "- Each event already has a pre-computed analysis with key points, action items, and prep\n"
-        "  focus. Incorporate that analysis into the Event Prep section -- do NOT ignore it.\n"
-        "- Do NOT include the News & Topics section in this response. It will be generated separately.\n"
-        "\n"
-        "TOOL GUIDANCE:\n"
-        "- Use search_memories for event-specific past notes.\n"
-        "- Use get_document only when a document should be reviewed for a specific event.\n"
-        "- Use web_search for external prep (company background, agenda context, travel).\n"
-        "- Use fetch_web_page only for URLs discovered via web_search.\n"
-        "\n"
-        "REQUIRED STRUCTURE:\n"
-        "# Daily Briefing - <date> (<timezone>)\n"
-        "## Day Overview\n"
-        "- Summarize the day, key prep actions, and conflicts.\n"
-        "## Schedule\n"
-        "- One bullet per event: <local time> - <title> (location if available)\n"
-        "## Event Prep\n"
-        "### <local time> - <title>\n"
-        "- Key points (from the per-event analysis)\n"
-        "- Action items and pending todos\n"
-        "- Suggested prep focus\n"
-        f"{birthdays_section}"
-        "## Outstanding Todos\n"
-        "- List pending todos only.\n"
-        "\n"
-        "If there are no events, say so in Day Overview and skip Schedule/Event Prep sections.\n"
-        "If there are no relevant todos, still include Outstanding Todos with a short note.\n"
-        f"{birthdays_note}"
-        "\n"
-        "CONTEXT FOR TODAY (already filtered; every event below is UPCOMING today):\n"
-        f"{_format_context_text(context)}"
-    )
+    lines.append("\n## Schedule")
+    for event in events:
+        time_label = _format_event_time_label(event.get("local_start"), event.get("local_end"))
+        title = event.get("title") or "Untitled"
+        location = _format_event_location(event.get("place") or {})
+        if location:
+            lines.append(f"- {time_label} - {title} ({location})")
+        else:
+            lines.append(f"- {time_label} - {title}")
+
+    lines.append("\n## Event Prep")
+    for event in events:
+        time_label = _format_event_time_label(event.get("local_start"), event.get("local_end"))
+        title = event.get("title") or "Untitled"
+        lines.append(f"### {time_label} - {title}")
+        deep_summary = event.get("deep_summary") or ""
+        key_points, action_items, prep_focus = _extract_deep_summary_sections(deep_summary)
+        if key_points:
+            for point in key_points[:3]:
+                lines.append(f"- {point}")
+        else:
+            lines.append("- Review the latest context and objectives for this event.")
+        if action_items:
+            for action in action_items[:4]:
+                lines.append(f"- {action}")
+        linked_todos = event.get("todos") or []
+        for todo in linked_todos[:3]:
+            desc = str(todo.get("description") or "").strip()
+            if desc:
+                lines.append(f"- Pending todo: {desc}")
+        if prep_focus:
+            lines.append(f"- Prep focus: {prep_focus}")
+        lines.append("")
+    return "\n".join(lines).strip()
+
+
+def _format_event_generation_context(context: dict[str, Any]) -> str:
+    events = context.get("events") or []
+    lines: list[str] = [
+        f"Date: {context.get('date')}",
+        f"Timezone: {context.get('timezone')}",
+        f"Events ({len(events)}):",
+    ]
+    for idx, event in enumerate(events, start=1):
+        lines.append(f"{idx}. {event.get('title') or 'Untitled'}")
+        lines.append(
+            f"   Time: {_format_event_time_label(event.get('local_start'), event.get('local_end'))}"
+        )
+        location = _format_event_location(event.get("place") or {})
+        if location:
+            lines.append(f"   Location: {location}")
+        deep_summary = (event.get("deep_summary") or "").strip()
+        if deep_summary:
+            lines.append("   Analysis:")
+            for item in deep_summary.splitlines()[:12]:
+                stripped = item.strip()
+                if stripped:
+                    lines.append(f"   {stripped}")
+    return "\n".join(lines)
+
+
+def _format_event_time_label(local_start: Any, local_end: Any) -> str:
+    start_dt = _parse_datetime(local_start)
+    end_dt = _parse_datetime(local_end)
+    if not start_dt:
+        return "Time TBD"
+    start_label = start_dt.strftime("%H:%M")
+    if end_dt:
+        return f"{start_label}-{end_dt.strftime('%H:%M')}"
+    return start_label
+
+
+def _format_event_location(place: dict[str, Any]) -> str:
+    bits = [place.get("name"), place.get("city"), place.get("country")]
+    return ", ".join(str(bit).strip() for bit in bits if str(bit).strip())
+
+
+def _extract_deep_summary_sections(deep_summary: str) -> tuple[list[str], list[str], str]:
+    if not deep_summary.strip():
+        return [], [], ""
+
+    key_points: list[str] = []
+    action_items: list[str] = []
+    prep_focus = ""
+    mode = ""
+    for raw_line in deep_summary.splitlines():
+        line = raw_line.strip()
+        upper = line.upper().rstrip(":")
+        if upper == "KEY POINTS":
+            mode = "key"
+            continue
+        if upper == "ACTION ITEMS":
+            mode = "action"
+            continue
+        if upper == "PREP FOCUS":
+            mode = "focus"
+            continue
+        if not line:
+            continue
+        normalized = line[1:].strip() if line.startswith("-") else line
+        if mode == "key":
+            key_points.append(normalized)
+        elif mode == "action":
+            action_items.append(normalized)
+        elif mode == "focus" and not prep_focus:
+            prep_focus = normalized
+
+    return key_points, action_items, prep_focus
+
+
+def _render_birthdays_section(upcoming_birthdays: list[dict[str, Any]]) -> str:
+    if not upcoming_birthdays:
+        return ""
+    lines = ["## Upcoming Birthdays"]
+    for birthday in upcoming_birthdays:
+        name = str(birthday.get("display_name") or "Unknown").strip()
+        date_label = str(birthday.get("birthday") or "").strip()
+        days_away = birthday.get("days_away")
+        if birthday.get("is_today"):
+            lines.append(f"- {name} - TODAY ({date_label})")
+        else:
+            lines.append(f"- {name} - {date_label} ({days_away} day(s) away)")
+    return "\n".join(lines)
+
+
+def _render_outstanding_todos_section(all_todos: list[dict[str, Any]]) -> str:
+    lines = ["## Outstanding Todos"]
+    if not all_todos:
+        lines.append("- No pending todos for today.")
+        return "\n".join(lines)
+    for todo in all_todos:
+        desc = str(todo.get("description") or "").strip()
+        if not desc:
+            continue
+        lines.append(f"- {desc}")
+    if len(lines) == 1:
+        lines.append("- No pending todos for today.")
+    return "\n".join(lines)
 
 
 def _select_news_for_generation(context: dict[str, Any]) -> dict[str, Any]:
@@ -1177,21 +1350,6 @@ def _format_news_context(
     return "\n".join(lines)
 
 
-def _merge_briefing_sections(core_content: str, news_section: str) -> str:
-    """Merge a core briefing document with a separately generated news section."""
-    merged = core_content.strip()
-    # Remove any pre-existing News section from the core draft to avoid duplicates.
-    merged = re.sub(r"\n## News & Topics\n[\s\S]*$", "", merged, flags=re.MULTILINE).rstrip()
-
-    if not news_section.strip():
-        return merged
-
-    cleaned_news = news_section.strip()
-    if not cleaned_news.startswith("## News & Topics"):
-        cleaned_news = f"## News & Topics\n{cleaned_news}"
-    return f"{merged}\n\n{cleaned_news}\n"
-
-
 def _build_briefing_prompt(context: dict[str, Any]) -> str:
     has_birthdays = bool(context.get("upcoming_birthdays"))
     birthdays_section = (
@@ -1284,44 +1442,6 @@ def _build_briefing_prompt(context: dict[str, Any]) -> str:
         "CONTEXT FOR TODAY (already filtered; every event below is UPCOMING today):\n"
         f"{_format_context_text(context)}"
     )
-
-
-def _build_targeted_rewrite_prompt(
-    context: dict[str, Any],
-    draft: str,
-    reasons: list[str],
-    *,
-    user_email: str | None = None,
-) -> str:
-    issues = "\n".join(f"- {r}" for r in reasons)
-    prompt = (
-        "Rewrite the draft into the REQUIRED STRUCTURE. Output Markdown only.\n"
-        "\n"
-        "ISSUES TO FIX:\n"
-        f"{issues}\n"
-        "\n"
-        "RULES:\n"
-        "- Output ONLY the final briefing. No reasoning, no thinking, no preamble.\n"
-        "- NEVER use meta-commentary ('the text includes', 'there are several', 'it appears').\n"
-        "- NEVER produce generic category lists — every bullet must reference a specific item.\n"
-        "- NEVER ask questions or offer to do more.\n"
-        "- The reader is the calendar owner. Use 'you' and avoid third-person owner references.\n"
-        "- For News & Topics: each item must be a specific article with URL and 1-sentence summary.\n"
-        "  Format: [Title](url) - why it matters. (Source)\n"
-        "- If no useful news, write: 'No notable news today.'\n"
-        "\n"
-        "Draft (do not include any of this meta text in output):\n"
-        f"{draft}\n\n"
-        "Context (use only for content):\n"
-        f"{_format_context_text(context)}"
-    )
-    user_context = _get_daily_briefing_user_context(
-        user_email,
-        f"daily briefing rewrite {context.get('date', '')}",
-    )
-    if user_context:
-        prompt = f"{prompt}\n\nUSER CONTEXT:\n{user_context}"
-    return prompt
 
 
 _MAX_SUMMARY_RETRIES = 1

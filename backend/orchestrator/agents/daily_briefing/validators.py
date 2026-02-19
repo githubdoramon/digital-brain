@@ -335,3 +335,79 @@ def validate_summary(summary: str) -> ValidationResult:
     if reasons:
         return ValidationResult(valid=False, tier=TIER_STRUCTURAL, reasons=reasons)
     return ValidationResult(valid=True)
+
+
+def validate_event_sections(content: str, context: dict[str, Any]) -> ValidationResult:
+    """Validate only the event-critical sections.
+
+    This check intentionally ignores global document structure and focuses on:
+    - Day Overview presence
+    - Schedule/Event Prep presence when events exist
+    - Event titles represented in Event Prep
+    """
+    reasons: list[str] = []
+    has_events = bool(context.get("events"))
+
+    if "## Day Overview" not in content:
+        reasons.append("Missing section: ## Day Overview")
+
+    if has_events:
+        if "## Schedule" not in content:
+            reasons.append("Missing section: ## Schedule")
+        if "## Event Prep" not in content:
+            reasons.append("Missing section: ## Event Prep")
+
+        lower = content.lower()
+        for event in context.get("events") or []:
+            title = str(event.get("title") or "").strip()
+            if not title:
+                continue
+            if title.lower() not in lower:
+                reasons.append(f"Event title missing from output: {title}")
+                break
+
+    if reasons:
+        return ValidationResult(valid=False, tier=TIER_COHERENCE, reasons=reasons)
+    return ValidationResult(valid=True)
+
+
+def validate_news_section(section_markdown: str, has_news_input: bool) -> ValidationResult:
+    """Validate the news section format for title/link/summary quality."""
+    text = (section_markdown or "").strip()
+    if not has_news_input:
+        return ValidationResult(valid=True)
+    if not text:
+        return ValidationResult(
+            valid=False,
+            tier=TIER_COHERENCE,
+            reasons=["News input exists but news section is empty"],
+        )
+    if "## News & Topics" not in text:
+        return ValidationResult(
+            valid=False,
+            tier=TIER_COHERENCE,
+            reasons=["Missing section header: ## News & Topics"],
+        )
+
+    lowered = text.lower()
+    if "no notable news today." in lowered:
+        return ValidationResult(valid=True)
+
+    article_pattern = re.compile(r"\[[^\]]+\]\(https?://[^)]+\)\s*-\s*.+\s*\([^)]+\)")
+    article_lines = [
+        line.strip() for line in text.splitlines() if "[" in line and "](" in line and " - " in line
+    ]
+    if not article_lines:
+        return ValidationResult(
+            valid=False,
+            tier=TIER_COHERENCE,
+            reasons=["No article lines found in news section"],
+        )
+    for line in article_lines:
+        if not article_pattern.search(line):
+            return ValidationResult(
+                valid=False,
+                tier=TIER_COHERENCE,
+                reasons=[f"Invalid news line format: {line[:120]}. Corrent format is [Title](URL) - Summary (Source), in markdown format."],
+            )
+    return ValidationResult(valid=True)
