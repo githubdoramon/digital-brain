@@ -191,6 +191,13 @@ def search_memories(
 
     vec_docs = vector_search_documents(normalized_query, 50) if normalized_query else {}
     bm_docs = bm25_search_documents(normalized_query, 50) if normalized_query else {}
+    if normalized_query:
+        try:
+            token_fallback_docs = bm25_search_documents_token_fallback(normalized_query, 50)
+        except Exception:
+            token_fallback_docs = {}
+        for doc_id, fallback_score in token_fallback_docs.items():
+            bm_docs[doc_id] = max(bm_docs.get(doc_id, 0.0), fallback_score * 1.5)
     st_docs = (
         structured_document_candidates(span, normalized_tags, 200)
         if (span or normalized_tags)
@@ -248,6 +255,13 @@ def search_memories(
         score = (doc_semantic_weight * v) + (doc_keyword_weight * b) + (doc_structured_weight * s)
         doc_scores[doc_id] = score
 
+    doc_source_weight, event_source_weight = _infer_source_bias_weights(normalized_query)
+    if doc_source_weight != 1.0 or event_source_weight != 1.0:
+        event_scores = {
+            event_id: score * event_source_weight for event_id, score in event_scores.items()
+        }
+        doc_scores = {doc_id: score * doc_source_weight for doc_id, score in doc_scores.items()}
+
     event_rows_all = fetch_events(list(event_ids)) if event_ids else []
     event_lookup_all = {row["id"]: row for row in event_rows_all}
     doc_lookup_all = (
@@ -265,46 +279,79 @@ def search_memories(
             salience_hints=normalized_salience_hints,
         )
 
+    combined_by_relevance: list[tuple[str, str, float]] = []
+    combined_by_relevance.extend(
+        (event_id, "event", event_scores[event_id]) for event_id in event_scores
+    )
+    combined_by_relevance.extend((doc_id, "document", doc_scores[doc_id]) for doc_id in doc_scores)
+    combined_by_relevance.sort(key=lambda item: (-item[2], item[0], item[1]))
+
     combined: list[tuple[str, str, float]] = []
 
     if use_temporal_ordering:
+        shortlist_size = _compute_temporal_shortlist_size(limit)
+        if shortlist_size is None:
+            temporal_candidates = combined_by_relevance
+        else:
+            temporal_candidates = combined_by_relevance[:shortlist_size]
+
+        materialized_candidates: list[tuple[str, str, float]] = []
+        for item_id, kind, score in temporal_candidates:
+            if kind == "event" and item_id in event_lookup_all:
+                materialized_candidates.append((item_id, kind, score))
+            elif kind == "document" and item_id in doc_lookup_all:
+                materialized_candidates.append((item_id, kind, score))
+        if materialized_candidates:
+            temporal_candidates = materialized_candidates
+
+        if temporal_candidates:
+            top_relevance = float(temporal_candidates[0][2])
+            min_relevance = max(0.05, top_relevance * 0.45)
+            relevance_gated = [
+                item for item in temporal_candidates if float(item[2]) >= min_relevance
+            ]
+            if relevance_gated:
+                temporal_candidates = relevance_gated
+
         with_dates: list[tuple[str, str, float, datetime]] = []
         without_dates: list[tuple[str, str, float]] = []
 
-        for event_id in event_scores:
+        for event_id, kind, score in temporal_candidates:
+            if kind != "event":
+                continue
             row = event_lookup_all.get(event_id)
             event_date = _to_temporal_sort_value(
                 (row.get("start_date") or row.get("end_date")) if row else None
             )
-            item = (event_id, "event", event_scores.get(event_id, 0.0))
+            item = (event_id, "event", score)
             if event_date:
-                with_dates.append((event_id, "event", event_scores.get(event_id, 0.0), event_date))
+                with_dates.append((event_id, "event", score, event_date))
             else:
                 without_dates.append(item)
 
-        for doc_id in doc_scores:
+        for doc_id, kind, score in temporal_candidates:
+            if kind != "document":
+                continue
             doc = doc_lookup_all.get(doc_id)
             doc_date = _to_temporal_sort_value(
                 (doc.get("document_date") or doc.get("created_at")) if doc else None
             )
-            item = (doc_id, "document", doc_scores.get(doc_id, 0.0))
+            item = (doc_id, "document", score)
             if doc_date:
-                with_dates.append((doc_id, "document", doc_scores.get(doc_id, 0.0), doc_date))
+                with_dates.append((doc_id, "document", score, doc_date))
             else:
                 without_dates.append(item)
 
-        with_dates.sort(
-            key=lambda item: (item[3], item[0], item[1]),
-            reverse=(temporal_ordering == "newest"),
-        )
-        without_dates.sort(key=lambda item: (item[0], item[1]))
+        if temporal_ordering == "newest":
+            with_dates.sort(key=lambda item: (item[3], item[2], item[0], item[1]), reverse=True)
+        else:
+            with_dates.sort(key=lambda item: (item[3], -item[2], item[0], item[1]))
+        without_dates.sort(key=lambda item: (-item[2], item[0], item[1]))
         combined = [
             (item_id, kind, score) for item_id, kind, score, _ in with_dates
         ] + without_dates
     else:
-        combined.extend((event_id, "event", event_scores[event_id]) for event_id in event_scores)
-        combined.extend((doc_id, "document", doc_scores[doc_id]) for doc_id in doc_scores)
-        combined.sort(key=lambda item: (-item[2], item[0], item[1]))
+        combined = combined_by_relevance
 
     if not combined:
         return {"results": []}
@@ -440,6 +487,83 @@ def search_memories(
     return {"results": results}
 
 
+def _infer_source_bias_weights(normalized_query: str) -> tuple[float, float]:
+    """Infer soft source priors (documents vs events) from generic query intent cues."""
+    if not normalized_query:
+        return (1.0, 1.0)
+
+    tokens = set(normalized_query.split())
+    artifact_tokens = {
+        "record",
+        "records",
+        "document",
+        "documents",
+        "doc",
+        "report",
+        "reports",
+        "file",
+        "files",
+        "note",
+        "notes",
+        "result",
+        "results",
+        "reading",
+        "value",
+        "level",
+        "count",
+        "number",
+    }
+    interaction_tokens = {
+        "meet",
+        "met",
+        "meeting",
+        "meetings",
+        "talk",
+        "talked",
+        "spoke",
+        "call",
+        "calls",
+        "conversation",
+        "conversations",
+        "chat",
+        "chats",
+        "visit",
+        "visited",
+    }
+
+    artifact_hits = len(tokens & artifact_tokens)
+    interaction_hits = len(tokens & interaction_tokens)
+
+    if (
+        "what is" in normalized_query
+        or "show me" in normalized_query
+        or "give me" in normalized_query
+    ):
+        artifact_hits += 1
+
+    doc_weight = 1.0
+    event_weight = 1.0
+    if artifact_hits > interaction_hits and artifact_hits > 0:
+        doc_weight = min(1.25, 1.12 + (0.03 * (artifact_hits - 1)))
+        event_weight = 0.95
+    elif interaction_hits > artifact_hits and interaction_hits > 0:
+        event_weight = min(1.25, 1.12 + (0.03 * (interaction_hits - 1)))
+        doc_weight = 0.95
+
+    return (doc_weight, event_weight)
+
+
+def _compute_temporal_shortlist_size(limit: int | None) -> int | None:
+    """Compute a relevance shortlist size before temporal reordering."""
+    if limit is None:
+        return None
+    try:
+        requested = max(1, int(limit))
+    except (TypeError, ValueError):
+        requested = 10
+    return min(160, max(40, requested * 6))
+
+
 def _apply_salience_boost_to_scores(
     *,
     event_scores: dict[str, float],
@@ -487,6 +611,60 @@ def _apply_salience_boost_to_scores(
             continue
         boost = min(0.18, 0.06 * overlap)
         doc_scores[doc_id] = doc_scores.get(doc_id, 0.0) + boost
+
+
+def bm25_search_documents_token_fallback(
+    query: str,
+    k: int = 50,
+    *,
+    min_term_length: int = 4,
+    max_terms: int = 6,
+) -> dict[str, float]:
+    """Fallback lexical matching for multi-term queries that under-match exact phrasing."""
+    cleaned_query = normalize_search_text(query)
+    if not cleaned_query:
+        return {}
+    terms = [token for token in cleaned_query.split() if len(token) >= min_term_length]
+    if not terms:
+        return {}
+    dedup_terms = list(dict.fromkeys(terms))[:max_terms]
+    if not dedup_terms:
+        return {}
+
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            WITH terms AS (
+                SELECT unnest(%s::text[]) AS term
+            )
+            SELECT
+                d.document_id,
+                (
+                    SUM(
+                        CASE
+                            WHEN d.content_tsv @@ plainto_tsquery('english', unaccent(terms.term))
+                            THEN 1
+                            ELSE 0
+                        END
+                    )::float
+                    / %s::float
+                ) AS token_score
+            FROM documents d
+            CROSS JOIN terms
+            GROUP BY d.document_id
+            HAVING SUM(
+                CASE
+                    WHEN d.content_tsv @@ plainto_tsquery('english', unaccent(terms.term))
+                    THEN 1
+                    ELSE 0
+                END
+            ) > 0
+            ORDER BY token_score DESC
+            LIMIT %s
+            """,
+            (dedup_terms, len(dedup_terms), k),
+        )
+        return {row["document_id"]: float(row["token_score"]) for row in cur.fetchall()}
 
 
 def vector_search(query: str, k: int = 50):

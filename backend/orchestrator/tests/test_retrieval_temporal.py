@@ -441,3 +441,47 @@ def test_tag_filter_without_query_uses_structured_candidates(monkeypatch):
 
     ids = [item["id"] for item in result["results"]]
     assert set(ids) == {"evt-tag", "doc-tag"}
+
+
+def test_temporal_latest_uses_relevance_gate_before_recency(monkeypatch):
+    monkeypatch.setattr(retrieval, "vector_search", lambda *_args, **_kwargs: {"evt-new": 0.2})
+    monkeypatch.setattr(retrieval, "bm25_search", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr(retrieval, "structured_candidates", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr(retrieval, "vector_search_documents", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr(retrieval, "bm25_search_documents", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr(
+        retrieval,
+        "bm25_search_documents_token_fallback",
+        lambda *_args, **_kwargs: {"doc-hemo": 1.0},
+    )
+    monkeypatch.setattr(
+        retrieval,
+        "fetch_events",
+        lambda *_args, **_kwargs: [_event_row("evt-new", datetime(2026, 2, 18, 10, 0, 0))],
+    )
+    monkeypatch.setattr(
+        retrieval,
+        "fetch_document_summaries",
+        lambda *_args, **_kwargs: {
+            "doc-hemo": {
+                "document_id": "doc-hemo",
+                "title": "Clinical Laboratory Test Results Report",
+                "description": "Hemoglobin panel",
+                "tags": ["health"],
+                "document_date": datetime(2026, 1, 5, 10, 0, 0),
+                "created_at": datetime(2026, 1, 5, 10, 0, 0),
+                "updated_at": datetime(2026, 1, 5, 10, 0, 0),
+                "download_url": "/documents/doc-hemo/download",
+                "file_name": "doc-hemo.txt",
+                "file_mime": "text/plain",
+                "file_size": 100,
+                "snippet": "Hemoglobin 14.2 g/dL",
+            }
+        },
+    )
+
+    result = retrieval.search_memories(query="hemoglobin reading", sort_order="newest", limit=5)
+
+    assert result["results"]
+    assert result["results"][0]["id"] == "doc-hemo"
+    assert result["results"][0]["kind"] == "document"

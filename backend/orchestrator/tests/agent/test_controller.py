@@ -735,6 +735,38 @@ class TestContactAwareMemorySearch:
         assert args.get("sort_order") == "newest"
         assert args.get("time_end") == "2026-02-07T12:00:00+00:00"
 
+    def test_temporal_latest_reuses_stable_time_end_within_same_request(
+        self, controller, monkeypatch
+    ):
+        state = AgentState(goal="What is my latest hemoglobin reading?")
+        now_values = iter(
+            [
+                "2026-02-07T12:00:00+00:00",
+                "2026-02-07T12:00:05+00:00",
+            ]
+        )
+        monkeypatch.setattr("agent.controller.utc_now_iso", lambda: next(now_values))
+
+        args_first, preempt_first = controller._prepare_memory_search_arguments(
+            args={"query": "What is my latest hemoglobin reading?"},
+            state=state,
+            question="What is my latest hemoglobin reading?",
+            user_email=None,
+            conversation_history=[],
+        )
+        args_second, preempt_second = controller._prepare_memory_search_arguments(
+            args={"query": "What is my latest hemoglobin reading?"},
+            state=state,
+            question="What is my latest hemoglobin reading?",
+            user_email=None,
+            conversation_history=[],
+        )
+
+        assert preempt_first is None
+        assert preempt_second is None
+        assert args_first.get("time_end") == "2026-02-07T12:00:00+00:00"
+        assert args_second.get("time_end") == "2026-02-07T12:00:00+00:00"
+
     def test_temporal_first_sets_oldest_sort_and_wider_limit(self, controller):
         state = AgentState(goal="When was the first time I met Gio?")
         args, preempt = controller._prepare_memory_search_arguments(

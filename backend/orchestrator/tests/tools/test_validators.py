@@ -387,7 +387,7 @@ class TestGoalCompletionValidatorTemporal:
             ToolCallRecord(
                 tool_name="search_memories",
                 arguments={"query": "Gio", "sort_order": "newest"},
-                result={"results": [{"id": "event-1"}], "count": 1},
+                result={"results": [{"id": "event-1", "kind": "event"}], "count": 1},
                 duration_ms=50,
                 success=True,
             )
@@ -399,8 +399,38 @@ class TestGoalCompletionValidatorTemporal:
             final_content="",
         )
         assert achieved is False
-        assert "Temporal query needs explicit date-ordered verification" in reason
+        assert "must be inspected with get_events" in reason
         assert pending
+
+    def test_temporal_document_query_does_not_require_get_events(self):
+        validator = GoalCompletionValidator()
+        tool_calls = [
+            ToolCallRecord(
+                tool_name="search_memories",
+                arguments={"query": "hemoglobin reading", "sort_order": "newest"},
+                result={"results": [{"id": "doc:lab", "kind": "document"}], "count": 1},
+                duration_ms=40,
+                success=True,
+            ),
+            ToolCallRecord(
+                tool_name="get_document",
+                arguments={"document_id": "doc:lab"},
+                result={"document": {"document_id": "doc:lab", "title": "Clinical report"}},
+                duration_ms=35,
+                success=True,
+            ),
+        ]
+
+        achieved, reason, pending = validator.check_goal_achieved(
+            goal="What is my latest hemoglobin reading?",
+            tool_calls=tool_calls,
+            known_facts=["Retrieved document: Clinical report"],
+            final_content="Your latest hemoglobin result is 14.2 g/dL from 2026-02-10.",
+        )
+
+        assert achieved is True
+        assert "Query returned" in reason
+        assert not pending
 
     def test_document_candidate_requires_document_inspection(self):
         validator = GoalCompletionValidator()

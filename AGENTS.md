@@ -140,6 +140,7 @@ User Question → Intent Router → Conversational Profile Dispatch → Tool Vis
 - **Adaptive model routing is always on**: per-step policy selects model/timeout using query complexity + runtime signals (route confidence tier, step count, tool count).
 - **Planner/verifier loop is runtime-enforced**: controller tracks an execution plan and retries when final response lacks required evidence.
 - **Parallel tool batches are supported**: independent read-only tools may execute concurrently via the tool execution coordinator.
+- **Temporal memory ranking is two-stage**: for `search_memories` with `sort_order=newest|oldest`, rank by relevance first (shortlist + relevance gate) and then apply chronological ordering inside that candidate set to avoid recency-only noise.
 - **LLM calls must use helpers**: all LLM requests and streams go through `backend/orchestrator/llm_helpers.py` (never call LLM endpoints via direct `requests`/`httpx` in app modules).
 - **Controller context kwargs are global**: handlers are invoked with shared runtime context (`state`, `question`, `search_limit`, `user_email`, `conversation_history`). Every handler must accept these explicitly or via `**kwargs`.
 - **Regression guard**: keep `backend/orchestrator/tests/tools/test_handlers/test_handler_signatures.py` passing to prevent `unexpected keyword argument` runtime failures.
@@ -149,6 +150,7 @@ User Question → Intent Router → Conversational Profile Dispatch → Tool Vis
 - **Profile intent ownership**: conversational profiles should declare intent ownership via `supports_intent` on the profile/interface implementation; avoid hardcoding intent lists inside the central registry.
 - **Agent-specific behavior docs**: detailed profile behavior for memory/disambiguation and briefing generation is documented in `backend/orchestrator/docs/agents/MEMORY_EXPERT.md` and `backend/orchestrator/docs/agents/DAILY_BRIEFING.md`.
 - **Validation semantics**: post-execution validation must treat clarification-required search/resolution results as `need_user_input`, not generic empty-result retries.
+- **Temporal completion checks are source-aware**: query-goal verification should require detail inspection for the top candidate kind (`get_document` for documents, `get_events` for events) rather than forcing `get_events` for every "latest/last" question.
 - **Session command hygiene**: strip leading slash commands from user text before agent execution; commands are control signals, not semantic query content.
 - **All-results limit policy**: when users explicitly ask for "all/everyone/entire" results, query handlers should honor unbounded retrieval semantics instead of silently capping to a fixed maximum.
 - **Mobile session parity**: mobile chat should resolve session via backend main-session semantics (`/mobile/main-session` + `/mobile/ask` without explicit `thread_id` in normal flow) so idle timeout/reset rules match backend behavior.

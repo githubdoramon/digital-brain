@@ -139,6 +139,9 @@ class ToolExecutionCoordinator:
             trace.trace_tool_error(tool_name, f"Invalid JSON arguments: {raw_args}")
             return {"error": f"Invalid JSON arguments: {raw_args}"}
 
+        if isinstance(args, dict):
+            args = {key: value for key, value in args.items() if value is not None}
+
         trace.trace_tool_call_start(tool_name, args)
         trace.trace_tool_lifecycle_start(tool_name, call_id, args)
 

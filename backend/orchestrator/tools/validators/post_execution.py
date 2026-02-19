@@ -909,23 +909,6 @@ class GoalCompletionValidator:
         final_content: str,
     ) -> tuple[bool, str, list[str]]:
         """Check if a query goal was achieved (e.g., search for memories)."""
-        goal_lower = goal.lower()
-        temporal_goal = any(
-            phrase in goal_lower
-            for phrase in (
-                "most recent",
-                "latest",
-                "last time",
-                "last meeting",
-                "last event",
-                "first time",
-                "first meeting",
-                "first event",
-                "earliest",
-                "when did i first",
-                "when did i last",
-            )
-        )
         # For queries, we need actual results
         if not tool_calls:
             return (False, "No tool calls made for query", ["Search for relevant information"])
@@ -1016,16 +999,6 @@ class GoalCompletionValidator:
                     "Detailed candidate retrieved; synthesize the final answer from it",
                     ["Use the inspected source details to produce the final answer"],
                 )
-            if temporal_goal:
-                has_temporal_resolution = any(
-                    t.success and t.tool_name == "get_events" for t in tool_calls
-                )
-                if not has_temporal_resolution:
-                    return (
-                        False,
-                        "Temporal query needs explicit date-ordered verification",
-                        ["Retrieve ordered event details before final answer"],
-                    )
             return (True, "Query returned results", [])
 
         if successful_query_calls:
@@ -1039,16 +1012,6 @@ class GoalCompletionValidator:
                             detail_requirement_reason,
                             [detail_requirement_action],
                         )
-                    if temporal_goal:
-                        has_temporal_resolution = any(
-                            t.success and t.tool_name == "get_events" for t in tool_calls
-                        )
-                        if not has_temporal_resolution:
-                            return (
-                                False,
-                                "Temporal query needs explicit date-ordered verification",
-                                ["Retrieve ordered event details before final answer"],
-                            )
                     return (True, "Query returned data", [])
 
             # Query succeeded but no results
@@ -1100,18 +1063,18 @@ class GoalCompletionValidator:
         return False
 
     def _find_best_search_candidate(self, tool_calls: list) -> dict[str, Any] | None:
-        """Find the highest-scoring candidate from successful search_memories calls."""
-        best_candidate: dict[str, Any] | None = None
-        best_score = float("-inf")
-
-        for call in tool_calls:
+        """Find the top candidate from the latest successful search_memories call."""
+        for call in reversed(tool_calls):
             if getattr(call, "tool_name", "") != "search_memories" or not getattr(
                 call, "success", False
             ):
                 continue
             rows = (getattr(call, "result", {}) or {}).get("results", [])
-            if not isinstance(rows, list):
+            if not isinstance(rows, list) or not rows:
                 continue
+
+            best_row: dict[str, Any] | None = None
+            best_score = float("-inf")
             for row in rows:
                 if not isinstance(row, dict):
                     continue
@@ -1122,18 +1085,24 @@ class GoalCompletionValidator:
                     score = float(row.get("score"))
                 except (TypeError, ValueError):
                     score = -1.0
-                if best_candidate is None or score > best_score:
-                    kind = str(row.get("kind") or "").strip().lower()
-                    if not kind and ":" in candidate_id:
-                        kind = candidate_id.split(":", 1)[0].strip().lower()
+                if best_row is None or score > best_score:
+                    best_row = row
                     best_score = score
-                    best_candidate = {
-                        "id": candidate_id,
-                        "kind": kind,
-                        "title": str(row.get("title") or "").strip(),
-                        "score": score,
-                    }
-        return best_candidate
+
+            if best_row is None:
+                continue
+
+            candidate_id = str(best_row.get("id") or "").strip()
+            kind = str(best_row.get("kind") or "").strip().lower()
+            if not kind and candidate_id.startswith("doc:"):
+                kind = "document"
+            return {
+                "id": candidate_id,
+                "kind": kind,
+                "title": str(best_row.get("title") or "").strip(),
+                "score": best_score,
+            }
+        return None
 
     def _required_detail_tool_for_candidate(
         self,
