@@ -7,6 +7,7 @@ from contextlib import asynccontextmanager, suppress
 from datetime import date, datetime
 from time import perf_counter
 from typing import Any, Callable
+from uuid import uuid4
 
 from fastapi import (
     BackgroundTasks,
@@ -60,6 +61,7 @@ from observability.logger import get_runtime_logger
 from schemas import (
     AskIn,
     AskOut,
+    AskRunStatusOut,
     ContactGroupIn,
     ContactGroupOut,
     ContactIn,
@@ -105,6 +107,40 @@ from versioning import get_service_versions
 logger = get_runtime_logger(__name__)
 
 ORCHESTRATOR_API_KEY = os.getenv("ORCHESTRATOR_API_KEY")
+
+ASK_RUNS_TTL_SECONDS = 1800
+_ask_runs: dict[str, dict[str, Any]] = {}
+
+
+def _touch_ask_run(run_id: str, **updates: Any) -> None:
+    existing = _ask_runs.get(run_id)
+    if not existing:
+        return
+    existing.update(updates)
+    existing["updated_at"] = datetime.utcnow()
+
+
+def _create_ask_run(user_email: str, thread_id: str | None) -> str:
+    run_id = f"run_{uuid4().hex[:16]}"
+    _ask_runs[run_id] = {
+        "run_id": run_id,
+        "user_email": user_email,
+        "thread_id": thread_id,
+        "status": "running",
+        "updated_at": datetime.utcnow(),
+        "status_message": "Starting request...",
+        "result": None,
+        "error": None,
+    }
+    cutoff = datetime.utcnow().timestamp() - ASK_RUNS_TTL_SECONDS
+    stale_ids = [
+        key
+        for key, value in _ask_runs.items()
+        if (value.get("updated_at") or datetime.utcnow()).timestamp() < cutoff
+    ]
+    for stale_id in stale_ids:
+        _ask_runs.pop(stale_id, None)
+    return run_id
 
 
 def require_service_api_key(
@@ -226,6 +262,30 @@ async def stream_system_logs(
             "Connection": "keep-alive",
             "X-Accel-Buffering": "no",
         },
+    )
+
+
+@api.get("/ask/runs/{run_id}", response_model=AskRunStatusOut)
+@api.get("/mobile/ask/runs/{run_id}", response_model=AskRunStatusOut)
+def get_ask_run_status(run_id: str, user: dict = Depends(get_current_user)):
+    user_email = user.get("email")
+    if not user_email:
+        raise HTTPException(status_code=400, detail="Authenticated user email missing")
+
+    run = _ask_runs.get(run_id)
+    if not run:
+        raise HTTPException(status_code=404, detail="Run not found")
+    if run.get("user_email") != user_email:
+        raise HTTPException(status_code=403, detail="Run does not belong to user")
+
+    return AskRunStatusOut(
+        run_id=run_id,
+        thread_id=run.get("thread_id"),
+        status=str(run.get("status") or "unknown"),
+        updated_at=run.get("updated_at") or datetime.utcnow(),
+        status_message=run.get("status_message"),
+        result=run.get("result"),
+        error=run.get("error"),
     )
 
 
@@ -1301,6 +1361,7 @@ async def ask_stream(
     user_email = user.get("email")
     if not user_email:
         raise HTTPException(status_code=400, detail="Authenticated user email missing")
+    run_id = _create_ask_run(user_email, payload.thread_id or payload.session_id)
 
     # Check for command flows (slash commands or pending event refinements)
     from commands import parse_command
@@ -1319,8 +1380,12 @@ async def ask_stream(
             heartbeat_seconds = 5.0
             queue: asyncio.Queue[dict[str, Any] | None] = asyncio.Queue()
             loop = asyncio.get_running_loop()
+            disconnect_event = asyncio.Event()
 
             def emit_status(message: str) -> None:
+                _touch_ask_run(run_id, status="running", status_message=message)
+                if disconnect_event.is_set():
+                    return
                 loop.call_soon_threadsafe(
                     queue.put_nowait,
                     {"type": "status", "message": message},
@@ -1354,6 +1419,7 @@ async def ask_stream(
                         }
 
                     command_result, command_thread_id, command_ui_directives = command_payload
+                    _touch_ask_run(run_id, thread_id=command_thread_id)
                     pending_event_id = get_pending_event(
                         event_pending_key(user_email, command_thread_id)
                     )
@@ -1372,38 +1438,70 @@ async def ask_stream(
                         "ui_directives": command_ui_directives,
                         "pending_event_id": pending_event_id,
                     }
+                    _touch_ask_run(
+                        run_id,
+                        status="completed",
+                        status_message=None,
+                        result=bundle,
+                        error=None,
+                    )
                     return {"type": "done", "bundle": bundle}
                 except ValueError as exc:
+                    _touch_ask_run(
+                        run_id,
+                        status="failed",
+                        status_message=None,
+                        error={"code": "validation_error", "message": str(exc)},
+                    )
                     return {"type": "error", "message": str(exc)}
                 except Exception as exc:
                     logger.exception("[ask/stream] command error user=%s", user_email)
+                    _touch_ask_run(
+                        run_id,
+                        status="failed",
+                        status_message=None,
+                        error={"code": "execution_error", "message": str(exc)},
+                    )
                     return {"type": "error", "message": str(exc)}
 
             async def _produce() -> None:
                 try:
                     final_event = await asyncio.to_thread(execute_command_flow)
-                    await queue.put(final_event)
+                    if not disconnect_event.is_set():
+                        await queue.put(final_event)
                 finally:
-                    await queue.put(None)
+                    if not disconnect_event.is_set():
+                        await queue.put(None)
 
             producer_task = asyncio.create_task(_produce())
             try:
-                while True:
-                    try:
-                        event = await asyncio.wait_for(queue.get(), timeout=heartbeat_seconds)
-                    except asyncio.TimeoutError:
-                        yield ": keep-alive\n\n"
-                        continue
+                yield f"data: {json.dumps({'type': 'session_info', 'thread_id': payload.thread_id or payload.session_id, 'is_new_session': False, 'run_id': run_id}, default=str)}\n\n"
+                try:
+                    while True:
+                        try:
+                            event = await asyncio.wait_for(queue.get(), timeout=heartbeat_seconds)
+                        except asyncio.TimeoutError:
+                            yield ": keep-alive\n\n"
+                            continue
 
-                    if event is None:
-                        break
+                        if event is None:
+                            break
 
-                    yield f"data: {json.dumps(event, default=str)}\n\n"
-                    if event.get("type") in {"done", "error"}:
-                        break
+                        yield f"data: {json.dumps(event, default=str)}\n\n"
+                        if event.get("type") in {"done", "error"}:
+                            break
+                except asyncio.CancelledError:
+                    disconnect_event.set()
+                    logger.info("[ask/stream] command client disconnected user=%s", user_email)
+                    raise
             finally:
-                if not producer_task.done():
-                    producer_task.cancel()
+                if disconnect_event.is_set():
+                    logger.info(
+                        "[ask/stream] command continues after disconnect user=%s",
+                        user_email,
+                    )
+                    _touch_ask_run(run_id, status_message="Disconnected, still processing...")
+                else:
                     with suppress(asyncio.CancelledError):
                         await producer_task
 
@@ -1440,13 +1538,22 @@ async def ask_stream(
 
     # Handle /new command with no actual message
     if ctx.is_reset_only:
+        _touch_ask_run(run_id, thread_id=ctx.session_id)
         logger.info("[ask/stream] session reset session=%s user=%s", ctx.session_id, user_email)
         reset_bundle = _make_reset_bundle(ctx)
 
         async def reset_generator():
-            yield f"data: {json.dumps({'type': 'session_info', 'thread_id': ctx.session_id, 'is_new_session': True}, default=str)}\n\n"
+            yield f"data: {json.dumps({'type': 'session_info', 'thread_id': ctx.session_id, 'is_new_session': True, 'run_id': run_id}, default=str)}\n\n"
             yield f"data: {json.dumps({'type': 'token', 'content': _RESET_MESSAGE}, default=str)}\n\n"
             yield f"data: {json.dumps({'type': 'done', 'bundle': reset_bundle}, default=str)}\n\n"
+
+            _touch_ask_run(
+                run_id,
+                status="completed",
+                status_message=None,
+                result=reset_bundle,
+                error=None,
+            )
 
         return StreamingResponse(
             reset_generator(),
@@ -1459,6 +1566,7 @@ async def ask_stream(
         )
 
     limit = payload.limit or 30
+    _touch_ask_run(run_id, thread_id=ctx.session_id)
 
     preview = ctx.question.strip().replace("\n", " ")
     if len(preview) > 120:
@@ -1481,6 +1589,7 @@ async def ask_stream(
 
     async def event_generator():
         heartbeat_seconds = 5.0
+        disconnect_event = asyncio.Event()
 
         async def _stream_events(queue: asyncio.Queue[dict[str, Any] | None]) -> None:
             try:
@@ -1510,42 +1619,89 @@ async def ask_stream(
                         )
                         event["bundle"] = bundle
 
-                    await queue.put(event)
+                    event_type = event.get("type")
+                    if event_type == "status":
+                        _touch_ask_run(
+                            run_id,
+                            status="running",
+                            status_message=str(event.get("message") or "Working..."),
+                        )
+                    elif event_type == "tool_call":
+                        name = str(event.get("name") or "tool")
+                        _touch_ask_run(
+                            run_id,
+                            status="running",
+                            status_message=f"Using {name}...",
+                        )
+                    elif event_type == "done":
+                        _touch_ask_run(
+                            run_id,
+                            status="completed",
+                            status_message=None,
+                            result=event.get("bundle"),
+                            error=None,
+                        )
+
+                    if not disconnect_event.is_set():
+                        await queue.put(event)
             except Exception as exc:
                 logger.exception("[ask/stream] error session=%s", ctx.session_id)
-                await queue.put({"type": "error", "message": str(exc)})
+                _touch_ask_run(
+                    run_id,
+                    status="failed",
+                    status_message=None,
+                    error={"code": "execution_error", "message": str(exc)},
+                )
+                if not disconnect_event.is_set():
+                    await queue.put({"type": "error", "message": str(exc)})
             finally:
-                await queue.put(None)
+                if not disconnect_event.is_set():
+                    await queue.put(None)
 
         try:
-            yield f"data: {json.dumps({'type': 'session_info', 'thread_id': ctx.session_id, 'is_new_session': ctx.is_new_session}, default=str)}\n\n"
+            yield f"data: {json.dumps({'type': 'session_info', 'thread_id': ctx.session_id, 'is_new_session': ctx.is_new_session, 'run_id': run_id}, default=str)}\n\n"
 
             queue: asyncio.Queue[dict[str, Any] | None] = asyncio.Queue()
             producer_task = asyncio.create_task(_stream_events(queue))
             try:
-                while True:
-                    try:
-                        event = await asyncio.wait_for(queue.get(), timeout=heartbeat_seconds)
-                    except asyncio.TimeoutError:
-                        yield ": keep-alive\n\n"
-                        continue
+                try:
+                    while True:
+                        try:
+                            event = await asyncio.wait_for(queue.get(), timeout=heartbeat_seconds)
+                        except asyncio.TimeoutError:
+                            yield ": keep-alive\n\n"
+                            continue
 
-                    if event is None:
-                        break
+                        if event is None:
+                            break
 
-                    yield f"data: {json.dumps(event, default=str)}\n\n"
+                        yield f"data: {json.dumps(event, default=str)}\n\n"
 
-                    if event.get("type") == "done":
-                        elapsed = perf_counter() - start_time
-                        logger.info(
-                            "[ask/stream] complete session=%s user=%s elapsed=%.3fs",
-                            ctx.session_id,
-                            user_email,
-                            elapsed,
-                        )
+                        if event.get("type") == "done":
+                            elapsed = perf_counter() - start_time
+                            logger.info(
+                                "[ask/stream] complete session=%s user=%s elapsed=%.3fs",
+                                ctx.session_id,
+                                user_email,
+                                elapsed,
+                            )
+                except asyncio.CancelledError:
+                    disconnect_event.set()
+                    logger.info(
+                        "[ask/stream] client disconnected session=%s user=%s",
+                        ctx.session_id,
+                        user_email,
+                    )
+                    _touch_ask_run(run_id, status_message="Disconnected, still processing...")
+                    raise
             finally:
-                if not producer_task.done():
-                    producer_task.cancel()
+                if disconnect_event.is_set():
+                    logger.info(
+                        "[ask/stream] execution continues after disconnect session=%s user=%s",
+                        ctx.session_id,
+                        user_email,
+                    )
+                else:
                     with suppress(asyncio.CancelledError):
                         await producer_task
         except Exception as exc:

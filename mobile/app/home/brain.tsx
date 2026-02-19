@@ -3,6 +3,7 @@ import { useRouter } from 'expo-router';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
+  AppState,
   FlatList,
   Keyboard,
   KeyboardEvent,
@@ -536,6 +537,34 @@ export default function ChatScreen() {
   }, [threadId, pendingEventId, isBootstrapping, isAuthLoading]);
 
   useEffect(() => {
+    if (!token || !allowed || isAuthLoading || isBootstrapping) return;
+
+    const subscription = AppState.addEventListener('change', (nextState) => {
+      if (nextState !== 'active') return;
+
+      void (async () => {
+        try {
+          const restored = await restoreChatHistory(token, {
+            threadId,
+            pendingEventId,
+          });
+          setThreadId(restored.threadId);
+          setPendingEventId(restored.pendingEventId);
+          if (restored.messages.length > 0) {
+            setMessages(restored.messages);
+          }
+        } catch {
+          // Ignore foreground sync failures and keep current UI state.
+        }
+      })();
+    });
+
+    return () => {
+      subscription.remove();
+    };
+  }, [allowed, isAuthLoading, isBootstrapping, pendingEventId, threadId, token]);
+
+  useEffect(() => {
     if (!pendingEventId) {
       setEventDraftModificationsByPreview({});
       return;
@@ -648,7 +677,11 @@ export default function ChatScreen() {
           },
           onStatus: (statusMessage) => {
             lastStatus = statusMessage;
-            if (!streamedContent) {
+            const isReconnectStatus = statusMessage.toLowerCase().startsWith('reconnecting');
+            if (isReconnectStatus) {
+              streamedContent = '';
+            }
+            if (!streamedContent || isReconnectStatus) {
               updatePendingMessage(lastStatus);
             }
           },

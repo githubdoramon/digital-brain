@@ -22,17 +22,27 @@ type StreamEvent =
   | { type: 'status'; message?: string }
   | { type: 'tool_call'; name?: string; args?: unknown }
   | { type: 'tool_result'; name?: string }
-  | { type: 'session_info'; thread_id?: string; is_new_session?: boolean }
+  | { type: 'session_info'; thread_id?: string; is_new_session?: boolean; run_id?: string }
   | { type: 'done'; bundle?: AskResponse }
   | { type: 'error'; message?: string }
   | { type: string; [key: string]: unknown };
 
 type StreamCallbacks = {
   onSessionInfo?: (threadId: string) => void;
+  onRunId?: (runId: string) => void;
   onStatus?: (message: string) => void;
   onToken?: (delta: string) => void;
   onClearContent?: () => void;
   onProgressChip?: (chip: string) => void;
+};
+
+type AskRunStatus = {
+  run_id: string;
+  thread_id?: string | null;
+  status: 'running' | 'completed' | 'failed' | 'cancelled' | string;
+  status_message?: string | null;
+  result?: AskResponse | null;
+  error?: { code?: string; message?: string } | null;
 };
 
 type StreamAskParams = {
@@ -110,10 +120,10 @@ function buildToolProgressChip(toolNameRaw: string, argsRaw: unknown): string {
     .map(([key, value]) => `${key}: ${formatToolArgValue(value)}`);
 
   if (selectedEntries.length === 0) {
-    return `Using ${humanName}`;
+    return `${humanName}`;
   }
 
-  return `Using ${humanName} (${selectedEntries.join(', ')})`;
+  return `${humanName} (${selectedEntries.join(', ')})`;
 }
 
 function parseSseEventLine(line: string): StreamEvent | null {
@@ -129,6 +139,63 @@ function parseSseEventLine(line: string): StreamEvent | null {
   } catch {
     return null;
   }
+}
+
+function delay(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function shouldTryRunPolling(error: unknown): boolean {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+  const text = error.message.toLowerCase();
+  return (
+    text.includes('connection abort') ||
+    text.includes('network request failed') ||
+    text.includes('stream ended before final response bundle') ||
+    text.includes('terminated')
+  );
+}
+
+async function pollRunStatus(
+  runId: string,
+  token: string | null | undefined,
+  callbacks?: StreamCallbacks,
+): Promise<AskResponse> {
+  if (!token) {
+    throw new Error('Missing token for run polling');
+  }
+
+  for (let attempt = 0; attempt < 45; attempt += 1) {
+    if (attempt > 0) {
+      await delay(2000);
+    }
+
+    const run = (await apiFetch(`/mobile/ask/runs/${encodeURIComponent(runId)}`, {
+      token,
+    })) as AskRunStatus;
+
+    const statusMessage = (run.status_message || '').trim();
+    if (statusMessage) {
+      callbacks?.onStatus?.(statusMessage);
+    }
+
+    if (run.thread_id) {
+      callbacks?.onSessionInfo?.(run.thread_id);
+    }
+
+    if (run.status === 'completed' && run.result) {
+      return run.result;
+    }
+
+    if (run.status === 'failed' || run.status === 'cancelled') {
+      const message = run.error?.message || 'Request failed while reconnecting';
+      throw new Error(message);
+    }
+  }
+
+  throw new Error('Timed out waiting for run to complete');
 }
 
 export async function askWithStreaming({
@@ -175,6 +242,7 @@ export async function askWithStreaming({
   }
 
   let doneBundle: AskResponse | null = null;
+  let runId: string | null = null;
   const reader = streamResponse.body?.getReader();
   if (!reader) {
     return (await apiFetch('/mobile/ask', {
@@ -191,6 +259,10 @@ export async function askWithStreaming({
     if (event.type === 'session_info') {
       if (event.thread_id) {
         callbacks?.onSessionInfo?.(event.thread_id);
+      }
+      if (event.run_id) {
+        runId = event.run_id;
+        callbacks?.onRunId?.(event.run_id);
       }
       return null;
     }
@@ -272,27 +344,39 @@ export async function askWithStreaming({
     return null;
   };
 
-  while (true) {
-    const { done, value } = await reader.read();
-    if (value) {
-      buffer += decoder.decode(value, { stream: !done });
-      const maybeDoneBundle = consumeBuffer(done);
-      if (maybeDoneBundle) {
-        doneBundle = maybeDoneBundle;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (value) {
+        buffer += decoder.decode(value, { stream: !done });
+        const maybeDoneBundle = consumeBuffer(done);
+        if (maybeDoneBundle) {
+          doneBundle = maybeDoneBundle;
+        }
+      } else if (done) {
+        const maybeDoneBundle = consumeBuffer(true);
+        if (maybeDoneBundle) {
+          doneBundle = maybeDoneBundle;
+        }
       }
-    } else if (done) {
-      const maybeDoneBundle = consumeBuffer(true);
-      if (maybeDoneBundle) {
-        doneBundle = maybeDoneBundle;
-      }
-    }
 
-    if (done || doneBundle) {
-      break;
+      if (done || doneBundle) {
+        break;
+      }
     }
+  } catch (error) {
+    if (runId && shouldTryRunPolling(error)) {
+      callbacks?.onStatus?.('Reconnecting...');
+      return pollRunStatus(runId, token, callbacks);
+    }
+    throw error;
   }
 
   if (!doneBundle) {
+    if (runId) {
+      callbacks?.onStatus?.('Reconnecting...');
+      return pollRunStatus(runId, token, callbacks);
+    }
     throw new Error('Stream ended before final response bundle');
   }
 

@@ -381,6 +381,16 @@ class MainSessionOut(BaseModel):
     messages: list[ThreadMessageOut] = Field(default_factory=list)
 
 
+class AskRunStatusOut(BaseModel):
+    run_id: str
+    thread_id: str | None = None
+    status: str
+    updated_at: datetime
+    status_message: str | None = None
+    result: dict[str, Any] | None = None
+    error: dict[str, Any] | None = None
+
+
 class ServiceVersion(BaseModel):
     id: str
     name: str
