@@ -11,7 +11,7 @@ ollama==0.3.3
 google-auth==2.35.0
 python-jose[cryptography]==3.3.0
 pdfminer.six==20221105
-pymupdf==1.26.3
+pymupdf==1.26.6
 pymupdf4llm==0.0.27
 pymupdf-layout==1.26.6
 opencv-python-headless==4.12.0.88
