@@ -65,10 +65,31 @@ def get_self_context(email: str) -> Optional[str]:
 
         user_info = contacts.find_self_contact(email)
         if user_info:
-            return (
-                f"You are assisting {user_info.get('name', 'the user')}. Their email is {email}."
-                f"{behavioral_guidance}"
-            )
+            name = str(user_info.get("display_name") or user_info.get("name") or "the user").strip()
+
+            emails = [
+                str(value).strip()
+                for value in (user_info.get("emails") or [])
+                if str(value).strip()
+            ]
+            if email not in emails:
+                emails.append(email)
+
+            aliases = [
+                str(value).strip()
+                for value in (user_info.get("aliases") or [])
+                if str(value).strip()
+            ]
+
+            lines = [f"You are assisting {name}."]
+            if emails:
+                lines.append(f"Known user emails: {', '.join(emails)}.")
+            else:
+                lines.append(f"Known user email: {email}.")
+            if aliases:
+                lines.append(f"Known user aliases: {', '.join(aliases)}.")
+            lines.append(behavioral_guidance.strip())
+            return " ".join(lines)
     except Exception:
         pass
 

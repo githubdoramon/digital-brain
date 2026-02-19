@@ -27,7 +27,7 @@ logger = logging.getLogger(__name__)
 DEFAULT_SIMILAR_LIMIT = 4
 BIRTHDAY_LOOKAHEAD_DAYS = 7
 MAX_NEWS_TOPIC_ARTICLES = 24
-MAX_NEWS_ARTICLES_PER_TOPIC = 4
+MAX_NEWS_ARTICLES_PER_TOPIC = 3
 MAX_NEWS_GENERAL_ARTICLES = 5
 _NEWS_SOURCE_QUALITY: dict[str, int] = {
     "reuters": 4,
@@ -56,6 +56,26 @@ _NEWS_STOPWORDS = {
     "update",
     "project",
 }
+
+
+def _get_daily_briefing_user_context(user_email: str | None, query: str) -> str:
+    """Build user identity + facts context for daily briefing prompts."""
+    if not user_email:
+        return ""
+    from prompts.context import get_self_context, get_user_facts_context
+
+    parts: list[str] = []
+    self_ctx = get_self_context(user_email)
+    if self_ctx:
+        parts.append(self_ctx)
+
+    facts_ctx = get_user_facts_context(user_email, query)
+    if facts_ctx:
+        parts.append(facts_ctx)
+
+    if not parts:
+        return ""
+    return "\n\n".join(parts)
 
 
 def handle_daily_briefing_request(payload: dict[str, Any]) -> dict[str, Any]:
@@ -205,7 +225,7 @@ def build_daily_briefing(
     )
 
     t0 = perf_counter()
-    summary = _generate_summary(context, markdown)
+    summary = _generate_summary(context, markdown, user_email=user_email)
     logger.info("[briefing] Summary generated (%.0fms)", (perf_counter() - t0) * 1000)
 
     todo_count = _count_todos(event_contexts, all_todos)
@@ -575,7 +595,7 @@ def _summarize_event(
 
     # -- Phase 1: optional web research via tool loop -------------------------
     t0 = perf_counter()
-    research_notes = _research_event(event_text, title, timezone_name)
+    research_notes = _research_event(event_text, title, timezone_name, user_email=user_email)
     if research_notes:
         logger.info(
             "[briefing.event] Research for '%s': %d chars (%.0fms)",
@@ -661,7 +681,13 @@ def _format_event_for_analysis(event_context: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
-def _research_event(event_text: str, title: str, timezone_name: str) -> str:
+def _research_event(
+    event_text: str,
+    title: str,
+    timezone_name: str,
+    *,
+    user_email: str | None = None,
+) -> str:
     """Run a bounded web-research tool loop for a single event.
 
     Returns the LLM's research notes (may be empty if no research was needed
@@ -690,6 +716,13 @@ def _research_event(event_text: str, title: str, timezone_name: str) -> str:
         "Return your research findings as concise bullet points. "
         "Include source URLs when available."
     )
+
+    user_context = _get_daily_briefing_user_context(
+        user_email,
+        f"daily briefing event research {title}",
+    )
+    if user_context:
+        research_prompt = f"{research_prompt}\n\nCURRENT USER CONTEXT:\n{user_context}"
 
     try:
         result = run_profiled_tool_loop(
@@ -729,19 +762,17 @@ def _synthesise_event_summary(
     user_email: str | None = None,
 ) -> str:
     """Combine event data + research into a structured preparation summary."""
-    from prompts.context import get_user_facts_context
-
     research_block = ""
     if research_notes:
         research_block = (
             f"\n\nWEB RESEARCH FINDINGS (incorporate relevant points):\n{research_notes}"
         )
 
-    user_facts_block = ""
+    user_context_block = ""
     if user_email:
-        facts_ctx = get_user_facts_context(user_email, f"{title} {event_text[:200]}")
-        if facts_ctx:
-            user_facts_block = f"\n\n{facts_ctx}\n"
+        user_ctx = _get_daily_briefing_user_context(user_email, f"{title} {event_text[:200]}")
+        if user_ctx:
+            user_context_block = f"\n\n{user_ctx}\n"
 
     system_prompt = (
         "You are a concise briefing analyst. Analyze the event context below and produce a "
@@ -753,7 +784,10 @@ def _synthesise_event_summary(
         f"Timezone: {timezone_name}\n\n"
         f"{event_text}"
         f"{research_block}"
-        f"{user_facts_block}\n\n"
+        f"{user_context_block}\n\n"
+        "Perspective: this summary is for the calendar owner. Use second-person framing where useful\n"
+        "(for example 'you will review metrics'). Avoid third-person self-references like\n"
+        "'align with <owner name>' when referring to the owner.\n\n"
         "Respond with exactly these sections (skip a section if nothing relevant):\n"
         "KEY POINTS:\n"
         "- Important context from past occurrences or notes\n\n"
@@ -782,8 +816,6 @@ MAX_REWRITES = 3
 
 
 def _generate_markdown(context: dict[str, Any], *, user_email: str | None = None) -> str:
-    from prompts.context import get_user_facts_context
-
     agent_profile = build_daily_briefing_agent_profile()
     if agent_profile.build_tools_and_handlers is None:
         raise RuntimeError("daily_briefing profile missing tool policy")
@@ -793,12 +825,13 @@ def _generate_markdown(context: dict[str, Any], *, user_email: str | None = None
     runtime_profile = agent_profile.runtime
     system_prompt = agent_profile.get_system_prompt()
 
-    # Inject user facts for personalization
-    if user_email:
-        briefing_query = f"daily briefing {context.get('date', '')}"
-        facts_ctx = get_user_facts_context(user_email, briefing_query)
-        if facts_ctx:
-            system_prompt = f"{system_prompt}\n\n{facts_ctx}"
+    # Inject user identity + facts for personalization
+    user_context = _get_daily_briefing_user_context(
+        user_email,
+        f"daily briefing {context.get('date', '')}",
+    )
+    if user_context:
+        system_prompt = f"{system_prompt}\n\n{user_context}"
 
     core_context = {**context, "news_articles": []}
     core_prompt = _build_core_briefing_prompt(core_context)
@@ -820,7 +853,7 @@ def _generate_markdown(context: dict[str, Any], *, user_email: str | None = None
             len(selected_news["topic_articles"]),
             len(selected_news["general_articles"]),
         )
-        news_section = _generate_news_section_markdown(selected_news)
+        news_section = _generate_news_section_markdown(selected_news, user_email=user_email)
         logger.info(
             "[briefing] News section generated: %d chars (%.0fms)",
             len(news_section),
@@ -845,7 +878,12 @@ def _generate_markdown(context: dict[str, Any], *, user_email: str | None = None
             len(content),
         )
         t_rewrite = perf_counter()
-        retry_prompt = _build_targeted_rewrite_prompt(context, content, vresult.reasons)
+        retry_prompt = _build_targeted_rewrite_prompt(
+            context,
+            content,
+            vresult.reasons,
+            user_email=user_email,
+        )
         content = call_llm(
             retry_prompt,
             system_prompt="Rewrite strictly to the required format. Fix ONLY the listed issues.",
@@ -897,6 +935,8 @@ def _build_core_briefing_prompt(context: dict[str, Any]) -> str:
     return (
         "DAILY BRIEFING TASK (PREP DOCUMENT)\n"
         "You are preparing the user for upcoming events. Use future tense (will, upcoming, prepare, review).\n"
+        "The reader is the calendar owner. Write directly to the owner using 'you' when helpful.\n"
+        "Avoid phrasing that treats the owner as a third person participant.\n"
         "\n"
         "OUTPUT RULES (MANDATORY):\n"
         "- Output ONLY the final briefing Markdown. No preamble, no sign-off, no reasoning.\n"
@@ -1050,7 +1090,11 @@ def _score_news_article(article: dict[str, Any], relevance_terms: set[str]) -> f
     return score
 
 
-def _generate_news_section_markdown(selected_news: dict[str, Any]) -> str:
+def _generate_news_section_markdown(
+    selected_news: dict[str, Any],
+    *,
+    user_email: str | None = None,
+) -> str:
     topic_articles = selected_news.get("topic_articles") or []
     general_articles = selected_news.get("general_articles") or []
     news_context = _format_news_context(topic_articles, general_articles)
@@ -1077,6 +1121,13 @@ def _generate_news_section_markdown(selected_news: dict[str, Any]) -> str:
         "NEWS CONTEXT:\n"
         f"{news_context}"
     )
+
+    user_context = _get_daily_briefing_user_context(
+        user_email,
+        "daily briefing news section",
+    )
+    if user_context:
+        prompt = f"{prompt}\n\nCURRENT USER CONTEXT:\n{user_context}"
 
     return call_llm(
         prompt,
@@ -1235,9 +1286,15 @@ def _build_briefing_prompt(context: dict[str, Any]) -> str:
     )
 
 
-def _build_targeted_rewrite_prompt(context: dict[str, Any], draft: str, reasons: list[str]) -> str:
+def _build_targeted_rewrite_prompt(
+    context: dict[str, Any],
+    draft: str,
+    reasons: list[str],
+    *,
+    user_email: str | None = None,
+) -> str:
     issues = "\n".join(f"- {r}" for r in reasons)
-    return (
+    prompt = (
         "Rewrite the draft into the REQUIRED STRUCTURE. Output Markdown only.\n"
         "\n"
         "ISSUES TO FIX:\n"
@@ -1248,6 +1305,7 @@ def _build_targeted_rewrite_prompt(context: dict[str, Any], draft: str, reasons:
         "- NEVER use meta-commentary ('the text includes', 'there are several', 'it appears').\n"
         "- NEVER produce generic category lists — every bullet must reference a specific item.\n"
         "- NEVER ask questions or offer to do more.\n"
+        "- The reader is the calendar owner. Use 'you' and avoid third-person owner references.\n"
         "- For News & Topics: each item must be a specific article with URL and 1-sentence summary.\n"
         "  Format: [Title](url) - why it matters. (Source)\n"
         "- If no useful news, write: 'No notable news today.'\n"
@@ -1257,12 +1315,24 @@ def _build_targeted_rewrite_prompt(context: dict[str, Any], draft: str, reasons:
         "Context (use only for content):\n"
         f"{_format_context_text(context)}"
     )
+    user_context = _get_daily_briefing_user_context(
+        user_email,
+        f"daily briefing rewrite {context.get('date', '')}",
+    )
+    if user_context:
+        prompt = f"{prompt}\n\nUSER CONTEXT:\n{user_context}"
+    return prompt
 
 
 _MAX_SUMMARY_RETRIES = 1
 
 
-def _generate_summary(context: dict[str, Any], markdown: str) -> str:
+def _generate_summary(
+    context: dict[str, Any],
+    markdown: str,
+    *,
+    user_email: str | None = None,
+) -> str:
     system_prompt = (
         "You summarize daily briefings into a single short paragraph. This is future-oriented prep. "
         "Output plain text only — no markdown, no headers, no bullet points. "
@@ -1277,6 +1347,13 @@ def _generate_summary(context: dict[str, Any], markdown: str) -> str:
         "Briefing markdown (reference only):\n"
         f"{markdown}"
     )
+    user_context = _get_daily_briefing_user_context(
+        user_email,
+        f"daily briefing summary {context.get('date', '')}",
+    )
+    if user_context:
+        system_prompt = f"{system_prompt}\n\n{user_context}"
+
     summary = call_llm(
         prompt,
         system_prompt=system_prompt,

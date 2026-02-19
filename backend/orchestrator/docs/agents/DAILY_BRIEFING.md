@@ -24,11 +24,24 @@ This document captures behavior and quality rules for the daily briefing profile
 
 - News is bounded before LLM generation to avoid prompt overload.
 - Selection includes:
-  - per-topic caps,
+  - per-topic cap (currently 3 per topic),
   - general-headline cap,
   - deduplication,
   - relevance scoring (topic matches, source quality, recency, overlap with event/todo terms).
 - Goal: fewer but higher-signal articles that are more relevant to the day.
+
+## Voice and Perspective
+
+- The briefing is written for the calendar owner (the authenticated user).
+- Prefer owner-facing language (for example, "you will review...") and avoid third-person owner references.
+- Event prep should avoid phrasing like "align with <owner name>" when that name is the user.
+
+## User Context Injection
+
+- Daily briefing prompt calls inject both:
+  - self identity context (display name, known emails, aliases, ownership guardrail), and
+  - relevant user facts (`get_user_facts_context`).
+- This applies across event research/synthesis, core markdown generation, news-section generation, and rewrite prompts.
 
 ## Validation Pipeline
 
