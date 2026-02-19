@@ -1271,6 +1271,16 @@ def _generate_news_section_markdown(
     topic_articles = selected_news.get("topic_articles") or []
     general_articles = selected_news.get("general_articles") or []
     news_context = _format_news_context(topic_articles, general_articles)
+    topic_labels = _extract_topic_labels(topic_articles)
+    topic_heading_rules = ""
+    if topic_labels:
+        labels_text = "\n".join(f"  - {label}" for label in topic_labels)
+        topic_heading_rules = (
+            "- Organize topic-matched news with explicit section headings in this exact form: `### <Topic Label>`.\n"
+            "- Use these topic headings (same labels):\n"
+            f"{labels_text}\n"
+            "- After topic sections, include `### General Headlines` for non-topic items.\n"
+        )
 
     prompt = (
         "Generate ONLY the `## News & Topics` markdown section for a daily briefing.\n"
@@ -1279,6 +1289,7 @@ def _generate_news_section_markdown(
         "- Start with exactly: `## News & Topics`\n"
         "- Use ONLY concrete articles from the provided context.\n"
         "- First list topic-matched articles grouped by topic label, then list up to 5 general headlines.\n"
+        f"{topic_heading_rules}"
         "- Each item MUST use this exact format:\n"
         "  [Article Title](url) - one sentence explaining why it matters or what happened. (Source)\n"
         "- Do NOT invent details or generic categories.\n"
@@ -1313,6 +1324,21 @@ def _generate_news_section_markdown(
     ).strip()
 
 
+def _extract_topic_labels(topic_articles: list[dict[str, Any]]) -> list[str]:
+    labels: list[str] = []
+    seen: set[str] = set()
+    for article in topic_articles:
+        label = str((article.get("topic_matches") or [""])[0]).strip()
+        if not label:
+            continue
+        key = label.casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        labels.append(label)
+    return labels
+
+
 def _format_news_context(
     topic_articles: list[dict[str, Any]], general_articles: list[dict[str, Any]]
 ) -> str:
@@ -1320,17 +1346,23 @@ def _format_news_context(
     lines.append(f"Topic-matched articles ({len(topic_articles)}):")
     if not topic_articles:
         lines.append("- None")
-    for article in topic_articles:
-        topic = ", ".join(article.get("topic_matches") or ["General"])
-        title = article.get("title") or "Untitled"
-        source = article.get("source") or "Unknown"
-        url = (article.get("url") or "").strip()
-        summary = (article.get("summary") or "").strip()
-        lines.append(f"- [{topic}] {title} ({source})")
-        if url:
-            lines.append(f"  URL: {url}")
-        if summary:
-            lines.append(f"  Summary: {summary[:300]}")
+    else:
+        grouped: dict[str, list[dict[str, Any]]] = {}
+        for article in topic_articles:
+            label = str((article.get("topic_matches") or ["General"])[0]).strip() or "General"
+            grouped.setdefault(label, []).append(article)
+        for label, items in grouped.items():
+            lines.append(f"Topic: {label}")
+            for article in items:
+                title = article.get("title") or "Untitled"
+                source = article.get("source") or "Unknown"
+                url = (article.get("url") or "").strip()
+                summary = (article.get("summary") or "").strip()
+                lines.append(f"- {title} ({source})")
+                if url:
+                    lines.append(f"  URL: {url}")
+                if summary:
+                    lines.append(f"  Summary: {summary[:300]}")
 
     lines.append("")
     lines.append(f"General headlines ({len(general_articles)}):")
