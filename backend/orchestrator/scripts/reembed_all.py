@@ -37,6 +37,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from db import get_conn  # noqa: E402
 from documents import (
     MAX_CONTENT_CHARS,  # noqa: E402
+    prepare_document_content_for_storage,  # noqa: E402
     reprocess_document_content,  # noqa: E402
 )
 from documents import _generate_document_embeddings as generate_document_embeddings  # noqa: E402
@@ -382,6 +383,7 @@ def recover_document_content(doc: dict[str, Any]) -> str:
 def reprocess_document(
     doc: dict[str, Any], raw_metadata: dict[str, Any]
 ) -> tuple[str, dict[str, Any], dict[str, Any]]:
+    document_id = str(doc.get("document_id") or "")
     debug: dict[str, Any] = {
         "used_file_reprocess": False,
         "used_fallback_content": False,
@@ -392,7 +394,9 @@ def reprocess_document(
         "parser_warnings": [],
         "normalized_sections": 0,
         "normalized_chars": 0,
+        "stored_chars": 0,
         "raw_chars": 0,
+        "translated_for_storage": False,
     }
     current_content = doc.get("content")
     fallback_content = (
@@ -406,7 +410,16 @@ def reprocess_document(
         if fallback_content:
             debug["used_fallback_content"] = True
             debug["fallback_reason"] = "missing_file_path"
-            return fallback_content, raw_metadata, debug
+            stored_content, stored_metadata = prepare_document_content_for_storage(
+                fallback_content,
+                document_id=document_id,
+                raw_metadata=raw_metadata,
+            )
+            debug["stored_chars"] = len(stored_content)
+            debug["translated_for_storage"] = bool(
+                stored_metadata.get("content_translated_for_storage")
+            )
+            return stored_content, stored_metadata, debug
         debug["fallback_reason"] = "missing_file_path"
         return "", raw_metadata, debug
 
@@ -416,7 +429,16 @@ def reprocess_document(
         if fallback_content:
             debug["used_fallback_content"] = True
             debug["fallback_reason"] = "file_not_found"
-            return fallback_content, raw_metadata, debug
+            stored_content, stored_metadata = prepare_document_content_for_storage(
+                fallback_content,
+                document_id=document_id,
+                raw_metadata=raw_metadata,
+            )
+            debug["stored_chars"] = len(stored_content)
+            debug["translated_for_storage"] = bool(
+                stored_metadata.get("content_translated_for_storage")
+            )
+            return stored_content, stored_metadata, debug
         print(
             "[documents] content missing and file path not found "
             f"document_id={doc.get('document_id')} file_path={file_path}"
@@ -436,7 +458,17 @@ def reprocess_document(
         debug["fallback_reason"] = "empty_normalized_content"
         if fallback_content:
             debug["used_fallback_content"] = True
-        return fallback_content, raw_metadata, debug
+            stored_content, stored_metadata = prepare_document_content_for_storage(
+                fallback_content,
+                document_id=document_id,
+                raw_metadata=raw_metadata,
+            )
+            debug["stored_chars"] = len(stored_content)
+            debug["translated_for_storage"] = bool(
+                stored_metadata.get("content_translated_for_storage")
+            )
+            return stored_content, stored_metadata, debug
+        return "", raw_metadata, debug
 
     if result.get("raw_extracted_text"):
         raw_metadata["raw_extracted_text"] = result["raw_extracted_text"]
@@ -448,7 +480,14 @@ def reprocess_document(
         raw_metadata["normalized_sections"] = result["normalized_sections"]
     if result.get("normalization_metadata"):
         raw_metadata["normalization_metadata"] = result["normalization_metadata"]
-    return normalized_content, raw_metadata, debug
+    stored_content, stored_metadata = prepare_document_content_for_storage(
+        normalized_content,
+        document_id=document_id,
+        raw_metadata=raw_metadata,
+    )
+    debug["stored_chars"] = len(stored_content)
+    debug["translated_for_storage"] = bool(stored_metadata.get("content_translated_for_storage"))
+    return stored_content, stored_metadata, debug
 
 
 def _should_debug_document(
@@ -481,7 +520,9 @@ def _log_document_reprocess_debug(
         f"parser_warnings={debug_info.get('parser_warnings')} "
         f"raw_chars={debug_info.get('raw_chars')} "
         f"normalized_chars={debug_info.get('normalized_chars')} "
+        f"stored_chars={debug_info.get('stored_chars')} "
         f"normalized_sections={debug_info.get('normalized_sections')} "
+        f"translated_for_storage={debug_info.get('translated_for_storage')} "
         f"chunk_count={chunk_count if chunk_count is not None else 'n/a'} "
         f"persisted_content={persisted_content if persisted_content is not None else 'n/a'}"
     )

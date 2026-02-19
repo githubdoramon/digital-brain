@@ -43,7 +43,7 @@ DOCUMENT_STORAGE_DIR = Path(
     os.getenv("DOCUMENT_STORAGE_DIR", "/app/storage/documents")
 ).expanduser()
 
-MAX_CONTENT_CHARS = int(os.getenv("DOCUMENT_MAX_CONTENT_CHARS", "60000"))
+MAX_CONTENT_CHARS = int(os.getenv("DOCUMENT_MAX_CONTENT_CHARS", "80000"))
 MAX_EMBED_CHARS = int(os.getenv("DOCUMENT_EMBED_MAX_CHARS", "8000"))
 EMBED_CHUNK_CHARS = int(os.getenv("DOCUMENT_EMBED_CHUNK_CHARS", "1200"))
 EMBED_CHUNK_OVERLAP_CHARS = int(os.getenv("DOCUMENT_EMBED_CHUNK_OVERLAP_CHARS", "200"))
@@ -180,17 +180,10 @@ def ingest_document(
         base_raw_metadata["normalized_sections"] = extraction["normalized_sections"]
     if extraction.get("normalization_metadata"):
         base_raw_metadata["normalization_metadata"] = extraction["normalization_metadata"]
-    original_content = content_text
-    translated_content, translated_for_storage = _translate_content_for_storage(
-        original_content,
+    content_text, base_raw_metadata = prepare_document_content_for_storage(
+        content_text,
         document_id=document_id,
-    )
-    content_text = translated_content[:MAX_CONTENT_CHARS]
-    _update_content_storage_metadata(
-        base_raw_metadata,
-        original_content=original_content,
-        stored_content=content_text,
-        translated=translated_for_storage,
+        raw_metadata=base_raw_metadata,
     )
 
     tags_input = tags if tags is not None else []
@@ -538,6 +531,29 @@ def reprocess_document_content(
 ) -> dict[str, Any]:
     """Re-extract and normalize a document file for full re-embedding workflows."""
     return _extract_and_normalize_document(path, mime_type)
+
+
+def prepare_document_content_for_storage(
+    content: str,
+    *,
+    document_id: str | None = None,
+    raw_metadata: dict[str, Any] | None = None,
+) -> tuple[str, dict[str, Any]]:
+    """Apply storage-time normalization policies shared by ingest and re-embed workflows."""
+    metadata = dict(raw_metadata or {})
+    original_content = (content or "").strip()
+    translated_content, translated_for_storage = _translate_content_for_storage(
+        original_content,
+        document_id=document_id,
+    )
+    stored_content = translated_content[:MAX_CONTENT_CHARS]
+    _update_content_storage_metadata(
+        metadata,
+        original_content=original_content,
+        stored_content=stored_content,
+        translated=translated_for_storage,
+    )
+    return stored_content, metadata
 
 
 def _extract_and_normalize_document(path: Path, mime_type: str | None) -> dict[str, Any]:

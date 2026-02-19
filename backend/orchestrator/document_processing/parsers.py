@@ -6,8 +6,10 @@ import re
 import shutil
 import subprocess
 import tempfile
+from collections.abc import Callable
 from importlib import import_module
 from pathlib import Path
+from typing import cast
 
 from docx import Document as DocxDocument
 from pdfminer.high_level import extract_text as extract_pdf_text
@@ -30,6 +32,7 @@ MARKDOWN_EXTRACTION_KWARGS: dict[str, object] = {
     "footer": False,
     "use_ocr": True,
     "force_ocr": False,
+    "table_strategy": "lines_strict",
 }
 
 
@@ -174,9 +177,27 @@ def _parse_pdf_with_markdown_extractor(
         logger.warning("[documents] pymupdf open failed for %s: %s", path, exc, exc_info=exc)
         return None
 
+    markdown_kwargs: dict[str, object] = {}
     try:
         markdown_kwargs = _supported_markdown_kwargs(extractor)
         markdown_output = extractor(doc, **markdown_kwargs)
+    except ValueError as exc:
+        if not _is_empty_table_sequence_error(exc):
+            logger.warning(
+                "[documents] markdown parse failed parser=%s path=%s error=%s",
+                parser_name,
+                path,
+                exc,
+                exc_info=exc,
+            )
+            return None
+        markdown_output, markdown_kwargs = _retry_markdown_without_tables(
+            extractor,
+            doc,
+            base_kwargs=markdown_kwargs,
+            parser_name=parser_name,
+            path=path,
+        )
     except Exception as exc:
         logger.warning(
             "[documents] markdown parse failed parser=%s path=%s error=%s",
@@ -230,14 +251,53 @@ def _supported_markdown_kwargs(extractor: object) -> dict[str, object]:
     accepts_var_kwargs = any(
         param.kind == inspect.Parameter.VAR_KEYWORD for param in parameters.values()
     )
-    logger.info("[documents] parameters: %s", parameters)
-    logger.info("[documents] accepts_var_kwargs: %s", accepts_var_kwargs)
-    logger.info("[documents] MARKDOWN_EXTRACTION_KWARGS: %s", MARKDOWN_EXTRACTION_KWARGS)
     for key, value in MARKDOWN_EXTRACTION_KWARGS.items():
         if accepts_var_kwargs or key in parameters:
             supported[key] = value
-    logger.info("[documents] supported markdown kwargs: %s", supported)
     return supported
+
+
+def _is_empty_table_sequence_error(exc: ValueError) -> bool:
+    return "min() arg is an empty sequence" in str(exc)
+
+
+def _retry_markdown_without_tables(
+    extractor: object,
+    doc: object,
+    *,
+    base_kwargs: dict[str, object],
+    parser_name: str,
+    path: Path,
+) -> tuple[object, dict[str, object]]:
+    if not callable(extractor):
+        raise TypeError("extractor is not callable")
+
+    retry_kwargs = dict(base_kwargs)
+    if "table_strategy" in retry_kwargs:
+        retry_kwargs["table_strategy"] = None
+    elif "ignore_graphics" in retry_kwargs:
+        retry_kwargs["ignore_graphics"] = True
+    else:
+        raise ValueError("table parser failed and no safe retry knobs available")
+
+    try:
+        output = cast(Callable[..., object], extractor)(doc, **retry_kwargs)
+    except Exception as exc:
+        logger.warning(
+            "[documents] markdown parse failed after table-disabled retry parser=%s path=%s error=%s",
+            parser_name,
+            path,
+            exc,
+            exc_info=exc,
+        )
+        raise
+
+    logger.info(
+        "[documents] markdown parser recovered with table-disabled retry parser=%s path=%s",
+        parser_name,
+        path,
+    )
+    return output, retry_kwargs
 
 
 def _try_enable_pymupdf_layout() -> bool:
