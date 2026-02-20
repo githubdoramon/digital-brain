@@ -28,6 +28,7 @@ from agent.agent_interfaces import (
     build_default_conversational_interface,
 )
 from agents.registry import build_conversational_profile_registry, choose_profile_interface
+from location_inference import infer_current_place
 from observability import trace
 from observability.logger import get_runtime_logger
 from ui_dsl.clarification import extract_need_user_input
@@ -339,6 +340,24 @@ class AgentController:
         state.conversational_profile = self.runtime_profile.name
         return state
 
+    def _inject_inferred_location(
+        self,
+        *,
+        state: AgentState,
+        user_email: str | None,
+    ) -> None:
+        """Attach inferred place metadata into request context when possible."""
+        location = state.request_context.get("location")
+        if not isinstance(location, dict):
+            return
+        try:
+            inferred = infer_current_place(location, user_email=user_email)
+        except Exception as exc:
+            logger.warning("[location_inference] failed to infer location: %s", exc)
+            return
+        if isinstance(inferred, dict):
+            state.request_context["inferred_location"] = inferred
+
     def _log_selected_profile(self) -> None:
         """Log active conversational profile metadata for current run."""
         interface = self._agent_interface()
@@ -467,6 +486,7 @@ class AgentController:
             client_context=client_context,
             ui_submission=ui_submission,
         )
+        self._inject_inferred_location(state=state, user_email=user_email)
 
         try:
             _, clarification_prompt, messages, tools = await self._prepare_execution_context(
@@ -723,6 +743,7 @@ class AgentController:
             client_context=client_context,
             ui_submission=ui_submission,
         )
+        self._inject_inferred_location(state=state, user_email=user_email)
 
         try:
             _, clarification_prompt, messages, tools = await self._prepare_execution_context(

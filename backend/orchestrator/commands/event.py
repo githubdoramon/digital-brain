@@ -59,6 +59,7 @@ def handle_pending_event(
     thread_id: str | None,
     pending_event_id: str | None,
     *,
+    client_context: dict[str, Any] | None = None,
     command_response_text: CommandResponseTextFn,
     command_assistant_metadata: CommandAssistantMetadataFn,
     progress_callback: ProgressCallbackFn | None = None,
@@ -109,6 +110,7 @@ def handle_pending_event(
         "user": user,
         "thread_id": command_thread_id,
         "event_pending_key": key,
+        "client_context": client_context,
         "progress_callback": progress_callback,
     }
     command_result = registry.execute(parsed_cmd, context)
@@ -196,6 +198,15 @@ def _normalize_event_modifications(raw: Any) -> dict[str, Any]:
 def _safe_entity_slug(raw: str) -> str:
     normalized = re.sub(r"[^a-z0-9]+", "-", (raw or "").strip().lower())
     return normalized.strip("-")
+
+
+def _safe_optional_float(value: Any) -> float | None:
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _persist_event_resolved(preview_id: str, status: str) -> None:
@@ -432,18 +443,26 @@ def confirm_event_command(
         created_places = []
         place_id_map = {}
 
-        for new_place in resolution["new_entities"]["places"]:
-            place_name = new_place["name"]
+        for new_place in resolution.get("new_entities", {}).get("places", []):
+            place_name = str(new_place.get("name") or "").strip()
+            if not place_name:
+                continue
+
+            existing_place_id = str(new_place.get("existing_place_id") or "").strip()
+            if existing_place_id:
+                place_id_map[place_name] = existing_place_id
+                continue
+
             place_slug = _safe_entity_slug(place_name) or "place"
             place_id = f"plc_{place_slug}_{uuid4().hex[:6]}"
 
             place_in = PlaceIn(
                 place_id=place_id,
                 name=place_name,
-                city=None,
-                country=None,
-                lat=None,
-                lon=None,
+                city=str(new_place.get("city") or "").strip() or None,
+                country=str(new_place.get("country") or "").strip() or None,
+                lat=_safe_optional_float(new_place.get("lat")),
+                lon=_safe_optional_float(new_place.get("lon")),
                 geohash=None,
             )
 
@@ -489,6 +508,14 @@ def confirm_event_command(
         where = extracted.get("where")
         if where:
             place_id = place_id_map.get(where)
+        if place_id is None:
+            matched_place = (
+                resolution.get("matched_place") if isinstance(resolution, dict) else None
+            )
+            if isinstance(matched_place, dict):
+                matched_place_id = str(matched_place.get("place_id") or "").strip()
+                if matched_place_id:
+                    place_id = matched_place_id
 
         event_id = f"event:{uuid4().hex}"
         when = extracted.get("when")
@@ -503,7 +530,10 @@ def confirm_event_command(
             types=extracted.get("types", ["generic"]),
             title=extracted.get("title", ""),
             summary=extracted.get("summary", ""),
-            raw={"source": "event_command"},
+            raw={
+                "source": "event_command",
+                "inferred_location": resolution.get("inferred_location"),
+            },
         )
 
         logger.info(

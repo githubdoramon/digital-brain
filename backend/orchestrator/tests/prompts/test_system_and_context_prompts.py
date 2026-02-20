@@ -1,6 +1,6 @@
 import sys
 
-from prompts.context import get_self_context
+from prompts.context import get_location_context, get_self_context
 from prompts.system import get_bounded_agent_protocol
 
 
@@ -35,3 +35,28 @@ def test_self_context_includes_known_aliases_and_emails(monkeypatch):
     assert "redacted@example.invalid" in context
     assert "Known user aliases" in context
     assert "R. Canales" in context
+
+
+def test_location_context_includes_inferred_place_details():
+    context = get_location_context(
+        {
+            "timezone": "UTC",
+            "location": {
+                "lat": 38.722,
+                "lon": -9.139,
+                "accuracy_m": 22.4,
+            },
+            "inferred_location": {
+                "place_name": "Home",
+                "city": "Aurora",
+                "country": "Westoria",
+                "source": "known_place_proximity",
+                "confidence": "high",
+                "distance_m": 15.2,
+            },
+        }
+    )
+    assert context is not None
+    assert "Likely current place: Home" in context
+    assert "Place inference source: known_place_proximity" in context
+    assert "Distance to inferred place: 15.2 meters" in context

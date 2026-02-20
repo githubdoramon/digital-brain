@@ -13,6 +13,7 @@ from uuid import uuid4
 
 from commands.parser import ParsedCommand
 from commands.registry import CommandRegistry
+from location_inference import infer_current_place
 from observability.logger import get_runtime_logger
 from ui_dsl.clarification import (
     build_need_user_input,
@@ -1417,15 +1418,61 @@ def handle_event(parsed: ParsedCommand, context: dict) -> dict[str, Any]:
     logger.info("[handle_event] STEP 2: Contact resolution complete")
     _emit_progress(context, "Resolving contacts...")
 
-    # Keep place handling aligned with existing flow
+    # Keep place handling aligned with existing flow.
+    # If location was not explicitly provided, infer a likely place from client context.
     where = extracted.get("where")
+    inferred_location: dict[str, Any] | None = None
+    if not where:
+        client_context = context.get("client_context")
+        client_location = (
+            client_context.get("location") if isinstance(client_context, dict) else None
+        )
+        inferred_location = infer_current_place(client_location, user_email=user_email)
+        inferred_name = (
+            str(inferred_location.get("place_name") or "").strip()
+            if isinstance(inferred_location, dict)
+            else ""
+        )
+        if inferred_name:
+            extracted["where"] = inferred_name
+            where = inferred_name
+            resolution["inferred_location"] = inferred_location
+            logger.info(
+                "[handle_event] Inferred place from location context: %s (source=%s)",
+                inferred_name,
+                inferred_location.get("source"),
+            )
+            place_id = str(inferred_location.get("place_id") or "").strip()
+            if place_id:
+                resolution["matched_place"] = {
+                    "place_id": place_id,
+                    "name": inferred_name,
+                }
+
     if where:
-        resolution["new_entities"]["places"].append(
-            {
+        matched_place = resolution.get("matched_place") if isinstance(resolution, dict) else None
+        matched_place_id = (
+            str(matched_place.get("place_id") or "").strip()
+            if isinstance(matched_place, dict)
+            else ""
+        )
+        if not matched_place_id:
+            new_place_payload: dict[str, Any] = {
                 "name": where,
                 "query": where,
             }
-        )
+            if isinstance(inferred_location, dict):
+                city = str(inferred_location.get("city") or "").strip()
+                country = str(inferred_location.get("country") or "").strip()
+                if city:
+                    new_place_payload["city"] = city
+                if country:
+                    new_place_payload["country"] = country
+                for coordinate in ("lat", "lon"):
+                    value = inferred_location.get(coordinate)
+                    if value is not None:
+                        new_place_payload[coordinate] = value
+            resolution["new_entities"]["places"].append(new_place_payload)
 
     # Replace generic terms with actual names in title and summary
     name_replacements = resolution.get("name_replacements", {})

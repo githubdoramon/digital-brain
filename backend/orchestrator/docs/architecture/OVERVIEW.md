@@ -103,6 +103,7 @@ sequenceDiagram
 - Tool groups are now used for runtime visibility policy (not just metadata).
 - Clarification responses follow `need_user_input` standards and map to UI directives when possible.
 - Contact resolution supports collective participant selectors (domain/company/group phrases); deterministic selectors can auto-persist contact groups, while inferred groups are surfaced in event preview and persisted on user confirmation.
+- Client location context can be enriched with inferred place context (`inferred_location`) using known-place proximity and reverse geocoding fallback.
 - Controller tracks recovery metrics in state metadata (`tool_visibility_escalations_count`, `clarification_requests_count`).
 - Adaptive model routing is always enabled (`agent/model_routing.py`) and selects model/timeout per step.
 - Planner/verifier checks are runtime-enforced (`agent/planning_policy.py`) before final answer completion.

@@ -120,6 +120,7 @@ def get_location_context(client_context: Optional[dict[str, Any]]) -> Optional[s
     timezone_name = str(client_context.get("timezone") or "").strip()
     locale = str(client_context.get("locale") or "").strip()
     location = client_context.get("location")
+    inferred_location = client_context.get("inferred_location")
 
     lines: list[str] = ["Client runtime context:"]
 
@@ -129,12 +130,10 @@ def get_location_context(client_context: Optional[dict[str, Any]]) -> Optional[s
         lines.append(f"- Locale: {locale}")
 
     if isinstance(location, dict):
-        try:
-            lat = float(location.get("lat"))
-            lon = float(location.get("lon"))
+        lat = _as_float(location.get("lat"))
+        lon = _as_float(location.get("lon"))
+        if lat is not None and lon is not None:
             lines.append(f"- Approximate location: {lat:.3f}, {lon:.3f}")
-        except (TypeError, ValueError):
-            pass
 
         accuracy = location.get("accuracy_m")
         if accuracy is not None:
@@ -151,11 +150,44 @@ def get_location_context(client_context: Optional[dict[str, Any]]) -> Optional[s
         if source:
             lines.append(f"- Location source: {source}")
 
+    if isinstance(inferred_location, dict):
+        inferred_name = str(inferred_location.get("place_name") or "").strip()
+        if inferred_name:
+            lines.append(f"- Likely current place: {inferred_name}")
+
+        inferred_city = str(inferred_location.get("city") or "").strip()
+        inferred_country = str(inferred_location.get("country") or "").strip()
+        if inferred_city or inferred_country:
+            locality = ", ".join(part for part in [inferred_city, inferred_country] if part)
+            lines.append(f"- Place locality: {locality}")
+
+        inferred_source = str(inferred_location.get("source") or "").strip()
+        if inferred_source:
+            lines.append(f"- Place inference source: {inferred_source}")
+
+        confidence = str(inferred_location.get("confidence") or "").strip()
+        if confidence:
+            lines.append(f"- Place confidence: {confidence}")
+
+        distance_m = inferred_location.get("distance_m")
+        distance_value = _as_float(distance_m)
+        if distance_value is not None:
+            lines.append(f"- Distance to inferred place: {round(distance_value, 1)} meters")
+
     if len(lines) == 1:
         return None
 
-    lines.append("- Treat this location as approximate context.")
+    lines.append("- Treat coordinates and inferred place as approximate context.")
     return "\n".join(lines)
+
+
+def _as_float(value: Any) -> float | None:
+    if value is None:
+        return None
+    try:
+        return float(str(value))
+    except (TypeError, ValueError):
+        return None
 
 
 def get_skill_index() -> Optional[str]:

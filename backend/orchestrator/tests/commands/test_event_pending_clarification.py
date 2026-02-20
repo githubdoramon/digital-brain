@@ -171,6 +171,77 @@ def test_handle_event_surfaces_proposed_contact_groups(monkeypatch):
     clear_pending_event(context["event_pending_key"])
 
 
+def test_handle_event_prefills_where_from_inferred_known_place(monkeypatch):
+    def fake_extract_event_entities(
+        event_message,
+        context,
+        existing_extracted=None,
+        clarification_messages=None,
+    ):
+        return {
+            "title": "Quick standup",
+            "summary": "Team standup",
+            "when": None,
+            "where": None,
+            "tags": ["work"],
+            "types": ["meeting"],
+            "need_user_input": None,
+        }
+
+    def fake_resolve_contacts(*_args, **_kwargs):
+        return (
+            {
+                "contacts": [],
+                "new_entities": {
+                    "contacts": [],
+                    "places": [],
+                    "documents": [],
+                },
+                "name_replacements": {},
+            },
+            {
+                "ambiguous_contacts": [],
+                "suggested_relationships": [],
+            },
+        )
+
+    monkeypatch.setattr(
+        "commands.handlers.event._extract_event_entities_with_llm",
+        fake_extract_event_entities,
+    )
+    monkeypatch.setattr(
+        "commands.handlers.event._resolve_contacts_with_agent",
+        fake_resolve_contacts,
+    )
+    monkeypatch.setattr(
+        "commands.handlers.event.infer_current_place",
+        lambda *_args, **_kwargs: {
+            "place_id": "plc_home",
+            "place_name": "Home",
+            "city": "Aurora",
+            "country": "Westoria",
+            "source": "known_place_proximity",
+            "confidence": "high",
+        },
+    )
+
+    parsed = ParsedCommand(
+        command="event",
+        args="quick standup",
+        raw_message="/event quick standup",
+    )
+    context = {
+        "user_email": "user@example.com",
+        "event_pending_key": "user@example.com:thread-xyz",
+        "client_context": {"location": {"lat": 38.72, "lon": -9.13}},
+    }
+
+    result = handle_event(parsed, context)
+    assert result.get("type") == "event_confirmation"
+    assert result.get("extracted", {}).get("where") == "Home"
+    assert result.get("resolution", {}).get("matched_place", {}).get("place_id") == "plc_home"
+
+
 def test_pending_clarification_accepts_plain_follow_up(monkeypatch):
     user_email = "user@example.com"
     thread_id = "thread-123"

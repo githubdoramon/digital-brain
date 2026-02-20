@@ -1137,3 +1137,39 @@ class TestClientContextNormalization:
         )
 
         assert normalized == {"timezone": "UTC"}
+
+    def test_injects_inferred_location_when_available(self, controller, monkeypatch):
+        state = AgentState(goal="Where am I?")
+        state.request_context = {"location": {"lat": 37.775, "lon": -122.419, "accuracy_m": 30.0}}
+
+        monkeypatch.setattr(
+            "agent.controller.infer_current_place",
+            lambda *_args, **_kwargs: {
+                "place_name": "Home",
+                "place_id": "plc_home",
+                "confidence": "high",
+                "source": "known_place_proximity",
+            },
+        )
+
+        controller._inject_inferred_location(state=state, user_email="user@example.com")
+
+        inferred = state.request_context.get("inferred_location")
+        assert isinstance(inferred, dict)
+        assert inferred.get("place_name") == "Home"
+
+    def test_skips_inference_without_location(self, controller, monkeypatch):
+        state = AgentState(goal="Where am I?")
+        state.request_context = {"timezone": "UTC"}
+
+        called = {"value": False}
+
+        def _fake_infer(*_args, **_kwargs):
+            called["value"] = True
+            return None
+
+        monkeypatch.setattr("agent.controller.infer_current_place", _fake_infer)
+        controller._inject_inferred_location(state=state, user_email="user@example.com")
+
+        assert called["value"] is False
+        assert "inferred_location" not in state.request_context

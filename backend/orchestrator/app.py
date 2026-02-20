@@ -1143,6 +1143,7 @@ def _handle_command(
     user_email: str,
     user: dict,
     thread_id: str | None,
+    client_context: dict[str, Any] | None = None,
     progress_callback: Callable[[str], None] | None = None,
 ) -> tuple[dict[str, Any], str, dict[str, Any] | None] | None:
     """
@@ -1172,6 +1173,7 @@ def _handle_command(
         "user": user,
         "thread_id": command_thread_id,
         "event_pending_key": pending_key,
+        "client_context": client_context,
         "progress_callback": progress_callback,
     }
     command_result = registry.execute(parsed_cmd, context)
@@ -1225,6 +1227,9 @@ async def ask(
             user,
             payload.thread_id or payload.session_id,
             payload.pending_event_id,
+            client_context=payload.client_context.model_dump(exclude_none=True)
+            if payload.client_context
+            else None,
             command_response_text=_command_response_text,
             command_assistant_metadata=_command_assistant_metadata,
             progress_callback=None,
@@ -1235,6 +1240,9 @@ async def ask(
                 user_email,
                 user,
                 payload.thread_id or payload.session_id,
+                payload.client_context.model_dump(exclude_none=True)
+                if payload.client_context
+                else None,
                 progress_callback=None,
             )
         if command_payload:
@@ -1400,6 +1408,9 @@ async def ask_stream(
                         user,
                         payload.thread_id or payload.session_id,
                         payload.pending_event_id,
+                        client_context=payload.client_context.model_dump(exclude_none=True)
+                        if payload.client_context
+                        else None,
                         command_response_text=_command_response_text,
                         command_assistant_metadata=_command_assistant_metadata,
                         progress_callback=emit_status,
@@ -1410,6 +1421,9 @@ async def ask_stream(
                             user_email,
                             user,
                             payload.thread_id or payload.session_id,
+                            payload.client_context.model_dump(exclude_none=True)
+                            if payload.client_context
+                            else None,
                             progress_callback=emit_status,
                         )
                     if not command_payload:
