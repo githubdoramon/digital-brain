@@ -27,7 +27,7 @@ type StreamEvent =
   | { type: 'error'; message?: string }
   | { type: string; [key: string]: unknown };
 
-type StreamCallbacks = {
+export type StreamCallbacks = {
   onSessionInfo?: (threadId: string) => void;
   onRunId?: (runId: string) => void;
   onStatus?: (message: string) => void;
@@ -158,18 +158,25 @@ function shouldTryRunPolling(error: unknown): boolean {
   );
 }
 
-async function pollRunStatus(
+export async function waitForRunCompletion(
   runId: string,
   token: string | null | undefined,
   callbacks?: StreamCallbacks,
+  options?: {
+    intervalMs?: number;
+    maxAttempts?: number;
+  },
 ): Promise<AskResponse> {
   if (!token) {
     throw new Error('Missing token for run polling');
   }
 
-  for (let attempt = 0; attempt < 45; attempt += 1) {
+  const intervalMs = options?.intervalMs ?? 2000;
+  const maxAttempts = options?.maxAttempts ?? 45;
+
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
     if (attempt > 0) {
-      await delay(2000);
+      await delay(intervalMs);
     }
 
     const run = (await apiFetch(`/mobile/ask/runs/${encodeURIComponent(runId)}`, {
@@ -367,7 +374,7 @@ export async function askWithStreaming({
   } catch (error) {
     if (runId && shouldTryRunPolling(error)) {
       callbacks?.onStatus?.('Reconnecting...');
-      return pollRunStatus(runId, token, callbacks);
+      return waitForRunCompletion(runId, token, callbacks);
     }
     throw error;
   }
@@ -375,7 +382,7 @@ export async function askWithStreaming({
   if (!doneBundle) {
     if (runId) {
       callbacks?.onStatus?.('Reconnecting...');
-      return pollRunStatus(runId, token, callbacks);
+      return waitForRunCompletion(runId, token, callbacks);
     }
     throw new Error('Stream ended before final response bundle');
   }

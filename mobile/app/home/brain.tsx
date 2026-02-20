@@ -32,8 +32,15 @@ import type {
   EventDraft,
   EventDraftModifications,
 } from '@/components/event-draft/types';
-import { askWithStreaming } from '@/chat/streaming';
-import { loadChatSession, saveChatSession, StoredChatSession } from '@/chat/session';
+import { askWithStreaming, waitForRunCompletion } from '@/chat/streaming';
+import {
+  clearPendingRun,
+  loadChatSession,
+  loadPendingRun,
+  saveChatSession,
+  savePendingRun,
+  StoredChatSession,
+} from '@/chat/session';
 import { restoreChatHistory } from '@/chat/threads';
 import type { CommandResult as ThreadCommandResult, EventResolvedStatus } from '@/chat/threads';
 import type { UiDirectiveBlock, UiDirectives, UiSubmissionInput } from '@/chat/uiDirectives';
@@ -536,6 +543,94 @@ export default function ChatScreen() {
     void saveChatSession(stored);
   }, [threadId, pendingEventId, isBootstrapping, isAuthLoading]);
 
+  const resumePendingRun = useCallback(async () => {
+    if (!token) return;
+    const pendingRun = await loadPendingRun();
+    if (!pendingRun?.runId) return;
+
+    setForceScrollNext(true);
+    setMessages((prev) => {
+      if (prev.some((message) => message.id === pendingRun.pendingMessageId)) {
+        return prev;
+      }
+      return [
+        ...prev,
+        {
+          id: pendingRun.pendingMessageId,
+          role: 'assistant',
+          content: 'Reconnecting...',
+          pending: true,
+        },
+      ];
+    });
+
+    const updatePendingMessage = (nextContent: string) => {
+      setMessages((prev) =>
+        prev.map((message) =>
+          message.id === pendingRun.pendingMessageId
+            ? {
+                ...message,
+                content: nextContent,
+                pending: true,
+              }
+            : message,
+        ),
+      );
+    };
+
+    const setProgressChip = (chipLabelRaw: string) => {
+      const chipLabel = chipLabelRaw.trim();
+      if (!chipLabel) return;
+      setMessages((prev) =>
+        prev.map((message) => {
+          if (message.id !== pendingRun.pendingMessageId) {
+            return message;
+          }
+          if (message.metadata?.progress_chip === chipLabel) {
+            return message;
+          }
+          return {
+            ...message,
+            metadata: {
+              ...message.metadata,
+              progress_chip: chipLabel,
+            },
+          };
+        }),
+      );
+    };
+
+    try {
+      await waitForRunCompletion(pendingRun.runId, token, {
+        onSessionInfo: (nextThreadId) => {
+          setThreadId((prev) => nextThreadId ?? prev);
+        },
+        onStatus: (statusMessage) => {
+          updatePendingMessage(statusMessage || 'Reconnecting...');
+        },
+        onProgressChip: setProgressChip,
+      });
+
+      const restored = await restoreChatHistory(token, {
+        threadId: pendingRun.threadId,
+        pendingEventId,
+      });
+      setThreadId(restored.threadId);
+      setPendingEventId(restored.pendingEventId);
+      if (restored.messages.length > 0) {
+        setMessages(restored.messages);
+      }
+      await clearPendingRun();
+    } catch {
+      // Keep pending run marker for another retry on next foreground.
+    }
+  }, [pendingEventId, token]);
+
+  useEffect(() => {
+    if (!token || !allowed || isAuthLoading || isBootstrapping) return;
+    void resumePendingRun();
+  }, [allowed, isAuthLoading, isBootstrapping, resumePendingRun, token]);
+
   useEffect(() => {
     if (!token || !allowed || isAuthLoading || isBootstrapping) return;
 
@@ -553,6 +648,7 @@ export default function ChatScreen() {
           if (restored.messages.length > 0) {
             setMessages(restored.messages);
           }
+          await resumePendingRun();
         } catch {
           // Ignore foreground sync failures and keep current UI state.
         }
@@ -562,7 +658,7 @@ export default function ChatScreen() {
     return () => {
       subscription.remove();
     };
-  }, [allowed, isAuthLoading, isBootstrapping, pendingEventId, threadId, token]);
+  }, [allowed, isAuthLoading, isBootstrapping, pendingEventId, resumePendingRun, threadId, token]);
 
   useEffect(() => {
     if (!pendingEventId) {
@@ -663,6 +759,7 @@ export default function ChatScreen() {
     };
 
     setIsSending(true);
+    let activeRunId: string | null = null;
     try {
       let streamedContent = '';
       let lastStatus = 'Thinking...';
@@ -674,6 +771,25 @@ export default function ChatScreen() {
         callbacks: {
           onSessionInfo: (threadIdFromStream) => {
             setThreadId((prev) => threadIdFromStream ?? prev);
+            if (activeRunId) {
+              void savePendingRun({
+                runId: activeRunId,
+                pendingMessageId: pendingId,
+                threadId: threadIdFromStream ?? null,
+                question: outboundText,
+                startedAt: Date.now(),
+              });
+            }
+          },
+          onRunId: (runIdFromStream) => {
+            activeRunId = runIdFromStream;
+            void savePendingRun({
+              runId: runIdFromStream,
+              pendingMessageId: pendingId,
+              threadId: threadId,
+              question: outboundText,
+              startedAt: Date.now(),
+            });
           },
           onStatus: (statusMessage) => {
             lastStatus = statusMessage;
@@ -696,6 +812,8 @@ export default function ChatScreen() {
           onProgressChip: setProgressChip,
         },
       });
+
+      await clearPendingRun();
 
       setThreadId((prev) => response.thread_id ?? prev);
       const commandResult = response.command_result as CommandResult | undefined;
@@ -731,6 +849,7 @@ export default function ChatScreen() {
     } catch (error) {
       const authExpired = (error as Error & { authExpired?: boolean }).authExpired;
       if (authExpired) {
+        await clearPendingRun();
         await signOut();
         setForceScrollNext(true);
         setMessages((prev) =>
@@ -747,18 +866,25 @@ export default function ChatScreen() {
         return;
       }
       const requestError = backendErrorDetails(error);
+      if (!activeRunId) {
+        await clearPendingRun();
+      }
       setForceScrollNext(true);
       setMessages((prev) =>
         prev.map((message) =>
           message.id === pendingId
             ? {
                 ...message,
-                content: 'I hit a snag reaching the brain. Try again in a moment.',
-                pending: false,
-                metadata: {
-                  ...message.metadata,
-                  request_error: requestError,
-                },
+                content: activeRunId
+                  ? 'Reconnecting...'
+                  : 'I hit a snag reaching the brain. Try again in a moment.',
+                pending: Boolean(activeRunId),
+                metadata: activeRunId
+                  ? message.metadata
+                  : {
+                      ...message.metadata,
+                      request_error: requestError,
+                    },
               }
             : message,
         ),
@@ -766,7 +892,7 @@ export default function ChatScreen() {
     } finally {
       setIsSending(false);
     }
-  }, [allowed, input, isBootstrapping, isSending, pendingEventId, signOut, token]);
+  }, [allowed, input, isBootstrapping, isSending, pendingEventId, signOut, threadId, token]);
 
   const loadEventEditorContacts = useCallback(async (): Promise<EventContactOption[]> => {
     if (!token) return [];
