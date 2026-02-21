@@ -1,0 +1,423 @@
+import MapView, { Marker, Region } from 'react-native-maps';
+import React, { useEffect, useMemo, useState } from 'react';
+import {
+  Alert,
+  KeyboardAvoidingView,
+  Platform,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  View,
+} from 'react-native';
+import { useRouter } from 'expo-router';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+
+import { apiFetch } from '@/api/client';
+import { AppPressable as Pressable } from '@/components/AppPressable';
+import { Card } from '@/components/Card';
+import { FloatingSaveButton } from '@/components/FloatingSaveButton';
+import { theme } from '@/theme';
+import type { Place } from '@/types/place';
+import { normalizeRouteParam } from '@/utils/text';
+
+type Draft = {
+  place_id: string;
+  name: string;
+  aliasesText: string;
+  address: string;
+  city: string;
+  country: string;
+  latText: string;
+  lonText: string;
+};
+
+const DEFAULT_REGION: Region = {
+  latitude: 37.7749,
+  longitude: -122.4194,
+  latitudeDelta: 0.04,
+  longitudeDelta: 0.04,
+};
+
+function toAliases(value: string): string[] {
+  return value
+    .split(',')
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function toNumberOrNull(value: string): number | null {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function buildPlaceId(draft: Draft): string {
+  const source = draft.name.trim() || draft.address.trim() || draft.city.trim() || 'place';
+  const slug = source
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 40);
+  return `place-${slug || 'new'}-${Date.now().toString(36)}`;
+}
+
+function draftFromPlace(place: Place): Draft {
+  return {
+    place_id: place.place_id,
+    name: place.name || '',
+    aliasesText: (place.aliases || []).join(', '),
+    address: place.address || '',
+    city: place.city || '',
+    country: place.country || '',
+    latText: typeof place.lat === 'number' ? String(place.lat) : '',
+    lonText: typeof place.lon === 'number' ? String(place.lon) : '',
+  };
+}
+
+function getRegionFromDraft(draft: Draft): Region {
+  const lat = toNumberOrNull(draft.latText);
+  const lon = toNumberOrNull(draft.lonText);
+  if (lat === null || lon === null) return DEFAULT_REGION;
+  return {
+    latitude: lat,
+    longitude: lon,
+    latitudeDelta: 0.01,
+    longitudeDelta: 0.01,
+  };
+}
+
+export function PlaceEditorScreen({ placeId }: { placeId?: string }) {
+  const router = useRouter();
+  const insets = useSafeAreaInsets();
+  const normalizedPlaceId = normalizeRouteParam(placeId);
+  const isCreating = !normalizedPlaceId;
+  const [initial, setInitial] = useState<Draft | null>(null);
+  const [draft, setDraft] = useState<Draft | null>(null);
+  const [isSaving, setIsSaving] = useState(false);
+  const [isLoading, setIsLoading] = useState(!isCreating);
+
+  useEffect(() => {
+    if (isCreating) {
+      const empty: Draft = {
+        place_id: '',
+        name: '',
+        aliasesText: '',
+        address: '',
+        city: '',
+        country: '',
+        latText: '',
+        lonText: '',
+      };
+      setInitial(empty);
+      setDraft(empty);
+      setIsLoading(false);
+      return;
+    }
+
+    let mounted = true;
+    void (async () => {
+      setIsLoading(true);
+      try {
+        const result = (await apiFetch(
+          `/mobile/places/${encodeURIComponent(normalizedPlaceId)}`,
+        )) as Place;
+        if (!mounted) return;
+        const normalized = draftFromPlace(result);
+        setInitial(normalized);
+        setDraft(normalized);
+      } catch (error) {
+        console.warn('[places] detail load failed', error);
+        if (mounted) {
+          Alert.alert('Load failed', 'Unable to load place details. Please go back and try again.');
+        }
+      } finally {
+        if (mounted) {
+          setIsLoading(false);
+        }
+      }
+    })();
+
+    return () => {
+      mounted = false;
+    };
+  }, [isCreating, normalizedPlaceId]);
+
+  const isDirty = useMemo(() => {
+    if (!draft || !initial) return false;
+    return JSON.stringify(draft) !== JSON.stringify(initial);
+  }, [draft, initial]);
+
+  const markerCoordinate = useMemo(() => {
+    if (!draft) return null;
+    const lat = toNumberOrNull(draft.latText);
+    const lon = toNumberOrNull(draft.lonText);
+    if (lat === null || lon === null) return null;
+    return { latitude: lat, longitude: lon };
+  }, [draft]);
+
+  const region = useMemo(() => {
+    if (!draft) return DEFAULT_REGION;
+    return getRegionFromDraft(draft);
+  }, [draft]);
+
+  const handleSave = async () => {
+    if (!draft) return;
+    setIsSaving(true);
+    try {
+      const place_id = isCreating ? buildPlaceId(draft) : normalizedPlaceId;
+      const payload = {
+        place_id,
+        name: draft.name.trim() || null,
+        aliases: toAliases(draft.aliasesText),
+        address: draft.address.trim() || null,
+        city: draft.city.trim() || null,
+        country: draft.country.trim() || null,
+        lat: toNumberOrNull(draft.latText),
+        lon: toNumberOrNull(draft.lonText),
+        geohash: null,
+      };
+      await apiFetch('/mobile/ingest/place', {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      });
+
+      if (isCreating) {
+        router.replace({
+          pathname: '/places/[placeId]',
+          params: { placeId: place_id },
+        });
+        return;
+      }
+
+      const refreshed = (await apiFetch(`/mobile/places/${encodeURIComponent(place_id)}`)) as Place;
+      const normalized = draftFromPlace(refreshed);
+      setInitial(normalized);
+      setDraft(normalized);
+    } catch (error) {
+      console.warn('[places] save failed', error);
+      Alert.alert('Save failed', 'Unable to save this place. Please try again.');
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  if (!draft) {
+    return (
+      <View style={styles.container}>
+        <View style={styles.emptyState}>
+          <Text style={styles.emptyTitle}>{isLoading ? 'Loading place...' : 'Place unavailable'}</Text>
+        </View>
+      </View>
+    );
+  }
+
+  return (
+    <KeyboardAvoidingView
+      style={styles.container}
+      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+      keyboardVerticalOffset={0}
+    >
+      <ScrollView
+        contentContainerStyle={[
+          styles.content,
+          {
+            paddingTop: insets.top + 56,
+            paddingBottom: insets.bottom + 120,
+          },
+        ]}
+      >
+        <Text style={styles.title}>{isCreating ? 'Create place' : 'Edit place'}</Text>
+        <Text style={styles.subtitle}>Update details and adjust its map location.</Text>
+
+        <Card style={styles.section}>
+          <Text style={styles.sectionTitle}>Details</Text>
+          <TextInput
+            style={styles.input}
+            value={draft.name}
+            onChangeText={(value) => setDraft({ ...draft, name: value })}
+            placeholder="Place name"
+            placeholderTextColor={theme.colors.mutedInk}
+          />
+          <TextInput
+            style={styles.input}
+            value={draft.aliasesText}
+            onChangeText={(value) => setDraft({ ...draft, aliasesText: value })}
+            placeholder="aliases, comma separated"
+            placeholderTextColor={theme.colors.mutedInk}
+          />
+          <TextInput
+            style={styles.input}
+            value={draft.address}
+            onChangeText={(value) => setDraft({ ...draft, address: value })}
+            placeholder="Address"
+            placeholderTextColor={theme.colors.mutedInk}
+          />
+          <TextInput
+            style={styles.input}
+            value={draft.city}
+            onChangeText={(value) => setDraft({ ...draft, city: value })}
+            placeholder="City"
+            placeholderTextColor={theme.colors.mutedInk}
+          />
+          <TextInput
+            style={styles.input}
+            value={draft.country}
+            onChangeText={(value) => setDraft({ ...draft, country: value })}
+            placeholder="Country"
+            placeholderTextColor={theme.colors.mutedInk}
+          />
+        </Card>
+
+        <Card style={styles.section}>
+          <Text style={styles.sectionTitle}>Coordinates</Text>
+          <View style={styles.coordinateRow}>
+            <TextInput
+              style={[styles.input, styles.coordinateInput]}
+              value={draft.latText}
+              keyboardType="numbers-and-punctuation"
+              onChangeText={(value) => setDraft({ ...draft, latText: value })}
+              placeholder="Latitude"
+              placeholderTextColor={theme.colors.mutedInk}
+            />
+            <TextInput
+              style={[styles.input, styles.coordinateInput]}
+              value={draft.lonText}
+              keyboardType="numbers-and-punctuation"
+              onChangeText={(value) => setDraft({ ...draft, lonText: value })}
+              placeholder="Longitude"
+              placeholderTextColor={theme.colors.mutedInk}
+            />
+          </View>
+          <Text style={styles.helper}>Drag the marker to adjust precise coordinates.</Text>
+          <View style={styles.mapWrap}>
+            <MapView style={styles.map} region={region}>
+              {markerCoordinate ? (
+                <Marker
+                  coordinate={markerCoordinate}
+                  draggable
+                  onDragEnd={(event) => {
+                    const { latitude, longitude } = event.nativeEvent.coordinate;
+                    setDraft({
+                      ...draft,
+                      latText: String(Number(latitude.toFixed(6))),
+                      lonText: String(Number(longitude.toFixed(6))),
+                    });
+                  }}
+                />
+              ) : null}
+            </MapView>
+            {!markerCoordinate ? (
+              <Pressable
+                onPress={() =>
+                  setDraft({
+                    ...draft,
+                    latText: String(Number(DEFAULT_REGION.latitude.toFixed(6))),
+                    lonText: String(Number(DEFAULT_REGION.longitude.toFixed(6))),
+                  })
+                }
+                style={styles.addMarkerButton}
+              >
+                <Text style={styles.addMarkerText}>Set initial marker</Text>
+              </Pressable>
+            ) : null}
+          </View>
+        </Card>
+      </ScrollView>
+
+      <FloatingSaveButton
+        visible={isDirty}
+        label={isSaving ? 'Saving...' : isCreating ? 'Create place' : 'Save changes'}
+        onPress={handleSave}
+        disabled={isSaving}
+        loading={isSaving}
+      />
+    </KeyboardAvoidingView>
+  );
+}
+
+const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+    backgroundColor: theme.colors.background,
+  },
+  emptyState: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 24,
+  },
+  emptyTitle: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: theme.colors.ink,
+  },
+  content: {
+    paddingHorizontal: 20,
+    gap: 16,
+  },
+  title: {
+    fontSize: 26,
+    fontWeight: '700',
+    color: theme.colors.ink,
+  },
+  subtitle: {
+    fontSize: 14,
+    color: theme.colors.mutedInk,
+  },
+  section: {
+    padding: 16,
+    gap: 10,
+  },
+  sectionTitle: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: theme.colors.ink,
+  },
+  input: {
+    borderWidth: 1,
+    borderColor: theme.colors.line,
+    borderRadius: theme.radius.md,
+    backgroundColor: '#fff',
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    color: theme.colors.ink,
+  },
+  coordinateRow: {
+    flexDirection: 'row',
+    gap: 8,
+  },
+  coordinateInput: {
+    flex: 1,
+  },
+  helper: {
+    fontSize: 12,
+    color: theme.colors.mutedInk,
+  },
+  mapWrap: {
+    borderRadius: theme.radius.lg,
+    overflow: 'hidden',
+    borderWidth: 1,
+    borderColor: theme.colors.line,
+    position: 'relative',
+  },
+  map: {
+    height: 240,
+    width: '100%',
+  },
+  addMarkerButton: {
+    position: 'absolute',
+    bottom: 12,
+    alignSelf: 'center',
+    backgroundColor: '#fff',
+    borderRadius: theme.radius.md,
+    borderWidth: 1,
+    borderColor: theme.colors.line,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+  },
+  addMarkerText: {
+    color: theme.colors.ink,
+    fontSize: 12,
+    fontWeight: '600',
+  },
+});

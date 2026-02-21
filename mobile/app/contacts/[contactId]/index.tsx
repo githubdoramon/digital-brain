@@ -25,8 +25,10 @@ import { Button } from '@/components/Button';
 import { Card } from '@/components/Card';
 import { ContactActionMenu } from '@/components/ContactActionMenu';
 import { FloatingSaveButton } from '@/components/FloatingSaveButton';
+import { LinkedPlacesCard } from '@/components/contact/LinkedPlacesCard';
 import { RelationshipChips } from '@/components/RelationshipChips';
 import { theme } from '@/theme';
+import { normalizeRouteParam } from '@/utils/text';
 
 type Relationship = {
   relationship_id: string;
@@ -103,15 +105,6 @@ function buildContactId(draft: Contact): string {
     .slice(0, 32);
   const suffix = Date.now().toString(36);
   return `${slug || 'contact'}-${suffix}`;
-}
-
-function normalizeRouteParam(value: string | undefined): string {
-  if (!value) return '';
-  try {
-    return decodeURIComponent(value);
-  } catch {
-    return value;
-  }
 }
 
 export default function ContactDetailScreen() {
@@ -279,18 +272,22 @@ export default function ContactDetailScreen() {
 
   const handleSave = async () => {
     if (!draft) return;
+    const normalizedName = draft.display_name.trim();
+    if (isCreating && !normalizedName) {
+      Alert.alert('Name required', 'Please enter a name for this contact before saving.');
+      return;
+    }
     setIsSaving(true);
     try {
       const targetContactId = isCreating ? buildContactId(draft) : contact?.contact_id;
       if (!targetContactId) {
         return;
       }
-      const normalizedName = draft.display_name.trim();
       await apiFetch('/mobile/ingest/contact', {
         method: 'POST',
         body: JSON.stringify({
           contact_id: targetContactId,
-          display_name: normalizedName || 'New contact',
+          display_name: normalizedName || (isCreating ? 'New contact' : draft.display_name),
           aliases: textToList(aliasesText),
           birthday: draft.birthday ? draft.birthday : null,
           emails: draft.emails,
@@ -312,6 +309,7 @@ export default function ContactDetailScreen() {
       }
     } catch (error) {
       console.warn('[contacts] save failed', error);
+      Alert.alert('Save failed', 'Unable to save this contact. Please try again.');
     } finally {
       setIsSaving(false);
     }
@@ -424,6 +422,8 @@ export default function ContactDetailScreen() {
             </Pressable>
           </Card>
         ) : null}
+
+        {!isCreating && contactParam ? <LinkedPlacesCard contactId={contactParam} /> : null}
 
         <Card style={styles.section}>
           <Text style={styles.sectionTitle}>Contact</Text>

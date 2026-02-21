@@ -67,6 +67,7 @@ from schemas import (
     ContactGroupOut,
     ContactIn,
     ContactMergeIn,
+    ContactPlaceLinkIn,
     ContactRelationshipIn,
     DailyBriefingIn,
     DailyBriefingOut,
@@ -488,6 +489,63 @@ def get_place(place_id: str, user: dict = Depends(get_current_user)):
     return place
 
 
+@api.get("/mobile/places")
+def list_mobile_places(
+    user: dict = Depends(get_current_user),
+    q: str | None = Query(default=None),
+    limit: int = Query(default=200, ge=1, le=500),
+):
+    return {"places": places_service.list_places(q, limit=limit)}
+
+
+@api.get("/mobile/contacts/{contact_id}/places")
+def list_mobile_contact_places(contact_id: str, user: dict = Depends(get_current_user)):
+    contact = contacts_service.get_contact(contact_id)
+    if contact is None or contacts_service.is_external_placeholder(contact.get("display_name")):
+        raise HTTPException(status_code=404, detail="Contact not found")
+    return {"places": places_service.list_contact_places(contact_id)}
+
+
+@api.post("/mobile/contacts/{contact_id}/places")
+def upsert_mobile_contact_place(
+    contact_id: str,
+    payload: ContactPlaceLinkIn,
+    user: dict = Depends(get_current_user),
+):
+    contact = contacts_service.get_contact(contact_id)
+    if contact is None or contacts_service.is_external_placeholder(contact.get("display_name")):
+        raise HTTPException(status_code=404, detail="Contact not found")
+
+    place = places_service.get_place(payload.place_id)
+    if place is None:
+        raise HTTPException(status_code=404, detail="Place not found")
+
+    places_service.upsert_contact_place(
+        contact_id=contact_id,
+        place_id=payload.place_id,
+        role=payload.role,
+        source=payload.source,
+        confidence=payload.confidence,
+    )
+    return {"ok": True}
+
+
+@api.delete("/mobile/contacts/{contact_id}/places/{place_id}")
+def unlink_mobile_contact_place(
+    contact_id: str,
+    place_id: str,
+    user: dict = Depends(get_current_user),
+):
+    contact = contacts_service.get_contact(contact_id)
+    if contact is None or contacts_service.is_external_placeholder(contact.get("display_name")):
+        raise HTTPException(status_code=404, detail="Contact not found")
+
+    deleted = places_service.unlink_contact_place(contact_id=contact_id, place_id=place_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Contact-place link not found")
+    return {"ok": True}
+
+
 @api.get("/mobile/contacts/{contact_id}/avatar")
 def get_contact_avatar(contact_id: str, _: dict = Depends(get_current_user)):
     contact = contacts_service.get_contact(contact_id)
@@ -620,6 +678,7 @@ async def handle_telegram_messages(
 
 
 @api.post("/ingest/place")
+@api.post("/mobile/ingest/place")
 def ingest_place(p: PlaceIn, user: dict = Depends(get_current_user)):
     places_service.ingest_place(p)
     return {"ok": True}

@@ -809,8 +809,6 @@ def _replace_generic_terms_in_text(
     result = text
     for generic, actual in replacements.items():
         # Case-insensitive replacement that preserves case structure
-        import re
-
         pattern = re.compile(re.escape(generic), re.IGNORECASE)
         result = pattern.sub(actual, result)
     return result
@@ -1025,6 +1023,7 @@ def _suggest_relationships_from_context(
     message: str,
     extracted: dict[str, Any],
     resolution: dict[str, Any],
+    user_email: str = "",
 ) -> list[dict[str, Any]]:
     """
     Analyze the event context to suggest relationships between contacts.
@@ -1042,6 +1041,7 @@ def _suggest_relationships_from_context(
         List of suggested relationships with from/to contacts and type
     """
     from llm_helpers import call_llm_json
+    from prompts.context import get_user_facts_context
 
     logger.info("[relationship_suggestion] Analyzing event for relationship suggestions")
 
@@ -1066,10 +1066,13 @@ def _suggest_relationships_from_context(
         contact_list,
     )
 
+    user_facts_ctx = get_user_facts_context(user_email, message) if user_email else None
+    user_facts_section = f"\n{user_facts_ctx}" if user_facts_ctx else ""
+
     prompt = f"""Analyze this event description and identify any implied relationships between the people mentioned.
 
 Event: "{message}"
-People involved: {contact_list}
+People involved: {contact_list}{user_facts_section}
 
 Common relationship types:
 - Family: parent, child, sibling, spouse, partner, grandparent, grandchild, cousin, uncle, aunt, nephew, niece
@@ -1696,8 +1699,11 @@ def handle_event(parsed: ParsedCommand, context: dict) -> dict[str, Any]:
             }
 
             if where_source == "inferred_location" and isinstance(inferred_location, dict):
+                address = str(inferred_location.get("address") or "").strip()
                 city = str(inferred_location.get("city") or "").strip()
                 country = str(inferred_location.get("country") or "").strip()
+                if address:
+                    new_place_payload["address"] = address
                 if city:
                     new_place_payload["city"] = city
                 if country:
@@ -1718,7 +1724,7 @@ def handle_event(parsed: ParsedCommand, context: dict) -> dict[str, Any]:
                     geocoded_name = str(geocoded_place.get("place_name") or where).strip() or where
                     extracted["where"] = geocoded_name
                     new_place_payload["name"] = geocoded_name
-                    for field_name in ("city", "country", "lat", "lon"):
+                    for field_name in ("address", "city", "country", "lat", "lon"):
                         field_value = geocoded_place.get(field_name)
                         if field_value is not None:
                             new_place_payload[field_name] = field_value

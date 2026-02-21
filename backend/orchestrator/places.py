@@ -1,12 +1,12 @@
 from __future__ import annotations
 
 import re
-from math import asin, cos, radians, sin, sqrt
 from typing import Any
 
 from rapidfuzz import fuzz
 
 from db import get_conn
+from geo_utils import haversine_meters
 from search_normalization import normalize_search_text
 
 __all__ = [
@@ -14,9 +14,11 @@ __all__ = [
     "find_best_place_match",
     "get_place",
     "ingest_place",
+    "list_places",
     "list_contact_places",
     "resolve_contact_place",
     "search_places",
+    "unlink_contact_place",
     "upsert_contact_place",
 ]
 
@@ -37,7 +39,7 @@ def get_place(place_id: str) -> dict[str, Any] | None:
     with get_conn() as conn, conn.cursor() as cur:
         cur.execute(
             """
-            SELECT place_id, name, aliases, city, country, lat, lon, geohash
+            SELECT place_id, name, aliases, address, city, country, lat, lon, geohash
             FROM places
             WHERE place_id = %s
             """,
@@ -52,11 +54,12 @@ def ingest_place(place: Any) -> None:
     with get_conn() as conn, conn.cursor() as cur:
         cur.execute(
             """
-            INSERT INTO places (place_id, name, aliases, city, country, lat, lon, geohash)
-            VALUES (%s,%s,%s,%s,%s,%s,%s,%s)
+            INSERT INTO places (place_id, name, aliases, address, city, country, lat, lon, geohash)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)
             ON CONFLICT (place_id) DO UPDATE
               SET name=EXCLUDED.name,
                   aliases=EXCLUDED.aliases,
+                  address=EXCLUDED.address,
                   city=EXCLUDED.city,
                   country=EXCLUDED.country,
                   lat=EXCLUDED.lat,
@@ -67,6 +70,7 @@ def ingest_place(place: Any) -> None:
                 place.place_id,
                 place.name,
                 aliases,
+                getattr(place, "address", None),
                 place.city,
                 place.country,
                 place.lat,
@@ -258,6 +262,26 @@ def upsert_contact_place(
         conn.commit()
 
 
+def unlink_contact_place(*, contact_id: str, place_id: str) -> bool:
+    clean_contact_id = str(contact_id or "").strip()
+    clean_place_id = str(place_id or "").strip()
+    if not clean_contact_id or not clean_place_id:
+        return False
+
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            DELETE FROM contact_places
+            WHERE contact_id = %s
+              AND place_id = %s
+            """,
+            (clean_contact_id, clean_place_id),
+        )
+        deleted = cur.rowcount > 0
+        conn.commit()
+        return deleted
+
+
 def list_contact_places(contact_id: str, role_hint: str | None = None) -> list[dict[str, Any]]:
     clean_contact_id = str(contact_id or "").strip()
     if not clean_contact_id:
@@ -274,6 +298,7 @@ def list_contact_places(contact_id: str, role_hint: str | None = None) -> list[d
                 cp.confidence,
                 p.name,
                 p.aliases,
+                p.address,
                 p.city,
                 p.country,
                 p.lat,
@@ -354,12 +379,50 @@ def _list_places() -> list[dict[str, Any]]:
     with get_conn() as conn, conn.cursor() as cur:
         cur.execute(
             """
-            SELECT place_id, name, aliases, city, country, lat, lon
+            SELECT place_id, name, aliases, address, city, country, lat, lon
             FROM places
             """
         )
         rows = cur.fetchall()
     return [dict(row) for row in rows]
+
+
+def list_places(query: str | None = None, *, limit: int = 200) -> list[dict[str, Any]]:
+    clean_limit = max(1, min(int(limit), 500))
+    clean_query = str(query or "").strip()
+
+    with get_conn() as conn, conn.cursor() as cur:
+        if clean_query:
+            like = f"%{clean_query}%"
+            cur.execute(
+                """
+                SELECT place_id, name, aliases, address, city, country, lat, lon, geohash
+                FROM places
+                WHERE (
+                    unaccent(coalesce(name, '')) ILIKE unaccent(%s)
+                    OR unaccent(coalesce(address, '')) ILIKE unaccent(%s)
+                    OR EXISTS (
+                        SELECT 1
+                        FROM unnest(coalesce(aliases, ARRAY[]::TEXT[])) AS alias
+                        WHERE unaccent(alias) ILIKE unaccent(%s)
+                    )
+                )
+                ORDER BY name NULLS LAST, place_id
+                LIMIT %s
+                """,
+                (like, like, like, clean_limit),
+            )
+        else:
+            cur.execute(
+                """
+                SELECT place_id, name, aliases, address, city, country, lat, lon, geohash
+                FROM places
+                ORDER BY name NULLS LAST, place_id
+                LIMIT %s
+                """,
+                (clean_limit,),
+            )
+        return [dict(row) for row in cur.fetchall()]
 
 
 def _score_place_match(
@@ -436,7 +499,7 @@ def _proximity_bonus(
 ) -> float:
     if query_lat is None or query_lon is None or place_lat is None or place_lon is None:
         return 0.0
-    distance_m = _haversine_meters(query_lat, query_lon, place_lat, place_lon)
+    distance_m = haversine_meters(query_lat, query_lon, place_lat, place_lon)
     if distance_m <= 100:
         return 6.0
     if distance_m <= 300:
@@ -463,12 +526,3 @@ def _role_similarity_score(hint: str, role_value: str) -> float:
     if hint in normalized_role or normalized_role in hint:
         return 88.0
     return float(fuzz.token_sort_ratio(hint, normalized_role))
-
-
-def _haversine_meters(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
-    radius_m = 6371000.0
-    dlat = radians(lat2 - lat1)
-    dlon = radians(lon2 - lon1)
-    a = sin(dlat / 2) ** 2 + cos(radians(lat1)) * cos(radians(lat2)) * sin(dlon / 2) ** 2
-    c = 2 * asin(sqrt(a))
-    return radius_m * c

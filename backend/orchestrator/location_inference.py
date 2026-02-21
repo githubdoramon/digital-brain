@@ -3,18 +3,19 @@ from __future__ import annotations
 import os
 import threading
 import time
-from math import asin, cos, radians, sin, sqrt
 from typing import Any
 
 import requests
 
 from db import get_conn
+from geo_utils import haversine_meters
 from observability.logger import get_runtime_logger
 
 logger = get_runtime_logger(__name__)
 
 _CACHE: dict[str, tuple[float, dict[str, Any] | None]] = {}
 _CACHE_LOCK = threading.Lock()
+_CACHE_MISS = object()
 
 
 def infer_current_place(
@@ -108,6 +109,11 @@ def geocode_place_name(
 
     return {
         "place_name": resolved_name,
+        "address": (
+            str(candidate.get("formatted") or "").strip()
+            or str(candidate.get("address_line1") or "").strip()
+            or None
+        ),
         "city": (
             str(candidate.get("city") or "").strip()
             or str(candidate.get("town") or "").strip()
@@ -165,7 +171,7 @@ def _match_known_place(
     nearest: dict[str, Any] | None = None
     nearest_distance: float | None = None
     for place in candidates:
-        distance = _haversine_meters(lat, lon, place["lat"], place["lon"])
+        distance = haversine_meters(lat, lon, place["lat"], place["lon"])
         if nearest_distance is None or distance < nearest_distance:
             nearest_distance = distance
             nearest = place
@@ -245,6 +251,11 @@ def _reverse_geocode_with_geoapify(
     result: dict[str, Any] = {
         "place_id": None,
         "place_name": name,
+        "address": (
+            str(candidate.get("formatted") or "").strip()
+            or str(candidate.get("address_line1") or "").strip()
+            or None
+        ),
         "city": city,
         "country": country,
         "lat": round(float(candidate.get("lat", lat)), 6),
@@ -313,15 +324,6 @@ def _confidence_for_known_place(
     return "low"
 
 
-def _haversine_meters(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
-    radius_m = 6371000.0
-    dlat = radians(lat2 - lat1)
-    dlon = radians(lon2 - lon1)
-    a = sin(dlat / 2) ** 2 + cos(radians(lat1)) * cos(radians(lat2)) * sin(dlon / 2) ** 2
-    c = 2 * asin(sqrt(a))
-    return radius_m * c
-
-
 def _build_cache_key(location: dict[str, Any]) -> str:
     lat = round(float(location["lat"]), 4)
     lon = round(float(location["lon"]), 4)
@@ -378,6 +380,3 @@ def _env_float(name: str, default: float) -> float:
         return float(raw)
     except ValueError:
         return default
-
-
-_CACHE_MISS = object()

@@ -247,6 +247,7 @@ export default function RelationshipManagementScreen() {
       router.back();
     } catch (error) {
       console.warn('[relationships] save failed', error);
+      Alert.alert('Save failed', 'Unable to save relationships. Please try again.');
     } finally {
       setIsSaving(false);
     }

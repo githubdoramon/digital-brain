@@ -71,7 +71,6 @@ function RootLayoutNav({ loaded }: { loaded: boolean }) {
       router.replace('/(auth)/sign-in');
     }
     if (token && inAuthGroup) {
-      
       router.replace('/home');
     }
   }, [token, segments, isLoading, router, loaded]);
@@ -175,6 +174,50 @@ function RootLayoutNav({ loaded }: { loaded: boolean }) {
           },
         }}
       />
+      <Stack.Screen
+        name="settings/places"
+        options={{
+          headerShown: true,
+          headerTransparent: Platform.OS !== 'android',
+          headerTitle: '',
+          headerBackTitle: ' ',
+          headerBackTitleStyle: { fontSize: 0 },
+          headerBackButtonMenuEnabled: false,
+          headerShadowVisible: false,
+          headerTintColor: theme.colors.ink,
+          headerStyle: {
+            backgroundColor: Platform.OS === 'android' ? theme.colors.background : 'transparent',
+          },
+        }}
+      />
+      <Stack.Screen
+        name="places/new/index"
+        options={{
+          headerShown: true,
+          headerTransparent: true,
+          headerTitle: '',
+          headerBackTitle: ' ',
+          headerBackTitleStyle: { fontSize: 0 },
+          headerBackButtonMenuEnabled: false,
+          headerShadowVisible: false,
+          headerTintColor: theme.colors.ink,
+          headerStyle: { backgroundColor: 'transparent' },
+        }}
+      />
+      <Stack.Screen
+        name="places/[placeId]/index"
+        options={{
+          headerShown: true,
+          headerTransparent: true,
+          headerTitle: '',
+          headerBackTitle: ' ',
+          headerBackTitleStyle: { fontSize: 0 },
+          headerBackButtonMenuEnabled: false,
+          headerShadowVisible: false,
+          headerTintColor: theme.colors.ink,
+          headerStyle: { backgroundColor: 'transparent' },
+        }}
+      />
         <Stack.Screen
           name="contacts/[contactId]/index"
           options={{
@@ -182,7 +225,7 @@ function RootLayoutNav({ loaded }: { loaded: boolean }) {
             headerTransparent: true,
             headerTitle: '',
             headerBackTitle: ' ',
-            headerBackTitleStyle: { fontSize: 1 },
+            headerBackTitleStyle: { fontSize: 0 },
             headerBackButtonMenuEnabled: false,
             headerShadowVisible: false,
             headerTintColor: theme.colors.ink,

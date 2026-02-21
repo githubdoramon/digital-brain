@@ -24,11 +24,19 @@ class PlaceIn(BaseModel):
     place_id: str
     name: str | None = None
     aliases: list[str] = Field(default_factory=list)
+    address: str | None = None
     city: str | None = None
     country: str | None = None
     lat: float | None = None
     lon: float | None = None
     geohash: str | None = None
+
+
+class ContactPlaceLinkIn(BaseModel):
+    place_id: str
+    role: str | None = None
+    source: str | None = None
+    confidence: str | None = None
 
 
 class EventIn(BaseModel):
