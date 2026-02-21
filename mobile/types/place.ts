@@ -2,6 +2,7 @@ export type Place = {
   place_id: string;
   name: string | null;
   aliases: string[];
+  description: string | null;
   address: string | null;
   city: string | null;
   country: string | null;

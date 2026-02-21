@@ -39,7 +39,7 @@ def get_place(place_id: str) -> dict[str, Any] | None:
     with get_conn() as conn, conn.cursor() as cur:
         cur.execute(
             """
-            SELECT place_id, name, aliases, address, city, country, lat, lon, geohash
+            SELECT place_id, name, aliases, description, address, city, country, lat, lon, geohash
             FROM places
             WHERE place_id = %s
             """,
@@ -54,11 +54,12 @@ def ingest_place(place: Any) -> None:
     with get_conn() as conn, conn.cursor() as cur:
         cur.execute(
             """
-            INSERT INTO places (place_id, name, aliases, address, city, country, lat, lon, geohash)
-            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)
+            INSERT INTO places (place_id, name, aliases, description, address, city, country, lat, lon, geohash)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
             ON CONFLICT (place_id) DO UPDATE
               SET name=EXCLUDED.name,
                   aliases=EXCLUDED.aliases,
+                  description=EXCLUDED.description,
                   address=EXCLUDED.address,
                   city=EXCLUDED.city,
                   country=EXCLUDED.country,
@@ -70,6 +71,7 @@ def ingest_place(place: Any) -> None:
                 place.place_id,
                 place.name,
                 aliases,
+                getattr(place, "description", None),
                 getattr(place, "address", None),
                 place.city,
                 place.country,
@@ -298,6 +300,7 @@ def list_contact_places(contact_id: str, role_hint: str | None = None) -> list[d
                 cp.confidence,
                 p.name,
                 p.aliases,
+                p.description,
                 p.address,
                 p.city,
                 p.country,
@@ -379,7 +382,7 @@ def _list_places() -> list[dict[str, Any]]:
     with get_conn() as conn, conn.cursor() as cur:
         cur.execute(
             """
-            SELECT place_id, name, aliases, address, city, country, lat, lon
+            SELECT place_id, name, aliases, description, address, city, country, lat, lon
             FROM places
             """
         )
@@ -396,10 +399,11 @@ def list_places(query: str | None = None, *, limit: int = 200) -> list[dict[str,
             like = f"%{clean_query}%"
             cur.execute(
                 """
-                SELECT place_id, name, aliases, address, city, country, lat, lon, geohash
+                SELECT place_id, name, aliases, description, address, city, country, lat, lon, geohash
                 FROM places
                 WHERE (
                     unaccent(coalesce(name, '')) ILIKE unaccent(%s)
+                    OR unaccent(coalesce(description, '')) ILIKE unaccent(%s)
                     OR unaccent(coalesce(address, '')) ILIKE unaccent(%s)
                     OR EXISTS (
                         SELECT 1
@@ -410,12 +414,12 @@ def list_places(query: str | None = None, *, limit: int = 200) -> list[dict[str,
                 ORDER BY name NULLS LAST, place_id
                 LIMIT %s
                 """,
-                (like, like, like, clean_limit),
+                (like, like, like, like, clean_limit),
             )
         else:
             cur.execute(
                 """
-                SELECT place_id, name, aliases, address, city, country, lat, lon, geohash
+                SELECT place_id, name, aliases, description, address, city, country, lat, lon, geohash
                 FROM places
                 ORDER BY name NULLS LAST, place_id
                 LIMIT %s

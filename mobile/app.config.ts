@@ -16,6 +16,14 @@ const resolveAppVariant = (): AppVariant => {
 const APP_VARIANT = resolveAppVariant();
 const IS_DEV = APP_VARIANT === AppVariant.Development;
 
+type AndroidConfigShape = {
+  config?: {
+    googleMaps?: {
+      apiKey?: string;
+    };
+  };
+};
+
 const getUniqueIdentifier = () => {
   if (IS_DEV) {
     return 'com.appcalipse.digitalbrain.dev';
@@ -62,6 +70,9 @@ export default ({ config }: ConfigContext): ExpoConfig => {
   const bundleId = getUniqueIdentifier();
   const androidGoogleServicesFile = requireConfigFile('./google-services.json');
 
+  const baseAndroid = appJson.expo.android as AndroidConfigShape | undefined;
+  const overrideAndroid = config.android as AndroidConfigShape | undefined;
+
   const merged = {
     ...appJson.expo,
     ...config,
@@ -70,12 +81,26 @@ export default ({ config }: ConfigContext): ExpoConfig => {
       ...(appJson.expo.ios ?? {}),
       ...(config.ios ?? {}),
       bundleIdentifier: bundleId,
+      config: {
+        ...((appJson.expo.ios as ExpoConfig['ios'])?.config ?? {}),
+        ...((config.ios as ExpoConfig['ios'])?.config ?? {}),
+        ...(process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY ? { googleMapsApiKey: process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY } : {}),
+      },
     },
     android: {
       ...(appJson.expo.android ?? {}),
       ...(config.android ?? {}),
       package: bundleId,
       googleServicesFile: androidGoogleServicesFile,
+      config: {
+        ...(baseAndroid?.config ?? {}),
+        ...(overrideAndroid?.config ?? {}),
+        googleMaps: {
+          ...(baseAndroid?.config?.googleMaps ?? {}),
+          ...(overrideAndroid?.config?.googleMaps ?? {}),
+          ...(process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY ? { apiKey: process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY } : {}),
+        },
+      },
     },
   };
 

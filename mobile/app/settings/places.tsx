@@ -1,11 +1,14 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
+import { useHeaderHeight } from '@react-navigation/elements';
 import { useFocusEffect } from '@react-navigation/native';
 import { useRouter } from 'expo-router';
-import React, { useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
-  Alert,
   FlatList,
+  Keyboard,
+  KeyboardAvoidingView,
+  Platform,
   StyleSheet,
   Text,
   TextInput,
@@ -21,6 +24,10 @@ import type { Place } from '@/types/place';
 import { normalizeSearch } from '@/utils/text';
 
 function formatSubtitle(place: Place): string {
+  const description = (place.description || '').trim();
+  if (description) {
+    return description;
+  }
   const pieces = [place.address, place.city, place.country]
     .map((value) => (value || '').trim())
     .filter(Boolean);
@@ -34,12 +41,33 @@ function formatSubtitle(place: Place): string {
 export default function SettingsPlacesScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
+  const headerHeight = useHeaderHeight();
   const [places, setPlaces] = useState<Place[]>([]);
   const [query, setQuery] = useState('');
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [keyboardVisible, setKeyboardVisible] = useState(false);
+  const [keyboardHeight, setKeyboardHeight] = useState(0);
   const hasLoadedOnceRef = useRef(false);
+
+  useEffect(() => {
+    const showEvent = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
+    const hideEvent = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
+
+    const showSubscription = Keyboard.addListener(showEvent, (event) => {
+      setKeyboardVisible(true);
+      setKeyboardHeight(event.endCoordinates?.height ?? 0);
+    });
+    const hideSubscription = Keyboard.addListener(hideEvent, () => {
+      setKeyboardVisible(false);
+      setKeyboardHeight(0);
+    });
+    return () => {
+      showSubscription.remove();
+      hideSubscription.remove();
+    };
+  }, []);
 
   const loadPlaces = React.useCallback(
     async ({ showInitialLoader = false, showRefreshSpinner = false } = {}) => {
@@ -96,17 +124,24 @@ export default function SettingsPlacesScreen() {
   }, [places, query]);
 
   return (
-    <View style={styles.container}>
+    <KeyboardAvoidingView
+      style={styles.container}
+      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+      keyboardVerticalOffset={headerHeight}
+    >
       <FlatList
         data={filtered}
         keyExtractor={(item) => item.place_id}
         refreshing={isRefreshing}
         onRefresh={handleRefresh}
+        automaticallyAdjustKeyboardInsets
+        keyboardShouldPersistTaps="handled"
+        keyboardDismissMode="on-drag"
         contentContainerStyle={[
           styles.content,
           {
-            paddingTop: insets.top + 56,
-            paddingBottom: insets.bottom + 110,
+            paddingTop: Platform.OS === 'android' ? 12 : headerHeight + 12,
+            paddingBottom: insets.bottom + (keyboardVisible ? keyboardHeight + 24 : 110),
           },
         ]}
         ListHeaderComponent={
@@ -152,19 +187,21 @@ export default function SettingsPlacesScreen() {
         )}
       />
 
-      <Pressable
-        onPress={() => router.push('/places/new')}
-        accessibilityRole="button"
-        accessibilityLabel="Create place"
-        style={({ pressed }) => [
-          styles.fab,
-          { bottom: insets.bottom + 26 },
-          pressed && styles.fabPressed,
-        ]}
-      >
-        <Ionicons name="add" size={24} color="#fff" />
-      </Pressable>
-    </View>
+      {!keyboardVisible ? (
+        <Pressable
+          onPress={() => router.push('/places/new')}
+          accessibilityRole="button"
+          accessibilityLabel="Create place"
+          style={({ pressed }) => [
+            styles.fab,
+            { bottom: insets.bottom + 26 },
+            pressed && styles.fabPressed,
+          ]}
+        >
+          <Ionicons name="add" size={24} color="#fff" />
+        </Pressable>
+      ) : null}
+    </KeyboardAvoidingView>
   );
 }
 

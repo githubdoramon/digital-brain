@@ -1,4 +1,5 @@
-import MapView, { Marker, Region } from 'react-native-maps';
+import MapView, { Marker, PROVIDER_GOOGLE, Region } from 'react-native-maps';
+import * as Location from 'expo-location';
 import React, { useEffect, useMemo, useState } from 'react';
 import {
   Alert,
@@ -25,6 +26,7 @@ type Draft = {
   place_id: string;
   name: string;
   aliasesText: string;
+  description: string;
   address: string;
   city: string;
   country: string;
@@ -51,6 +53,16 @@ function toNumberOrNull(value: string): number | null {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
+function formatReverseAddress(
+  reverse: Location.LocationGeocodedAddress | null | undefined,
+): string {
+  if (!reverse) return '';
+  const lineOne = [reverse.name, reverse.street].filter(Boolean).join(' ').trim();
+  const lineTwo = [reverse.city, reverse.region, reverse.postalCode].filter(Boolean).join(', ').trim();
+  const country = (reverse.country || '').trim();
+  return [lineOne, lineTwo, country].filter(Boolean).join(' • ').trim();
+}
+
 function buildPlaceId(draft: Draft): string {
   const source = draft.name.trim() || draft.address.trim() || draft.city.trim() || 'place';
   const slug = source
@@ -66,6 +78,7 @@ function draftFromPlace(place: Place): Draft {
     place_id: place.place_id,
     name: place.name || '',
     aliasesText: (place.aliases || []).join(', '),
+    description: place.description || '',
     address: place.address || '',
     city: place.city || '',
     country: place.country || '',
@@ -94,6 +107,8 @@ export function PlaceEditorScreen({ placeId }: { placeId?: string }) {
   const [initial, setInitial] = useState<Draft | null>(null);
   const [draft, setDraft] = useState<Draft | null>(null);
   const [isSaving, setIsSaving] = useState(false);
+  const [isLocating, setIsLocating] = useState(false);
+  const [isGeocodingAddress, setIsGeocodingAddress] = useState(false);
   const [isLoading, setIsLoading] = useState(!isCreating);
 
   useEffect(() => {
@@ -102,6 +117,7 @@ export function PlaceEditorScreen({ placeId }: { placeId?: string }) {
         place_id: '',
         name: '',
         aliasesText: '',
+        description: '',
         address: '',
         city: '',
         country: '',
@@ -160,6 +176,105 @@ export function PlaceEditorScreen({ placeId }: { placeId?: string }) {
     return getRegionFromDraft(draft);
   }, [draft]);
 
+  useEffect(() => {
+    if (!draft || isLocating) {
+      return;
+    }
+    const hasCoordinates =
+      toNumberOrNull(draft.latText) !== null && toNumberOrNull(draft.lonText) !== null;
+    if (hasCoordinates) {
+      return;
+    }
+
+    let active = true;
+    setIsLocating(true);
+    void (async () => {
+      try {
+        const permission = await Location.requestForegroundPermissionsAsync();
+        if (permission.status !== 'granted') {
+          return;
+        }
+        const position = await Location.getCurrentPositionAsync({
+          accuracy: Location.Accuracy.Balanced,
+        });
+        if (!active) return;
+        const latitude = Number(position.coords.latitude.toFixed(6));
+        const longitude = Number(position.coords.longitude.toFixed(6));
+        setDraft((current) => {
+          if (!current) return current;
+          const alreadySet =
+            toNumberOrNull(current.latText) !== null && toNumberOrNull(current.lonText) !== null;
+          if (alreadySet) return current;
+          return {
+            ...current,
+            latText: String(latitude),
+            lonText: String(longitude),
+          };
+        });
+      } catch {
+        // Best effort location seed.
+      } finally {
+        if (active) {
+          setIsLocating(false);
+        }
+      }
+    })();
+
+    return () => {
+      active = false;
+    };
+  }, [draft, isLocating]);
+
+  const handleSearchAddress = async () => {
+    if (!draft) return;
+    const addressQuery = draft.address.trim();
+    if (!addressQuery) {
+      Alert.alert('Address required', 'Type an address first.');
+      return;
+    }
+
+    setIsGeocodingAddress(true);
+    try {
+      const results = await Location.geocodeAsync(addressQuery);
+      if (!results || results.length === 0) {
+        Alert.alert('No coordinates found', 'Try a more specific address.');
+        return;
+      }
+      const first = results[0];
+      const latitude = Number(first.latitude.toFixed(6));
+      const longitude = Number(first.longitude.toFixed(6));
+
+      let reverseCity = '';
+      let reverseCountry = '';
+      let reverseAddress = '';
+      try {
+        const reverseResults = await Location.reverseGeocodeAsync({ latitude, longitude });
+        const reverse = reverseResults?.[0];
+        reverseCity = reverse?.city || reverse?.subregion || reverse?.region || '';
+        reverseCountry = reverse?.country || '';
+        reverseAddress = formatReverseAddress(reverse);
+      } catch {
+        // Keep going with geocode coordinates even if reverse details fail.
+      }
+
+      setDraft((current) => {
+        if (!current) return current;
+        return {
+          ...current,
+          latText: String(latitude),
+          lonText: String(longitude),
+          address: reverseAddress || current.address,
+          city: reverseCity || first.city || current.city,
+          country: reverseCountry || first.country || current.country,
+        };
+      });
+    } catch {
+      Alert.alert('Search failed', 'Could not resolve this address right now.');
+    } finally {
+      setIsGeocodingAddress(false);
+    }
+  };
+
   const handleSave = async () => {
     if (!draft) return;
     setIsSaving(true);
@@ -169,6 +284,7 @@ export function PlaceEditorScreen({ placeId }: { placeId?: string }) {
         place_id,
         name: draft.name.trim() || null,
         aliases: toAliases(draft.aliasesText),
+        description: draft.description.trim() || null,
         address: draft.address.trim() || null,
         city: draft.city.trim() || null,
         country: draft.country.trim() || null,
@@ -246,11 +362,13 @@ export function PlaceEditorScreen({ placeId }: { placeId?: string }) {
             placeholderTextColor={theme.colors.mutedInk}
           />
           <TextInput
-            style={styles.input}
-            value={draft.address}
-            onChangeText={(value) => setDraft({ ...draft, address: value })}
-            placeholder="Address"
+            style={[styles.input, styles.multilineInput]}
+            value={draft.description}
+            onChangeText={(value) => setDraft({ ...draft, description: value })}
+            placeholder="Description / notes"
             placeholderTextColor={theme.colors.mutedInk}
+            multiline
+            textAlignVertical="top"
           />
           <TextInput
             style={styles.input}
@@ -270,6 +388,26 @@ export function PlaceEditorScreen({ placeId }: { placeId?: string }) {
 
         <Card style={styles.section}>
           <Text style={styles.sectionTitle}>Coordinates</Text>
+          <TextInput
+            style={styles.input}
+            value={draft.address}
+            onChangeText={(value) => setDraft({ ...draft, address: value })}
+            placeholder="Address"
+            placeholderTextColor={theme.colors.mutedInk}
+          />
+          <Pressable
+            style={[
+              styles.searchAddressButton,
+              (isGeocodingAddress || !draft.address.trim()) && styles.searchAddressButtonDisabled,
+            ]}
+            onPress={() => void handleSearchAddress()}
+            disabled={isGeocodingAddress || !draft.address.trim()}
+          >
+            <Text style={styles.searchAddressButtonText}>
+              {isGeocodingAddress ? 'Searching address...' : 'Search coordinates from address'}
+            </Text>
+          </Pressable>
+          {isLocating ? <Text style={styles.helper}>Detecting your current location...</Text> : null}
           <View style={styles.coordinateRow}>
             <TextInput
               style={[styles.input, styles.coordinateInput]}
@@ -290,7 +428,11 @@ export function PlaceEditorScreen({ placeId }: { placeId?: string }) {
           </View>
           <Text style={styles.helper}>Drag the marker to adjust precise coordinates.</Text>
           <View style={styles.mapWrap}>
-            <MapView style={styles.map} region={region}>
+            <MapView
+              style={styles.map}
+              region={region}
+              {...(Platform.OS === 'android' && { provider: PROVIDER_GOOGLE })}
+            >
               {markerCoordinate ? (
                 <Marker
                   coordinate={markerCoordinate}
@@ -382,12 +524,31 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
     color: theme.colors.ink,
   },
+  multilineInput: {
+    minHeight: 90,
+    paddingTop: 12,
+  },
   coordinateRow: {
     flexDirection: 'row',
     gap: 8,
   },
   coordinateInput: {
     flex: 1,
+  },
+  searchAddressButton: {
+    alignSelf: 'flex-start',
+    borderRadius: theme.radius.md,
+    backgroundColor: theme.colors.ink,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+  },
+  searchAddressButtonDisabled: {
+    opacity: 0.5,
+  },
+  searchAddressButtonText: {
+    color: '#fff',
+    fontSize: 12,
+    fontWeight: '600',
   },
   helper: {
     fontSize: 12,

@@ -24,6 +24,7 @@ class PlaceIn(BaseModel):
     place_id: str
     name: str | None = None
     aliases: list[str] = Field(default_factory=list)
+    description: str | None = None
     address: str | None = None
     city: str | None = None
     country: str | None = None
