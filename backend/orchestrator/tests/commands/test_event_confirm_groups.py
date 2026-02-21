@@ -166,3 +166,76 @@ def test_confirm_event_persists_deterministic_group_without_explicit_confirmatio
     assert result.success is True
     assert len(upserts) == 1
     assert upserts[0]["name"] == "People at @acme.example"
+
+
+def test_confirm_event_persists_pending_alias_for_matched_place(monkeypatch):
+    command_data = _base_command_data()
+    command_data["extracted"]["where"] = "Home"
+    command_data["resolution"]["matched_place"] = {
+        "place_id": "plc_home",
+        "name": "Home",
+        "pending_alias": "my house",
+    }
+
+    alias_calls: list[tuple[str, str]] = []
+
+    monkeypatch.setattr("commands.event.get_command_data", lambda _preview_id: command_data)
+    monkeypatch.setattr("commands.event.delete_command_data", lambda _preview_id: None)
+    monkeypatch.setattr(
+        "commands.event.clear_pending_event_by_preview_id", lambda _preview_id: None
+    )
+    monkeypatch.setattr("commands.event._persist_event_resolved", lambda _preview_id, _status: None)
+    monkeypatch.setattr("commands.event.events_service.ingest_event", lambda _event_in: None)
+    monkeypatch.setattr(
+        "commands.event.places_service.add_place_alias",
+        lambda place_id, alias: alias_calls.append((place_id, alias)) or True,
+    )
+
+    payload = EventCommandConfirmation(preview_id="event:preview:place-alias", confirmed=True)
+    result = confirm_event_command(payload, "user@example.com")
+
+    assert result.success is True
+    assert alias_calls == [("plc_home", "my house")]
+
+
+def test_confirm_event_persists_pending_contact_place_link(monkeypatch):
+    command_data = _base_command_data()
+    command_data["extracted"]["where"] = "Home"
+    command_data["resolution"]["matched_place"] = {
+        "place_id": "plc_home",
+        "name": "Home",
+    }
+    command_data["resolution"]["pending_contact_place_link"] = {
+        "contact_id": "contact:jose",
+        "role": "home",
+        "source": "event_inference",
+        "confidence": "high",
+    }
+
+    link_calls: list[dict] = []
+
+    monkeypatch.setattr("commands.event.get_command_data", lambda _preview_id: command_data)
+    monkeypatch.setattr("commands.event.delete_command_data", lambda _preview_id: None)
+    monkeypatch.setattr(
+        "commands.event.clear_pending_event_by_preview_id", lambda _preview_id: None
+    )
+    monkeypatch.setattr("commands.event._persist_event_resolved", lambda _preview_id, _status: None)
+    monkeypatch.setattr("commands.event.events_service.ingest_event", lambda _event_in: None)
+    monkeypatch.setattr(
+        "commands.event.places_service.upsert_contact_place",
+        lambda **kwargs: link_calls.append(kwargs),
+    )
+
+    payload = EventCommandConfirmation(preview_id="event:preview:contact-place", confirmed=True)
+    result = confirm_event_command(payload, "user@example.com")
+
+    assert result.success is True
+    assert link_calls == [
+        {
+            "contact_id": "contact:jose",
+            "place_id": "plc_home",
+            "role": "home",
+            "source": "event_inference",
+            "confidence": "high",
+        }
+    ]

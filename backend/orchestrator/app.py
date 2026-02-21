@@ -50,6 +50,7 @@ from commands.event import (
     handle_pending_event,
 )
 from db import get_conn
+from db_migrations import run_pending_migrations
 from notifications.preferences import get_push_settings, update_push_settings
 from observability.log_stream import (
     LOG_LEVELS,
@@ -206,6 +207,17 @@ def _format_briefing_response(briefing: dict[str, Any]) -> dict[str, Any]:
 async def lifespan(app: FastAPI):
     configure_logging()
     install_stdout_logger()
+    try:
+        run_pending_migrations()
+    except Exception:
+        if os.getenv("DB_AUTO_MIGRATE_FAIL_FAST", "true").strip().lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }:
+            raise
+        logger.exception("Database migration failed; continuing startup")
     # Startup: Ensure we can connect at startup; this raises early if DB connection is misconfigured.
     with get_conn():
         pass

@@ -146,6 +146,10 @@ def test_handle_event_surfaces_proposed_contact_groups(monkeypatch):
         "commands.handlers.event._resolve_contacts_with_agent",
         fake_resolve_contacts,
     )
+    monkeypatch.setattr(
+        "commands.handlers.event.places_service.find_best_place_match", lambda *a, **k: None
+    )
+    monkeypatch.setattr("commands.handlers.event.geocode_place_name", lambda *a, **k: None)
 
     parsed = ParsedCommand(
         command="event",
@@ -224,6 +228,9 @@ def test_handle_event_prefills_where_from_inferred_known_place(monkeypatch):
             "confidence": "high",
         },
     )
+    monkeypatch.setattr(
+        "commands.handlers.event.places_service.find_best_place_match", lambda *a, **k: None
+    )
 
     parsed = ParsedCommand(
         command="event",
@@ -240,6 +247,319 @@ def test_handle_event_prefills_where_from_inferred_known_place(monkeypatch):
     assert result.get("type") == "event_confirmation"
     assert result.get("extracted", {}).get("where") == "Home"
     assert result.get("resolution", {}).get("matched_place", {}).get("place_id") == "plc_home"
+
+
+def test_handle_event_maps_similar_where_to_existing_place(monkeypatch):
+    def fake_extract_event_entities(
+        event_message,
+        context,
+        existing_extracted=None,
+        clarification_messages=None,
+    ):
+        return {
+            "title": "Dinner",
+            "summary": "Dinner with friends",
+            "when": None,
+            "where": "my house",
+            "tags": ["personal"],
+            "types": ["memory"],
+            "need_user_input": None,
+        }
+
+    def fake_resolve_contacts(*_args, **_kwargs):
+        return (
+            {
+                "contacts": [],
+                "new_entities": {"contacts": [], "places": [], "documents": []},
+                "name_replacements": {},
+            },
+            {"ambiguous_contacts": [], "suggested_relationships": []},
+        )
+
+    monkeypatch.setattr(
+        "commands.handlers.event._extract_event_entities_with_llm",
+        fake_extract_event_entities,
+    )
+    monkeypatch.setattr(
+        "commands.handlers.event._resolve_contacts_with_agent",
+        fake_resolve_contacts,
+    )
+    monkeypatch.setattr(
+        "commands.handlers.event.places_service.find_best_place_match",
+        lambda *_a, **_k: {
+            "place_id": "plc_home",
+            "name": "Home",
+            "match_confidence": "high",
+            "matched_via": "alias_exact",
+            "match_score": 98.0,
+        },
+    )
+
+    parsed = ParsedCommand(command="event", args="dinner", raw_message="/event dinner")
+    context = {"user_email": "user@example.com", "event_pending_key": "user@example.com:thread-x"}
+
+    result = handle_event(parsed, context)
+    assert result.get("type") == "event_confirmation"
+    assert result.get("extracted", {}).get("where") == "Home"
+    assert result.get("resolution", {}).get("matched_place", {}).get("place_id") == "plc_home"
+    assert result.get("resolution", {}).get("matched_place", {}).get("pending_alias") == "my house"
+    assert result.get("resolution", {}).get("new_entities", {}).get("places") == []
+
+
+def test_handle_event_geocodes_new_where_when_not_matched(monkeypatch):
+    def fake_extract_event_entities(
+        event_message,
+        context,
+        existing_extracted=None,
+        clarification_messages=None,
+    ):
+        return {
+            "title": "Lunch",
+            "summary": "Lunch note",
+            "when": None,
+            "where": "best burger place",
+            "tags": ["food"],
+            "types": ["memory"],
+            "need_user_input": None,
+        }
+
+    def fake_resolve_contacts(*_args, **_kwargs):
+        return (
+            {
+                "contacts": [],
+                "new_entities": {"contacts": [], "places": [], "documents": []},
+                "name_replacements": {},
+            },
+            {"ambiguous_contacts": [], "suggested_relationships": []},
+        )
+
+    monkeypatch.setattr(
+        "commands.handlers.event._extract_event_entities_with_llm",
+        fake_extract_event_entities,
+    )
+    monkeypatch.setattr(
+        "commands.handlers.event._resolve_contacts_with_agent",
+        fake_resolve_contacts,
+    )
+    monkeypatch.setattr(
+        "commands.handlers.event.places_service.find_best_place_match", lambda *a, **k: None
+    )
+    monkeypatch.setattr(
+        "commands.handlers.event.geocode_place_name",
+        lambda *_a, **_k: {
+            "place_name": "Burger Palace",
+            "city": "Aurora",
+            "country": "Westoria",
+            "lat": 38.72,
+            "lon": -9.14,
+            "provider": "geoapify",
+            "source": "geoapify_forward_geocode",
+        },
+    )
+
+    parsed = ParsedCommand(command="event", args="lunch", raw_message="/event lunch")
+    context = {
+        "user_email": "user@example.com",
+        "event_pending_key": "user@example.com:thread-y",
+        "client_context": {"location": {"lat": 38.72, "lon": -9.13}},
+    }
+
+    result = handle_event(parsed, context)
+    places = result.get("resolution", {}).get("new_entities", {}).get("places", [])
+    assert result.get("extracted", {}).get("where") == "Burger Palace"
+    assert places
+    assert places[0].get("city") == "Aurora"
+    assert places[0].get("country") == "Westoria"
+
+
+def test_handle_event_uses_contact_place_relation_before_global_match(monkeypatch):
+    def fake_extract_event_entities(
+        event_message,
+        context,
+        existing_extracted=None,
+        clarification_messages=None,
+    ):
+        return {
+            "title": "Visited",
+            "summary": "Visited Jordan",
+            "when": None,
+            "where": "Jordan's house",
+            "tags": ["personal"],
+            "types": ["memory"],
+            "need_user_input": None,
+        }
+
+    def fake_resolve_contacts(*_args, **_kwargs):
+        return (
+            {
+                "contacts": [
+                    {
+                        "contact_id": "contact:jose",
+                        "display_name": "Jordan",
+                        "query": "Jordan",
+                        "confidence": "high",
+                    }
+                ],
+                "new_entities": {"contacts": [], "places": [], "documents": []},
+                "name_replacements": {},
+            },
+            {"ambiguous_contacts": [], "suggested_relationships": []},
+        )
+
+    monkeypatch.setattr(
+        "commands.handlers.event._extract_event_entities_with_llm",
+        fake_extract_event_entities,
+    )
+    monkeypatch.setattr(
+        "commands.handlers.event._resolve_contacts_with_agent",
+        fake_resolve_contacts,
+    )
+    monkeypatch.setattr(
+        "commands.handlers.event.places_service.resolve_contact_place",
+        lambda *_a, **_k: {
+            "place_id": "plc_jose_home",
+            "name": "Jordan Home",
+            "confidence": "high",
+            "matched_via": "contact_place_relation",
+        },
+    )
+    monkeypatch.setattr(
+        "commands.handlers.event.places_service.find_best_place_match",
+        lambda *_a, **_k: {
+            "place_id": "plc_global_home",
+            "name": "Global Home",
+            "match_confidence": "high",
+            "matched_via": "alias_exact",
+            "match_score": 98.0,
+        },
+    )
+
+    parsed = ParsedCommand(command="event", args="visit", raw_message="/event visit")
+    context = {"user_email": "user@example.com", "event_pending_key": "user@example.com:thread-z"}
+
+    result = handle_event(parsed, context)
+    assert result.get("type") == "event_confirmation"
+    assert result.get("extracted", {}).get("where") == "Jordan Home"
+    assert result.get("resolution", {}).get("matched_place", {}).get("place_id") == "plc_jose_home"
+    pending_link = result.get("resolution", {}).get("pending_contact_place_link")
+    assert pending_link
+    assert pending_link.get("contact_id") == "contact:jose"
+    assert pending_link.get("role") == "home"
+
+
+def test_handle_event_does_not_queue_generic_alias(monkeypatch):
+    def fake_extract_event_entities(
+        event_message,
+        context,
+        existing_extracted=None,
+        clarification_messages=None,
+    ):
+        return {
+            "title": "Quick note",
+            "summary": "At house",
+            "when": None,
+            "where": "house",
+            "tags": ["personal"],
+            "types": ["memory"],
+            "need_user_input": None,
+        }
+
+    def fake_resolve_contacts(*_args, **_kwargs):
+        return (
+            {
+                "contacts": [],
+                "new_entities": {"contacts": [], "places": [], "documents": []},
+                "name_replacements": {},
+            },
+            {"ambiguous_contacts": [], "suggested_relationships": []},
+        )
+
+    monkeypatch.setattr(
+        "commands.handlers.event._extract_event_entities_with_llm",
+        fake_extract_event_entities,
+    )
+    monkeypatch.setattr(
+        "commands.handlers.event._resolve_contacts_with_agent",
+        fake_resolve_contacts,
+    )
+    monkeypatch.setattr(
+        "commands.handlers.event.places_service.find_best_place_match",
+        lambda *_a, **_k: {
+            "place_id": "plc_home",
+            "name": "Home",
+            "match_confidence": "high",
+            "matched_via": "name_exact",
+            "match_score": 99.0,
+        },
+    )
+
+    parsed = ParsedCommand(command="event", args="quick note", raw_message="/event quick note")
+    context = {"user_email": "user@example.com", "event_pending_key": "user@example.com:thread-a"}
+
+    result = handle_event(parsed, context)
+    matched_place = result.get("resolution", {}).get("matched_place", {})
+    assert matched_place.get("place_id") == "plc_home"
+    assert "pending_alias" not in matched_place
+
+
+def test_handle_event_contact_place_link_requires_high_contact_confidence(monkeypatch):
+    def fake_extract_event_entities(
+        event_message,
+        context,
+        existing_extracted=None,
+        clarification_messages=None,
+    ):
+        return {
+            "title": "Visit",
+            "summary": "Visited Jordan",
+            "when": None,
+            "where": "Jordan's house",
+            "tags": ["personal"],
+            "types": ["memory"],
+            "need_user_input": None,
+        }
+
+    def fake_resolve_contacts(*_args, **_kwargs):
+        return (
+            {
+                "contacts": [
+                    {
+                        "contact_id": "contact:jose",
+                        "display_name": "Jordan",
+                        "query": "Jordan",
+                        "confidence": "medium",
+                    }
+                ],
+                "new_entities": {"contacts": [], "places": [], "documents": []},
+                "name_replacements": {},
+            },
+            {"ambiguous_contacts": [], "suggested_relationships": []},
+        )
+
+    monkeypatch.setattr(
+        "commands.handlers.event._extract_event_entities_with_llm",
+        fake_extract_event_entities,
+    )
+    monkeypatch.setattr(
+        "commands.handlers.event._resolve_contacts_with_agent",
+        fake_resolve_contacts,
+    )
+    monkeypatch.setattr(
+        "commands.handlers.event.places_service.resolve_contact_place",
+        lambda *_a, **_k: {
+            "place_id": "plc_jose_home",
+            "name": "Jordan Home",
+            "confidence": "high",
+            "matched_via": "contact_place_relation",
+        },
+    )
+
+    parsed = ParsedCommand(command="event", args="visit", raw_message="/event visit")
+    context = {"user_email": "user@example.com", "event_pending_key": "user@example.com:thread-b"}
+
+    result = handle_event(parsed, context)
+    assert result.get("resolution", {}).get("matched_place", {}).get("place_id") == "plc_jose_home"
+    assert "pending_contact_place_link" not in result.get("resolution", {})
 
 
 def test_pending_clarification_accepts_plain_follow_up(monkeypatch):

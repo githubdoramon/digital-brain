@@ -11,10 +11,12 @@ from datetime import datetime
 from typing import Any
 from uuid import uuid4
 
+import places as places_service
 from commands.parser import ParsedCommand
 from commands.registry import CommandRegistry
-from location_inference import infer_current_place
+from location_inference import geocode_place_name, infer_current_place
 from observability.logger import get_runtime_logger
+from search_normalization import normalize_search_text
 from ui_dsl.clarification import (
     build_need_user_input,
     build_need_user_input_prompt_guidance,
@@ -27,6 +29,158 @@ from ui_dsl.clarification import (
 )
 
 logger = get_runtime_logger(__name__)
+
+_PLACE_ROLE_SYNONYMS = {
+    # Home-like
+    "home": "home",
+    "house": "home",
+    "residence": "home",
+    "apartment": "home",
+    "apt": "home",
+    "condo": "home",
+    "flat": "home",
+    "parents": "family_home",
+    "family": "family_home",
+    "partner": "partner_home",
+    "secondary": "secondary_home",
+    # Work-like
+    "work": "work",
+    "office": "work",
+    "workplace": "work",
+    "job": "work",
+    "company": "work",
+    "hq": "hq",
+    "headquarters": "hq",
+    "branch": "branch_office",
+    "coworking": "coworking",
+    "cowork": "coworking",
+    "client": "client_site",
+    # Education
+    "school": "school",
+    "campus": "campus",
+    "college": "school",
+    "university": "school",
+    # Other common categories
+    "gym": "gym",
+    "club": "club",
+    "community": "community_space",
+    "church": "worship_place",
+    "temple": "worship_place",
+    "mosque": "worship_place",
+    "hospital": "healthcare",
+    "clinic": "healthcare",
+    "doctor": "healthcare",
+    "favorite": "favorite_spot",
+    "spot": "frequent_spot",
+    "frequent": "frequent_spot",
+    "other": "other",
+}
+
+_GENERIC_PLACE_ALIAS_TERMS = {
+    # generic role words from synonyms map (both source tokens and canonical targets)
+    *set(_PLACE_ROLE_SYNONYMS.keys()),
+    *set(_PLACE_ROLE_SYNONYMS.values()),
+    # broad non-entity fallback terms
+    "place",
+}
+
+
+def _extract_client_location(context: dict[str, Any]) -> dict[str, Any] | None:
+    client_context = context.get("client_context")
+    if not isinstance(client_context, dict):
+        return None
+    location = client_context.get("location")
+    return location if isinstance(location, dict) else None
+
+
+def _normalize_role_hint(role_text: str | None) -> str | None:
+    normalized = normalize_search_text(role_text or "")
+    if not normalized:
+        return None
+    normalized = normalized.replace("-", " ")
+    for token in normalized.split():
+        mapped = _PLACE_ROLE_SYNONYMS.get(token)
+        if mapped:
+            return mapped
+    return normalized
+
+
+def _is_generic_place_alias(alias_text: str) -> bool:
+    normalized = normalize_search_text(alias_text)
+    if not normalized:
+        return True
+    tokens = [token for token in normalized.replace("-", " ").split() if token]
+    if not tokens:
+        return True
+    return all(token in _GENERIC_PLACE_ALIAS_TERMS for token in tokens)
+
+
+def _is_high_confidence_match(match: dict[str, Any] | None) -> bool:
+    if not isinstance(match, dict):
+        return False
+    confidence = str(match.get("confidence") or "").strip().lower()
+    if confidence == "high":
+        return True
+    try:
+        score = float(match.get("match_score") or 0.0)
+    except (TypeError, ValueError):
+        score = 0.0
+    return score >= 92.0
+
+
+def _extract_contact_scoped_place_hint(where_text: str) -> dict[str, str] | None:
+    text = str(where_text or "").strip()
+    if not text:
+        return None
+
+    patterns = [
+        re.compile(r"^(?P<person>.+?)\s*'s\s+(?P<role>[a-zA-Z\s]+)$", flags=re.IGNORECASE),
+        re.compile(r"^(?P<role>[a-zA-Z\s]+)\s+of\s+(?P<person>.+?)$", flags=re.IGNORECASE),
+        re.compile(r"^at\s+(?P<person>.+?)\s+(?P<role>[a-zA-Z\s]+)$", flags=re.IGNORECASE),
+    ]
+    for pattern in patterns:
+        match = pattern.match(text)
+        if not match:
+            continue
+        person = str(match.group("person") or "").strip()
+        role = str(match.group("role") or "").strip()
+        normalized_role = _normalize_role_hint(role)
+        if person and normalized_role:
+            return {
+                "person_text": person,
+                "role": normalized_role,
+                "raw_role": role,
+            }
+    return None
+
+
+def _resolve_contact_id_from_resolution(
+    person_text: str,
+    resolution: dict[str, Any],
+) -> tuple[str | None, str | None, str | None, str | None]:
+    normalized_target = normalize_search_text(person_text)
+    if not normalized_target:
+        return None, None, None, None
+
+    candidates: list[tuple[str, str, str, str | None]] = []
+    for contact in resolution.get("contacts", []):
+        if not isinstance(contact, dict):
+            continue
+        contact_id = str(contact.get("contact_id") or "").strip()
+        display_name = str(contact.get("display_name") or "").strip()
+        query_text = str(contact.get("query") or "").strip()
+        confidence = str(contact.get("confidence") or "").strip() or None
+        if not contact_id:
+            continue
+        candidates.append((contact_id, display_name, query_text, confidence))
+
+    for contact_id, display_name, query_text, confidence in candidates:
+        if normalize_search_text(display_name) == normalized_target:
+            return contact_id, display_name or None, query_text or None, confidence
+        if query_text and normalize_search_text(query_text) == normalized_target:
+            return contact_id, display_name or None, query_text or None, confidence
+
+    return None, None, None, None
 
 
 def _emit_progress(context: dict[str, Any], message: str) -> None:
@@ -1418,38 +1572,117 @@ def handle_event(parsed: ParsedCommand, context: dict) -> dict[str, Any]:
     logger.info("[handle_event] STEP 2: Contact resolution complete")
     _emit_progress(context, "Resolving contacts...")
 
-    # Keep place handling aligned with existing flow.
-    # If location was not explicitly provided, infer a likely place from client context.
-    where = extracted.get("where")
+    if not isinstance(resolution, dict):
+        resolution = {
+            "contacts": [],
+            "new_entities": {"contacts": [], "places": [], "documents": []},
+        }
+
+    where = str(extracted.get("where") or "").strip()
+    client_location = _extract_client_location(context)
     inferred_location: dict[str, Any] | None = None
+    where_source = "extracted"
+    contact_place_hint: dict[str, Any] | None = None
+
     if not where:
-        client_context = context.get("client_context")
-        client_location = (
-            client_context.get("location") if isinstance(client_context, dict) else None
-        )
         inferred_location = infer_current_place(client_location, user_email=user_email)
-        inferred_name = (
-            str(inferred_location.get("place_name") or "").strip()
-            if isinstance(inferred_location, dict)
-            else ""
-        )
-        if inferred_name:
-            extracted["where"] = inferred_name
+        inferred_name = ""
+        if isinstance(inferred_location, dict):
+            inferred_name = str(inferred_location.get("place_name") or "").strip()
+        if inferred_name and isinstance(inferred_location, dict):
             where = inferred_name
+            where_source = "inferred_location"
+            extracted["where"] = inferred_name
             resolution["inferred_location"] = inferred_location
             logger.info(
                 "[handle_event] Inferred place from location context: %s (source=%s)",
                 inferred_name,
-                inferred_location.get("source"),
+                inferred_location.get("source") or "unknown",
             )
-            place_id = str(inferred_location.get("place_id") or "").strip()
-            if place_id:
+            inferred_place_id = str(inferred_location.get("place_id") or "").strip()
+            if inferred_place_id:
                 resolution["matched_place"] = {
-                    "place_id": place_id,
+                    "place_id": inferred_place_id,
                     "name": inferred_name,
+                    "confidence": str(inferred_location.get("confidence") or "medium"),
+                    "matched_via": "inferred_location",
                 }
 
     if where:
+        extracted_contact_hint = _extract_contact_scoped_place_hint(where)
+        if extracted_contact_hint:
+            contact_id, display_name, matched_query, contact_confidence = (
+                _resolve_contact_id_from_resolution(
+                    extracted_contact_hint["person_text"],
+                    resolution,
+                )
+            )
+            if contact_id:
+                contact_place_hint = {
+                    "contact_id": contact_id,
+                    "contact_display_name": display_name,
+                    "contact_query": matched_query,
+                    "role": extracted_contact_hint["role"],
+                    "source": "event_inference",
+                    "confidence": (
+                        "high"
+                        if str(contact_confidence or "").strip().lower() in {"high", "certain"}
+                        else "medium"
+                    ),
+                }
+                resolution["place_contact_hint"] = contact_place_hint
+
+        matched_place = resolution.get("matched_place") if isinstance(resolution, dict) else None
+        matched_place_id = (
+            str(matched_place.get("place_id") or "").strip()
+            if isinstance(matched_place, dict)
+            else ""
+        )
+
+        if not matched_place_id and contact_place_hint:
+            contact_place_match = places_service.resolve_contact_place(
+                contact_id=str(contact_place_hint.get("contact_id") or ""),
+                role_hint=str(contact_place_hint.get("role") or ""),
+                where_text=where,
+            )
+            if contact_place_match:
+                matched_name = str(contact_place_match.get("name") or where).strip() or where
+                extracted["where"] = matched_name
+                resolution["matched_place"] = {
+                    "place_id": str(contact_place_match.get("place_id") or "").strip(),
+                    "name": matched_name,
+                    "confidence": contact_place_match.get("confidence") or "high",
+                    "matched_via": contact_place_match.get("matched_via")
+                    or "contact_place_relation",
+                }
+                where = matched_name
+                matched_place_id = str(contact_place_match.get("place_id") or "").strip()
+
+        if not matched_place_id:
+            place_match = places_service.find_best_place_match(
+                where,
+                client_location=client_location,
+            )
+            if place_match:
+                canonical_name = str(place_match.get("name") or where).strip() or where
+                extracted["where"] = canonical_name
+                resolution["matched_place"] = {
+                    "place_id": str(place_match.get("place_id") or "").strip(),
+                    "name": canonical_name,
+                    "confidence": place_match.get("match_confidence"),
+                    "matched_via": place_match.get("matched_via"),
+                    "match_score": place_match.get("match_score"),
+                }
+
+                if (
+                    where_source == "extracted"
+                    and str(place_match.get("match_confidence") or "") == "high"
+                    and where.casefold() != canonical_name.casefold()
+                    and not _is_generic_place_alias(where)
+                ):
+                    resolution["matched_place"]["pending_alias"] = where
+                where = canonical_name
+
         matched_place = resolution.get("matched_place") if isinstance(resolution, dict) else None
         matched_place_id = (
             str(matched_place.get("place_id") or "").strip()
@@ -1461,7 +1694,8 @@ def handle_event(parsed: ParsedCommand, context: dict) -> dict[str, Any]:
                 "name": where,
                 "query": where,
             }
-            if isinstance(inferred_location, dict):
+
+            if where_source == "inferred_location" and isinstance(inferred_location, dict):
                 city = str(inferred_location.get("city") or "").strip()
                 country = str(inferred_location.get("country") or "").strip()
                 if city:
@@ -1472,7 +1706,45 @@ def handle_event(parsed: ParsedCommand, context: dict) -> dict[str, Any]:
                     value = inferred_location.get(coordinate)
                     if value is not None:
                         new_place_payload[coordinate] = value
+            elif where_source == "extracted":
+                near_lat = None
+                near_lon = None
+                if isinstance(client_location, dict):
+                    near_lat = client_location.get("lat")
+                    near_lon = client_location.get("lon")
+                geocoded_place = geocode_place_name(where, near_lat=near_lat, near_lon=near_lon)
+                if isinstance(geocoded_place, dict):
+                    resolution["geocoded_place"] = geocoded_place
+                    geocoded_name = str(geocoded_place.get("place_name") or where).strip() or where
+                    extracted["where"] = geocoded_name
+                    new_place_payload["name"] = geocoded_name
+                    for field_name in ("city", "country", "lat", "lon"):
+                        field_value = geocoded_place.get(field_name)
+                        if field_value is not None:
+                            new_place_payload[field_name] = field_value
+
             resolution["new_entities"]["places"].append(new_place_payload)
+
+        final_matched_place = (
+            resolution.get("matched_place") if isinstance(resolution, dict) else None
+        )
+        final_place_id = (
+            str(final_matched_place.get("place_id") or "").strip()
+            if isinstance(final_matched_place, dict)
+            else ""
+        )
+        if (
+            contact_place_hint
+            and final_place_id
+            and str(contact_place_hint.get("confidence") or "").strip().lower() == "high"
+            and _is_high_confidence_match(final_matched_place)
+        ):
+            resolution["pending_contact_place_link"] = {
+                "contact_id": contact_place_hint.get("contact_id"),
+                "role": contact_place_hint.get("role"),
+                "source": contact_place_hint.get("source") or "event_inference",
+                "confidence": contact_place_hint.get("confidence") or "high",
+            }
 
     # Replace generic terms with actual names in title and summary
     name_replacements = resolution.get("name_replacements", {})

@@ -29,6 +29,7 @@ Current semantic examples:
 
 - `home_assistant`: `action='call_tool'` requires `tool_name`.
 - `lookup_contact`: action-specific `query`/`contact_id` requirements.
+- `lookup_contact_places`: requires either `contact_id` or `contact_query`.
 
 Repair feedback now includes:
 

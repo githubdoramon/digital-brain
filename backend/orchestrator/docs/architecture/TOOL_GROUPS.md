@@ -9,7 +9,13 @@ Tool groups are the canonical capability taxonomy and are now used both for meta
 ```python
 TOOL_GROUPS = {
     "memory": ["search_memories", "get_events", "get_document"],
-    "resolution": ["resolve_contacts", "lookup_contact", "select_contacts"],
+    "resolution": [
+        "resolve_contacts",
+        "lookup_contact",
+        "select_contacts",
+        "lookup_places",
+        "lookup_contact_places",
+    ],
     "web": ["web_search", "fetch_web_page"],
     "home": ["home_assistant"],
     "skills": ["run_skill_script"],
@@ -66,6 +72,7 @@ flowchart LR
 Negative examples:
 
 - Do not use `lookup_contact` to count event interactions; it is for contact profiles/relationships.
+- Use `lookup_places` / `lookup_contact_places` for place-entity resolution, not for free-form event retrieval.
 - Do not rely only on event title keywords (for example only searching `meeting`) when ranking interactions across a time window.
 
 ## When Editing Groups

@@ -396,3 +396,101 @@ def handle_select_contacts(
         "error": f"Unknown action: {raw_action}",
         "valid_actions": [member.value for member in SelectContactsAction],
     }
+
+
+def handle_lookup_places(
+    args: dict[str, Any],
+    state: Optional["AgentState"] = None,
+    **kwargs,
+) -> dict[str, Any]:
+    """Lookup places by name/alias with optional proximity context."""
+    import places as places_service
+
+    query = str(args.get("query") or "").strip()
+    if not query:
+        return {"error": "query is required"}
+
+    near_lat = args.get("near_lat")
+    near_lon = args.get("near_lon")
+    client_location = None
+    if near_lat is not None and near_lon is not None:
+        client_location = {"lat": near_lat, "lon": near_lon}
+
+    limit = int(args.get("limit", 5) or 5)
+    fuzzy_threshold = int(args.get("fuzzy_threshold", 80) or 80)
+
+    results = places_service.search_places(
+        query,
+        client_location=client_location,
+        fuzzy_threshold=fuzzy_threshold,
+        limit=limit,
+    )
+
+    if state is not None:
+        if results:
+            state.add_fact(f"Found {len(results)} place matches for '{query}'")
+        else:
+            state.add_fact(f"No places found for '{query}'")
+
+    return {
+        "query": query,
+        "found": bool(results),
+        "count": len(results),
+        "places": results,
+    }
+
+
+def handle_lookup_contact_places(
+    args: dict[str, Any],
+    state: Optional["AgentState"] = None,
+    **kwargs,
+) -> dict[str, Any]:
+    """Lookup places linked to a contact, with optional role hint."""
+    import contacts
+    import places as places_service
+
+    contact_id = str(args.get("contact_id") or "").strip()
+    contact_query = str(args.get("contact_query") or "").strip()
+    role_hint = str(args.get("role_hint") or "").strip() or None
+    where_text = str(args.get("where_text") or "").strip() or None
+
+    matched_contact: dict[str, Any] | None = None
+    if not contact_id and not contact_query:
+        return {"error": "contact_id or contact_query is required"}
+
+    if not contact_id and contact_query:
+        contacts_found = contacts.search_contacts(contact_query, limit=3)
+        if not contacts_found:
+            return {
+                "found": False,
+                "error": f"No contact found matching '{contact_query}'",
+                "contact_places": [],
+            }
+        matched_contact = contacts_found[0]
+        contact_id = str(matched_contact.get("contact_id") or "").strip()
+
+    if not contact_id:
+        return {"error": "Unable to resolve contact_id"}
+
+    contact_places = places_service.list_contact_places(contact_id, role_hint=role_hint)
+    suggested = places_service.resolve_contact_place(
+        contact_id=contact_id,
+        role_hint=role_hint,
+        where_text=where_text,
+    )
+
+    if state is not None:
+        if contact_places:
+            state.add_fact(f"Found {len(contact_places)} linked places for contact {contact_id}")
+        else:
+            state.add_fact(f"No linked places found for contact {contact_id}")
+
+    return {
+        "found": bool(contact_places),
+        "contact_id": contact_id,
+        "contact": matched_contact,
+        "role_hint": role_hint,
+        "count": len(contact_places),
+        "contact_places": contact_places,
+        "suggested_place": suggested,
+    }

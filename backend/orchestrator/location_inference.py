@@ -60,6 +60,69 @@ def infer_current_place(
     return inferred
 
 
+def geocode_place_name(
+    name: str,
+    *,
+    near_lat: float | None = None,
+    near_lon: float | None = None,
+) -> dict[str, Any] | None:
+    """Resolve a place name using Geoapify forward geocoding."""
+    api_key = os.getenv("GEOAPIFY_API_KEY", "").strip()
+    query = str(name or "").strip()
+    if not api_key or not query:
+        return None
+
+    base_url = "https://api.geoapify.com/v1/geocode/search"
+    timeout_s = _env_float("GEOAPIFY_TIMEOUT_SECONDS", 5.0)
+    params: dict[str, Any] = {
+        "text": query,
+        "limit": 1,
+        "format": "json",
+        "apiKey": api_key,
+    }
+    if near_lat is not None and near_lon is not None:
+        params["bias"] = f"proximity:{near_lon},{near_lat}"
+
+    try:
+        response = requests.get(base_url, params=params, timeout=timeout_s)
+        response.raise_for_status()
+        payload = response.json()
+    except requests.RequestException as exc:
+        logger.warning("[location_inference] Geoapify forward geocode failed: %s", exc)
+        return None
+    except ValueError:
+        logger.warning("[location_inference] Geoapify forward geocode invalid JSON")
+        return None
+
+    candidate = _first_geoapify_result(payload)
+    if not candidate:
+        return None
+
+    resolved_name = (
+        str(candidate.get("name") or "").strip()
+        or str(candidate.get("address_line1") or "").strip()
+        or str(candidate.get("formatted") or "").strip()
+    )
+    if not resolved_name:
+        return None
+
+    return {
+        "place_name": resolved_name,
+        "city": (
+            str(candidate.get("city") or "").strip()
+            or str(candidate.get("town") or "").strip()
+            or str(candidate.get("village") or "").strip()
+            or str(candidate.get("municipality") or "").strip()
+            or None
+        ),
+        "country": str(candidate.get("country") or "").strip() or None,
+        "lat": _safe_round(candidate.get("lat"), 6),
+        "lon": _safe_round(candidate.get("lon"), 6),
+        "source": "geoapify_forward_geocode",
+        "provider": "geoapify",
+    }
+
+
 def _normalize_location(location: dict[str, Any] | None) -> dict[str, Any] | None:
     if not isinstance(location, dict):
         return None
@@ -135,9 +198,7 @@ def _reverse_geocode_with_geoapify(
     if not api_key:
         return None
 
-    base_url = os.getenv(
-        "GEOAPIFY_REVERSE_GEOCODE_URL", "https://api.geoapify.com/v1/geocode/reverse"
-    )
+    base_url = "https://api.geoapify.com/v1/geocode/reverse"
     timeout_s = _env_float("GEOAPIFY_TIMEOUT_SECONDS", 5.0)
 
     try:

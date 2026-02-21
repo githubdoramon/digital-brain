@@ -244,6 +244,12 @@ class PreExecutionValidator:
             if action is None:
                 return "Provide either 'event_ids' or a time span ('time_start' + 'time_end') for get_events"
 
+        if tool_name == "lookup_contact_places":
+            has_contact_id = bool(str(params.get("contact_id") or "").strip())
+            has_contact_query = bool(str(params.get("contact_query") or "").strip())
+            if not has_contact_id and not has_contact_query:
+                return "Provide 'contact_id' or 'contact_query' for lookup_contact_places"
+
         return None
 
     def _semantic_repair_hints(self, tool_name: str, params: dict[str, Any]) -> list[str]:
@@ -277,6 +283,12 @@ class PreExecutionValidator:
                 hints.append(
                     "Provide both 'time_start' and 'time_end' in ISO 8601 for strict event windows"
                 )
+
+        if tool_name == "lookup_contact_places":
+            has_contact_id = bool(str(params.get("contact_id") or "").strip())
+            has_contact_query = bool(str(params.get("contact_query") or "").strip())
+            if not has_contact_id and not has_contact_query:
+                hints.append("Set either 'contact_id' or 'contact_query' to identify the person")
 
         return hints
 

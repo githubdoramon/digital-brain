@@ -23,6 +23,7 @@ class ContactIn(BaseModel):
 class PlaceIn(BaseModel):
     place_id: str
     name: str | None = None
+    aliases: list[str] = Field(default_factory=list)
     city: str | None = None
     country: str | None = None
     lat: float | None = None

@@ -1,4 +1,9 @@
-from tools.handlers.resolution import handle_lookup_contact, handle_select_contacts
+from tools.handlers.resolution import (
+    handle_lookup_contact,
+    handle_lookup_contact_places,
+    handle_lookup_places,
+    handle_select_contacts,
+)
 
 
 def test_select_contacts_group_selector(monkeypatch):
@@ -108,3 +113,76 @@ def test_select_contacts_all_query_uses_unbounded_limit(monkeypatch):
     assert result["count"] == 1
     assert calls["value"] == "gmail.com"
     assert calls["limit"] is None
+
+
+def test_lookup_places_returns_ranked_matches(monkeypatch):
+    monkeypatch.setattr(
+        "places.search_places",
+        lambda query, **_kwargs: [
+            {
+                "place_id": "plc_home",
+                "name": "Home",
+                "match_score": 98.0,
+                "match_confidence": "high",
+                "matched_via": "alias_exact",
+            }
+        ],
+    )
+
+    result = handle_lookup_places(
+        {
+            "query": "my house",
+            "near_lat": 38.72,
+            "near_lon": -9.13,
+            "limit": 5,
+        }
+    )
+
+    assert result["found"] is True
+    assert result["count"] == 1
+    assert result["places"][0]["place_id"] == "plc_home"
+
+
+def test_lookup_contact_places_resolves_from_query(monkeypatch):
+    monkeypatch.setattr(
+        "contacts.search_contacts",
+        lambda query, limit=3: [
+            {
+                "contact_id": "contact:jose",
+                "display_name": "Jordan",
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        "places.list_contact_places",
+        lambda contact_id, role_hint=None: [
+            {
+                "contact_id": contact_id,
+                "place_id": "plc_home",
+                "role": role_hint or "home",
+                "name": "Home",
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        "places.resolve_contact_place",
+        lambda **_kwargs: {
+            "place_id": "plc_home",
+            "name": "Home",
+            "matched_via": "contact_place_relation",
+            "confidence": "high",
+        },
+    )
+
+    result = handle_lookup_contact_places(
+        {
+            "contact_query": "Jordan",
+            "role_hint": "house",
+            "where_text": "Jordan's house",
+        }
+    )
+
+    assert result["found"] is True
+    assert result["contact_id"] == "contact:jose"
+    assert result["count"] == 1
+    assert result["suggested_place"]["place_id"] == "plc_home"

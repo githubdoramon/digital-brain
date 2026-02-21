@@ -25,7 +25,13 @@ logger = get_runtime_logger(__name__)
 # Tool group definitions - maps group names to tool names
 TOOL_GROUPS = {
     "memory": ["search_memories", "get_events", "get_document"],
-    "resolution": ["resolve_contacts", "lookup_contact", "select_contacts"],
+    "resolution": [
+        "resolve_contacts",
+        "lookup_contact",
+        "select_contacts",
+        "lookup_places",
+        "lookup_contact_places",
+    ],
     "web": ["web_search", "fetch_web_page"],
     "home": ["home_assistant"],
     "skills": ["run_skill_script"],
@@ -729,6 +735,96 @@ def _register_all_tools(registry: ToolRegistry) -> None:
                     default=120,
                     minimum=1,
                     validator=validate_positive_int,
+                ),
+            ],
+            constraints=["read_only"],
+        )
+    )
+
+    # lookup_places - place name/alias retrieval and canonicalization support
+    registry.register(
+        ToolContract(
+            name="lookup_places",
+            description=(
+                "Place lookup tool for matching place names/aliases in personal memory. "
+                "Use this when the query is about identifying a place entity, resolving place wording, "
+                "or checking if a place already exists."
+            ),
+            parameters=[
+                ToolParameter(
+                    name="query",
+                    type="string",
+                    description="Place text to resolve (for example 'my house', 'Sao Bento').",
+                    required=True,
+                    min_length=1,
+                ),
+                ToolParameter(
+                    name="near_lat",
+                    type="number",
+                    description="Optional latitude hint for proximity-aware ranking.",
+                    required=False,
+                ),
+                ToolParameter(
+                    name="near_lon",
+                    type="number",
+                    description="Optional longitude hint for proximity-aware ranking.",
+                    required=False,
+                ),
+                ToolParameter(
+                    name="fuzzy_threshold",
+                    type="integer",
+                    description="Minimum fuzzy score (0-100).",
+                    required=False,
+                    default=80,
+                    minimum=0,
+                    maximum=100,
+                ),
+                ToolParameter(
+                    name="limit",
+                    type="integer",
+                    description="Maximum place matches to return.",
+                    required=False,
+                    default=5,
+                    minimum=1,
+                    validator=validate_positive_int,
+                ),
+            ],
+            constraints=["read_only"],
+        )
+    )
+
+    # lookup_contact_places - person-scoped place lookup (e.g., "Jordan's house")
+    registry.register(
+        ToolContract(
+            name="lookup_contact_places",
+            description=(
+                "Lookup places linked to a specific contact. Useful for person-scoped references like "
+                "'Jordan's house' or 'Maria's office' when contact identity is known or can be searched."
+            ),
+            parameters=[
+                ToolParameter(
+                    name="contact_id",
+                    type="string",
+                    description="Direct contact id to query linked places.",
+                    required=False,
+                ),
+                ToolParameter(
+                    name="contact_query",
+                    type="string",
+                    description="Contact search text when contact_id is not known.",
+                    required=False,
+                ),
+                ToolParameter(
+                    name="role_hint",
+                    type="string",
+                    description="Optional role hint like home/work/school.",
+                    required=False,
+                ),
+                ToolParameter(
+                    name="where_text",
+                    type="string",
+                    description="Optional original place phrase for better ranking.",
+                    required=False,
                 ),
             ],
             constraints=["read_only"],

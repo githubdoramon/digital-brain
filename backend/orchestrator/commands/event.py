@@ -459,6 +459,10 @@ def confirm_event_command(
             place_in = PlaceIn(
                 place_id=place_id,
                 name=place_name,
+                aliases=[str(new_place.get("query") or "").strip()]
+                if str(new_place.get("query") or "").strip()
+                and str(new_place.get("query") or "").strip().casefold() != place_name.casefold()
+                else [],
                 city=str(new_place.get("city") or "").strip() or None,
                 country=str(new_place.get("country") or "").strip() or None,
                 lat=_safe_optional_float(new_place.get("lat")),
@@ -506,16 +510,33 @@ def confirm_event_command(
 
         place_id = None
         where = extracted.get("where")
+        matched_place = resolution.get("matched_place") if isinstance(resolution, dict) else None
         if where:
             place_id = place_id_map.get(where)
         if place_id is None:
-            matched_place = (
-                resolution.get("matched_place") if isinstance(resolution, dict) else None
-            )
             if isinstance(matched_place, dict):
                 matched_place_id = str(matched_place.get("place_id") or "").strip()
                 if matched_place_id:
                     place_id = matched_place_id
+
+        if isinstance(matched_place, dict):
+            alias_to_add = str(matched_place.get("pending_alias") or "").strip()
+            if place_id and alias_to_add:
+                places_service.add_place_alias(place_id, alias_to_add)
+
+        pending_contact_place_link = (
+            resolution.get("pending_contact_place_link") if isinstance(resolution, dict) else None
+        )
+        if place_id and isinstance(pending_contact_place_link, dict):
+            contact_id = str(pending_contact_place_link.get("contact_id") or "").strip()
+            if contact_id:
+                places_service.upsert_contact_place(
+                    contact_id=contact_id,
+                    place_id=place_id,
+                    role=str(pending_contact_place_link.get("role") or "").strip() or None,
+                    source=str(pending_contact_place_link.get("source") or "event_inference"),
+                    confidence=str(pending_contact_place_link.get("confidence") or "high"),
+                )
 
         event_id = f"event:{uuid4().hex}"
         when = extracted.get("when")

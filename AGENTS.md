@@ -125,7 +125,7 @@ User Question → Intent Router → Conversational Profile Dispatch → Tool Vis
 | Group | Tools |
 |-------|-------|
 | `memory` | search_memories, get_events, get_document |
-| `resolution` | resolve_contacts, lookup_contact, select_contacts |
+| `resolution` | resolve_contacts, lookup_contact, select_contacts, lookup_places, lookup_contact_places |
 | `web` | web_search, fetch_web_page |
 | `home` | home_assistant |
 | `skills` | run_skill_script |
@@ -155,6 +155,8 @@ User Question → Intent Router → Conversational Profile Dispatch → Tool Vis
 - **All-results limit policy**: when users explicitly ask for "all/everyone/entire" results, query handlers should honor unbounded retrieval semantics instead of silently capping to a fixed maximum.
 - **Mobile session parity**: mobile chat should resolve session via backend main-session semantics (`/mobile/main-session` + `/mobile/ask` without explicit `thread_id` in normal flow) so idle timeout/reset rules match backend behavior.
 - **Location-aware place inference**: ask flows may enrich `client_context.location` with `inferred_location` (known-place proximity first, Geoapify reverse geocode fallback). Treat inferred place as approximate, and in `/event` flows only prefill `where` when the user did not explicitly provide a location.
+- **Event place canonicalization**: when `/event` extraction yields a `where` value, resolve it against existing places (name + aliases, accent-insensitive fuzzy match, optional proximity boost) before creating a new place. On misses, Geoapify forward geocoding may enrich metadata (city/country/lat/lon) for the new place.
+- **DB migration policy**: treat `backend/db/init.sql` as bootstrap schema for fresh databases. Incremental runtime-safe changes belong in ordered SQL files under `backend/orchestrator/db_migrations/`, which are auto-applied at orchestrator startup.
 - **Import-time side effects**: avoid filesystem writes (like `mkdir`) during module import. Create directories lazily at the point of file operations.
 - **Entity ID hygiene**: when generating IDs from user-provided names/titles (contacts, places, etc.), always slug/sanitize to safe URL/path characters (for example lowercase `a-z0-9-`) and avoid reserved characters like `#`, `?`, `/`, `%`.
 - **Contact disambiguation policy**: ambiguity auto-resolution strictness is controlled by `CONTACT_DISAMBIGUATION_STRICTNESS` (`strict`/`balanced`/`lenient`).
@@ -337,9 +339,10 @@ pytest tests/agent/test_controller.py tests/integration/test_full_flow.py tests/
 ## Data & Storage
 
 - **Database schema**: `backend/db/init.sql`
+- **Incremental migrations**: `backend/orchestrator/db_migrations/` (applied automatically at startup when `DB_AUTO_MIGRATE=true`)
 - **Document files**: `backend/orchestrator/storage/documents` (volume-mounted)
 - **Vector embeddings**: pgvector in PostgreSQL
-- **Junction tables**: entity associations use dedicated junction tables with composite PKs and FK cascades: `event_contacts`, `todo_contacts`, `todo_events`, `todo_places`. The `events` table does **not** have a `people` column — use `event_contacts` and `db.fetch_event_people()` instead.
+- **Junction tables**: entity associations use dedicated junction tables with composite PKs and FK cascades: `event_contacts`, `todo_contacts`, `todo_events`, `todo_places`, `contact_places`. The `events` table does **not** have a `people` column — use `event_contacts` and `db.fetch_event_people()` instead.
 
 ## Key Implementation Files
 

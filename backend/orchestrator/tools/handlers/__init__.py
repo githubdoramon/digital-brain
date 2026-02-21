@@ -9,6 +9,8 @@ from .homeassistant import handle_home_assistant
 from .memory import handle_get_document, handle_get_events, handle_search_memories
 from .resolution import (
     handle_lookup_contact,
+    handle_lookup_contact_places,
+    handle_lookup_places,
     handle_resolve_contacts,
     handle_select_contacts,
 )
@@ -25,6 +27,8 @@ HANDLERS = {
     "resolve_contacts": handle_resolve_contacts,
     "lookup_contact": handle_lookup_contact,
     "select_contacts": handle_select_contacts,
+    "lookup_places": handle_lookup_places,
+    "lookup_contact_places": handle_lookup_contact_places,
     "web_search": handle_web_search,
     "fetch_web_page": handle_fetch_web_page,
     "run_skill_script": handle_run_skill_script,
@@ -48,6 +52,8 @@ __all__ = [
     "handle_resolve_contacts",
     "handle_lookup_contact",
     "handle_select_contacts",
+    "handle_lookup_places",
+    "handle_lookup_contact_places",
     "handle_web_search",
     "handle_fetch_web_page",
     "handle_run_skill_script",
