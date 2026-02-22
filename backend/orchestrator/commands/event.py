@@ -463,6 +463,7 @@ def confirm_event_command(
                 if str(new_place.get("query") or "").strip()
                 and str(new_place.get("query") or "").strip().casefold() != place_name.casefold()
                 else [],
+                address=str(new_place.get("address") or "").strip() or None,
                 city=str(new_place.get("city") or "").strip() or None,
                 country=str(new_place.get("country") or "").strip() or None,
                 lat=_safe_optional_float(new_place.get("lat")),
