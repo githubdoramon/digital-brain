@@ -255,6 +255,21 @@ export default function SettingsScreen() {
         </Pressable>
       </Card>
 
+      <Card style={[styles.card, styles.navCard]}>
+        <Pressable
+          style={styles.navRow}
+          onPress={() => router.push('/settings/events')}
+        >
+          <View style={styles.textBlock}>
+            <Text style={styles.rowTitle}>Events</Text>
+            <Text style={styles.rowSubtitle}>
+              Search, view, and edit events with linked contacts and places.
+            </Text>
+          </View>
+          <Ionicons name="chevron-forward" size={20} color={theme.colors.mutedInk} />
+        </Pressable>
+      </Card>
+
 
       <Button
         label="Sign out"

@@ -1,12 +1,13 @@
-import { useLocalSearchParams } from 'expo-router';
+import { useLocalSearchParams, useRouter } from 'expo-router';
 import React from 'react';
+import { Alert } from 'react-native';
 
 import { apiFetch } from '@/api/client';
 import {
   EventDetailsForm,
   EventDraftEditorScreen,
 } from '@/components/event-draft/EventDraftEditorScreen';
-import type { EventDraft } from '@/components/event-draft/types';
+import type { EventDraft, EventPlaceOption } from '@/components/event-draft/types';
 
 type EventDetail = {
   id: string;
@@ -23,6 +24,7 @@ type EventDetail = {
     country?: string | null;
   } | null;
   types?: string[] | null;
+  external_id?: string | null;
 };
 
 type Contact = {
@@ -33,7 +35,17 @@ type Contact = {
 type RouteParams = {
   eventId: string;
   draftSessionId?: string;
+  editable?: string;
 };
+
+type PlaceListResponse = {
+  places: EventPlaceOption[];
+};
+
+function isEditableParam(value: string | undefined): boolean {
+  if (!value) return false;
+  return value === '1' || value.toLowerCase() === 'true';
+}
 
 function formatDateRange(start?: string | null, end?: string | null) {
   if (!start) return 'Date TBD';
@@ -110,6 +122,7 @@ function toDraft(event: EventDetail, contactMap: Map<string, string>): EventDraf
     summary: String(event.summary || '').trim(),
     when: String(event.start_date || '').trim(),
     where: placeLabel,
+    placeId: event.place?.place_id || null,
     tags: Array.isArray(event.tags) ? event.tags.map((tag) => String(tag || '').trim()).filter(Boolean) : [],
     types: Array.isArray(event.types) ? event.types.map((typeValue) => String(typeValue || '').trim()).filter(Boolean) : [],
     participants: normalizeEventPeople(event.people, contactMap),
@@ -122,6 +135,8 @@ export default function EventScreenRoute() {
   const draftSessionId = Array.isArray(params.draftSessionId)
     ? params.draftSessionId[0]
     : params.draftSessionId;
+  const editableParam = Array.isArray(params.editable) ? params.editable[0] : params.editable;
+  const editable = isEditableParam(editableParam);
 
   React.useEffect(() => {
     console.info('[event-draft-session] event-route-params', {
@@ -134,16 +149,21 @@ export default function EventScreenRoute() {
     return <EventDraftEditorScreen sessionId={draftSessionId} />;
   }
 
-  return <EventDetailView eventId={eventId} />;
+  return <EventDetailView eventId={eventId} editable={editable} />;
 }
 
 type EventDetailViewProps = {
   eventId?: string;
+  editable: boolean;
 };
 
-function EventDetailView({ eventId }: EventDetailViewProps) {
+function EventDetailView({ eventId, editable }: EventDetailViewProps) {
+  const router = useRouter();
   const [event, setEvent] = React.useState<EventDetail | null>(null);
   const [contactMap, setContactMap] = React.useState<Map<string, string>>(new Map());
+  const [availableContacts, setAvailableContacts] = React.useState<Contact[]>([]);
+  const [availablePlaces, setAvailablePlaces] = React.useState<EventPlaceOption[]>([]);
+  const [isSaving, setIsSaving] = React.useState(false);
 
   React.useEffect(() => {
     let mounted = true;
@@ -176,6 +196,7 @@ function EventDetailView({ eventId }: EventDetailViewProps) {
       try {
         const result = (await apiFetch('/mobile/contacts')) as { contacts: Contact[] };
         if (!mounted) return;
+        setAvailableContacts(result.contacts || []);
         const map = new Map<string, string>();
         for (const contact of result.contacts || []) {
           map.set(contact.contact_id, contact.display_name);
@@ -193,6 +214,26 @@ function EventDetailView({ eventId }: EventDetailViewProps) {
     };
   }, []);
 
+  React.useEffect(() => {
+    let mounted = true;
+    (async () => {
+      try {
+        const result = (await apiFetch('/mobile/places?limit=500')) as PlaceListResponse;
+        if (mounted) {
+          setAvailablePlaces(result.places || []);
+        }
+      } catch {
+        if (mounted) {
+          setAvailablePlaces([]);
+        }
+      }
+    })();
+
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
   const draft = React.useMemo(() => {
     if (!event) return null;
     return toDraft(event, contactMap);
@@ -201,6 +242,51 @@ function EventDetailView({ eventId }: EventDetailViewProps) {
   const title = String(event?.title || '').trim() || 'Event details';
   const subtitle = formatDateRange(event?.start_date, event?.end_date);
 
+  const handleSave = React.useCallback(
+    async (nextDraft: EventDraft) => {
+      if (!eventId || !event) return;
+      const nextStartDate = nextDraft.when.trim() || String(event.start_date || '').trim();
+      const parsedStart = new Date(nextStartDate);
+      if (!nextStartDate || Number.isNaN(parsedStart.getTime())) {
+        Alert.alert('Date required', 'Select a valid date and time before saving this event.');
+        return;
+      }
+
+      setIsSaving(true);
+      try {
+        await apiFetch('/ingest/event', {
+          method: 'POST',
+          body: JSON.stringify({
+            id: eventId,
+            startDate: parsedStart.toISOString(),
+            endDate: event.end_date || null,
+            placeId: nextDraft.placeId || null,
+            people: nextDraft.participants.map((participant) => participant.contactId),
+            tags: nextDraft.tags,
+            types: nextDraft.types,
+            title: nextDraft.title,
+            summary: nextDraft.summary,
+            raw: {},
+            externalId: event.external_id || null,
+          }),
+        });
+
+        const refreshed = (await apiFetch(`/mobile/events/${encodeURIComponent(eventId)}`)) as EventDetail;
+        setEvent(refreshed);
+        Alert.alert('Saved', 'Event changes were saved.');
+        router.replace({
+          pathname: '/events/[eventId]',
+          params: { eventId },
+        });
+      } catch {
+        Alert.alert('Save failed', 'Unable to save this event right now.');
+      } finally {
+        setIsSaving(false);
+      }
+    },
+    [event, eventId, router],
+  );
+
   return (
     <EventDetailsForm
       initialDraft={draft || {
@@ -208,15 +294,19 @@ function EventDetailView({ eventId }: EventDetailViewProps) {
         summary: '',
         when: '',
         where: '',
+        placeId: null,
         tags: [],
         types: [],
         participants: [],
       }}
-      availableContacts={[]}
-      editable={false}
-      headerKicker="Linked event"
+      availableContacts={availableContacts}
+      availablePlaces={availablePlaces}
+      editable={editable}
+      headerKicker={editable ? 'Event editor' : 'Linked event'}
       headerTitle={title}
       headerSubtitle={subtitle}
+      doneLabel={isSaving ? 'Saving...' : 'Save changes'}
+      onDone={editable && !isSaving ? handleSave : undefined}
     />
   );
 }

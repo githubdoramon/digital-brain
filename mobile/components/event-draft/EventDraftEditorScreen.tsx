@@ -18,16 +18,23 @@ import { Card } from '@/components/Card';
 import { AppPressable as Pressable } from '@/components/AppPressable';
 import { FloatingSaveButton } from '@/components/FloatingSaveButton';
 import { UiDirectiveDateTimePickerSheet } from '@/components/ui-directive-card/UiDirectiveDateTimePickerSheet';
-import { EMPTY_EVENT_DRAFT, type EventContactOption, type EventDraft } from '@/components/event-draft/types';
+import {
+  EMPTY_EVENT_DRAFT,
+  type EventContactOption,
+  type EventDraft,
+  type EventPlaceOption,
+} from '@/components/event-draft/types';
 import {
   getEventDraftEditSession,
   submitEventDraftEditSession,
 } from '@/events/draftEditorSession';
 import { theme } from '@/theme';
+import { normalizeSearch } from '@/utils/text';
 
 type EventDetailsFormProps = {
   initialDraft: EventDraft;
   availableContacts: EventContactOption[];
+  availablePlaces: EventPlaceOption[];
   editable: boolean;
   headerKicker: string;
   headerTitle: string;
@@ -80,9 +87,24 @@ function readOnlyList(values: string[], fallback: string) {
   return filtered.length ? filtered : [fallback];
 }
 
+function formatPlaceLabel(place: EventPlaceOption): string {
+  const parts = [place.name, place.city, place.country]
+    .map((value) => String(value || '').trim())
+    .filter(Boolean);
+  if (parts.length > 0) return parts.join(', ');
+  return place.place_id;
+}
+
+function buildPlaceSearchText(place: EventPlaceOption): string {
+  return [place.name, place.address, place.city, place.country, ...(place.aliases || [])]
+    .filter(Boolean)
+    .join(' ');
+}
+
 export function EventDetailsForm({
   initialDraft,
   availableContacts,
+  availablePlaces,
   editable,
   headerKicker,
   headerTitle,
@@ -98,6 +120,9 @@ export function EventDetailsForm({
   const [summary, setSummary] = React.useState(initialDraft.summary);
   const [when, setWhen] = React.useState(initialDraft.when);
   const [where, setWhere] = React.useState(initialDraft.where);
+  const [selectedPlaceId, setSelectedPlaceId] = React.useState<string | null>(
+    initialDraft.placeId || null,
+  );
   const [tagsInput, setTagsInput] = React.useState(listToInput(initialDraft.tags));
   const [typesInput, setTypesInput] = React.useState(listToInput(initialDraft.types));
   const [participantQuery, setParticipantQuery] = React.useState('');
@@ -110,6 +135,7 @@ export function EventDetailsForm({
     setSummary(initialDraft.summary);
     setWhen(initialDraft.when);
     setWhere(initialDraft.where);
+    setSelectedPlaceId(initialDraft.placeId || null);
     setTagsInput(listToInput(initialDraft.tags));
     setTypesInput(listToInput(initialDraft.types));
     setSelectedParticipantIds(initialDraft.participants.map((participant) => participant.contactId));
@@ -166,14 +192,23 @@ export function EventDetailsForm({
 
   const filteredContacts = React.useMemo(() => {
     if (!editable) return [];
-    const query = participantQuery.trim().toLowerCase();
+    const query = normalizeSearch(participantQuery.trim());
     if (!query) return [];
     const selectedSet = new Set(selectedParticipantIds);
     return availableContacts
       .filter((contact) => !selectedSet.has(contact.contact_id))
-      .filter((contact) => contact.display_name.toLowerCase().includes(query))
+      .filter((contact) => normalizeSearch(contact.display_name).includes(query))
       .slice(0, 5);
   }, [availableContacts, editable, participantQuery, selectedParticipantIds]);
+
+  const filteredPlaces = React.useMemo(() => {
+    if (!editable) return [];
+    const query = normalizeSearch(where.trim());
+    if (!query) return [];
+    return availablePlaces
+      .filter((place) => normalizeSearch(buildPlaceSearchText(place)).includes(query))
+      .slice(0, 6);
+  }, [availablePlaces, editable, where]);
 
   const toggleParticipant = React.useCallback((contactId: string) => {
     setSelectedParticipantIds((prev) =>
@@ -188,11 +223,12 @@ export function EventDetailsForm({
       summary: summary.trim(),
       when: when.trim(),
       where: where.trim(),
+      placeId: selectedPlaceId,
       tags: inputToList(tagsInput),
       types: inputToList(typesInput),
       participants: selectedParticipants,
     }),
-    [selectedParticipants, summary, tagsInput, title, typesInput, when, where],
+    [selectedParticipants, selectedPlaceId, summary, tagsInput, title, typesInput, when, where],
   );
 
   const readOnlyParticipants = selectedParticipants;
@@ -285,13 +321,52 @@ export function EventDetailsForm({
           <Card style={styles.card}>
             <Text style={styles.label}>Where</Text>
             {editable ? (
-              <TextInput
-                value={where}
-                onChangeText={setWhere}
-                placeholder="Location"
-                placeholderTextColor={theme.colors.mutedInk}
-                style={styles.input}
-              />
+              <>
+                <TextInput
+                  value={where}
+                  onChangeText={(value) => {
+                    setWhere(value);
+                    setSelectedPlaceId(null);
+                  }}
+                  placeholder="Search places"
+                  placeholderTextColor={theme.colors.mutedInk}
+                  style={styles.input}
+                />
+                {selectedPlaceId ? (
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel="Clear linked place"
+                    onPress={() => setSelectedPlaceId(null)}
+                    style={({ pressed }) => [styles.clearLink, pressed && styles.clearLinkPressed]}
+                  >
+                    <Text style={styles.clearLinkText}>Clear linked place</Text>
+                  </Pressable>
+                ) : null}
+                {where.trim().length > 0 && filteredPlaces.length > 0 ? (
+                  <View style={styles.suggestionList}>
+                    {filteredPlaces.map((place) => (
+                      <Pressable
+                        key={place.place_id}
+                        accessibilityRole="button"
+                        accessibilityLabel={`Select ${formatPlaceLabel(place)}`}
+                        onPress={() => {
+                          setWhere(formatPlaceLabel(place));
+                          setSelectedPlaceId(place.place_id);
+                        }}
+                        style={({ pressed }) => [styles.suggestionRow, pressed && styles.suggestionPressed]}
+                      >
+                        <View style={styles.suggestionBody}>
+                          <Text style={styles.suggestionText}>{formatPlaceLabel(place)}</Text>
+                          {place.address ? (
+                            <Text style={styles.suggestionMeta}>{place.address}</Text>
+                          ) : null}
+                        </View>
+                        <Ionicons name="location-outline" size={16} color={theme.colors.accentDeep} />
+                      </Pressable>
+                    ))}
+                  </View>
+                ) : null}
+              </>
             ) : (
               <Text style={styles.readText}>{readOnlyText(where, 'Not specified')}</Text>
             )}
@@ -472,6 +547,7 @@ export function EventDraftEditorScreen({ sessionId }: DraftEditorScreenProps) {
     <EventDetailsForm
       initialDraft={session.initialDraft || EMPTY_EVENT_DRAFT}
       availableContacts={session.availableContacts}
+      availablePlaces={[]}
       editable
       headerKicker="Event proposal"
       headerTitle="Edit draft"
@@ -600,6 +676,16 @@ const styles = StyleSheet.create({
     lineHeight: 19,
     flexShrink: 1,
     marginRight: 10,
+  },
+  suggestionBody: {
+    flex: 1,
+    marginRight: 10,
+  },
+  suggestionMeta: {
+    color: theme.colors.mutedInk,
+    fontSize: 12,
+    lineHeight: 16,
+    marginTop: 2,
   },
   chipRow: {
     flexDirection: 'row',

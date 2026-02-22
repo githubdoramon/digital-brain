@@ -8,11 +8,21 @@ export type EventContactOption = {
   display_name: string;
 };
 
+export type EventPlaceOption = {
+  place_id: string;
+  name: string | null;
+  address: string | null;
+  city: string | null;
+  country: string | null;
+  aliases?: string[];
+};
+
 export type EventDraft = {
   title: string;
   summary: string;
   when: string;
   where: string;
+  placeId?: string | null;
   tags: string[];
   types: string[];
   participants: EventDraftParticipant[];
@@ -33,6 +43,7 @@ export const EMPTY_EVENT_DRAFT: EventDraft = {
   summary: '',
   when: '',
   where: '',
+  placeId: null,
   tags: [],
   types: [],
   participants: [],

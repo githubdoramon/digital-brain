@@ -779,7 +779,8 @@ def search_events(
                        e.start_date,
                        e.end_date
                 FROM events e
-                WHERE e.title ILIKE %s OR e.summary ILIKE %s
+                WHERE unaccent(COALESCE(e.title, '')) ILIKE unaccent(%s)
+                   OR unaccent(COALESCE(e.summary, '')) ILIKE unaccent(%s)
                 ORDER BY e.start_date DESC
                 LIMIT %s
                 """,
