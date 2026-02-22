@@ -22,12 +22,14 @@ import { Card } from '@/components/Card';
 import { FloatingSaveButton } from '@/components/FloatingSaveButton';
 import { TopNoticeProvider, useTopNotice } from '@/components/top-notice';
 import { theme } from '@/theme';
+import { matchesContactSearch } from '@/utils/contactSearch';
 
 const dueDatePattern = /^\d{4}-\d{2}-\d{2}$/;
 
 type Contact = {
   contact_id: string;
   display_name: string;
+  aliases?: string[];
 };
 
 type EventResult = {
@@ -53,12 +55,6 @@ type TodoSnapshot = {
   contactIds: string[];
   eventIds: string[];
 };
-
-const normalizeSearch = (value: string) =>
-  value
-    .normalize('NFD')
-    .replace(/\p{Diacritic}/gu, '')
-    .toLowerCase();
 
 function formatIsoDate(value: Date) {
   return value.toISOString().slice(0, 10);
@@ -186,12 +182,10 @@ function NewTodoContent() {
   );
 
   const filteredContacts = React.useMemo(() => {
-    const trimmed = normalizeSearch(contactQuery.trim());
+    const trimmed = contactQuery.trim();
     if (!trimmed) return [];
     return contacts
-      .filter((contact) =>
-        normalizeSearch(contact.display_name).includes(trimmed)
-      )
+      .filter((contact) => matchesContactSearch(contact, trimmed))
       .filter((contact) => !selectedContactIds.has(contact.contact_id))
       .slice(0, 6);
   }, [contactQuery, contacts, selectedContactIds]);

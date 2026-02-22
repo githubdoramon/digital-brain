@@ -20,6 +20,7 @@ import { Avatar } from '@/components/Avatar';
 import { Card } from '@/components/Card';
 import { RelationshipChips } from '@/components/RelationshipChips';
 import { theme } from '@/theme';
+import { matchesContactSearch } from '@/utils/contactSearch';
 
 type Relationship = {
   relationship_id: string;
@@ -32,6 +33,7 @@ type Relationship = {
 type Contact = {
   contact_id: string;
   display_name: string;
+  aliases?: string[];
   emails: string[];
   phones: string[];
   tags: string[];
@@ -40,12 +42,6 @@ type Contact = {
   avatar_url?: string | null;
   relationships: Relationship[];
 };
-
-const normalizeSearch = (value: string) =>
-  value
-    .normalize('NFD')
-    .replace(/\p{Diacritic}/gu, '')
-    .toLowerCase();
 
 function ContactCard({
   contact,
@@ -157,11 +153,9 @@ export default function ContactsScreen() {
   }, [contacts]);
 
   const filtered = useMemo(() => {
-    const trimmed = normalizeSearch(query.trim());
+    const trimmed = query.trim();
     if (!trimmed) return contacts;
-    return contacts.filter((contact) =>
-      normalizeSearch(contact.display_name).includes(trimmed),
-    );
+    return contacts.filter((contact) => matchesContactSearch(contact, trimmed));
   }, [contacts, query]);
 
   const listHeader = (

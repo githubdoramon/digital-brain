@@ -1,13 +1,17 @@
-import { useLocalSearchParams, useRouter } from 'expo-router';
+import { useLocalSearchParams } from 'expo-router';
 import React from 'react';
-import { Alert } from 'react-native';
+import { Alert, StyleSheet } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import Ionicons from '@expo/vector-icons/Ionicons';
 
 import { apiFetch } from '@/api/client';
+import { AppPressable as Pressable } from '@/components/AppPressable';
 import {
   EventDetailsForm,
   EventDraftEditorScreen,
 } from '@/components/event-draft/EventDraftEditorScreen';
 import type { EventDraft, EventPlaceOption } from '@/components/event-draft/types';
+import { theme } from '@/theme';
 
 type EventDetail = {
   id: string;
@@ -30,6 +34,7 @@ type EventDetail = {
 type Contact = {
   contact_id: string;
   display_name: string;
+  aliases?: string[];
 };
 
 type RouteParams = {
@@ -158,12 +163,17 @@ type EventDetailViewProps = {
 };
 
 function EventDetailView({ eventId, editable }: EventDetailViewProps) {
-  const router = useRouter();
+  const insets = useSafeAreaInsets();
   const [event, setEvent] = React.useState<EventDetail | null>(null);
   const [contactMap, setContactMap] = React.useState<Map<string, string>>(new Map());
   const [availableContacts, setAvailableContacts] = React.useState<Contact[]>([]);
   const [availablePlaces, setAvailablePlaces] = React.useState<EventPlaceOption[]>([]);
+  const [isEditing, setIsEditing] = React.useState(editable);
   const [isSaving, setIsSaving] = React.useState(false);
+
+  React.useEffect(() => {
+    setIsEditing(editable);
+  }, [editable]);
 
   React.useEffect(() => {
     let mounted = true;
@@ -254,7 +264,7 @@ function EventDetailView({ eventId, editable }: EventDetailViewProps) {
 
       setIsSaving(true);
       try {
-        await apiFetch('/ingest/event', {
+        await apiFetch('/mobile/ingest/event', {
           method: 'POST',
           body: JSON.stringify({
             id: eventId,
@@ -274,20 +284,18 @@ function EventDetailView({ eventId, editable }: EventDetailViewProps) {
         const refreshed = (await apiFetch(`/mobile/events/${encodeURIComponent(eventId)}`)) as EventDetail;
         setEvent(refreshed);
         Alert.alert('Saved', 'Event changes were saved.');
-        router.replace({
-          pathname: '/events/[eventId]',
-          params: { eventId },
-        });
-      } catch {
+        setIsEditing(false);
+      } catch (error) {
+        console.warn('[events] save failed', error);
         Alert.alert('Save failed', 'Unable to save this event right now.');
       } finally {
         setIsSaving(false);
       }
     },
-    [event, eventId, router],
+    [event, eventId],
   );
 
-  return (
+  const content = (
     <EventDetailsForm
       initialDraft={draft || {
         title: '',
@@ -301,12 +309,56 @@ function EventDetailView({ eventId, editable }: EventDetailViewProps) {
       }}
       availableContacts={availableContacts}
       availablePlaces={availablePlaces}
-      editable={editable}
-      headerKicker={editable ? 'Event editor' : 'Linked event'}
+      editable={isEditing}
+      headerKicker={isEditing ? 'Event editor' : 'Linked event'}
       headerTitle={title}
       headerSubtitle={subtitle}
       doneLabel={isSaving ? 'Saving...' : 'Save changes'}
-      onDone={editable && !isSaving ? handleSave : undefined}
+      onDone={isEditing && !isSaving ? handleSave : undefined}
     />
   );
+
+  if (isEditing) {
+    return content;
+  }
+
+  return (
+    <>
+      {content}
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel="Edit event"
+        onPress={() => setIsEditing(true)}
+        style={({ pressed }) => [
+          styles.fab,
+          { bottom: insets.bottom + 20 },
+          pressed && styles.fabPressed,
+        ]}
+      >
+        <Ionicons name="create-outline" size={22} color="#fff" />
+      </Pressable>
+    </>
+  );
 }
+
+const styles = StyleSheet.create({
+  fab: {
+    position: 'absolute',
+    right: 20,
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: theme.colors.accent,
+    shadowColor: '#101214',
+    shadowOffset: { width: 0, height: 10 },
+    shadowOpacity: 0.3,
+    shadowRadius: 14,
+    elevation: 10,
+  },
+  fabPressed: {
+    transform: [{ scale: 0.97 }],
+    opacity: 0.92,
+  },
+});

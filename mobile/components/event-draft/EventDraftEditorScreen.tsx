@@ -30,6 +30,7 @@ import {
 } from '@/events/draftEditorSession';
 import { theme } from '@/theme';
 import { normalizeSearch } from '@/utils/text';
+import { matchesContactSearch } from '@/utils/contactSearch';
 
 type EventDetailsFormProps = {
   initialDraft: EventDraft;
@@ -192,12 +193,12 @@ export function EventDetailsForm({
 
   const filteredContacts = React.useMemo(() => {
     if (!editable) return [];
-    const query = normalizeSearch(participantQuery.trim());
+    const query = participantQuery.trim();
     if (!query) return [];
     const selectedSet = new Set(selectedParticipantIds);
     return availableContacts
       .filter((contact) => !selectedSet.has(contact.contact_id))
-      .filter((contact) => normalizeSearch(contact.display_name).includes(query))
+      .filter((contact) => matchesContactSearch(contact, query))
       .slice(0, 5);
   }, [availableContacts, editable, participantQuery, selectedParticipantIds]);
 

@@ -6,6 +6,7 @@ export type EventDraftParticipant = {
 export type EventContactOption = {
   contact_id: string;
   display_name: string;
+  aliases?: string[];
 };
 
 export type EventPlaceOption = {

@@ -20,6 +20,7 @@ import { AppPressable as Pressable } from '@/components/AppPressable';
 import { Card } from '@/components/Card';
 import { FloatingSaveButton } from '@/components/FloatingSaveButton';
 import { theme } from '@/theme';
+import { matchesContactSearch } from '@/utils/contactSearch';
 
 type ContactRelationship = {
   relationship_id: string;
@@ -165,10 +166,10 @@ export default function RelationshipManagementScreen() {
   const isDirty = relationshipSnapshot !== originalSnapshot;
 
   const availableContacts = useMemo(() => {
-    const lower = search.trim().toLowerCase();
+    const query = search.trim();
     return allContacts
       .filter((item) => item.contact_id !== contactParam)
-      .filter((item) => item.display_name.toLowerCase().includes(lower));
+      .filter((item) => matchesContactSearch(item, query));
   }, [allContacts, contactParam, search]);
 
   const hasInvalidSelection = search.trim().length > 0 && !selectedContactId;

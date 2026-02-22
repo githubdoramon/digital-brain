@@ -821,6 +821,7 @@ def delete_todo(todo_id: str, user: dict = Depends(get_current_user)):
 
 
 @api.post("/ingest/event")
+@api.post("/mobile/ingest/event")
 def ingest_event(e: EventIn, user: dict = Depends(get_current_user)):
     events_service.ingest_event(e)
     return {"ok": True, "id": e.id}

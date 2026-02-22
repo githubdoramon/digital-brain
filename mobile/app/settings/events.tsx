@@ -161,21 +161,7 @@ export default function SettingsEventsScreen() {
                 <Text style={styles.cardTitle}>{String(item.title || '').trim() || 'Untitled event'}</Text>
                 <Text style={styles.cardSubtitle}>{formatDate(item.start_date)}</Text>
               </View>
-              <Pressable
-                accessibilityRole="button"
-                accessibilityLabel="Edit event"
-                onPress={(event) => {
-                  event?.stopPropagation?.();
-                  router.push({
-                    pathname: '/events/[eventId]',
-                    params: { eventId: item.id, editable: '1' },
-                  });
-                }}
-                style={({ pressed }) => [styles.editButton, pressed && styles.editButtonPressed]}
-              >
-                <Ionicons name="create-outline" size={16} color={theme.colors.ink} />
-                <Text style={styles.editLabel}>Edit</Text>
-              </Pressable>
+              <Ionicons name="chevron-forward" size={18} color={theme.colors.mutedInk} />
             </Pressable>
           </Card>
         )}
@@ -238,25 +224,6 @@ const styles = StyleSheet.create({
   cardSubtitle: {
     fontSize: 13,
     color: theme.colors.mutedInk,
-  },
-  editButton: {
-    minHeight: 34,
-    borderRadius: theme.radius.md,
-    borderWidth: 1,
-    borderColor: theme.colors.line,
-    backgroundColor: '#fff',
-    paddingHorizontal: 10,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-  },
-  editButtonPressed: {
-    opacity: 0.8,
-  },
-  editLabel: {
-    fontSize: 12,
-    fontWeight: '600',
-    color: theme.colors.ink,
   },
   empty: {
     fontSize: 14,
