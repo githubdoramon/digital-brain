@@ -283,7 +283,6 @@ function EventDetailView({ eventId, editable }: EventDetailViewProps) {
 
         const refreshed = (await apiFetch(`/mobile/events/${encodeURIComponent(eventId)}`)) as EventDetail;
         setEvent(refreshed);
-        Alert.alert('Saved', 'Event changes were saved.');
         setIsEditing(false);
       } catch (error) {
         console.warn('[events] save failed', error);
