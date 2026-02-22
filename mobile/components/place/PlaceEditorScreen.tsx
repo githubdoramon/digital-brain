@@ -1,3 +1,4 @@
+import Ionicons from '@expo/vector-icons/Ionicons';
 import MapView, { Marker, PROVIDER_GOOGLE, Region } from 'react-native-maps';
 import * as Location from 'expo-location';
 import React, { useEffect, useMemo, useState } from 'react';
@@ -18,8 +19,10 @@ import { apiFetch } from '@/api/client';
 import { AppPressable as Pressable } from '@/components/AppPressable';
 import { Card } from '@/components/Card';
 import { FloatingSaveButton } from '@/components/FloatingSaveButton';
+import { LinkedContactsCard } from '@/components/place/LinkedContactsCard';
 import { theme } from '@/theme';
 import type { Place } from '@/types/place';
+import { openNativeMapForPlace } from '@/utils/maps';
 import { normalizeRouteParam } from '@/utils/text';
 
 type Draft = {
@@ -317,6 +320,26 @@ export function PlaceEditorScreen({ placeId }: { placeId?: string }) {
     }
   };
 
+  const handleOpenMapApp = async () => {
+    if (!draft) return;
+    const lat = toNumberOrNull(draft.latText);
+    const lon = toNumberOrNull(draft.lonText);
+    if (lat === null || lon === null) {
+      Alert.alert('Coordinates required', 'Set latitude and longitude to open this place in Maps.');
+      return;
+    }
+
+    const opened = await openNativeMapForPlace({
+      lat,
+      lon,
+      address: draft.address,
+      name: draft.name,
+    });
+    if (!opened) {
+      Alert.alert('Unable to open Maps', 'No compatible maps app was found.');
+    }
+  };
+
   if (!draft) {
     return (
       <View style={styles.container}>
@@ -395,18 +418,38 @@ export function PlaceEditorScreen({ placeId }: { placeId?: string }) {
             placeholder="Address"
             placeholderTextColor={theme.colors.mutedInk}
           />
-          <Pressable
-            style={[
-              styles.searchAddressButton,
-              (isGeocodingAddress || !draft.address.trim()) && styles.searchAddressButtonDisabled,
-            ]}
-            onPress={() => void handleSearchAddress()}
-            disabled={isGeocodingAddress || !draft.address.trim()}
-          >
-            <Text style={styles.searchAddressButtonText}>
-              {isGeocodingAddress ? 'Searching address...' : 'Search coordinates from address'}
-            </Text>
-          </Pressable>
+          <View style={styles.actionRow}>
+            <Pressable
+              style={({ pressed }) => [
+                styles.actionButton,
+                styles.primaryActionButton,
+                (isGeocodingAddress || !draft.address.trim()) && styles.actionButtonDisabled,
+                pressed && styles.actionButtonPressed,
+              ]}
+              onPress={() => void handleSearchAddress()}
+              disabled={isGeocodingAddress || !draft.address.trim()}
+            >
+              <Ionicons name="search" size={16} color="#fff" />
+              <Text style={[styles.actionButtonText, styles.primaryActionButtonText]}>
+                {isGeocodingAddress ? 'Searching...' : 'Find coordinates'}
+              </Text>
+            </Pressable>
+            <Pressable
+              style={({ pressed }) => [
+                styles.actionButton,
+                styles.secondaryActionButton,
+                !markerCoordinate && styles.actionButtonDisabled,
+                pressed && styles.actionButtonPressed,
+              ]}
+              onPress={() => void handleOpenMapApp()}
+              disabled={!markerCoordinate}
+            >
+              <Ionicons name="navigate" size={16} color={theme.colors.ink} />
+              <Text style={[styles.actionButtonText, styles.secondaryActionButtonText]}>
+                Open in Maps
+              </Text>
+            </Pressable>
+          </View>
           {isLocating ? <Text style={styles.helper}>Detecting your current location...</Text> : null}
           <View style={styles.coordinateRow}>
             <TextInput
@@ -464,6 +507,8 @@ export function PlaceEditorScreen({ placeId }: { placeId?: string }) {
             ) : null}
           </View>
         </Card>
+
+        {!isCreating && normalizedPlaceId ? <LinkedContactsCard placeId={normalizedPlaceId} /> : null}
       </ScrollView>
 
       <FloatingSaveButton
@@ -535,20 +580,44 @@ const styles = StyleSheet.create({
   coordinateInput: {
     flex: 1,
   },
-  searchAddressButton: {
-    alignSelf: 'flex-start',
-    borderRadius: theme.radius.md,
-    backgroundColor: theme.colors.ink,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
+  actionRow: {
+    flexDirection: 'row',
+    gap: 8,
   },
-  searchAddressButtonDisabled: {
+  actionButton: {
+    flex: 1,
+    minHeight: 44,
+    borderRadius: theme.radius.md,
+    borderWidth: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexDirection: 'row',
+    gap: 8,
+    paddingHorizontal: 12,
+  },
+  primaryActionButton: {
+    backgroundColor: '#1d2938',
+    borderColor: '#1d2938',
+  },
+  secondaryActionButton: {
+    backgroundColor: '#f4f7f9',
+    borderColor: theme.colors.line,
+  },
+  actionButtonText: {
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  primaryActionButtonText: {
+    color: '#fff',
+  },
+  secondaryActionButtonText: {
+    color: theme.colors.ink,
+  },
+  actionButtonDisabled: {
     opacity: 0.5,
   },
-  searchAddressButtonText: {
-    color: '#fff',
-    fontSize: 12,
-    fontWeight: '600',
+  actionButtonPressed: {
+    opacity: 0.86,
   },
   helper: {
     fontSize: 12,

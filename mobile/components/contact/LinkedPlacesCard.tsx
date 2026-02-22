@@ -9,6 +9,7 @@ import { AppPressable as Pressable } from '@/components/AppPressable';
 import { Card } from '@/components/Card';
 import { theme } from '@/theme';
 import type { Place } from '@/types/place';
+import { openNativeMapForPlace } from '@/utils/maps';
 import { normalizeSearch } from '@/utils/text';
 
 function placeLabel(place: Place): string {
@@ -109,6 +110,18 @@ export function LinkedPlacesCard({ contactId }: { contactId: string }) {
     }
   };
 
+  const handleOpenMap = async (place: Place) => {
+    const opened = await openNativeMapForPlace({
+      lat: place.lat,
+      lon: place.lon,
+      address: place.address,
+      name: place.name,
+    });
+    if (!opened) {
+      Alert.alert('Unable to open Maps', 'This place does not have coordinates yet.');
+    }
+  };
+
   return (
     <Card style={styles.section}>
       <Text style={styles.sectionTitle}>Linked places</Text>
@@ -129,9 +142,31 @@ export function LinkedPlacesCard({ contactId }: { contactId: string }) {
               <Text style={styles.placeMeta}>{placeLabel(place)}</Text>
             </View>
           </Pressable>
-          <Pressable onPress={() => void handleRemove(place.place_id)} disabled={isSaving}>
-            <Ionicons name="close-circle" size={20} color={theme.colors.mutedInk} />
-          </Pressable>
+          <View style={styles.rowActions}>
+            {typeof place.lat === 'number' && typeof place.lon === 'number' ? (
+              <Pressable
+                onPress={() => void handleOpenMap(place)}
+                accessibilityRole="button"
+                accessibilityLabel={`Open ${place.name || 'place'} in maps`}
+                style={({ pressed }) => [styles.actionIconButton, pressed && styles.actionIconButtonPressed]}
+                hitSlop={6}
+              >
+                <Ionicons name="navigate" size={20} color={theme.colors.ink} />
+              </Pressable>
+            ) : null}
+            <Pressable
+              onPress={() => void handleRemove(place.place_id)}
+              disabled={isSaving}
+              style={({ pressed }) => [
+                styles.actionIconButton,
+                styles.removeIconButton,
+                (pressed || isSaving) && styles.actionIconButtonPressed,
+              ]}
+              hitSlop={6}
+            >
+              <Ionicons name="close" size={20} color="#b83f35" />
+            </Pressable>
+          </View>
         </View>
       ))}
 
@@ -220,6 +255,29 @@ const styles = StyleSheet.create({
   placeMeta: {
     fontSize: 12,
     color: theme.colors.mutedInk,
+  },
+  rowActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  actionIconButton: {
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: theme.colors.line,
+    backgroundColor: '#f5f7f9',
+  },
+  removeIconButton: {
+    backgroundColor: '#fff4f2',
+    borderColor: '#efd0ca',
+  },
+  actionIconButtonPressed: {
+    opacity: 0.72,
+    transform: [{ scale: 0.98 }],
   },
   divider: {
     height: 1,
