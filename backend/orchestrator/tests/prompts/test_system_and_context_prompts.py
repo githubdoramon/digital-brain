@@ -60,3 +60,19 @@ def test_location_context_includes_inferred_place_details():
     assert "Likely current place: Home" in context
     assert "Place inference source: known_place_proximity" in context
     assert "Distance to inferred place: 15.2 meters" in context
+
+
+def test_location_context_includes_recent_resolved_place_guidance():
+    context = get_location_context(
+        {
+            "recent_resolved_place": {
+                "place_id": "plc_home_123",
+                "place_name": "Theo's apt",
+                "address": "Maple Street, 23, Springfield",
+                "role_hint": "home",
+            }
+        }
+    )
+    assert context is not None
+    assert "place_id: plc_home_123" in context
+    assert "recent resolved place is available" in context

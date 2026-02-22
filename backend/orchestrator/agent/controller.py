@@ -1242,6 +1242,24 @@ class AgentController:
             except (TypeError, ValueError):
                 pass
 
+        recent_place = client_context.get("recent_resolved_place")
+        if isinstance(recent_place, dict):
+            place_id = str(recent_place.get("place_id") or "").strip()
+            if place_id:
+                normalized_recent_place: dict[str, Any] = {"place_id": place_id}
+                for field_name in (
+                    "place_name",
+                    "address",
+                    "city",
+                    "country",
+                    "role_hint",
+                    "source",
+                ):
+                    value = str(recent_place.get(field_name) or "").strip()
+                    if value:
+                        normalized_recent_place[field_name] = value
+                normalized["recent_resolved_place"] = normalized_recent_place
+
         return normalized
 
     def _normalize_ui_submission(

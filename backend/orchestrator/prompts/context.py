@@ -121,6 +121,7 @@ def get_location_context(client_context: Optional[dict[str, Any]]) -> Optional[s
     locale = str(client_context.get("locale") or "").strip()
     location = client_context.get("location")
     inferred_location = client_context.get("inferred_location")
+    recent_resolved_place = client_context.get("recent_resolved_place")
 
     lines: list[str] = ["Client runtime context:"]
 
@@ -173,6 +174,29 @@ def get_location_context(client_context: Optional[dict[str, Any]]) -> Optional[s
         distance_value = _as_float(distance_m)
         if distance_value is not None:
             lines.append(f"- Distance to inferred place: {round(distance_value, 1)} meters")
+
+    if isinstance(recent_resolved_place, dict):
+        recent_place_id = str(recent_resolved_place.get("place_id") or "").strip()
+        recent_place_name = str(recent_resolved_place.get("place_name") or "").strip()
+        if recent_place_id:
+            if recent_place_name:
+                lines.append(
+                    f"- Recent resolved place reference: {recent_place_name} (place_id: {recent_place_id})"
+                )
+            else:
+                lines.append(f"- Recent resolved place reference: place_id {recent_place_id}")
+
+        recent_address = str(recent_resolved_place.get("address") or "").strip()
+        if recent_address:
+            lines.append(f"- Recent place address text: {recent_address}")
+
+        recent_role_hint = str(recent_resolved_place.get("role_hint") or "").strip()
+        if recent_role_hint:
+            lines.append(f"- Recent place role hint: {recent_role_hint}")
+
+        lines.append(
+            "- A recent resolved place is available; use its place_id for follow-up place lookups when relevant."
+        )
 
     if len(lines) == 1:
         return None

@@ -70,7 +70,7 @@ def ensure_thread(
                 raise LookupError("Thread not found")
             if row["user_email"] != user_email:
                 raise PermissionError("Thread does not belong to the authenticated user")
-            return row
+            return dict(row)
 
     new_thread_id = thread_id or _generate_thread_id()
     normalized_title = _normalize_title_candidate(title)
@@ -86,8 +86,11 @@ def ensure_thread(
             (new_thread_id, user_email, normalized_title),
         )
         row = cur.fetchone()
+        if not row:
+            conn.rollback()
+            raise RuntimeError("Failed to create conversation thread")
         conn.commit()
-        return row
+        return dict(row)
 
 
 def list_threads(user_email: str) -> list[dict[str, Any]]:
@@ -168,6 +171,33 @@ def get_conversation_history(thread_id: str, user_email: str) -> list[dict[str, 
             continue
         history.append({"role": role, "content": content})
     return history
+
+
+def get_latest_assistant_metadata(thread_id: str, user_email: str) -> dict[str, Any] | None:
+    """Return metadata from the latest assistant message in a thread."""
+    if not thread_id or not user_email:
+        return None
+
+    with get_conn() as conn, conn.cursor(row_factory=dict_row) as cur:
+        cur.execute(
+            """
+            SELECT m.metadata
+            FROM conversation_messages m
+            JOIN conversation_threads t ON t.id = m.thread_id
+            WHERE m.thread_id = %s
+              AND t.user_email = %s
+              AND m.role = 'assistant'
+            ORDER BY m.created_at DESC, m.message_id DESC
+            LIMIT 1
+            """,
+            (thread_id, user_email),
+        )
+        row = cur.fetchone()
+
+    if not row:
+        return None
+    metadata = row.get("metadata")
+    return metadata if isinstance(metadata, dict) else None
 
 
 def record_exchange(
@@ -355,7 +385,7 @@ def update_thread_title(thread_id: str, user_email: str, title: str) -> dict[str
             conn.rollback()
             return None
         conn.commit()
-    return row
+    return dict(row)
 
 
 # ---------------------------------------------------------------------------
@@ -473,8 +503,11 @@ def _create_thread_for_main_session(user_email: str) -> dict[str, Any]:
             (new_thread_id, user_email, title),
         )
         row = cur.fetchone()
+        if not row:
+            conn.rollback()
+            raise RuntimeError("Failed to create main session thread")
         conn.commit()
-        return row
+        return dict(row)
 
 
 def resolve_main_session(

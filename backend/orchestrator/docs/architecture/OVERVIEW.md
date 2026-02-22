@@ -106,6 +106,7 @@ sequenceDiagram
 - Client location context can be enriched with inferred place context (`inferred_location`) using known-place proximity and reverse geocoding fallback.
 - `/event` place resolution canonicalizes extracted `where` values against existing places (including aliases) before creating new rows, and can enrich unknown places with Geoapify forward geocoding.
 - Contact-to-place links are stored in `contact_places` and can prioritize person-scoped place phrases (for example "Jordan's house") during `/event` resolution.
+- Resolved place context can be persisted in assistant message metadata and reinjected for deictic follow-ups (for example "Who else lives here?") so place-aware tools use stable `place_id` references.
 - Orchestrator startup auto-applies ordered SQL migrations from `backend/orchestrator/db_migrations/`; `backend/db/init.sql` remains bootstrap-only for fresh Postgres initialization.
 - Controller tracks recovery metrics in state metadata (`tool_visibility_escalations_count`, `clarification_requests_count`).
 - Adaptive model routing is always enabled (`agent/model_routing.py`) and selects model/timeout per step.

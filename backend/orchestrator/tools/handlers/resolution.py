@@ -468,6 +468,16 @@ def handle_lookup_places(
     if state is not None:
         if results:
             state.add_fact(f"Found {len(results)} place matches for '{query}'")
+            top_match = results[0]
+            if isinstance(top_match, dict):
+                state.resolution["resolved_place"] = {
+                    "place_id": str(top_match.get("place_id") or "").strip() or None,
+                    "place_name": str(top_match.get("name") or "").strip() or None,
+                    "address": str(top_match.get("address") or "").strip() or None,
+                    "city": str(top_match.get("city") or "").strip() or None,
+                    "country": str(top_match.get("country") or "").strip() or None,
+                    "source": "lookup_places",
+                }
         else:
             state.add_fact(f"No places found for '{query}'")
 
@@ -564,6 +574,16 @@ def handle_lookup_contact_places(
                 state.add_fact(
                     f"Found {len(ranked_places)} place candidates for group '{query}' from {len(member_contacts)} members"
                 )
+                if isinstance(suggested_place, dict):
+                    state.resolution["resolved_place"] = {
+                        "place_id": str(suggested_place.get("place_id") or "").strip() or None,
+                        "place_name": str(suggested_place.get("name") or "").strip() or None,
+                        "address": str(suggested_place.get("address") or "").strip() or None,
+                        "city": str(suggested_place.get("city") or "").strip() or None,
+                        "country": str(suggested_place.get("country") or "").strip() or None,
+                        "role_hint": role_hint,
+                        "source": "lookup_contact_places",
+                    }
             else:
                 state.add_fact(f"No linked places found for group '{query}'")
 
@@ -611,6 +631,16 @@ def handle_lookup_contact_places(
     if state is not None:
         if contact_places:
             state.add_fact(f"Found {len(contact_places)} linked places for contact {contact_id}")
+            if isinstance(suggested, dict):
+                state.resolution["resolved_place"] = {
+                    "place_id": str(suggested.get("place_id") or "").strip() or None,
+                    "place_name": str(suggested.get("name") or "").strip() or None,
+                    "address": str(suggested.get("address") or "").strip() or None,
+                    "city": str(suggested.get("city") or "").strip() or None,
+                    "country": str(suggested.get("country") or "").strip() or None,
+                    "role_hint": role_hint,
+                    "source": "lookup_contact_places",
+                }
         else:
             state.add_fact(f"No linked places found for contact {contact_id}")
 
@@ -687,6 +717,16 @@ def handle_lookup_place_contacts(
     if state is not None:
         if place_contacts:
             state.add_fact(f"Found {len(place_contacts)} contacts linked to place {place_id}")
+            if isinstance(resolved_place, dict):
+                state.resolution["resolved_place"] = {
+                    "place_id": place_id,
+                    "place_name": str(resolved_place.get("name") or "").strip() or None,
+                    "address": str(resolved_place.get("address") or "").strip() or None,
+                    "city": str(resolved_place.get("city") or "").strip() or None,
+                    "country": str(resolved_place.get("country") or "").strip() or None,
+                    "role_hint": role_hint,
+                    "source": "lookup_place_contacts",
+                }
         else:
             state.add_fact(f"No contacts linked to place {place_id}")
 

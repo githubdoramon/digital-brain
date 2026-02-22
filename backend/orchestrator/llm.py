@@ -29,6 +29,63 @@ logger.info("[llm] Bounded agent architecture ENABLED")
 _main_controller = None
 
 
+def _extract_recent_resolved_place(metadata: dict[str, Any] | None) -> dict[str, Any] | None:
+    if not isinstance(metadata, dict):
+        return None
+    raw_place = metadata.get("resolved_place")
+    if not isinstance(raw_place, dict):
+        return None
+    place_id = str(raw_place.get("place_id") or "").strip()
+    if not place_id:
+        return None
+    return {
+        "place_id": place_id,
+        "place_name": str(raw_place.get("place_name") or "").strip() or None,
+        "address": str(raw_place.get("address") or "").strip() or None,
+        "city": str(raw_place.get("city") or "").strip() or None,
+        "country": str(raw_place.get("country") or "").strip() or None,
+        "role_hint": str(raw_place.get("role_hint") or "").strip() or None,
+        "source": str(raw_place.get("source") or "").strip() or None,
+    }
+
+
+def _merge_client_context_with_recent_place(
+    *,
+    client_context: dict[str, Any] | None,
+    latest_assistant_metadata: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    recent_place = _extract_recent_resolved_place(latest_assistant_metadata)
+    if not recent_place:
+        return client_context
+
+    merged: dict[str, Any] = {}
+    if isinstance(client_context, dict):
+        merged.update(client_context)
+    merged["recent_resolved_place"] = recent_place
+    return merged
+
+
+def _extract_resolved_place_from_result(result: dict[str, Any]) -> dict[str, Any] | None:
+    resolution = result.get("resolution")
+    if not isinstance(resolution, dict):
+        return None
+    raw_place = resolution.get("resolved_place")
+    if not isinstance(raw_place, dict):
+        return None
+    place_id = str(raw_place.get("place_id") or "").strip()
+    if not place_id:
+        return None
+    return {
+        "place_id": place_id,
+        "place_name": str(raw_place.get("place_name") or "").strip() or None,
+        "address": str(raw_place.get("address") or "").strip() or None,
+        "city": str(raw_place.get("city") or "").strip() or None,
+        "country": str(raw_place.get("country") or "").strip() or None,
+        "role_hint": str(raw_place.get("role_hint") or "").strip() or None,
+        "source": str(raw_place.get("source") or "").strip() or None,
+    }
+
+
 def _get_main_controller():
     """Create/reuse the conversational controller instance."""
     global _main_controller
@@ -85,11 +142,21 @@ async def answer_question(
     """
     # Load conversation history
     conversation_history: list[dict[str, str]] = []
+    latest_assistant_metadata: dict[str, Any] | None = None
     if session_id and user_email:
         try:
             conversation_history = conversations.get_conversation_history(session_id, user_email)
+            latest_assistant_metadata = conversations.get_latest_assistant_metadata(
+                session_id,
+                user_email,
+            )
         except Exception as exc:
             logger.warning("[session] Failed to load history: %s", exc, exc_info=exc)
+
+    effective_client_context = _merge_client_context_with_recent_place(
+        client_context=client_context,
+        latest_assistant_metadata=latest_assistant_metadata,
+    )
 
     controller = _get_main_controller()
     result = await controller.run(
@@ -99,7 +166,7 @@ async def answer_question(
         user_email=user_email,
         conversation_history=conversation_history,
         search_limit=search_limit,
-        client_context=client_context,
+        client_context=effective_client_context,
         ui_submission=ui_submission,
     )
 
@@ -109,6 +176,9 @@ async def answer_question(
             assistant_metadata = {}
             if result.get("ui_directives"):
                 assistant_metadata["ui_directives"] = result["ui_directives"]
+            resolved_place = _extract_resolved_place_from_result(result)
+            if resolved_place:
+                assistant_metadata["resolved_place"] = resolved_place
 
             persist_result = conversations.record_exchange(
                 thread_id=session_id,
@@ -177,11 +247,21 @@ async def answer_question_stream(
     """
     # Load conversation history
     conversation_history: list[dict[str, str]] = []
+    latest_assistant_metadata: dict[str, Any] | None = None
     if session_id and user_email:
         try:
             conversation_history = conversations.get_conversation_history(session_id, user_email)
+            latest_assistant_metadata = conversations.get_latest_assistant_metadata(
+                session_id,
+                user_email,
+            )
         except Exception as exc:
             logger.warning("[session] Failed to load history: %s", exc, exc_info=exc)
+
+    effective_client_context = _merge_client_context_with_recent_place(
+        client_context=client_context,
+        latest_assistant_metadata=latest_assistant_metadata,
+    )
 
     controller = _get_main_controller()
     final_bundle = None
@@ -193,7 +273,7 @@ async def answer_question_stream(
         user_email=user_email,
         conversation_history=conversation_history,
         search_limit=search_limit,
-        client_context=client_context,
+        client_context=effective_client_context,
         ui_submission=ui_submission,
     ):
         if event.get("type") == "done":
@@ -207,6 +287,9 @@ async def answer_question_stream(
             assistant_metadata = {}
             if final_bundle.get("ui_directives"):
                 assistant_metadata["ui_directives"] = final_bundle["ui_directives"]
+            resolved_place = _extract_resolved_place_from_result(final_bundle)
+            if resolved_place:
+                assistant_metadata["resolved_place"] = resolved_place
 
             persist_result = conversations.record_exchange(
                 thread_id=session_id,
