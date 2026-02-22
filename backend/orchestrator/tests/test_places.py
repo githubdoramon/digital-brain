@@ -84,3 +84,35 @@ def test_resolve_contact_place_prefers_matching_role(monkeypatch):
     assert match is not None
     assert match.get("place_id") == "plc_home"
     assert match.get("matched_via") == "contact_place_relation"
+
+
+def test_search_places_matches_address_and_description(monkeypatch):
+    monkeypatch.setattr(
+        "places._list_places",
+        lambda: [
+            {
+                "place_id": "plc_theos",
+                "name": "Theo's apt",
+                "aliases": [],
+                "description": "Apartment building near old town",
+                "address": "Maple Street, 23, Springfield",
+                "city": "Springfield",
+                "country": "Westoria",
+                "lat": 38.68,
+                "lon": -9.15,
+            }
+        ],
+    )
+
+    by_address = places.search_places("12 Maple Street", limit=3)
+    assert by_address
+    assert by_address[0].get("place_id") == "plc_theos"
+    assert "address" in str(by_address[0].get("matched_via") or "")
+
+    by_description = places.search_places(
+        "old town apartment building",
+        limit=3,
+        fuzzy_threshold=60,
+    )
+    assert by_description
+    assert by_description[0].get("place_id") == "plc_theos"

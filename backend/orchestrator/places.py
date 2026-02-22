@@ -136,12 +136,20 @@ def search_places(
             for alias in (place.get("aliases") or [])
             if str(alias or "").strip()
         ]
-        candidate_texts = [name, *aliases]
-        candidate_texts = [text for text in candidate_texts if text]
-        if not candidate_texts:
+        address = str(place.get("address") or "").strip()
+        description = str(place.get("description") or "").strip()
+
+        has_any_text = any((name, aliases, address, description))
+        if not has_any_text:
             continue
 
-        score, matched_via, matched_text = _score_place_match(normalized_query, candidate_texts)
+        score, matched_via, matched_text = _score_place_match_with_fields(
+            normalized_query=normalized_query,
+            name=name,
+            aliases=aliases,
+            address=address,
+            description=description,
+        )
         if score <= 0:
             continue
 
@@ -159,6 +167,8 @@ def search_places(
             {
                 "place_id": place.get("place_id"),
                 "name": name,
+                "address": address or None,
+                "description": description or None,
                 "city": place.get("city"),
                 "country": place.get("country"),
                 "lat": place.get("lat"),
@@ -177,6 +187,39 @@ def search_places(
         )
     )
     return scored_results[: max(1, int(limit))]
+
+
+def _score_place_match_with_fields(
+    *,
+    normalized_query: str,
+    name: str,
+    aliases: list[str],
+    address: str,
+    description: str,
+) -> tuple[float, str, str]:
+    best_score = 0.0
+    best_via = "none"
+    best_text = ""
+
+    weighted_fields: list[tuple[str, str, float]] = []
+    if name:
+        weighted_fields.append(("name", name, 1.0))
+    for alias in aliases:
+        weighted_fields.append(("alias", alias, 1.0))
+    if address:
+        weighted_fields.append(("address", address, 0.92))
+    if description:
+        weighted_fields.append(("description", description, 0.78))
+
+    for field_kind, text, weight in weighted_fields:
+        score, via, matched_text = _score_place_match(normalized_query, [text])
+        weighted_score = score * weight
+        if weighted_score > best_score:
+            best_score = weighted_score
+            best_via = f"{field_kind}_{via}"
+            best_text = matched_text
+
+    return best_score, best_via, best_text
 
 
 def add_place_alias(place_id: str, alias: str) -> bool:
