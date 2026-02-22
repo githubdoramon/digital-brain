@@ -125,7 +125,7 @@ User Question → Intent Router → Conversational Profile Dispatch → Tool Vis
 | Group | Tools |
 |-------|-------|
 | `memory` | search_memories, get_events, get_document |
-| `resolution` | resolve_contacts, lookup_contact, select_contacts, lookup_places, lookup_contact_places |
+| `resolution` | resolve_contacts, lookup_contact, select_contacts, lookup_places, lookup_contact_places, lookup_place_contacts |
 | `web` | web_search, fetch_web_page |
 | `home` | home_assistant |
 | `skills` | run_skill_script |

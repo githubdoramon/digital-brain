@@ -181,6 +181,11 @@ class TestPreExecutionSemanticValidation:
         assert "contact_id" in "; ".join(result.errors)
         assert "group_query" in "; ".join(result.errors)
 
+    def test_lookup_place_contacts_requires_place_selector(self, validator):
+        result = validator.validate("lookup_place_contacts", {"role_hint": "home"})
+        assert result.valid is False
+        assert "place_id" in "; ".join(result.errors)
+
 
 class TestValidationFlow:
     """Tests for the overall validation flow."""

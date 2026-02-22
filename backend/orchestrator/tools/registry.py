@@ -31,6 +31,7 @@ TOOL_GROUPS = {
         "select_contacts",
         "lookup_places",
         "lookup_contact_places",
+        "lookup_place_contacts",
     ],
     "web": ["web_search", "fetch_web_page"],
     "home": ["home_assistant"],
@@ -832,6 +833,68 @@ def _register_all_tools(registry: ToolRegistry) -> None:
                     type="string",
                     description="Optional original place phrase for better ranking.",
                     required=False,
+                ),
+            ],
+            constraints=["read_only"],
+        )
+    )
+
+    # lookup_place_contacts - place-scoped people lookup (e.g., "who lives at X")
+    registry.register(
+        ToolContract(
+            name="lookup_place_contacts",
+            description=(
+                "Lookup contacts linked to a place. Useful for questions like 'who lives at X' or "
+                "'who works at X'. Accepts known place_id or place_query to resolve a known place first."
+            ),
+            parameters=[
+                ToolParameter(
+                    name="place_id",
+                    type="string",
+                    description="Known place id to fetch linked contacts.",
+                    required=False,
+                ),
+                ToolParameter(
+                    name="place_query",
+                    type="string",
+                    description="Place text to resolve when place_id is unknown.",
+                    required=False,
+                ),
+                ToolParameter(
+                    name="role_hint",
+                    type="string",
+                    description="Optional relation hint like home/work/school.",
+                    required=False,
+                ),
+                ToolParameter(
+                    name="near_lat",
+                    type="number",
+                    description="Optional latitude hint for place disambiguation.",
+                    required=False,
+                ),
+                ToolParameter(
+                    name="near_lon",
+                    type="number",
+                    description="Optional longitude hint for place disambiguation.",
+                    required=False,
+                ),
+                ToolParameter(
+                    name="fuzzy_threshold",
+                    type="integer",
+                    description="Minimum fuzzy score for place_query resolution (0-100).",
+                    required=False,
+                    default=80,
+                    minimum=0,
+                    maximum=100,
+                ),
+                ToolParameter(
+                    name="limit",
+                    type="integer",
+                    description="Maximum contacts to return.",
+                    required=False,
+                    default=25,
+                    minimum=1,
+                    validator=validate_positive_int,
                 ),
             ],
             constraints=["read_only"],

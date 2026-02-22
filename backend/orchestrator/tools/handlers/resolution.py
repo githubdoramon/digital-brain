@@ -4,6 +4,7 @@ Entity resolution and contact lookup tool handlers.
 Handles:
 - resolve_contacts: Extract and resolve people from free-form text
 - lookup_contact: Smart contact search with fuzzy matching and relationship filtering
+- lookup_places / lookup_contact_places / lookup_place_contacts: place-centric resolution helpers
 
 Note: Tracing/logging is handled at the controller level via the centralized
 trace module. Handlers focus purely on execution logic.
@@ -621,4 +622,79 @@ def handle_lookup_contact_places(
         "count": len(contact_places),
         "contact_places": contact_places,
         "suggested_place": suggested,
+    }
+
+
+def handle_lookup_place_contacts(
+    args: dict[str, Any],
+    state: Optional["AgentState"] = None,
+    **kwargs,
+) -> dict[str, Any]:
+    """Lookup contacts linked to a place, with optional role hint."""
+    import places as places_service
+
+    place_id = str(args.get("place_id") or "").strip()
+    place_query = str(args.get("place_query") or "").strip()
+    role_hint = str(args.get("role_hint") or "").strip() or None
+    limit = int(args.get("limit", 25) or 25)
+
+    near_lat = args.get("near_lat")
+    near_lon = args.get("near_lon")
+    client_location = None
+    if near_lat is not None and near_lon is not None:
+        client_location = {"lat": near_lat, "lon": near_lon}
+
+    resolved_place: dict[str, Any] | None = None
+    if not place_id:
+        if not place_query:
+            return {"error": "place_id or place_query is required"}
+        matches = places_service.search_places(
+            place_query,
+            client_location=client_location,
+            fuzzy_threshold=int(args.get("fuzzy_threshold", 80) or 80),
+            limit=3,
+        )
+        if not matches:
+            return {
+                "found": False,
+                "error": f"No known place found matching '{place_query}'",
+                "contacts": [],
+            }
+        resolved_place = matches[0]
+        place_id = str(resolved_place.get("place_id") or "").strip()
+
+    if not place_id:
+        return {"error": "Unable to resolve place_id"}
+
+    if resolved_place is None:
+        place_record = places_service.get_place(place_id)
+        if place_record:
+            resolved_place = {
+                "place_id": place_id,
+                "name": place_record.get("name"),
+                "city": place_record.get("city"),
+                "country": place_record.get("country"),
+                "lat": place_record.get("lat"),
+                "lon": place_record.get("lon"),
+            }
+
+    place_contacts = places_service.list_place_contacts(
+        place_id,
+        role_hint=role_hint,
+        limit=limit,
+    )
+
+    if state is not None:
+        if place_contacts:
+            state.add_fact(f"Found {len(place_contacts)} contacts linked to place {place_id}")
+        else:
+            state.add_fact(f"No contacts linked to place {place_id}")
+
+    return {
+        "found": bool(place_contacts),
+        "place_id": place_id,
+        "place": resolved_place,
+        "role_hint": role_hint,
+        "count": len(place_contacts),
+        "contacts": place_contacts,
     }

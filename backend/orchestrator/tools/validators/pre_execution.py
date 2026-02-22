@@ -254,6 +254,12 @@ class PreExecutionValidator:
                     "for lookup_contact_places"
                 )
 
+        if tool_name == "lookup_place_contacts":
+            has_place_id = bool(str(params.get("place_id") or "").strip())
+            has_place_query = bool(str(params.get("place_query") or "").strip())
+            if not has_place_id and not has_place_query:
+                return "Provide 'place_id' or 'place_query' for lookup_place_contacts"
+
         return None
 
     def _semantic_repair_hints(self, tool_name: str, params: dict[str, Any]) -> list[str]:
@@ -296,6 +302,12 @@ class PreExecutionValidator:
                 hints.append(
                     "Set 'contact_id', 'contact_query', or 'group_query' to identify the target"
                 )
+
+        if tool_name == "lookup_place_contacts":
+            has_place_id = bool(str(params.get("place_id") or "").strip())
+            has_place_query = bool(str(params.get("place_query") or "").strip())
+            if not has_place_id and not has_place_query:
+                hints.append("Set 'place_id' or 'place_query' to identify the place")
 
         return hints
 

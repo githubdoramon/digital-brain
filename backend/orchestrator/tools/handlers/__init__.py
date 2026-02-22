@@ -10,6 +10,7 @@ from .memory import handle_get_document, handle_get_events, handle_search_memori
 from .resolution import (
     handle_lookup_contact,
     handle_lookup_contact_places,
+    handle_lookup_place_contacts,
     handle_lookup_places,
     handle_resolve_contacts,
     handle_select_contacts,
@@ -29,6 +30,7 @@ HANDLERS = {
     "select_contacts": handle_select_contacts,
     "lookup_places": handle_lookup_places,
     "lookup_contact_places": handle_lookup_contact_places,
+    "lookup_place_contacts": handle_lookup_place_contacts,
     "web_search": handle_web_search,
     "fetch_web_page": handle_fetch_web_page,
     "run_skill_script": handle_run_skill_script,
@@ -54,6 +56,7 @@ __all__ = [
     "handle_select_contacts",
     "handle_lookup_places",
     "handle_lookup_contact_places",
+    "handle_lookup_place_contacts",
     "handle_web_search",
     "handle_fetch_web_page",
     "handle_run_skill_script",

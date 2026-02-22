@@ -1,6 +1,7 @@
 from tools.handlers.resolution import (
     handle_lookup_contact,
     handle_lookup_contact_places,
+    handle_lookup_place_contacts,
     handle_lookup_places,
     handle_select_contacts,
 )
@@ -251,3 +252,39 @@ def test_lookup_contact_places_falls_back_to_group_when_contact_missing(monkeypa
     assert result["found"] is True
     assert result["group"]["group_id"] == "group:lewis"
     assert result["role_hint"] == "home"
+
+
+def test_lookup_place_contacts_resolves_place_query(monkeypatch):
+    monkeypatch.setattr(
+        "places.search_places",
+        lambda *_a, **_k: [
+            {
+                "place_id": "plc_home",
+                "name": "Lewis Home",
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        "places.list_place_contacts",
+        lambda place_id, **_kwargs: [
+            {
+                "contact_id": "contact:dana",
+                "display_name": "Dana",
+                "role": "home",
+                "place_id": place_id,
+            }
+        ],
+    )
+
+    result = handle_lookup_place_contacts(
+        {
+            "place_query": "Lewis home",
+            "role_hint": "home",
+            "limit": 10,
+        }
+    )
+
+    assert result["found"] is True
+    assert result["place_id"] == "plc_home"
+    assert result["count"] == 1
+    assert result["contacts"][0]["contact_id"] == "contact:dana"

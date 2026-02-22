@@ -274,6 +274,21 @@ class TestPreregisteredTools:
         assert is_valid is True
         assert error is None
 
+    def test_lookup_place_contacts_registered(self, populated_registry):
+        contract = populated_registry.get_contract("lookup_place_contacts")
+        assert contract is not None
+        assert "lookup_place_contacts" in TOOL_GROUPS["resolution"]
+
+        is_valid, error, _ = contract.validate_params(
+            {"place_query": "Lewis home", "role_hint": "home"}
+        )
+        assert is_valid is True
+        assert error is None
+
+        is_valid, error, _ = contract.validate_params({"place_id": "plc_home", "limit": 10})
+        assert is_valid is True
+        assert error is None
+
     def test_lookup_contact_limit_supports_unbounded_values(self, populated_registry):
         contract = populated_registry.get_contract("lookup_contact")
         assert contract is not None

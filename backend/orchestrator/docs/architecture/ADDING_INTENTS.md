@@ -67,6 +67,7 @@ TOOL_GROUPS = {
         "select_contacts",
         "lookup_places",
         "lookup_contact_places",
+        "lookup_place_contacts",
     ],
     # ... existing groups ...
 

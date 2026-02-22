@@ -14,6 +14,7 @@ __all__ = [
     "find_best_place_match",
     "get_place",
     "ingest_place",
+    "list_place_contacts",
     "list_places",
     "list_contact_places",
     "resolve_contact_place",
@@ -312,6 +313,57 @@ def list_contact_places(contact_id: str, role_hint: str | None = None) -> list[d
             """,
             (clean_contact_id,),
         )
+        rows = [dict(row) for row in cur.fetchall()]
+
+    if not role_hint:
+        return rows
+
+    hint = _canonical_place_text(role_hint)
+    if not hint:
+        return rows
+
+    scored: list[tuple[float, dict[str, Any]]] = []
+    for row in rows:
+        score = _role_similarity_score(hint, str(row.get("role") or ""))
+        scored.append((score, row))
+
+    scored.sort(key=lambda item: item[0], reverse=True)
+    return [row for _score, row in scored]
+
+
+def list_place_contacts(
+    place_id: str,
+    *,
+    role_hint: str | None = None,
+    limit: int | None = 100,
+) -> list[dict[str, Any]]:
+    clean_place_id = str(place_id or "").strip()
+    if not clean_place_id:
+        return []
+
+    with get_conn() as conn, conn.cursor() as cur:
+        base_query = """
+            SELECT
+                cp.contact_id,
+                cp.place_id,
+                cp.role,
+                cp.source,
+                cp.confidence,
+                c.display_name,
+                c.external_id,
+                c.aliases,
+                c.emails,
+                c.phones,
+                c.tags
+            FROM contact_places cp
+            JOIN contacts c ON c.contact_id = cp.contact_id
+            WHERE cp.place_id = %s
+            ORDER BY c.display_name NULLS LAST, cp.contact_id
+        """
+        if limit is None:
+            cur.execute(base_query, (clean_place_id,))
+        else:
+            cur.execute(base_query + "\nLIMIT %s", (clean_place_id, int(limit)))
         rows = [dict(row) for row in cur.fetchall()]
 
     if not role_hint:
