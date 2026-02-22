@@ -43,7 +43,7 @@ def get_memory_expert_protocol_prompt() -> str:
         "- Address/home questions guidance:\n"
         "  * For 'where does X live' questions, start with lookup_contact_places (contact_query or group_query) with role_hint='home'.\n"
         "  * If lookup_contact_places returns no suggested place, call lookup_places with the place/family wording before trying search_memories.\n"
-        "  * For 'who lives/works at X', call lookup_place_contacts with place_query and role_hint before memory search.\n"
+        "  * For 'who lives/works at X', call lookup_place_contacts with place_id when already known from prior step/turn; otherwise use place_query and role_hint before memory search.\n"
         "  * Use search_memories/get_events only when place-lookup tools cannot resolve the answer.\n"
         "- Document retrieval guidelines:\n"
         "  * Prioritize the top matching document from search_memories and call get_document before re-searching with different terms.\n"

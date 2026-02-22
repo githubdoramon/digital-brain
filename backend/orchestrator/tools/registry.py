@@ -747,15 +747,15 @@ def _register_all_tools(registry: ToolRegistry) -> None:
         ToolContract(
             name="lookup_places",
             description=(
-                "Place lookup tool for matching place names/aliases in personal memory. "
-                "Use this when the query is about identifying a place entity, resolving place wording, "
-                "or checking if a place already exists."
+                "Place lookup tool for resolving known places from names, aliases, addresses, or descriptions. "
+                "Use this to canonicalize a place first; when the user asks who lives/works at that place, "
+                "then call lookup_place_contacts with the resolved place_id."
             ),
             parameters=[
                 ToolParameter(
                     name="query",
                     type="string",
-                    description="Place text to resolve (for example 'my house', 'Sao Bento').",
+                    description="Place text to resolve (name/alias/address/description, e.g. 'my house' or 'Rua ...').",
                     required=True,
                     min_length=1,
                 ),
@@ -845,7 +845,8 @@ def _register_all_tools(registry: ToolRegistry) -> None:
             name="lookup_place_contacts",
             description=(
                 "Lookup contacts linked to a place. Useful for questions like 'who lives at X' or "
-                "'who works at X'. Accepts known place_id or place_query to resolve a known place first."
+                "'who works at X'. Prefer place_id when available (for follow-ups) to avoid address re-matching; "
+                "if only text is available, pass place_query to resolve then return linked contacts."
             ),
             parameters=[
                 ToolParameter(

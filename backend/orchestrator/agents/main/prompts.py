@@ -37,7 +37,7 @@ def get_main_bounded_protocol_prompt() -> str:
         "2. TOOL USAGE:\n"
         "   - INVOKE tools via tool_call; never output pseudo-calls in text\n"
         "   - Follow each tool's contract description for when to use it and how to set parameters\n"
-        "   - For place/address queries (e.g., 'Where does X live?'), prefer lookup_contact_places / lookup_place_contacts / lookup_places before broad memory searches\n"
+        "   - For place/address queries (e.g., 'Where does X live?'), prefer lookup_contact_places / lookup_place_contacts / lookup_places before broad memory searches; when a place_id is known, use it\n"
         "   - Prefer the smallest useful action: gather missing evidence, then answer\n"
         "   - If a tool fails, repair arguments once and then switch approach\n\n"
         "   - Self-identity guardrail:\n"
