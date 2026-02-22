@@ -11,11 +11,49 @@ trace module. Handlers focus purely on execution logic.
 
 from typing import TYPE_CHECKING, Any, Optional
 
+from search_normalization import normalize_search_text
 from tools.action_enums import LookupContactAction, SelectContactsAction
 from tools.limit_policy import wants_all_results
 
 if TYPE_CHECKING:
     from agent.state import AgentState
+
+
+_ROLE_HINT_KEYWORDS: dict[str, set[str]] = {
+    "home": {
+        "home",
+        "house",
+        "residence",
+        "apartment",
+        "apt",
+        "condo",
+        "flat",
+        "address",
+        "live",
+        "lives",
+    },
+    "work": {"work", "office", "workplace", "job", "company", "hq", "headquarters"},
+    "school": {"school", "college", "university", "campus"},
+}
+
+
+def _infer_role_hint_from_text(text: str) -> str | None:
+    normalized = normalize_search_text(text or "")
+    if not normalized:
+        return None
+    token_set = {token for token in normalized.replace("-", " ").split() if token}
+    if not token_set:
+        return None
+
+    best_role: str | None = None
+    best_score = 0
+    for role, keywords in _ROLE_HINT_KEYWORDS.items():
+        score = len(token_set.intersection(keywords))
+        if score > best_score:
+            best_score = score
+            best_role = role
+
+    return best_role
 
 
 def handle_resolve_contacts(
@@ -446,21 +484,111 @@ def handle_lookup_contact_places(
     **kwargs,
 ) -> dict[str, Any]:
     """Lookup places linked to a contact, with optional role hint."""
+    import contact_groups
     import contacts
     import places as places_service
 
+    runtime_email = str(kwargs.get("user_email") or "").strip()
     contact_id = str(args.get("contact_id") or "").strip()
     contact_query = str(args.get("contact_query") or "").strip()
+    group_query = str(args.get("group_query") or "").strip()
     role_hint = str(args.get("role_hint") or "").strip() or None
     where_text = str(args.get("where_text") or "").strip() or None
 
+    question_text = str(kwargs.get("question") or "").strip().lower()
+    if not role_hint:
+        hint_text = f"{where_text or ''} {question_text}".strip()
+        role_hint = _infer_role_hint_from_text(hint_text)
+
+    def _resolve_group_places(query: str) -> dict[str, Any]:
+        if not runtime_email:
+            return {
+                "found": False,
+                "error": "user_email is required for group_query lookups",
+                "contact_places": [],
+            }
+        group_lookup = contact_groups.resolve_group_members(runtime_email, query, limit=120)
+        if not group_lookup.get("found"):
+            return {
+                "found": False,
+                "error": f"No contact group found matching '{query}'",
+                "contact_places": [],
+                "group": None,
+            }
+
+        member_contacts = list(group_lookup.get("contacts") or [])
+        place_votes: dict[str, dict[str, Any]] = {}
+        for member in member_contacts:
+            member_contact_id = str(member.get("contact_id") or "").strip()
+            if not member_contact_id:
+                continue
+            member_places = places_service.list_contact_places(
+                member_contact_id, role_hint=role_hint
+            )
+            for place in member_places:
+                place_id = str(place.get("place_id") or "").strip()
+                if not place_id:
+                    continue
+                vote = place_votes.get(place_id)
+                if vote is None:
+                    vote = {
+                        "place_id": place_id,
+                        "name": place.get("name"),
+                        "city": place.get("city"),
+                        "country": place.get("country"),
+                        "lat": place.get("lat"),
+                        "lon": place.get("lon"),
+                        "roles": set(),
+                        "member_count": 0,
+                    }
+                    place_votes[place_id] = vote
+                role_value = str(place.get("role") or "").strip()
+                if role_value:
+                    vote["roles"].add(role_value)
+                vote["member_count"] = int(vote.get("member_count") or 0) + 1
+
+        ranked_places = list(place_votes.values())
+        ranked_places.sort(
+            key=lambda row: (
+                -int(row.get("member_count") or 0),
+                str(row.get("name") or ""),
+            )
+        )
+        for row in ranked_places:
+            row["roles"] = sorted(row.get("roles") or [])
+
+        suggested_place = ranked_places[0] if ranked_places else None
+        if state is not None:
+            if ranked_places:
+                state.add_fact(
+                    f"Found {len(ranked_places)} place candidates for group '{query}' from {len(member_contacts)} members"
+                )
+            else:
+                state.add_fact(f"No linked places found for group '{query}'")
+
+        return {
+            "found": bool(ranked_places),
+            "group_query": query,
+            "group": group_lookup.get("group"),
+            "member_count": len(member_contacts),
+            "role_hint": role_hint,
+            "count": len(ranked_places),
+            "contact_places": ranked_places,
+            "suggested_place": suggested_place,
+        }
+
     matched_contact: dict[str, Any] | None = None
+    if group_query:
+        return _resolve_group_places(group_query)
+
     if not contact_id and not contact_query:
-        return {"error": "contact_id or contact_query is required"}
+        return {"error": "contact_id, contact_query, or group_query is required"}
 
     if not contact_id and contact_query:
         contacts_found = contacts.search_contacts(contact_query, limit=3)
         if not contacts_found:
+            if runtime_email:
+                return _resolve_group_places(contact_query)
             return {
                 "found": False,
                 "error": f"No contact found matching '{contact_query}'",

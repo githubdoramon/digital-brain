@@ -186,3 +186,68 @@ def test_lookup_contact_places_resolves_from_query(monkeypatch):
     assert result["contact_id"] == "contact:jose"
     assert result["count"] == 1
     assert result["suggested_place"]["place_id"] == "plc_home"
+
+
+def test_lookup_contact_places_supports_group_query(monkeypatch):
+    monkeypatch.setattr(
+        "contact_groups.resolve_group_members",
+        lambda *_a, **_k: {
+            "found": True,
+            "group": {"group_id": "group:lewis", "name": "Lewis family"},
+            "contacts": [
+                {"contact_id": "contact:dana", "display_name": "Dana"},
+                {"contact_id": "contact:ana", "display_name": "Ana"},
+            ],
+        },
+    )
+
+    def fake_list_contact_places(contact_id, role_hint=None):
+        if contact_id == "contact:dana":
+            return [{"place_id": "plc_home", "name": "Lewis Home", "role": "home"}]
+        if contact_id == "contact:ana":
+            return [{"place_id": "plc_home", "name": "Lewis Home", "role": "home"}]
+        return []
+
+    monkeypatch.setattr("places.list_contact_places", fake_list_contact_places)
+
+    result = handle_lookup_contact_places(
+        {
+            "group_query": "Lewis family",
+            "role_hint": "home",
+        },
+        user_email="user@example.com",
+    )
+
+    assert result["found"] is True
+    assert result["group"]["group_id"] == "group:lewis"
+    assert result["count"] == 1
+    assert result["suggested_place"]["place_id"] == "plc_home"
+
+
+def test_lookup_contact_places_falls_back_to_group_when_contact_missing(monkeypatch):
+    monkeypatch.setattr("contacts.search_contacts", lambda *_a, **_k: [])
+    monkeypatch.setattr(
+        "contact_groups.resolve_group_members",
+        lambda *_a, **_k: {
+            "found": True,
+            "group": {"group_id": "group:lewis", "name": "Lewis family"},
+            "contacts": [{"contact_id": "contact:dana", "display_name": "Dana"}],
+        },
+    )
+    monkeypatch.setattr(
+        "places.list_contact_places",
+        lambda *_a, **_k: [{"place_id": "plc_home", "name": "Lewis Home", "role": "home"}],
+    )
+
+    result = handle_lookup_contact_places(
+        {
+            "contact_query": "Lewis family",
+            "where_text": "where do they live",
+        },
+        user_email="user@example.com",
+        question="Where do the Lewis family lives?",
+    )
+
+    assert result["found"] is True
+    assert result["group"]["group_id"] == "group:lewis"
+    assert result["role_hint"] == "home"

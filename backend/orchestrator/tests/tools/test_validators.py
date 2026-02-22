@@ -179,6 +179,7 @@ class TestPreExecutionSemanticValidation:
         result = validator.validate("lookup_contact_places", {"role_hint": "home"})
         assert result.valid is False
         assert "contact_id" in "; ".join(result.errors)
+        assert "group_query" in "; ".join(result.errors)
 
 
 class TestValidationFlow:

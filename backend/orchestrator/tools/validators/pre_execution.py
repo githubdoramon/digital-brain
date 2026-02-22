@@ -247,8 +247,12 @@ class PreExecutionValidator:
         if tool_name == "lookup_contact_places":
             has_contact_id = bool(str(params.get("contact_id") or "").strip())
             has_contact_query = bool(str(params.get("contact_query") or "").strip())
-            if not has_contact_id and not has_contact_query:
-                return "Provide 'contact_id' or 'contact_query' for lookup_contact_places"
+            has_group_query = bool(str(params.get("group_query") or "").strip())
+            if not has_contact_id and not has_contact_query and not has_group_query:
+                return (
+                    "Provide 'contact_id', 'contact_query', or 'group_query' "
+                    "for lookup_contact_places"
+                )
 
         return None
 
@@ -287,8 +291,11 @@ class PreExecutionValidator:
         if tool_name == "lookup_contact_places":
             has_contact_id = bool(str(params.get("contact_id") or "").strip())
             has_contact_query = bool(str(params.get("contact_query") or "").strip())
-            if not has_contact_id and not has_contact_query:
-                hints.append("Set either 'contact_id' or 'contact_query' to identify the person")
+            has_group_query = bool(str(params.get("group_query") or "").strip())
+            if not has_contact_id and not has_contact_query and not has_group_query:
+                hints.append(
+                    "Set 'contact_id', 'contact_query', or 'group_query' to identify the target"
+                )
 
         return hints
 

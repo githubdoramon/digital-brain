@@ -799,7 +799,8 @@ def _register_all_tools(registry: ToolRegistry) -> None:
             name="lookup_contact_places",
             description=(
                 "Lookup places linked to a specific contact. Useful for person-scoped references like "
-                "'Jordan's house' or 'Maria's office' when contact identity is known or can be searched."
+                "'Jordan's house' or 'Maria's office' when contact identity is known or can be searched. "
+                "For family/home questions (e.g. 'Where does the Lewis family live?'), prefer group_query with role_hint='home'."
             ),
             parameters=[
                 ToolParameter(
@@ -812,6 +813,12 @@ def _register_all_tools(registry: ToolRegistry) -> None:
                     name="contact_query",
                     type="string",
                     description="Contact search text when contact_id is not known.",
+                    required=False,
+                ),
+                ToolParameter(
+                    name="group_query",
+                    type="string",
+                    description="Contact-group query when the request targets a family/team/cohort.",
                     required=False,
                 ),
                 ToolParameter(
