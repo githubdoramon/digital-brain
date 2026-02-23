@@ -1,25 +1,30 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { LinearGradient } from 'expo-linear-gradient';
+import { useRouter } from 'expo-router';
 import React, { useCallback, useEffect, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
-  FlatList,
+  Animated,
   Modal,
-  Platform,
   StyleSheet,
   Text,
   TextInput,
   View,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { useHeaderHeight } from '@react-navigation/elements';
 
 import { apiFetch } from '@/api/client';
 import { useAuth } from '@/auth/AuthContext';
 import { AppPressable as Pressable } from '@/components/AppPressable';
 import { Button } from '@/components/Button';
 import { Card } from '@/components/Card';
+import {
+  COLLAPSING_CONTENT_TOP_PADDING,
+  COLLAPSING_SECONDARY_TITLE_BLOCK_HEIGHT,
+  COLLAPSING_TOP_BAR_HEIGHT,
+  CollapsingTopBar,
+} from '@/components/CollapsingTopBar';
 import { theme } from '@/theme';
 
 // ---------------------------------------------------------------------------
@@ -52,9 +57,10 @@ const CATEGORY_OPTIONS = Object.keys(CATEGORY_LABELS);
 // ---------------------------------------------------------------------------
 
 export default function AboutMeScreen() {
+  const router = useRouter();
   const { token } = useAuth();
   const insets = useSafeAreaInsets();
-  const headerHeight = useHeaderHeight();
+  const scrollY = React.useRef(new Animated.Value(0)).current;
 
   const [facts, setFacts] = useState<UserFact[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -129,23 +135,19 @@ export default function AboutMeScreen() {
   return (
     <LinearGradient
       colors={theme.gradients.sunrise}
-      style={[
-        styles.container,
-        {
-          paddingTop: Platform.OS === 'android' ? 12 : headerHeight + 12,
-          paddingBottom: insets.bottom + 24,
-        },
-      ]}
+      style={styles.container}
     >
-      <FlatList
+      <Animated.FlatList
         data={grouped}
+        onScroll={Animated.event([{ nativeEvent: { contentOffset: { y: scrollY } } }], {
+          useNativeDriver: false,
+        })}
+        scrollEventThrottle={16}
         keyExtractor={(item) =>
           item.type === 'header' ? `header-${item.category}` : item.fact.fact_id
         }
         ListHeaderComponent={
           <View style={styles.header}>
-            <Text style={styles.kicker}>Personalisation</Text>
-            <Text style={styles.title}>About me</Text>
             <Text style={styles.subtitle}>
               Things your Brain has learned about you from conversations. Edit or remove anything
               that's wrong.
@@ -179,8 +181,24 @@ export default function AboutMeScreen() {
             <FactRow fact={item.fact} onEdit={openEdit} onDelete={deleteFact} />
           );
         }}
-        contentContainerStyle={styles.listContent}
+        contentContainerStyle={[
+          {
+            paddingTop:
+              insets.top +
+              COLLAPSING_TOP_BAR_HEIGHT +
+              COLLAPSING_CONTENT_TOP_PADDING +
+              COLLAPSING_SECONDARY_TITLE_BLOCK_HEIGHT,
+            paddingBottom: insets.bottom + 24,
+          },
+        ]}
         showsVerticalScrollIndicator={false}
+      />
+
+      <CollapsingTopBar
+        title="Profile"
+        secondaryTitle="About me"
+        scrollY={scrollY}
+        onPressBack={() => router.back()}
       />
 
       <FactEditModal
@@ -404,28 +422,12 @@ function FactEditModal({ visible, fact, onSave, onCancel }: FactEditModalProps) 
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    paddingHorizontal: 24,
-  },
-  listContent: {
-    paddingBottom: 32,
+    paddingHorizontal: 18
   },
 
   // -- Header --
   header: {
     marginBottom: 20,
-  },
-  kicker: {
-    textTransform: 'uppercase',
-    letterSpacing: 3,
-    fontSize: 12,
-    fontWeight: '600',
-    color: theme.colors.teal,
-  },
-  title: {
-    fontSize: 26,
-    fontWeight: '700',
-    color: theme.colors.ink,
-    marginTop: 6,
   },
   subtitle: {
     marginTop: 6,

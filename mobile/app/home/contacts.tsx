@@ -18,6 +18,12 @@ import { useAuth } from '@/auth/AuthContext';
 import { AppPressable as Pressable } from '@/components/AppPressable';
 import { Avatar } from '@/components/Avatar';
 import { Card } from '@/components/Card';
+import {
+  COLLAPSING_CONTENT_TOP_PADDING,
+  COLLAPSING_SECONDARY_TITLE_BLOCK_HEIGHT,
+  COLLAPSING_TOP_BAR_HEIGHT,
+  CollapsingTopBar,
+} from '@/components/CollapsingTopBar';
 import { RelationshipChips } from '@/components/RelationshipChips';
 import { theme } from '@/theme';
 import { matchesContactSearch } from '@/utils/contactSearch';
@@ -50,6 +56,7 @@ function ContactCard({
   onPress,
   index,
   token,
+  animateIn,
 }: {
   contact: Contact;
   subtitle: string;
@@ -57,29 +64,27 @@ function ContactCard({
   onPress: () => void;
   index: number;
   token: string | null;
+  animateIn: boolean;
 }) {
-  const opacity = useRef(new Animated.Value(0)).current;
-  const translateY = useRef(new Animated.Value(12)).current;
+  const translateY = useRef(new Animated.Value(0)).current;
 
   useEffect(() => {
-    Animated.parallel([
-      Animated.timing(opacity, {
-        toValue: 1,
-        duration: 320,
-        delay: 80 + index * 40,
-        useNativeDriver: true,
-      }),
-      Animated.timing(translateY, {
-        toValue: 0,
-        duration: 320,
-        delay: 80 + index * 40,
-        useNativeDriver: true,
-      }),
-    ]).start();
-  }, [index, opacity, translateY]);
+    if (!animateIn) {
+      translateY.setValue(0);
+      return;
+    }
+
+    translateY.setValue(12);
+    Animated.timing(translateY, {
+      toValue: 0,
+      duration: 320,
+      delay: 80 + index * 40,
+      useNativeDriver: true,
+    }).start();
+  }, [animateIn, index, translateY]);
 
   return (
-    <Animated.View style={[styles.cardPressable, { opacity, transform: [{ translateY }] }]}>
+    <Animated.View style={[styles.cardPressable, { transform: [{ translateY }] }]}>
       <Card variant="elevated">
         <Pressable onPress={onPress} style={styles.cardTapArea}>
           <Avatar name={contact.display_name} uri={contact.avatar_url ?? undefined} token={token} />
@@ -95,15 +100,23 @@ function ContactCard({
 }
 
 export default function ContactsScreen() {
-  const { token } = useAuth();
+  const { token, name, email, photo } = useAuth();
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const tabBarHeight = useBottomTabBarHeight();
+  const scrollY = useRef(new Animated.Value(0)).current;
   const [contacts, setContacts] = useState<Contact[]>([]);
   const [query, setQuery] = useState('');
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const hasLoadedOnceRef = useRef(false);
+  const hasPlayedEntranceAnimationRef = useRef(false);
+
+  useEffect(() => {
+    if (!hasPlayedEntranceAnimationRef.current && contacts.length > 0) {
+      hasPlayedEntranceAnimationRef.current = true;
+    }
+  }, [contacts.length]);
 
   const loadContacts = React.useCallback(
     async ({ showInitialLoader = false, showRefreshSpinner = false } = {}) => {
@@ -159,9 +172,7 @@ export default function ContactsScreen() {
   }, [contacts, query]);
 
   const listHeader = (
-    <View style={[styles.header, { paddingTop: insets.top + 12 }]}>
-      <Text style={styles.kicker}>Contacts</Text>
-      <Text style={styles.title}>People you (may) care about</Text>
+    <View style={styles.header}>
       <View style={styles.searchWrap}>
         <TextInput
           placeholder="Search contacts"
@@ -179,12 +190,17 @@ export default function ContactsScreen() {
       <FlatList
         data={filtered}
         keyExtractor={(item) => item.contact_id}
+        onScroll={Animated.event([{ nativeEvent: { contentOffset: { y: scrollY } } }], {
+          useNativeDriver: false,
+        })}
+        scrollEventThrottle={16}
         refreshing={isRefreshing}
         onRefresh={handleRefresh}
-        progressViewOffset={insets.top + 16}
+        progressViewOffset={insets.top + COLLAPSING_TOP_BAR_HEIGHT + 16}
         contentContainerStyle={[
           styles.listContent,
           {
+            paddingTop: insets.top + COLLAPSING_TOP_BAR_HEIGHT + COLLAPSING_CONTENT_TOP_PADDING,
             paddingBottom: insets.bottom + tabBarHeight + 122,
           },
         ]}
@@ -207,6 +223,7 @@ export default function ContactsScreen() {
               chips={chips}
               index={index}
               token={token}
+              animateIn={!hasPlayedEntranceAnimationRef.current}
               onPress={() =>
                 router.push({
                   pathname: '/contacts/[contactId]',
@@ -216,6 +233,15 @@ export default function ContactsScreen() {
             />
           );
         }}
+      />
+      <CollapsingTopBar
+        title="Contacts"
+        secondaryTitle="People you (may) care about"
+        scrollY={scrollY}
+        profileName={name || email || 'You'}
+        profilePhoto={photo}
+        token={token}
+        onPressProfile={() => router.push('/settings')}
       />
       <Pressable
         onPress={() => router.push('/contacts/new')}
@@ -243,20 +269,8 @@ const styles = StyleSheet.create({
     gap: 16,
   },
   header: {
+    paddingTop: COLLAPSING_SECONDARY_TITLE_BLOCK_HEIGHT,
     paddingBottom: 12,
-  },
-  kicker: {
-    fontSize: 12,
-    textTransform: 'uppercase',
-    letterSpacing: 3,
-    color: theme.colors.teal,
-    fontWeight: '600',
-  },
-  title: {
-    fontSize: 26,
-    fontWeight: '700',
-    color: theme.colors.ink,
-    marginTop: 6,
   },
   subtitle: {
     marginTop: 6,
@@ -264,7 +278,7 @@ const styles = StyleSheet.create({
     color: theme.colors.mutedInk,
   },
   searchWrap: {
-    marginTop: 16,
+    marginTop: 12,
   },
   searchInput: {
     borderWidth: 1,

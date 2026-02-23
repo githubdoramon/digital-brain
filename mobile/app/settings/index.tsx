@@ -6,20 +6,25 @@ import * as SecureStore from 'expo-secure-store';
 import {
   ActivityIndicator,
   Alert,
-  Platform,
+  Animated,
   StyleSheet,
   Switch,
   Text,
   View,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { useHeaderHeight } from '@react-navigation/elements';
 
 import { apiFetch } from '@/api/client';
 import { useAuth } from '@/auth/AuthContext';
 import { AppPressable as Pressable } from '@/components/AppPressable';
 import { Button } from '@/components/Button';
 import { Card } from '@/components/Card';
+import {
+  COLLAPSING_CONTENT_TOP_PADDING,
+  COLLAPSING_SECONDARY_TITLE_BLOCK_HEIGHT,
+  COLLAPSING_TOP_BAR_HEIGHT,
+  CollapsingTopBar,
+} from '@/components/CollapsingTopBar';
 import {
   getDeviceRegistrationIfGranted,
   registerForPushNotifications,
@@ -36,7 +41,7 @@ export default function SettingsScreen() {
   const router = useRouter();
   const { token, signOut } = useAuth();
   const insets = useSafeAreaInsets();
-  const headerHeight = useHeaderHeight();
+  const scrollY = React.useRef(new Animated.Value(0)).current;
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [pushEnabled, setPushEnabled] = useState(false);
@@ -174,41 +179,47 @@ export default function SettingsScreen() {
   return (
     <LinearGradient
       colors={theme.gradients.sunrise}
-      style={[
-        styles.container,
-        {
-          paddingTop: (Platform.OS === 'android' ? 12 : headerHeight + 12),
-          paddingBottom: insets.bottom + 24,
-        },
-      ]}
+      style={styles.container}
     >
-      <View style={styles.header}>
-        <Text style={styles.kicker}>Configuration</Text>
-        <Text style={styles.title}>Control your Brain</Text>
-      </View>
-
-      <Card style={styles.card}>
-        <View style={styles.row}>
-          <View style={styles.textBlock}>
-            <Text style={styles.rowTitle}>Push notifications</Text>
-            <Text style={styles.rowSubtitle}>
-              Turn on quick alerts for new memories and follow-ups.
-            </Text>
+      <Animated.ScrollView
+        onScroll={Animated.event([{ nativeEvent: { contentOffset: { y: scrollY } } }], {
+          useNativeDriver: false,
+        })}
+        scrollEventThrottle={16}
+        contentContainerStyle={[
+          styles.content,
+          {
+            paddingTop:
+              insets.top +
+              COLLAPSING_TOP_BAR_HEIGHT +
+              COLLAPSING_CONTENT_TOP_PADDING +
+              COLLAPSING_SECONDARY_TITLE_BLOCK_HEIGHT,
+            paddingBottom: insets.bottom + 24,
+          },
+        ]}
+      >
+        <Card style={styles.card}>
+          <View style={styles.row}>
+            <View style={styles.textBlock}>
+              <Text style={styles.rowTitle}>Push notifications</Text>
+              <Text style={styles.rowSubtitle}>
+                Turn on quick alerts for new memories and follow-ups.
+              </Text>
+            </View>
+            {isLoading ? (
+              <ActivityIndicator color={theme.colors.accent} />
+            ) : (
+              <Switch
+                value={pushEnabled}
+                onValueChange={togglePush}
+                trackColor={{ false: theme.colors.line, true: theme.colors.paleTeal }}
+                thumbColor={pushEnabled ? theme.colors.accent : '#f2f2f2'}
+                disabled={isSaving}
+              />
+            )}
           </View>
-          {isLoading ? (
-            <ActivityIndicator color={theme.colors.accent} />
-          ) : (
-            <Switch
-              value={pushEnabled}
-              onValueChange={togglePush}
-              trackColor={{ false: theme.colors.line, true: theme.colors.paleTeal }}
-              thumbColor={pushEnabled ? theme.colors.accent : '#f2f2f2'}
-              disabled={isSaving}
-            />
-          )}
-        </View>
-        {isSaving && <Text style={styles.saving}>Saving preference…</Text>}
-      </Card>
+          {isSaving && <Text style={styles.saving}>Saving preference…</Text>}
+        </Card>
 
       <Card style={[styles.card, styles.navCard]}>
         <Pressable
@@ -271,11 +282,19 @@ export default function SettingsScreen() {
       </Card>
 
 
-      <Button
-        label="Sign out"
-        onPress={signOut}
-        variant="primary"
-        style={styles.signOutButton}
+        <Button
+          label="Sign out"
+          onPress={signOut}
+          variant="primary"
+          style={styles.signOutButton}
+        />
+      </Animated.ScrollView>
+
+      <CollapsingTopBar
+        title="Settings"
+        secondaryTitle="Control your Brain"
+        scrollY={scrollY}
+        onPressBack={() => router.back()}
       />
     </LinearGradient>
   );
@@ -284,28 +303,9 @@ export default function SettingsScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
+  },
+  content: {
     paddingHorizontal: 24,
-  },
-  header: {
-    marginBottom: 24,
-  },
-  kicker: {
-    textTransform: 'uppercase',
-    letterSpacing: 3,
-    fontSize: 12,
-    fontWeight: '600',
-    color: theme.colors.teal,
-  },
-  title: {
-    fontSize: 26,
-    fontWeight: '700',
-    color: theme.colors.ink,
-    marginTop: 6,
-  },
-  subtitle: {
-    marginTop: 6,
-    fontSize: 14,
-    color: theme.colors.mutedInk,
   },
   card: {
     borderRadius: theme.radius.xl,

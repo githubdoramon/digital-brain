@@ -5,7 +5,6 @@ import { Stack, useRouter, useSegments } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
 import { StatusBar } from 'expo-status-bar';
 import { useEffect } from 'react';
-import { Platform } from 'react-native';
 import 'react-native-reanimated';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import * as Notifications from 'expo-notifications';
@@ -129,81 +128,31 @@ function RootLayoutNav({ loaded }: { loaded: boolean }) {
       <Stack.Screen
         name="settings/index"
         options={{
-          headerShown: true,
-          headerTransparent: Platform.OS !== 'android',
-          headerTitle: '',
-          headerBackTitle: ' ',
-          headerBackTitleStyle: { fontSize: 0 },
-          headerBackButtonMenuEnabled: false,
-          headerShadowVisible: false,
-          headerTintColor: theme.colors.ink,
-          headerStyle: {
-            backgroundColor: Platform.OS === 'android' ? theme.colors.background : 'transparent',
-          },
+          headerShown: false,
         }}
       />
       <Stack.Screen
         name="settings/news-topics"
         options={{
-          headerShown: true,
-          headerTransparent: Platform.OS !== 'android',
-          headerTitle: '',
-          headerBackTitle: ' ',
-          headerBackTitleStyle: { fontSize: 0 },
-          headerBackButtonMenuEnabled: false,
-          headerShadowVisible: false,
-          headerTintColor: theme.colors.ink,
-          headerStyle: {
-            backgroundColor: Platform.OS === 'android' ? theme.colors.background : 'transparent',
-          },
+          headerShown: false,
         }}
       />
       <Stack.Screen
         name="settings/about-me"
         options={{
-          headerShown: true,
-          headerTransparent: Platform.OS !== 'android',
-          headerTitle: '',
-          headerBackTitle: ' ',
-          headerBackTitleStyle: { fontSize: 0 },
-          headerBackButtonMenuEnabled: false,
-          headerShadowVisible: false,
-          headerTintColor: theme.colors.ink,
-          headerStyle: {
-            backgroundColor: Platform.OS === 'android' ? theme.colors.background : 'transparent',
-          },
+          headerShown: false,
         }}
       />
       <Stack.Screen
         name="settings/places"
         options={{
-          headerShown: true,
-          headerTransparent: Platform.OS !== 'android',
-          headerTitle: '',
-          headerBackTitle: ' ',
-          headerBackTitleStyle: { fontSize: 0 },
-          headerBackButtonMenuEnabled: false,
-          headerShadowVisible: false,
-          headerTintColor: theme.colors.ink,
-          headerStyle: {
-            backgroundColor: Platform.OS === 'android' ? theme.colors.background : 'transparent',
-          },
+          headerShown: false,
         }}
       />
       <Stack.Screen
         name="settings/events"
         options={{
-          headerShown: true,
-          headerTransparent: Platform.OS !== 'android',
-          headerTitle: '',
-          headerBackTitle: ' ',
-          headerBackTitleStyle: { fontSize: 0 },
-          headerBackButtonMenuEnabled: false,
-          headerShadowVisible: false,
-          headerTintColor: theme.colors.ink,
-          headerStyle: {
-            backgroundColor: Platform.OS === 'android' ? theme.colors.background : 'transparent',
-          },
+          headerShown: false,
         }}
       />
       <Stack.Screen
@@ -265,15 +214,7 @@ function RootLayoutNav({ loaded }: { loaded: boolean }) {
         <Stack.Screen
           name="todos/index"
           options={{
-            headerShown: true,
-            headerTransparent: true,
-            headerTitle: 'New todo',
-            headerBackTitle: ' ',
-            headerBackTitleStyle: { fontSize: 0 },
-            headerBackButtonMenuEnabled: false,
-            headerShadowVisible: false,
-            headerTintColor: theme.colors.ink,
-            headerStyle: { backgroundColor: 'transparent' },
+            headerShown: false,
           }}
         />
         <Stack.Screen
@@ -293,15 +234,7 @@ function RootLayoutNav({ loaded }: { loaded: boolean }) {
         <Stack.Screen
           name="events/[eventId]"
           options={{
-            headerShown: true,
-            headerTransparent: true,
-            headerTitle: '',
-            headerBackTitle: ' ',
-            headerBackTitleStyle: { fontSize: 0 },
-            headerBackButtonMenuEnabled: false,
-            headerShadowVisible: false,
-            headerTintColor: theme.colors.ink,
-            headerStyle: { backgroundColor: 'transparent' },
+            headerShown: false,
           }}
         />
         <Stack.Screen name="modal" options={{ presentation: 'modal' }} />

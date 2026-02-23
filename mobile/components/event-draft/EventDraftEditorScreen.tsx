@@ -3,10 +3,10 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
 import React from 'react';
 import {
+  Animated,
   Keyboard,
   KeyboardAvoidingView,
   Platform,
-  ScrollView,
   StyleSheet,
   Text,
   TextInput,
@@ -16,6 +16,12 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { Card } from '@/components/Card';
 import { AppPressable as Pressable } from '@/components/AppPressable';
+import {
+  COLLAPSING_CONTENT_TOP_PADDING,
+  COLLAPSING_SECONDARY_TITLE_BLOCK_HEIGHT,
+  COLLAPSING_TOP_BAR_HEIGHT,
+  CollapsingTopBar,
+} from '@/components/CollapsingTopBar';
 import { FloatingSaveButton } from '@/components/FloatingSaveButton';
 import { UiDirectiveDateTimePickerSheet } from '@/components/ui-directive-card/UiDirectiveDateTimePickerSheet';
 import {
@@ -42,6 +48,7 @@ type EventDetailsFormProps = {
   headerSubtitle?: string;
   doneLabel?: string;
   onDone?: (draft: EventDraft) => void;
+  onPressBack?: () => void;
 };
 
 type DraftEditorScreenProps = {
@@ -112,8 +119,10 @@ export function EventDetailsForm({
   headerSubtitle,
   doneLabel = 'Done',
   onDone,
+  onPressBack,
 }: EventDetailsFormProps) {
   const insets = useSafeAreaInsets();
+  const scrollY = React.useRef(new Animated.Value(0)).current;
   const [keyboardHeight, setKeyboardHeight] = React.useState(0);
   const [showDatePicker, setShowDatePicker] = React.useState(false);
 
@@ -243,19 +252,25 @@ export function EventDetailsForm({
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
         keyboardVerticalOffset={Platform.OS === 'ios' ? 72 : 0}
       >
-        <ScrollView
+        <Animated.ScrollView
+          onScroll={Animated.event([{ nativeEvent: { contentOffset: { y: scrollY } } }], {
+            useNativeDriver: false,
+          })}
+          scrollEventThrottle={16}
           showsVerticalScrollIndicator={false}
           keyboardShouldPersistTaps="handled"
           contentContainerStyle={[
             styles.content,
             {
-              paddingTop: insets.top + 62,
+              paddingTop:
+                insets.top +
+                COLLAPSING_TOP_BAR_HEIGHT +
+                COLLAPSING_CONTENT_TOP_PADDING +
+                COLLAPSING_SECONDARY_TITLE_BLOCK_HEIGHT,
               paddingBottom: insets.bottom + (editable ? 120 : 28),
             },
           ]}
         >
-          <Text style={styles.kicker}>{headerKicker}</Text>
-          <Text style={styles.title}>{headerTitle}</Text>
           {headerSubtitle ? <Text style={styles.subtitle}>{headerSubtitle}</Text> : null}
 
           <Card style={styles.card}>
@@ -475,7 +490,14 @@ export function EventDetailsForm({
               </View>
             )}
           </Card>
-        </ScrollView>
+        </Animated.ScrollView>
+
+        <CollapsingTopBar
+          title={headerKicker}
+          secondaryTitle={headerTitle}
+          scrollY={scrollY}
+          onPressBack={onPressBack}
+        />
 
         {editable ? (
           <FloatingSaveButton
@@ -555,6 +577,7 @@ export function EventDraftEditorScreen({ sessionId }: DraftEditorScreenProps) {
       headerSubtitle="Review details before creating the event."
       doneLabel="Done"
       onDone={handleDone}
+      onPressBack={() => router.back()}
     />
   );
 }
@@ -570,22 +593,8 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
     gap: 14,
   },
-  kicker: {
-    fontSize: 12,
-    letterSpacing: 2.6,
-    textTransform: 'uppercase',
-    color: theme.colors.accentDeep,
-    fontWeight: '600',
-  },
-  title: {
-    marginTop: 6,
-    fontSize: 28,
-    lineHeight: 34,
-    fontWeight: '700',
-    color: theme.colors.ink,
-  },
   subtitle: {
-    marginTop: 4,
+    marginTop: 8,
     fontSize: 14,
     lineHeight: 20,
     color: theme.colors.mutedInk,

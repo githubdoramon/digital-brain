@@ -1,4 +1,4 @@
-import { useLocalSearchParams } from 'expo-router';
+import { useLocalSearchParams, useRouter } from 'expo-router';
 import React from 'react';
 import { Alert, StyleSheet } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -163,6 +163,7 @@ type EventDetailViewProps = {
 };
 
 function EventDetailView({ eventId, editable }: EventDetailViewProps) {
+  const router = useRouter();
   const insets = useSafeAreaInsets();
   const [event, setEvent] = React.useState<EventDetail | null>(null);
   const [contactMap, setContactMap] = React.useState<Map<string, string>>(new Map());
@@ -314,6 +315,7 @@ function EventDetailView({ eventId, editable }: EventDetailViewProps) {
       headerSubtitle={subtitle}
       doneLabel={isSaving ? 'Saving...' : 'Save changes'}
       onDone={isEditing && !isSaving ? handleSave : undefined}
+      onPressBack={() => router.back()}
     />
   );
 

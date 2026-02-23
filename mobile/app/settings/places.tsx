@@ -1,10 +1,10 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
-import { useHeaderHeight } from '@react-navigation/elements';
 import { useFocusEffect } from '@react-navigation/native';
 import { useRouter } from 'expo-router';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
+  Animated,
   FlatList,
   Keyboard,
   KeyboardAvoidingView,
@@ -19,6 +19,12 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { apiFetch } from '@/api/client';
 import { AppPressable as Pressable } from '@/components/AppPressable';
 import { Card } from '@/components/Card';
+import {
+  COLLAPSING_CONTENT_TOP_PADDING,
+  COLLAPSING_SECONDARY_TITLE_BLOCK_HEIGHT,
+  COLLAPSING_TOP_BAR_HEIGHT,
+  CollapsingTopBar,
+} from '@/components/CollapsingTopBar';
 import { theme } from '@/theme';
 import type { Place } from '@/types/place';
 import { normalizeSearch } from '@/utils/text';
@@ -41,7 +47,7 @@ function formatSubtitle(place: Place): string {
 export default function SettingsPlacesScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
-  const headerHeight = useHeaderHeight();
+  const scrollY = useRef(new Animated.Value(0)).current;
   const [places, setPlaces] = useState<Place[]>([]);
   const [query, setQuery] = useState('');
   const [isLoading, setIsLoading] = useState(true);
@@ -127,11 +133,15 @@ export default function SettingsPlacesScreen() {
     <KeyboardAvoidingView
       style={styles.container}
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-      keyboardVerticalOffset={headerHeight}
+      keyboardVerticalOffset={insets.top + COLLAPSING_TOP_BAR_HEIGHT}
     >
       <FlatList
         data={filtered}
         keyExtractor={(item) => item.place_id}
+        onScroll={Animated.event([{ nativeEvent: { contentOffset: { y: scrollY } } }], {
+          useNativeDriver: false,
+        })}
+        scrollEventThrottle={16}
         refreshing={isRefreshing}
         onRefresh={handleRefresh}
         automaticallyAdjustKeyboardInsets
@@ -140,14 +150,12 @@ export default function SettingsPlacesScreen() {
         contentContainerStyle={[
           styles.content,
           {
-            paddingTop: Platform.OS === 'android' ? 12 : headerHeight + 12,
+            paddingTop: insets.top + COLLAPSING_TOP_BAR_HEIGHT + COLLAPSING_CONTENT_TOP_PADDING,
             paddingBottom: insets.bottom + (keyboardVisible ? keyboardHeight + 24 : 110),
           },
         ]}
         ListHeaderComponent={
           <View style={styles.header}>
-            <Text style={styles.title}>Places</Text>
-            <Text style={styles.subtitle}>Edit known places and keep their coordinates accurate.</Text>
             <TextInput
               value={query}
               onChangeText={setQuery}
@@ -186,6 +194,12 @@ export default function SettingsPlacesScreen() {
           </Card>
         )}
       />
+      <CollapsingTopBar
+        title="Places"
+        secondaryTitle="Go through your locations"
+        scrollY={scrollY}
+        onPressBack={() => router.back()}
+      />
 
       {!keyboardVisible ? (
         <Pressable
@@ -215,15 +229,12 @@ const styles = StyleSheet.create({
     gap: 14,
   },
   header: {
-    gap: 10,
+    paddingTop: COLLAPSING_SECONDARY_TITLE_BLOCK_HEIGHT,
+    gap: 8,
     marginBottom: 8,
   },
-  title: {
-    fontSize: 26,
-    fontWeight: '700',
-    color: theme.colors.ink,
-  },
   subtitle: {
+    marginTop: 6,
     fontSize: 14,
     color: theme.colors.mutedInk,
   },

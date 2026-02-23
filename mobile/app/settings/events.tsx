@@ -1,10 +1,10 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
-import { useHeaderHeight } from '@react-navigation/elements';
 import { useFocusEffect } from '@react-navigation/native';
 import { useRouter } from 'expo-router';
 import React, { useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
+  Animated,
   FlatList,
   KeyboardAvoidingView,
   Platform,
@@ -18,6 +18,12 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { apiFetch } from '@/api/client';
 import { AppPressable as Pressable } from '@/components/AppPressable';
 import { Card } from '@/components/Card';
+import {
+  COLLAPSING_CONTENT_TOP_PADDING,
+  COLLAPSING_SECONDARY_TITLE_BLOCK_HEIGHT,
+  COLLAPSING_TOP_BAR_HEIGHT,
+  CollapsingTopBar,
+} from '@/components/CollapsingTopBar';
 import { theme } from '@/theme';
 import { normalizeSearch } from '@/utils/text';
 
@@ -48,7 +54,7 @@ function formatDate(value?: string | null): string {
 export default function SettingsEventsScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
-  const headerHeight = useHeaderHeight();
+  const scrollY = useRef(new Animated.Value(0)).current;
   const [events, setEvents] = useState<EventListItem[]>([]);
   const [query, setQuery] = useState('');
   const [isLoading, setIsLoading] = useState(true);
@@ -107,11 +113,15 @@ export default function SettingsEventsScreen() {
     <KeyboardAvoidingView
       style={styles.container}
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-      keyboardVerticalOffset={headerHeight}
+      keyboardVerticalOffset={insets.top + COLLAPSING_TOP_BAR_HEIGHT}
     >
       <FlatList
         data={filtered}
         keyExtractor={(item) => item.id}
+        onScroll={Animated.event([{ nativeEvent: { contentOffset: { y: scrollY } } }], {
+          useNativeDriver: false,
+        })}
+        scrollEventThrottle={16}
         refreshing={isRefreshing}
         onRefresh={() => void loadEvents({ showRefreshSpinner: true })}
         automaticallyAdjustKeyboardInsets
@@ -120,14 +130,12 @@ export default function SettingsEventsScreen() {
         contentContainerStyle={[
           styles.content,
           {
-            paddingTop: Platform.OS === 'android' ? 12 : headerHeight + 12,
+            paddingTop: insets.top + COLLAPSING_TOP_BAR_HEIGHT + COLLAPSING_CONTENT_TOP_PADDING,
             paddingBottom: insets.bottom + 44,
           },
         ]}
         ListHeaderComponent={
           <View style={styles.header}>
-            <Text style={styles.title}>Events</Text>
-            <Text style={styles.subtitle}>Search your event history and open an event to edit links.</Text>
             <TextInput
               value={query}
               onChangeText={setQuery}
@@ -166,6 +174,12 @@ export default function SettingsEventsScreen() {
           </Card>
         )}
       />
+      <CollapsingTopBar
+        title="Events"
+        secondaryTitle='Dig through your moments'
+        scrollY={scrollY}
+        onPressBack={() => router.back()}
+      />
     </KeyboardAvoidingView>
   );
 }
@@ -180,15 +194,12 @@ const styles = StyleSheet.create({
     gap: 14,
   },
   header: {
-    gap: 10,
+    paddingTop: COLLAPSING_SECONDARY_TITLE_BLOCK_HEIGHT,
+    gap: 8,
     marginBottom: 8,
   },
-  title: {
-    fontSize: 26,
-    fontWeight: '700',
-    color: theme.colors.ink,
-  },
   subtitle: {
+    marginTop: 6,
     fontSize: 14,
     color: theme.colors.mutedInk,
   },

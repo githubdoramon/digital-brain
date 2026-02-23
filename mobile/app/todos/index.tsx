@@ -5,10 +5,10 @@ import React from 'react';
 import DateTimePicker, { DateType, useDefaultStyles } from 'react-native-ui-datepicker';
 import {
   ActivityIndicator,
+  Animated,
   KeyboardAvoidingView,
   Modal,
   Platform,
-  ScrollView,
   StyleSheet,
   Text,
   TextInput,
@@ -19,6 +19,12 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { apiFetch } from '@/api/client';
 import { AppPressable as Pressable } from '@/components/AppPressable';
 import { Card } from '@/components/Card';
+import {
+  COLLAPSING_CONTENT_TOP_PADDING,
+  COLLAPSING_SECONDARY_TITLE_BLOCK_HEIGHT,
+  COLLAPSING_TOP_BAR_HEIGHT,
+  CollapsingTopBar,
+} from '@/components/CollapsingTopBar';
 import { FloatingSaveButton } from '@/components/FloatingSaveButton';
 import { TopNoticeProvider, useTopNotice } from '@/components/top-notice';
 import { theme } from '@/theme';
@@ -125,6 +131,7 @@ function NewTodoContent() {
   const [eventsLoading, setEventsLoading] = React.useState(false);
   const [showDatePicker, setShowDatePicker] = React.useState(false);
   const [draftDate, setDraftDate] = React.useState<Date | null>(null);
+  const scrollY = React.useRef(new Animated.Value(0)).current;
   const [initialSnapshot, setInitialSnapshot] = React.useState<TodoSnapshot>(() =>
     buildTodoSnapshot({
       description: '',
@@ -416,29 +423,24 @@ function NewTodoContent() {
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
         keyboardVerticalOffset={0}
       >
-        <ScrollView
+        <Animated.ScrollView
+          onScroll={Animated.event([{ nativeEvent: { contentOffset: { y: scrollY } } }], {
+            useNativeDriver: false,
+          })}
+          scrollEventThrottle={16}
           contentContainerStyle={[
             styles.content,
             {
-              paddingTop: insets.top + 64,
+              paddingTop:
+                insets.top +
+                COLLAPSING_TOP_BAR_HEIGHT +
+                COLLAPSING_CONTENT_TOP_PADDING +
+                COLLAPSING_SECONDARY_TITLE_BLOCK_HEIGHT,
               paddingBottom: insets.bottom + (isDirty ? 120 : 32),
             },
           ]}
           keyboardShouldPersistTaps="handled"
         >
-          <View style={styles.header}>
-            <View style={styles.kickerRow}>
-              <Ionicons name="sparkles" size={14} color={theme.colors.accentDeep} />
-              <Text style={styles.kicker}>{isEditing ? 'Edit todo' : 'New todo'}</Text>
-            </View>
-            <Text style={styles.title}>{isEditing ? 'Refine this task' : 'Capture what matters'}</Text>
-            <Text style={styles.subtitle}>
-              {isEditing
-                ? 'Update details and save when you are ready.'
-                : 'Keep it simple and set a date if it helps.'}
-            </Text>
-          </View>
-
           <Card style={styles.formCard}>
             <Text style={styles.label}>Todo</Text>
             {loadingTodo ? <Text style={styles.helper}>Loading todo details...</Text> : null}
@@ -585,7 +587,14 @@ function NewTodoContent() {
           <Pressable onPress={() => router.back()} style={styles.cancelRow}>
             <Text style={styles.cancelText}>Cancel</Text>
           </Pressable>
-        </ScrollView>
+        </Animated.ScrollView>
+
+        <CollapsingTopBar
+          title="Todo"
+          secondaryTitle={isEditing ? 'Refine this task' : 'Capture what matters'}
+          scrollY={scrollY}
+          onPressBack={() => router.back()}
+        />
 
         <FloatingSaveButton
           visible={isDirty}
@@ -677,26 +686,6 @@ const styles = StyleSheet.create({
   content: {
     paddingHorizontal: 20,
     gap: 16,
-  },
-  header: {
-    gap: 6,
-  },
-  kickerRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-  },
-  kicker: {
-    fontSize: 12,
-    textTransform: 'uppercase',
-    letterSpacing: 2.4,
-    color: theme.colors.accentDeep,
-    fontWeight: '600',
-  },
-  title: {
-    fontSize: 26,
-    fontWeight: '700',
-    color: theme.colors.ink,
   },
   subtitle: {
     fontSize: 14,

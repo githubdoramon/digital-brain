@@ -3,6 +3,7 @@ import { useRouter } from 'expo-router';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
+  Animated,
   AppState,
   FlatList,
   Keyboard,
@@ -22,6 +23,12 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { apiFetch } from '@/api/client';
 import { useAuth } from '@/auth/AuthContext';
 import { AppPressable as Pressable } from '@/components/AppPressable';
+import {
+  COLLAPSING_CONTENT_TOP_PADDING,
+  COLLAPSING_SECONDARY_TITLE_BLOCK_HEIGHT,
+  COLLAPSING_TOP_BAR_HEIGHT,
+  CollapsingTopBar,
+} from '@/components/CollapsingTopBar';
 import { theme } from '@/theme';
 import { UiDirectiveCard } from '@/components/ui-directive-card';
 import { SlashCommandPalette } from '@/components/SlashCommandPalette';
@@ -108,6 +115,7 @@ const EVENT_CLARIFICATION_BLOCK_PREFIX = 'event_clarification:';
 const EVENT_CONFIRM_OPTION_PREFIX = 'confirm:';
 const EVENT_CANCEL_OPTION_PREFIX = 'cancel:';
 const EVENT_EDIT_OPTION_PREFIX = 'edit:';
+const EVENT_PREVIEW_BLOCK_PREFIX = 'event_preview:';
 const MIN_CHAT_INPUT_HEIGHT = 46;
 const MAX_CHAT_INPUT_HEIGHT = 120;
 const COMPOSER_KEYBOARD_GAP = 20;
@@ -412,11 +420,61 @@ function clarificationIdFromAction(actionIdRaw: string | undefined): string | nu
   return clarificationId || null;
 }
 
+function formatEventPreviewWhen(value: string): string {
+  const raw = value.trim();
+  if (!raw) return 'Not specified';
+  const normalized = raw.replace('Z', '+00:00');
+  const parsed = new Date(normalized);
+  if (Number.isNaN(parsed.getTime())) {
+    return raw;
+  }
+  return parsed.toLocaleString('en-US', {
+    month: 'short',
+    day: '2-digit',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  });
+}
+
+function updateEventPreviewCard(
+  directives: UiDirectives,
+  previewId: string,
+  draft: EventDraft,
+): UiDirectives {
+  const participants = draft.participants
+    .map((participant) => participant.displayName.trim())
+    .filter(Boolean);
+  const body = [
+    `Title: ${draft.title.trim() || 'Untitled event'}`,
+    `Summary: ${draft.summary.trim() || 'No summary provided.'}`,
+    `When: ${formatEventPreviewWhen(draft.when)}`,
+    `Where: ${draft.where.trim() || 'Not specified'}`,
+    `Who: ${participants.length > 0 ? participants.join(', ') : 'No participants detected'}`,
+    `Tags: ${draft.tags.length > 0 ? draft.tags.join(', ') : 'None'}`,
+    `Types: ${draft.types.length > 0 ? draft.types.join(', ') : 'Generic'}`,
+  ].join('\n');
+
+  return {
+    ...directives,
+    blocks: directives.blocks.map((block) =>
+      block.id === `${EVENT_PREVIEW_BLOCK_PREFIX}${previewId}`
+        ? {
+            ...block,
+            body,
+          }
+        : block,
+    ),
+  };
+}
+
 export default function ChatScreen() {
   const router = useRouter();
-  const { token, signOut, email, isLoading: isAuthLoading } = useAuth();
+  const { token, signOut, email, name, photo, isLoading: isAuthLoading } = useAuth();
   const insets = useSafeAreaInsets();
   const tabBarHeight = useBottomTabBarHeight();
+  const scrollY = useRef(new Animated.Value(0)).current;
   const listRef = useRef<FlatList<Message>>(null);
   const inputRef = useRef<TextInput>(null);
   const [input, setInput] = useState('');
@@ -691,16 +749,6 @@ export default function ChatScreen() {
     };
   }, []);
 
-  const header = useMemo(
-    () => (
-      <View style={styles.header}>
-        <Text style={styles.kicker}>Chat</Text>
-        <Text style={styles.title}>Talk to "your" memory</Text>
-      </View>
-    ),
-    [],
-  );
-
   const sendMessage = useCallback(async (override?: SendMessageInput) => {
     const overrideText = typeof override === 'string' ? override : override?.text;
     const uiSubmission = typeof override === 'string' ? undefined : override?.uiSubmission;
@@ -924,18 +972,6 @@ export default function ChatScreen() {
         }
         return next;
       });
-
-      setMessages((prev) => [
-        ...prev,
-        {
-          id: `${Date.now()}-event-edit-status`,
-          role: 'assistant',
-          content: modifiedFields
-            ? `Updated draft fields: ${modifiedFields}. Tap Create event when ready.`
-            : 'No field changes were saved.',
-        },
-      ]);
-      setForceScrollNext(true);
     },
     [],
   );
@@ -1185,20 +1221,22 @@ export default function ChatScreen() {
           style={styles.list}
           data={messages}
           keyExtractor={(item) => item.id}
-          ListHeaderComponent={header}
           ListFooterComponent={<View style={{ height: listBottomInset }} />}
           contentContainerStyle={[
             styles.listContent,
             {
-              paddingTop: insets.top + 16,
+              paddingTop: insets.top + COLLAPSING_TOP_BAR_HEIGHT + COLLAPSING_CONTENT_TOP_PADDING,
             },
           ]}
-          onScroll={(event) => {
-            const { contentOffset, layoutMeasurement, contentSize } = event.nativeEvent;
-            const distanceFromBottom =
-              contentSize.height - (contentOffset.y + layoutMeasurement.height);
-            isAtBottomRef.current = distanceFromBottom < 48;
-          }}
+          onScroll={Animated.event([{ nativeEvent: { contentOffset: { y: scrollY } } }], {
+            useNativeDriver: false,
+            listener: (event: any) => {
+              const { contentOffset, layoutMeasurement, contentSize } = event.nativeEvent;
+              const distanceFromBottom =
+                contentSize.height - (contentOffset.y + layoutMeasurement.height);
+              isAtBottomRef.current = distanceFromBottom < 48;
+            },
+          })}
           scrollEventThrottle={16}
           renderItem={({ item }) => {
             if (item.role === 'assistant' && item.pending) {
@@ -1210,10 +1248,35 @@ export default function ChatScreen() {
               );
             }
 
-            const previewId = extractEventPreviewId(item.metadata?.command_result);
+            const commandResult = item.metadata?.command_result;
+            const previewId = extractEventPreviewId(commandResult);
             const isSupersededEventCard = Boolean(
               previewId && pendingEventId && previewId !== pendingEventId,
             );
+            const previewModifications = previewId
+              ? eventDraftModificationsByPreview[previewId]
+              : undefined;
+            const directives = item.metadata?.ui_directives;
+            let directivesForCard = directives;
+            if (previewId && directives && previewModifications) {
+              const baseDraft = buildEventDraft(commandResult, previewId);
+              if (baseDraft) {
+                const contactNameById = new Map(
+                  eventEditorContacts.map((contact) => [contact.contact_id, contact.display_name]),
+                );
+                for (const participant of baseDraft.participants) {
+                  if (!contactNameById.has(participant.contactId)) {
+                    contactNameById.set(participant.contactId, participant.displayName);
+                  }
+                }
+                const modifiedDraft = applyDraftModifications(
+                  baseDraft,
+                  previewModifications,
+                  contactNameById,
+                );
+                directivesForCard = updateEventPreviewCard(directives, previewId, modifiedDraft);
+              }
+            }
             const requestError = item.metadata?.request_error;
             const isErrorExpanded = Boolean(expandedErrorMessageIds[item.id]);
 
@@ -1232,18 +1295,18 @@ export default function ChatScreen() {
                     {item.content}
                   </Text>
                 )}
-                {item.metadata?.ui_directives && (
+                {directivesForCard && (
                   <View style={styles.commandCardWrap}>
                     <UiDirectiveCard
-                      directives={item.metadata.ui_directives}
+                      directives={directivesForCard}
                       isSubmitting={isSending || isConfirmingEvent || isSupersededEventCard}
-                      resolvedStatus={item.metadata.event_resolved}
+                      resolvedStatus={item.metadata?.event_resolved}
                       onSubmit={(submission) => {
                         void handleDirectiveSubmission(
                           item.id,
-                          item.metadata?.ui_directives,
+                          directivesForCard,
                           submission,
-                          item.metadata?.command_result,
+                          commandResult,
                         );
                       }}
                     />
@@ -1285,6 +1348,15 @@ export default function ChatScreen() {
               </View>
             );
           }}
+        />
+        <CollapsingTopBar
+          title="Brain"
+          secondaryTitle={'Talk to "your" memory'}
+          scrollY={scrollY}
+          profileName={name || email || 'You'}
+          profilePhoto={photo}
+          token={token}
+          onPressProfile={() => router.push('/settings')}
         />
         {showAnchoredSlashPalette && (
           <View style={[styles.slashPaletteAnchor, { bottom: composerHeight + composerBottomOffset + 8 }]}>
@@ -1373,29 +1445,13 @@ const styles = StyleSheet.create({
   },
   screen: {
     flex: 1,
+    paddingTop: COLLAPSING_SECONDARY_TITLE_BLOCK_HEIGHT + 20,
   },
   list: {
     flex: 1,
   },
   listContent: {
     paddingHorizontal: 20,
-  },
-  header: {
-    marginTop: 0,
-    marginBottom: 20,
-  },
-  kicker: {
-    fontSize: 12,
-    textTransform: 'uppercase',
-    letterSpacing: 3,
-    color: theme.colors.teal,
-    fontWeight: '600',
-  },
-  title: {
-    fontSize: 26,
-    fontWeight: '700',
-    color: theme.colors.ink,
-    marginTop: 6,
   },
   subtitle: {
     marginTop: 6,

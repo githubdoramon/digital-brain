@@ -18,8 +18,13 @@ import Ionicons from '@expo/vector-icons/Ionicons';
 import { apiFetch } from '@/api/client';
 import { useAuth } from '@/auth/AuthContext';
 import { AppPressable as Pressable } from '@/components/AppPressable';
-import { Avatar } from '@/components/Avatar';
 import { Card } from '@/components/Card';
+import {
+  COLLAPSING_CONTENT_TOP_PADDING,
+  COLLAPSING_SECONDARY_TITLE_BLOCK_HEIGHT,
+  COLLAPSING_TOP_BAR_HEIGHT,
+  CollapsingTopBar,
+} from '@/components/CollapsingTopBar';
 import { renderAssistantMarkdown } from '@/components/MarkdownRenderer';
 import { useTopNotice } from '@/components/top-notice';
 import { theme } from '@/theme';
@@ -67,6 +72,7 @@ export default function DailyScreen() {
   const [completingIds, setCompletingIds] = React.useState<Record<string, boolean>>({});
   const { showNotice } = useTopNotice();
   const todoAnimations = React.useRef<Record<string, Animated.Value>>({}).current;
+  const scrollY = React.useRef(new Animated.Value(0)).current;
   const AnimatedCard = React.useMemo(() => Animated.createAnimatedComponent(Card), []);
 
   React.useEffect(() => {
@@ -227,35 +233,20 @@ export default function DailyScreen() {
       <FlatList
         data={todos}
         keyExtractor={(item) => item.todo_id}
+        onScroll={Animated.event([{ nativeEvent: { contentOffset: { y: scrollY } } }], {
+          useNativeDriver: false,
+        })}
+        scrollEventThrottle={16}
         showsVerticalScrollIndicator={false}
         contentContainerStyle={[
           styles.content,
           {
-            paddingTop: insets.top + 18,
+            paddingTop: insets.top + COLLAPSING_TOP_BAR_HEIGHT + COLLAPSING_CONTENT_TOP_PADDING,
             paddingBottom: insets.bottom + 220,
           },
         ]}
         ListHeaderComponent={
-          <View>
-            <View style={styles.headerRow}>
-              <View style={styles.headerText}>
-                <Text style={styles.kicker}>Daily</Text>
-                <Text style={styles.title}>Your day, scoped</Text>
-              </View>
-              <Pressable
-                onPress={() => router.push('/settings')}
-                accessibilityRole="button"
-                accessibilityLabel="Open settings"
-                accessibilityHint="Shows account and app preferences"
-                style={({ pressed }) => [
-                  styles.profileButton,
-                  pressed && styles.profileButtonPressed,
-                ]}
-              >
-                <Avatar name={profileName} uri={photo} token={token} size={34} />
-              </Pressable>
-            </View>
-
+          <View style={styles.headerSpacer} >
             <Card style={styles.summaryCard}>
               <Pressable
                 onPress={() => setExpanded((prev) => !prev)}
@@ -378,6 +369,15 @@ export default function DailyScreen() {
           ) : null
         }
       />
+      <CollapsingTopBar
+        title="Daily"
+        secondaryTitle="Your day, scoped"
+        scrollY={scrollY}
+        profileName={profileName}
+        profilePhoto={photo}
+        token={token}
+        onPressProfile={() => router.push('/settings')}
+      />
       <Pressable
         onPress={() => router.push('/todos')}
         accessibilityRole="button"
@@ -402,44 +402,12 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
     gap: 12,
   },
-  headerRow: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    justifyContent: 'space-between',
-    gap: 12,
-  },
-  headerText: {
-    flex: 1,
-  },
-  kicker: {
-    fontSize: 12,
-    textTransform: 'uppercase',
-    letterSpacing: 3,
-    color: theme.colors.teal,
-    fontWeight: '600',
-  },
-  title: {
-    fontSize: 26,
-    fontWeight: '700',
-    color: theme.colors.ink,
+  headerSpacer: {
+    paddingTop: COLLAPSING_SECONDARY_TITLE_BLOCK_HEIGHT,
   },
   subtitle: {
     fontSize: 14,
     color: theme.colors.mutedInk,
-  },
-  profileButton: {
-    minHeight: 44,
-    minWidth: 44,
-    padding: 4,
-    borderRadius: 999,
-    backgroundColor: 'rgba(255, 255, 255, 0.86)',
-    borderWidth: 1,
-    borderColor: theme.colors.line,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  profileButtonPressed: {
-    opacity: 0.7,
   },
   summaryCard: {
     marginTop: 10,
