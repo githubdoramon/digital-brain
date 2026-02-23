@@ -724,18 +724,34 @@ def merge_contacts(primary_contact_id: str, duplicate_contact_id: str) -> dict[s
                 (duplicate_contact_id,),
             )
 
-        # Update events people arrays
+        # Update event linkages
         cur.execute(
             """
-            UPDATE events
-            SET people = (
-                SELECT array_agg(DISTINCT elem)
-                FROM unnest(array_replace(coalesce(people, ARRAY[]::TEXT[]), %s, %s)) AS elem
-            )
-            WHERE people @> ARRAY[%s]::TEXT[]
+            SELECT event_id
+            FROM event_contacts
+            WHERE contact_id = %s
             """,
-            (duplicate_contact_id, primary_contact_id, duplicate_contact_id),
+            (duplicate_contact_id,),
         )
+        event_rows = [dict(row) for row in cur.fetchall()]
+        for event_row in event_rows:
+            event_id = event_row["event_id"]
+            cur.execute(
+                """
+                INSERT INTO event_contacts (event_id, contact_id)
+                VALUES (%s, %s)
+                ON CONFLICT DO NOTHING
+                """,
+                (event_id, primary_contact_id),
+            )
+        if event_rows:
+            cur.execute(
+                """
+                DELETE FROM event_contacts
+                WHERE contact_id = %s
+                """,
+                (duplicate_contact_id,),
+            )
 
         cur.execute(
             """
