@@ -393,7 +393,11 @@ def confirm_event_command(
             created_contacts.append({"contact_id": contact_id, "display_name": display_name})
             contact_id_map[display_name] = contact_id
 
-        confirmed_relationships = normalized_modifications.get("confirmed_relationships") or []
+        confirmed_relationships_present = "confirmed_relationships" in normalized_modifications
+        if confirmed_relationships_present:
+            confirmed_relationships = normalized_modifications.get("confirmed_relationships") or []
+        else:
+            confirmed_relationships = command_data.get("relationship_suggestions") or []
 
         if confirmed_relationships:
             existing_contact_map = {

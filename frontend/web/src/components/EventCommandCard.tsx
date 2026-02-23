@@ -126,14 +126,11 @@ export function EventCommandCard({
       }
 
       // Include selected relationship suggestions
-      if (commandData.relationship_suggestions && selectedRelationships.size > 0) {
+      if (commandData.relationship_suggestions) {
         const confirmedRelationships = Array.from(selectedRelationships)
           .map(idx => commandData.relationship_suggestions?.[idx])
           .filter(Boolean);
-
-        if (confirmedRelationships.length > 0) {
-          modifications.confirmed_relationships = confirmedRelationships;
-        }
+        modifications.confirmed_relationships = confirmedRelationships;
       }
 
       await onConfirm(commandData.preview_id, modifications);

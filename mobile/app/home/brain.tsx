@@ -93,6 +93,16 @@ type EventAction = {
 type EventCommandResultPayload = {
   type?: string;
   preview_id?: string;
+  relationship_suggestions?: {
+    from_contact_id?: unknown;
+    from_display_name?: unknown;
+    to_contact_id?: unknown;
+    to_display_name?: unknown;
+    relationship_type?: unknown;
+    reciprocal_type?: unknown;
+    confidence?: unknown;
+    reasoning?: unknown;
+  }[];
   extracted?: {
     title?: unknown;
     summary?: unknown;
@@ -263,6 +273,45 @@ function stringArrayValue(value: unknown): string[] {
   return value
     .map((entry) => textValue(entry))
     .filter(Boolean);
+}
+
+type ConfirmedRelationship = {
+  from_contact_id?: string;
+  from_display_name?: string;
+  to_contact_id?: string;
+  to_display_name?: string;
+  relationship_type: string;
+  reciprocal_type?: string;
+  confidence?: string;
+  reasoning?: string;
+};
+
+function buildConfirmedRelationships(commandResult: CommandResult | undefined): ConfirmedRelationship[] {
+  if (!commandResult || typeof commandResult !== 'object') return [];
+  const payload = commandResult as EventCommandResultPayload;
+  const suggestions = Array.isArray(payload.relationship_suggestions)
+    ? payload.relationship_suggestions
+    : [];
+
+  const confirmedRelationships: ConfirmedRelationship[] = [];
+  for (const suggestion of suggestions) {
+    const relationshipType = textValue(suggestion.relationship_type);
+    if (!relationshipType) {
+      continue;
+    }
+    confirmedRelationships.push({
+      from_contact_id: textValue(suggestion.from_contact_id) || undefined,
+      from_display_name: textValue(suggestion.from_display_name) || undefined,
+      to_contact_id: textValue(suggestion.to_contact_id) || undefined,
+      to_display_name: textValue(suggestion.to_display_name) || undefined,
+      relationship_type: relationshipType,
+      reciprocal_type: textValue(suggestion.reciprocal_type) || undefined,
+      confidence: textValue(suggestion.confidence) || undefined,
+      reasoning: textValue(suggestion.reasoning) || undefined,
+    });
+  }
+
+  return confirmedRelationships;
 }
 
 function normalizedDraftValue(value: string) {
@@ -1085,16 +1134,21 @@ export default function ChatScreen() {
         setIsConfirmingEvent(true);
         try {
           const modifications = eventDraftModificationsByPreview[action.previewId] || {};
+          const confirmedRelationships = buildConfirmedRelationships(commandResult);
+          const confirmPayload = {
+            preview_id: action.previewId,
+            confirmed: true,
+            modifications: {
+              ...modifications,
+              confirmed_relationships: confirmedRelationships,
+            },
+            skip_entities: {},
+          };
           await apiFetch('/mobile/commands/event/confirm', {
             method: 'POST',
             body: JSON.stringify(
               action.type === 'confirm'
-                ? {
-                    preview_id: action.previewId,
-                    confirmed: true,
-                    modifications,
-                    skip_entities: {},
-                  }
+                ? confirmPayload
                 : {
                     preview_id: action.previewId,
                     confirmed: false,
