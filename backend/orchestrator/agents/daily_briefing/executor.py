@@ -802,6 +802,8 @@ def _research_event(
         "If the event is routine or internal with no obvious research angle, "
         "respond with: NO_RESEARCH_NEEDED\n\n"
         f"Timezone: {timezone_name}\n\n"
+        "Perspective: this is preparation for the calendar owner. If the owner appears "
+        "by name or alias in notes, treat that as 'you' (second person), not a third person.\n\n"
         f"{event_text}\n\n"
         "Return your research findings as concise bullet points. "
         "Include source URLs when available."
@@ -876,7 +878,8 @@ def _synthesise_event_summary(
         f"{research_block}"
         f"{user_context_block}\n\n"
         "Perspective: this summary is for the calendar owner. Use second-person framing where useful\n"
-        "(for example 'you will review metrics'). Avoid third-person self-references like\n"
+        "(for example 'you will review metrics'). If owner names/aliases appear in notes,\n"
+        "rewrite those references to second person. Avoid third-person self-references like\n"
         "'align with <owner name>' when referring to the owner.\n\n"
         "Respond with exactly these sections (skip a section if nothing relevant):\n"
         "KEY POINTS:\n"
@@ -984,6 +987,7 @@ def _generate_event_sections_markdown(
         "- Focus only on today's events and linked prep/actions.\n"
         "- Use future-oriented prep language.\n"
         "- The reader is the calendar owner; use second-person framing where useful.\n"
+        "- If the owner name/alias appears in context, rewrite it to 'you/your'.\n"
         "- Do not output birthdays, outstanding todos, or news sections.\n"
         "- Do not include any preamble or extra headers.\n\n"
         "If there are no events, output only:\n"
@@ -1270,116 +1274,67 @@ def _generate_news_section_markdown(
 ) -> str:
     topic_articles = selected_news.get("topic_articles") or []
     general_articles = selected_news.get("general_articles") or []
-    news_context = _format_news_context(topic_articles, general_articles)
-    topic_labels = _extract_topic_labels(topic_articles)
-    topic_heading_rules = ""
-    if topic_labels:
-        labels_text = "\n".join(f"  - {label}" for label in topic_labels)
-        topic_heading_rules = (
-            "- Organize topic-matched news with explicit section headings in this exact form: `### <Topic Label>`.\n"
-            "- Use these topic headings (same labels):\n"
-            f"{labels_text}\n"
-            "- After topic sections, include `### General Headlines` for non-topic items.\n"
-        )
+    sections: list[str] = ["## News & Topics"]
+    wrote_any = False
 
-    prompt = (
-        "Generate ONLY the `## News & Topics` markdown section for a daily briefing.\n"
-        "\n"
-        "STRICT REQUIREMENTS:\n"
-        "- Start with exactly: `## News & Topics`\n"
-        "- Use ONLY concrete articles from the provided context.\n"
-        "- First list topic-matched articles grouped by topic label, then list up to 5 general headlines.\n"
-        f"{topic_heading_rules}"
-        "- Each item MUST use this exact format:\n"
-        "  [Article Title](url) - one sentence explaining why it matters or what happened. (Source)\n"
-        "- Do NOT invent details or generic categories.\n"
-        "- Make each sentence high-signal and decision-useful: include one concrete implication, risk,\n"
-        "  or why-it-matters angle for the user in that sentence.\n"
-        "- Prefer business impact, regulatory implications, market shifts, security risk, or strategic\n"
-        "  relevance over vague descriptions.\n"
-        "- If no useful articles are available, output exactly:\n"
-        "  ## News & Topics\n"
-        "  No notable news today.\n"
-        "- Output markdown only, no preamble, no reasoning.\n"
-        "\n"
-        "NEWS CONTEXT:\n"
-        f"{news_context}"
-    )
+    for label, articles in _group_topic_articles(topic_articles):
+        lines = _render_news_article_lines(articles)
+        if not lines:
+            continue
+        wrote_any = True
+        sections.append(f"### {label}")
+        sections.extend(lines)
 
-    user_context = _get_daily_briefing_user_context(
-        user_email,
-        "daily briefing news section",
-    )
-    if user_context:
-        prompt = f"{prompt}\n\nCURRENT USER CONTEXT:\n{user_context}"
+    general_lines = _render_news_article_lines(general_articles)
+    if general_lines:
+        wrote_any = True
+        sections.append("### General Headlines")
+        sections.extend(general_lines)
 
-    return call_llm(
-        prompt,
-        system_prompt=(
-            "You write concise daily briefing news sections. "
-            "Output markdown only and strictly follow the requested format."
-        ),
-        temperature=0.1,
-        use_simpler_model=False,
-    ).strip()
+    if not wrote_any:
+        sections.append("No notable news today.")
+
+    return "\n".join(sections)
 
 
-def _extract_topic_labels(topic_articles: list[dict[str, Any]]) -> list[str]:
-    labels: list[str] = []
-    seen: set[str] = set()
+def _group_topic_articles(topic_articles: list[dict[str, Any]]) -> list[tuple[str, list[dict[str, Any]]]]:
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    ordered_labels: list[str] = []
     for article in topic_articles:
-        label = str((article.get("topic_matches") or [""])[0]).strip()
-        if not label:
-            continue
-        key = label.casefold()
-        if key in seen:
-            continue
-        seen.add(key)
-        labels.append(label)
-    return labels
+        label = str((article.get("topic_matches") or ["General"])[0]).strip() or "General"
+        if label not in grouped:
+            grouped[label] = []
+            ordered_labels.append(label)
+        grouped[label].append(article)
+    return [(label, grouped[label]) for label in ordered_labels]
 
 
-def _format_news_context(
-    topic_articles: list[dict[str, Any]], general_articles: list[dict[str, Any]]
-) -> str:
+def _render_news_article_lines(articles: list[dict[str, Any]]) -> list[str]:
     lines: list[str] = []
-    lines.append(f"Topic-matched articles ({len(topic_articles)}):")
-    if not topic_articles:
-        lines.append("- None")
-    else:
-        grouped: dict[str, list[dict[str, Any]]] = {}
-        for article in topic_articles:
-            label = str((article.get("topic_matches") or ["General"])[0]).strip() or "General"
-            grouped.setdefault(label, []).append(article)
-        for label, items in grouped.items():
-            lines.append(f"Topic: {label}")
-            for article in items:
-                title = article.get("title") or "Untitled"
-                source = article.get("source") or "Unknown"
-                url = (article.get("url") or "").strip()
-                summary = (article.get("summary") or "").strip()
-                lines.append(f"- {title} ({source})")
-                if url:
-                    lines.append(f"  URL: {url}")
-                if summary:
-                    lines.append(f"  Summary: {summary[:300]}")
+    for article in articles:
+        title = str(article.get("title") or "Untitled").strip()
+        url = str(article.get("url") or "").strip()
+        source = str(article.get("source") or "Unknown").strip()
+        summary = _to_single_news_sentence(str(article.get("summary") or "").strip())
 
-    lines.append("")
-    lines.append(f"General headlines ({len(general_articles)}):")
-    if not general_articles:
-        lines.append("- None")
-    for article in general_articles:
-        title = article.get("title") or "Untitled"
-        source = article.get("source") or "Unknown"
-        url = (article.get("url") or "").strip()
-        summary = (article.get("summary") or "").strip()
-        lines.append(f"- {title} ({source})")
-        if url:
-            lines.append(f"  URL: {url}")
-        if summary:
-            lines.append(f"  Summary: {summary[:300]}")
+        if not url:
+            continue
+        if not summary:
+            summary = "Notable development worth tracking for your priorities."
+        lines.append(f"- [{title}]({url}) - {summary} ({source})")
+    return lines
 
-    return "\n".join(lines)
+
+def _to_single_news_sentence(text: str) -> str:
+    cleaned = re.sub(r"\s+", " ", (text or "")).strip()
+    if not cleaned:
+        return ""
+    first = re.split(r"(?<=[.!?])\s+", cleaned, maxsplit=1)[0].strip()
+    if len(first) > 240:
+        first = first[:237].rstrip() + "..."
+    if first and first[-1] not in ".!?":
+        first += "."
+    return first
 
 
 def _build_briefing_prompt(context: dict[str, Any]) -> str:

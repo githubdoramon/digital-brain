@@ -9,6 +9,7 @@ from agents.daily_briefing.executor import (
     _build_briefing_prompt,
     _format_context_text,
     _format_event_for_analysis,
+    _generate_news_section_markdown,
     _research_event,
     _summarize_event,
     _synthesise_event_summary,
@@ -512,6 +513,56 @@ class TestBriefingPromptNews:
         prompt = _build_briefing_prompt(ctx)
         assert "## News & Topics" not in prompt
         assert "News & Topics section" not in prompt
+
+
+class TestGenerateNewsSectionMarkdown:
+    def test_keeps_topic_assignment_deterministic(self):
+        selected_news = {
+            "topic_articles": [
+                _make_news_article(
+                    title="Studio announces franchise sequel",
+                    url="https://example.com/ent-1",
+                    summary="A major studio confirmed a new release timeline.",
+                    source="reuters",
+                    topic_matches=["Entertainment"],
+                ),
+                _make_news_article(
+                    title="Satellite startup secures launch slot",
+                    url="https://example.com/space-1",
+                    summary="The company locked a key launch window for Q3.",
+                    source="bbc_world",
+                    topic_matches=["Space"],
+                ),
+            ],
+            "general_articles": [],
+        }
+
+        section = _generate_news_section_markdown(selected_news)
+
+        entertainment_block = section.split("### Entertainment", 1)[1].split("### Space", 1)[0]
+        space_block = section.split("### Space", 1)[1]
+
+        assert "Studio announces franchise sequel" in entertainment_block
+        assert "Satellite startup secures launch slot" not in entertainment_block
+        assert "Satellite startup secures launch slot" in space_block
+
+    def test_includes_general_headlines_block(self):
+        selected_news = {
+            "topic_articles": [],
+            "general_articles": [
+                _make_news_article(
+                    title="Central bank signals rate pause",
+                    url="https://example.com/econ-1",
+                    summary="Markets are repricing growth expectations after the guidance update.",
+                    source="bloomberg",
+                    topic_matches=[],
+                )
+            ],
+        }
+
+        section = _generate_news_section_markdown(selected_news)
+        assert "### General Headlines" in section
+        assert "[Central bank signals rate pause](https://example.com/econ-1)" in section
 
 
 # ---------------------------------------------------------------------------

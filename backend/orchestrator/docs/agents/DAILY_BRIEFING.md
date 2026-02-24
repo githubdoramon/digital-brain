@@ -17,7 +17,7 @@ This document captures behavior and quality rules for the daily briefing profile
 5. Generate final markdown in focused passes:
    - Event-critical sections first (`Day Overview`, `Schedule`, `Event Prep`) in an isolated prompt.
    - Build deterministic sections in code for birthdays and outstanding todos.
-   - Generate `## News & Topics` in a dedicated call from a bounded news subset.
+   - Build `## News & Topics` deterministically in code from the bounded news subset (topic grouping is code-owned).
    - Assemble final markdown in code (no full-document rewrite pass).
 6. Run summary generation (plain text 1-2 sentences).
 
