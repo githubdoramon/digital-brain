@@ -5,6 +5,7 @@ import os
 import re
 from collections.abc import Sequence
 from datetime import datetime
+from enum import Enum
 from itertools import combinations
 from typing import Any, Callable
 from uuid import uuid4
@@ -48,6 +49,11 @@ EVENT_TYPE_CHOICES = {
     "purchase",
     "health",
 }
+
+
+class EventMergeMode(str, Enum):
+    ADDITIVE = "additive"
+    AUTHORITATIVE_EXTERNAL = "authoritative_external"
 
 
 def _format_external_event_id(external_type: str, external_id: str) -> str:
@@ -176,7 +182,7 @@ def ingest_external_event(payload: ExternalEventPayload) -> str:
 
     existing_event = _get_event_by_id(normalized_event_id)
     if existing_event:
-        event = _merge_event(existing_event, event)
+        event = _merge_event(existing_event, event, mode=EventMergeMode.AUTHORITATIVE_EXTERNAL)
 
     attendee_emails = event.attendees_emails or []
     contact_cache: dict[str, tuple[str | None, bool]] = {}
@@ -715,28 +721,43 @@ def _merge_types(existing: Sequence[str], incoming: Sequence[str]) -> list[str]:
     return merged or ["generic"]
 
 
-def _merge_event(existing: dict[str, Any], incoming: EventIn) -> EventIn:
-    existing_end = existing.get("end_date")
-    incoming_end = incoming.end_date
-    merged_end = existing_end
-    if incoming_end and (not existing_end or incoming_end > existing_end):
-        merged_end = incoming_end
+def _merge_event(
+    existing: dict[str, Any],
+    incoming: EventIn,
+    *,
+    mode: EventMergeMode = EventMergeMode.ADDITIVE,
+) -> EventIn:
+    if mode == EventMergeMode.AUTHORITATIVE_EXTERNAL:
+        merged_start = incoming.start_date
+        merged_end = incoming.end_date
+        merged_place_id = incoming.place_id
+        merged_people = list(dict.fromkeys(incoming.people or []))
+        merged_summary = incoming.summary
+    else:
+        existing_end = existing.get("end_date")
+        incoming_end = incoming.end_date
+        merged_start = existing.get("start_date") or incoming.start_date
+        merged_end = existing_end
+        if incoming_end and (not existing_end or incoming_end > existing_end):
+            merged_end = incoming_end
+        merged_place_id = incoming.place_id or existing.get("place_id")
+        merged_people = list(dict.fromkeys((existing.get("people") or []) + (incoming.people or [])))
+        merged_summary = _merge_text(existing.get("summary"), incoming.summary)
 
-    merged_people = list(dict.fromkeys((existing.get("people") or []) + (incoming.people or [])))
     merged_tags = list(dict.fromkeys((existing.get("tags") or []) + (incoming.tags or [])))
     merged_raw = dict(existing.get("raw") or {})
     merged_raw.update(incoming.raw or {})
 
     return EventIn(
         id=existing.get("id") or incoming.id,
-        startDate=existing.get("start_date") or incoming.start_date,
+        startDate=merged_start,
         endDate=merged_end,
-        placeId=incoming.place_id or existing.get("place_id"),
+        placeId=merged_place_id,
         people=merged_people,
         tags=merged_tags,
         types=_merge_types(existing.get("types") or [], incoming.types or []),
         title=incoming.title or existing.get("title") or "",
-        summary=_merge_text(existing.get("summary"), incoming.summary),
+        summary=merged_summary,
         raw=merged_raw,
         externalId=incoming.external_id or existing.get("external_id"),
     )
