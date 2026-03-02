@@ -1,5 +1,8 @@
 from datetime import datetime
 
+import pytest
+from fastapi import HTTPException
+
 from commands.event import confirm_event_command
 from schemas import EventCommandConfirmation
 
@@ -239,3 +242,53 @@ def test_confirm_event_persists_pending_contact_place_link(monkeypatch):
             "confidence": "high",
         }
     ]
+
+
+def test_confirm_event_applies_end_when_modification(monkeypatch):
+    command_data = _base_command_data()
+    captured_event = {"event": None}
+
+    monkeypatch.setattr("commands.event.get_command_data", lambda _preview_id: command_data)
+    monkeypatch.setattr("commands.event.delete_command_data", lambda _preview_id: None)
+    monkeypatch.setattr(
+        "commands.event.clear_pending_event_by_preview_id", lambda _preview_id: None
+    )
+    monkeypatch.setattr("commands.event._persist_event_resolved", lambda _preview_id, _status: None)
+    monkeypatch.setattr(
+        "commands.event.events_service.ingest_event",
+        lambda event_in: captured_event.__setitem__("event", event_in),
+    )
+
+    payload = EventCommandConfirmation(
+        preview_id="event:preview:end-when",
+        confirmed=True,
+        modifications={"end_when": "2026-02-18T19:15:00"},
+    )
+    result = confirm_event_command(payload, "user@example.com")
+
+    assert result.success is True
+    assert captured_event["event"] is not None
+    assert captured_event["event"].end_date == datetime(2026, 2, 18, 19, 15)
+
+
+def test_confirm_event_rejects_end_when_before_start(monkeypatch):
+    command_data = _base_command_data()
+
+    monkeypatch.setattr("commands.event.get_command_data", lambda _preview_id: command_data)
+    monkeypatch.setattr("commands.event.delete_command_data", lambda _preview_id: None)
+    monkeypatch.setattr(
+        "commands.event.clear_pending_event_by_preview_id", lambda _preview_id: None
+    )
+    monkeypatch.setattr("commands.event._persist_event_resolved", lambda _preview_id, _status: None)
+
+    payload = EventCommandConfirmation(
+        preview_id="event:preview:end-before-start",
+        confirmed=True,
+        modifications={"end_when": "2026-02-18T17:15:00"},
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        confirm_event_command(payload, "user@example.com")
+
+    assert exc_info.value.status_code == 400
+    assert "after the start" in str(exc_info.value.detail)

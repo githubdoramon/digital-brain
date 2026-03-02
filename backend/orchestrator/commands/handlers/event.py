@@ -196,12 +196,16 @@ def _format_existing_extraction_for_prompt(existing: dict[str, Any] | None) -> s
     when_value = existing.get("when")
     if isinstance(when_value, datetime):
         when_value = when_value.isoformat()
+    end_when_value = existing.get("end_when")
+    if isinstance(end_when_value, datetime):
+        end_when_value = end_when_value.isoformat()
 
     return (
         "Existing extraction (use as base, update only if new details override):\n"
         f"- title: {existing.get('title')!r}\n"
         f"- summary: {existing.get('summary')!r}\n"
         f"- when: {when_value!r}\n"
+        f"- end_when: {end_when_value!r}\n"
         f"- where: {existing.get('where')!r}\n"
         f"- documents: {existing.get('documents')!r}\n"
         f"- tags: {existing.get('tags')!r}\n"
@@ -532,11 +536,12 @@ Event description: "{message}"
 
 Extract the following information:
 1. **What happened**: A brief title (5-10 words) and detailed summary
-2. **When**: Parse date/time. If relative (e.g., "yesterday", "last Tuesday"), convert to actual datetime using current context. If not mentioned, use current time.
-3. **Where**: Location/place name (if mentioned)
-4. **Documents**: References to documents/files (if mentioned)
-5. **Tags**: Relevant tags for categorization. Consider major categories like: {tag_examples}, etc.
-6. **Event types**: Choose from: generic, meeting, communication, task, creation, consumption, travel, personal, system, financial, observation, interaction, education, celebration, purchase, health
+2. **When**: Parse event start date/time. Time is optional. Return ISO date (YYYY-MM-DD) when only date is known, or ISO datetime when time is known.
+3. **End**: Parse optional end date/time if present. Return null if not mentioned.
+4. **Where**: Location/place name (if mentioned)
+5. **Documents**: References to documents/files (if mentioned)
+6. **Tags**: Relevant tags for categorization. Consider major categories like: {tag_examples}, etc.
+7. **Event types**: Choose from: generic, meeting, communication, task, creation, consumption, travel, personal, system, financial, observation, interaction, education, celebration, purchase, health
 
 People extraction is handled separately. Do NOT include any people/person list.
 
@@ -554,7 +559,8 @@ Return ONLY valid JSON in this exact format:
 {need_user_input_template}
     "title": "Brief title",
     "summary": "Detailed description",
-    "when": "ISO 8601 datetime or null",
+    "when": "ISO 8601 date/datetime or null",
+    "end_when": "ISO 8601 datetime or null",
     "where": "Location name or null",
     "documents": [],
     "tags": ["tag1", "tag2"],
@@ -586,19 +592,25 @@ Return ONLY valid JSON in this exact format:
             ),
         )
 
-        # Parse datetime if provided
-        when = None
-        if extracted.get("when"):
+        def _parse_optional_datetime(raw: Any, field_name: str) -> datetime | None:
+            if not raw:
+                return None
             try:
-                when = datetime.fromisoformat(extracted["when"].replace("Z", "+00:00"))
-                logger.debug("[event_extraction] Parsed datetime: %s", when)
-            except (ValueError, AttributeError) as e:
+                parsed = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+                logger.debug("[event_extraction] Parsed %s: %s", field_name, parsed)
+                return parsed
+            except (ValueError, AttributeError) as exc:
                 logger.warning(
-                    "[event_extraction] Failed to parse datetime '%s': %s",
-                    extracted.get("when"),
-                    e,
-                    exc_info=e,
+                    "[event_extraction] Failed to parse %s '%s': %s",
+                    field_name,
+                    raw,
+                    exc,
+                    exc_info=exc,
                 )
+                return None
+
+        when = _parse_optional_datetime(extracted.get("when"), "when")
+        end_when = _parse_optional_datetime(extracted.get("end_when"), "end_when")
 
         need_user_input = normalize_need_user_input(extracted.get("need_user_input"))
 
@@ -607,6 +619,7 @@ Return ONLY valid JSON in this exact format:
             "title": extracted.get("title", message[:100]),
             "summary": extracted.get("summary", message),
             "when": when,
+            "end_when": end_when,
             "where": extracted.get("where"),
             "who": [],
             "documents": extracted.get("documents", []),
@@ -619,6 +632,7 @@ Return ONLY valid JSON in this exact format:
                 "title",
                 "summary",
                 "when",
+                "end_when",
                 "where",
                 "documents",
                 "tags",
@@ -646,6 +660,7 @@ Return ONLY valid JSON in this exact format:
             "title": message[:100],
             "summary": message,
             "when": None,
+            "end_when": None,
             "where": None,
             "who": [],
             "documents": [],

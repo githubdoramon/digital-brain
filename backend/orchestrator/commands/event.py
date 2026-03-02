@@ -171,6 +171,21 @@ def _normalize_event_modifications(raw: Any) -> dict[str, Any]:
                     status_code=400,
                     detail=f"Invalid event modification 'when': {when_text}",
                 ) from exc
+    if "end_when" in raw:
+        end_when_raw = raw.get("end_when")
+        if end_when_raw in (None, ""):
+            normalized["end_when"] = None
+        else:
+            end_when_text = str(end_when_raw).strip()
+            try:
+                normalized["end_when"] = datetime.fromisoformat(
+                    end_when_text.replace("Z", "+00:00")
+                )
+            except ValueError as exc:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Invalid event modification 'end_when': {end_when_text}",
+                ) from exc
     if "tags" in raw:
         normalized["tags"] = _string_list_from_modification(raw.get("tags"))
     if "types" in raw:
@@ -277,6 +292,8 @@ def confirm_event_command(
         extracted["summary"] = normalized_modifications["summary"]
     if "when" in normalized_modifications:
         extracted["when"] = normalized_modifications["when"]
+    if "end_when" in normalized_modifications:
+        extracted["end_when"] = normalized_modifications["end_when"]
     if "where" in normalized_modifications:
         extracted["where"] = normalized_modifications["where"]
     if "tags" in normalized_modifications:
@@ -545,11 +562,19 @@ def confirm_event_command(
 
         event_id = f"event:{uuid4().hex}"
         when = extracted.get("when")
+        end_when = extracted.get("end_when")
+        start_when = when if when else datetime.now()
+
+        if end_when and end_when < start_when:
+            raise HTTPException(
+                status_code=400,
+                detail="Event end date/time must be after the start date/time.",
+            )
 
         event_in = EventIn(
             id=event_id,
-            startDate=when if when else datetime.now(),
-            endDate=None,
+            startDate=start_when,
+            endDate=end_when,
             placeId=place_id,
             people=all_contact_ids,
             tags=extracted.get("tags", []),
@@ -624,6 +649,8 @@ def confirm_event_command(
             created_groups=created_groups,
         )
 
+    except HTTPException:
+        raise
     except Exception as exc:
         logger.exception("[event_confirm] Failed to create event: %s", exc)
         raise HTTPException(status_code=500, detail=f"Failed to create event: {str(exc)}")

@@ -126,6 +126,7 @@ function toDraft(event: EventDetail, contactMap: Map<string, string>): EventDraf
     title: String(event.title || '').trim(),
     summary: String(event.summary || '').trim(),
     when: String(event.start_date || '').trim(),
+    endWhen: String(event.end_date || '').trim(),
     where: placeLabel,
     placeId: event.place?.place_id || null,
     tags: Array.isArray(event.tags) ? event.tags.map((tag) => String(tag || '').trim()).filter(Boolean) : [],
@@ -259,8 +260,23 @@ function EventDetailView({ eventId, editable }: EventDetailViewProps) {
       const nextStartDate = nextDraft.when.trim() || String(event.start_date || '').trim();
       const parsedStart = new Date(nextStartDate);
       if (!nextStartDate || Number.isNaN(parsedStart.getTime())) {
-        Alert.alert('Date required', 'Select a valid date and time before saving this event.');
+        Alert.alert('Date required', 'Select a valid date before saving this event.');
         return;
+      }
+
+      const nextEndDate = nextDraft.endWhen.trim();
+      let parsedEndIso: string | null = null;
+      if (nextEndDate) {
+        const parsedEnd = new Date(nextEndDate);
+        if (Number.isNaN(parsedEnd.getTime())) {
+          Alert.alert('Invalid end date', 'Select a valid end date and time before saving this event.');
+          return;
+        }
+        if (parsedEnd.getTime() < parsedStart.getTime()) {
+          Alert.alert('Invalid date range', 'End date and time must be after the start date.');
+          return;
+        }
+        parsedEndIso = parsedEnd.toISOString();
       }
 
       setIsSaving(true);
@@ -270,7 +286,7 @@ function EventDetailView({ eventId, editable }: EventDetailViewProps) {
           body: JSON.stringify({
             id: eventId,
             startDate: parsedStart.toISOString(),
-            endDate: event.end_date || null,
+            endDate: parsedEndIso,
             placeId: nextDraft.placeId || null,
             people: nextDraft.participants.map((participant) => participant.contactId),
             tags: nextDraft.tags,
@@ -301,6 +317,7 @@ function EventDetailView({ eventId, editable }: EventDetailViewProps) {
         title: '',
         summary: '',
         when: '',
+        endWhen: '',
         where: '',
         placeId: null,
         tags: [],

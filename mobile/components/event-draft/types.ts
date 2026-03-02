@@ -22,6 +22,7 @@ export type EventDraft = {
   title: string;
   summary: string;
   when: string;
+  endWhen: string;
   where: string;
   placeId?: string | null;
   tags: string[];
@@ -33,6 +34,7 @@ export type EventDraftModifications = {
   title?: string;
   summary?: string;
   when?: string | null;
+  end_when?: string | null;
   where?: string;
   tags?: string[];
   types?: string[];
@@ -43,6 +45,7 @@ export const EMPTY_EVENT_DRAFT: EventDraft = {
   title: '',
   summary: '',
   when: '',
+  endWhen: '',
   where: '',
   placeId: null,
   tags: [],

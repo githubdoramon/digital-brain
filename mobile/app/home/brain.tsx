@@ -107,6 +107,7 @@ type EventCommandResultPayload = {
     title?: unknown;
     summary?: unknown;
     when?: unknown;
+    end_when?: unknown;
     where?: unknown;
     tags?: unknown;
     types?: unknown;
@@ -372,6 +373,7 @@ function buildEventDraft(commandResult: CommandResult | undefined, previewId: st
     title: textValue(extracted.title),
     summary: textValue(extracted.summary),
     when: textValue(extracted.when),
+    endWhen: textValue(extracted.end_when),
     where: textValue(extracted.where),
     tags: stringArrayValue(extracted.tags),
     types: stringArrayValue(extracted.types),
@@ -403,6 +405,12 @@ function applyDraftModifications(
         : modifications.when === undefined
           ? baseDraft.when
           : modifications.when,
+    endWhen:
+      modifications.end_when === null
+        ? ''
+        : modifications.end_when === undefined
+          ? baseDraft.endWhen
+          : modifications.end_when,
     where: modifications.where ?? baseDraft.where,
     tags: modifications.tags ?? baseDraft.tags,
     types: modifications.types ?? baseDraft.types,
@@ -427,6 +435,9 @@ function buildDraftModifications(baseDraft: EventDraft, nextDraft: EventDraft): 
   if (normalizedDraftValue(baseDraft.when) !== normalizedDraftValue(nextDraft.when)) {
     modifications.when = normalizedDraftValue(nextDraft.when) || null;
   }
+  if (normalizedDraftValue(baseDraft.endWhen) !== normalizedDraftValue(nextDraft.endWhen)) {
+    modifications.end_when = normalizedDraftValue(nextDraft.endWhen) || null;
+  }
   if (normalizedDraftValue(baseDraft.where) !== normalizedDraftValue(nextDraft.where)) {
     modifications.where = normalizedDraftValue(nextDraft.where);
   }
@@ -450,6 +461,7 @@ function modificationSummary(modifications: EventDraftModifications): string {
   if ('title' in modifications) labels.push('title');
   if ('summary' in modifications) labels.push('summary');
   if ('when' in modifications) labels.push('when');
+  if ('end_when' in modifications) labels.push('end');
   if ('where' in modifications) labels.push('where');
   if ('tags' in modifications) labels.push('tags');
   if ('types' in modifications) labels.push('types');
@@ -499,6 +511,7 @@ function updateEventPreviewCard(
     `Title: ${draft.title.trim() || 'Untitled event'}`,
     `Summary: ${draft.summary.trim() || 'No summary provided.'}`,
     `When: ${formatEventPreviewWhen(draft.when)}`,
+    `Ends: ${formatEventPreviewWhen(draft.endWhen)}`,
     `Where: ${draft.where.trim() || 'Not specified'}`,
     `Who: ${participants.length > 0 ? participants.join(', ') : 'No participants detected'}`,
     `Tags: ${draft.tags.length > 0 ? draft.tags.join(', ') : 'None'}`,

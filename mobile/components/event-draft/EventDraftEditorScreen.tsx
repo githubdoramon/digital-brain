@@ -79,6 +79,64 @@ function formatWhen(value: string) {
   });
 }
 
+function splitWhen(value: string): { date: string; time: string } {
+  const trimmed = value.trim();
+  if (!trimmed) return { date: '', time: '' };
+  const datetimeMatch = trimmed.match(/^(\d{4}-\d{2}-\d{2})[T\s](\d{2}:\d{2})/);
+  if (datetimeMatch) {
+    return { date: datetimeMatch[1], time: datetimeMatch[2] };
+  }
+  const dateMatch = trimmed.match(/^(\d{4}-\d{2}-\d{2})$/);
+  if (dateMatch) {
+    return { date: dateMatch[1], time: '' };
+  }
+
+  const parsed = new Date(trimmed.replace('Z', '+00:00'));
+  if (Number.isNaN(parsed.getTime())) {
+    return { date: '', time: '' };
+  }
+
+  const year = parsed.getFullYear();
+  const month = String(parsed.getMonth() + 1).padStart(2, '0');
+  const day = String(parsed.getDate()).padStart(2, '0');
+  const hours = String(parsed.getHours()).padStart(2, '0');
+  const minutes = String(parsed.getMinutes()).padStart(2, '0');
+  return {
+    date: `${year}-${month}-${day}`,
+    time: `${hours}:${minutes}`,
+  };
+}
+
+function composeWhen(dateValue: string, timeValue: string): string {
+  const date = dateValue.trim();
+  const time = timeValue.trim();
+  if (!date) return '';
+  return time ? `${date}T${time}` : date;
+}
+
+function formatDateOnly(value: string): string {
+  const date = value.trim();
+  if (!date) return 'Pick date';
+  const parsed = new Date(`${date}T00:00:00`);
+  if (Number.isNaN(parsed.getTime())) return date;
+  return parsed.toLocaleDateString(undefined, {
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+  });
+}
+
+function formatTimeOnly(value: string): string {
+  const time = value.trim();
+  if (!time) return 'Add time (optional)';
+  const parsed = new Date(`2000-01-01T${time}:00`);
+  if (Number.isNaN(parsed.getTime())) return time;
+  return parsed.toLocaleTimeString(undefined, {
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+}
+
 function floatingOffset(insetBottom: number, keyboardHeight: number) {
   const keyboardInset =
     Platform.OS === 'ios' ? Math.max(0, keyboardHeight - insetBottom) : keyboardHeight;
@@ -125,10 +183,14 @@ export function EventDetailsForm({
   const scrollY = React.useRef(new Animated.Value(0)).current;
   const [keyboardHeight, setKeyboardHeight] = React.useState(0);
   const [showDatePicker, setShowDatePicker] = React.useState(false);
+  const [showStartTimePicker, setShowStartTimePicker] = React.useState(false);
+  const [showEndDateTimePicker, setShowEndDateTimePicker] = React.useState(false);
 
   const [title, setTitle] = React.useState(initialDraft.title);
   const [summary, setSummary] = React.useState(initialDraft.summary);
-  const [when, setWhen] = React.useState(initialDraft.when);
+  const [whenDate, setWhenDate] = React.useState(() => splitWhen(initialDraft.when).date);
+  const [whenTime, setWhenTime] = React.useState(() => splitWhen(initialDraft.when).time);
+  const [endWhen, setEndWhen] = React.useState(initialDraft.endWhen || '');
   const [where, setWhere] = React.useState(initialDraft.where);
   const [selectedPlaceId, setSelectedPlaceId] = React.useState<string | null>(
     initialDraft.placeId || null,
@@ -141,9 +203,12 @@ export function EventDetailsForm({
   );
 
   React.useEffect(() => {
+    const nextWhen = splitWhen(initialDraft.when);
     setTitle(initialDraft.title);
     setSummary(initialDraft.summary);
-    setWhen(initialDraft.when);
+    setWhenDate(nextWhen.date);
+    setWhenTime(nextWhen.time);
+    setEndWhen(initialDraft.endWhen || '');
     setWhere(initialDraft.where);
     setSelectedPlaceId(initialDraft.placeId || null);
     setTagsInput(listToInput(initialDraft.tags));
@@ -231,14 +296,26 @@ export function EventDetailsForm({
     () => ({
       title: title.trim(),
       summary: summary.trim(),
-      when: when.trim(),
+      when: composeWhen(whenDate, whenTime),
+      endWhen: endWhen.trim(),
       where: where.trim(),
       placeId: selectedPlaceId,
       tags: inputToList(tagsInput),
       types: inputToList(typesInput),
       participants: selectedParticipants,
     }),
-    [selectedParticipants, selectedPlaceId, summary, tagsInput, title, typesInput, when, where],
+    [
+      endWhen,
+      selectedParticipants,
+      selectedPlaceId,
+      summary,
+      tagsInput,
+      title,
+      typesInput,
+      whenDate,
+      whenTime,
+      where,
+    ],
   );
 
   const readOnlyParticipants = selectedParticipants;
@@ -310,19 +387,29 @@ export function EventDetailsForm({
               <>
                 <Pressable
                   accessibilityRole="button"
-                  accessibilityLabel="Select event time"
+                  accessibilityLabel="Select event date"
                   onPress={() => setShowDatePicker(true)}
                   style={({ pressed }) => [styles.dateField, pressed && styles.dateFieldPressed]}
                 >
-                  <Text style={when ? styles.dateValue : styles.datePlaceholder}>
-                    {when ? formatWhen(when) : 'Pick date and time'}
+                  <Text style={whenDate ? styles.dateValue : styles.datePlaceholder}>
+                    {formatDateOnly(whenDate)}
                   </Text>
                 </Pressable>
-                {when ? (
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel="Select event time"
+                  onPress={() => setShowStartTimePicker(true)}
+                  style={({ pressed }) => [styles.dateField, pressed && styles.dateFieldPressed]}
+                >
+                  <Text style={whenTime ? styles.dateValue : styles.datePlaceholder}>
+                    {formatTimeOnly(whenTime)}
+                  </Text>
+                </Pressable>
+                {whenTime ? (
                   <Pressable
                     accessibilityRole="button"
                     accessibilityLabel="Clear event time"
-                    onPress={() => setWhen('')}
+                    onPress={() => setWhenTime('')}
                     style={({ pressed }) => [styles.clearLink, pressed && styles.clearLinkPressed]}
                   >
                     <Text style={styles.clearLinkText}>Clear time</Text>
@@ -330,7 +417,37 @@ export function EventDetailsForm({
                 ) : null}
               </>
             ) : (
-              <Text style={styles.readText}>{formatWhen(when)}</Text>
+              <Text style={styles.readText}>{formatWhen(composeWhen(whenDate, whenTime))}</Text>
+            )}
+          </Card>
+
+          <Card style={styles.card}>
+            <Text style={styles.label}>Ends</Text>
+            {editable ? (
+              <>
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel="Select event end date and time"
+                  onPress={() => setShowEndDateTimePicker(true)}
+                  style={({ pressed }) => [styles.dateField, pressed && styles.dateFieldPressed]}
+                >
+                  <Text style={endWhen ? styles.dateValue : styles.datePlaceholder}>
+                    {endWhen ? formatWhen(endWhen) : 'Add end date and time (optional)'}
+                  </Text>
+                </Pressable>
+                {endWhen ? (
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel="Clear event end date and time"
+                    onPress={() => setEndWhen('')}
+                    style={({ pressed }) => [styles.clearLink, pressed && styles.clearLinkPressed]}
+                  >
+                    <Text style={styles.clearLinkText}>Clear end date and time</Text>
+                  </Pressable>
+                ) : null}
+              </>
+            ) : (
+              <Text style={styles.readText}>{formatWhen(endWhen)}</Text>
             )}
           </Card>
 
@@ -513,12 +630,38 @@ export function EventDetailsForm({
       {editable && showDatePicker ? (
         <UiDirectiveDateTimePickerSheet
           visible
-          mode="datetime"
-          value={when || undefined}
+          mode="date"
+          value={whenDate || undefined}
           onClose={() => setShowDatePicker(false)}
           onConfirm={(nextValue) => {
-            setWhen(nextValue);
+            setWhenDate(nextValue);
             setShowDatePicker(false);
+          }}
+        />
+      ) : null}
+
+      {editable && showStartTimePicker ? (
+        <UiDirectiveDateTimePickerSheet
+          visible
+          mode="time"
+          value={whenTime || undefined}
+          onClose={() => setShowStartTimePicker(false)}
+          onConfirm={(nextValue) => {
+            setWhenTime(nextValue);
+            setShowStartTimePicker(false);
+          }}
+        />
+      ) : null}
+
+      {editable && showEndDateTimePicker ? (
+        <UiDirectiveDateTimePickerSheet
+          visible
+          mode="datetime"
+          value={endWhen || undefined}
+          onClose={() => setShowEndDateTimePicker(false)}
+          onConfirm={(nextValue) => {
+            setEndWhen(nextValue);
+            setShowEndDateTimePicker(false);
           }}
         />
       ) : null}

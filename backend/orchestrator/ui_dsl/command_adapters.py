@@ -119,6 +119,7 @@ def _event_confirmation_directive(command_result: dict[str, Any]) -> dict[str, A
         f"Title: {_normalized_text(extracted.get('title')) or 'Untitled event'}",
         f"Summary: {_normalized_text(extracted.get('summary')) or 'No summary provided.'}",
         f"When: {_format_when(extracted.get('when'))}",
+        f"Ends: {_format_when(extracted.get('end_when'))}",
         f"Where: {_normalized_text(extracted.get('where')) or 'Not specified'}",
         f"Who: {_joined_or_default(_string_list(extracted.get('who')), 'No participants detected')}",
         f"Tags: {_joined_or_default(_string_list(extracted.get('tags')), 'None')}",

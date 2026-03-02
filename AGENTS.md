@@ -326,6 +326,34 @@ npm run dev
 docker compose up --build
 ```
 
+### Python Virtualenv (backend)
+
+- Always run backend Python commands inside `backend/orchestrator/.venv`.
+- If `.venv` does not exist yet, create and bootstrap it:
+
+```bash
+cd backend/orchestrator
+python3 -m venv .venv
+.venv/bin/pip install -r requirements.txt
+.venv/bin/pip install -r requirements-dev.txt
+```
+
+- You can either activate the venv, or run tools directly from it:
+
+```bash
+# Option 1: activate shell
+cd backend/orchestrator
+source .venv/bin/activate
+pytest tests/commands/test_event_confirm_groups.py
+
+# Option 2: explicit venv binaries (no activation)
+cd backend/orchestrator
+.venv/bin/python -m pytest tests/commands/test_event_confirm_groups.py
+.venv/bin/uvicorn app:api --reload
+```
+
+- Avoid using global/system `python`, `pip`, `pytest`, or `uvicorn` for backend work in this repo.
+
 ### Test Commands
 
 - Always run backend tests inside `backend/orchestrator/.venv`.
