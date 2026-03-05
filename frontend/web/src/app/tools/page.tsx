@@ -12,6 +12,7 @@ type ToolRunResponse = {
   normalized_args: Record<string, unknown>;
   result: Record<string, unknown>;
   duration_ms: number;
+  llm_model?: string | null;
 };
 
 type MemoryResult = {
@@ -170,6 +171,7 @@ export default function ToolsPage() {
   const [resolveForm, setResolveForm] = useState({
     text: "",
   });
+  const [llmModel, setLlmModel] = useState("");
   const [response, setResponse] = useState<ToolRunResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
@@ -262,6 +264,7 @@ export default function ToolsPage() {
       const result = await api.post<ToolRunResponse>("/tools/run", {
         tool_name: tool,
         args,
+        llm_model: llmModel.trim() || undefined,
       });
       setResponse(result);
     } catch (err) {
@@ -297,6 +300,23 @@ export default function ToolsPage() {
               </option>
             ))}
           </select>
+        </div>
+
+        <div style={{ display: "grid", gap: "6px" }}>
+          <label htmlFor="llmModel" style={{ fontWeight: 600, fontSize: "0.9rem" }}>
+            LLM model override (optional)
+          </label>
+          <input
+            id="llmModel"
+            type="text"
+            value={llmModel}
+            onChange={(event) => setLlmModel(event.target.value)}
+            placeholder="gpt-4.1-mini"
+            style={{ padding: "10px 12px", borderRadius: "8px", border: "1px solid #d7d7d7" }}
+          />
+          <span style={{ fontSize: "0.8rem", color: "#666" }}>
+            Leave empty to use the default model configured in environment variables.
+          </span>
         </div>
 
         {tool === "search_memories" ? (
@@ -596,6 +616,7 @@ export default function ToolsPage() {
             <strong style={{ display: "block", marginBottom: "6px" }}>Execution summary</strong>
             <div style={{ display: "grid", gap: "4px", fontSize: "0.9rem", color: "#334155" }}>
               <span>Tool: {response.tool_name}</span>
+              <span>LLM model: {response.llm_model || "default (.env)"}</span>
               <span>Duration: {response.duration_ms.toFixed(1)} ms</span>
             </div>
           </div>

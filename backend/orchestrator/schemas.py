@@ -215,6 +215,7 @@ class DocumentSearchIn(BaseModel):
 class ToolRunIn(BaseModel):
     tool_name: str
     args: dict[str, Any] = Field(default_factory=dict)
+    llm_model: str | None = None
 
 
 class ToolRunOut(BaseModel):
@@ -223,6 +224,7 @@ class ToolRunOut(BaseModel):
     normalized_args: dict[str, Any] = Field(default_factory=dict)
     result: dict[str, Any] = Field(default_factory=dict)
     duration_ms: float
+    llm_model: str | None = None
 
 
 class PushNotificationsUpdateIn(BaseModel):

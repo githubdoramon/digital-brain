@@ -23,6 +23,8 @@ Design principles:
 import inspect
 import os
 import re
+from contextlib import contextmanager
+from contextvars import ContextVar
 from typing import Any, Optional
 
 import contact_groups as contact_groups_service
@@ -40,6 +42,26 @@ from ui_dsl.clarification import (
 logger = get_runtime_logger(__name__)
 
 EMAIL_DOMAIN_PATTERN = re.compile(r"@([a-z0-9][a-z0-9.-]*\.[a-z]{2,})", re.IGNORECASE)
+_CONTACT_RESOLUTION_MODEL_OVERRIDE: ContextVar[str | None] = ContextVar(
+    "contact_resolution_model_override", default=None
+)
+
+
+@contextmanager
+def use_contact_resolution_model(model: str | None):
+    normalized_model = str(model or "").strip() or None
+    token = _CONTACT_RESOLUTION_MODEL_OVERRIDE.set(normalized_model)
+    try:
+        yield
+    finally:
+        _CONTACT_RESOLUTION_MODEL_OVERRIDE.reset(token)
+
+
+def _call_contact_resolution_llm_json(prompt: str, **kwargs: Any) -> dict[str, Any]:
+    model_override = _CONTACT_RESOLUTION_MODEL_OVERRIDE.get()
+    if model_override and "model" not in kwargs:
+        kwargs["model"] = model_override
+    return call_llm_json(prompt, **kwargs)
 
 
 def _with_clarification_guidelines(prompt: str) -> str:
@@ -696,7 +718,7 @@ Return ONLY a valid JSON, nothing more, no other text or explanation:
     for attempt in range(max_retries):
         try:
             # Use low temperature for consistent structured output
-            result = call_llm_json(
+            result = _call_contact_resolution_llm_json(
                 prompt, timeout=60, temperature=0.1, top_p=0.9, use_simpler_model=True
             )
             people = result.get("people", [])
@@ -2057,7 +2079,7 @@ Return ONLY valid JSON:
     prompt = _with_clarification_guidelines(prompt)
 
     try:
-        llm_result = call_llm_json(
+        llm_result = _call_contact_resolution_llm_json(
             prompt, timeout=60, temperature=0.1, top_p=0.9, use_simpler_model=True
         )
     except Exception:
@@ -2381,7 +2403,7 @@ Return ONLY a valid JSON, nothing more, no other text or explanation:
 
     try:
         # Use low temperature for consistent disambiguation
-        llm_response = call_llm_json(
+        llm_response = _call_contact_resolution_llm_json(
             prompt, timeout=60, temperature=0.1, top_p=0.9, use_simpler_model=True
         )
 
@@ -2446,7 +2468,7 @@ Return ONLY a valid JSON, nothing more, no other text or explanation:
 
     try:
         # Use low temperature for consistent profession inference
-        result = call_llm_json(
+        result = _call_contact_resolution_llm_json(
             prompt, timeout=20, temperature=0.1, top_p=0.9, use_simpler_model=True
         )
         return result.get("profession")
@@ -2500,7 +2522,7 @@ Return ONLY valid JSON:
     prompt = _with_clarification_guidelines(prompt)
 
     try:
-        result = call_llm_json(
+        result = _call_contact_resolution_llm_json(
             prompt, timeout=60, temperature=0.1, top_p=0.9, use_simpler_model=True
         )
     except Exception:
@@ -2572,7 +2594,7 @@ Return ONLY a valid JSON:
     prompt = _with_clarification_guidelines(prompt)
 
     try:
-        result = call_llm_json(
+        result = _call_contact_resolution_llm_json(
             prompt, timeout=20, temperature=0.1, top_p=0.9, use_simpler_model=True
         )
     except Exception:

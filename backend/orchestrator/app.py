@@ -2098,6 +2098,7 @@ def run_tool(payload: ToolRunIn, user: dict = Depends(get_current_user)):
         raise HTTPException(status_code=500, detail=f"Tool handler not found: {payload.tool_name}")
 
     state = AgentState(goal=f"tool_run:{payload.tool_name}")
+    llm_model_override = str(payload.llm_model or "").strip() or None
     search_limit = normalized_args.get("limit")
     if not isinstance(search_limit, int):
         search_limit = 30
@@ -2111,6 +2112,7 @@ def run_tool(payload: ToolRunIn, user: dict = Depends(get_current_user)):
             search_limit=search_limit,
             user_email=user_email,
             conversation_history=None,
+            llm_model=llm_model_override,
         )
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Tool execution failed: {exc}") from exc
@@ -2122,6 +2124,7 @@ def run_tool(payload: ToolRunIn, user: dict = Depends(get_current_user)):
         normalized_args=normalized_args,
         result=result,
         duration_ms=duration_ms,
+        llm_model=llm_model_override,
     )
 
 

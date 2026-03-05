@@ -84,6 +84,9 @@ def handle_resolve_contacts(
         return {"error": "user_email is required"}
 
     payload: dict[str, Any] = {"text": text, "user_email": runtime_email}
+    llm_model = str(kwargs.get("llm_model") or "").strip()
+    if llm_model:
+        payload["llm_model"] = llm_model
     if conversation_history:
         payload["conversation_messages"] = conversation_history[-8:]
 
