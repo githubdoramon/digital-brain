@@ -2099,6 +2099,12 @@ def run_tool(payload: ToolRunIn, user: dict = Depends(get_current_user)):
 
     state = AgentState(goal=f"tool_run:{payload.tool_name}")
     llm_model_override = str(payload.llm_model or "").strip() or None
+    logger.info(
+        "[tools/run] Running tool=%s user=%s llm_model=%s",
+        payload.tool_name,
+        user_email,
+        llm_model_override or "default",
+    )
     search_limit = normalized_args.get("limit")
     if not isinstance(search_limit, int):
         search_limit = 30

@@ -61,6 +61,11 @@ def _call_contact_resolution_llm_json(prompt: str, **kwargs: Any) -> dict[str, A
     model_override = _CONTACT_RESOLUTION_MODEL_OVERRIDE.get()
     if model_override and "model" not in kwargs:
         kwargs["model"] = model_override
+    if model_override:
+        logger.debug(
+            "[contact_resolver] Using model override for LLM call: %s",
+            model_override,
+        )
     return call_llm_json(prompt, **kwargs)
 
 

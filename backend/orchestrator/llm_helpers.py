@@ -130,16 +130,45 @@ def _post_chat_completion(
     timeout: Optional[int] = None,
 ) -> dict[str, Any]:
     base_url = _get_required_setting("LLM_BASE_URL", LLM_BASE_URL)
+    resolved_timeout = timeout or LLM_TIMEOUT
     last_exception: Exception | None = None
+    model_name = str(payload.get("model") or "").strip() or "(unset)"
+    messages = payload.get("messages")
+    message_count = len(messages) if isinstance(messages, list) else 0
+
+    def _preview_response_text(response: requests.Response | None) -> str:
+        if response is None:
+            return ""
+        text = (response.text or "").strip().replace("\n", " ")
+        return text[:400]
+
+    def _to_shell_single_quoted(value: str) -> str:
+        return "'" + value.replace("'", "'\"'\"'") + "'"
+
+    redacted_headers = dict(get_llm_headers())
+    if "Authorization" in redacted_headers:
+        redacted_headers["Authorization"] = "Bearer ***"
+    request_url = f"{base_url}/chat/completions"
+    payload_json = json.dumps(payload, ensure_ascii=False)
+    curl_command = (
+        "curl -sS -X POST "
+        f"{_to_shell_single_quoted(request_url)} "
+        "-H 'Content-Type: application/json' "
+        f"-H {_to_shell_single_quoted(f\"Authorization: {redacted_headers.get('Authorization', '')}\")} "
+        f"-d {_to_shell_single_quoted(payload_json)}"
+    )
+    logger.info("[llm_helpers] Equivalent curl request: %s", curl_command)
 
     for attempt in range(1, LLM_MAX_RETRIES + 1):
+        started_at = time.perf_counter()
         try:
             response = requests.post(
                 f"{base_url}/chat/completions",
                 headers=get_llm_headers(),
                 json=payload,
-                timeout=timeout or LLM_TIMEOUT,
+                timeout=resolved_timeout,
             )
+            elapsed_ms = (time.perf_counter() - started_at) * 1000
             if response.status_code and _is_retryable_status(response.status_code):
                 last_exception = requests.HTTPError(
                     f"HTTP {response.status_code}", response=response
@@ -147,11 +176,16 @@ def _post_chat_completion(
                 if attempt < LLM_MAX_RETRIES:
                     delay = LLM_RETRY_BASE_DELAY * (2 ** (attempt - 1))
                     logger.warning(
-                        "[llm_helpers] LLM request failed (HTTP %s), retrying in %.1fs (attempt %d/%d)",
+                        "[llm_helpers] LLM request failed (HTTP %s) for model=%s in %.1fms (timeout=%ss, messages=%d). Retry in %.1fs (attempt %d/%d). Response: %s",
                         response.status_code,
+                        model_name,
+                        elapsed_ms,
+                        resolved_timeout,
+                        message_count,
                         delay,
                         attempt,
                         LLM_MAX_RETRIES,
+                        _preview_response_text(response),
                     )
                     time.sleep(delay)
                     continue
@@ -162,13 +196,57 @@ def _post_chat_completion(
             _raise_for_llm_error(content)
             return content
 
-        except (requests.ConnectionError, requests.Timeout) as exc:
+        except requests.HTTPError as exc:
+            response = getattr(exc, "response", None)
+            status_code = response.status_code if response is not None else "unknown"
+            elapsed_ms = (time.perf_counter() - started_at) * 1000
+            logger.error(
+                "[llm_helpers] LLM HTTP error status=%s model=%s elapsed=%.1fms timeout=%ss messages=%d attempt=%d/%d response=%s",
+                status_code,
+                model_name,
+                elapsed_ms,
+                resolved_timeout,
+                message_count,
+                attempt,
+                LLM_MAX_RETRIES,
+                _preview_response_text(response),
+            )
+            raise
+
+        except requests.Timeout as exc:
+            last_exception = exc
+            elapsed_ms = (time.perf_counter() - started_at) * 1000
+            if attempt < LLM_MAX_RETRIES:
+                delay = LLM_RETRY_BASE_DELAY * (2 ** (attempt - 1))
+                logger.warning(
+                    "[llm_helpers] LLM request timed out for model=%s after %.1fms (timeout=%ss, messages=%d). Retry in %.1fs (attempt %d/%d)",
+                    model_name,
+                    elapsed_ms,
+                    resolved_timeout,
+                    message_count,
+                    delay,
+                    attempt,
+                    LLM_MAX_RETRIES,
+                )
+                time.sleep(delay)
+            else:
+                logger.error(
+                    "[llm_helpers] LLM request timed out for model=%s after %.1fms (timeout=%ss, messages=%d) on final attempt",
+                    model_name,
+                    elapsed_ms,
+                    resolved_timeout,
+                    message_count,
+                )
+                raise
+
+        except requests.ConnectionError as exc:
             last_exception = exc
             if attempt < LLM_MAX_RETRIES:
                 delay = LLM_RETRY_BASE_DELAY * (2 ** (attempt - 1))
                 logger.warning(
-                    "[llm_helpers] LLM request failed (%s), retrying in %.1fs (attempt %d/%d)",
+                    "[llm_helpers] LLM request failed (%s) for model=%s, retrying in %.1fs (attempt %d/%d)",
                     type(exc).__name__,
+                    model_name,
                     delay,
                     attempt,
                     LLM_MAX_RETRIES,
