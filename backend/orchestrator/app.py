@@ -964,7 +964,9 @@ def ingest_meeting_notes(
     meetings: list[MeetingIn],
     _: None = Depends(require_service_api_key),
 ):
+    logger.debug("[meeting_notes] Ingestion request received with %d meeting(s)", len(meetings))
     ids = events_service.ingest_meeting_notes(meetings, todo_writer=todos_service.ingest_todo)
+    logger.debug("[meeting_notes] Ingestion completed with %d event id(s)", len(ids))
     return {"ok": True, "ids": ids}
 
 

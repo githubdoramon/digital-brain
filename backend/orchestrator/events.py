@@ -211,6 +211,12 @@ def ingest_meeting_notes(
     current_user = _load_current_user_from_env()
 
     user_tokens = _build_user_tokens(current_user)
+    logger.debug(
+        "[meeting_notes] Starting ingestion for %d meeting(s); todo_writer=%s; user_tokens=%d",
+        len(meetings),
+        bool(todo_writer),
+        len(user_tokens),
+    )
     for meeting in meetings:
         attendee_emails = meeting.attendees_emails or []
         unique_contacts, new_contacts_by_domain = _resolve_attendee_contacts(
@@ -284,16 +290,37 @@ def ingest_meeting_notes(
         ingest_event(event)
         event_ids.append(event_id)
 
+        meeting_label = normalized_meeting_id or title
         if not todo_writer or not user_tokens:
+            logger.debug(
+                "[meeting_notes] Skipping todo extraction for event %s (%s): todo_writer=%s user_tokens=%d",
+                event_id,
+                meeting_label,
+                bool(todo_writer),
+                len(user_tokens),
+            )
             continue
+
         existing_todo_signatures = _get_existing_todo_signatures(event_id)
         steps = _extract_next_steps(meeting.content)
+        if not steps:
+            logger.debug(
+                "[meeting_notes] No next steps found for event %s (%s)",
+                event_id,
+                meeting_label,
+            )
+
+        created_todos = 0
+        skipped_not_assigned = 0
+        skipped_empty_or_duplicate = 0
         for _idx, step in enumerate(steps):
             step_lower = step.lower()
             if not any(token in step_lower for token in user_tokens):
+                skipped_not_assigned += 1
                 continue
             normalized_step = _normalize_todo_description(step)
             if not normalized_step or normalized_step in existing_todo_signatures:
+                skipped_empty_or_duplicate += 1
                 continue
             existing_todo_signatures.add(normalized_step)
             todo = TodoIn(
@@ -305,6 +332,18 @@ def ingest_meeting_notes(
                 place_ids=[],
             )
             todo_writer(todo)
+            created_todos += 1
+
+        logger.debug(
+            "[meeting_notes] Todo extraction for event %s (%s): steps=%d created=%d skipped_not_assigned=%d skipped_empty_or_duplicate=%d existing_signatures=%d",
+            event_id,
+            meeting_label,
+            len(steps),
+            created_todos,
+            skipped_not_assigned,
+            skipped_empty_or_duplicate,
+            len(existing_todo_signatures),
+        )
 
     return event_ids
 
