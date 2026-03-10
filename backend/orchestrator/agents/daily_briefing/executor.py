@@ -212,9 +212,21 @@ def build_daily_briefing(
         "news_articles": news_articles,
     }
 
+    selected_news = (
+        _select_news_for_generation(context)
+        if news_articles
+        else {"topic_articles": [], "general_articles": []}
+    )
+    if news_articles:
+        selected_news = _enrich_selected_news_summaries(
+            selected_news,
+            user_email=user_email,
+        )
+    context["selected_news"] = selected_news
+
     # -- 6. Assemble final markdown & summary ------------------------------------
     t0 = perf_counter()
-    markdown = _generate_markdown(context, user_email=user_email)
+    markdown = _generate_markdown(context, selected_news=selected_news, user_email=user_email)
     logger.info(
         "[briefing] Markdown generated: %d chars (%.0fms)",
         len(markdown),
@@ -906,19 +918,25 @@ def _synthesise_event_summary(
         return ""
 
 
-def _generate_markdown(context: dict[str, Any], *, user_email: str | None = None) -> str:
+def _generate_markdown(
+    context: dict[str, Any],
+    *,
+    selected_news: dict[str, Any] | None = None,
+    user_email: str | None = None,
+) -> str:
     header = f"# Daily Briefing - {context.get('date')} ({context.get('timezone')})"
     news_input = context.get("news_articles") or []
-    selected_news = (
-        _select_news_for_generation(context)
-        if news_input
-        else {"topic_articles": [], "general_articles": []}
-    )
-    if news_input:
-        selected_news = _enrich_selected_news_summaries(
-            selected_news,
-            user_email=user_email,
-        )
+    selected_news_data: dict[str, Any]
+    if selected_news is not None:
+        selected_news_data = selected_news
+    else:
+        selected_news_data = context.get("selected_news") or {}
+        if not selected_news_data:
+            selected_news_data = (
+                _select_news_for_generation(context)
+                if news_input
+                else {"topic_articles": [], "general_articles": []}
+            )
 
     core_sections = ""
     news_section = ""
@@ -926,8 +944,8 @@ def _generate_markdown(context: dict[str, Any], *, user_email: str | None = None
     if news_input:
         logger.info(
             "[briefing] News generation context: %d topic article(s), %d general headline(s)",
-            len(selected_news["topic_articles"]),
-            len(selected_news["general_articles"]),
+            len(selected_news_data["topic_articles"]),
+            len(selected_news_data["general_articles"]),
         )
         t_parallel = perf_counter()
         with ThreadPoolExecutor(max_workers=BRIEFING_SECTION_MAX_WORKERS) as pool:
@@ -936,7 +954,7 @@ def _generate_markdown(context: dict[str, Any], *, user_email: str | None = None
             )
             news_future = pool.submit(
                 _generate_news_section_markdown,
-                selected_news,
+                selected_news_data,
                 user_email=user_email,
             )
             core_sections = core_future.result()
@@ -1594,7 +1612,94 @@ def _generate_summary(
         if not vresult.valid:
             logger.error("[briefing] Summary retry still invalid: %s", vresult.reasons)
 
-    return summary
+    base_summary = (summary or "").strip()
+    if not base_summary:
+        return base_summary
+
+    news_digest = _generate_news_summary_digest(context, user_email=user_email)
+    if not news_digest:
+        return base_summary
+
+    combined_summary = f"{base_summary}\n{news_digest.strip()}"
+    final_validation = validate_summary(combined_summary)
+    if final_validation.valid:
+        return combined_summary
+
+    logger.warning(
+        "[briefing] Combined summary + news digest failed validation: %s; keeping base summary",
+        final_validation.reasons,
+    )
+    return base_summary
+
+
+def _generate_news_summary_digest(
+    context: dict[str, Any],
+    *,
+    user_email: str | None = None,
+) -> str:
+    """Generate a short paragraph with the most relevant news developments."""
+    selected_news = context.get("selected_news") or {}
+    topic_articles = selected_news.get("topic_articles") or []
+    general_articles = selected_news.get("general_articles") or []
+    candidates = [*topic_articles, *general_articles]
+    if not candidates:
+        return ""
+
+    lines: list[str] = []
+    for idx, article in enumerate(candidates, start=1):
+        title = str(article.get("title") or "Untitled").strip()
+        source = str(article.get("source") or "Unknown").strip()
+        topics = ", ".join(str(t).strip() for t in (article.get("topic_matches") or []) if t)
+        summary = (
+            str(article.get("brief_summary") or "").strip()
+            or str(article.get("summary") or "").strip()
+        )
+        summary = _to_single_news_sentence(summary)
+        lines.append(
+            f"{idx}. {title} | source={source} | topics={topics or 'General'} | note={summary or 'N/A'}"
+        )
+
+    system_prompt = (
+        "You write a short news paragraph for the end of a daily briefing summary. "
+        "Output exactly one compact paragraph in plain text (1-2 sentences, max 300 chars). "
+        "Review all selected articles, decide what is actually consequential, and ignore low-signal items. "
+        "Highlight only the most consequential development(s). No markdown, no bullets, no links. "
+        "Use ASCII characters only."
+    )
+    user_context = _get_daily_briefing_user_context(
+        user_email,
+        f"daily briefing news digest {context.get('date', '')}",
+    )
+    if user_context:
+        system_prompt = f"{system_prompt}\n\n{user_context}"
+
+    prompt = (
+        "From these selected articles, write one short paragraph for the overall summary.\n"
+        "Use the full list below, but mention only truly relevant developments and discard trivial items.\n"
+        "If nothing is summary-worthy, return an empty string.\n"
+        "Focus on what changed and why it matters for the user.\n"
+        f"Selected articles:\n{chr(10).join(lines)}"
+    )
+
+    try:
+        digest = call_llm(
+            prompt,
+            system_prompt=system_prompt,
+            temperature=0.3,
+            use_simpler_model=False,
+        )
+    except Exception:
+        logger.warning("[briefing] News digest generation failed", exc_info=True)
+        return ""
+
+    cleaned = re.sub(r"\s+", " ", str(digest or "")).strip()
+    if not cleaned:
+        return ""
+    if len(cleaned) > 260:
+        cleaned = cleaned[:257].rstrip() + "..."
+    if cleaned and cleaned[-1] not in ".!?":
+        cleaned += "."
+    return cleaned
 
 
 def _condense_notes(notes: str, limit: int = 48) -> str:

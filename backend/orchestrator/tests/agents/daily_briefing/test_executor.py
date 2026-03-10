@@ -10,6 +10,7 @@ from agents.daily_briefing.executor import (
     _enrich_selected_news_summaries,
     _format_context_text,
     _format_event_for_analysis,
+    _generate_summary,
     _generate_news_section_markdown,
     _research_event,
     _summarize_event,
@@ -601,6 +602,60 @@ class TestNewsSummaryEnrichment:
         enriched = _enrich_selected_news_summaries(selected_news)
 
         assert "release window" in enriched["general_articles"][0]["brief_summary"]
+
+
+class TestOverallSummaryNewsDigest:
+    @patch("agents.daily_briefing.executor.call_llm")
+    def test_appends_news_digest_paragraph_when_selected_news_exists(self, mock_llm):
+        mock_llm.side_effect = [
+            "You have 2 meetings today and 1 key todo.",
+            "On news, a major central bank surprise moved markets and may impact near-term planning.",
+        ]
+        context = _make_context(events=[_make_event_context()], all_todos=[{"description": "Review report"}])
+        context["selected_news"] = {
+            "topic_articles": [_make_news_article(title="Central bank signals surprise cut")],
+            "general_articles": [],
+        }
+
+        summary = _generate_summary(context, "# Daily Briefing")
+
+        assert "You have 2 meetings" in summary
+        assert "On news" in summary
+        assert "\n" in summary
+
+    @patch("agents.daily_briefing.executor.call_llm")
+    def test_skips_news_digest_when_no_selected_news(self, mock_llm):
+        mock_llm.return_value = "Quiet day with one meeting and one follow-up task."
+        context = _make_context(events=[_make_event_context()])
+        context["selected_news"] = {"topic_articles": [], "general_articles": []}
+
+        summary = _generate_summary(context, "# Daily Briefing")
+
+        assert summary == "Quiet day with one meeting and one follow-up task."
+
+    @patch("agents.daily_briefing.executor.call_llm")
+    def test_digest_prompt_receives_all_selected_articles(self, mock_llm):
+        mock_llm.side_effect = [
+            "You have a focused day with two meetings.",
+            "News highlight paragraph.",
+        ]
+        context = _make_context(events=[_make_event_context()])
+        context["selected_news"] = {
+            "topic_articles": [
+                _make_news_article(title="Topic A"),
+                _make_news_article(title="Topic B"),
+            ],
+            "general_articles": [
+                _make_news_article(title="General C", topic_matches=[]),
+            ],
+        }
+
+        _generate_summary(context, "# Daily Briefing")
+
+        digest_prompt = mock_llm.call_args_list[1].args[0]
+        assert "Topic A" in digest_prompt
+        assert "Topic B" in digest_prompt
+        assert "General C" in digest_prompt
 
 
 # ---------------------------------------------------------------------------

@@ -19,7 +19,7 @@ This document captures behavior and quality rules for the daily briefing profile
    - Build deterministic sections in code for birthdays and outstanding todos.
    - Build `## News & Topics` deterministically in code from the bounded news subset (topic grouping is code-owned), with per-article one-sentence LLM summaries generated after selection.
    - Assemble final markdown in code (no full-document rewrite pass).
-6. Run summary generation (plain text 1-2 sentences).
+6. Run summary generation (plain text), and append a short news digest paragraph at the end when selected news exists.
 
 ## Parallelism
 
