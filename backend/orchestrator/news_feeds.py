@@ -28,8 +28,11 @@ import requests
 
 from db import get_conn
 from observability.logger import get_runtime_logger
+from search_normalization import normalize_search_text
 
 logger = get_runtime_logger(__name__)
+
+_TOPIC_MATCH_CONFIDENCE_THRESHOLD = 1.5
 
 
 def _ms_since(start: float) -> float:
@@ -274,9 +277,9 @@ def _search_tavily_news(
     for item in data.get("results") or []:
         articles.append(
             {
-                "title": (item.get("title") or "").strip(),
-                "url": (item.get("url") or "").strip(),
-                "summary": (item.get("content") or "").strip(),
+                "title": str(item.get("title") or "").strip(),
+                "url": str(item.get("url") or "").strip(),
+                "summary": str(item.get("content") or "").strip(),
                 "source": "tavily",
                 "published_at": item.get("published_date"),
                 "topic_matches": [],
@@ -323,9 +326,9 @@ def _fetch_rss_feed(
         published = _parse_rss_date(entry)
         articles.append(
             {
-                "title": (entry.get("title") or "").strip(),
-                "url": (entry.get("link") or "").strip(),
-                "summary": _clean_html(entry.get("summary") or entry.get("description") or ""),
+                "title": str(entry.get("title") or "").strip(),
+                "url": str(entry.get("link") or "").strip(),
+                "summary": _clean_html(str(entry.get("summary") or entry.get("description") or "")),
                 "source": source,
                 "published_at": published,
                 "topic_matches": [],
@@ -343,15 +346,92 @@ def _match_topics(
     article: NewsArticle,
     topics: list[dict[str, Any]],
 ) -> list[str]:
-    """Return topic labels whose keywords appear in the article title or summary."""
-    text = f"{article.get('title', '')} {article.get('summary', '')}".lower()
-    matched: list[str] = []
+    """Return confidence-ranked topic labels for article title/summary."""
+    title_text = normalize_search_text(str(article.get("title") or ""))
+    summary_text = normalize_search_text(str(article.get("summary") or ""))
+    article_text = f"{title_text} {summary_text}".strip()
+    if not article_text:
+        return []
+
+    scored_matches: list[tuple[str, float]] = []
     for topic in topics:
+        topic_label = str(topic.get("label") or "").strip()
+        if not topic_label:
+            continue
+        score = 0.0
         for kw in topic.get("keywords") or []:
-            if kw.lower() in text:
-                matched.append(topic["label"])
-                break
-    return matched
+            keyword_score = _score_keyword_match(str(kw), title_text, summary_text, article_text)
+            if keyword_score <= 0:
+                continue
+            score += keyword_score
+        if score > 0:
+            scored_matches.append((topic_label, score))
+
+    if not scored_matches:
+        return []
+
+    scored_matches.sort(key=lambda item: item[1], reverse=True)
+    top_label, top_score = scored_matches[0]
+    if top_score < _TOPIC_MATCH_CONFIDENCE_THRESHOLD:
+        return []
+
+    matched = [top_label]
+    for label, score in scored_matches[1:]:
+        if score < _TOPIC_MATCH_CONFIDENCE_THRESHOLD:
+            continue
+        if (top_score - score) <= 0.5:
+            matched.append(label)
+        else:
+            break
+    return matched[:3]
+
+
+def _score_keyword_match(
+    keyword: str,
+    title_text: str,
+    summary_text: str,
+    article_text: str,
+) -> float:
+    normalized_keyword = normalize_search_text(keyword)
+    if not normalized_keyword:
+        return 0.0
+
+    tokens = [token for token in normalized_keyword.split() if token]
+    if not tokens:
+        return 0.0
+
+    phrase_pattern = _keyword_phrase_pattern(tokens)
+
+    if phrase_pattern.search(title_text):
+        return 4.0
+    if phrase_pattern.search(summary_text):
+        return 3.0
+
+    if len(tokens) > 1:
+        if all(_whole_word_present(token, article_text) for token in tokens):
+            return 2.0
+        return 0.0
+
+    token = tokens[0]
+    if len(token) < 2:
+        return 0.0
+
+    if _whole_word_present(token, article_text):
+        return 1.5
+
+    if len(token) >= 6 and token in article_text:
+        return 0.5
+
+    return 0.0
+
+
+def _keyword_phrase_pattern(tokens: list[str]) -> re.Pattern[str]:
+    phrase = r"\b" + r"\s+".join(re.escape(token) for token in tokens) + r"\b"
+    return re.compile(phrase)
+
+
+def _whole_word_present(token: str, text: str) -> bool:
+    return bool(re.search(rf"\b{re.escape(token)}\b", text))
 
 
 def _deduplicate(articles: list[NewsArticle]) -> list[NewsArticle]:

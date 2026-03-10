@@ -33,6 +33,7 @@ BIRTHDAY_LOOKAHEAD_DAYS = 7
 MAX_NEWS_TOPIC_ARTICLES = 24
 MAX_NEWS_ARTICLES_PER_TOPIC = 3
 MAX_NEWS_GENERAL_ARTICLES = 5
+NEWS_SUMMARY_MAX_WORKERS = 4
 EVENT_ENRICHMENT_MAX_WORKERS = 4
 EVENT_SUMMARY_MAX_WORKERS = 3
 BRIEFING_SECTION_MAX_WORKERS = 2
@@ -750,7 +751,7 @@ def _format_event_for_analysis(event_context: dict[str, Any]) -> str:
             s_summary = s.get("summary") or ""
             lines.append(f"  - {s_date} | {s_title}")
             if s_summary:
-                lines.append(f"    Notes: {_condense_notes(s_summary, limit=6)}")
+                lines.append(f"    Notes: {_condense_notes(s_summary, limit=30)}")
 
     todos = event_context.get("todos") or []
     if todos:
@@ -913,6 +914,11 @@ def _generate_markdown(context: dict[str, Any], *, user_email: str | None = None
         if news_input
         else {"topic_articles": [], "general_articles": []}
     )
+    if news_input:
+        selected_news = _enrich_selected_news_summaries(
+            selected_news,
+            user_email=user_email,
+        )
 
     core_sections = ""
     news_section = ""
@@ -1297,6 +1303,110 @@ def _generate_news_section_markdown(
     return "\n".join(sections)
 
 
+def _enrich_selected_news_summaries(
+    selected_news: dict[str, Any],
+    *,
+    user_email: str | None = None,
+) -> dict[str, Any]:
+    """Add LLM-authored one-sentence summaries for selected news articles."""
+    topic_articles = [dict(article) for article in (selected_news.get("topic_articles") or [])]
+    general_articles = [dict(article) for article in (selected_news.get("general_articles") or [])]
+    total_articles = len(topic_articles) + len(general_articles)
+    if total_articles == 0:
+        return {
+            "topic_articles": topic_articles,
+            "general_articles": general_articles,
+        }
+
+    logger.info("[briefing] Enriching %d selected article summary(s)", total_articles)
+
+    article_slots: list[tuple[list[dict[str, Any]], int, dict[str, Any]]] = []
+    for idx, article in enumerate(topic_articles):
+        article_slots.append((topic_articles, idx, article))
+    for idx, article in enumerate(general_articles):
+        article_slots.append((general_articles, idx, article))
+
+    workers = min(NEWS_SUMMARY_MAX_WORKERS, total_articles)
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        future_map = {
+            pool.submit(_generate_article_brief_summary, article, user_email=user_email): (
+                container,
+                idx,
+            )
+            for container, idx, article in article_slots
+        }
+        for future in as_completed(future_map):
+            container, idx = future_map[future]
+            article = container[idx]
+            fallback = _to_single_news_sentence(str(article.get("summary") or "").strip())
+            if not fallback:
+                fallback = "Notable development worth tracking for your priorities."
+            try:
+                brief_summary = (future.result() or "").strip()
+            except Exception:
+                logger.warning("[briefing] Failed to generate article brief summary", exc_info=True)
+                brief_summary = ""
+            article["brief_summary"] = brief_summary or fallback
+
+    return {
+        "topic_articles": topic_articles,
+        "general_articles": general_articles,
+    }
+
+
+def _generate_article_brief_summary(
+    article: dict[str, Any],
+    *,
+    user_email: str | None = None,
+) -> str:
+    """Generate one concise sentence helping the user decide whether to read."""
+    title = str(article.get("title") or "Untitled").strip()
+    source = str(article.get("source") or "Unknown").strip()
+    raw_summary = str(article.get("summary") or "").strip()
+    url = str(article.get("url") or "").strip()
+    topic_labels = ", ".join(str(t).strip() for t in (article.get("topic_matches") or []) if t)
+
+    system_prompt = (
+        "You write one-sentence news briefs for a daily briefing. "
+        "The sentence must be concrete and useful for deciding whether to open the full article. "
+        "Use plain text only (no markdown, no links). Use ASCII characters only. "
+        "Avoid vague language and avoid repeating the title verbatim."
+    )
+    user_context = _get_daily_briefing_user_context(
+        user_email,
+        f"daily briefing article summary {title}",
+    )
+    if user_context:
+        system_prompt = f"{system_prompt}\n\n{user_context}"
+
+    prompt = (
+        "Write exactly one sentence (max 300 chars) that states the key development and why it matters.\n"
+        f"Title: {title}\n"
+        f"Source: {source}\n"
+        f"URL: {url or 'N/A'}\n"
+        f"Topics: {topic_labels or 'General'}\n"
+        f"Raw content: {raw_summary or 'N/A'}"
+    )
+
+    try:
+        generated = call_llm(
+            prompt,
+            system_prompt=system_prompt,
+            temperature=0.3,
+            use_simpler_model=False,
+        )
+    except Exception:
+        logger.warning("[briefing] LLM article summary generation failed for '%s'", title, exc_info=True)
+        return ""
+
+    candidate = _to_single_news_sentence(str(generated or "").strip())
+    if not candidate:
+        return ""
+    if len(candidate) > 240:
+        candidate = candidate[:237].rstrip() + "..."
+    return candidate
+
+
 def _group_topic_articles(topic_articles: list[dict[str, Any]]) -> list[tuple[str, list[dict[str, Any]]]]:
     grouped: dict[str, list[dict[str, Any]]] = {}
     ordered_labels: list[str] = []
@@ -1315,7 +1425,9 @@ def _render_news_article_lines(articles: list[dict[str, Any]]) -> list[str]:
         title = str(article.get("title") or "Untitled").strip()
         url = str(article.get("url") or "").strip()
         source = str(article.get("source") or "Unknown").strip()
-        summary = _to_single_news_sentence(str(article.get("summary") or "").strip())
+        summary = _to_single_news_sentence(str(article.get("brief_summary") or "").strip())
+        if not summary:
+            summary = _to_single_news_sentence(str(article.get("summary") or "").strip())
 
         if not url:
             continue
@@ -1330,8 +1442,8 @@ def _to_single_news_sentence(text: str) -> str:
     if not cleaned:
         return ""
     first = re.split(r"(?<=[.!?])\s+", cleaned, maxsplit=1)[0].strip()
-    if len(first) > 240:
-        first = first[:237].rstrip() + "..."
+    if len(first) > 300:
+        first = first[:297].rstrip() + "..."
     if first and first[-1] not in ".!?":
         first += "."
     return first

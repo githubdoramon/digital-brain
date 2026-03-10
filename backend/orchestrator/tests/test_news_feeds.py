@@ -123,6 +123,23 @@ class TestMatchTopics:
         assert "AI" in result
         assert "Climate" in result
 
+    def test_accent_insensitive_matching(self):
+        article = _article(title="Sao Paulo startup raises funding", summary="")
+        topics = [_topic("Brazil", ["São Paulo"])]
+        assert _match_topics(article, topics) == ["Brazil"]
+
+    def test_short_keyword_does_not_match_substring_noise(self):
+        article = _article(title="Actor said he is excited", summary="Entertainment update")
+        topics = [_topic("AI", ["ai"])]
+        assert _match_topics(article, topics) == []
+
+    def test_ambiguous_scores_keep_multiple_topics(self):
+        article = _article(title="AI and climate trends collide in new forecast", summary="")
+        topics = [_topic("AI", ["ai"]), _topic("Climate", ["climate"])]
+        result = _match_topics(article, topics)
+        assert "AI" in result
+        assert "Climate" in result
+
 
 # ---------------------------------------------------------------------------
 # _deduplicate

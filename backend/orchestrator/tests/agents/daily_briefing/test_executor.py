@@ -7,6 +7,7 @@ from unittest.mock import MagicMock, patch
 from agents.daily_briefing.executor import (
     BIRTHDAY_LOOKAHEAD_DAYS,
     _build_briefing_prompt,
+    _enrich_selected_news_summaries,
     _format_context_text,
     _format_event_for_analysis,
     _generate_news_section_markdown,
@@ -563,6 +564,43 @@ class TestGenerateNewsSectionMarkdown:
         section = _generate_news_section_markdown(selected_news)
         assert "### General Headlines" in section
         assert "[Central bank signals rate pause](https://example.com/econ-1)" in section
+
+
+class TestNewsSummaryEnrichment:
+    @patch("agents.daily_briefing.executor.call_llm")
+    def test_uses_llm_summary_when_available(self, mock_llm):
+        mock_llm.return_value = "Regulators approved a key ETF filing, which could accelerate institutional blockchain adoption."
+        selected_news = {
+            "topic_articles": [
+                _make_news_article(
+                    title="Regulator approves crypto ETF filing",
+                    summary="A regulator advanced a major filing process.",
+                    topic_matches=["Blockchain"],
+                )
+            ],
+            "general_articles": [],
+        }
+
+        enriched = _enrich_selected_news_summaries(selected_news)
+
+        assert enriched["topic_articles"][0]["brief_summary"].startswith("Regulators approved a key ETF")
+
+    @patch("agents.daily_briefing.executor.call_llm", side_effect=Exception("timeout"))
+    def test_falls_back_to_source_summary_on_failure(self, mock_llm):
+        selected_news = {
+            "topic_articles": [],
+            "general_articles": [
+                _make_news_article(
+                    title="Studio reveals sequel timeline",
+                    summary="The film franchise now has a release window and production schedule.",
+                    topic_matches=[],
+                )
+            ],
+        }
+
+        enriched = _enrich_selected_news_summaries(selected_news)
+
+        assert "release window" in enriched["general_articles"][0]["brief_summary"]
 
 
 # ---------------------------------------------------------------------------

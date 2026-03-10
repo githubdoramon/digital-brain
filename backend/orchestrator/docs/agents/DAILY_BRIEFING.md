@@ -17,7 +17,7 @@ This document captures behavior and quality rules for the daily briefing profile
 5. Generate final markdown in focused passes:
    - Event-critical sections first (`Day Overview`, `Schedule`, `Event Prep`) in an isolated prompt.
    - Build deterministic sections in code for birthdays and outstanding todos.
-   - Build `## News & Topics` deterministically in code from the bounded news subset (topic grouping is code-owned).
+   - Build `## News & Topics` deterministically in code from the bounded news subset (topic grouping is code-owned), with per-article one-sentence LLM summaries generated after selection.
    - Assemble final markdown in code (no full-document rewrite pass).
 6. Run summary generation (plain text 1-2 sentences).
 
@@ -38,6 +38,8 @@ This document captures behavior and quality rules for the daily briefing profile
   - general-headline cap,
   - deduplication,
   - relevance scoring (topic matches, source quality, recency, overlap with event/todo terms).
+- Topic matching uses confidence scoring over normalized title/summary keyword evidence (including accent-insensitive text normalization) to reduce wrong-topic clustering.
+- After selection, each included article gets a one-sentence LLM rewrite focused on decision value (`what happened` + `why it matters`) before rendering.
 - Goal: fewer but higher-signal articles that are more relevant to the day.
 
 ## Voice and Perspective
