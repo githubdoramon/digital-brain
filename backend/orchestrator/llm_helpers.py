@@ -142,24 +142,6 @@ def _post_chat_completion(
         text = (response.text or "").strip().replace("\n", " ")
         return text[:400]
 
-    def _to_shell_single_quoted(value: str) -> str:
-        return "'" + value.replace("'", "'\"'\"'") + "'"
-
-    redacted_headers = dict(get_llm_headers())
-    if "Authorization" in redacted_headers:
-        redacted_headers["Authorization"] = "Bearer ***"
-    redacted_authorization = redacted_headers.get("Authorization", "")
-    request_url = f"{base_url}/chat/completions"
-    payload_json = json.dumps(payload, ensure_ascii=False)
-    curl_command = (
-        "curl -sS -X POST "
-        f"{_to_shell_single_quoted(request_url)} "
-        "-H 'Content-Type: application/json' "
-        f"-H {_to_shell_single_quoted(f'Authorization: {redacted_authorization}')} "
-        f"-d {_to_shell_single_quoted(payload_json)}"
-    )
-    logger.info("[llm_helpers] Equivalent curl request: %s", curl_command)
-
     for attempt in range(1, LLM_MAX_RETRIES + 1):
         started_at = time.perf_counter()
         try:
