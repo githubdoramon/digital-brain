@@ -53,7 +53,7 @@ def get_self_context(email: str) -> Optional[str]:
         return None
 
     behavioral_guidance = (
-        " The user is the owner/narrator of this memory graph. "
+        "The user is the owner/narrator of this memory graph. "
         "When answering people-ranking or interaction questions (for example, who they met/talked to most), "
         "treat the user as the anchor and return counterpart contacts, not the user themselves, "
         "unless the user explicitly asks about themselves."
