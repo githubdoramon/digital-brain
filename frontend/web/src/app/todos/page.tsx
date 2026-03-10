@@ -136,7 +136,11 @@ function formatEventTooltip(event: LinkedEvent): string | undefined {
   return event.id;
 }
 
-const ACCOMPLISHED_STATUS = "accomplished";
+const COMPLETED_STATUS = "completed";
+
+function isCompletedStatus(status: string | null | undefined): boolean {
+  return (status || "").trim().toLowerCase() === COMPLETED_STATUS;
+}
 
 function formatDate(date: string | null): string {
   if (!date) {
@@ -233,10 +237,7 @@ export default function TodosPage() {
   }, [loadTodos]);
 
   async function toggleTodo(todo: Todo) {
-    const nextStatus =
-      todo.status?.toLowerCase() === ACCOMPLISHED_STATUS
-        ? "pending"
-        : ACCOMPLISHED_STATUS;
+    const nextStatus = isCompletedStatus(todo.status) ? "pending" : COMPLETED_STATUS;
 
     setUpdatingId(todo.todo_id);
     setStatus({ kind: "idle" });
@@ -266,8 +267,8 @@ export default function TodosPage() {
       setStatus({
         kind: "success",
         message:
-          nextStatus === ACCOMPLISHED_STATUS
-            ? `Marked ${todo.todo_id} as accomplished`
+          nextStatus === COMPLETED_STATUS
+            ? `Marked ${todo.todo_id} as completed`
             : `Reopened ${todo.todo_id}`,
       });
     } catch (error) {
@@ -349,22 +350,22 @@ export default function TodosPage() {
     }
   }
 
-  const [pendingTodos, accomplishedTodos] = useMemo(() => {
+  const [pendingTodos, completedTodos] = useMemo(() => {
     const pending: Todo[] = [];
-    const accomplished: Todo[] = [];
+    const completed: Todo[] = [];
 
     for (const todo of todos) {
-      if (todo.status?.toLowerCase() === ACCOMPLISHED_STATUS) {
-        accomplished.push(todo);
+      if (isCompletedStatus(todo.status)) {
+        completed.push(todo);
       } else {
         pending.push(todo);
       }
     }
 
     pending.sort(compareTodosByDueDate);
-    accomplished.sort(compareTodosByDueDate);
+    completed.sort(compareTodosByDueDate);
 
-    return [pending, accomplished];
+    return [pending, completed];
   }, [todos]);
 
   return (
@@ -372,7 +373,7 @@ export default function TodosPage() {
       <div style={{ display: "grid", gap: "8px" }}>
         <h1 style={{ fontSize: "2rem", fontWeight: 600 }}>Todos</h1>
         <p style={{ color: "#555" }}>
-          Review outstanding tasks and mark them as accomplished once you finish
+          Review outstanding tasks and mark them as completed once you finish
           them. Completed tasks stay available for reference.
         </p>
       </div>
@@ -383,7 +384,7 @@ export default function TodosPage() {
             ? "Loading todos…"
             : todos.length === 0
             ? "No todos yet"
-            : `${pendingTodos.length} pending · ${accomplishedTodos.length} accomplished`}
+            : `${pendingTodos.length} pending · ${completedTodos.length} completed`}
         </span>
         <button
           type="button"
@@ -444,9 +445,9 @@ export default function TodosPage() {
           updatingId={updatingId}
         />
         <TodoSection
-          title="Accomplished"
-          emptyLabel="No accomplished todos yet"
-          todos={accomplishedTodos}
+          title="Completed"
+          emptyLabel="No completed todos yet"
+          todos={completedTodos}
           onToggle={toggleTodo}
           onDelete={deleteTodo}
           onUpdateDueDate={updateTodoDueDate}
@@ -532,7 +533,7 @@ type TodoCardProps = {
 };
 
 function TodoCard({ todo, isUpdating, onToggle, onDelete, onUpdateDueDate }: TodoCardProps) {
-  const isAccomplished = todo.status?.toLowerCase() === ACCOMPLISHED_STATUS;
+  const isCompleted = isCompletedStatus(todo.status);
   const [isEditingDueDate, setIsEditingDueDate] = useState(false);
   const [draftDueDate, setDraftDueDate] = useState(() => toDateInputValue(todo.due_date));
   const dateInputRef = useRef<HTMLInputElement | null>(null);
@@ -610,7 +611,7 @@ function TodoCard({ todo, isUpdating, onToggle, onDelete, onUpdateDueDate }: Tod
         padding: "16px",
         display: "grid",
         gap: "12px",
-        background: isAccomplished ? "#f8fafc" : "#fff",
+        background: isCompleted ? "#f8fafc" : "#fff",
       }}
     >
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: "12px" }}>
@@ -622,8 +623,8 @@ function TodoCard({ todo, isUpdating, onToggle, onDelete, onUpdateDueDate }: Tod
         </div>
         <span
           style={{
-            background: isAccomplished ? "#dcfce7" : "#fee2e2",
-            color: isAccomplished ? "#166534" : "#b91c1c",
+            background: isCompleted ? "#dcfce7" : "#fee2e2",
+            color: isCompleted ? "#166534" : "#b91c1c",
             fontSize: "0.75rem",
             fontWeight: 600,
             padding: "4px 8px",
@@ -632,7 +633,7 @@ function TodoCard({ todo, isUpdating, onToggle, onDelete, onUpdateDueDate }: Tod
             letterSpacing: "0.05em",
           }}
         >
-          {isAccomplished ? "Accomplished" : todo.status || "Pending"}
+          {isCompleted ? "Completed" : "Pending"}
         </span>
       </div>
 
@@ -742,8 +743,8 @@ function TodoCard({ todo, isUpdating, onToggle, onDelete, onUpdateDueDate }: Tod
           onClick={() => onToggle(todo)}
           disabled={isUpdating}
           style={{
-            background: isAccomplished ? "#fef3c7" : "#0b6bcb",
-            color: isAccomplished ? "#92400e" : "#fff",
+            background: isCompleted ? "#fef3c7" : "#0b6bcb",
+            color: isCompleted ? "#92400e" : "#fff",
             border: "none",
             borderRadius: "8px",
             padding: "8px 16px",
@@ -754,9 +755,9 @@ function TodoCard({ todo, isUpdating, onToggle, onDelete, onUpdateDueDate }: Tod
         >
           {isUpdating
             ? "Saving..."
-            : isAccomplished
+            : isCompleted
             ? "Mark as pending"
-            : "Mark accomplished"}
+            : "Mark completed"}
         </button>
         <button
           type="button"
@@ -779,5 +780,4 @@ function TodoCard({ todo, isUpdating, onToggle, onDelete, onUpdateDueDate }: Tod
     </article>
   );
 }
-
 

@@ -17,11 +17,39 @@ __all__ = [
     "delete_todo",
 ]
 
-PENDING_STATUSES = ("", "pending", "open", "in_progress", "todo")
-COMPLETED_STATUSES = ("completed", "complete", "done", "accomplished", "closed")
+TODO_STATUS_PENDING = "pending"
+TODO_STATUS_COMPLETED = "completed"
+LEGACY_COMPLETED_STATUSES = ("complete", "done", "accomplished", "closed")
+
+
+def normalize_todo_status(status: str | None) -> str:
+    normalized = (status or "").strip().lower()
+    if normalized == TODO_STATUS_COMPLETED or normalized in LEGACY_COMPLETED_STATUSES:
+        return TODO_STATUS_COMPLETED
+    return TODO_STATUS_PENDING
+
+
+def _status_sql_expression(column_name: str) -> str:
+    return (
+        "CASE "
+        f"WHEN lower(coalesce({column_name}, '')) = %s THEN %s "
+        f"WHEN lower(coalesce({column_name}, '')) = ANY(%s) THEN %s "
+        "ELSE %s END"
+    )
+
+
+def _status_sql_params() -> tuple[str, str, list[str], str, str]:
+    return (
+        TODO_STATUS_COMPLETED,
+        TODO_STATUS_COMPLETED,
+        list(LEGACY_COMPLETED_STATUSES),
+        TODO_STATUS_COMPLETED,
+        TODO_STATUS_PENDING,
+    )
 
 
 def ingest_todo(todo: TodoIn) -> None:
+    normalized_status = normalize_todo_status(todo.status)
     with get_conn() as conn, conn.cursor() as cur:
         cur.execute(
             """
@@ -41,7 +69,7 @@ def ingest_todo(todo: TodoIn) -> None:
             (
                 todo.todo_id,
                 todo.description,
-                (todo.status or "pending").strip() or "pending",
+                normalized_status,
                 todo.due_date,
             ),
         )
@@ -58,11 +86,13 @@ def ingest_todo(todo: TodoIn) -> None:
 
 
 def list_todos(*, open_only: bool = False, order: str | None = None) -> list[dict[str, Any]]:
+    status_expr = _status_sql_expression("status")
     where_clause = ""
-    params: list[Any] = []
+    params: list[Any] = list(_status_sql_params())
     if open_only:
-        where_clause = "WHERE lower(coalesce(status, '')) = ANY(%s)"
-        params.append(list(PENDING_STATUSES))
+        where_clause = f"WHERE ({status_expr}) = %s"
+        params.extend(_status_sql_params())
+        params.append(TODO_STATUS_PENDING)
 
     if order == "due":
         order_clause = (
@@ -86,7 +116,7 @@ def list_todos(*, open_only: bool = False, order: str | None = None) -> list[dic
     with get_conn() as conn, conn.cursor() as cur:
         cur.execute(
             f"""
-            SELECT todo_id, description, status, due_date, created_at, updated_at
+            SELECT todo_id, description, ({status_expr}) AS status, due_date, created_at, updated_at
             FROM todos
             {where_clause}
             {order_clause}
@@ -128,21 +158,34 @@ def list_event_todos(
 ) -> list[dict[str, Any]]:
     if not event_id:
         return []
+    status_expr = _status_sql_expression("t.status")
     if pending_only:
-        status_filter = "AND lower(coalesce(t.status, '')) = ANY(%s)"
-        params: tuple = (event_id, list(PENDING_STATUSES))
+        status_filter = f"AND ({status_expr}) = %s"
+        params: tuple = (
+            event_id,
+            *_status_sql_params(),
+            TODO_STATUS_PENDING,
+        )
     else:
         cutoff = datetime.now(timezone.utc) - timedelta(days=days)
         status_filter = (
             "AND ("
-            "  lower(coalesce(t.status, '')) = ANY(%s)"
+            f"  ({status_expr}) = %s"
             "  OR ("
-            "    lower(coalesce(t.status, '')) = ANY(%s)"
+            f"    ({status_expr}) = %s"
             "    AND (t.updated_at >= %s OR (t.updated_at IS NULL AND t.created_at >= %s))"
             "  )"
             ")"
         )
-        params = (event_id, list(PENDING_STATUSES), list(COMPLETED_STATUSES), cutoff, cutoff)
+        params = (
+            event_id,
+            *_status_sql_params(),
+            TODO_STATUS_PENDING,
+            *_status_sql_params(),
+            TODO_STATUS_COMPLETED,
+            cutoff,
+            cutoff,
+        )
     with get_conn() as conn, conn.cursor() as cur:
         cur.execute(
             f"""
@@ -173,21 +216,29 @@ def list_unlinked_relevant_todos(
     *,
     pending_only: bool = False,
 ) -> list[dict[str, Any]]:
+    status_expr = _status_sql_expression("t.status")
     if pending_only:
-        status_filter = "AND lower(coalesce(t.status, '')) = ANY(%s)"
-        params: tuple = (list(PENDING_STATUSES),)
+        status_filter = f"AND ({status_expr}) = %s"
+        params: tuple = (*_status_sql_params(), TODO_STATUS_PENDING)
     else:
         cutoff = datetime.now(timezone.utc) - timedelta(days=days)
         status_filter = (
             "AND ("
-            "  lower(coalesce(t.status, '')) = ANY(%s)"
+            f"  ({status_expr}) = %s"
             "  OR ("
-            "    lower(coalesce(t.status, '')) = ANY(%s)"
+            f"    ({status_expr}) = %s"
             "    AND (t.updated_at >= %s OR (t.updated_at IS NULL AND t.created_at >= %s))"
             "  )"
             ")"
         )
-        params = (list(PENDING_STATUSES), list(COMPLETED_STATUSES), cutoff, cutoff)
+        params = (
+            *_status_sql_params(),
+            TODO_STATUS_PENDING,
+            *_status_sql_params(),
+            TODO_STATUS_COMPLETED,
+            cutoff,
+            cutoff,
+        )
     with get_conn() as conn, conn.cursor() as cur:
         cur.execute(
             f"""
@@ -219,7 +270,7 @@ def list_unlinked_relevant_todos(
 def update_todo_status(todo_id: str, status: str) -> bool:
     if not todo_id:
         return False
-    cleaned_status = (status or "").strip() or "pending"
+    cleaned_status = normalize_todo_status(status)
     with get_conn() as conn, conn.cursor() as cur:
         cur.execute(
             """
@@ -256,7 +307,7 @@ def get_todo(todo_id: str) -> dict[str, Any] | None:
         return {
             "todo_id": row.get("todo_id"),
             "description": row.get("description"),
-            "status": row.get("status"),
+            "status": normalize_todo_status(row.get("status")),
             "due_date": row["due_date"].isoformat() if row.get("due_date") else None,
             "created_at": row["created_at"].isoformat() if row.get("created_at") else None,
             "updated_at": row["updated_at"].isoformat() if row.get("updated_at") else None,
@@ -388,7 +439,7 @@ def _serialize_todo_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
             {
                 "todo_id": row.get("todo_id"),
                 "description": row.get("description"),
-                "status": row.get("status"),
+                "status": normalize_todo_status(row.get("status")),
                 "due_date": row["due_date"].isoformat() if row.get("due_date") else None,
                 "created_at": row["created_at"].isoformat() if row.get("created_at") else None,
                 "updated_at": row["updated_at"].isoformat() if row.get("updated_at") else None,
