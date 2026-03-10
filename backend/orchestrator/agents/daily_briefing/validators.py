@@ -13,7 +13,24 @@ import re
 from dataclasses import dataclass, field
 from typing import Any
 
+from search_normalization import normalize_search_text
+
 logger = logging.getLogger(__name__)
+
+_TITLE_TOKEN_STOPWORDS = {
+    "a",
+    "an",
+    "and",
+    "the",
+    "with",
+    "for",
+    "to",
+    "of",
+    "in",
+    "on",
+    "at",
+    "by",
+}
 
 # ---------------------------------------------------------------------------
 # Validation result
@@ -357,18 +374,41 @@ def validate_event_sections(content: str, context: dict[str, Any]) -> Validation
         if "## Event Prep" not in content:
             reasons.append("Missing section: ## Event Prep")
 
-        lower = content.lower()
+        normalized_content = normalize_search_text(content)
         for event in context.get("events") or []:
             title = str(event.get("title") or "").strip()
             if not title:
                 continue
-            if title.lower() not in lower:
+            if not _event_title_present_in_output(title, normalized_content):
                 reasons.append(f"Event title missing from output: {title}")
                 break
 
     if reasons:
         return ValidationResult(valid=False, tier=TIER_COHERENCE, reasons=reasons)
     return ValidationResult(valid=True)
+
+
+def _event_title_present_in_output(title: str, normalized_content: str) -> bool:
+    normalized_title = normalize_search_text(title)
+    if not normalized_title:
+        return True
+
+    if normalized_title in normalized_content:
+        return True
+
+    title_tokens = [
+        token
+        for token in re.split(r"[^a-z0-9]+", normalized_title)
+        if token and token not in _TITLE_TOKEN_STOPWORDS
+    ]
+    if not title_tokens:
+        return True
+
+    matched = sum(1 for token in title_tokens if token in normalized_content)
+    if len(title_tokens) == 1:
+        return matched == 1
+    required = max(1, int(len(title_tokens) * 0.6))
+    return matched >= required
 
 
 def validate_news_section(section_markdown: str, has_news_input: bool) -> ValidationResult:

@@ -65,6 +65,14 @@ _NEWS_STOPWORDS = {
     "project",
 }
 
+_LOW_VALUE_PREP_PATTERNS = [
+    re.compile(r"\b(review|read)\b.*\b(notes?|agenda)\b", re.IGNORECASE),
+    re.compile(r"\bconfirm\b.*\bagenda\b", re.IGNORECASE),
+    re.compile(r"\bprepare\b.*\b(talking points?|questions?)\b", re.IGNORECASE),
+    re.compile(r"\badd\b.*\b(calendar|agenda)\b", re.IGNORECASE),
+    re.compile(r"\bcheck\b.*\b(calendar|invite|time)\b", re.IGNORECASE),
+]
+
 
 def _get_daily_briefing_user_context(user_email: str | None, query: str) -> str:
     """Build user identity + facts context for daily briefing prompts."""
@@ -731,7 +739,7 @@ def _format_event_for_analysis(event_context: dict[str, Any]) -> str:
     """Build a concise text block describing a single event for LLM consumption."""
     lines: list[str] = []
     title = event_context.get("title") or "Untitled"
-    lines.append(f"Event: {title}")
+    lines.append(f"CURRENT UPCOMING EVENT: {title}")
     lines.append(
         f"Time: {event_context.get('local_start')} to {event_context.get('local_end') or 'TBD'}"
     )
@@ -751,12 +759,12 @@ def _format_event_for_analysis(event_context: dict[str, Any]) -> str:
 
     summary = event_context.get("summary") or ""
     if summary:
-        lines.append("Notes from this event:")
+        lines.append("Current event notes:")
         lines.append(_condense_notes(summary))
 
     similar = event_context.get("similar_events") or []
     if similar:
-        lines.append(f"Past occurrences ({len(similar)}):")
+        lines.append(f"Historical similar occurrences ({len(similar)}):")
         for s in similar:
             s_title = s.get("title") or "Untitled"
             s_date = s.get("local_start") or s.get("start_date") or ""
@@ -817,6 +825,7 @@ def _research_event(
         f"Timezone: {timezone_name}\n\n"
         "Perspective: this is preparation for the calendar owner. If the owner appears "
         "by name or alias in notes, treat that as 'you' (second person), not a third person.\n\n"
+        "Differentiate clearly between the current upcoming event and historical references.\n"
         f"{event_text}\n\n"
         "Return your research findings as concise bullet points. "
         "Include source URLs when available."
@@ -890,10 +899,20 @@ def _synthesise_event_summary(
         f"{event_text}"
         f"{research_block}"
         f"{user_context_block}\n\n"
+        "Use this interpretation rule:\n"
+        "- 'CURRENT UPCOMING EVENT' and 'Current event notes' are about the event being prepared now.\n"
+        "- 'Historical similar occurrences' are past references for pattern extraction only.\n"
+        "Never mix up current commitments with historical notes.\n\n"
         "Perspective: this summary is for the calendar owner. Use second-person framing where useful\n"
         "(for example 'you will review metrics'). If owner names/aliases appear in notes,\n"
         "rewrite those references to second person. Avoid third-person self-references like\n"
         "'align with <owner name>' when referring to the owner.\n\n"
+        "Quality bar (strict):\n"
+        "- Only include non-obvious, high-value points grounded in the provided context/research.\n"
+        "- Do NOT output generic prep advice (for example, reviewing notes, checking agenda,\n"
+        "  preparing talking points, or calendar hygiene).\n"
+        "- Your goal is to do work that the user would have to do themselves, not to just point out what they need to do.\n"
+        "- If a section has no meaningful insight, omit that section.\n\n"
         "Respond with exactly these sections (skip a section if nothing relevant):\n"
         "KEY POINTS:\n"
         "- Important context from past occurrences or notes\n\n"
@@ -912,10 +931,64 @@ def _synthesise_event_summary(
             temperature=0.1,
             use_simpler_model=False,
         )
-        return result.strip()
+        return _sanitize_event_summary_output(result)
     except Exception:
         logger.warning("Failed to summarize event '%s', using fallback", title, exc_info=True)
         return ""
+
+
+def _sanitize_event_summary_output(raw_text: str) -> str:
+    """Filter low-value generic prep bullets from synthesized event summaries."""
+    text = str(raw_text or "").strip()
+    if not text:
+        return ""
+
+    section_order = ["KEY POINTS", "ACTION ITEMS", "SUGGESTED READING", "PREP FOCUS"]
+    sections: dict[str, list[str]] = {name: [] for name in section_order}
+    current_section = ""
+
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        upper = line.rstrip(":").upper()
+        if upper in sections:
+            current_section = upper
+            continue
+        if not current_section:
+            continue
+
+        normalized = line[1:].strip() if line.startswith("-") else line
+        if not normalized:
+            continue
+        if current_section != "SUGGESTED READING" and _is_low_value_prep_line(normalized):
+            continue
+        sections[current_section].append(normalized)
+
+    rendered: list[str] = []
+    for section in section_order:
+        items = sections[section]
+        if not items:
+            continue
+        rendered.append(f"{section}:")
+        if section == "PREP FOCUS":
+            rendered.append(f"- {items[0]}")
+        else:
+            for item in items:
+                rendered.append(f"- {item}")
+        rendered.append("")
+
+    return "\n".join(rendered).strip()
+
+
+def _is_low_value_prep_line(text: str) -> bool:
+    cleaned = re.sub(r"\s+", " ", str(text or "")).strip()
+    if not cleaned:
+        return True
+    for pattern in _LOW_VALUE_PREP_PATTERNS:
+        if pattern.search(cleaned):
+            return True
+    return False
 
 
 def _generate_markdown(
@@ -1009,6 +1082,9 @@ def _generate_event_sections_markdown(
         "## Event Prep\n\n"
         "Rules:\n"
         "- Focus only on today's events and linked prep/actions.\n"
+        "- Day Overview must be strategic (1-2 bullets) and must NOT repeat schedule lines or times.\n"
+        "- Schedule must stay factual (time, event title, optional location) with no extra advice.\n"
+        "- Event Prep must contain non-obvious insights only; do not repeat schedule facts.\n"
         "- Use future-oriented prep language.\n"
         "- The reader is the calendar owner; use second-person framing where useful.\n"
         "- If the owner name/alias appears in context, rewrite it to 'you/your'.\n"

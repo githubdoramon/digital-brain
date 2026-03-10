@@ -47,6 +47,9 @@ This document captures behavior and quality rules for the daily briefing profile
 - The briefing is written for the calendar owner (the authenticated user).
 - Prefer owner-facing language (for example, "you will review...") and avoid third-person owner references.
 - Event prep should avoid phrasing like "align with <owner name>" when that name is the user.
+- Event prep output should suppress low-value generic advice (for example "review notes", "confirm agenda", "prepare talking points") and only keep context-grounded, non-obvious items.
+- Event synthesis should explicitly separate current upcoming-event context from historical similar-event references.
+- Keep `Day Overview` strategic and concise, while `Schedule` carries the concrete per-event timeline.
 
 ## User Context Injection
 

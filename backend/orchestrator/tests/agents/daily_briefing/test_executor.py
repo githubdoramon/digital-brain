@@ -209,7 +209,7 @@ class TestFormatEventForAnalysis:
     def test_includes_title_and_time(self):
         event = _make_event_context(title="Board Meeting")
         text = _format_event_for_analysis(event)
-        assert "Event: Board Meeting" in text
+        assert "CURRENT UPCOMING EVENT: Board Meeting" in text
         assert "Time:" in text
 
     def test_includes_similar_events(self):
@@ -223,7 +223,7 @@ class TestFormatEventForAnalysis:
         ]
         event = _make_event_context(title="Board", similar_events=similar)
         text = _format_event_for_analysis(event)
-        assert "Past occurrences" in text
+        assert "Historical similar occurrences" in text
         assert "Past Board" in text
         assert "Discussed budget" in text
 
@@ -339,6 +339,26 @@ class TestSynthesiseEventSummary:
         _synthesise_event_summary("Event: Conf", "- agenda link", "Conf", "UTC")
         prompt = mock_call_llm.call_args[0][0]
         assert "SUGGESTED READING" in prompt
+
+    @patch("agents.daily_briefing.executor.call_llm")
+    def test_filters_low_value_generic_action_items(self, mock_call_llm):
+        mock_call_llm.return_value = (
+            "KEY POINTS:\n"
+            "- Procurement asked for final budget sign-off by 15:00.\n"
+            "ACTION ITEMS:\n"
+            "- Review previous meeting notes.\n"
+            "- Prepare talking points.\n"
+            "- Send finance risk memo before the meeting.\n"
+            "PREP FOCUS:\n"
+            "- Confirm the agenda.\n"
+        )
+
+        result = _synthesise_event_summary("Event: Finance Review", "", "Finance Review", "UTC")
+
+        assert "Review previous meeting notes" not in result
+        assert "Prepare talking points" not in result
+        assert "Confirm the agenda" not in result
+        assert "Send finance risk memo" in result
 
     @patch("agents.daily_briefing.executor.call_llm", side_effect=Exception("LLM down"))
     def test_returns_empty_on_failure(self, mock_call_llm):

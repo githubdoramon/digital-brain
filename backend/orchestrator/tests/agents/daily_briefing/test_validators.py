@@ -13,6 +13,7 @@ from agents.daily_briefing.validators import (
     _validate_llm_judge,
     _validate_structural,
     validate_briefing,
+    validate_event_sections,
     validate_summary,
 )
 
@@ -294,6 +295,30 @@ class TestValidateSummary:
 
     def test_short_clean_summary_passes(self):
         result = validate_summary("Quiet day with no meetings. 1 pending todo to review.")
+        assert result.valid
+
+
+class TestValidateEventSections:
+    def test_accepts_schedule_titles_without_exact_raw_substring(self):
+        content = (
+            "## Day Overview\n"
+            "- You have three meetings scheduled today.\n"
+            "## Schedule\n"
+            "- **10:30 - 10:55** - 1:1 with Sean\n"
+            "- **11:30 - 11:55** - 1:1 with Seb\n"
+            "- **15:00 - 16:00** - Leadership weekly\n"
+            "## Event Prep\n"
+            "### 10:30 - 1:1 with Sean\n"
+            "- Discuss hiring blockers\n"
+        )
+        context = _ctx(
+            events=[
+                _event("1:1 with Sean"),
+                _event("1:1 with Seb"),
+                _event("Leadership weekly"),
+            ]
+        )
+        result = validate_event_sections(content, context)
         assert result.valid
 
 
