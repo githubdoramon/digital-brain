@@ -3,10 +3,11 @@ from __future__ import annotations
 from datetime import date, datetime
 from typing import Any
 
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Response
+
 import daily_briefings
 from async_jobs import enqueue_job, mark_failed, mark_running, mark_succeeded
 from auth import get_current_user, require_service_api_key
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Response
 from observability.logger import get_runtime_logger
 from schemas import DailyBriefingIn, DailyBriefingOut
 

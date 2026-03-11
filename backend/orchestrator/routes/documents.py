@@ -4,10 +4,11 @@ import json
 import os
 from datetime import datetime
 
-import documents
-from auth import get_current_user, require_service_api_key
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse
+
+import documents
+from auth import get_current_user, require_service_api_key
 from observability.logger import get_runtime_logger
 from schemas import DocumentCollection, DocumentDetailOut, DocumentSearchIn, DocumentUpdateIn
 

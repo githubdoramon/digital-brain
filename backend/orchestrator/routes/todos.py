@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+from fastapi import APIRouter, Depends, HTTPException, Query
+
 import todos as todos_service
 from auth import get_current_user
-from fastapi import APIRouter, Depends, HTTPException, Query
 from schemas import TodoIn, TodoStatusUpdateIn
 
 

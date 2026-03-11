@@ -2,14 +2,21 @@ from __future__ import annotations
 
 from typing import Any
 
+from fastapi import APIRouter, Depends, HTTPException, Query
+
 import events as events_service
 import todos as todos_service
 from auth import get_current_user, require_service_api_key
 from commands.event import confirm_event_command as confirm_event_command_impl
 from db import get_conn
-from fastapi import APIRouter, Depends, HTTPException, Query
 from observability.logger import get_runtime_logger
-from schemas import EventCommandConfirmation, EventCommandResult, EventIn, ExternalEventPayload, MeetingIn
+from schemas import (
+    EventCommandConfirmation,
+    EventCommandResult,
+    EventIn,
+    ExternalEventPayload,
+    MeetingIn,
+)
 
 logger = get_runtime_logger(__name__)
 

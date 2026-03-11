@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+from fastapi import APIRouter, Depends, HTTPException
+
 import news_feeds
 import news_personalization
 from auth import get_current_user
-from fastapi import APIRouter, Depends, HTTPException
 from observability.logger import get_runtime_logger
 from schemas import NewsInteractionsIn, NewsTopicIn
 

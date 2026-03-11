@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
+
 import devices as devices_service
 import user_facts
 from auth import get_current_user
-from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from notifications.preferences import get_push_settings, update_push_settings
 from schemas import (
     DeviceRegisterIn,

@@ -3,11 +3,12 @@ from __future__ import annotations
 import asyncio
 import json
 
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
+from fastapi.responses import StreamingResponse
+
 import action_logs
 import immich_client
 from auth import get_current_user, require_service_api_key
-from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
-from fastapi.responses import StreamingResponse
 from observability.log_stream import LOG_LEVELS, get_log_buffer
 from schemas import ServiceVersionCollection
 from versioning import get_service_versions

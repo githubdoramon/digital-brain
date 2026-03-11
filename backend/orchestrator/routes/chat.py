@@ -8,20 +8,17 @@ from time import perf_counter
 from typing import Any, Callable
 from uuid import uuid4
 
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Response
+from fastapi.responses import StreamingResponse
+
 import conversations
 import llm
-from agent.state import AgentState
 from auth import get_current_user
-from commands.event import (
-    confirm_event_command as confirm_event_command_impl,
-)
 from commands.event import (
     event_pending_key,
     handle_pending_event,
 )
 from db import get_conn
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Response
-from fastapi.responses import StreamingResponse
 from observability.logger import get_runtime_logger
 from schemas import (
     AskIn,

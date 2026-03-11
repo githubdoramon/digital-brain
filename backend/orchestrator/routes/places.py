@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+from fastapi import APIRouter, Depends, HTTPException, Query
+
 import contacts as contacts_service
 import places as places_service
 from auth import get_current_user
-from fastapi import APIRouter, Depends, HTTPException, Query
 from schemas import PlaceIn
 
 

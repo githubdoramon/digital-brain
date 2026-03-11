@@ -3,11 +3,12 @@ from __future__ import annotations
 from time import perf_counter
 from typing import Any
 
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
+
 import skills
 import telegram_bot
 from agent.state import AgentState
 from auth import get_current_user, require_service_api_key
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from observability.logger import get_runtime_logger
 from schemas import ToolRunIn, ToolRunOut
 from tools.handlers import get_handler

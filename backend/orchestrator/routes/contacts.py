@@ -2,12 +2,13 @@ from __future__ import annotations
 
 from typing import Any
 
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
+
 import contact_groups as contact_groups_service
 import contacts as contacts_service
 import immich_client
 import places as places_service
 from auth import get_current_user, require_service_api_key
-from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from observability.logger import get_runtime_logger
 from schemas import (
     ContactGroupIn,
