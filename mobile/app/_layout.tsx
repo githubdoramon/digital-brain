@@ -237,6 +237,12 @@ function RootLayoutNav({ loaded }: { loaded: boolean }) {
             headerShown: false,
           }}
         />
+        <Stack.Screen
+          name="news/article/[briefingItemId]/index"
+          options={{
+            headerShown: false,
+          }}
+        />
         <Stack.Screen name="modal" options={{ presentation: 'modal' }} />
       </Stack>
     </ThemeProvider>

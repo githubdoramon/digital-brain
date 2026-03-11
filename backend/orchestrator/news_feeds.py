@@ -19,9 +19,12 @@ from __future__ import annotations
 import hashlib
 import os
 import re
+from collections import Counter
 from datetime import datetime, timezone
 from time import perf_counter
 from typing import Any
+from urllib.parse import parse_qsl, urlparse, urlunparse
+from uuid import uuid4
 
 import feedparser
 import requests
@@ -44,6 +47,31 @@ def _ms_since(start: float) -> float:
 # ---------------------------------------------------------------------------
 
 DEFAULT_TAVILY_NEWS_RESULTS = 5
+DEFAULT_NEWSDATA_RESULTS = 10
+
+NEWSDATA_API_URL = os.getenv("NEWSDATA_API_URL", "https://newsdata.io/api/1/news")
+NEWSDATA_REQUEST_TIMEOUT = int(os.getenv("NEWSDATA_TIMEOUT", "20"))
+NEWSDATA_MAX_QUERIES_PER_RUN = int(os.getenv("NEWSDATA_MAX_QUERIES_PER_RUN", "8"))
+NEWSDATA_RESULTS_PER_QUERY = int(os.getenv("NEWSDATA_RESULTS_PER_QUERY", str(DEFAULT_NEWSDATA_RESULTS)))
+
+_TRACKING_QUERY_KEYS = {
+    "utm_source",
+    "utm_medium",
+    "utm_campaign",
+    "utm_term",
+    "utm_content",
+    "utm_name",
+    "utm_cid",
+    "utm_reader",
+    "utm_viz_id",
+    "utm_pubreferrer",
+    "gclid",
+    "fbclid",
+    "mc_cid",
+    "mc_eid",
+    "ref",
+    "spm",
+}
 
 RSS_FEEDS: dict[str, dict[str, str]] = {
     "hacker_news": {
@@ -76,6 +104,7 @@ NewsArticle = dict[str, Any]
 def fetch_news(
     *,
     max_tavily_per_topic: int = DEFAULT_TAVILY_NEWS_RESULTS,
+    max_newsdata_per_query: int = NEWSDATA_RESULTS_PER_QUERY,
     feed_limit_per_source: int = 10,
 ) -> list[NewsArticle]:
     """Main entry-point: fetch news from all sources, filtered by DB topics.
@@ -111,7 +140,24 @@ def fetch_news(
 
     articles: list[NewsArticle] = []
 
-    # -- 1. Tavily topic searches (one search per topic) ---------------------
+    # -- 1. NewsData queries (free-tier budgeted) -----------------------------
+    newsdata_start = perf_counter()
+    newsdata_total = 0
+    newsdata_queries = _build_newsdata_queries(topics)
+    for query in newsdata_queries[: max(1, NEWSDATA_MAX_QUERIES_PER_RUN)]:
+        results = _search_newsdata_news(query, max_results=max_newsdata_per_query)
+        for article in results:
+            article["topic_matches"] = _match_topics(article, topics)
+        newsdata_total += len(results)
+        articles.extend(results)
+    logger.info(
+        "[news] NewsData: %d article(s) from %d query(ies) (%.0fms)",
+        newsdata_total,
+        min(len(newsdata_queries), max(1, NEWSDATA_MAX_QUERIES_PER_RUN)),
+        _ms_since(newsdata_start),
+    )
+
+    # -- 2. Tavily topic searches (one search per topic) ---------------------
     tavily_start = perf_counter()
     tavily_total = 0
     for topic in topics:
@@ -128,7 +174,7 @@ def fetch_news(
         _ms_since(tavily_start),
     )
 
-    # -- 2. RSS feeds --------------------------------------------------------
+    # -- 3. RSS feeds --------------------------------------------------------
     rss_start = perf_counter()
     rss_total = 0
     for feed_id, feed_meta in RSS_FEEDS.items():
@@ -154,7 +200,14 @@ def fetch_news(
         )
     logger.info("[news] RSS total: %d article(s) (%.0fms)", rss_total, _ms_since(rss_start))
 
-    # -- 3. Deduplicate & sort -----------------------------------------------
+    # -- 4. Canonicalize/cluster/persist + deduplicate & sort ----------------
+    for article in articles:
+        article["url"] = _canonicalize_url(str(article.get("url") or ""))
+        article["source_domain"] = _extract_source_domain(str(article.get("url") or ""))
+
+    articles = _attach_story_clusters(articles)
+    _persist_story_mentions(articles)
+
     before_dedup = len(articles)
     articles = _deduplicate(articles)
     articles.sort(key=_sort_key, reverse=True)
@@ -226,6 +279,170 @@ def delete_topic(topic_id: str) -> bool:
         )
         conn.commit()
         return cur.rowcount > 0
+
+
+def get_cluster_signal_map(
+    cluster_ids: list[str],
+    *,
+    user_email: str | None = None,
+) -> dict[str, dict[str, float]]:
+    if not cluster_ids:
+        return {}
+    clean_ids = [cid for cid in cluster_ids if cid]
+    if not clean_ids:
+        return {}
+
+    try:
+        with get_conn() as conn, conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT
+                  cluster_id,
+                  COUNT(*) FILTER (WHERE ingested_at >= NOW() - INTERVAL '1 day') AS mentions_1d,
+                  COUNT(*) FILTER (WHERE ingested_at >= NOW() - INTERVAL '7 day') AS mentions_7d
+                FROM news_story_mentions
+                WHERE cluster_id = ANY(%s)
+                GROUP BY cluster_id
+                """,
+                (clean_ids,),
+            )
+            mention_rows = cur.fetchall()
+
+            if user_email:
+                cur.execute(
+                    """
+                    SELECT cluster_id, COUNT(*) AS recent_hits
+                    FROM daily_briefing_news_items
+                    WHERE cluster_id = ANY(%s)
+                      AND user_email = %s
+                      AND created_at >= NOW() - INTERVAL '3 day'
+                    GROUP BY cluster_id
+                    """,
+                    (clean_ids, user_email),
+                )
+            else:
+                cur.execute(
+                    """
+                    SELECT cluster_id, COUNT(*) AS recent_hits
+                    FROM daily_briefing_news_items
+                    WHERE cluster_id = ANY(%s)
+                      AND created_at >= NOW() - INTERVAL '3 day'
+                    GROUP BY cluster_id
+                    """,
+                    (clean_ids,),
+                )
+            seen_rows = cur.fetchall()
+    except Exception:
+        logger.warning("[news] Failed to load cluster trend signals", exc_info=True)
+        return {}
+
+    seen_map = {
+        str(dict(row).get("cluster_id") or ""): float(dict(row).get("recent_hits") or 0.0)
+        for row in seen_rows
+    }
+    out: dict[str, dict[str, float]] = {}
+    for row in mention_rows:
+        row_data = dict(row)
+        cluster_id = str(row_data.get("cluster_id") or "")
+        if not cluster_id:
+            continue
+        mentions_1d = float(row_data.get("mentions_1d") or 0.0)
+        mentions_7d = float(row_data.get("mentions_7d") or 0.0)
+        baseline = max((mentions_7d - mentions_1d) / 6.0, 1.0)
+        trend_score = mentions_1d / baseline
+        novelty_penalty = seen_map.get(cluster_id, 0.0)
+        out[cluster_id] = {
+            "mentions_1d": mentions_1d,
+            "mentions_7d": mentions_7d,
+            "trend_score": trend_score,
+            "novelty_penalty": novelty_penalty,
+        }
+    return out
+
+
+def _build_newsdata_queries(topics: list[dict[str, Any]]) -> list[str]:
+    queries: list[str] = ["world news"]
+    for topic in topics:
+        label = str(topic.get("label") or "").strip()
+        if label:
+            queries.append(label)
+        for keyword in topic.get("keywords") or []:
+            kw = str(keyword).strip()
+            if kw:
+                queries.append(kw)
+
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for query in queries:
+        normalized = normalize_search_text(query)
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        deduped.append(query)
+    return deduped
+
+
+def _search_newsdata_news(
+    query: str,
+    *,
+    max_results: int = DEFAULT_NEWSDATA_RESULTS,
+) -> list[NewsArticle]:
+    api_key = os.getenv("NEWSDATA_API_KEY")
+    if not api_key:
+        return []
+
+    params = {
+        "apikey": api_key,
+        "q": query,
+        "language": os.getenv("NEWSDATA_LANGUAGE", "en"),
+        "size": max(1, min(max_results, 10)),
+    }
+
+    try:
+        t0 = perf_counter()
+        response = requests.get(
+            NEWSDATA_API_URL,
+            params=params,
+            timeout=NEWSDATA_REQUEST_TIMEOUT,
+        )
+        response.raise_for_status()
+        payload = response.json()
+        logger.debug(
+            "[news.newsdata] Search '%s': %d result(s) (%.0fms)",
+            query,
+            len(payload.get("results") or []),
+            _ms_since(t0),
+        )
+    except Exception:
+        logger.warning("[news.newsdata] Query failed for '%s'", query, exc_info=True)
+        return []
+
+    articles: list[NewsArticle] = []
+    for item in payload.get("results") or []:
+        url = str(item.get("link") or item.get("url") or "").strip()
+        title = str(item.get("title") or "").strip()
+        if not title:
+            continue
+        source = str(
+            item.get("source_id")
+            or item.get("source_name")
+            or item.get("source")
+            or "newsdata"
+        ).strip()
+        summary = str(item.get("description") or item.get("content") or "").strip()
+        published_at = item.get("pubDate") or item.get("published_at")
+        articles.append(
+            {
+                "title": title,
+                "url": url,
+                "summary": summary,
+                "source": source,
+                "provider": "newsdata",
+                "published_at": published_at,
+                "topic_matches": [],
+            }
+        )
+    return articles
 
 
 # ---------------------------------------------------------------------------
@@ -434,17 +651,228 @@ def _whole_word_present(token: str, text: str) -> bool:
     return bool(re.search(rf"\b{re.escape(token)}\b", text))
 
 
+def _extract_source_domain(url: str) -> str:
+    parsed = urlparse(url)
+    host = (parsed.netloc or "").lower()
+    if host.startswith("www."):
+        host = host[4:]
+    return host
+
+
+def _canonicalize_url(url: str) -> str:
+    value = (url or "").strip()
+    if not value:
+        return ""
+    if value.startswith("www."):
+        value = f"https://{value}"
+
+    try:
+        parsed = urlparse(value)
+    except Exception:
+        return value
+
+    scheme = parsed.scheme.lower() or "https"
+    netloc = (parsed.netloc or "").lower()
+    if netloc.startswith("www."):
+        netloc = netloc[4:]
+    path = parsed.path or ""
+    path = re.sub(r"/+", "/", path)
+    if path == "/":
+        path = ""
+    elif len(path) > 1 and path.endswith("/"):
+        path = path[:-1]
+
+    query_pairs = []
+    for key, val in parse_qsl(parsed.query, keep_blank_values=False):
+        if key.lower() in _TRACKING_QUERY_KEYS:
+            continue
+        query_pairs.append((key, val))
+    query_pairs.sort(key=lambda item: (item[0], item[1]))
+    query = "&".join(f"{k}={v}" for k, v in query_pairs)
+    return urlunparse((scheme, netloc, path, "", query, ""))
+
+
+def _story_fingerprint(article: NewsArticle) -> str:
+    canonical_url = _canonicalize_url(str(article.get("url") or ""))
+    title = normalize_search_text(str(article.get("title") or ""))
+    summary = normalize_search_text(str(article.get("summary") or ""))
+    title_tokens = [token for token in re.split(r"[^a-z0-9]+", title) if len(token) >= 4]
+    summary_tokens = [token for token in re.split(r"[^a-z0-9]+", summary) if len(token) >= 4]
+    token_stream = [*title_tokens[:8], *summary_tokens[:6]]
+    deduped_tokens = list(dict.fromkeys(token_stream))
+    token_signature = " ".join(deduped_tokens)
+    if token_signature:
+        seed = token_signature
+    elif title:
+        seed = title
+    else:
+        seed = canonical_url
+    return hashlib.sha256(seed.encode("utf-8")).hexdigest()
+
+
+def _attach_story_clusters(articles: list[NewsArticle]) -> list[NewsArticle]:
+    if not articles:
+        return []
+
+    clusters: dict[str, NewsArticle] = {}
+    for article in articles:
+        fingerprint = _story_fingerprint(article)
+        cluster_id = f"story:{fingerprint[:20]}"
+        article["story_fingerprint"] = fingerprint
+        article["cluster_id"] = cluster_id
+
+        existing = clusters.get(cluster_id)
+        if not existing:
+            clusters[cluster_id] = article
+            continue
+
+        merged_topics = list(dict.fromkeys((existing.get("topic_matches") or []) + (article.get("topic_matches") or [])))
+        existing["topic_matches"] = merged_topics
+
+        existing_quality = 1 if existing.get("topic_matches") else 0
+        incoming_quality = 1 if article.get("topic_matches") else 0
+        if incoming_quality > existing_quality:
+            clusters[cluster_id] = article
+            clusters[cluster_id]["topic_matches"] = merged_topics
+
+    cluster_counts = Counter(str(article.get("cluster_id") or "") for article in articles)
+    for article in articles:
+        cluster_id = str(article.get("cluster_id") or "")
+        article["cluster_size"] = int(cluster_counts.get(cluster_id, 1))
+    return articles
+
+
+def _persist_story_mentions(articles: list[NewsArticle]) -> None:
+    if not articles:
+        return
+    try:
+        with get_conn() as conn, conn.cursor() as cur:
+            for article in articles:
+                cluster_id = str(article.get("cluster_id") or "")
+                fingerprint = str(article.get("story_fingerprint") or "")
+                if not cluster_id or not fingerprint:
+                    continue
+                source_domain = str(article.get("source_domain") or "")
+                canonical_url = _canonicalize_url(str(article.get("url") or ""))
+                title = str(article.get("title") or "Untitled").strip()
+                summary = str(article.get("summary") or "").strip()
+                source = str(article.get("source") or "unknown").strip()
+                provider = str(article.get("provider") or source).strip()
+                published_at = _parse_datetime_for_db(article.get("published_at"))
+                metadata = {
+                    "cluster_size": article.get("cluster_size"),
+                    "topic_matches": article.get("topic_matches") or [],
+                }
+
+                cur.execute(
+                    """
+                    INSERT INTO news_story_clusters (
+                      cluster_id,
+                      story_fingerprint,
+                      canonical_title,
+                      canonical_url,
+                      source_domain,
+                      first_seen_at,
+                      last_seen_at,
+                      mention_count,
+                      metadata
+                    )
+                    VALUES (%s, %s, %s, %s, %s, NOW(), NOW(), 1, %s::jsonb)
+                    ON CONFLICT (cluster_id) DO UPDATE
+                      SET canonical_title = EXCLUDED.canonical_title,
+                          canonical_url = COALESCE(EXCLUDED.canonical_url, news_story_clusters.canonical_url),
+                          source_domain = COALESCE(EXCLUDED.source_domain, news_story_clusters.source_domain),
+                          last_seen_at = NOW(),
+                          mention_count = news_story_clusters.mention_count + 1,
+                          metadata = EXCLUDED.metadata
+                    """,
+                    (
+                        cluster_id,
+                        fingerprint,
+                        title,
+                        canonical_url or None,
+                        source_domain or None,
+                        _to_json(metadata),
+                    ),
+                )
+
+                cur.execute(
+                    """
+                    INSERT INTO news_story_mentions (
+                      mention_id,
+                      cluster_id,
+                      provider,
+                      source,
+                      source_domain,
+                      article_url,
+                      canonical_url,
+                      title,
+                      summary,
+                      topic_matches,
+                      published_at,
+                      ingested_at,
+                      metadata
+                    )
+                    VALUES (
+                      %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW(), %s::jsonb
+                    )
+                    """,
+                    (
+                        f"news_mention:{uuid4().hex}",
+                        cluster_id,
+                        provider,
+                        source,
+                        source_domain or None,
+                        str(article.get("url") or "").strip() or None,
+                        canonical_url or None,
+                        title,
+                        summary or None,
+                        article.get("topic_matches") or [],
+                        published_at,
+                        _to_json(metadata),
+                    ),
+                )
+            conn.commit()
+    except Exception:
+        logger.warning("[news] Failed persisting story clusters/mentions", exc_info=True)
+
+
+def _parse_datetime_for_db(value: Any) -> datetime | None:
+    if not value:
+        return None
+    raw = str(value).strip()
+    if not raw:
+        return None
+    try:
+        parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed
+    except Exception:
+        return None
+
+
+def _to_json(value: dict[str, Any]) -> str:
+    import json
+
+    return json.dumps(value)
+
+
 def _deduplicate(articles: list[NewsArticle]) -> list[NewsArticle]:
     """Remove duplicate articles based on URL, merging topic_matches."""
     seen: dict[str, NewsArticle] = {}
     for article in articles:
-        key = _article_key(article)
+        key = str(article.get("cluster_id") or _article_key(article))
         if key in seen:
             existing = seen[key]
             merged_topics = list(
                 dict.fromkeys(existing["topic_matches"] + article["topic_matches"])
             )
             existing["topic_matches"] = merged_topics
+            existing["cluster_size"] = max(
+                int(existing.get("cluster_size") or 1),
+                int(article.get("cluster_size") or 1),
+            )
         else:
             seen[key] = article
     return list(seen.values())
@@ -452,18 +880,19 @@ def _deduplicate(articles: list[NewsArticle]) -> list[NewsArticle]:
 
 def _article_key(article: NewsArticle) -> str:
     """Stable key for dedup — prefer URL, fall back to title hash."""
-    url = (article.get("url") or "").strip()
+    url = _canonicalize_url(str(article.get("url") or ""))
     if url:
         return url
-    title = (article.get("title") or "").strip().lower()
+    title = normalize_search_text(str(article.get("title") or "").strip())
     return hashlib.sha256(title.encode()).hexdigest()
 
 
 def _sort_key(article: NewsArticle) -> tuple:
     """Sort articles: topic-matched first, then by recency."""
     has_topics = 1 if article.get("topic_matches") else 0
+    cluster_size = int(article.get("cluster_size") or 1)
     published = article.get("published_at") or ""
-    return (has_topics, published)
+    return (has_topics, cluster_size, published)
 
 
 def _parse_rss_date(entry: Any) -> str | None:

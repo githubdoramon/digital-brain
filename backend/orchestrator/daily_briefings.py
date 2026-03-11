@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime
 from typing import Any
 from uuid import uuid4
 
@@ -122,7 +122,13 @@ def get_daily_briefing(
             )
         raw_row = cur.fetchone()
     row = _row_to_dict(raw_row)
-    return _serialize_briefing(row) if row else None
+    if not row:
+        return None
+    briefing = _serialize_briefing(row)
+    briefing["news_items"] = list_daily_briefing_news_items(
+        briefing_id=str(briefing.get("briefing_id") or "")
+    )
+    return briefing
 
 
 def get_latest_daily_briefing(*, user_email: str | None) -> dict[str, Any] | None:
@@ -149,7 +155,131 @@ def get_latest_daily_briefing(*, user_email: str | None) -> dict[str, Any] | Non
         )
         raw_row = cur.fetchone()
     row = _row_to_dict(raw_row)
-    return _serialize_briefing(row) if row else None
+    if not row:
+        return None
+    briefing = _serialize_briefing(row)
+    briefing["news_items"] = list_daily_briefing_news_items(
+        briefing_id=str(briefing.get("briefing_id") or "")
+    )
+    return briefing
+
+
+def list_daily_briefing_news_items(*, briefing_id: str) -> list[dict[str, Any]]:
+    if not briefing_id:
+        return []
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT
+              briefing_item_id,
+              briefing_id,
+              user_email,
+              briefing_date,
+              timezone,
+              cluster_id,
+              title,
+              url,
+              source,
+              source_domain,
+              section,
+              topic_label,
+              rank,
+              score,
+              brief_summary,
+              topic_matches,
+              metadata,
+              created_at
+            FROM daily_briefing_news_items
+            WHERE briefing_id = %s
+            ORDER BY rank ASC
+            """,
+            (briefing_id,),
+        )
+        rows = cur.fetchall()
+    items: list[dict[str, Any]] = []
+    for row in rows:
+        item = dict(row)
+        briefing_date = item.get("briefing_date")
+        created_at = item.get("created_at")
+        if isinstance(briefing_date, date):
+            item["briefing_date"] = briefing_date.isoformat()
+        if isinstance(created_at, datetime):
+            item["created_at"] = created_at.isoformat()
+        items.append(item)
+    return items
+
+
+def replace_daily_briefing_news_items(
+    *,
+    briefing_id: str,
+    user_email: str | None,
+    briefing_date: date,
+    timezone: str,
+    items: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    resolved_user_email = (user_email or "default_user").strip() or "default_user"
+    if not briefing_id:
+        return []
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            "DELETE FROM daily_briefing_news_items WHERE briefing_id = %s",
+            (briefing_id,),
+        )
+        for idx, item in enumerate(items, start=1):
+            briefing_item_id = str(item.get("briefing_item_id") or f"briefing_news:{uuid4().hex}")
+            topic_matches = item.get("topic_matches")
+            if not isinstance(topic_matches, list):
+                topic_matches = []
+            metadata = item.get("metadata")
+            if not isinstance(metadata, dict):
+                metadata = {}
+            cur.execute(
+                """
+                INSERT INTO daily_briefing_news_items (
+                  briefing_item_id,
+                  briefing_id,
+                  user_email,
+                  briefing_date,
+                  timezone,
+                  cluster_id,
+                  title,
+                  url,
+                  source,
+                  source_domain,
+                  section,
+                  topic_label,
+                  rank,
+                  score,
+                  brief_summary,
+                  topic_matches,
+                  metadata
+                )
+                VALUES (
+                  %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb
+                )
+                """,
+                (
+                    briefing_item_id,
+                    briefing_id,
+                    resolved_user_email,
+                    briefing_date,
+                    timezone,
+                    item.get("cluster_id"),
+                    str(item.get("title") or "Untitled").strip(),
+                    item.get("url"),
+                    str(item.get("source") or "unknown").strip(),
+                    item.get("source_domain"),
+                    str(item.get("section") or "general").strip(),
+                    item.get("topic_label"),
+                    int(item.get("rank") or idx),
+                    item.get("score"),
+                    item.get("brief_summary"),
+                    topic_matches,
+                    _to_json(metadata),
+                ),
+            )
+        conn.commit()
+    return list_daily_briefing_news_items(briefing_id=briefing_id)
 
 
 def _serialize_briefing(row: dict[str, Any]) -> dict[str, Any]:
@@ -157,8 +287,8 @@ def _serialize_briefing(row: dict[str, Any]) -> dict[str, Any]:
     created_at = row.get("created_at")
     updated_at = row.get("updated_at")
     briefing_date_value = briefing_date.isoformat() if isinstance(briefing_date, date) else None
-    created_at_value = created_at.isoformat() if hasattr(created_at, "isoformat") else None
-    updated_at_value = updated_at.isoformat() if hasattr(updated_at, "isoformat") else None
+    created_at_value = created_at.isoformat() if isinstance(created_at, datetime) else None
+    updated_at_value = updated_at.isoformat() if isinstance(updated_at, datetime) else None
     return {
         "briefing_id": row.get("briefing_id"),
         "user_email": row.get("user_email"),
@@ -177,3 +307,9 @@ def _row_to_dict(row: Any | None) -> dict[str, Any] | None:
     if not row:
         return None
     return dict(row)
+
+
+def _to_json(value: dict[str, Any]) -> str:
+    import json
+
+    return json.dumps(value)

@@ -4,7 +4,7 @@ import asyncio
 import json
 import os
 from contextlib import asynccontextmanager, suppress
-from datetime import date, datetime
+from datetime import datetime
 from time import perf_counter
 from typing import Any, Callable
 from uuid import uuid4
@@ -29,14 +29,14 @@ import action_logs
 import contact_groups as contact_groups_service
 import contacts as contacts_service
 import conversations
-import daily_briefings
 import devices as devices_service
 import documents
 import events as events_service
 import immich_client
 import llm
-import news_feeds
 import places as places_service
+from routes.daily_briefing import create_daily_briefing_router
+from routes.news import create_news_router
 import skills
 import telegram_bot
 import todos as todos_service
@@ -69,8 +69,6 @@ from schemas import (
     ContactMergeIn,
     ContactPlaceLinkIn,
     ContactRelationshipIn,
-    DailyBriefingIn,
-    DailyBriefingOut,
     DeviceRegisterIn,
     DocumentCollection,
     DocumentDetailOut,
@@ -83,7 +81,6 @@ from schemas import (
     ExternalEventPayload,
     MainSessionOut,
     MeetingIn,
-    NewsTopicIn,
     NotificationSettingsOut,
     PlaceIn,
     PushNotificationsUpdateIn,
@@ -183,27 +180,6 @@ def _parse_iso_datetime(value: str | None) -> datetime | None:
         raise HTTPException(status_code=400, detail=f"Invalid document_date: {value}") from exc
 
 
-def _parse_iso_date(value: str | None) -> date:
-    if not value:
-        raise HTTPException(status_code=400, detail="date is required")
-    try:
-        return datetime.fromisoformat(value.replace("Z", "+00:00")).date()
-    except Exception as exc:
-        raise HTTPException(status_code=400, detail=f"Invalid date: {value}") from exc
-
-
-def _format_briefing_response(briefing: dict[str, Any]) -> dict[str, Any]:
-    return {
-        "briefing_id": briefing.get("briefing_id"),
-        "date": briefing.get("briefing_date"),
-        "timezone": briefing.get("timezone"),
-        "event_count": briefing.get("event_count") or 0,
-        "todo_count": briefing.get("todo_count") or 0,
-        "summary": briefing.get("summary") or "",
-        "markdown": briefing.get("markdown") or "",
-    }
-
-
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     configure_logging()
@@ -227,6 +203,11 @@ async def lifespan(app: FastAPI):
 
 
 api = FastAPI(title="Personal Memory Orchestrator", version="0.3", lifespan=lifespan)
+
+api.include_router(
+    create_daily_briefing_router(require_service_api_key=require_service_api_key)
+)
+api.include_router(create_news_router())
 
 # Configure CORS to allow requests from the frontend
 api.add_middleware(
@@ -1018,6 +999,7 @@ def validate_gate_access(
     if not contacts:
         raise HTTPException(status_code=403, detail="Not authorized")
 
+    open_gate = False
     for contact in contacts:
         contact_name = contact.get("display_name") or contact.get("contact_id") or "unknown"
         action_logs.insert_action_log(
@@ -1025,7 +1007,6 @@ def validate_gate_access(
             {"name": contact_name, "location": "gate"},
         )
         tags = [tag.lower() for tag in (contact.get("tags") or []) if isinstance(tag, str)]
-        open_gate = False
         if "gate-access" in tags:
             open_gate = True
             action_logs.insert_action_log(
@@ -1049,45 +1030,6 @@ def get_meeting(meeting_id: str, user: dict = Depends(get_current_user)):
     if not meeting:
         raise HTTPException(status_code=404, detail="Meeting not found")
     return meeting
-
-
-@api.get("/mobile/briefings/daily", response_model=DailyBriefingOut)
-def get_daily_briefing(
-    date_value: str = Query(..., alias="date"),
-    timezone: str | None = Query(default=None),
-    user: dict = Depends(get_current_user),
-):
-    user_email = user.get("email")
-    if not user_email:
-        raise HTTPException(status_code=400, detail="Authenticated user email missing")
-    briefing_date = _parse_iso_date(date_value)
-    briefing = daily_briefings.get_daily_briefing(
-        user_email=user_email,
-        briefing_date=briefing_date,
-        timezone=timezone,
-    )
-    if not briefing:
-        briefing = daily_briefings.get_daily_briefing(
-            user_email="default_user",
-            briefing_date=briefing_date,
-            timezone=timezone,
-        )
-    if not briefing:
-        raise HTTPException(status_code=404, detail="Briefing not found")
-    return _format_briefing_response(briefing)
-
-
-@api.get("/mobile/briefings/latest", response_model=DailyBriefingOut)
-def get_latest_briefing(user: dict = Depends(get_current_user)):
-    user_email = user.get("email")
-    if not user_email:
-        raise HTTPException(status_code=400, detail="Authenticated user email missing")
-    briefing = daily_briefings.get_latest_daily_briefing(user_email=user_email)
-    if not briefing:
-        briefing = daily_briefings.get_latest_daily_briefing(user_email="default_user")
-    if not briefing:
-        raise HTTPException(status_code=404, detail="Briefing not found")
-    return _format_briefing_response(briefing)
 
 
 # --------------------------- Ask endpoint (LLM-powered) ---------------------------
@@ -2197,57 +2139,6 @@ def resolve_contacts_endpoint(
 
 
 # ---------------------------------------------------------------------------
-# News Topics
-# ---------------------------------------------------------------------------
-
-
-@api.get("/news-topics")
-@api.get("/mobile/news-topics")
-def list_news_topics(user: dict = Depends(get_current_user)):
-    topics = news_feeds.list_topics()
-    return {"topics": topics}
-
-
-@api.post("/news-topics")
-@api.post("/mobile/news-topics")
-def upsert_news_topic(
-    payload: NewsTopicIn,
-    user: dict = Depends(get_current_user),
-):
-    topic = news_feeds.upsert_topic(
-        topic_id=payload.topic_id,
-        label=payload.label,
-        keywords=payload.keywords,
-        enabled=payload.enabled,
-    )
-    return topic
-
-
-@api.delete("/news-topics/{topic_id}")
-@api.delete("/mobile/news-topics/{topic_id}")
-def delete_news_topic(
-    topic_id: str,
-    user: dict = Depends(get_current_user),
-):
-    deleted = news_feeds.delete_topic(topic_id)
-    if not deleted:
-        raise HTTPException(status_code=404, detail="Topic not found")
-    return {"ok": True}
-
-
-@api.get("/news-topics/preview")
-@api.get("/mobile/news-topics/preview")
-def preview_news(user: dict = Depends(get_current_user)):
-    """Fetch news from all sources to preview topic matching."""
-    try:
-        articles = news_feeds.fetch_news()
-    except Exception as exc:
-        logger.warning("News preview fetch failed", exc_info=True)
-        raise HTTPException(status_code=502, detail=f"News fetch failed: {exc}") from exc
-    return {"articles": articles}
-
-
-# ---------------------------------------------------------------------------
 # Emergency Stock Endpoint
 # ---------------------------------------------------------------------------
 
@@ -2264,17 +2155,4 @@ def run_emergency_stock_endpoint(
     result = handle_emergency_stock_request()
     if result.get("status") == "error":
         raise HTTPException(status_code=500, detail=result.get("message", "Unknown error"))
-    return result
-
-
-@api.post("/agents/daily-briefing/run", response_model=DailyBriefingOut)
-def run_daily_briefing_agent(
-    payload: DailyBriefingIn,
-    _=Depends(require_service_api_key),
-):
-    from agents.daily_briefing.executor import handle_daily_briefing_request
-
-    result = handle_daily_briefing_request(payload.model_dump())
-    if result.get("status") == "error":
-        raise HTTPException(status_code=400, detail=result.get("message", "Invalid request"))
     return result

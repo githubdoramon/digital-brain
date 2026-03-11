@@ -7,10 +7,12 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date, datetime, time, timedelta, timezone
 from time import perf_counter
 from typing import Any
+from uuid import uuid4
 from zoneinfo import ZoneInfo
 
 import daily_briefings
 import news_feeds
+import news_personalization
 import retrieval
 import todos as todos_service
 from agent.tool_loop_runner import run_profiled_tool_loop
@@ -30,9 +32,11 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_SIMILAR_LIMIT = 4
 BIRTHDAY_LOOKAHEAD_DAYS = 7
-MAX_NEWS_TOPIC_ARTICLES = 24
-MAX_NEWS_ARTICLES_PER_TOPIC = 3
-MAX_NEWS_GENERAL_ARTICLES = 5
+MAX_NEWS_SELECTED_ARTICLES = 24
+NEWS_TOPIC_MIN_SCORE = 3.0
+NEWS_GENERAL_MIN_SCORE = 2.5
+NEWS_SOURCE_REPEAT_PENALTY = 0.8
+NEWS_TOPIC_REPEAT_PENALTY = 0.35
 NEWS_SUMMARY_MAX_WORKERS = 4
 EVENT_ENRICHMENT_MAX_WORKERS = 4
 EVENT_SUMMARY_MAX_WORKERS = 3
@@ -212,6 +216,7 @@ def build_daily_briefing(
     context = {
         "date": local_date.isoformat(),
         "timezone": timezone_name,
+        "user_email": user_email,
         "day_start": start_local.isoformat(),
         "day_end": end_local.isoformat(),
         "events": event_contexts,
@@ -255,6 +260,14 @@ def build_daily_briefing(
         event_count=len(events),
         todo_count=todo_count,
     )
+    news_items = _build_briefing_news_items(selected_news)
+    persisted_news_items = daily_briefings.replace_daily_briefing_news_items(
+        briefing_id=str(stored.get("briefing_id") or ""),
+        user_email=user_email,
+        briefing_date=local_date,
+        timezone=timezone_name,
+        items=news_items,
+    )
 
     total_ms = (perf_counter() - pipeline_start) * 1000
     logger.info(
@@ -273,6 +286,7 @@ def build_daily_briefing(
         "todo_count": todo_count,
         "summary": summary,
         "markdown": markdown,
+        "news_items": persisted_news_items,
     }
 
 
@@ -909,6 +923,9 @@ def _synthesise_event_summary(
         "'align with <owner name>' when referring to the owner.\n\n"
         "Quality bar (strict):\n"
         "- Only include non-obvious, high-value points grounded in the provided context/research.\n"
+        "- Do not include generic advice, like uploading documents somewhere if you don't know which documents you are talking about.\n"
+        "- Do not suggest invite reminders, the meetings are already schedule and have their own reminders. Also do not suggest reaching out to people to remind them about the meeting or about its agenda.\n"
+        "- Do not suggest testing/verifying audio or video quality, or testing connection speed.\n"
         "- Do NOT output generic prep advice (for example, reviewing notes, checking agenda,\n"
         "  preparing talking points, or calendar hygiene).\n"
         "- Your goal is to do work that the user would have to do themselves, not to just point out what they need to do.\n"
@@ -1264,52 +1281,155 @@ def _select_news_for_generation(context: dict[str, Any]) -> dict[str, Any]:
     """Select a bounded and relevance-ranked subset for news generation."""
     news_articles = context.get("news_articles") or []
     relevance_terms = _build_news_relevance_terms(context)
+    user_email = str(context.get("user_email") or "").strip() or None
+
+    topic_weights, source_weights = news_personalization.get_user_preference_weights(
+        user_email=user_email
+    )
+    cluster_ids = [str(article.get("cluster_id") or "") for article in news_articles]
+    cluster_signals = news_feeds.get_cluster_signal_map(cluster_ids, user_email=user_email)
 
     seen_keys: set[str] = set()
     scored_topic: list[tuple[float, dict[str, Any], str]] = []
     scored_general: list[tuple[float, dict[str, Any]]] = []
 
     for article in news_articles:
+        cluster_id = str(article.get("cluster_id") or "")
         url = (article.get("url") or "").strip().lower()
         title = (article.get("title") or "").strip().lower()
-        key = url or title
+        key = cluster_id or url or title
         if not key or key in seen_keys:
             continue
         seen_keys.add(key)
 
-        score = _score_news_article(article, relevance_terms)
+        score, breakdown = _score_news_article(
+            article,
+            relevance_terms,
+            topic_weights=topic_weights,
+            source_weights=source_weights,
+            trend_signal=cluster_signals.get(cluster_id, {}),
+        )
+        enriched_article = dict(article)
+        enriched_article["score_breakdown"] = breakdown
         matches = article.get("topic_matches") or []
         if matches:
             topic_label = str(matches[0]).strip() or "General"
-            scored_topic.append((score, article, topic_label))
+            scored_topic.append((score, enriched_article, topic_label))
             continue
 
-        scored_general.append((score, article))
+        scored_general.append((score, enriched_article))
 
     scored_topic.sort(key=lambda x: x[0], reverse=True)
     scored_general.sort(key=lambda x: x[0], reverse=True)
 
     topic_articles: list[dict[str, Any]] = []
     general_articles: list[dict[str, Any]] = []
+    source_counts: dict[str, int] = {}
     topic_counts: dict[str, int] = {}
+    used_clusters: set[str] = set()
 
     for _, article, topic in scored_topic:
-        if len(topic_articles) >= MAX_NEWS_TOPIC_ARTICLES:
+        if len(topic_articles) + len(general_articles) >= MAX_NEWS_SELECTED_ARTICLES:
             break
-        if topic_counts.get(topic, 0) >= MAX_NEWS_ARTICLES_PER_TOPIC:
+
+        raw_score = float(article.get("score_breakdown", {}).get("total", 0.0) or 0.0)
+        source_key = normalize_search_text(
+            str(article.get("source_domain") or article.get("source") or "unknown")
+        )
+        repetition_penalty = source_counts.get(source_key, 0) * NEWS_SOURCE_REPEAT_PENALTY
+        topic_penalty = topic_counts.get(topic, 0) * NEWS_TOPIC_REPEAT_PENALTY
+        adjusted_score = raw_score - repetition_penalty - topic_penalty
+        if adjusted_score < NEWS_TOPIC_MIN_SCORE:
             continue
+
+        cluster_id = str(article.get("cluster_id") or "")
+        if cluster_id and cluster_id in used_clusters:
+            continue
+        if cluster_id:
+            used_clusters.add(cluster_id)
+
         topic_counts[topic] = topic_counts.get(topic, 0) + 1
+        source_counts[source_key] = source_counts.get(source_key, 0) + 1
+        article["score"] = round(adjusted_score, 4)
+        article["section"] = "topic"
+        article["topic_label"] = topic
         topic_articles.append(article)
 
     for _, article in scored_general:
-        if len(general_articles) >= MAX_NEWS_GENERAL_ARTICLES:
+        if len(topic_articles) + len(general_articles) >= MAX_NEWS_SELECTED_ARTICLES:
             break
+        raw_score = float(article.get("score_breakdown", {}).get("total", 0.0) or 0.0)
+        source_key = normalize_search_text(
+            str(article.get("source_domain") or article.get("source") or "unknown")
+        )
+        repetition_penalty = source_counts.get(source_key, 0) * NEWS_SOURCE_REPEAT_PENALTY
+        adjusted_score = raw_score - repetition_penalty
+        if adjusted_score < NEWS_GENERAL_MIN_SCORE:
+            continue
+
+        cluster_id = str(article.get("cluster_id") or "")
+        if cluster_id and cluster_id in used_clusters:
+            continue
+        if cluster_id:
+            used_clusters.add(cluster_id)
+
+        source_counts[source_key] = source_counts.get(source_key, 0) + 1
+        article["score"] = round(adjusted_score, 4)
+        article["section"] = "general"
         general_articles.append(article)
 
     return {
         "topic_articles": topic_articles,
         "general_articles": general_articles,
     }
+
+
+def _build_briefing_news_items(selected_news: dict[str, Any]) -> list[dict[str, Any]]:
+    items: list[dict[str, Any]] = []
+    rank = 1
+
+    for article in selected_news.get("topic_articles") or []:
+        items.append(
+            {
+                "briefing_item_id": f"briefing_news:{uuid4().hex}",
+                "cluster_id": article.get("cluster_id"),
+                "title": article.get("title"),
+                "url": article.get("url"),
+                "source": article.get("source"),
+                "source_domain": article.get("source_domain"),
+                "section": "topic",
+                "topic_label": article.get("topic_label")
+                or ((article.get("topic_matches") or [None])[0]),
+                "rank": rank,
+                "score": article.get("score"),
+                "brief_summary": article.get("brief_summary"),
+                "topic_matches": article.get("topic_matches") or [],
+                "metadata": article.get("score_breakdown") or {},
+            }
+        )
+        rank += 1
+
+    for article in selected_news.get("general_articles") or []:
+        items.append(
+            {
+                "briefing_item_id": f"briefing_news:{uuid4().hex}",
+                "cluster_id": article.get("cluster_id"),
+                "title": article.get("title"),
+                "url": article.get("url"),
+                "source": article.get("source"),
+                "source_domain": article.get("source_domain"),
+                "section": "general",
+                "topic_label": None,
+                "rank": rank,
+                "score": article.get("score"),
+                "brief_summary": article.get("brief_summary"),
+                "topic_matches": article.get("topic_matches") or [],
+                "metadata": article.get("score_breakdown") or {},
+            }
+        )
+        rank += 1
+
+    return items
 
 
 def _build_news_relevance_terms(context: dict[str, Any]) -> set[str]:
@@ -1336,22 +1456,59 @@ def _build_news_relevance_terms(context: dict[str, Any]) -> set[str]:
     return terms
 
 
-def _score_news_article(article: dict[str, Any], relevance_terms: set[str]) -> float:
+def _score_news_article(
+    article: dict[str, Any],
+    relevance_terms: set[str],
+    *,
+    topic_weights: dict[str, float] | None = None,
+    source_weights: dict[str, float] | None = None,
+    trend_signal: dict[str, float] | None = None,
+) -> tuple[float, dict[str, float]]:
+    topic_weights = topic_weights or {}
+    source_weights = source_weights or {}
+    trend_signal = trend_signal or {}
+
     score = 0.0
+    breakdown: dict[str, float] = {}
     source = normalize_search_text(str(article.get("source") or ""))
     for source_key, weight in _NEWS_SOURCE_QUALITY.items():
         if source_key in source:
             score += weight
+            breakdown["source_quality"] = float(weight)
             break
 
     topic_matches = article.get("topic_matches") or []
-    score += min(len(topic_matches), 3) * 2.0
+    topic_match_score = min(len(topic_matches), 3) * 2.0
+    score += topic_match_score
+    breakdown["topic_match"] = float(topic_match_score)
 
     title = normalize_search_text(str(article.get("title") or ""))
     summary = normalize_search_text(str(article.get("summary") or ""))
     haystack = f"{title} {summary}"
     overlap = sum(1 for term in relevance_terms if term and term in haystack)
-    score += overlap * 1.5
+    overlap_score = overlap * 1.5
+    score += overlap_score
+    breakdown["context_overlap"] = float(overlap_score)
+
+    trend_score = float(trend_signal.get("trend_score") or 0.0)
+    novelty_penalty = float(trend_signal.get("novelty_penalty") or 0.0)
+    trend_boost = min(trend_score, 4.0) * 0.8
+    novelty_delta = min(novelty_penalty, 3.0) * 0.9
+    score += trend_boost
+    score -= novelty_delta
+    breakdown["trend_boost"] = float(trend_boost)
+    breakdown["novelty_penalty"] = float(-novelty_delta)
+
+    preference_score = 0.0
+    for label in topic_matches:
+        pref = topic_weights.get(normalize_search_text(str(label)), 0.0)
+        preference_score += pref
+    source_pref_key = normalize_search_text(
+        str(article.get("source_domain") or article.get("source") or "")
+    )
+    preference_score += source_weights.get(source_pref_key, 0.0)
+    score += preference_score
+    breakdown["user_preference"] = float(preference_score)
 
     published_at = article.get("published_at")
     published_dt = _parse_datetime(published_at)
@@ -1361,10 +1518,14 @@ def _score_news_article(article: dict[str, Any], relevance_terms: set[str]) -> f
         age_hours = max((datetime.now(timezone.utc) - published_dt).total_seconds() / 3600, 0)
         if age_hours <= 12:
             score += 2.0
+            breakdown["recency"] = 2.0
         elif age_hours <= 24:
             score += 1.0
+            breakdown["recency"] = 1.0
 
-    return score
+    breakdown["total"] = float(score)
+
+    return score, breakdown
 
 
 def _generate_news_section_markdown(
@@ -1565,7 +1726,7 @@ def _build_briefing_prompt(context: dict[str, Any]) -> str:
             "## News & Topics\n"
             "- Use ONLY concrete articles from the context below. Do NOT invent or generalize.\n"
             "- First list topic-matched articles (grouped by topic label), then up to 5 notable\n"
-            "  general headlines that cover important worldwide events.\n"
+            "  general headlines that pass relevance and worldwide importance thresholds.\n"
             "- Each item MUST follow this exact format:\n"
             "  [Article Title](url) - one sentence explaining why it matters or what happened. (Source)\n"
             "- The 1-sentence summary is the most valuable part -- the user should understand the\n"

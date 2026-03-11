@@ -30,6 +30,9 @@ import { useTopNotice } from '@/components/top-notice';
 import { theme } from '@/theme';
 
 type DailyBriefing = {
+  status?: 'ready' | 'pending' | 'failed';
+  job_id?: string | null;
+  message?: string | null;
   briefing_id?: string | null;
   date: string;
   timezone: string;
@@ -37,6 +40,22 @@ type DailyBriefing = {
   todo_count: number;
   summary: string;
   markdown: string;
+  news_items?: BriefingNewsItem[];
+};
+
+type BriefingNewsItem = {
+  briefing_item_id: string;
+  briefing_id?: string | null;
+  cluster_id?: string | null;
+  title: string;
+  url?: string | null;
+  source?: string | null;
+  source_domain?: string | null;
+  section: 'topic' | 'general';
+  topic_label?: string | null;
+  rank: number;
+  score?: number | null;
+  brief_summary?: string | null;
 };
 
 type TodoItem = {
@@ -59,6 +78,24 @@ function formatTimezone(): string {
   return Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
 }
 
+function normalizeArticleUrl(url: string): string {
+  const value = (url || '').trim();
+  if (!value) return '';
+  try {
+    const parsed = new URL(value.startsWith('http') ? value : `https://${value}`);
+    const host = parsed.hostname.toLowerCase().replace(/^www\./, '');
+    const path = parsed.pathname.replace(/\/+$/, '') || '/';
+    return `${host}${path}`;
+  } catch {
+    return value.toLowerCase();
+  }
+}
+
+function buildFallbackBriefingItemId(url: string): string {
+  const slug = normalizeArticleUrl(url).replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+  return slug ? `external-${slug.slice(0, 56)}` : 'external-link';
+}
+
 export default function DailyScreen() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
@@ -67,6 +104,7 @@ export default function DailyScreen() {
   const [briefing, setBriefing] = React.useState<DailyBriefing | null>(null);
   const [loading, setLoading] = React.useState(true);
   const [error, setError] = React.useState<string | null>(null);
+  const [pendingJobId, setPendingJobId] = React.useState<string | null>(null);
   const [todos, setTodos] = React.useState<TodoItem[]>([]);
   const [todosLoading, setTodosLoading] = React.useState(true);
   const [completingIds, setCompletingIds] = React.useState<Record<string, boolean>>({});
@@ -81,11 +119,14 @@ export default function DailyScreen() {
     }
   }, []);
 
-  const loadBriefing = React.useCallback(() => {
+  const loadBriefing = React.useCallback((options: { showLoading?: boolean } = {}) => {
     let isMounted = true;
     const fetchBriefing = async () => {
       try {
-        setLoading(true);
+        const showLoading = options.showLoading ?? true;
+        if (showLoading) {
+          setLoading(true);
+        }
         setError(null);
         const date = formatToday();
         const timezone = formatTimezone();
@@ -99,7 +140,18 @@ export default function DailyScreen() {
           }
         );
         if (isMounted) {
-          setBriefing(response as DailyBriefing);
+          const payload = (response ?? null) as DailyBriefing | null;
+          setBriefing(payload);
+          if (payload?.status === 'pending') {
+            setPendingJobId(payload.job_id ?? 'pending');
+            setError(payload.message ?? null);
+          } else if (payload?.status === 'failed') {
+            setPendingJobId(null);
+            setError(payload.message ?? 'Daily briefing generation failed.');
+          } else {
+            setPendingJobId(null);
+            setError(null);
+          }
         }
       } catch (err) {
         if (!isMounted) return;
@@ -108,11 +160,7 @@ export default function DailyScreen() {
           setError(null);
           return;
         }
-        if (message.toLowerCase().includes('briefing not found')) {
-          setBriefing(null);
-          setError(null);
-          return;
-        }
+        setPendingJobId(null);
         setError(message);
         setBriefing(null);
       } finally {
@@ -168,6 +216,24 @@ export default function DailyScreen() {
     }, [authLoading, token, loadBriefing, loadTodos])
   );
 
+  React.useEffect(() => {
+    if (!pendingJobId || authLoading || !token) {
+      return;
+    }
+
+    const cleanups = new Set<() => void>();
+    const interval = setInterval(() => {
+      const cleanup = loadBriefing({ showLoading: false });
+      cleanups.add(cleanup);
+    }, 10000);
+
+    return () => {
+      clearInterval(interval);
+      cleanups.forEach((cleanup) => cleanup());
+      cleanups.clear();
+    };
+  }, [authLoading, pendingJobId, token, loadBriefing]);
+
   const getTodoAnimation = React.useCallback(
     (todoId: string) => {
       if (!todoAnimations[todoId]) {
@@ -176,6 +242,38 @@ export default function DailyScreen() {
       return todoAnimations[todoId];
     },
     [todoAnimations]
+  );
+
+  const newsItemsByUrl = React.useMemo(() => {
+    const map = new Map<string, BriefingNewsItem>();
+    for (const item of briefing?.news_items ?? []) {
+      const key = normalizeArticleUrl(item.url ?? '');
+      if (!key) continue;
+      map.set(key, item);
+    }
+    return map;
+  }, [briefing?.news_items]);
+
+  const handleBriefingLinkPress = React.useCallback(
+    async (url: string, label?: string) => {
+      const normalized = normalizeArticleUrl(url);
+      const matched = normalized ? newsItemsByUrl.get(normalized) : undefined;
+      const briefingItemId = matched?.briefing_item_id || buildFallbackBriefingItemId(url);
+      router.push({
+        pathname: '/news/article/[briefingItemId]',
+        params: {
+          briefingItemId,
+          url,
+          briefingId: matched?.briefing_id || briefing?.briefing_id || '',
+          clusterId: matched?.cluster_id || '',
+          source: matched?.source || '',
+          sourceDomain: matched?.source_domain || '',
+          topicLabel: matched?.topic_label || '',
+          title: matched?.title || label || '',
+        },
+      });
+    },
+    [briefing?.briefing_id, newsItemsByUrl, router],
   );
 
   const handleComplete = React.useCallback(
@@ -220,10 +318,15 @@ export default function DailyScreen() {
     [completingIds, getTodoAnimation, showNotice]
   );
 
-  const summaryText = briefing?.summary ?? 'No briefing yet. Trigger today\'s brief to see it here.';
-  const metaText = briefing
-    ? `${briefing.event_count} events • ${briefing.todo_count} todos`
-    : 'No summary metrics yet';
+  const isBriefingPending = briefing?.status === 'pending' || !!pendingJobId;
+  const summaryText = isBriefingPending
+    ? briefing?.message || 'Generating your briefing now...'
+    : briefing?.summary ?? 'No briefing yet. Trigger today\'s brief to see it here.';
+  const metaText = isBriefingPending
+    ? 'Generating now'
+    : briefing
+      ? `${briefing.event_count} events • ${briefing.todo_count} todos`
+      : 'No summary metrics yet';
   const formatEventTitle = (event: TodoItem['events'][number]) =>
     event.title?.trim() || 'Linked event';
   const profileName = name || email || 'You';
@@ -267,7 +370,9 @@ export default function DailyScreen() {
                 <View style={styles.briefingBlock}>
                   <Text style={styles.briefingLabel}>Full briefing</Text>
                   <View style={styles.markdownBlock}>
-                    {renderAssistantMarkdown(briefing?.markdown || 'No briefing yet.', 'briefing')}
+                    {renderAssistantMarkdown(briefing?.markdown || 'No briefing yet.', 'briefing', {
+                      onLinkPress: handleBriefingLinkPress,
+                    })}
                   </View>
                 </View>
               ) : null}

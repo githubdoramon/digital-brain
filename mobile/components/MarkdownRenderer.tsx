@@ -3,6 +3,8 @@ import { Linking, Platform, ScrollView, StyleSheet, Text, View } from 'react-nat
 
 import { theme } from '@/theme';
 
+type MarkdownLinkHandler = (url: string, label?: string) => void | Promise<void>;
+
 // ---------------------------------------------------------------------------
 // Patterns
 // ---------------------------------------------------------------------------
@@ -37,6 +39,19 @@ async function openMarkdownLink(rawUrl: string) {
   }
 }
 
+async function handleMarkdownLinkPress(
+  rawUrl: string,
+  onLinkPress?: MarkdownLinkHandler,
+  label?: string,
+) {
+  const normalizedUrl = normalizeLinkUrl(rawUrl);
+  if (onLinkPress) {
+    await onLinkPress(normalizedUrl, label);
+    return;
+  }
+  await openMarkdownLink(normalizedUrl);
+}
+
 function splitTrailingUrlPunctuation(token: string) {
   const trailing = token.match(TRAILING_URL_PUNCTUATION_PATTERN)?.[0] ?? '';
   if (!trailing) {
@@ -52,7 +67,7 @@ function splitTrailingUrlPunctuation(token: string) {
 // Inline markdown
 // ---------------------------------------------------------------------------
 
-function renderInlineMarkdown(text: string, keyPrefix: string) {
+function renderInlineMarkdown(text: string, keyPrefix: string, onLinkPress?: MarkdownLinkHandler) {
   const parts = text.split(INLINE_MARKDOWN_PATTERN).filter(Boolean);
   return parts.map((part, index) => {
     const markdownLinkMatch = part.match(MARKDOWN_LINK_PATTERN);
@@ -65,7 +80,7 @@ function renderInlineMarkdown(text: string, keyPrefix: string) {
           accessibilityRole="link"
           selectable={false}
           onPress={() => {
-            void openMarkdownLink(rawUrl);
+            void handleMarkdownLinkPress(rawUrl, onLinkPress, label);
           }}
         >
           {label}
@@ -82,7 +97,7 @@ function renderInlineMarkdown(text: string, keyPrefix: string) {
             accessibilityRole="link"
             selectable={false}
             onPress={() => {
-              void openMarkdownLink(url);
+              void handleMarkdownLinkPress(url, onLinkPress);
             }}
           >
             {url}
@@ -176,6 +191,7 @@ function renderMarkdownTable(
   tableLines: string[],
   keyPrefix: string,
   startIndex: number,
+  onLinkPress?: MarkdownLinkHandler,
 ) {
   // Parse header, separator, and body rows
   const rows: string[][] = [];
@@ -256,6 +272,7 @@ function renderMarkdownTable(
                       {renderInlineMarkdown(
                         cell,
                         `${keyPrefix}-table-cell-${startIndex}-${rowIndex}-${cellIndex}`,
+                        onLinkPress,
                       )}
                     </Text>
                   </View>
@@ -273,7 +290,11 @@ function renderMarkdownTable(
 // Main renderer
 // ---------------------------------------------------------------------------
 
-export function renderAssistantMarkdown(markdown: string, keyPrefix: string) {
+export function renderAssistantMarkdown(
+  markdown: string,
+  keyPrefix: string,
+  options: { onLinkPress?: MarkdownLinkHandler } = {},
+) {
   const blocks: React.ReactNode[] = [];
   let inCodeBlock = false;
   let codeBlockCount = 0;
@@ -283,7 +304,7 @@ export function renderAssistantMarkdown(markdown: string, keyPrefix: string) {
 
   function flushTable() {
     if (tableLines.length > 0) {
-      const node = renderMarkdownTable(tableLines, keyPrefix, tableStartIndex);
+      const node = renderMarkdownTable(tableLines, keyPrefix, tableStartIndex, options.onLinkPress);
       if (node) blocks.push(node);
       tableLines = [];
     }
@@ -330,7 +351,11 @@ export function renderAssistantMarkdown(markdown: string, keyPrefix: string) {
     if (line.startsWith('### ')) {
       blocks.push(
         <Text key={`${keyPrefix}-h3-${index}`} style={styles.markdownH3} selectable>
-          {renderInlineMarkdown(line.replace('### ', ''), `${keyPrefix}-h3-${index}`)}
+          {renderInlineMarkdown(
+            line.replace('### ', ''),
+            `${keyPrefix}-h3-${index}`,
+            options.onLinkPress,
+          )}
         </Text>,
       );
       return;
@@ -339,7 +364,11 @@ export function renderAssistantMarkdown(markdown: string, keyPrefix: string) {
     if (line.startsWith('## ')) {
       blocks.push(
         <Text key={`${keyPrefix}-h2-${index}`} style={styles.markdownH2} selectable>
-          {renderInlineMarkdown(line.replace('## ', ''), `${keyPrefix}-h2-${index}`)}
+          {renderInlineMarkdown(
+            line.replace('## ', ''),
+            `${keyPrefix}-h2-${index}`,
+            options.onLinkPress,
+          )}
         </Text>,
       );
       return;
@@ -348,7 +377,11 @@ export function renderAssistantMarkdown(markdown: string, keyPrefix: string) {
     if (line.startsWith('# ')) {
       blocks.push(
         <Text key={`${keyPrefix}-h1-${index}`} style={styles.markdownH1} selectable>
-          {renderInlineMarkdown(line.replace('# ', ''), `${keyPrefix}-h1-${index}`)}
+          {renderInlineMarkdown(
+            line.replace('# ', ''),
+            `${keyPrefix}-h1-${index}`,
+            options.onLinkPress,
+          )}
         </Text>,
       );
       return;
@@ -364,6 +397,7 @@ export function renderAssistantMarkdown(markdown: string, keyPrefix: string) {
             {renderInlineMarkdown(
               line.replace(BULLET_LINE_PATTERN, ''),
               `${keyPrefix}-bullet-${index}`,
+              options.onLinkPress,
             )}
           </Text>
         </View>,
@@ -379,7 +413,7 @@ export function renderAssistantMarkdown(markdown: string, keyPrefix: string) {
             {numberedMatch[1]}.
           </Text>
           <Text style={styles.markdownListText} selectable>
-            {renderInlineMarkdown(numberedMatch[2], `${keyPrefix}-numbered-${index}`)}
+            {renderInlineMarkdown(numberedMatch[2], `${keyPrefix}-numbered-${index}`, options.onLinkPress)}
           </Text>
         </View>,
       );
@@ -393,6 +427,7 @@ export function renderAssistantMarkdown(markdown: string, keyPrefix: string) {
             {renderInlineMarkdown(
               line.replace(BLOCKQUOTE_LINE_PATTERN, ''),
               `${keyPrefix}-quote-${index}`,
+              options.onLinkPress,
             )}
           </Text>
         </View>,
@@ -402,7 +437,7 @@ export function renderAssistantMarkdown(markdown: string, keyPrefix: string) {
 
     blocks.push(
       <Text key={`${keyPrefix}-paragraph-${index}`} style={styles.markdownParagraph} selectable>
-        {renderInlineMarkdown(line, `${keyPrefix}-paragraph-${index}`)}
+        {renderInlineMarkdown(line, `${keyPrefix}-paragraph-${index}`, options.onLinkPress)}
       </Text>,
     );
   });

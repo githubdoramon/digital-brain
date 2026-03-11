@@ -9,6 +9,8 @@ from unittest.mock import MagicMock, patch
 from news_feeds import (
     RSS_FEEDS,
     _article_key,
+    _build_newsdata_queries,
+    _canonicalize_url,
     _clean_html,
     _deduplicate,
     _fetch_rss_feed,
@@ -200,6 +202,44 @@ class TestArticleKey:
     def test_falls_back_to_title_hash(self):
         key = _article_key(_article(url="", title="Test"))
         assert len(key) == 64  # SHA-256 hex digest
+
+
+class TestCanonicalizeUrl:
+    def test_removes_tracking_params(self):
+        raw = "https://example.com/story?utm_source=x&fbclid=y&ref=z&id=123"
+        canonical = _canonicalize_url(raw)
+        assert canonical == "https://example.com/story?id=123"
+
+
+class TestNewsDataQueryPlanner:
+    def test_deduplicates_normalized_queries(self):
+        topics = [
+            _topic("AI", ["ai", "Artificial Intelligence"]),
+            _topic("Artificial intelligence", ["AI"]),
+        ]
+        queries = _build_newsdata_queries(topics)
+        normalized = {q.lower() for q in queries}
+        assert "world news" in normalized
+        assert len(queries) >= 2
+
+
+class TestDeduplicateByCluster:
+    def test_cluster_id_merges_cross_source_variants(self):
+        articles = [
+            {
+                **_article(url="https://a.com/story-1", topic_matches=["AI"]),
+                "cluster_id": "story:abc",
+                "cluster_size": 2,
+            },
+            {
+                **_article(url="https://b.com/story-1", topic_matches=["Tech"]),
+                "cluster_id": "story:abc",
+                "cluster_size": 2,
+            },
+        ]
+        deduped = _deduplicate(articles)
+        assert len(deduped) == 1
+        assert set(deduped[0]["topic_matches"]) == {"AI", "Tech"}
 
 
 # ---------------------------------------------------------------------------

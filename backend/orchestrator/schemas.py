@@ -262,14 +262,34 @@ class DailyBriefingIn(BaseModel):
     user_email: str | None = None
 
 
+class DailyBriefingNewsItemOut(BaseModel):
+    briefing_item_id: str
+    briefing_id: str | None = None
+    cluster_id: str | None = None
+    title: str
+    url: str | None = None
+    source: str
+    source_domain: str | None = None
+    section: Literal["topic", "general"]
+    topic_label: str | None = None
+    rank: int
+    score: float | None = None
+    brief_summary: str | None = None
+    topic_matches: list[str] = Field(default_factory=list)
+
+
 class DailyBriefingOut(BaseModel):
+    status: Literal["ready", "pending", "failed"] = "ready"
+    job_id: str | None = None
+    message: str | None = None
     briefing_id: str | None = None
     date: str
     timezone: str
-    event_count: int
-    todo_count: int
-    summary: str
-    markdown: str
+    event_count: int = 0
+    todo_count: int = 0
+    summary: str = ""
+    markdown: str = ""
+    news_items: list[DailyBriefingNewsItemOut] = Field(default_factory=list)
 
 
 class ClientLocationIn(BaseModel):
@@ -486,3 +506,18 @@ class NewsTopicOut(BaseModel):
     enabled: bool
     created_at: datetime | None = None
     updated_at: datetime | None = None
+
+
+class NewsInteractionEventIn(BaseModel):
+    event_type: Literal["article_opened", "article_feedback_up", "article_feedback_down"]
+    briefing_id: str | None = None
+    briefing_item_id: str | None = None
+    cluster_id: str | None = None
+    topic_label: str | None = None
+    source: str | None = None
+    source_domain: str | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class NewsInteractionsIn(BaseModel):
+    events: list[NewsInteractionEventIn] = Field(default_factory=list)

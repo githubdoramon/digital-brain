@@ -70,6 +70,9 @@ backend/orchestrator/
 ├── observability/              # Tracing and logging
 │   ├── logger.py             # Structured runtime + trace logging
 │   └── log_stream.py         # In-memory log buffer + streaming
+├── routes/                     # FastAPI route modules (feature-scoped)
+│   ├── daily_briefing.py     # Daily briefing API routes
+│   └── news.py               # News topics/preview/interactions routes
 ├── mcp/                        # Model Context Protocol
 │   ├── client.py             # Generic MCP client
 │   └── servers/
@@ -150,6 +153,7 @@ User Question → Intent Router → Conversational Profile Dispatch → Tool Vis
 - **Profile intent ownership**: conversational profiles should declare intent ownership via `supports_intent` on the profile/interface implementation; avoid hardcoding intent lists inside the central registry.
 - **Agent-specific behavior docs**: detailed profile behavior for memory/disambiguation and briefing generation is documented in `backend/orchestrator/docs/agents/MEMORY_EXPERT.md` and `backend/orchestrator/docs/agents/DAILY_BRIEFING.md`.
 - **Daily briefing news quality**: render per-article one-sentence summaries after bounded selection (LLM rewrite with deterministic fallback), append a short news digest paragraph to the overall briefing summary when selected news exists, and use confidence-scored topic matching with accent-insensitive normalization to reduce wrong-cluster assignments.
+- **News intelligence persistence**: keep story-level clusters/mentions and selected briefing news items in DB tables so ranking can use trend + novelty history and mobile interactions can be attributed to stable briefing item IDs.
 - **Daily briefing event quality**: event prep summaries should prioritize non-obvious, context-grounded guidance, filter low-value generic advice, and clearly separate current upcoming-event context from historical similar-event references.
 - **Validation semantics**: post-execution validation must treat clarification-required search/resolution results as `need_user_input`, not generic empty-result retries.
 - **Temporal completion checks are source-aware**: query-goal verification should require detail inspection for the top candidate kind (`get_document` for documents, `get_events` for events) rather than forcing `get_events` for every "latest/last" question.
@@ -166,6 +170,7 @@ User Question → Intent Router → Conversational Profile Dispatch → Tool Vis
 - **Skills vs prompts policy**: behavioral guidance that overlaps with tool contracts or profile prompts belongs in the prompt, not as a separate skill definition. Skill definitions (`skill_definitions/`) are reserved for genuinely unique guidance not covered elsewhere (e.g. `tagging-guide`). Do not create skills that restate tool contracts or profile protocol.
 - **Logging policy**: never use `print` in orchestrator runtime code (only in scripts/tests). Use `logging.getLogger(__name__)` with `debug/info/warning/error` (or `logger.log(DECISION_LEVEL, ...)` for decisions). Logging must flow through `observability/log_stream.py` so frontend log streaming can filter by level. For streaming endpoints, rely on authenticated user context (no service API key) unless explicitly required.
 - **Componentize aggressively**: never let a single file grow into a monolith. Extract reusable UI components (web and mobile), utility functions, hooks, and sub-modules into their own files as soon as a file starts handling multiple concerns. For React (web and mobile): split pages into small, focused components; co-locate them in a nearby `components/` folder or a feature-scoped directory. For backend: extract helpers, data transforms, and sub-handlers into dedicated modules. A file doing layout + data fetching + business logic + styling is a sign it needs to be broken up. Aim for each file to have a single clear responsibility.
+- **FastAPI route modularity**: keep endpoint definitions in feature-scoped modules under `backend/orchestrator/routes/` and keep `backend/orchestrator/app.py` focused on app bootstrap, shared middleware/dependencies, and router composition.
 - **Document ingestion pipeline**: document parsing should flow through `backend/orchestrator/document_processing/` (parser selection, normalization, and structured chunking) before embeddings are generated. Keep parser fallbacks resilient (never hard-fail on unsupported formats), persist parser metadata in `raw_metadata`, and use `scripts/reembed_all.py` after parser/chunking improvements to refresh stored embeddings.
 - **Reuse before creating**: before building a new UI element, search `mobile/components/` and `frontend/web/src/` for existing components that serve the same purpose. Extend an existing component with a new variant or prop rather than creating a one-off inline implementation. Key mobile primitives: `AppPressable` (tap primitive), `Button` (labeled button with `primary`/`secondary`/`clear`/`danger` variants), `FloatingSaveButton` (FAB), `Card` (container). The same principle applies to backend utilities — check existing helpers before writing new ones.
 - **Accent-insensitive text matching is mandatory**: any code that compares, searches, or fuzzy-matches user-provided text (names, titles, tags, comments, or any free-text field) must strip diacritics before comparison. Use `normalize_search_text()` from `search_normalization.py` for Python-side comparisons and PostgreSQL `unaccent()` for SQL queries. Never use raw `.lower()` or `LOWER()` alone for text matching — "Jordan" must match "José", "São Paulo" must match "Sao Paulo". The `unaccent` extension is installed in the database schema (`init.sql`).
@@ -216,10 +221,16 @@ User Question → Intent Router → Conversational Profile Dispatch → Tool Vis
 - `PUT /user/facts/{id}` – Update/correct a fact
 - `DELETE /user/facts/{id}` – Delete a fact
 
+### Daily Briefings
+- `GET /mobile/briefings/daily` – Get daily briefing or immediate pending status (auto-enqueues generation)
+- `GET /mobile/briefings/latest` – Get latest generated briefing
+- `POST /agents/daily-briefing/run` – Service API key endpoint to enqueue generation
+
 ### News Topics
 - `GET /news-topics` – List tracked topics
 - `POST /news-topics` – Create/update topic
 - `DELETE /news-topics/{id}` – Delete topic
+- `POST /news/interactions` – Record article open/thumbs feedback
 
 ### Webhooks
 - `POST /webhooks/contacts` – Sync/unlink contacts

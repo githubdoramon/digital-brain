@@ -13,7 +13,7 @@ This document captures behavior and quality rules for the daily briefing profile
 1. Gather event context for the day, similar past events, linked todos, contacts.
 2. Run per-event deep analysis (`_summarize_event`) using dedicated calls.
 3. Gather birthdays and unlinked pending todos.
-4. Aggregate news via `news_feeds.fetch_news()`.
+4. Aggregate news via `news_feeds.fetch_news()` (Tavily + NewsData + RSS), then story-cluster and persist mention history.
 5. Generate final markdown in focused passes:
    - Event-critical sections first (`Day Overview`, `Schedule`, `Event Prep`) in an isolated prompt.
    - Build deterministic sections in code for birthdays and outstanding todos.
@@ -34,13 +34,25 @@ This document captures behavior and quality rules for the daily briefing profile
 
 - News is bounded before LLM generation to avoid prompt overload.
 - Selection includes:
-  - per-topic cap (currently 3 per topic),
-  - general-headline cap,
+  - dynamic score-threshold selection (instead of strict fixed per-topic/source limits),
   - deduplication,
-  - relevance scoring (topic matches, source quality, recency, overlap with event/todo terms).
+  - relevance scoring (topic matches, source quality, recency, overlap with event/todo terms),
+  - trend/novelty signals from persisted story mention history,
+  - user-preference weighting from explicit article interactions (open, thumbs up/down).
 - Topic matching uses confidence scoring over normalized title/summary keyword evidence (including accent-insensitive text normalization) to reduce wrong-topic clustering.
 - After selection, each included article gets a one-sentence LLM rewrite focused on decision value (`what happened` + `why it matters`) before rendering.
 - Goal: fewer but higher-signal articles that are more relevant to the day.
+
+## Delivery Semantics
+
+- Mobile briefing fetch is non-blocking: when a daily briefing is missing, the API enqueues generation and returns `pending` immediately (HTTP 202).
+- Clients poll the same daily endpoint until status becomes `ready`.
+- Service endpoint `/agents/daily-briefing/run` also queues work and returns immediately.
+
+## Feedback Loop
+
+- Mobile article opens and thumbs feedback are recorded via `/mobile/news/interactions`.
+- Signals update `news_user_profiles` and feed personalization weights used in the next daily run.
 
 ## Voice and Perspective
 
