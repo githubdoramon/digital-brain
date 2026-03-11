@@ -32,8 +32,9 @@ def _article(
     source: str = "test",
     published_at: str | None = "2026-02-15T10:00:00+00:00",
     topic_matches: list | None = None,
+    provider: str | None = None,
 ) -> dict:
-    return {
+    article = {
         "title": title,
         "url": url,
         "summary": summary,
@@ -41,6 +42,9 @@ def _article(
         "published_at": published_at,
         "topic_matches": topic_matches or [],
     }
+    if provider is not None:
+        article["provider"] = provider
+    return article
 
 
 def _topic(label: str = "AI", keywords: list | None = None) -> dict:
@@ -272,7 +276,8 @@ class TestSearchTavilyNews:
         results = _search_tavily_news("ai", max_results=3)
         assert len(results) == 1
         assert results[0]["title"] == "AI News"
-        assert results[0]["source"] == "tavily"
+        assert results[0]["source"] == "example.com"
+        assert results[0]["provider"] == "tavily"
         # Verify the payload includes news-specific params
         call_payload = mock_post.call_args[1]["json"]
         assert call_payload["topic"] == "news"
@@ -350,7 +355,12 @@ class TestFetchNews:
     def test_combines_tavily_and_rss(self, mock_topics, mock_tavily, mock_rss):
         mock_topics.return_value = [_topic("AI", ["ai"])]
         mock_tavily.return_value = [
-            _article(title="Tavily AI result", url="https://tavily.com/1", source="tavily")
+            _article(
+                title="Tavily AI result",
+                url="https://tavily.com/1",
+                source="tavily.com",
+                provider="tavily",
+            )
         ]
         mock_rss.return_value = [
             _article(title="RSS AI article", url="https://rss.com/1", source="hacker_news")
@@ -358,8 +368,8 @@ class TestFetchNews:
 
         results = fetch_news()
         assert len(results) >= 2  # at least 1 tavily + 1 per RSS feed call
-        sources = {r["source"] for r in results}
-        assert "tavily" in sources
+        providers = {r.get("provider") for r in results}
+        assert "tavily" in providers
 
     @patch("news_feeds._fetch_rss_feed", return_value=[])
     @patch("news_feeds._search_tavily_news", return_value=[])

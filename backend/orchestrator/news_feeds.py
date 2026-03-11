@@ -492,12 +492,19 @@ def _search_tavily_news(
 
     articles: list[NewsArticle] = []
     for item in data.get("results") or []:
+        url = str(item.get("url") or "").strip()
+        source = str(item.get("source") or item.get("source_name") or "").strip()
+        if not source:
+            source = _extract_source_domain(url)
+        if not source:
+            source = "unknown"
         articles.append(
             {
                 "title": str(item.get("title") or "").strip(),
-                "url": str(item.get("url") or "").strip(),
+                "url": url,
                 "summary": str(item.get("content") or "").strip(),
-                "source": "tavily",
+                "source": source,
+                "provider": "tavily",
                 "published_at": item.get("published_date"),
                 "topic_matches": [],
             }

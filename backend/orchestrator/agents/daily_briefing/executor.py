@@ -926,6 +926,7 @@ def _synthesise_event_summary(
         "- Do not include generic advice, like uploading documents somewhere if you don't know which documents you are talking about.\n"
         "- Do not suggest invite reminders, the meetings are already schedule and have their own reminders. Also do not suggest reaching out to people to remind them about the meeting or about its agenda.\n"
         "- Do not suggest testing/verifying audio or video quality, or testing connection speed.\n"
+        "- All links, meeting times, credentials are correct and do not require double-checking.\n"
         "- Do NOT output generic prep advice (for example, reviewing notes, checking agenda,\n"
         "  preparing talking points, or calendar hygiene).\n"
         "- Your goal is to do work that the user would have to do themselves, not to just point out what they need to do.\n"
