@@ -71,6 +71,15 @@ backend/orchestrator/
 │   ├── logger.py             # Structured runtime + trace logging
 │   └── log_stream.py         # In-memory log buffer + streaming
 ├── routes/                     # FastAPI route modules (feature-scoped)
+│   ├── chat.py               # Ask/stream and conversation thread routes
+│   ├── contacts.py           # Contacts, contact groups, and resolution routes
+│   ├── places.py             # Place lookup and place-contact routes
+│   ├── todos.py              # Todo routes
+│   ├── events.py             # Event/meeting routes and ingest routes
+│   ├── documents.py          # Document routes and ingest routes
+│   ├── user.py               # Mobile settings/device + user facts routes
+│   ├── system.py             # Versions, logs, and gate access routes
+│   ├── automation.py         # Tools, skills, agents, and telegram webhook routes
 │   ├── daily_briefing.py     # Daily briefing API routes
 │   └── news.py               # News topics/preview/interactions routes
 ├── mcp/                        # Model Context Protocol

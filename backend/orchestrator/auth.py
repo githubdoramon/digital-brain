@@ -37,6 +37,23 @@ def get_allowed_users() -> Optional[set[str]]:
 
 
 ALLOWED_USERS = get_allowed_users()
+ORCHESTRATOR_API_KEY = os.environ.get("ORCHESTRATOR_API_KEY")
+
+
+def require_service_api_key(
+    x_service_api_key: str = Header(default="", alias="x-service-api-key"),
+) -> None:
+    """Validate internal service API key for service-to-service endpoints."""
+    if not ORCHESTRATOR_API_KEY:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Service API key is not configured",
+        )
+    if x_service_api_key != ORCHESTRATOR_API_KEY:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid service API key",
+        )
 
 
 def verify_google_token(token: str) -> dict:
