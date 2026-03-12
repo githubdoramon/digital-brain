@@ -623,7 +623,7 @@ export function EventDraftEditorScreen({ sessionId }: DraftEditorScreenProps) {
     <EventDetailsForm
       initialDraft={session.initialDraft || EMPTY_EVENT_DRAFT}
       availableContacts={session.availableContacts}
-      availablePlaces={[]}
+      availablePlaces={session.availablePlaces}
       editable
       headerKicker="Event proposal"
       headerTitle="Edit draft"

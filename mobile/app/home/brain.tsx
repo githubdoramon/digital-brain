@@ -38,6 +38,7 @@ import type {
   EventContactOption,
   EventDraft,
   EventDraftModifications,
+  EventPlaceOption,
 } from '@/components/event-draft/types';
 import { askWithStreaming, waitForRunCompletion } from '@/chat/streaming';
 import {
@@ -116,6 +117,9 @@ type EventCommandResultPayload = {
     contacts?: { contact_id?: unknown; display_name?: unknown }[];
     new_entities?: {
       contacts?: { display_name?: unknown; contact_id?: unknown }[];
+    };
+    matched_place?: {
+      place_id?: unknown;
     };
   };
 };
@@ -375,6 +379,7 @@ function buildEventDraft(commandResult: CommandResult | undefined, previewId: st
     when: textValue(extracted.when),
     endWhen: textValue(extracted.end_when),
     where: textValue(extracted.where),
+    placeId: textValue(payload.resolution?.matched_place?.place_id) || null,
     tags: stringArrayValue(extracted.tags),
     types: stringArrayValue(extracted.types),
     participants,
@@ -412,6 +417,10 @@ function applyDraftModifications(
           ? baseDraft.endWhen
           : modifications.end_when,
     where: modifications.where ?? baseDraft.where,
+    placeId:
+      modifications.place_id === undefined
+        ? baseDraft.placeId
+        : textValue(modifications.place_id) || null,
     tags: modifications.tags ?? baseDraft.tags,
     types: modifications.types ?? baseDraft.types,
     participants,
@@ -441,6 +450,9 @@ function buildDraftModifications(baseDraft: EventDraft, nextDraft: EventDraft): 
   if (normalizedDraftValue(baseDraft.where) !== normalizedDraftValue(nextDraft.where)) {
     modifications.where = normalizedDraftValue(nextDraft.where);
   }
+  if ((baseDraft.placeId || null) !== (nextDraft.placeId || null)) {
+    modifications.place_id = nextDraft.placeId || null;
+  }
   if (!sameStringList(baseDraft.tags, nextDraft.tags)) {
     modifications.tags = nextDraft.tags;
   }
@@ -463,6 +475,7 @@ function modificationSummary(modifications: EventDraftModifications): string {
   if ('when' in modifications) labels.push('when');
   if ('end_when' in modifications) labels.push('end');
   if ('where' in modifications) labels.push('where');
+  if ('place_id' in modifications) labels.push('place');
   if ('tags' in modifications) labels.push('tags');
   if ('types' in modifications) labels.push('types');
   if ('contact_ids' in modifications) labels.push('participants');
@@ -549,6 +562,7 @@ export default function ChatScreen() {
   >({});
   const [activeDraftEditorSessionId, setActiveDraftEditorSessionId] = useState<string | null>(null);
   const [eventEditorContacts, setEventEditorContacts] = useState<EventContactOption[]>([]);
+  const [eventEditorPlaces, setEventEditorPlaces] = useState<EventPlaceOption[]>([]);
   const isAtBottomRef = useRef(true);
   const [forceScrollNext, setForceScrollNext] = useState(false);
   const [isBootstrapping, setIsBootstrapping] = useState(true);
@@ -1020,6 +1034,22 @@ export default function ChatScreen() {
     }
   }, [eventEditorContacts, token]);
 
+  const loadEventEditorPlaces = useCallback(async (): Promise<EventPlaceOption[]> => {
+    if (!token) return [];
+    if (eventEditorPlaces.length > 0) return eventEditorPlaces;
+
+    try {
+      const response = (await apiFetch('/mobile/places?limit=500', { token })) as {
+        places?: EventPlaceOption[];
+      };
+      const places = Array.isArray(response.places) ? response.places : [];
+      setEventEditorPlaces(places);
+      return places;
+    } catch {
+      return [];
+    }
+  }, [eventEditorPlaces, token]);
+
   const applyEventDraftEdits = useCallback(
     (previewId: string, baseDraft: EventDraft, nextDraft: EventDraft) => {
       const modifications = buildDraftModifications(baseDraft, nextDraft);
@@ -1090,6 +1120,7 @@ export default function ChatScreen() {
 
         if (action.type === 'edit') {
           const loadedContacts = await loadEventEditorContacts();
+          const loadedPlaces = await loadEventEditorPlaces();
           const contactNameById = new Map(
             loadedContacts.map((contact) => [contact.contact_id, contact.display_name]),
           );
@@ -1125,6 +1156,7 @@ export default function ChatScreen() {
               contactNameById,
             ),
             availableContacts: loadedContacts,
+            availablePlaces: loadedPlaces,
           });
           setActiveDraftEditorSessionId((previousSessionId) => {
             clearEventDraftEditSession(previousSessionId);
@@ -1244,6 +1276,7 @@ export default function ChatScreen() {
       eventDraftModificationsByPreview,
       isConfirmingEvent,
       loadEventEditorContacts,
+      loadEventEditorPlaces,
       pendingEventId,
       router,
       sendMessage,

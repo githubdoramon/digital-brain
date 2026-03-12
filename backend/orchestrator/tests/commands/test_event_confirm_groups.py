@@ -292,3 +292,71 @@ def test_confirm_event_rejects_end_when_before_start(monkeypatch):
 
     assert exc_info.value.status_code == 400
     assert "after the start" in str(exc_info.value.detail)
+
+
+def test_confirm_event_handles_mixed_timezone_awareness(monkeypatch):
+    command_data = _base_command_data()
+    captured_event = {"event": None}
+
+    monkeypatch.setattr("commands.event.get_command_data", lambda _preview_id: command_data)
+    monkeypatch.setattr("commands.event.delete_command_data", lambda _preview_id: None)
+    monkeypatch.setattr(
+        "commands.event.clear_pending_event_by_preview_id", lambda _preview_id: None
+    )
+    monkeypatch.setattr("commands.event._persist_event_resolved", lambda _preview_id, _status: None)
+    monkeypatch.setattr(
+        "commands.event.events_service.ingest_event",
+        lambda event_in: captured_event.__setitem__("event", event_in),
+    )
+
+    payload = EventCommandConfirmation(
+        preview_id="event:preview:mixed-tz-awareness",
+        confirmed=True,
+        modifications={"end_when": "2026-02-18T19:15:00Z"},
+    )
+    result = confirm_event_command(payload, "user@example.com")
+
+    assert result.success is True
+    assert captured_event["event"] is not None
+    assert captured_event["event"].start_date.tzinfo is not None
+    assert captured_event["event"].end_date.tzinfo is not None
+
+
+def test_confirm_event_uses_explicit_place_id_modification(monkeypatch):
+    command_data = _base_command_data()
+    command_data["extracted"]["where"] = "my place"
+    command_data["resolution"]["matched_place"] = {
+        "place_id": "plc_old",
+        "name": "Old Place",
+    }
+
+    captured_event = {"event": None}
+
+    monkeypatch.setattr("commands.event.get_command_data", lambda _preview_id: command_data)
+    monkeypatch.setattr("commands.event.delete_command_data", lambda _preview_id: None)
+    monkeypatch.setattr(
+        "commands.event.clear_pending_event_by_preview_id", lambda _preview_id: None
+    )
+    monkeypatch.setattr("commands.event._persist_event_resolved", lambda _preview_id, _status: None)
+    monkeypatch.setattr(
+        "commands.event.events_service.ingest_event",
+        lambda event_in: captured_event.__setitem__("event", event_in),
+    )
+    monkeypatch.setattr(
+        "commands.event.places_service.get_place",
+        lambda place_id: {"place_id": place_id} if place_id == "plc_selected" else None,
+    )
+
+    payload = EventCommandConfirmation(
+        preview_id="event:preview:explicit-place",
+        confirmed=True,
+        modifications={
+            "where": "custom location text",
+            "place_id": "plc_selected",
+        },
+    )
+    result = confirm_event_command(payload, "user@example.com")
+
+    assert result.success is True
+    assert captured_event["event"] is not None
+    assert captured_event["event"].place_id == "plc_selected"

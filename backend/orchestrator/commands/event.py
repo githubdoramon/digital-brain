@@ -158,6 +158,12 @@ def _normalize_event_modifications(raw: Any) -> dict[str, Any]:
         normalized["summary"] = str(raw.get("summary") or "").strip()
     if "where" in raw:
         normalized["where"] = str(raw.get("where") or "").strip()
+    if "place_id" in raw:
+        place_id_raw = raw.get("place_id")
+        if place_id_raw in (None, ""):
+            normalized["place_id"] = None
+        else:
+            normalized["place_id"] = str(place_id_raw).strip()
     if "when" in raw:
         when_raw = raw.get("when")
         if when_raw in (None, ""):
@@ -208,6 +214,29 @@ def _normalize_event_modifications(raw: Any) -> dict[str, Any]:
         ]
 
     return normalized
+
+
+def _is_offset_aware(value: datetime) -> bool:
+    tzinfo = value.tzinfo
+    return tzinfo is not None and tzinfo.utcoffset(value) is not None
+
+
+def _align_datetime_awareness(
+    start_when: datetime,
+    end_when: datetime | None,
+) -> tuple[datetime, datetime | None]:
+    """Ensure datetimes have compatible offset-awareness for comparisons/storage."""
+    if end_when is None:
+        return start_when, None
+
+    start_is_aware = _is_offset_aware(start_when)
+    end_is_aware = _is_offset_aware(end_when)
+
+    if start_is_aware == end_is_aware:
+        return start_when, end_when
+    if start_is_aware:
+        return start_when, end_when.replace(tzinfo=start_when.tzinfo)
+    return start_when.replace(tzinfo=end_when.tzinfo), end_when
 
 
 def _safe_entity_slug(raw: str) -> str:
@@ -533,6 +562,16 @@ def confirm_event_command(
         place_id = None
         where = extracted.get("where")
         matched_place = resolution.get("matched_place") if isinstance(resolution, dict) else None
+        explicit_place_id = normalized_modifications.get("place_id")
+
+        if "place_id" in normalized_modifications:
+            if explicit_place_id:
+                if places_service.get_place(explicit_place_id) is None:
+                    raise HTTPException(status_code=400, detail="Selected place was not found.")
+                place_id = explicit_place_id
+            else:
+                place_id = None
+
         if where:
             place_id = place_id_map.get(where)
         if place_id is None:
@@ -540,6 +579,9 @@ def confirm_event_command(
                 matched_place_id = str(matched_place.get("place_id") or "").strip()
                 if matched_place_id:
                     place_id = matched_place_id
+
+        if "place_id" in normalized_modifications:
+            place_id = explicit_place_id or None
 
         if isinstance(matched_place, dict):
             alias_to_add = str(matched_place.get("pending_alias") or "").strip()
@@ -563,7 +605,14 @@ def confirm_event_command(
         event_id = f"event:{uuid4().hex}"
         when = extracted.get("when")
         end_when = extracted.get("end_when")
-        start_when = when if when else datetime.now()
+        if when:
+            start_when = when
+        elif isinstance(end_when, datetime) and _is_offset_aware(end_when):
+            start_when = datetime.now(tz=end_when.tzinfo)
+        else:
+            start_when = datetime.now()
+
+        start_when, end_when = _align_datetime_awareness(start_when, end_when)
 
         if end_when and end_when < start_when:
             raise HTTPException(

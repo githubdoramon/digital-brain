@@ -36,6 +36,7 @@ export type EventDraftModifications = {
   when?: string | null;
   end_when?: string | null;
   where?: string;
+  place_id?: string | null;
   tags?: string[];
   types?: string[];
   contact_ids?: string[];

@@ -1,4 +1,8 @@
-import type { EventContactOption, EventDraft } from '@/components/event-draft/types';
+import type {
+  EventContactOption,
+  EventDraft,
+  EventPlaceOption,
+} from '@/components/event-draft/types';
 
 export type EventDraftEditSession = {
   sessionId: string;
@@ -6,6 +10,7 @@ export type EventDraftEditSession = {
   baseDraft: EventDraft;
   initialDraft: EventDraft;
   availableContacts: EventContactOption[];
+  availablePlaces: EventPlaceOption[];
 };
 
 export type EventDraftEditResult = {
@@ -49,6 +54,7 @@ export function createEventDraftEditSession(
     sessionId,
     previewId: session.previewId,
     contactCount: session.availableContacts.length,
+    placeCount: session.availablePlaces.length,
   });
   return session;
 }
