@@ -362,10 +362,10 @@ class AgentController:
         """Log active conversational profile metadata for current run."""
         interface = self._agent_interface()
         runtime = interface.profile.runtime
-        self.logger.log_decision(
-            decision="Agent profile selected",
-            reason=interface.profile.name,
-            details={
+        trace.trace_decision(
+            "Agent profile selected",
+            interface.profile.name,
+            {
                 "max_steps": runtime.max_steps,
                 "max_tool_calls": runtime.max_tool_calls,
             },
@@ -429,10 +429,6 @@ class AgentController:
                 "Returning clarification prompt to user",
                 {"prompt": follow_up_prompt},
             )
-            self.logger.log_decision(
-                decision="Requesting clarification",
-                reason=follow_up_prompt,
-            )
             state.clarification_requests_count += 1
             return follow_up_prompt
 
@@ -441,10 +437,6 @@ class AgentController:
                 f"Returning UI follow-up{suffix}",
                 "Structured directive requires user input",
                 {"prompt": follow_up_prompt},
-            )
-            self.logger.log_decision(
-                decision="Requesting UI follow-up",
-                reason=follow_up_prompt,
             )
             state.clarification_requests_count += 1
             return follow_up_prompt
@@ -671,11 +663,6 @@ class AgentController:
                         "Goal not achieved, forcing continuation",
                         {"pending_actions": goal_check["pending_actions"]},
                     )
-                    self.logger.log_decision(
-                        decision="Forcing continuation",
-                        reason=goal_check["reason"],
-                        details={"pending_actions": goal_check["pending_actions"]},
-                    )
                     messages.append(
                         {
                             "role": "user",
@@ -813,6 +800,8 @@ class AgentController:
                 current_content = ""
                 streamed_any = False
                 self._set_active_llm_policy(state=state, question=question, tools_count=len(tools))
+                trace.trace_llm_request(len(tools))
+                llm_start = perf_counter()
 
                 async for chunk in self._stream_llm(messages, tools):
                     message = chunk.get("message", {})
@@ -829,6 +818,22 @@ class AgentController:
 
                     if chunk.get("done"):
                         break
+
+                llm_duration = (perf_counter() - llm_start) * 1000
+                final_content_preview = current_content.strip() if not tool_calls else None
+                trace.trace_llm_response(
+                    llm_duration,
+                    has_tool_calls=bool(tool_calls),
+                    tool_count=len(tool_calls),
+                    content_preview=final_content_preview,
+                )
+                self.logger.log_llm_call(
+                    run_id,
+                    state.step_count,
+                    llm_duration,
+                    content=final_content_preview,
+                    had_tool_calls=bool(tool_calls),
+                )
 
                 if tool_calls:
                     # When the only tool call is emit_ui_directive and we
@@ -1015,6 +1020,13 @@ class AgentController:
                     continue
 
                 accumulated_content = current_content
+                final_preview = accumulated_content.strip().replace("\n", " ")[:220]
+                if final_preview:
+                    trace.trace_decision(
+                        "Stream final response drafted",
+                        "LLM produced a final user-facing answer",
+                        {"preview": final_preview},
+                    )
                 break
 
             # Finalize
@@ -1052,13 +1064,13 @@ class AgentController:
         )
 
         route_tier = self._confidence_tier(classification.confidence)
-        self.logger.log_decision(
-            decision="Routing decision",
-            reason=(
+        trace.trace_decision(
+            "Routing decision",
+            (
                 f"source={classification.route_source.value}, tier={route_tier.value}, "
                 f"confidence={classification.confidence:.2f}"
             ),
-            details={
+            {
                 "intent": classification.intent.value,
                 "allowed_tool_groups": classification.allowed_tool_groups,
                 "profile_selection": choose_profile_interface(
@@ -1130,11 +1142,6 @@ class AgentController:
         state.tool_visibility_escalated = True
         state.tool_visibility_escalations_count += 1
         state.allowed_tool_groups = list(self.tool_registry.list_groups())
-        self.logger.log_decision(
-            decision="Escalating tool visibility",
-            reason=reason,
-            details={"mode": ToolVisibilityMode.FULL.value, "step": state.step_count},
-        )
         trace.trace_decision(
             "Escalating tool visibility",
             reason,
@@ -1183,10 +1190,10 @@ class AgentController:
         )
         self._active_llm_policy = policy
         self._last_llm_policy = policy
-        self.logger.log_decision(
-            decision="LLM routing policy",
-            reason=f"profile={policy.profile}",
-            details={
+        trace.trace_decision(
+            "LLM routing policy",
+            f"profile={policy.profile}",
+            {
                 "model": policy.model,
                 "timeout": policy.timeout,
                 "rationale": policy.rationale,
@@ -1972,18 +1979,6 @@ class AgentController:
             violation.limit_type.value,
             violation.message,
             {
-                "steps_taken": state.step_count,
-                "tool_calls_made": state.tool_calls_count,
-                "repairs_attempted": state.repair_count,
-            },
-        )
-
-        # Log the limit violation decision
-        self.logger.log_decision(
-            decision="Stopping due to limit violation",
-            reason=violation.message,
-            details={
-                "limit_type": violation.limit_type.value,
                 "steps_taken": state.step_count,
                 "tool_calls_made": state.tool_calls_count,
                 "repairs_attempted": state.repair_count,

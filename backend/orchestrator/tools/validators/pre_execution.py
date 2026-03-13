@@ -10,6 +10,7 @@ Validates tool calls before execution:
 """
 
 from dataclasses import dataclass, field
+import re
 from typing import TYPE_CHECKING, Any, Optional
 
 from tools.action_enums import GetEventsAction, HomeAssistantAction, LookupContactAction
@@ -92,6 +93,8 @@ class PreExecutionValidator:
         Returns:
             ValidationResult with validation status and feedback
         """
+        params = self._canonicalize_params(tool_name, params)
+
         # Check if tool exists
         contract = self.registry.get_contract(tool_name)
         if not contract:
@@ -149,7 +152,8 @@ class PreExecutionValidator:
         Returns:
             Tuple of (ValidationResult, normalized_params or None)
         """
-        result = self.validate(tool_name, params)
+        canonical_params = self._canonicalize_params(tool_name, params)
+        result = self.validate(tool_name, canonical_params)
 
         if not result.valid:
             return result, None
@@ -157,10 +161,30 @@ class PreExecutionValidator:
         # Normalize parameters
         contract = self.registry.get_contract(tool_name)
         if contract:
-            normalized = contract.normalize(params)
+            normalized = contract.normalize(canonical_params)
             return result, normalized
 
-        return result, params
+        return result, canonical_params
+
+    def _canonicalize_params(self, tool_name: str, params: dict[str, Any]) -> dict[str, Any]:
+        """Apply generic canonicalization before validation/normalization."""
+        canonical = dict(params or {})
+
+        def _strip_id_fields(obj: dict[str, Any]) -> None:
+            for key, value in list(obj.items()):
+                if key.endswith("_id") and isinstance(value, str):
+                    obj[key] = _apply_id_prefix_for_field(key, value)
+                elif key.endswith("_ids") and isinstance(value, list):
+                    normalized_values: list[str] = []
+                    for item in value:
+                        normalized = _apply_id_prefix_for_field(key, str(item))
+                        if isinstance(normalized, str) and normalized.strip():
+                            normalized_values.append(normalized.strip())
+                    obj[key] = normalized_values
+
+        _strip_id_fields(canonical)
+
+        return canonical
 
     def _generate_repair_hints(
         self,
@@ -340,3 +364,35 @@ class PreExecutionValidator:
     def can_repair(self, repair_count: int) -> bool:
         """Check if more repair attempts are allowed."""
         return repair_count < self.max_repairs
+_UUID_PATTERN = re.compile(
+    r"^[0-9a-fA-F]{32}$|^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$"
+)
+
+_ID_PREFIX_BY_FIELD: dict[str, str] = {
+    "document_id": "doc",
+    "contact_id": "contact",
+    "place_id": "place",
+    "todo_id": "todo",
+    "event_id": "event",
+    "thread_id": "thread",
+}
+
+
+def _apply_id_prefix_for_field(field_name: str, raw_value: Any) -> Any:
+    """Prefix UUID-only IDs when field has known entity namespace."""
+    if not isinstance(raw_value, str):
+        return raw_value
+
+    trimmed = raw_value.strip()
+    if not trimmed:
+        return trimmed
+    if ":" in trimmed:
+        return trimmed
+    if not _UUID_PATTERN.fullmatch(trimmed):
+        return trimmed
+
+    singular_field = field_name[:-1] if field_name.endswith("_ids") else field_name
+    prefix = _ID_PREFIX_BY_FIELD.get(singular_field)
+    if not prefix:
+        return trimmed
+    return f"{prefix}:{trimmed}"

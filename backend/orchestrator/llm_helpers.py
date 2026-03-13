@@ -273,13 +273,13 @@ def _call_llm_raw(
         tool_choice=tool_choice,
     )
 
-    logger.debug("[llm_helpers] LLM input: %s", json.dumps(messages, ensure_ascii=False))
-    logger.debug("[llm_helpers] LLM available tools: %s", json.dumps(tools, ensure_ascii=False))
-    logger.debug("[llm_helpers] LLM tool choice: %s", json.dumps(tool_choice, ensure_ascii=False))
+    logger.info("[llm_helpers] LLM input: %s", json.dumps(messages, ensure_ascii=False))
+    logger.info("[llm_helpers] LLM available tools: %s", json.dumps(tools, ensure_ascii=False))
+    logger.info("[llm_helpers] LLM tool choice: %s", json.dumps(tool_choice, ensure_ascii=False))
 
     content = _post_chat_completion(payload, timeout=timeout)
 
-    logger.debug("[llm_helpers] LLM response: %s", json.dumps(content, ensure_ascii=False))
+    logger.info("[llm_helpers] LLM response: %s", json.dumps(content, ensure_ascii=False))
 
     return content
 
@@ -323,6 +323,9 @@ async def stream_llm_chat(
         tools=tools,
         tool_choice=tool_choice,
     )
+    logger.info("[llm_helpers] LLM input (stream): %s", json.dumps(messages, ensure_ascii=False))
+    logger.info("[llm_helpers] LLM available tools (stream): %s", json.dumps(tools, ensure_ascii=False))
+    logger.info("[llm_helpers] LLM tool choice (stream): %s", json.dumps(tool_choice, ensure_ascii=False))
     resolved_timeout = timeout or LLM_TIMEOUT
     timeout_config = httpx.Timeout(resolved_timeout, connect=10.0)
     last_exception: Exception | None = None
@@ -358,6 +361,7 @@ async def stream_llm_chat(
                     response.raise_for_status()
                     async for line in response.aiter_lines():
                         yield line
+                    logger.info("[llm_helpers] LLM response (stream): completed")
                     return  # success, stop retrying
 
         except (httpx.ConnectError, httpx.ConnectTimeout, httpx.ReadTimeout) as exc:

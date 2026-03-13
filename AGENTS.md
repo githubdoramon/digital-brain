@@ -8,6 +8,8 @@ Personal memory orchestrator with a **bounded agent architecture**. Backend: Fas
 
 **Terminology**: When a user says "app", they mean the mobile app in `mobile`, not the web frontend.
 
+**Execution**: No need to propose ticket creation or plans for engineers to execute later. You are also the executor here.
+
 **Mobile routing convention**: For dynamic mobile routes, prefer folder-based segments with `index.tsx` (for example `mobile/app/contacts/[contactId]/index.tsx`) so nested subroutes can be added without migrating route structure later.
 
 ## Architecture Documentation
@@ -152,6 +154,8 @@ User Question → Intent Router → Conversational Profile Dispatch → Tool Vis
 - **Adaptive model routing is always on**: per-step policy selects model/timeout using query complexity + runtime signals (route confidence tier, step count, tool count).
 - **Planner/verifier loop is runtime-enforced**: controller tracks an execution plan and retries when final response lacks required evidence.
 - **Parallel tool batches are supported**: independent read-only tools may execute concurrently via the tool execution coordinator.
+- **Cross-tool no-progress dedupe is runtime-enforced**: equivalent read-only tool calls (same canonicalized arguments and goal context) should reuse prior results instead of re-executing, to prevent loop churn across memory/resolution/web retrieval paths.
+- **Tool argument canonicalization is mandatory before execution**: normalize IDs and stable argument shapes centrally (validator/executor) so downstream handlers receive consistent inputs (for example prefixed document IDs).
 - **Temporal memory ranking is two-stage**: for `search_memories` with `sort_order=newest|oldest`, rank by relevance first (shortlist + relevance gate) and then apply chronological ordering inside that candidate set to avoid recency-only noise.
 - **LLM calls must use helpers**: all LLM requests and streams go through `backend/orchestrator/llm_helpers.py` (never call LLM endpoints via direct `requests`/`httpx` in app modules).
 - **Controller context kwargs are global**: handlers are invoked with shared runtime context (`state`, `question`, `search_limit`, `user_email`, `conversation_history`). Every handler must accept these explicitly or via `**kwargs`.
@@ -166,6 +170,8 @@ User Question → Intent Router → Conversational Profile Dispatch → Tool Vis
 - **Daily briefing event quality**: event prep summaries should prioritize non-obvious, context-grounded guidance, filter low-value generic advice, and clearly separate current upcoming-event context from historical similar-event references.
 - **Validation semantics**: post-execution validation must treat clarification-required search/resolution results as `need_user_input`, not generic empty-result retries.
 - **Temporal completion checks are source-aware**: query-goal verification should require detail inspection for the top candidate kind (`get_document` for documents, `get_events` for events) rather than forcing `get_events` for every "latest/last" question.
+- **Goal completion should stay query-aligned**: when multiple evidence branches are explored, completion checks should prioritize candidates aligned with the user goal (for example temporal interaction questions should prefer event evidence over unrelated document branches).
+- **LLM observability parity is required**: sync and stream agent paths should emit comparable LLM request/response lifecycle logs so final-decision turns are debuggable in both modes.
 - **Session command hygiene**: strip leading slash commands from user text before agent execution; commands are control signals, not semantic query content.
 - **All-results limit policy**: when users explicitly ask for "all/everyone/entire" results, query handlers should honor unbounded retrieval semantics instead of silently capping to a fixed maximum.
 - **Mobile session parity**: mobile chat should resolve session via backend main-session semantics (`/mobile/main-session` + `/mobile/ask` without explicit `thread_id` in normal flow) so idle timeout/reset rules match backend behavior.

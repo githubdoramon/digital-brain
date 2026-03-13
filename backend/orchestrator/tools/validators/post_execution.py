@@ -12,9 +12,9 @@ This is the key component that decides:
 - failed: Tool failed, handle error
 """
 
-import json
 import os
 import sys
+import json
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Optional
@@ -105,7 +105,7 @@ class PostExecutionValidator:
         result: dict[str, Any],
         goal: str,
         known_facts: list[str],
-        completed_actions: list[str] = None,
+        completed_actions: Optional[list[str]] = None,
     ) -> PostExecutionResult:
         """
         Check if the tool result satisfies the goal.
@@ -380,7 +380,7 @@ class PostExecutionValidator:
         result: dict[str, Any],
         goal: str,
         known_facts: list[str],
-        completed_actions: list[str] = None,
+        completed_actions: Optional[list[str]] = None,
     ) -> PostExecutionResult:
         """
         Use LLM to assess goal coverage for ambiguous results.
@@ -410,7 +410,7 @@ class PostExecutionValidator:
         result: dict[str, Any],
         goal: str,
         known_facts: list[str],
-        completed_actions: list[str] = None,
+        completed_actions: Optional[list[str]] = None,
     ) -> str:
         """Build the prompt for LLM validation."""
         # Truncate result if too large
@@ -608,9 +608,11 @@ Rules:
             return None
 
         def _score(item: dict[str, Any]) -> float:
-            value = item.get("score")
             try:
-                return float(value)
+                value = item.get("score")
+                if value is None:
+                    return -1.0
+                return float(str(value))
             except (TypeError, ValueError):
                 return -1.0
 
@@ -928,11 +930,18 @@ class GoalCompletionValidator:
             and tc.success
         ]
         has_successful_results = any(self._has_results(tc.result) for tc in successful_query_calls)
-        best_search_candidate = self._find_best_search_candidate(tool_calls)
+        best_search_candidate = self._find_best_search_candidate(tool_calls, goal)
         required_detail_tool = self._required_detail_tool_for_candidate(best_search_candidate)
         has_required_detail = required_detail_tool is None or any(
             tc.tool_name == required_detail_tool for tc in successful_query_calls
         )
+        if (
+            required_detail_tool == "get_document"
+            and self._is_temporal_interaction_query(goal)
+            and any(tc.tool_name == "get_events" and self._has_results(tc.result) for tc in successful_query_calls)
+        ):
+            required_detail_tool = None
+            has_required_detail = True
         candidate_kind = str((best_search_candidate or {}).get("kind") or "source")
         if required_detail_tool == "get_document":
             detail_requirement_reason = (
@@ -1062,9 +1071,13 @@ class GoalCompletionValidator:
 
         return False
 
-    def _find_best_search_candidate(self, tool_calls: list) -> dict[str, Any] | None:
-        """Find the top candidate from the latest successful search_memories call."""
-        for call in reversed(tool_calls):
+    def _find_best_search_candidate(self, tool_calls: list, goal: str) -> dict[str, Any] | None:
+        """Find best candidate across search calls, preferring goal-aligned evidence."""
+        preferred_kinds = self._preferred_candidate_kinds(goal)
+        best_candidate: dict[str, Any] | None = None
+        best_composite = float("-inf")
+
+        for recency_index, call in enumerate(reversed(tool_calls)):
             if getattr(call, "tool_name", "") != "search_memories" or not getattr(
                 call, "success", False
             ):
@@ -1073,36 +1086,45 @@ class GoalCompletionValidator:
             if not isinstance(rows, list) or not rows:
                 continue
 
-            best_row: dict[str, Any] | None = None
-            best_score = float("-inf")
+            query_text = str((getattr(call, "arguments", {}) or {}).get("query") or "").strip().lower()
+            goal_overlap = self._text_overlap_ratio(goal.lower(), query_text)
+            recency_bonus = max(0.0, 0.12 - (recency_index * 0.02))
+
             for row in rows:
                 if not isinstance(row, dict):
                     continue
                 candidate_id = str(row.get("id") or "").strip()
                 if not candidate_id:
                     continue
-                try:
-                    score = float(row.get("score"))
-                except (TypeError, ValueError):
-                    score = -1.0
-                if best_row is None or score > best_score:
-                    best_row = row
-                    best_score = score
 
-            if best_row is None:
-                continue
+                kind = str(row.get("kind") or "").strip().lower()
+                if not kind and candidate_id.startswith("doc:"):
+                    kind = "document"
 
-            candidate_id = str(best_row.get("id") or "").strip()
-            kind = str(best_row.get("kind") or "").strip().lower()
-            if not kind and candidate_id.startswith("doc:"):
-                kind = "document"
-            return {
-                "id": candidate_id,
-                "kind": kind,
-                "title": str(best_row.get("title") or "").strip(),
-                "score": best_score,
-            }
-        return None
+                score = self._safe_float(row.get("score"), default=-1.0)
+
+                kind_bonus = 0.0
+                if preferred_kinds and kind:
+                    if kind == preferred_kinds[0]:
+                        kind_bonus = 0.25
+                    elif kind in preferred_kinds:
+                        kind_bonus = 0.12
+
+                composite = score + (goal_overlap * 0.15) + recency_bonus + kind_bonus
+                if composite <= best_composite:
+                    continue
+
+                best_composite = composite
+                best_candidate = {
+                    "id": candidate_id,
+                    "kind": kind,
+                    "title": str(row.get("title") or "").strip(),
+                    "score": score,
+                    "composite": composite,
+                    "goal_overlap": goal_overlap,
+                }
+
+        return best_candidate
 
     def _required_detail_tool_for_candidate(
         self,
@@ -1117,3 +1139,45 @@ class GoalCompletionValidator:
         if kind == "event":
             return "get_events"
         return None
+
+    def _preferred_candidate_kinds(self, goal: str) -> list[str]:
+        goal_lower = (goal or "").lower()
+        if self._is_temporal_interaction_query(goal):
+            return ["event", "document"]
+        if any(token in goal_lower for token in ("document", "contract", "pdf", "file", "policy")):
+            return ["document", "event"]
+        return []
+
+    def _is_temporal_interaction_query(self, goal: str) -> bool:
+        goal_lower = (goal or "").lower()
+        temporal_markers = ("last", "latest", "most recent", "first", "earliest", "when")
+        interaction_markers = (
+            "did i",
+            "with",
+            "met",
+            "meet",
+            "talked",
+            "call",
+            "called",
+            "spent time",
+            "hang out",
+        )
+        return any(m in goal_lower for m in temporal_markers) and any(
+            m in goal_lower for m in interaction_markers
+        )
+
+    def _text_overlap_ratio(self, text_a: str, text_b: str) -> float:
+        tokens_a = {tok for tok in text_a.split() if tok}
+        tokens_b = {tok for tok in text_b.split() if tok}
+        if not tokens_a or not tokens_b:
+            return 0.0
+        shared = tokens_a.intersection(tokens_b)
+        return len(shared) / max(len(tokens_b), 1)
+
+    def _safe_float(self, value: Any, default: float = -1.0) -> float:
+        try:
+            if value is None:
+                return default
+            return float(str(value))
+        except (TypeError, ValueError):
+            return default

@@ -242,7 +242,7 @@ def handle_get_document(
     # Lazy import to avoid circular dependencies
     import documents as documents_service
 
-    document_id = args.get("document_id")
+    document_id = str(args.get("document_id") or "").strip()
 
     if not document_id:
         return {"error": "document_id is required"}

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 from time import perf_counter
 from typing import Any, cast
@@ -26,6 +27,26 @@ PARALLEL_SAFE_TOOLS = {
     "fetch_web_page",
 }
 
+DEDUPLICATION_SAFE_TOOLS = {
+    "search_memories",
+    "get_events",
+    "get_document",
+    "lookup_contact",
+    "lookup_places",
+    "lookup_contact_places",
+    "lookup_place_contacts",
+    "select_contacts",
+    "web_search",
+    "fetch_web_page",
+}
+
+_SET_LIKE_ARG_KEYS = {
+    "contact_ids",
+    "event_ids",
+    "place_ids",
+    "tags",
+    "types",
+}
 
 class ToolExecutionCoordinator:
     """Execute tool calls with guardrails, validation, and state bookkeeping."""
@@ -55,10 +76,10 @@ class ToolExecutionCoordinator:
 
         for can_parallelize, batch in self._build_execution_batches(tool_calls):
             if can_parallelize and len(batch) > 1:
-                self.controller.logger.log_decision(
-                    decision="Parallel tool batch",
-                    reason="Independent read-only tools",
-                    details={"count": len(batch)},
+                trace.trace_decision(
+                    "Parallel tool batch",
+                    "Independent read-only tools",
+                    {"count": len(batch)},
                 )
                 batch_results = await asyncio.gather(
                     *[
@@ -201,7 +222,10 @@ class ToolExecutionCoordinator:
 
         if self.controller.config.enable_validation:
             trace.trace_pre_validation_start(tool_name)
-            validation = self.controller.pre_validator.validate(tool_name, args)
+            validation, normalized_args = self.controller.pre_validator.validate_and_normalize(
+                tool_name,
+                args,
+            )
             if not validation.valid:
                 state.repair_count += 1
                 trace.trace_pre_validation_fail(
@@ -219,7 +243,25 @@ class ToolExecutionCoordinator:
                     repair_attempt=state.repair_count,
                 )
                 return validation.to_feedback()
+            if isinstance(normalized_args, dict):
+                args = normalized_args
             trace.trace_pre_validation_pass(tool_name)
+
+        blocked_repeat = self._block_redundant_tool_execution(
+            state=state,
+            tool_name=tool_name,
+            args=args,
+        )
+        if blocked_repeat is not None:
+            return self._finalize_early_tool_result(
+                tool_name=tool_name,
+                args=args,
+                result=blocked_repeat,
+                state=state,
+                run_id=run_id,
+                call_id=call_id,
+                default_summary="Reused previous equivalent tool result",
+            )
 
         step_start = perf_counter()
         if allow_parallel_execution and self._is_parallel_safe_tool(tool_name):
@@ -315,10 +357,10 @@ class ToolExecutionCoordinator:
 
             if post_result.coverage == GoalCoverage.FAILED:
                 guidance = self.get_failure_guidance(tool_name, result, post_result)
-                self.controller.logger.log_decision(
-                    decision="Tool call failed - injecting recovery guidance",
-                    reason=post_result.reason,
-                    details={
+                trace.trace_decision(
+                    "Tool call failed - injecting recovery guidance",
+                    post_result.reason,
+                    {
                         "guidance": guidance[:100] + "..." if len(guidance) > 100 else guidance
                     },
                 )
@@ -383,6 +425,95 @@ class ToolExecutionCoordinator:
 
     def _is_parallel_safe_tool(self, tool_name: str) -> bool:
         return tool_name in PARALLEL_SAFE_TOOLS
+
+    def _block_redundant_tool_execution(
+        self,
+        *,
+        state: AgentState,
+        tool_name: str,
+        args: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        """Block equivalent repeated read-only calls and reuse prior result."""
+        if tool_name not in DEDUPLICATION_SAFE_TOOLS:
+            return None
+
+        current_signature = self._tool_call_signature(state=state, tool_name=tool_name, args=args)
+
+        for previous in reversed(state.tool_calls):
+            if previous.tool_name != tool_name:
+                continue
+            if not previous.success:
+                continue
+            previous_signature = self._tool_call_signature(
+                state=state,
+                tool_name=tool_name,
+                args=previous.arguments,
+            )
+            if previous_signature != current_signature:
+                continue
+
+            previous_result = dict(previous.result or {})
+            if not previous_result:
+                continue
+
+            no_progress_message = (
+                "Equivalent tool call already executed. "
+                "Reuse previous evidence or switch to a different retrieval step."
+            )
+
+            previous_meta_raw = previous_result.get("_meta")
+            previous_meta = previous_meta_raw if isinstance(previous_meta_raw, dict) else {}
+
+            deduped_result = dict(previous_result)
+            deduped_result["status"] = "no_progress"
+            deduped_result["message"] = no_progress_message
+            deduped_meta = dict(previous_meta)
+            deduped_meta["deduplicated"] = True
+            deduped_meta["reused_tool"] = tool_name
+            deduped_result["_meta"] = deduped_meta
+            return deduped_result
+
+        return None
+
+    def _tool_call_signature(
+        self,
+        *,
+        state: AgentState,
+        tool_name: str,
+        args: dict[str, Any],
+    ) -> str:
+        """Compute stable signature for dedupe comparisons."""
+        canonical_args = self._canonicalize_for_signature(args)
+        payload = {
+            "tool": tool_name,
+            "args": canonical_args,
+            "intent": state.intent,
+            "goal_hash": hashlib.sha1(str(state.goal or "").encode("utf-8")).hexdigest()[:12],
+        }
+        serialized = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
+        return hashlib.sha1(serialized.encode("utf-8")).hexdigest()
+
+    def _canonicalize_for_signature(self, value: Any, key: str = "") -> Any:
+        """Normalize values to reduce non-semantic signature drift."""
+        if isinstance(value, dict):
+            return {
+                str(k): self._canonicalize_for_signature(v, str(k))
+                for k, v in sorted(value.items(), key=lambda item: str(item[0]))
+            }
+
+        if isinstance(value, list):
+            normalized_items = [self._canonicalize_for_signature(item, key) for item in value]
+            if key in _SET_LIKE_ARG_KEYS and all(isinstance(item, str) for item in normalized_items):
+                return sorted(dict.fromkeys(item.strip() for item in normalized_items if item.strip()))
+            return normalized_items
+
+        if isinstance(value, str):
+            text = value.strip()
+            if key == "query":
+                return " ".join(text.lower().split())
+            return text
+
+        return value
 
     def _remember_episode_from_tool_result(
         self,

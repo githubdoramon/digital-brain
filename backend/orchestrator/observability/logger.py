@@ -255,7 +255,7 @@ class AgentLogger:
         self,
         max_logs: int = 1000,
         enable_state_snapshots: bool = False,
-        verbose: bool = True,
+        verbose: bool = False,
     ):
         """
         Initialize the logger.
@@ -272,25 +272,8 @@ class AgentLogger:
         self._verbose = verbose
 
     def _log(self, message: str, level: str = "INFO") -> None:
-        """Print a log message if verbose mode is enabled."""
-        if self._verbose:
-            prefix = {
-                "INFO": "[agent]",
-                "DECISION": "[agent.decision]",
-                "TOOL": "[agent.tool]",
-                "VALIDATION": "[agent.validation]",
-                "STATE": "[agent.state]",
-                "ERROR": "[agent.ERROR]",
-            }.get(level, "[agent]")
-            payload = f"{prefix} {message}"
-            if level == "ERROR":
-                logger.error(payload)
-            elif level == "WARNING":
-                logger.warning(payload)
-            elif level == "DECISION":
-                logger.log(DECISION_LEVEL, payload)
-            else:
-                logger.info(payload)
+        """No-op runtime emission; tracer helpers own live logging output."""
+        return
 
     def start_run(
         self,
@@ -328,8 +311,6 @@ class AgentLogger:
 
             self._logs[run_id] = log
 
-        if self._verbose:
-            logger.info("[agent.logger] Started run %s", run_id)
         return run_id
 
     def log_intent(
@@ -456,14 +437,14 @@ class AgentLogger:
 
         # Log tool call details
         args_str = json.dumps(arguments, default=str)
-        self._log(f"Tool: {tool_name}({args_str})", "TOOL")
+        self._log(f"Tool: {tool_name}({args_str})", "DEBUG")
 
         if not pre_validation_passed:
             self._log(f"  PRE-VALIDATION FAILED: {validation_errors}", "VALIDATION")
             if repair_attempt > 0:
                 self._log(f"  Repair attempt #{repair_attempt}", "VALIDATION")
         elif duration_ms > 0:
-            self._log(f"  Executed in {duration_ms:.0f}ms", "TOOL")
+            self._log(f"  Executed in {duration_ms:.0f}ms", "DEBUG")
 
             # Log result summary
             if result:
@@ -474,15 +455,19 @@ class AgentLogger:
                 else:
                     # Success - summarize result
                     if "count" in result:
-                        self._log(f"  Result: {result['count']} items returned", "TOOL")
+                        self._log(f"  Result: {result['count']} items returned", "DEBUG")
                     elif "tools" in result:
-                        self._log(f"  Result: Listed {len(result['tools'])} tools", "TOOL")
+                        self._log(f"  Result: Listed {len(result['tools'])} tools", "DEBUG")
                     elif "rows" in result:
-                        self._log(f"  Result: {len(result['rows'])} rows", "TOOL")
+                        self._log(f"  Result: {len(result['rows'])} rows", "DEBUG")
                     elif "results" in result:
-                        self._log(f"  Result: {len(result['results'])} results", "TOOL")
+                        self._log(f"  Result: {len(result['results'])} results", "DEBUG")
                     else:
-                        self._log("  Result: OK", "TOOL")
+                        self._log("  Result: OK", "DEBUG")
+
+                    preview = self._compact_result_preview(result)
+                    if preview:
+                        self._log(f"  Preview: {preview}", "DEBUG")
 
         # Log post-validation
         if goal_coverage:
@@ -503,6 +488,60 @@ class AgentLogger:
         if details:
             for key, value in details.items():
                 self._log(f"  {key}: {value}", "DECISION")
+
+    def _compact_result_preview(self, result: dict[str, Any]) -> str:
+        """Build a compact, debug-safe preview for retrieval-style tool results."""
+        if not isinstance(result, dict):
+            return ""
+
+        if isinstance(result.get("document"), dict):
+            doc = result["document"]
+            document_id = str(doc.get("document_id") or "").strip()
+            title = str(doc.get("title") or "").strip()
+            bits = []
+            if document_id:
+                bits.append(document_id)
+            if title:
+                bits.append(title)
+            return "document=" + " | ".join(bits) if bits else ""
+
+        if isinstance(result.get("events"), list):
+            events = [item for item in result.get("events", []) if isinstance(item, dict)]
+            top = events[:3]
+            if not top:
+                return ""
+            formatted = []
+            for event in top:
+                event_id = str(event.get("id") or event.get("event_id") or "").strip()
+                title = str(event.get("title") or "").strip()
+                date = str(event.get("start_date") or "").strip()
+                parts = [part for part in (event_id, title, date) if part]
+                if parts:
+                    formatted.append(" | ".join(parts))
+            return "; ".join(formatted)
+
+        if isinstance(result.get("results"), list):
+            rows = [item for item in result.get("results", []) if isinstance(item, dict)]
+            top = rows[:3]
+            if not top:
+                return ""
+            formatted = []
+            for row in top:
+                row_id = str(row.get("id") or "").strip()
+                kind = str(row.get("kind") or "").strip()
+                title = str(row.get("title") or "").strip()
+                score = row.get("score")
+                score_text = ""
+                try:
+                    score_text = f" score={float(score):.3f}" if score is not None else ""
+                except (TypeError, ValueError):
+                    score_text = ""
+                parts = [part for part in (kind, title, row_id) if part]
+                if parts:
+                    formatted.append(" | ".join(parts) + score_text)
+            return "; ".join(formatted)
+
+        return ""
 
     def log_validation_result(
         self,
@@ -582,16 +621,6 @@ class AgentLogger:
             log.error = error
             log.limit_hit = limit_hit
 
-            if self._verbose:
-                logger.info(
-                    "[agent.logger] Completed run %s: success=%s, steps=%s, tool_calls=%s, duration=%.1fms",
-                    run_id,
-                    success,
-                    log.total_steps,
-                    log.total_tool_calls,
-                    log.duration_ms or 0,
-                )
-
             return log
 
     def get_log(self, run_id: str) -> Optional[AgentRunLog]:
@@ -652,7 +681,7 @@ def get_logger() -> AgentLogger:
     if _logger is None:
         with _logger_lock:
             if _logger is None:
-                _logger = AgentLogger()
+                _logger = AgentLogger(verbose=False)
     return _logger
 
 
@@ -791,17 +820,17 @@ def trace_malformed_output(content: str, pattern: str) -> None:
 
 def trace_tool_call_start(tool_name: str, args: dict[str, Any]) -> float:
     """Log tool call start. Returns start time."""
-    if _should_log(LogLevel.INFO):
+    if _should_log(LogLevel.DEBUG):
         args_str = _format_args(args)
-        _emit(LogLevel.INFO, f"[tool.{tool_name}] Executing: {args_str}")
+        _emit(LogLevel.DEBUG, f"[tool.{tool_name}] Executing: {args_str}")
     return perf_counter()
 
 
 def trace_tool_args_normalized(tool_name: str, args: dict[str, Any]) -> None:
     """Log normalized tool arguments after controller enrichment."""
-    if _should_log(LogLevel.INFO):
+    if _should_log(LogLevel.DEBUG):
         args_str = _format_args(args)
-        _emit(LogLevel.INFO, f"[tool.{tool_name}] Normalized args: {args_str}")
+        _emit(LogLevel.DEBUG, f"[tool.{tool_name}] Normalized args: {args_str}")
 
 
 def trace_pre_validation_start(tool_name: str) -> None:
@@ -837,10 +866,10 @@ def trace_tool_execution_result(
     result_summary: str,
 ) -> None:
     """Log tool execution result."""
-    if _should_log(LogLevel.INFO):
+    if _should_log(LogLevel.DEBUG):
         status = "✓" if success else "✗"
         _emit(
-            LogLevel.INFO,
+            LogLevel.DEBUG,
             f"[tool.{tool_name}] {status} Completed ({duration_ms:.0f}ms): {result_summary}",
         )
 
