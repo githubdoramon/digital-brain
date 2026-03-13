@@ -1,6 +1,7 @@
 import { fetch as expoFetch } from 'expo/fetch';
 
 import { apiFetch, API_BASE_URL } from '@/api/client';
+import type { LinkedItem } from '@/chat/linkedItems';
 import type { CommandResult as ThreadCommandResult } from '@/chat/threads';
 import type { UiDirectives, UiSubmissionInput } from '@/chat/uiDirectives';
 import { getClientContext } from '@/location/clientContext';
@@ -14,6 +15,7 @@ export type AskResponse = {
   pending_event_id?: string | null;
   command_result?: CommandResult;
   ui_directives?: UiDirectives;
+  linked_items?: LinkedItem[];
 };
 
 type StreamEvent =
@@ -273,12 +275,14 @@ export async function askWithStreaming({
 
   const handleParsedEvent = (event: StreamEvent): AskResponse | null => {
     if (event.type === 'session_info') {
-      if (event.thread_id) {
-        callbacks?.onSessionInfo?.(event.thread_id);
+      const threadId = typeof event.thread_id === 'string' ? event.thread_id.trim() : '';
+      if (threadId) {
+        callbacks?.onSessionInfo?.(threadId);
       }
-      if (event.run_id) {
-        runId = event.run_id;
-        callbacks?.onRunId?.(event.run_id);
+      const parsedRunId = typeof event.run_id === 'string' ? event.run_id.trim() : '';
+      if (parsedRunId) {
+        runId = parsedRunId;
+        callbacks?.onRunId?.(parsedRunId);
       }
       return null;
     }
@@ -320,7 +324,11 @@ export async function askWithStreaming({
     }
 
     if (event.type === 'error') {
-      throw new Error(event.message || 'Stream ended with an error');
+      const message =
+        typeof event.message === 'string' && event.message.trim()
+          ? event.message.trim()
+          : 'Stream ended with an error';
+      throw new Error(message);
     }
 
     if (event.type === 'done') {

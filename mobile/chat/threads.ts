@@ -1,4 +1,5 @@
 import { apiFetch } from '@/api/client';
+import type { LinkedItem } from '@/chat/linkedItems';
 import type { UiDirectives } from './uiDirectives';
 
 import { StoredChatSession } from './session';
@@ -15,6 +16,7 @@ export type ThreadMessage = {
   metadata?: {
     command_result?: CommandResult;
     ui_directives?: UiDirectives;
+    linked_items?: LinkedItem[];
     [key: string]: unknown;
   } | null;
   created_at: string;
@@ -37,6 +39,7 @@ export type ChatMessage = {
   metadata?: {
     command_result?: CommandResult;
     ui_directives?: UiDirectives;
+    linked_items?: LinkedItem[];
     event_resolved?: EventResolvedStatus;
   };
 };
@@ -67,6 +70,9 @@ export async function restoreChatHistory(
         ? {
             command_result: meta.command_result,
             ui_directives: meta.ui_directives,
+            linked_items: Array.isArray(meta.linked_items)
+              ? (meta.linked_items as LinkedItem[])
+              : undefined,
             event_resolved: meta.event_resolved as EventResolvedStatus | undefined,
           }
         : undefined,

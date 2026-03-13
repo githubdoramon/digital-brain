@@ -2008,6 +2008,7 @@ class AgentController:
             "search_results": self._latest_search_results(state),
             "events_results": self._collected_events_results(state),
             "document_results": self._collected_document_results(state),
+            "linked_items": self._build_linked_items(state),
             "ui_directives": state.ui_directives,
             "limit_hit": violation.limit_type.value,
             "profile": self.runtime_profile.name,
@@ -2091,6 +2092,7 @@ class AgentController:
             "search_results": self._latest_search_results(state),
             "events_results": self._collected_events_results(state),
             "document_results": self._collected_document_results(state),
+            "linked_items": self._build_linked_items(state),
             "ui_directives": state.ui_directives,
             # Completion metadata (clawdbot-inspired)
             "_meta": {
@@ -2127,6 +2129,61 @@ class AgentController:
             bundle["activated_skills"] = [s.get("name") for s in state.activated_skills]
 
         return bundle
+
+    def _build_linked_items(self, state: AgentState, max_items: int = 5) -> list[dict[str, Any]]:
+        """Build bounded, deterministic deep-link candidates from inspected tool results."""
+        items: list[dict[str, Any]] = []
+        seen: set[tuple[str, str]] = set()
+
+        for event in self._collected_events_results(state):
+            if not isinstance(event, dict):
+                continue
+            event_id = str(event.get("id") or event.get("event_id") or "").strip()
+            if not event_id:
+                continue
+            dedupe_key = ("event", event_id)
+            if dedupe_key in seen:
+                continue
+            seen.add(dedupe_key)
+
+            title = str(event.get("title") or "").strip() or f"Event {event_id}"
+            subtitle = str(event.get("start_date") or event.get("end_date") or "").strip() or None
+            items.append(
+                {
+                    "entity_type": "event",
+                    "entity_id": event_id,
+                    "title": title,
+                    "subtitle": subtitle,
+                }
+            )
+            if len(items) >= max_items:
+                return items
+
+        for document in self._collected_document_results(state):
+            if not isinstance(document, dict):
+                continue
+            document_id = str(document.get("document_id") or "").strip()
+            if not document_id:
+                continue
+            dedupe_key = ("document", document_id)
+            if dedupe_key in seen:
+                continue
+            seen.add(dedupe_key)
+
+            title = str(document.get("title") or "").strip() or f"Document {document_id}"
+            subtitle = str(document.get("file_name") or "").strip() or None
+            items.append(
+                {
+                    "entity_type": "document",
+                    "entity_id": document_id,
+                    "title": title,
+                    "subtitle": subtitle,
+                }
+            )
+            if len(items) >= max_items:
+                break
+
+        return items
 
     def _latest_search_results(self, state: AgentState) -> list[dict[str, Any]]:
         """Return the latest successful search_memories result rows."""

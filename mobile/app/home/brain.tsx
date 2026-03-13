@@ -50,8 +50,10 @@ import {
   StoredChatSession,
 } from '@/chat/session';
 import { restoreChatHistory } from '@/chat/threads';
+import { routeForLinkedItem, type LinkedItem } from '@/chat/linkedItems';
 import type { CommandResult as ThreadCommandResult, EventResolvedStatus } from '@/chat/threads';
 import type { UiDirectiveBlock, UiDirectives, UiSubmissionInput } from '@/chat/uiDirectives';
+import { LinkedItemsRow } from '@/components/chat/LinkedItemsRow';
 import {
   clearEventDraftEditSession,
   consumeEventDraftEditResult,
@@ -66,6 +68,7 @@ type Message = {
   metadata?: {
     command_result?: CommandResult;
     ui_directives?: UiDirectives;
+    linked_items?: LinkedItem[];
     event_resolved?: EventResolvedStatus;
     request_error?: RequestErrorMetadata;
     progress_chip?: string;
@@ -946,6 +949,9 @@ export default function ChatScreen() {
       setThreadId((prev) => response.thread_id ?? prev);
       const commandResult = response.command_result as CommandResult | undefined;
       const uiDirectives = response.ui_directives;
+      const linkedItems = Array.isArray(response.linked_items)
+        ? (response.linked_items as LinkedItem[])
+        : [];
       const assistantContent =
         response.answer ??
         uiDirectives?.fallback_text ??
@@ -964,10 +970,11 @@ export default function ChatScreen() {
                 content: assistantContent,
                 pending: false,
                 metadata:
-                  commandResult || uiDirectives
+                  commandResult || uiDirectives || linkedItems.length > 0
                     ? {
                         command_result: commandResult,
                         ui_directives: uiDirectives,
+                        linked_items: linkedItems.length > 0 ? linkedItems : undefined,
                       }
                     : undefined,
               }
@@ -1295,6 +1302,15 @@ export default function ChatScreen() {
   const showAnchoredSlashPalette = showSlashPalette && composerHeight > 0;
   const lastMessage = messages[messages.length - 1];
 
+  const handleLinkedItemPress = useCallback(
+    (item: LinkedItem) => {
+      const route = routeForLinkedItem(item);
+      if (!route) return;
+      router.push(route);
+    },
+    [router],
+  );
+
   useEffect(() => {
     if (!listRef.current) return;
     if (!isAtBottomRef.current && !forceScrollNext) return;
@@ -1361,6 +1377,7 @@ export default function ChatScreen() {
               ? eventDraftModificationsByPreview[previewId]
               : undefined;
             const directives = item.metadata?.ui_directives;
+            const linkedItems = item.metadata?.linked_items || [];
             let directivesForCard = directives;
             if (previewId && directives && previewModifications) {
               const baseDraft = buildEventDraft(commandResult, previewId);
@@ -1421,6 +1438,13 @@ export default function ChatScreen() {
                     ) : null}
                   </View>
                 )}
+                {linkedItems.length > 0 ? (
+                  <LinkedItemsRow
+                    items={linkedItems}
+                    disabled={item.pending || isSending}
+                    onPressItem={handleLinkedItemPress}
+                  />
+                ) : null}
                 {requestError ? (
                   <View style={styles.errorCardWrap}>
                     <Pressable

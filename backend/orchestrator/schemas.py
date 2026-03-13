@@ -343,6 +343,13 @@ class UiDirectivesOut(BaseModel):
     blocks: list[UiDirectiveBlock] = Field(default_factory=list)
 
 
+class LinkedItemOut(BaseModel):
+    entity_type: Literal["event", "document"]
+    entity_id: str
+    title: str
+    subtitle: str | None = None
+
+
 class AskIn(BaseModel):
     question: str
     limit: int | None = 30
@@ -375,6 +382,7 @@ class AskOut(BaseModel):
     ui_directives: UiDirectivesOut | None = None
     command_result: dict[str, Any] | None = None
     pending_event_id: str | None = None
+    linked_items: list[LinkedItemOut] = Field(default_factory=list)
 
 
 class ThreadCreate(BaseModel):

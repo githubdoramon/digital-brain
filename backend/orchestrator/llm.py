@@ -176,6 +176,9 @@ async def answer_question(
             assistant_metadata = {}
             if result.get("ui_directives"):
                 assistant_metadata["ui_directives"] = result["ui_directives"]
+            linked_items = result.get("linked_items")
+            if isinstance(linked_items, list) and linked_items:
+                assistant_metadata["linked_items"] = linked_items
             resolved_place = _extract_resolved_place_from_result(result)
             if resolved_place:
                 assistant_metadata["resolved_place"] = resolved_place
@@ -287,6 +290,9 @@ async def answer_question_stream(
             assistant_metadata = {}
             if final_bundle.get("ui_directives"):
                 assistant_metadata["ui_directives"] = final_bundle["ui_directives"]
+            linked_items = final_bundle.get("linked_items")
+            if isinstance(linked_items, list) and linked_items:
+                assistant_metadata["linked_items"] = linked_items
             resolved_place = _extract_resolved_place_from_result(final_bundle)
             if resolved_place:
                 assistant_metadata["resolved_place"] = resolved_place

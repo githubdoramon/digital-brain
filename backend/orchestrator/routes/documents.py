@@ -87,6 +87,7 @@ def create_documents_router(
         return DocumentCollection(documents=docs)
 
     @router.get("/documents/{document_id}", response_model=DocumentDetailOut)
+    @router.get("/mobile/documents/{document_id}", response_model=DocumentDetailOut)
     def get_document_detail(document_id: str, user: dict = Depends(get_current_user)):
         document = documents.get_document(document_id)
         if not document:
@@ -131,6 +132,7 @@ def create_documents_router(
         return {"ok": True}
 
     @router.get("/documents/{document_id}/download")
+    @router.get("/mobile/documents/{document_id}/download")
     def download_document(document_id: str, user: dict = Depends(get_current_user)):
         info = documents.get_document_file(document_id)
         if not info:
