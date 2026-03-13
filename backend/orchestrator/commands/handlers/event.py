@@ -337,6 +337,7 @@ def _format_target_field_context_for_prompt(
         locked_lines.append(f"- {field}: {value!r}")
 
     update_lines = "\n".join(f"- {field}" for field in target_fields)
+    locked_lines_text = "\n".join(locked_lines)
     lock_instruction = (
         "Preserve locked fields exactly unless the user explicitly corrects them in this turn."
         if lock_existing_fields
@@ -348,7 +349,7 @@ def _format_target_field_context_for_prompt(
         "Fields to update this turn:\n"
         f"{update_lines}\n"
         "Locked fields:\n"
-        f"{'\\n'.join(locked_lines)}\n"
+        f"{locked_lines_text}\n"
         f"{lock_instruction}\n\n"
     )
 
