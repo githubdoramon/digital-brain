@@ -9,8 +9,8 @@ Validates tool calls before execution:
 5. Implements repair loop (max 2 retries)
 """
 
-from dataclasses import dataclass, field
 import re
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Optional
 
 from tools.action_enums import GetEventsAction, HomeAssistantAction, LookupContactAction

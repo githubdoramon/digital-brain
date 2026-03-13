@@ -12,9 +12,9 @@ This is the key component that decides:
 - failed: Tool failed, handle error
 """
 
+import json
 import os
 import sys
-import json
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Optional
