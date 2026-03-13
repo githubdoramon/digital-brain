@@ -53,19 +53,6 @@ type StreamAskParams = {
   callbacks?: StreamCallbacks;
 };
 
-const STREAM_DEBUG_ENABLED = __DEV__;
-
-function logStreamDebug(message: string, details?: Record<string, unknown>) {
-  if (!STREAM_DEBUG_ENABLED) {
-    return;
-  }
-  if (details) {
-    console.info(`[ask-stream] ${message}`, details);
-    return;
-  }
-  console.info(`[ask-stream] ${message}`);
-}
-
 function formatToolArgValue(value: unknown): string {
   if (value === null || value === undefined) return 'null';
   if (typeof value === 'string') {
@@ -150,9 +137,6 @@ function parseSseEventLine(line: string): StreamEvent | null {
   try {
     return JSON.parse(raw) as StreamEvent;
   } catch {
-    logStreamDebug('failed to parse event line', {
-      rawPreview: raw.slice(0, 220),
-    });
     return null;
   }
 }
@@ -198,14 +182,6 @@ export async function waitForRunCompletion(
     const run = (await apiFetch(`/mobile/ask/runs/${encodeURIComponent(runId)}`, {
       token,
     })) as AskRunStatus;
-
-    logStreamDebug('poll run status', {
-      runId,
-      attempt: attempt + 1,
-      status: run.status,
-      hasResult: Boolean(run.result),
-      hasError: Boolean(run.error),
-    });
 
     const statusMessage = (run.status_message || '').trim();
     if (statusMessage) {
@@ -274,11 +250,6 @@ export async function askWithStreaming({
 
   const headerRunId = streamResponse.headers.get('x-ask-run-id')?.trim() || null;
   const headerThreadId = streamResponse.headers.get('x-ask-thread-id')?.trim() || null;
-  logStreamDebug('stream opened', {
-    status: streamResponse.status,
-    runId: headerRunId,
-    threadId: headerThreadId,
-  });
 
   let doneBundle: AskResponse | null = null;
   let runId: string | null = headerRunId;
@@ -299,17 +270,8 @@ export async function askWithStreaming({
 
   const decoder = new TextDecoder();
   let buffer = '';
-  let tokenEventCount = 0;
 
   const handleParsedEvent = (event: StreamEvent): AskResponse | null => {
-    const eventType = String(event.type || 'unknown');
-    if (eventType !== 'token') {
-      logStreamDebug('event received', {
-        type: eventType,
-        runId,
-      });
-    }
-
     if (event.type === 'session_info') {
       if (event.thread_id) {
         callbacks?.onSessionInfo?.(event.thread_id);
@@ -332,10 +294,6 @@ export async function askWithStreaming({
     if (event.type === 'tool_call') {
       const toolName = typeof event.name === 'string' ? event.name.trim() : '';
       if (toolName) {
-        logStreamDebug('tool call', {
-          toolName,
-          runId,
-        });
         const chip = buildToolProgressChip(toolName, event.args);
         if (chip) {
           callbacks?.onProgressChip?.(chip);
@@ -351,14 +309,6 @@ export async function askWithStreaming({
     if (event.type === 'token') {
       const delta = typeof event.content === 'string' ? event.content : '';
       if (delta) {
-        tokenEventCount += 1;
-        if (tokenEventCount <= 3 || tokenEventCount % 25 === 0) {
-          logStreamDebug('token event', {
-            runId,
-            tokenEventCount,
-            chars: delta.length,
-          });
-        }
         callbacks?.onToken?.(delta);
       }
       return null;
@@ -374,10 +324,6 @@ export async function askWithStreaming({
     }
 
     if (event.type === 'done') {
-      logStreamDebug('done bundle received', {
-        runId,
-        hasBundle: Boolean(event.bundle),
-      });
       return event.bundle ?? null;
     }
 
@@ -436,10 +382,6 @@ export async function askWithStreaming({
     }
   } catch (error) {
     if (runId && shouldTryRunPolling(error)) {
-      logStreamDebug('stream interrupted, switching to polling', {
-        runId,
-        reason: error instanceof Error ? error.message : String(error),
-      });
       callbacks?.onStatus?.('Reconnecting...');
       return waitForRunCompletion(runId, token, callbacks);
     }
@@ -448,9 +390,6 @@ export async function askWithStreaming({
 
   if (!doneBundle) {
     if (runId) {
-      logStreamDebug('stream ended without done bundle, polling', {
-        runId,
-      });
       callbacks?.onStatus?.('Reconnecting...');
       return waitForRunCompletion(runId, token, callbacks);
     }

@@ -716,12 +716,6 @@ export default function ChatScreen() {
     const setProgressChip = (chipLabelRaw: string) => {
       const chipLabel = chipLabelRaw.trim();
       if (!chipLabel) return;
-      if (__DEV__) {
-        console.info('[chat-stream] progress chip (resume)', {
-          pendingMessageId: pendingRun.pendingMessageId,
-          chipLabel,
-        });
-      }
 
       setMessages((prev) =>
         prev.map((message) => {
@@ -872,12 +866,6 @@ export default function ChatScreen() {
     const setProgressChip = (chipLabelRaw: string) => {
       const chipLabel = chipLabelRaw.trim();
       if (!chipLabel) return;
-      if (__DEV__) {
-        console.info('[chat-stream] progress chip', {
-          pendingMessageId: pendingId,
-          chipLabel,
-        });
-      }
 
       setMessages((prev) =>
         prev.map((message) => {
