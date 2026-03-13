@@ -10,8 +10,11 @@ import action_logs
 import immich_client
 from auth import get_current_user, require_service_api_key
 from observability.log_stream import LOG_LEVELS, get_log_buffer
+from observability.logger import get_runtime_logger
 from schemas import ServiceVersionCollection
 from versioning import get_service_versions
+
+logger = get_runtime_logger(__name__)
 
 
 def create_system_router() -> APIRouter:
@@ -25,7 +28,7 @@ def create_system_router() -> APIRouter:
     @router.get("/system/logs/stream")
     async def stream_system_logs(
         level: str | None = Query(default=None),
-        _: dict = Depends(get_current_user),
+        user: dict = Depends(get_current_user),
     ):
         if level:
             normalized = level.lower()
@@ -34,25 +37,50 @@ def create_system_router() -> APIRouter:
             level = normalized
 
         buffer = get_log_buffer()
+        user_email = user.get("email") if isinstance(user, dict) else None
+        logger.info("[system/logs/stream] connect user=%s level=%s", user_email, level or "all")
 
         async def event_generator():
             loop = asyncio.get_running_loop()
             last_id = 0
             heartbeat_interval_seconds = 5.0
             last_emit_at = loop.time()
-            while True:
-                entries = buffer.get_since(last_id, level=level)
-                if entries:
-                    for entry in entries:
-                        last_id = entry.entry_id
-                        yield f"data: {json.dumps(entry.to_dict(), default=str)}\\n\\n"
-                    last_emit_at = loop.time()
-                else:
-                    now = loop.time()
-                    if now - last_emit_at >= heartbeat_interval_seconds:
-                        yield ": keep-alive\\n\\n"
-                        last_emit_at = now
-                await asyncio.sleep(0.5)
+            try:
+                while True:
+                    entries = buffer.get_since(last_id, level=level)
+                    if entries:
+                        logger.info(
+                            "[system/logs/stream] emit user=%s level=%s batch=%s first_id=%s last_id=%s",
+                            user_email,
+                            level or "all",
+                            len(entries),
+                            entries[0].entry_id,
+                            entries[-1].entry_id,
+                        )
+                        for entry in entries:
+                            last_id = entry.entry_id
+                            yield f"data: {json.dumps(entry.to_dict(), default=str)}\\n\\n"
+                        last_emit_at = loop.time()
+                    else:
+                        now = loop.time()
+                        if now - last_emit_at >= heartbeat_interval_seconds:
+                            logger.info(
+                                "[system/logs/stream] heartbeat user=%s level=%s last_id=%s",
+                                user_email,
+                                level or "all",
+                                last_id,
+                            )
+                            yield ": keep-alive\\n\\n"
+                            last_emit_at = now
+                    await asyncio.sleep(0.5)
+            except asyncio.CancelledError:
+                logger.info(
+                    "[system/logs/stream] disconnect user=%s level=%s last_id=%s",
+                    user_email,
+                    level or "all",
+                    last_id,
+                )
+                raise
 
         return StreamingResponse(
             event_generator(),

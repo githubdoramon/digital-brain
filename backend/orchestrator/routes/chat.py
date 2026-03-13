@@ -39,6 +39,17 @@ ASK_RUNS_TTL_SECONDS = 1800
 _ask_runs: dict[str, dict[str, Any]] = {}
 
 
+def _should_log_stream_event(event_type: str) -> bool:
+    return event_type in {
+        "status",
+        "tool_call",
+        "tool_result",
+        "done",
+        "error",
+        "clear_content",
+    }
+
+
 def create_chat_router() -> APIRouter:
     router = APIRouter()
 
@@ -239,6 +250,12 @@ def create_chat_router() -> APIRouter:
 
                 def emit_status(message: str) -> None:
                     _touch_ask_run(run_id, status="running", status_message=message)
+                    logger.info(
+                        "[ask/stream] command status run=%s user=%s message=%r",
+                        run_id,
+                        user_email,
+                        message,
+                    )
                     if disconnect_event.is_set():
                         return
                     loop.call_soon_threadsafe(
@@ -328,6 +345,12 @@ def create_chat_router() -> APIRouter:
                 async def _produce() -> None:
                     try:
                         final_event = await asyncio.to_thread(execute_command_flow)
+                        logger.info(
+                            "[ask/stream] command final_event run=%s user=%s type=%s",
+                            run_id,
+                            user_email,
+                            str(final_event.get("type") or "unknown"),
+                        )
                         if not disconnect_event.is_set():
                             await queue.put(final_event)
                     finally:
@@ -347,6 +370,15 @@ def create_chat_router() -> APIRouter:
 
                             if event is None:
                                 break
+
+                            event_type = str(event.get("type") or "unknown")
+                            if _should_log_stream_event(event_type):
+                                logger.info(
+                                    "[ask/stream] command emit run=%s user=%s type=%s",
+                                    run_id,
+                                    user_email,
+                                    event_type,
+                                )
 
                             yield f"data: {json.dumps(event, default=str)}\\n\\n"
                             if event.get("type") in {"done", "error"}:
@@ -486,6 +518,14 @@ def create_chat_router() -> APIRouter:
                             event["bundle"] = bundle
 
                         event_type = event.get("type")
+                        if _should_log_stream_event(str(event_type or "")):
+                            logger.info(
+                                "[ask/stream] upstream event run=%s session=%s user=%s type=%s",
+                                run_id,
+                                ctx.session_id,
+                                user_email,
+                                str(event_type or "unknown"),
+                            )
                         if event_type == "status":
                             _touch_ask_run(
                                 run_id,
@@ -540,6 +580,16 @@ def create_chat_router() -> APIRouter:
 
                             if event is None:
                                 break
+
+                            event_type = str(event.get("type") or "unknown")
+                            if _should_log_stream_event(event_type):
+                                logger.info(
+                                    "[ask/stream] emit run=%s session=%s user=%s type=%s",
+                                    run_id,
+                                    ctx.session_id,
+                                    user_email,
+                                    event_type,
+                                )
 
                             yield f"data: {json.dumps(event, default=str)}\\n\\n"
 
