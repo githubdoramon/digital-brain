@@ -1,7 +1,7 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { useFocusEffect } from '@react-navigation/native';
 import { useRouter } from 'expo-router';
-import React, { useMemo, useRef, useState } from 'react';
+import React, { useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Animated,
@@ -25,17 +25,21 @@ import {
   CollapsingTopBar,
 } from '@/components/CollapsingTopBar';
 import { theme } from '@/theme';
-import { normalizeSearch } from '@/utils/text';
+
+const PAGE_SIZE = 30;
 
 type EventListItem = {
   id: string;
   title?: string | null;
+  summary?: string | null;
   start_date?: string | null;
   end_date?: string | null;
 };
 
 type EventSearchResponse = {
   events: EventListItem[];
+  has_more?: boolean;
+  next_offset?: number;
 };
 
 function formatDate(value?: string | null): string {
@@ -58,28 +62,64 @@ export default function SettingsEventsScreen() {
   const [events, setEvents] = useState<EventListItem[]>([]);
   const [query, setQuery] = useState('');
   const [isLoading, setIsLoading] = useState(true);
+  const [isLoadingMore, setIsLoadingMore] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const hasLoadedOnceRef = useRef(false);
+  const hasMoreRef = useRef(false);
+  const nextOffsetRef = useRef(0);
+  const isLoadingMoreRef = useRef(false);
 
   const loadEvents = React.useCallback(
-    async ({ showInitialLoader = false, showRefreshSpinner = false } = {}) => {
+    async ({
+      showInitialLoader = false,
+      showRefreshSpinner = false,
+      append = false,
+    }: {
+      showInitialLoader?: boolean;
+      showRefreshSpinner?: boolean;
+      append?: boolean;
+    } = {}) => {
       const trimmed = query.trim();
+      if (append) {
+        if (isLoadingMoreRef.current || !hasMoreRef.current) return;
+        isLoadingMoreRef.current = true;
+        setIsLoadingMore(true);
+      }
       if (showInitialLoader) setIsLoading(true);
       if (showRefreshSpinner) setIsRefreshing(true);
+      const requestOffset = append ? nextOffsetRef.current : 0;
       try {
-        setLoadError(null);
+        if (!append) setLoadError(null);
         const searchParams = new URLSearchParams();
-        searchParams.set('limit', '50');
+        searchParams.set('limit', String(PAGE_SIZE));
+        searchParams.set('offset', String(requestOffset));
         if (trimmed) searchParams.set('query', trimmed);
         const result = (await apiFetch(
           `/mobile/events/search?${searchParams.toString()}`,
         )) as EventSearchResponse;
-        setEvents(result.events ?? []);
+        const incoming = result.events ?? [];
+        setEvents((prev) => {
+          if (!append) return incoming;
+          const seen = new Set(prev.map((event) => event.id));
+          const deduped = incoming.filter((event) => !seen.has(event.id));
+          return prev.concat(deduped);
+        });
+        const resolvedNextOffset =
+          typeof result.next_offset === 'number'
+            ? result.next_offset
+            : requestOffset + incoming.length;
+        const resolvedHasMore = Boolean(result.has_more);
+        nextOffsetRef.current = resolvedNextOffset;
+        hasMoreRef.current = resolvedHasMore;
       } catch (error) {
         console.warn('[events] load failed', error);
         setLoadError('Unable to load events. Pull to refresh.');
       } finally {
+        if (append) {
+          isLoadingMoreRef.current = false;
+          setIsLoadingMore(false);
+        }
         setIsLoading(false);
         setIsRefreshing(false);
       }
@@ -103,12 +143,6 @@ export default function SettingsEventsScreen() {
     return () => clearTimeout(timeout);
   }, [loadEvents]);
 
-  const filtered = useMemo(() => {
-    const normalizedQuery = normalizeSearch(query.trim());
-    if (!normalizedQuery) return events;
-    return events.filter((event) => normalizeSearch(String(event.title || '')).includes(normalizedQuery));
-  }, [events, query]);
-
   return (
     <KeyboardAvoidingView
       style={styles.container}
@@ -116,7 +150,7 @@ export default function SettingsEventsScreen() {
       keyboardVerticalOffset={insets.top + COLLAPSING_TOP_BAR_HEIGHT}
     >
       <FlatList
-        data={filtered}
+        data={events}
         keyExtractor={(item) => item.id}
         onScroll={Animated.event([{ nativeEvent: { contentOffset: { y: scrollY } } }], {
           useNativeDriver: false,
@@ -124,6 +158,8 @@ export default function SettingsEventsScreen() {
         scrollEventThrottle={16}
         refreshing={isRefreshing}
         onRefresh={() => void loadEvents({ showRefreshSpinner: true })}
+        onEndReachedThreshold={0.35}
+        onEndReached={() => void loadEvents({ append: true })}
         automaticallyAdjustKeyboardInsets
         keyboardShouldPersistTaps="handled"
         keyboardDismissMode="on-drag"
@@ -154,6 +190,9 @@ export default function SettingsEventsScreen() {
             <Text style={styles.empty}>No events found.</Text>
           )
         }
+        ListFooterComponent={
+          isLoadingMore ? <ActivityIndicator size="small" color={theme.colors.accent} style={styles.loader} /> : null
+        }
         renderItem={({ item }) => (
           <Card style={styles.card}>
             <Pressable
@@ -168,6 +207,11 @@ export default function SettingsEventsScreen() {
               <View style={styles.cardBody}>
                 <Text style={styles.cardTitle}>{String(item.title || '').trim() || 'Untitled event'}</Text>
                 <Text style={styles.cardSubtitle}>{formatDate(item.start_date)}</Text>
+                {item.summary ? (
+                  <Text style={styles.cardMeta} numberOfLines={2}>
+                    {item.summary}
+                  </Text>
+                ) : null}
               </View>
               <Ionicons name="chevron-forward" size={18} color={theme.colors.mutedInk} />
             </Pressable>
@@ -235,6 +279,11 @@ const styles = StyleSheet.create({
   cardSubtitle: {
     fontSize: 13,
     color: theme.colors.mutedInk,
+  },
+  cardMeta: {
+    fontSize: 13,
+    color: theme.colors.mutedInk,
+    marginTop: 2,
   },
   empty: {
     fontSize: 14,

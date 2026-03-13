@@ -58,6 +58,7 @@ def create_events_router(
         user: dict = Depends(get_current_user),
         query: str | None = Query(default=None),
         limit: int = Query(default=10, ge=1, le=50),
+        offset: int = Query(default=0, ge=0),
     ):
         trimmed = (query or "").strip()
         with get_conn() as conn, conn.cursor() as cur:
@@ -67,31 +68,40 @@ def create_events_router(
                     """
                     SELECT e.id,
                            e.title,
+                           e.summary,
                            e.start_date,
                            e.end_date
                     FROM events e
                     WHERE unaccent(COALESCE(e.title, '')) ILIKE unaccent(%s)
                        OR unaccent(COALESCE(e.summary, '')) ILIKE unaccent(%s)
-                    ORDER BY e.start_date DESC
-                    LIMIT %s
+                    ORDER BY e.start_date DESC NULLS LAST, e.id DESC
+                    LIMIT %s OFFSET %s
                     """,
-                    (like, like, limit),
+                    (like, like, limit + 1, offset),
                 )
             else:
                 cur.execute(
                     """
                     SELECT e.id,
                            e.title,
+                           e.summary,
                            e.start_date,
                            e.end_date
                     FROM events e
-                    ORDER BY e.start_date DESC
-                    LIMIT %s
+                    ORDER BY e.start_date DESC NULLS LAST, e.id DESC
+                    LIMIT %s OFFSET %s
                     """,
-                    (limit,),
+                    (limit + 1, offset),
                 )
-            rows: list[dict[str, Any]] = [dict(row) for row in cur.fetchall()]
-        return {"events": rows}
+            fetched_rows: list[dict[str, Any]] = [dict(row) for row in cur.fetchall()]
+        has_more = len(fetched_rows) > limit
+        rows = fetched_rows[:limit]
+        next_offset = offset + len(rows)
+        return {
+            "events": rows,
+            "has_more": has_more,
+            "next_offset": next_offset,
+        }
 
     @router.get("/events/{event_id}")
     @router.get("/mobile/events/{event_id}")
