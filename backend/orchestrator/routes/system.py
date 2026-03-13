@@ -59,7 +59,7 @@ def create_system_router() -> APIRouter:
                         )
                         for entry in entries:
                             last_id = entry.entry_id
-                            yield f"data: {json.dumps(entry.to_dict(), default=str)}\\n\\n"
+                            yield f"data: {json.dumps(entry.to_dict(), default=str)}\n\n"
                         last_emit_at = loop.time()
                     else:
                         now = loop.time()
@@ -70,7 +70,7 @@ def create_system_router() -> APIRouter:
                                 level or "all",
                                 last_id,
                             )
-                            yield ": keep-alive\\n\\n"
+                            yield ": keep-alive\n\n"
                             last_emit_at = now
                     await asyncio.sleep(0.5)
             except asyncio.CancelledError:

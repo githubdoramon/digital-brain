@@ -359,13 +359,13 @@ def create_chat_router() -> APIRouter:
 
                 producer_task = asyncio.create_task(_produce())
                 try:
-                    yield f"data: {json.dumps({'type': 'session_info', 'thread_id': payload.thread_id or payload.session_id, 'is_new_session': False, 'run_id': run_id}, default=str)}\\n\\n"
+                    yield f"data: {json.dumps({'type': 'session_info', 'thread_id': payload.thread_id or payload.session_id, 'is_new_session': False, 'run_id': run_id}, default=str)}\n\n"
                     try:
                         while True:
                             try:
                                 event = await asyncio.wait_for(queue.get(), timeout=heartbeat_seconds)
                             except asyncio.TimeoutError:
-                                yield ": keep-alive\\n\\n"
+                                yield ": keep-alive\n\n"
                                 continue
 
                             if event is None:
@@ -380,7 +380,7 @@ def create_chat_router() -> APIRouter:
                                     event_type,
                                 )
 
-                            yield f"data: {json.dumps(event, default=str)}\\n\\n"
+                            yield f"data: {json.dumps(event, default=str)}\n\n"
                             if event.get("type") in {"done", "error"}:
                                 break
                     except asyncio.CancelledError:
@@ -439,9 +439,9 @@ def create_chat_router() -> APIRouter:
             reset_bundle = _make_reset_bundle(ctx)
 
             async def reset_generator():
-                yield f"data: {json.dumps({'type': 'session_info', 'thread_id': ctx.session_id, 'is_new_session': True, 'run_id': run_id}, default=str)}\\n\\n"
-                yield f"data: {json.dumps({'type': 'token', 'content': _RESET_MESSAGE}, default=str)}\\n\\n"
-                yield f"data: {json.dumps({'type': 'done', 'bundle': reset_bundle}, default=str)}\\n\\n"
+                yield f"data: {json.dumps({'type': 'session_info', 'thread_id': ctx.session_id, 'is_new_session': True, 'run_id': run_id}, default=str)}\n\n"
+                yield f"data: {json.dumps({'type': 'token', 'content': _RESET_MESSAGE}, default=str)}\n\n"
+                yield f"data: {json.dumps({'type': 'done', 'bundle': reset_bundle}, default=str)}\n\n"
 
                 _touch_ask_run(
                     run_id,
@@ -565,7 +565,7 @@ def create_chat_router() -> APIRouter:
                         await queue.put(None)
 
             try:
-                yield f"data: {json.dumps({'type': 'session_info', 'thread_id': ctx.session_id, 'is_new_session': ctx.is_new_session, 'run_id': run_id}, default=str)}\\n\\n"
+                yield f"data: {json.dumps({'type': 'session_info', 'thread_id': ctx.session_id, 'is_new_session': ctx.is_new_session, 'run_id': run_id}, default=str)}\n\n"
 
                 queue: asyncio.Queue[dict[str, Any] | None] = asyncio.Queue()
                 producer_task = asyncio.create_task(_stream_events(queue))
@@ -575,7 +575,7 @@ def create_chat_router() -> APIRouter:
                             try:
                                 event = await asyncio.wait_for(queue.get(), timeout=heartbeat_seconds)
                             except asyncio.TimeoutError:
-                                yield ": keep-alive\\n\\n"
+                                yield ": keep-alive\n\n"
                                 continue
 
                             if event is None:
@@ -591,7 +591,7 @@ def create_chat_router() -> APIRouter:
                                     event_type,
                                 )
 
-                            yield f"data: {json.dumps(event, default=str)}\\n\\n"
+                            yield f"data: {json.dumps(event, default=str)}\n\n"
 
                             if event.get("type") == "done":
                                 elapsed = perf_counter() - start_time
@@ -622,7 +622,7 @@ def create_chat_router() -> APIRouter:
                             await producer_task
             except Exception as exc:
                 logger.exception("[ask/stream] error session=%s", ctx.session_id)
-                yield f"data: {json.dumps({'type': 'error', 'message': str(exc)}, default=str)}\\n\\n"
+                yield f"data: {json.dumps({'type': 'error', 'message': str(exc)}, default=str)}\n\n"
 
         return StreamingResponse(
             event_generator(),
