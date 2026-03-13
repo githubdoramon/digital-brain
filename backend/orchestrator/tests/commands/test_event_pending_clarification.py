@@ -5,7 +5,13 @@ from commands.event import event_pending_key, handle_pending_event
 from commands.handlers import event as event_handler
 from commands.handlers.event import handle_event
 from commands.parser import ParsedCommand
-from commands.storage import clear_pending_event, delete_command_data, get_pending_event
+from commands.storage import (
+    clear_pending_event,
+    delete_command_data,
+    get_pending_event,
+    store_command_data,
+    store_pending_event,
+)
 
 
 def test_handle_event_sets_pending_key_for_clarification(monkeypatch):
@@ -709,3 +715,109 @@ def test_apply_group_confirmation_from_answer_explicit_name_no():
     startup = next(group for group in updated if group.get("name") == "startup friends")
     assert soccer.get("confirmed") is False
     assert "confirmed" not in startup
+
+
+def test_follow_up_without_prior_clarification_infers_target_fields(monkeypatch):
+    clarification_id = "event:clarification:infer1234"
+    store_command_data(
+        clarification_id,
+        {
+            "original_message": "met with Alex at home yesterday",
+            "thread_id": "thread-123",
+            "extracted": {
+                "title": "Met with Alex",
+                "summary": "Talked about roadmap",
+                "when": None,
+                "end_when": None,
+                "where": "Home",
+                "tags": ["work"],
+                "types": ["meeting"],
+                "who": ["Alex"],
+            },
+            "resolution": {
+                "contacts": [],
+                "new_entities": {
+                    "contacts": [],
+                    "places": [],
+                    "documents": [],
+                },
+                "name_replacements": {},
+                "proposed_contact_groups": [],
+            },
+            "relationship_suggestions": [{"relationship_type": "colleague"}],
+        },
+    )
+    store_pending_event("user@example.com:thread-123", clarification_id)
+
+    infer_called = {"value": False}
+    resolve_called = {"value": False}
+
+    def fake_infer_fields(raw_message, existing_extraction, context):
+        infer_called["value"] = True
+        assert "office" in raw_message.lower()
+        assert existing_extraction.get("where") == "Home"
+        return ["where"]
+
+    def fake_extract_event_entities(
+        event_message,
+        context,
+        existing_extracted=None,
+        clarification_messages=None,
+    ):
+        base = existing_extracted or {}
+        assert context.get("event_target_fields") == ["where"]
+        assert context.get("event_lock_existing_fields") is True
+        return {
+            "title": base.get("title"),
+            "summary": base.get("summary"),
+            "when": base.get("when"),
+            "end_when": base.get("end_when"),
+            "where": "Office",
+            "tags": base.get("tags"),
+            "types": base.get("types"),
+            "need_user_input": None,
+        }
+
+    def fail_if_resolve_called(*_args, **_kwargs):
+        resolve_called["value"] = True
+        raise AssertionError("Contact resolution should not run for where-only follow-up")
+
+    monkeypatch.setattr(
+        "commands.handlers.event._infer_follow_up_target_fields",
+        fake_infer_fields,
+    )
+    monkeypatch.setattr(
+        "commands.handlers.event._extract_event_entities_with_llm",
+        fake_extract_event_entities,
+    )
+    monkeypatch.setattr(
+        "commands.handlers.event._resolve_contacts_with_agent",
+        fail_if_resolve_called,
+    )
+    monkeypatch.setattr(
+        "commands.handlers.event.places_service.find_best_place_match", lambda *a, **k: None
+    )
+    monkeypatch.setattr("commands.handlers.event.geocode_place_name", lambda *a, **k: None)
+
+    parsed = ParsedCommand(
+        command="event",
+        args="ah, the event happened at my office [clarification_id:event:clarification:infer1234]",
+        raw_message="/event ah, the event happened at my office [clarification_id:event:clarification:infer1234]",
+    )
+    context = {
+        "user_email": "user@example.com",
+        "thread_id": "thread-123",
+        "event_pending_key": "user@example.com:thread-123",
+    }
+
+    result = handle_event(parsed, context)
+
+    assert result.get("type") == "event_confirmation"
+    assert result.get("extracted", {}).get("where") == "Office"
+    assert infer_called["value"] is True
+    assert resolve_called["value"] is False
+
+    preview_id = result.get("preview_id")
+    if preview_id:
+        delete_command_data(preview_id)
+    clear_pending_event("user@example.com:thread-123")

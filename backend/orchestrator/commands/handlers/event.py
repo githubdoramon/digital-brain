@@ -30,6 +30,17 @@ from ui_dsl.clarification import (
 
 logger = get_runtime_logger(__name__)
 
+_EVENT_FIELD_RULES: dict[str, dict[str, bool]] = {
+    "title": {"extractable": True},
+    "summary": {"extractable": True},
+    "when": {"extractable": True},
+    "end_when": {"extractable": True},
+    "where": {"extractable": True},
+    "tags": {"extractable": True},
+    "types": {"extractable": True},
+    "who": {"extractable": False},
+}
+
 _PLACE_ROLE_SYNONYMS = {
     # Home-like
     "home": "home",
@@ -187,6 +198,159 @@ def _emit_progress(context: dict[str, Any], message: str) -> None:
     callback = context.get("progress_callback")
     if callable(callback):
         callback(message)
+
+
+def _normalize_event_field_ids(raw_fields: Any) -> list[str]:
+    if not isinstance(raw_fields, list):
+        return []
+
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for raw in raw_fields:
+        field_id = str(raw or "").strip().lower()
+        if not field_id or field_id not in _EVENT_FIELD_RULES:
+            continue
+        if field_id in seen:
+            continue
+        seen.add(field_id)
+        normalized.append(field_id)
+    return normalized
+
+
+def _has_assistant_clarification_prompt(
+    clarification_messages: list[dict[str, str]] | None,
+) -> bool:
+    if not clarification_messages:
+        return False
+    return any(
+        str(entry.get("role") or "").strip().lower() == "assistant"
+        and bool(str(entry.get("content") or "").strip())
+        for entry in clarification_messages
+    )
+
+
+def _format_field_inference_extraction_context(existing_extraction: dict[str, Any]) -> str:
+    when_value = existing_extraction.get("when")
+    if isinstance(when_value, datetime):
+        when_value = when_value.isoformat()
+    end_when_value = existing_extraction.get("end_when")
+    if isinstance(end_when_value, datetime):
+        end_when_value = end_when_value.isoformat()
+
+    return (
+        "Current extracted event fields:\n"
+        f"- title: {existing_extraction.get('title')!r}\n"
+        f"- summary: {existing_extraction.get('summary')!r}\n"
+        f"- when: {when_value!r}\n"
+        f"- end_when: {end_when_value!r}\n"
+        f"- where: {existing_extraction.get('where')!r}\n"
+        f"- tags: {existing_extraction.get('tags')!r}\n"
+        f"- types: {existing_extraction.get('types')!r}\n"
+        f"- who: {existing_extraction.get('who')!r}\n"
+    )
+
+
+def _infer_follow_up_target_fields(
+    follow_up_message: str,
+    existing_extraction: dict[str, Any],
+    context: dict[str, Any],
+) -> list[str]:
+    from llm_helpers import call_llm_json
+    from prompts.context import get_time_context, get_user_facts_context
+
+    user_email = str(context.get("user_email") or "").strip()
+    user_facts_ctx = get_user_facts_context(user_email, follow_up_message) if user_email else None
+    user_facts_block = f"\n{user_facts_ctx}\n" if user_facts_ctx else ""
+    extraction_context = _format_field_inference_extraction_context(existing_extraction)
+    time_context = get_time_context()
+
+    prompt = f"""You classify which event fields the user is trying to update in a follow-up message.
+
+Current context:
+- Date/time: {time_context}
+- User: {user_email}
+{user_facts_block}
+{extraction_context}
+
+User follow-up message:
+\"{follow_up_message}\"
+
+Choose only from these fields:
+- title
+- summary
+- when
+- end_when
+- where
+- tags
+- types
+- who
+
+Rules:
+- Select the smallest set of fields that should change.
+- If user only changes location (e.g. "it happened at my office"), return ["where"].
+- If user clarifies people/participants, include "who".
+- If unsure, return an empty list with low confidence.
+
+Return ONLY valid JSON with this exact shape:
+{{
+  "fields": ["where"],
+  "confidence": "high"
+}}"""
+
+    try:
+        classification = call_llm_json(prompt, timeout=20)
+    except Exception as exc:
+        logger.warning(
+            "[handle_event] Failed to infer follow-up target fields: %s",
+            exc,
+            exc_info=exc,
+        )
+        return []
+
+    fields = _normalize_event_field_ids(classification.get("fields"))
+    confidence = str(classification.get("confidence") or "").strip().lower()
+    if confidence not in {"high", "medium", "low"}:
+        confidence = "low"
+
+    if confidence == "low":
+        return []
+    return fields
+
+
+def _format_target_field_context_for_prompt(
+    target_fields: list[str],
+    existing_extraction: dict[str, Any] | None,
+    lock_existing_fields: bool,
+) -> str:
+    if not target_fields or not existing_extraction:
+        return ""
+
+    extraction_fields = [
+        field for field, rules in _EVENT_FIELD_RULES.items() if bool(rules.get("extractable"))
+    ]
+    locked_fields = [field for field in extraction_fields if field not in target_fields]
+    locked_lines: list[str] = []
+    for field in locked_fields:
+        value = existing_extraction.get(field)
+        if isinstance(value, datetime):
+            value = value.isoformat()
+        locked_lines.append(f"- {field}: {value!r}")
+
+    update_lines = "\n".join(f"- {field}" for field in target_fields)
+    lock_instruction = (
+        "Preserve locked fields exactly unless the user explicitly corrects them in this turn."
+        if lock_existing_fields
+        else "Prefer preserving locked fields when the user did not mention them."
+    )
+
+    return (
+        "Follow-up update scope:\n"
+        "Fields to update this turn:\n"
+        f"{update_lines}\n"
+        "Locked fields:\n"
+        f"{'\\n'.join(locked_lines)}\n"
+        f"{lock_instruction}\n\n"
+    )
 
 
 def _format_existing_extraction_for_prompt(existing: dict[str, Any] | None) -> str:
@@ -514,7 +678,20 @@ def _extract_event_entities_with_llm(
     # Build tag context
     tag_examples = ", ".join(MAJOR_TAGS[:5])  # Show first 5 major tags as examples
 
+    target_fields = _normalize_event_field_ids(context.get("event_target_fields"))
+    extraction_target_fields = [
+        field
+        for field in target_fields
+        if bool(_EVENT_FIELD_RULES.get(field, {}).get("extractable"))
+    ]
+    lock_existing_fields = bool(context.get("event_lock_existing_fields"))
+
     existing_context = _format_existing_extraction_for_prompt(existing_extraction)
+    target_field_context = _format_target_field_context_for_prompt(
+        extraction_target_fields,
+        existing_extraction,
+        lock_existing_fields,
+    )
     clarification_context = _format_clarification_history(clarification_messages)
     conversation_json = _format_conversation_json(message, clarification_messages)
     need_user_input_guidance = build_need_user_input_prompt_guidance(exclude_people=True)
@@ -532,7 +709,7 @@ Current context:
 {user_facts_block}
 Event description: "{message}"
 
-{existing_context}{conversation_context}{clarification_context}
+{existing_context}{target_field_context}{conversation_context}{clarification_context}
 
 Extract the following information:
 1. **What happened**: A brief title (5-10 words) and detailed summary
@@ -638,6 +815,9 @@ Return ONLY valid JSON in this exact format:
                 "tags",
                 "types",
             ]:
+                if extraction_target_fields and key not in extraction_target_fields:
+                    result[key] = existing_extraction.get(key)
+                    continue
                 if result.get(key) in (None, "", [], ["generic"]) and existing_extraction.get(key):
                     result[key] = existing_extraction[key]
 
@@ -1357,6 +1537,8 @@ def handle_event(parsed: ParsedCommand, context: dict) -> dict[str, Any]:
     resolution = None
     previous_contact_result: dict[str, Any] = {}
     previous_resolution: dict[str, Any] = {}
+    previous_relationship_suggestions: list[dict[str, Any]] = []
+    target_field_ids: list[str] = []
     skip_contact_resolution = False
     original_message_to_store = raw_message
     if clarification_context:
@@ -1374,6 +1556,12 @@ def handle_event(parsed: ParsedCommand, context: dict) -> dict[str, Any]:
         )
         previous_contact_result = clarification_context.get("contact_result") or {}
         previous_resolution = clarification_context.get("resolution") or {}
+        previous_relationship_suggestions = list(
+            clarification_context.get("relationship_suggestions") or []
+        )
+        target_field_ids = _normalize_event_field_ids(
+            clarification_context.get("requested_field_ids")
+        )
         ambiguous_contacts = previous_contact_result.get("ambiguous_contacts", [])
 
         if raw_message and ambiguous_contacts:
@@ -1417,14 +1605,41 @@ def handle_event(parsed: ParsedCommand, context: dict) -> dict[str, Any]:
                 previous_resolution["proposed_contact_groups"] = updated_groups
                 resolution = previous_resolution
 
+        if not target_field_ids and raw_message and clarification_context.get("extracted"):
+            if not _has_assistant_clarification_prompt(clarification_messages):
+                inferred_fields = _infer_follow_up_target_fields(
+                    raw_message,
+                    clarification_context.get("extracted") or {},
+                    context,
+                )
+                if inferred_fields:
+                    target_field_ids = inferred_fields
+                    logger.info(
+                        "[handle_event] Inferred follow-up target fields: %s",
+                        target_field_ids,
+                    )
+
+        if target_field_ids and "who" not in target_field_ids and previous_resolution:
+            skip_contact_resolution = True
+            resolution = resolution or previous_resolution
+            contact_result = contact_result or previous_contact_result
+            logger.info(
+                "[handle_event] Skipping contact resolution for non-participant follow-up: %s",
+                target_field_ids,
+            )
+
     # Extract entities using LLM with time context
     logger.info("[handle_event] STEP 1: Extracting entities with LLM...")
     _emit_progress(context, "Extracting event entities...")
+    extraction_context = dict(context)
+    if target_field_ids:
+        extraction_context["event_target_fields"] = target_field_ids
+        extraction_context["event_lock_existing_fields"] = True
     with ThreadPoolExecutor(max_workers=2) as executor:
         extraction_future = executor.submit(
             _extract_event_entities_with_llm,
             event_message,
-            context,
+            extraction_context,
             clarification_context.get("extracted") if clarification_context else None,
             clarification_messages,
         )
@@ -1551,6 +1766,9 @@ def handle_event(parsed: ParsedCommand, context: dict) -> dict[str, Any]:
         )
 
         from commands.storage import store_command_data, store_pending_event
+        requested_field_ids = _normalize_event_field_ids(
+            [field.get("id") for field in clarification_fields if isinstance(field, dict)]
+        )
 
         if clarification_messages is None:
             clarification_messages = [
@@ -1573,6 +1791,8 @@ def handle_event(parsed: ParsedCommand, context: dict) -> dict[str, Any]:
                 "user_email": user_email,
                 "original_message": original_message_to_store,
                 "clarification_messages": clarification_messages,
+                "requested_field_ids": requested_field_ids,
+                "relationship_suggestions": previous_relationship_suggestions,
             },
         )
         pending_key = context.get("event_pending_key")
@@ -1796,9 +2016,11 @@ def handle_event(parsed: ParsedCommand, context: dict) -> dict[str, Any]:
     logger.info("[handle_event] STEP 4: Suggesting relationships...")
     _emit_progress(context, "Inferring relationships...")
     relationship_suggestions = _format_relationship_suggestions(
-        contact_result.get("suggested_relationships", []),
+        contact_result.get("suggested_relationships", []) if contact_result else [],
         resolution,
     )
+    if not relationship_suggestions and previous_relationship_suggestions:
+        relationship_suggestions = previous_relationship_suggestions
 
     # Update extracted "who" from contact agent results
     resolution["contacts"] = _dedupe_contacts(resolution.get("contacts", []))
@@ -1839,6 +2061,7 @@ def handle_event(parsed: ParsedCommand, context: dict) -> dict[str, Any]:
             "original_message": original_message_to_store,
             "thread_id": context.get("thread_id"),
             "clarification_messages": clarification_messages,
+            "requested_field_ids": [],
         },
     )
 
