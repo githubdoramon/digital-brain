@@ -11,6 +11,7 @@ from search_normalization import normalize_search_text
 
 __all__ = [
     "add_place_alias",
+    "delete_place",
     "find_best_place_match",
     "get_place",
     "ingest_place",
@@ -82,6 +83,55 @@ def ingest_place(place: Any) -> None:
             ),
         )
         conn.commit()
+
+
+def delete_place(place_id: str) -> bool:
+    clean_place_id = str(place_id or "").strip()
+    if not clean_place_id:
+        return False
+
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            DELETE FROM contact_places
+            WHERE place_id = %s
+            """,
+            (clean_place_id,),
+        )
+
+        cur.execute("SELECT to_regclass('todo_places') AS table_name")
+        todo_places_table = cur.fetchone() or {}
+        if todo_places_table.get("table_name"):
+            cur.execute(
+                """
+                DELETE FROM todo_places
+                WHERE place_id = %s
+                """,
+                (clean_place_id,),
+            )
+
+        cur.execute("SELECT to_regclass('events') AS table_name")
+        events_table = cur.fetchone() or {}
+        if events_table.get("table_name"):
+            cur.execute(
+                """
+                UPDATE events
+                SET place_id = NULL
+                WHERE place_id = %s
+                """,
+                (clean_place_id,),
+            )
+
+        cur.execute(
+            """
+            DELETE FROM places
+            WHERE place_id = %s
+            """,
+            (clean_place_id,),
+        )
+        deleted = cur.rowcount > 0
+        conn.commit()
+        return deleted
 
 
 def find_best_place_match(

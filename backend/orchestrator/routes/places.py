@@ -47,6 +47,16 @@ def create_places_router() -> APIRouter:
         ]
         return {"contacts": contacts}
 
+    @router.delete("/places/{place_id}")
+    @router.delete("/mobile/places/{place_id}")
+    def delete_place(place_id: str, user: dict = Depends(get_current_user)):
+        place = places_service.get_place(place_id)
+        if place is None:
+            raise HTTPException(status_code=404, detail="Place not found")
+
+        places_service.delete_place(place_id)
+        return {"ok": True}
+
     @router.delete("/mobile/places/{place_id}/contacts/{contact_id}")
     def unlink_mobile_place_contact(
         place_id: str,

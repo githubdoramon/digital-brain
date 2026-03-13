@@ -17,6 +17,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { apiFetch } from '@/api/client';
 import { AppPressable as Pressable } from '@/components/AppPressable';
+import { Button } from '@/components/Button';
 import { Card } from '@/components/Card';
 import { FloatingSaveButton } from '@/components/FloatingSaveButton';
 import { LinkedContactsCard } from '@/components/place/LinkedContactsCard';
@@ -110,6 +111,7 @@ export function PlaceEditorScreen({ placeId }: { placeId?: string }) {
   const [initial, setInitial] = useState<Draft | null>(null);
   const [draft, setDraft] = useState<Draft | null>(null);
   const [isSaving, setIsSaving] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
   const [isLocating, setIsLocating] = useState(false);
   const [isGeocodingAddress, setIsGeocodingAddress] = useState(false);
   const [isLoading, setIsLoading] = useState(!isCreating);
@@ -340,6 +342,41 @@ export function PlaceEditorScreen({ placeId }: { placeId?: string }) {
     }
   };
 
+  const handleDeletePlace = async () => {
+    if (isCreating || !normalizedPlaceId || isDeleting) return;
+
+    setIsDeleting(true);
+    try {
+      await apiFetch(`/mobile/places/${encodeURIComponent(normalizedPlaceId)}`, {
+        method: 'DELETE',
+      });
+      router.replace('/settings/places');
+    } catch (error) {
+      console.warn('[places] delete failed', error);
+      Alert.alert('Delete failed', 'Unable to delete this place right now.');
+    } finally {
+      setIsDeleting(false);
+    }
+  };
+
+  const handleConfirmDelete = () => {
+    if (isCreating || !normalizedPlaceId || isDeleting) return;
+
+    const detail = isDirty
+      ? 'This will permanently remove the place and discard your unsaved edits.'
+      : 'This will permanently remove the place.';
+    Alert.alert('Delete place?', detail, [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Delete',
+        style: 'destructive',
+        onPress: () => {
+          void handleDeletePlace();
+        },
+      },
+    ]);
+  };
+
   if (!draft) {
     return (
       <View style={styles.container}>
@@ -509,6 +546,21 @@ export function PlaceEditorScreen({ placeId }: { placeId?: string }) {
         </Card>
 
         {!isCreating && normalizedPlaceId ? <LinkedContactsCard placeId={normalizedPlaceId} /> : null}
+
+        {!isCreating && normalizedPlaceId ? (
+          <Card style={styles.deleteSection}>
+            <Text style={styles.sectionTitle}>Danger zone</Text>
+            <Text style={styles.deleteHint}>
+              This removes the place from your directory and unlinks it from related records.
+            </Text>
+            <Button
+              label={isDeleting ? 'Deleting...' : 'Delete place'}
+              variant="danger"
+              disabled={isDeleting}
+              onPress={handleConfirmDelete}
+            />
+          </Card>
+        ) : null}
       </ScrollView>
 
       <FloatingSaveButton
@@ -633,6 +685,14 @@ const styles = StyleSheet.create({
   map: {
     height: 240,
     width: '100%',
+  },
+  deleteSection: {
+    padding: 16,
+    gap: 10,
+  },
+  deleteHint: {
+    fontSize: 12,
+    color: theme.colors.mutedInk,
   },
   addMarkerButton: {
     position: 'absolute',
