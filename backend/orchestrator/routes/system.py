@@ -36,13 +36,22 @@ def create_system_router() -> APIRouter:
         buffer = get_log_buffer()
 
         async def event_generator():
+            loop = asyncio.get_running_loop()
             last_id = 0
+            heartbeat_interval_seconds = 5.0
+            last_emit_at = loop.time()
             while True:
                 entries = buffer.get_since(last_id, level=level)
                 if entries:
                     for entry in entries:
                         last_id = entry.entry_id
                         yield f"data: {json.dumps(entry.to_dict(), default=str)}\\n\\n"
+                    last_emit_at = loop.time()
+                else:
+                    now = loop.time()
+                    if now - last_emit_at >= heartbeat_interval_seconds:
+                        yield ": keep-alive\\n\\n"
+                        last_emit_at = now
                 await asyncio.sleep(0.5)
 
         return StreamingResponse(

@@ -706,6 +706,7 @@ export default function ChatScreen() {
                 ...message,
                 content: nextContent,
                 pending: true,
+                metadata: message.metadata,
               }
             : message,
         ),
@@ -854,6 +855,7 @@ export default function ChatScreen() {
                 ...message,
                 content: nextContent,
                 pending: true,
+                metadata: message.metadata,
               }
             : message,
         ),

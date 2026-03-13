@@ -479,47 +479,75 @@ export default function SystemStatusPage() {
       return;
     }
 
+    let cancelled = false;
     const controller = new AbortController();
+    let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 
-    setLogError(null);
-    setLogConnected(true);
+    const wait = (ms: number) =>
+      new Promise<void>((resolve) => {
+        reconnectTimer = setTimeout(resolve, ms);
+      });
 
-    streamSystemLogs(
-      "all",
-      (entry) => {
-        const key = getLogKey(entry);
-        if (seenLogKeysRef.current.has(key)) {
-          return;
-        }
-        seenLogKeysRef.current.add(key);
-        setLogEntries((current) => {
-          const next = sortLogEntries([...current, toLogRow(entry)]);
-          const trimmed = next.length > 1000 ? next.slice(-1000) : next;
-          if (seenLogKeysRef.current.size > 5000) {
-            seenLogKeysRef.current = new Set(trimmed.map((row) => getLogKey(row)));
+    const runStreamLoop = async () => {
+      let reconnectAttempt = 0;
+
+      while (!cancelled && !controller.signal.aborted) {
+        setLogError(null);
+        setLogConnected(true);
+
+        try {
+          await streamSystemLogs(
+            "all",
+            (entry) => {
+              const key = getLogKey(entry);
+              if (seenLogKeysRef.current.has(key)) {
+                return;
+              }
+              seenLogKeysRef.current.add(key);
+              setLogEntries((current) => {
+                const next = sortLogEntries([...current, toLogRow(entry)]);
+                const trimmed = next.length > 1000 ? next.slice(-1000) : next;
+                if (seenLogKeysRef.current.size > 5000) {
+                  seenLogKeysRef.current = new Set(trimmed.map((row) => getLogKey(row)));
+                }
+                return trimmed;
+              });
+            },
+            (message) => {
+              setLogError(message);
+            },
+            controller.signal
+          );
+
+          if (cancelled || controller.signal.aborted) {
+            break;
           }
-          return trimmed;
-        });
-      },
-      (message) => {
-        setLogError(message);
-      },
-      controller.signal
-    )
-      .then(() => {
-        if (!controller.signal.aborted) {
+
           setLogConnected(false);
-        }
-      })
-      .catch((err) => {
-        if (!controller.signal.aborted) {
+          setLogError("Log stream disconnected. Reconnecting...");
+        } catch (err) {
+          if (cancelled || controller.signal.aborted) {
+            break;
+          }
+
           setLogConnected(false);
           setLogError(err instanceof Error ? err.message : "Log stream disconnected. Retrying...");
         }
-      });
+
+        reconnectAttempt += 1;
+        const backoffMs = Math.min(5000, 500 * 2 ** Math.min(reconnectAttempt, 3));
+        await wait(backoffMs);
+      }
+    };
+
+    void runStreamLoop();
 
     return () => {
+      cancelled = true;
       controller.abort();
+      if (reconnectTimer) {
+        clearTimeout(reconnectTimer);
+      }
     };
   }, [isLogPaused]);
 
