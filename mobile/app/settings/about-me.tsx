@@ -6,7 +6,10 @@ import {
   ActivityIndicator,
   Alert,
   Animated,
+  KeyboardAvoidingView,
   Modal,
+  Platform,
+  ScrollView,
   StyleSheet,
   Text,
   TextInput,
@@ -350,67 +353,77 @@ function FactEditModal({ visible, fact, onSave, onCancel }: FactEditModalProps) 
   };
 
   return (
-    <Modal visible={visible} animationType="slide" transparent>
-      <View style={styles.modalOverlay}>
+    <Modal visible={visible} animationType="slide" transparent onRequestClose={onCancel}>
+      <KeyboardAvoidingView
+        style={styles.modalOverlay}
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        keyboardVerticalOffset={Platform.OS === 'ios' ? 16 : 0}
+      >
         <View style={styles.modalContent}>
-          <Text style={styles.modalTitle}>Edit fact</Text>
+          <ScrollView
+            keyboardShouldPersistTaps="handled"
+            contentContainerStyle={styles.modalBody}
+            showsVerticalScrollIndicator={false}
+          >
+            <Text style={styles.modalTitle}>Edit fact</Text>
 
-          <Text style={styles.fieldLabel}>What your Brain knows</Text>
-          <TextInput
-            style={[styles.input, styles.contentInput]}
-            value={content}
-            onChangeText={setContent}
-            placeholder="e.g. Prefers rock music"
-            placeholderTextColor={theme.colors.mutedInk}
-            multiline
-            autoFocus
-          />
+            <Text style={styles.fieldLabel}>What your Brain knows</Text>
+            <TextInput
+              style={[styles.input, styles.contentInput]}
+              value={content}
+              onChangeText={setContent}
+              placeholder="e.g. Prefers rock music"
+              placeholderTextColor={theme.colors.mutedInk}
+              multiline
+              autoFocus
+            />
 
-          <Text style={styles.fieldLabel}>Category</Text>
-          <View style={styles.categoryPicker}>
-            {CATEGORY_OPTIONS.map((cat) => {
-              const meta = CATEGORY_LABELS[cat];
-              const selected = category === cat;
-              return (
-                <Pressable
-                  key={cat}
-                  onPress={() => setCategory(cat)}
-                  style={[styles.categoryChip, selected && styles.categoryChipSelected]}
-                >
-                  <Ionicons
-                    name={meta.icon as any}
-                    size={14}
-                    color={selected ? theme.colors.card : theme.colors.teal}
-                  />
-                  <Text
-                    style={[styles.categoryChipText, selected && styles.categoryChipTextSelected]}
+            <Text style={styles.fieldLabel}>Category</Text>
+            <View style={styles.categoryPicker}>
+              {CATEGORY_OPTIONS.map((cat) => {
+                const meta = CATEGORY_LABELS[cat];
+                const selected = category === cat;
+                return (
+                  <Pressable
+                    key={cat}
+                    onPress={() => setCategory(cat)}
+                    style={[styles.categoryChip, selected && styles.categoryChipSelected]}
                   >
-                    {meta.label}
-                  </Text>
-                </Pressable>
-              );
-            })}
-          </View>
+                    <Ionicons
+                      name={meta.icon as any}
+                      size={14}
+                      color={selected ? theme.colors.card : theme.colors.teal}
+                    />
+                    <Text
+                      style={[styles.categoryChipText, selected && styles.categoryChipTextSelected]}
+                    >
+                      {meta.label}
+                    </Text>
+                  </Pressable>
+                );
+              })}
+            </View>
 
-          <Text style={styles.fieldLabel}>Importance ({importance}/10)</Text>
-          <View style={styles.importanceRow}>
-            {Array.from({ length: 10 }, (_, i) => {
-              const val = i + 1;
-              const active = val <= importance;
-              return (
-                <Pressable key={val} onPress={() => setImportance(val)} style={styles.importanceHit}>
-                  <View style={[styles.importanceBar, active && styles.importanceBarActive]} />
-                </Pressable>
-              );
-            })}
-          </View>
+            <Text style={styles.fieldLabel}>Importance ({importance}/10)</Text>
+            <View style={styles.importanceRow}>
+              {Array.from({ length: 10 }, (_, i) => {
+                const val = i + 1;
+                const active = val <= importance;
+                return (
+                  <Pressable key={val} onPress={() => setImportance(val)} style={styles.importanceHit}>
+                    <View style={[styles.importanceBar, active && styles.importanceBarActive]} />
+                  </Pressable>
+                );
+              })}
+            </View>
 
-          <View style={styles.modalActions}>
-            <Button label="Cancel" variant="secondary" onPress={onCancel} style={styles.modalBtn} />
-            <Button label="Save" variant="primary" onPress={handleSave} style={styles.modalBtn} />
-          </View>
+            <View style={styles.modalActions}>
+              <Button label="Cancel" variant="secondary" onPress={onCancel} style={styles.modalBtn} />
+              <Button label="Save" variant="primary" onPress={handleSave} style={styles.modalBtn} />
+            </View>
+          </ScrollView>
         </View>
-      </View>
+      </KeyboardAvoidingView>
     </Modal>
   );
 }
@@ -535,6 +548,9 @@ const styles = StyleSheet.create({
     backgroundColor: theme.colors.card,
     borderTopLeftRadius: theme.radius.xl,
     borderTopRightRadius: theme.radius.xl,
+    maxHeight: '90%',
+  },
+  modalBody: {
     padding: 24,
     paddingBottom: 40,
   },
