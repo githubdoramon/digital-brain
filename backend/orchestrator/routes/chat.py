@@ -373,6 +373,8 @@ def create_chat_router() -> APIRouter:
                     "Cache-Control": "no-cache",
                     "Connection": "keep-alive",
                     "X-Accel-Buffering": "no",
+                    "X-Ask-Run-Id": run_id,
+                    "X-Ask-Thread-Id": str(payload.thread_id or payload.session_id or ""),
                 },
             )
 
@@ -424,6 +426,8 @@ def create_chat_router() -> APIRouter:
                     "Cache-Control": "no-cache",
                     "Connection": "keep-alive",
                     "X-Accel-Buffering": "no",
+                    "X-Ask-Run-Id": run_id,
+                    "X-Ask-Thread-Id": ctx.session_id,
                 },
             )
 
@@ -577,6 +581,8 @@ def create_chat_router() -> APIRouter:
                 "Cache-Control": "no-cache",
                 "Connection": "keep-alive",
                 "X-Accel-Buffering": "no",
+                "X-Ask-Run-Id": run_id,
+                "X-Ask-Thread-Id": ctx.session_id,
             },
         )
 

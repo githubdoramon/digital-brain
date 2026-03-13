@@ -7,7 +7,6 @@
     "icon": "./assets/images/icon.png",
     "scheme": "com.googleusercontent.apps.000000000000-redacted-oauth-ios-1",
     "userInterfaceStyle": "automatic",
-    "newArchEnabled": true,
     "splash": {
       "image": "./assets/images/splash-icon.png",
       "resizeMode": "contain",
@@ -22,17 +21,12 @@
     },
     "android": {
       "googleServicesFile": "./google-services.json",
-      "androidStatusBar": {
-        "barStyle": "dark-content",
-        "backgroundColor": "#f7f2ec"
-      },
       "adaptiveIcon": {
         "foregroundImage": "./assets/images/android-icon-fg.png",
         "backgroundImage": "./assets/images/android-icon-bg.png",
         "backgroundColor": "#F7F1EA",
         "monochromeImage": "./assets/images/android-icon-fg.png"
       },
-      "edgeToEdgeEnabled": true,
       "softwareKeyboardLayoutMode": "resize",
       "predictiveBackGestureEnabled": false,
       "package": "com.appcalipse.digitalbrain",
@@ -46,8 +40,10 @@
         "imageWidth": 150
       }],
       "expo-router",
+      "expo-font",
       "expo-notifications",
       "expo-secure-store",
+      "expo-web-browser",
       ["@react-native-google-signin/google-signin", {
         "iosUrlScheme": "com.googleusercontent.apps.000000000000-redacted-oauth-ios-2"
       }]

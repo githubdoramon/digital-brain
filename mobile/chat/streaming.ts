@@ -248,8 +248,17 @@ export async function askWithStreaming({
     throw error;
   }
 
+  const headerRunId = streamResponse.headers.get('x-ask-run-id')?.trim() || null;
+  const headerThreadId = streamResponse.headers.get('x-ask-thread-id')?.trim() || null;
+
   let doneBundle: AskResponse | null = null;
-  let runId: string | null = null;
+  let runId: string | null = headerRunId;
+  if (runId) {
+    callbacks?.onRunId?.(runId);
+  }
+  if (headerThreadId) {
+    callbacks?.onSessionInfo?.(headerThreadId);
+  }
   const reader = streamResponse.body?.getReader();
   if (!reader) {
     return (await apiFetch('/mobile/ask', {
