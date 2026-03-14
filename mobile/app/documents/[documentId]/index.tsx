@@ -77,18 +77,38 @@ export default function DocumentDetailScreen() {
     }
   }, []);
 
-  const notifyDownloadComplete = React.useCallback(async (name: string) => {
+  const notifyDownloadComplete = React.useCallback(async (name: string, fileUri: string) => {
     try {
       await Notifications.scheduleNotificationAsync({
         content: {
           title: 'Download complete',
           body: name,
           sound: 'default',
+          data: {
+            kind: 'document_download',
+            fileName: name,
+            fileUri,
+          },
         },
         trigger: null,
       });
     } catch {
       showTransientMessage(`Downloaded ${name}`);
+    }
+  }, [showTransientMessage]);
+
+  const notifyDownloadFailed = React.useCallback(async (message: string) => {
+    try {
+      await Notifications.scheduleNotificationAsync({
+        content: {
+          title: 'Download failed',
+          body: message,
+          sound: 'default',
+        },
+        trigger: null,
+      });
+    } catch {
+      showTransientMessage(message);
     }
   }, [showTransientMessage]);
 
@@ -151,27 +171,17 @@ export default function DocumentDetailScreen() {
       return;
     }
     const appTargetPath = `${documentDirectory}${safeName}`;
-    const publicAndroidTargetPath = `/storage/emulated/0/Download/${safeName}`;
+    const publicAndroidTargetPath = `file:///storage/emulated/0/Download/${safeName}`;
     const targetPath = Platform.OS === 'android' ? publicAndroidTargetPath : appTargetPath;
 
     setIsDownloading(true);
     try {
       let activeToken = token;
-      let result: FileSystem.FileSystemDownloadResult;
-
-      try {
-        result = await FileSystem.downloadAsync(downloadEndpoint, targetPath, {
-          headers: {
-            Authorization: `Bearer ${activeToken}`,
-          },
-        });
-      } catch {
-        result = await FileSystem.downloadAsync(downloadEndpoint, appTargetPath, {
-          headers: {
-            Authorization: `Bearer ${activeToken}`,
-          },
-        });
-      }
+      let result = await FileSystem.downloadAsync(downloadEndpoint, targetPath, {
+        headers: {
+          Authorization: `Bearer ${activeToken}`,
+        },
+      });
 
       if (result.status === 401) {
         const refreshedToken = await refreshToken();
@@ -179,26 +189,23 @@ export default function DocumentDetailScreen() {
           throw new Error('Session expired. Please sign in again.');
         }
         activeToken = refreshedToken;
-        try {
-          result = await FileSystem.downloadAsync(downloadEndpoint, targetPath, {
-            headers: {
-              Authorization: `Bearer ${activeToken}`,
-            },
-          });
-        } catch {
-          result = await FileSystem.downloadAsync(downloadEndpoint, appTargetPath, {
-            headers: {
-              Authorization: `Bearer ${activeToken}`,
-            },
-          });
-        }
+        result = await FileSystem.downloadAsync(downloadEndpoint, targetPath, {
+          headers: {
+            Authorization: `Bearer ${activeToken}`,
+          },
+        });
       }
 
       if (result.status < 200 || result.status >= 300) {
         throw new Error(`Download failed with status ${result.status}.`);
       }
 
-      await notifyDownloadComplete(safeName);
+      const downloadedInfo = await FileSystem.getInfoAsync(result.uri);
+      if (!downloadedInfo.exists) {
+        throw new Error('Download reported success, but file was not found on device storage.');
+      }
+
+      await notifyDownloadComplete(safeName, result.uri);
       if (Platform.OS !== 'android') {
         void Linking.openURL(result.uri).catch(() => undefined);
       }
@@ -206,10 +213,20 @@ export default function DocumentDetailScreen() {
       const message =
         downloadError instanceof Error ? downloadError.message : 'Failed to download this file.';
       showTransientMessage(message);
+      void notifyDownloadFailed(message);
     } finally {
       setIsDownloading(false);
     }
-  }, [document, documentId, isDownloading, notifyDownloadComplete, refreshToken, showTransientMessage, token]);
+  }, [
+    document,
+    documentId,
+    isDownloading,
+    notifyDownloadComplete,
+    notifyDownloadFailed,
+    refreshToken,
+    showTransientMessage,
+    token,
+  ]);
 
   return (
     <View style={styles.container}>

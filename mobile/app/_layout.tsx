@@ -6,6 +6,7 @@ import * as SplashScreen from 'expo-splash-screen';
 import { StatusBar } from 'expo-status-bar';
 import { useEffect } from 'react';
 import 'react-native-reanimated';
+import { Linking, Platform } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import * as Notifications from 'expo-notifications';
 
@@ -90,7 +91,30 @@ function RootLayoutNav({ loaded }: { loaded: boolean }) {
     receivedListener = Notifications.addNotificationReceivedListener(() => {
       // Foreground notifications are handled by the global handler.
     });
-    responseListener = Notifications.addNotificationResponseReceivedListener(() => {
+    responseListener = Notifications.addNotificationResponseReceivedListener((response) => {
+      const data = response.notification.request.content.data as {
+        kind?: string;
+        fileUri?: string;
+      };
+
+      if (data?.kind === 'document_download') {
+        const fileUri = typeof data.fileUri === 'string' ? data.fileUri : null;
+        if (fileUri) {
+          void Linking.openURL(fileUri).catch(async () => {
+            if (Platform.OS === 'android') {
+              try {
+                await Linking.sendIntent('android.intent.action.VIEW_DOWNLOADS');
+                return;
+              } catch {
+                // Fall through to home navigation.
+              }
+            }
+            router.push('/home');
+          });
+          return;
+        }
+      }
+
       router.push('/home');
     });
 
