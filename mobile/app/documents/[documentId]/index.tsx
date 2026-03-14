@@ -116,42 +116,57 @@ export default function DocumentDetailScreen() {
     }
   }, [showTransientMessage]);
 
-  const ensureAndroidDownloadsDirectoryUri = React.useCallback(async (): Promise<string> => {
-    const cached = await AsyncStorage.getItem(DOWNLOADS_DIRECTORY_URI_KEY);
-    if (cached) {
-      return cached;
-    }
+  const ensureAndroidDownloadsDirectoryUri = React.useCallback(
+    async (forcePrompt: boolean = false): Promise<string> => {
+      if (!forcePrompt) {
+        const cached = await AsyncStorage.getItem(DOWNLOADS_DIRECTORY_URI_KEY);
+        if (cached) {
+          return cached;
+        }
+      }
 
-    const initialUri = StorageAccessFramework.getUriForDirectoryInRoot('Download');
-    const permission = await StorageAccessFramework.requestDirectoryPermissionsAsync(initialUri);
-    if (!permission.granted || !permission.directoryUri) {
-      throw new Error('Downloads access not granted.');
-    }
+      const initialUri = StorageAccessFramework.getUriForDirectoryInRoot('Download');
+      const permission = await StorageAccessFramework.requestDirectoryPermissionsAsync(initialUri);
+      if (!permission.granted || !permission.directoryUri) {
+        throw new Error('Downloads access not granted.');
+      }
 
-    await AsyncStorage.setItem(DOWNLOADS_DIRECTORY_URI_KEY, permission.directoryUri);
-    return permission.directoryUri;
-  }, []);
+      await AsyncStorage.setItem(DOWNLOADS_DIRECTORY_URI_KEY, permission.directoryUri);
+      return permission.directoryUri;
+    },
+    [],
+  );
 
   const exportToAndroidDownloads = React.useCallback(
     async (localFileUri: string, fileName: string, mimeType?: string | null): Promise<string> => {
-      const directoryUri = await ensureAndroidDownloadsDirectoryUri();
-      const lastDot = fileName.lastIndexOf('.');
-      const baseName = lastDot > 0 ? fileName.slice(0, lastDot) : fileName;
-      const targetMime = mimeType || 'application/octet-stream';
+      const writeToDownloads = async (directoryUri: string): Promise<string> => {
+        const lastDot = fileName.lastIndexOf('.');
+        const baseName = lastDot > 0 ? fileName.slice(0, lastDot) : fileName;
+        const targetMime = mimeType || 'application/octet-stream';
 
-      const safFileUri = await StorageAccessFramework.createFileAsync(
-        directoryUri,
-        baseName,
-        targetMime,
-      );
-      const base64Content = await FileSystem.readAsStringAsync(localFileUri, {
-        encoding: FileSystem.EncodingType.Base64,
-      });
-      await FileSystem.writeAsStringAsync(safFileUri, base64Content, {
-        encoding: FileSystem.EncodingType.Base64,
-      });
+        const safFileUri = await StorageAccessFramework.createFileAsync(
+          directoryUri,
+          baseName,
+          targetMime,
+        );
+        const base64Content = await FileSystem.readAsStringAsync(localFileUri, {
+          encoding: FileSystem.EncodingType.Base64,
+        });
+        await FileSystem.writeAsStringAsync(safFileUri, base64Content, {
+          encoding: FileSystem.EncodingType.Base64,
+        });
 
-      return safFileUri;
+        return safFileUri;
+      };
+
+      const directoryUri = await ensureAndroidDownloadsDirectoryUri(false);
+      try {
+        return await writeToDownloads(directoryUri);
+      } catch {
+        await AsyncStorage.removeItem(DOWNLOADS_DIRECTORY_URI_KEY);
+        const refreshedDirectoryUri = await ensureAndroidDownloadsDirectoryUri(true);
+        return await writeToDownloads(refreshedDirectoryUri);
+      }
     },
     [ensureAndroidDownloadsDirectoryUri],
   );
