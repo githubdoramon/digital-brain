@@ -105,7 +105,7 @@ export default function DocumentDetailScreen() {
     () =>
       scrollY.interpolate({
         inputRange: [0, 20, 70],
-        outputRange: [0, 0.55, 1],
+        outputRange: [0, 0.68, 1],
         extrapolate: 'clamp',
       }),
     [scrollY],
@@ -249,7 +249,12 @@ export default function DocumentDetailScreen() {
         ) : null}
       </Animated.ScrollView>
 
-      <ScrollHeaderBackdrop height={insets.top + 56} opacity={headerOverlayOpacity} />
+      <ScrollHeaderBackdrop
+        height={insets.top + 56}
+        opacity={headerOverlayOpacity}
+        topAlpha={1}
+        bottomAlpha={0.9}
+      />
     </View>
   );
 }
