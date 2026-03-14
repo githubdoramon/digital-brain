@@ -112,10 +112,12 @@ sequenceDiagram
 - Adaptive model routing is always enabled (`agent/model_routing.py`) and selects model/timeout per step.
 - Planner/verifier checks are runtime-enforced (`agent/planning_policy.py`) before final answer completion.
 - Tool execution coordinator supports parallel batches for independent read-only tool calls.
+- Chat deep-link metadata (`linked_items`) is controller-derived from inspected event/document tool results; prompts can signal when inspection is worthwhile, but the model does not emit `linked_items` directly.
 
 ## Related Docs
 
 - [MAIN_AGENT_FLOW.md](./MAIN_AGENT_FLOW.md)
+- [LINKED_ITEMS_DSL.md](./LINKED_ITEMS_DSL.md)
 - [STATE_MANAGEMENT.md](./STATE_MANAGEMENT.md)
 - [TOOL_GROUPS.md](./TOOL_GROUPS.md)
 - [VALIDATION.md](./VALIDATION.md)

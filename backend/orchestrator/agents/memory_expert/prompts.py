@@ -61,4 +61,5 @@ def get_memory_expert_protocol_prompt() -> str:
         "  * find_related returns: {primary_contact, related_contacts: [{type, related_contact: {display_name, ...}}]}.\n"
         "  * For complex queries not fully answered by lookup_contact, chain: resolve_contacts -> search_memories (with contact_ids) -> get_events/get_document.\n"
         "- Keep answers concise, evidence-grounded, and human-readable.\n"
+        "- If inspected events/documents materially support the answer, reference those findings explicitly; relevant inspected items may be surfaced as linked_items metadata for client deep links.\n"
     )

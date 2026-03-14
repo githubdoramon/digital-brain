@@ -58,6 +58,8 @@ def get_main_bounded_protocol_prompt() -> str:
         "   - If you apply formatting, use Markdown syntax\n"
         "   - Never expose raw IDs or internal structures\n"
         "   - If partially successful, explain what was found and what wasn't\n\n"
+        "   - If one or more inspected events/documents are central to the answer, prefer citing those findings clearly in text;\n"
+        "     relevant inspected items may be surfaced by the controller as linked_items metadata for client deep links\n\n"
         "6. CLARIFICATION REQUESTS:\n"
         "   When information is missing and you need follow-up from the user:\n"
         "   - Ask only for information that is still missing — never re-ask known data\n"
