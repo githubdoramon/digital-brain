@@ -90,6 +90,14 @@ def test_handle_event_sets_pending_key_for_clarification(monkeypatch):
     delete_command_data(clarification_id)
 
 
+def test_replace_generic_terms_handles_none_values():
+    assert event_handler._replace_generic_terms_in_text(None, {"my wife": "Ana"}) == ""
+    assert (
+        event_handler._replace_generic_terms_in_text("Dinner with my wife", {"my wife": None})
+        == "Dinner with "
+    )
+
+
 def test_handle_event_surfaces_proposed_contact_groups(monkeypatch):
     def fake_extract_event_entities(
         event_message,

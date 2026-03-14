@@ -989,7 +989,7 @@ def _resolve_generic_terms_with_relationships(
 
 
 def _replace_generic_terms_in_text(
-    text: str,
+    text: str | None,
     replacements: dict[str, str],
 ) -> str:
     """
@@ -1002,11 +1002,18 @@ def _replace_generic_terms_in_text(
     Returns:
         Text with generic terms replaced
     """
-    result = text
+    if text is None:
+        return ""
+
+    result = text if isinstance(text, str) else str(text)
     for generic, actual in replacements.items():
+        generic_term = str(generic or "").strip()
+        if not generic_term:
+            continue
+        replacement_text = "" if actual is None else str(actual)
         # Case-insensitive replacement that preserves case structure
-        pattern = re.compile(re.escape(generic), re.IGNORECASE)
-        result = pattern.sub(actual, result)
+        pattern = re.compile(re.escape(generic_term), re.IGNORECASE)
+        result = pattern.sub(replacement_text, result)
     return result
 
 
