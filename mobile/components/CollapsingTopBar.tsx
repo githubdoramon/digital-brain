@@ -4,6 +4,7 @@ import { Animated, Platform, StyleSheet, View } from 'react-native';
 
 import { AppPressable as Pressable } from '@/components/AppPressable';
 import { Avatar } from '@/components/Avatar';
+import { ScrollHeaderBackdrop } from '@/components/ScrollHeaderBackdrop';
 import { theme } from '@/theme';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -88,16 +89,7 @@ export function CollapsingTopBar({
 
   return (
     <View pointerEvents="box-none" style={styles.wrap}>
-      <Animated.View
-        pointerEvents="none"
-        style={[
-          styles.backdrop,
-          {
-            height: insets.top + COLLAPSING_TOP_BAR_HEIGHT,
-            opacity: barOpacity,
-          },
-        ]}
-      />
+      <ScrollHeaderBackdrop height={insets.top + COLLAPSING_TOP_BAR_HEIGHT} opacity={barOpacity} />
 
       <Animated.Text
         numberOfLines={1}
@@ -167,11 +159,6 @@ const styles = StyleSheet.create({
     left: 0,
     right: 0,
     zIndex: 5,
-  },
-  backdrop: {
-    backgroundColor: 'rgba(247, 242, 236, 0.92)',
-    borderBottomWidth: 1,
-    borderBottomColor: 'rgba(231, 222, 212, 0.95)',
   },
   collapsedTitle: {
     position: 'absolute',

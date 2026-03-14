@@ -1,12 +1,23 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
-import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
+import * as FileSystem from 'expo-file-system/legacy';
+import { Stack, useLocalSearchParams } from 'expo-router';
 import React from 'react';
-import { ActivityIndicator, ScrollView, StyleSheet, Text, View } from 'react-native';
+import {
+  ActivityIndicator,
+  Alert,
+  Animated,
+  Linking,
+  StyleSheet,
+  Text,
+  View,
+} from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { apiFetch } from '@/api/client';
+import { API_BASE_URL, apiFetch } from '@/api/client';
+import { useAuth } from '@/auth/AuthContext';
 import { AppPressable as Pressable } from '@/components/AppPressable';
 import { Card } from '@/components/Card';
+import { ScrollHeaderBackdrop } from '@/components/ScrollHeaderBackdrop';
 import { theme } from '@/theme';
 
 type RouteParams = {
@@ -48,13 +59,15 @@ function formatFileSize(bytes?: number | null): string {
 
 export default function DocumentDetailScreen() {
   const insets = useSafeAreaInsets();
-  const router = useRouter();
+  const { token, refreshToken } = useAuth();
   const params = useLocalSearchParams<RouteParams>();
   const documentId = Array.isArray(params.documentId) ? params.documentId[0] : params.documentId;
+  const scrollY = React.useRef(new Animated.Value(0)).current;
 
   const [document, setDocument] = React.useState<DocumentDetail | null>(null);
   const [isLoading, setIsLoading] = React.useState(true);
   const [error, setError] = React.useState<string | null>(null);
+  const [isDownloading, setIsDownloading] = React.useState(false);
 
   React.useEffect(() => {
     let mounted = true;
@@ -88,6 +101,78 @@ export default function DocumentDetailScreen() {
     };
   }, [documentId]);
 
+  const headerOverlayOpacity = React.useMemo(
+    () =>
+      scrollY.interpolate({
+        inputRange: [0, 20, 70],
+        outputRange: [0, 0.55, 1],
+        extrapolate: 'clamp',
+      }),
+    [scrollY],
+  );
+
+  const handleDownload = React.useCallback(async () => {
+    if (!documentId || !document || isDownloading) {
+      return;
+    }
+    if (!token) {
+      Alert.alert('Session expired', 'Please sign in again to download this file.');
+      return;
+    }
+
+    const downloadEndpoint = `${API_BASE_URL}/mobile/documents/${encodeURIComponent(documentId)}/download`;
+    const safeName = (document.file_name || `${documentId}.bin`).replace(/[\\/:*?"<>|]/g, '_');
+    const documentDirectory = FileSystem.documentDirectory;
+    if (!documentDirectory) {
+      Alert.alert('Download failed', 'Local storage is unavailable on this device.');
+      return;
+    }
+    const targetPath = `${documentDirectory}${safeName}`;
+
+    setIsDownloading(true);
+    try {
+      let activeToken = token;
+      let result = await FileSystem.downloadAsync(downloadEndpoint, targetPath, {
+        headers: {
+          Authorization: `Bearer ${activeToken}`,
+        },
+      });
+
+      if (result.status === 401) {
+        const refreshedToken = await refreshToken();
+        if (!refreshedToken) {
+          throw new Error('Session expired. Please sign in again.');
+        }
+        activeToken = refreshedToken;
+        result = await FileSystem.downloadAsync(downloadEndpoint, targetPath, {
+          headers: {
+            Authorization: `Bearer ${activeToken}`,
+          },
+        });
+      }
+
+      if (result.status < 200 || result.status >= 300) {
+        throw new Error(`Download failed with status ${result.status}.`);
+      }
+
+      Alert.alert('Download complete', `${safeName} was saved to local app storage.`, [
+        {
+          text: 'Open',
+          onPress: () => {
+            void Linking.openURL(result.uri).catch(() => undefined);
+          },
+        },
+        { text: 'OK', style: 'cancel' },
+      ]);
+    } catch (downloadError) {
+      const message =
+        downloadError instanceof Error ? downloadError.message : 'Failed to download this file.';
+      Alert.alert('Download failed', message);
+    } finally {
+      setIsDownloading(false);
+    }
+  }, [document, documentId, isDownloading, refreshToken, token]);
+
   return (
     <View style={styles.container}>
       <Stack.Screen
@@ -96,22 +181,30 @@ export default function DocumentDetailScreen() {
           headerRight: () => (
             <Pressable
               onPress={() => {
-                if (!documentId) return;
-                router.push(`/documents/${encodeURIComponent(documentId)}/file`);
+                void handleDownload();
               }}
+              disabled={isDownloading}
               style={({ pressed }) => [styles.headerAction, pressed && styles.headerActionPressed]}
               hitSlop={10}
             >
-              <Ionicons name="download-outline" size={20} color={theme.colors.ink} />
+              <Ionicons
+                name={isDownloading ? 'hourglass-outline' : 'download-outline'}
+                size={20}
+                color={theme.colors.ink}
+              />
             </Pressable>
           ),
         }}
       />
-      <ScrollView
+      <Animated.ScrollView
         contentContainerStyle={[
           styles.content,
           { paddingTop: insets.top + 56, paddingBottom: insets.bottom + 24 },
         ]}
+        onScroll={Animated.event([{ nativeEvent: { contentOffset: { y: scrollY } } }], {
+          useNativeDriver: false,
+        })}
+        scrollEventThrottle={16}
       >
         {isLoading ? (
           <View style={styles.centerState}>
@@ -154,7 +247,9 @@ export default function DocumentDetailScreen() {
             ) : null}
           </>
         ) : null}
-      </ScrollView>
+      </Animated.ScrollView>
+
+      <ScrollHeaderBackdrop height={insets.top + 56} opacity={headerOverlayOpacity} />
     </View>
   );
 }
