@@ -1,4 +1,5 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as FileSystem from 'expo-file-system/legacy';
 import { Stack, useLocalSearchParams } from 'expo-router';
 import React from 'react';
@@ -39,6 +40,9 @@ type DocumentDetail = {
   created_at?: string;
   updated_at?: string;
 };
+
+const DOWNLOADS_DIRECTORY_URI_KEY = 'downloads_directory_uri';
+const { StorageAccessFramework } = FileSystem;
 
 function formatDate(value?: string | null): string {
   if (!value) return 'Unknown';
@@ -112,6 +116,77 @@ export default function DocumentDetailScreen() {
     }
   }, [showTransientMessage]);
 
+  const ensureAndroidDownloadsDirectoryUri = React.useCallback(async (): Promise<string> => {
+    const cached = await AsyncStorage.getItem(DOWNLOADS_DIRECTORY_URI_KEY);
+    if (cached) {
+      return cached;
+    }
+
+    const initialUri = StorageAccessFramework.getUriForDirectoryInRoot('Download');
+    const permission = await StorageAccessFramework.requestDirectoryPermissionsAsync(initialUri);
+    if (!permission.granted || !permission.directoryUri) {
+      throw new Error('Downloads access not granted.');
+    }
+
+    await AsyncStorage.setItem(DOWNLOADS_DIRECTORY_URI_KEY, permission.directoryUri);
+    return permission.directoryUri;
+  }, []);
+
+  const exportToAndroidDownloads = React.useCallback(
+    async (localFileUri: string, fileName: string, mimeType?: string | null): Promise<string> => {
+      const directoryUri = await ensureAndroidDownloadsDirectoryUri();
+      const lastDot = fileName.lastIndexOf('.');
+      const baseName = lastDot > 0 ? fileName.slice(0, lastDot) : fileName;
+      const targetMime = mimeType || 'application/octet-stream';
+
+      const safFileUri = await StorageAccessFramework.createFileAsync(
+        directoryUri,
+        baseName,
+        targetMime,
+      );
+      const base64Content = await FileSystem.readAsStringAsync(localFileUri, {
+        encoding: FileSystem.EncodingType.Base64,
+      });
+      await FileSystem.writeAsStringAsync(safFileUri, base64Content, {
+        encoding: FileSystem.EncodingType.Base64,
+      });
+
+      return safFileUri;
+    },
+    [ensureAndroidDownloadsDirectoryUri],
+  );
+
+  const performDownload = React.useCallback(
+    async (endpoint: string, destinationPath: string, initialToken: string) => {
+      let activeToken = initialToken;
+      let result = await FileSystem.downloadAsync(endpoint, destinationPath, {
+        headers: {
+          Authorization: `Bearer ${activeToken}`,
+        },
+      });
+
+      if (result.status === 401) {
+        const refreshedToken = await refreshToken();
+        if (!refreshedToken) {
+          throw new Error('Session expired. Please sign in again.');
+        }
+        activeToken = refreshedToken;
+        result = await FileSystem.downloadAsync(endpoint, destinationPath, {
+          headers: {
+            Authorization: `Bearer ${activeToken}`,
+          },
+        });
+      }
+
+      if (result.status < 200 || result.status >= 300) {
+        throw new Error(`Download failed with status ${result.status}.`);
+      }
+
+      return { result, activeToken };
+    },
+    [refreshToken],
+  );
+
   React.useEffect(() => {
     let mounted = true;
     if (!documentId) {
@@ -171,43 +246,38 @@ export default function DocumentDetailScreen() {
       return;
     }
     const appTargetPath = `${documentDirectory}${safeName}`;
-    const publicAndroidTargetPath = `file:///storage/emulated/0/Download/${safeName}`;
-    const targetPath = Platform.OS === 'android' ? publicAndroidTargetPath : appTargetPath;
+    const targetPath = appTargetPath;
 
     setIsDownloading(true);
     try {
-      let activeToken = token;
-      let result = await FileSystem.downloadAsync(downloadEndpoint, targetPath, {
-        headers: {
-          Authorization: `Bearer ${activeToken}`,
-        },
-      });
-
-      if (result.status === 401) {
-        const refreshedToken = await refreshToken();
-        if (!refreshedToken) {
-          throw new Error('Session expired. Please sign in again.');
-        }
-        activeToken = refreshedToken;
-        result = await FileSystem.downloadAsync(downloadEndpoint, targetPath, {
-          headers: {
-            Authorization: `Bearer ${activeToken}`,
-          },
-        });
-      }
-
-      if (result.status < 200 || result.status >= 300) {
-        throw new Error(`Download failed with status ${result.status}.`);
-      }
+      const downloadAttempt = await performDownload(downloadEndpoint, targetPath, token);
+      const result = downloadAttempt.result;
 
       const downloadedInfo = await FileSystem.getInfoAsync(result.uri);
       if (!downloadedInfo.exists) {
         throw new Error('Download reported success, but file was not found on device storage.');
       }
 
-      await notifyDownloadComplete(safeName, result.uri);
+      let openUri = result.uri;
+      let completionLabel = safeName;
+
+      if (Platform.OS === 'android') {
+        try {
+          openUri = await exportToAndroidDownloads(result.uri, safeName, document.file_mime);
+        } catch (exportError) {
+          const message =
+            exportError instanceof Error
+              ? exportError.message
+              : 'Could not save to Downloads. File kept in app storage.';
+          showTransientMessage(message);
+          completionLabel = `${safeName} (saved in app storage)`;
+          openUri = await FileSystem.getContentUriAsync(result.uri).catch(() => result.uri);
+        }
+      }
+
+      await notifyDownloadComplete(completionLabel, openUri);
       if (Platform.OS !== 'android') {
-        void Linking.openURL(result.uri).catch(() => undefined);
+        void Linking.openURL(openUri).catch(() => undefined);
       }
     } catch (downloadError) {
       const message =
@@ -223,7 +293,8 @@ export default function DocumentDetailScreen() {
     isDownloading,
     notifyDownloadComplete,
     notifyDownloadFailed,
-    refreshToken,
+    exportToAndroidDownloads,
+    performDownload,
     showTransientMessage,
     token,
   ]);
