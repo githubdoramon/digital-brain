@@ -81,8 +81,24 @@ export default function DocumentDetailScreen() {
     }
   }, []);
 
+  const ensureNotificationPermission = React.useCallback(async (): Promise<boolean> => {
+    const current = await Notifications.getPermissionsAsync();
+    if (current.granted) {
+      return true;
+    }
+
+    const requested = await Notifications.requestPermissionsAsync();
+    return requested.granted;
+  }, []);
+
   const notifyDownloadComplete = React.useCallback(
     async (name: string, fileUri: string, mimeType?: string | null) => {
+    const allowed = await ensureNotificationPermission();
+    if (!allowed) {
+      showTransientMessage(`Downloaded ${name}`);
+      return;
+    }
+
     try {
       await Notifications.scheduleNotificationAsync({
         content: {
@@ -102,10 +118,16 @@ export default function DocumentDetailScreen() {
       showTransientMessage(`Downloaded ${name}`);
     }
     },
-    [showTransientMessage],
+    [ensureNotificationPermission, showTransientMessage],
   );
 
   const notifyDownloadFailed = React.useCallback(async (message: string) => {
+    const allowed = await ensureNotificationPermission();
+    if (!allowed) {
+      showTransientMessage(message);
+      return;
+    }
+
     try {
       await Notifications.scheduleNotificationAsync({
         content: {
@@ -118,7 +140,7 @@ export default function DocumentDetailScreen() {
     } catch {
       showTransientMessage(message);
     }
-  }, [showTransientMessage]);
+  }, [ensureNotificationPermission, showTransientMessage]);
 
   const ensureAndroidDownloadsDirectoryUri = React.useCallback(
     async (forcePrompt: boolean = false): Promise<string> => {
