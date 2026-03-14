@@ -1,6 +1,7 @@
 import FontAwesome from '@expo/vector-icons/FontAwesome';
 import { DefaultTheme, ThemeProvider } from '@react-navigation/native';
 import { useFonts } from 'expo-font';
+import * as IntentLauncher from 'expo-intent-launcher';
 import { Stack, useRouter, useSegments } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
 import { StatusBar } from 'expo-status-bar';
@@ -95,22 +96,32 @@ function RootLayoutNav({ loaded }: { loaded: boolean }) {
       const data = response.notification.request.content.data as {
         kind?: string;
         fileUri?: string;
+        mimeType?: string;
       };
 
       if (data?.kind === 'document_download') {
         const fileUri = typeof data.fileUri === 'string' ? data.fileUri : null;
+        const mimeType = typeof data.mimeType === 'string' ? data.mimeType : '*/*';
         if (fileUri) {
-          void Linking.openURL(fileUri).catch(async () => {
-            if (Platform.OS === 'android') {
+          if (Platform.OS === 'android') {
+            void IntentLauncher.startActivityAsync('android.intent.action.VIEW', {
+              data: fileUri,
+              type: mimeType,
+              flags: 1,
+            }).catch(async () => {
               try {
                 await Linking.sendIntent('android.intent.action.VIEW_DOWNLOADS');
                 return;
               } catch {
                 // Fall through to home navigation.
               }
-            }
-            router.push('/home');
-          });
+              router.push('/home');
+            });
+          } else {
+            void Linking.openURL(fileUri).catch(() => {
+              router.push('/home');
+            });
+          }
           return;
         }
       }

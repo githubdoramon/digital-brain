@@ -24,6 +24,7 @@
     "expo-device": "~55.0.9",
     "expo-file-system": "^55.0.10",
     "expo-font": "~55.0.4",
+    "expo-intent-launcher": "~55.0.8",
     "expo-linear-gradient": "~55.0.8",
     "expo-linking": "~55.0.7",
     "expo-location": "~55.1.2",

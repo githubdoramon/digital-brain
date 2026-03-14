@@ -81,7 +81,8 @@ export default function DocumentDetailScreen() {
     }
   }, []);
 
-  const notifyDownloadComplete = React.useCallback(async (name: string, fileUri: string) => {
+  const notifyDownloadComplete = React.useCallback(
+    async (name: string, fileUri: string, mimeType?: string | null) => {
     try {
       await Notifications.scheduleNotificationAsync({
         content: {
@@ -92,6 +93,7 @@ export default function DocumentDetailScreen() {
             kind: 'document_download',
             fileName: name,
             fileUri,
+            mimeType: mimeType || undefined,
           },
         },
         trigger: null,
@@ -99,7 +101,9 @@ export default function DocumentDetailScreen() {
     } catch {
       showTransientMessage(`Downloaded ${name}`);
     }
-  }, [showTransientMessage]);
+    },
+    [showTransientMessage],
+  );
 
   const notifyDownloadFailed = React.useCallback(async (message: string) => {
     try {
@@ -290,7 +294,7 @@ export default function DocumentDetailScreen() {
         }
       }
 
-      await notifyDownloadComplete(completionLabel, openUri);
+      await notifyDownloadComplete(completionLabel, openUri, document.file_mime);
       if (Platform.OS !== 'android') {
         void Linking.openURL(openUri).catch(() => undefined);
       }
