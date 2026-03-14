@@ -142,21 +142,21 @@ export default function NewsArticleScreen() {
           </Pressable>
           <Pressable
             onPress={() => {
-              void submitFeedback('up');
-            }}
-            disabled={submittingFeedback}
-            style={[styles.iconButton, feedbackState === 'up' && styles.feedbackPositive]}
-          >
-            <Ionicons name="thumbs-up-outline" size={18} color={theme.colors.ink} />
-          </Pressable>
-          <Pressable
-            onPress={() => {
               void submitFeedback('down');
             }}
             disabled={submittingFeedback}
             style={[styles.iconButton, feedbackState === 'down' && styles.feedbackNegative]}
           >
             <Ionicons name="thumbs-down-outline" size={18} color={theme.colors.ink} />
+          </Pressable>
+          <Pressable
+            onPress={() => {
+              void submitFeedback('up');
+            }}
+            disabled={submittingFeedback}
+            style={[styles.iconButton, feedbackState === 'up' && styles.feedbackPositive]}
+          >
+            <Ionicons name="thumbs-up-outline" size={18} color={theme.colors.ink} />
           </Pressable>
         </View>
       </View>

@@ -144,6 +144,12 @@ function RootLayoutNav({ loaded }: { loaded: boolean }) {
         }}
       />
       <Stack.Screen
+        name="settings/about"
+        options={{
+          headerShown: false,
+        }}
+      />
+      <Stack.Screen
         name="settings/places"
         options={{
           headerShown: false,
@@ -238,12 +244,38 @@ function RootLayoutNav({ loaded }: { loaded: boolean }) {
           }}
         />
         <Stack.Screen
+          name="documents/[documentId]/index"
+          options={{
+            headerShown: true,
+            headerTransparent: true,
+            headerTitle: 'Document',
+            headerBackTitle: ' ',
+            headerBackTitleStyle: { fontSize: 0 },
+            headerBackButtonMenuEnabled: false,
+            headerShadowVisible: false,
+            headerTintColor: theme.colors.ink,
+            headerStyle: { backgroundColor: 'transparent' },
+          }}
+        />
+        <Stack.Screen
+          name="documents/[documentId]/file/index"
+          options={{
+            headerShown: false,
+          }}
+        />
+        <Stack.Screen
           name="news/article/[briefingItemId]/index"
           options={{
             headerShown: false,
           }}
         />
-        <Stack.Screen name="modal" options={{ presentation: 'modal' }} />
+        <Stack.Screen
+          name="modal"
+          options={{
+            presentation: 'modal',
+            headerShown: false,
+          }}
+        />
       </Stack>
     </ThemeProvider>
   );

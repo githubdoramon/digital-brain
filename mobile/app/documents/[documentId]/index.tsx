@@ -1,8 +1,8 @@
-import { useLocalSearchParams, useRouter } from 'expo-router';
+import Ionicons from '@expo/vector-icons/Ionicons';
+import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
 import React from 'react';
 import { ActivityIndicator, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import Ionicons from '@expo/vector-icons/Ionicons';
 
 import { apiFetch } from '@/api/client';
 import { AppPressable as Pressable } from '@/components/AppPressable';
@@ -47,8 +47,8 @@ function formatFileSize(bytes?: number | null): string {
 }
 
 export default function DocumentDetailScreen() {
-  const router = useRouter();
   const insets = useSafeAreaInsets();
+  const router = useRouter();
   const params = useLocalSearchParams<RouteParams>();
   const documentId = Array.isArray(params.documentId) ? params.documentId[0] : params.documentId;
 
@@ -89,15 +89,30 @@ export default function DocumentDetailScreen() {
   }, [documentId]);
 
   return (
-    <View style={[styles.container, { paddingTop: insets.top + 8 }]}> 
-      <View style={styles.topBar}>
-        <Pressable onPress={() => router.back()} style={({ pressed }) => [styles.backButton, pressed && styles.pressed]}>
-          <Ionicons name="chevron-back" size={20} color={theme.colors.ink} />
-          <Text style={styles.backLabel}>Back</Text>
-        </Pressable>
-      </View>
-
-      <ScrollView contentContainerStyle={[styles.content, { paddingBottom: insets.bottom + 24 }]}> 
+    <View style={styles.container}>
+      <Stack.Screen
+        options={{
+          headerTitle: 'Document',
+          headerRight: () => (
+            <Pressable
+              onPress={() => {
+                if (!documentId) return;
+                router.push(`/documents/${encodeURIComponent(documentId)}/file`);
+              }}
+              style={({ pressed }) => [styles.headerAction, pressed && styles.headerActionPressed]}
+              hitSlop={10}
+            >
+              <Ionicons name="download-outline" size={20} color={theme.colors.ink} />
+            </Pressable>
+          ),
+        }}
+      />
+      <ScrollView
+        contentContainerStyle={[
+          styles.content,
+          { paddingTop: insets.top + 56, paddingBottom: insets.bottom + 24 },
+        ]}
+      >
         {isLoading ? (
           <View style={styles.centerState}>
             <ActivityIndicator color={theme.colors.accentDeep} />
@@ -149,30 +164,20 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: theme.colors.background,
   },
-  topBar: {
-    paddingHorizontal: 16,
-    paddingBottom: 8,
-  },
-  backButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    alignSelf: 'flex-start',
-    paddingVertical: 6,
-    paddingHorizontal: 8,
-    borderRadius: theme.radius.md,
-  },
-  backLabel: {
-    color: theme.colors.ink,
-    fontSize: 15,
-    fontWeight: '600',
-  },
-  pressed: {
-    opacity: 0.7,
-  },
   content: {
     paddingHorizontal: 16,
     gap: 12,
+  },
+  headerAction: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#f4eee5',
+  },
+  headerActionPressed: {
+    opacity: 0.75,
   },
   centerState: {
     alignItems: 'center',

@@ -35,7 +35,7 @@ export function LinkedItemsRow({ items, onPressItem, disabled = false }: LinkedI
               disabled && styles.pillDisabled,
             ]}
           >
-            <Ionicons name={iconForItem(item)} size={14} color={theme.colors.accentDeep} />
+            <Ionicons name={iconForItem(item)} size={14} color={theme.colors.teal} />
             <Text numberOfLines={1} style={styles.title}>
               {item.title}
             </Text>
@@ -63,8 +63,8 @@ const styles = StyleSheet.create({
   },
   pill: {
     borderWidth: 1,
-    borderColor: theme.colors.line,
-    backgroundColor: theme.colors.card,
+    borderColor: '#bfdad7',
+    backgroundColor: theme.colors.paleTeal,
     borderRadius: 999,
     paddingHorizontal: 10,
     paddingVertical: 6,
@@ -80,7 +80,7 @@ const styles = StyleSheet.create({
     opacity: 0.6,
   },
   title: {
-    color: theme.colors.accentDeep,
+    color: theme.colors.teal,
     fontSize: 13,
     fontWeight: '600',
     maxWidth: 220,

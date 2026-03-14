@@ -15,6 +15,7 @@ The controller:
 
 import json
 import os
+import re
 
 # Import with absolute paths to avoid circular imports
 import sys
@@ -2049,6 +2050,7 @@ class AgentController:
     ) -> dict[str, Any]:
         """Finalize the response."""
         # Removed: event_proposal extraction - use /event command instead
+        answer = self._strip_tool_reference_artifacts(answer)
 
         duration_ms = (perf_counter() - total_start) * 1000
 
@@ -2129,6 +2131,17 @@ class AgentController:
             bundle["activated_skills"] = [s.get("name") for s in state.activated_skills]
 
         return bundle
+
+    def _strip_tool_reference_artifacts(self, answer: str) -> str:
+        """Remove bracketed tool-field placeholders accidentally surfaced by the model."""
+        text = str(answer or "")
+        if not text:
+            return text
+
+        cleaned = re.sub(r"[\[【]\s*[A-Za-z_-]+:[A-Za-z0-9_\-]+\s*[\]】]", "", text)
+        cleaned = re.sub(r"\s+([,.;:!?])", r"\1", cleaned)
+        cleaned = re.sub(r"\s{2,}", " ", cleaned)
+        return cleaned.strip()
 
     def _build_linked_items(self, state: AgentState, max_items: int = 5) -> list[dict[str, Any]]:
         """Build bounded, deterministic deep-link candidates from inspected tool results."""
@@ -2237,19 +2250,6 @@ class AgentController:
 
     def _compact_document_result(self, document: dict[str, Any]) -> dict[str, Any]:
         """Build a compact document result for response bundles."""
-        raw_metadata_obj = document.get("raw_metadata")
-        embedding_content = ""
-        original_content = ""
-        if isinstance(raw_metadata_obj, dict):
-            embedding_content = str(raw_metadata_obj.get("content_english_for_embedding") or "")
-            original_content = str(raw_metadata_obj.get("original_content") or "")
-        preview_source = (
-            document.get("content_preview") or embedding_content or original_content or ""
-        )
-        preview_text = str(preview_source or "").strip()
-        if len(preview_text) > 12000:
-            preview_text = preview_text[:11997].rstrip() + "..."
-
         compact: dict[str, Any] = {
             "document_id": document.get("document_id"),
             "title": document.get("title"),
@@ -2260,8 +2260,6 @@ class AgentController:
             "file_size": document.get("file_size"),
             "snippet": document.get("snippet"),
         }
-        if preview_text:
-            compact["content_preview"] = preview_text
         return compact
 
     def _extract_event_proposal(self, content: str) -> Optional[dict[str, Any]]:

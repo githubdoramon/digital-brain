@@ -756,8 +756,10 @@ class ToolExecutionCoordinator:
             "file_mime": document.get("file_mime"),
             "file_size": document.get("file_size"),
             "snippet": self._truncate_text(document.get("snippet"), 280),
-            "content_preview": self._truncate_text(preview_source, 12000),
         }
+        preview = self._truncate_text(preview_source, 500)
+        if preview:
+            compact_document["snippet"] = preview
         return {"document": compact_document}
 
     def _compact_get_events_result(self, result: dict[str, Any]) -> dict[str, Any]:
