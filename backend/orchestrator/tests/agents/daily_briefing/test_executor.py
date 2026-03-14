@@ -11,6 +11,7 @@ from agents.daily_briefing.executor import (
     _format_context_text,
     _format_event_for_analysis,
     _generate_news_section_markdown,
+    _select_news_for_generation,
     _generate_summary,
     _research_event,
     _summarize_event,
@@ -585,6 +586,42 @@ class TestGenerateNewsSectionMarkdown:
         section = _generate_news_section_markdown(selected_news)
         assert "### General Headlines" in section
         assert "[Central bank signals rate pause](https://example.com/econ-1)" in section
+
+
+class TestSelectNewsForGeneration:
+    @patch("agents.daily_briefing.executor.news_feeds.get_cluster_signal_map", return_value={})
+    @patch(
+        "agents.daily_briefing.executor.news_personalization.get_user_preference_weights",
+        return_value=({}, {}),
+    )
+    def test_dedupes_same_url_even_when_cluster_differs(self, _mock_weights, _mock_signals):
+        context = _make_context(
+            news_articles=[
+                {
+                    **_make_news_article(
+                        title="Same story variant A",
+                        url="https://example.com/story-1",
+                        topic_matches=["AI"],
+                    ),
+                    "cluster_id": "story:alpha",
+                    "source_domain": "example.com",
+                },
+                {
+                    **_make_news_article(
+                        title="Same story variant B",
+                        url="https://example.com/story-1",
+                        topic_matches=["AI"],
+                    ),
+                    "cluster_id": "story:beta",
+                    "source_domain": "example.com",
+                },
+            ]
+        )
+
+        selected = _select_news_for_generation(context)
+
+        selected_urls = [a["url"] for a in selected["topic_articles"]]
+        assert selected_urls.count("https://example.com/story-1") == 1
 
 
 class TestNewsSummaryEnrichment:

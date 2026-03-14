@@ -1298,7 +1298,7 @@ def _select_news_for_generation(context: dict[str, Any]) -> dict[str, Any]:
         cluster_id = str(article.get("cluster_id") or "")
         url = (article.get("url") or "").strip().lower()
         title = (article.get("title") or "").strip().lower()
-        key = cluster_id or url or title
+        key = url or cluster_id or title
         if not key or key in seen_keys:
             continue
         seen_keys.add(key)

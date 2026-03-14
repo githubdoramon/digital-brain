@@ -866,22 +866,46 @@ def _to_json(value: dict[str, Any]) -> str:
 
 
 def _deduplicate(articles: list[NewsArticle]) -> list[NewsArticle]:
-    """Remove duplicate articles based on URL, merging topic_matches."""
+    """Remove duplicate articles, prioritizing canonical URL identity."""
     seen: dict[str, NewsArticle] = {}
+    url_to_key: dict[str, str] = {}
+    cluster_to_key: dict[str, str] = {}
+
     for article in articles:
-        key = str(article.get("cluster_id") or _article_key(article))
-        if key in seen:
-            existing = seen[key]
+        canonical_url = _canonicalize_url(str(article.get("url") or ""))
+        url_key = f"url:{canonical_url}" if canonical_url else ""
+        cluster_id = str(article.get("cluster_id") or "").strip()
+        cluster_key = f"cluster:{cluster_id}" if cluster_id else ""
+
+        resolved_key = ""
+        if url_key and url_key in url_to_key:
+            resolved_key = url_to_key[url_key]
+        elif cluster_key and cluster_key in cluster_to_key:
+            resolved_key = cluster_to_key[cluster_key]
+
+        if not resolved_key:
+            resolved_key = url_key or cluster_key or f"fallback:{_article_key(article)}"
+
+        if resolved_key in seen:
+            existing = seen[resolved_key]
             merged_topics = list(
-                dict.fromkeys(existing["topic_matches"] + article["topic_matches"])
+                dict.fromkeys((existing.get("topic_matches") or []) + (article.get("topic_matches") or []))
             )
             existing["topic_matches"] = merged_topics
             existing["cluster_size"] = max(
                 int(existing.get("cluster_size") or 1),
                 int(article.get("cluster_size") or 1),
             )
+            if not existing.get("cluster_id") and article.get("cluster_id"):
+                existing["cluster_id"] = article.get("cluster_id")
         else:
-            seen[key] = article
+            seen[resolved_key] = article
+
+        if url_key:
+            url_to_key[url_key] = resolved_key
+        if cluster_key:
+            cluster_to_key[cluster_key] = resolved_key
+
     return list(seen.values())
 
 

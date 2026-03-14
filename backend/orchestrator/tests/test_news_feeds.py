@@ -245,6 +245,25 @@ class TestDeduplicateByCluster:
         assert len(deduped) == 1
         assert set(deduped[0]["topic_matches"]) == {"AI", "Tech"}
 
+    def test_same_url_with_different_clusters_is_deduped(self):
+        articles = [
+            {
+                **_article(url="https://example.com/story-1?utm_source=a", topic_matches=["AI"]),
+                "cluster_id": "story:alpha",
+                "cluster_size": 1,
+            },
+            {
+                **_article(url="https://example.com/story-1", topic_matches=["Tech"]),
+                "cluster_id": "story:beta",
+                "cluster_size": 1,
+            },
+        ]
+
+        deduped = _deduplicate(articles)
+
+        assert len(deduped) == 1
+        assert set(deduped[0]["topic_matches"]) == {"AI", "Tech"}
+
 
 # ---------------------------------------------------------------------------
 # _search_tavily_news
