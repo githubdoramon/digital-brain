@@ -4,14 +4,16 @@ import { Stack, useLocalSearchParams } from 'expo-router';
 import React from 'react';
 import {
   ActivityIndicator,
-  Alert,
   Animated,
   Linking,
+  Platform,
   StyleSheet,
   Text,
+  ToastAndroid,
   View,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import * as Notifications from 'expo-notifications';
 
 import { API_BASE_URL, apiFetch } from '@/api/client';
 import { useAuth } from '@/auth/AuthContext';
@@ -69,6 +71,27 @@ export default function DocumentDetailScreen() {
   const [error, setError] = React.useState<string | null>(null);
   const [isDownloading, setIsDownloading] = React.useState(false);
 
+  const showTransientMessage = React.useCallback((message: string) => {
+    if (Platform.OS === 'android') {
+      ToastAndroid.show(message, ToastAndroid.SHORT);
+    }
+  }, []);
+
+  const notifyDownloadComplete = React.useCallback(async (name: string) => {
+    try {
+      await Notifications.scheduleNotificationAsync({
+        content: {
+          title: 'Download complete',
+          body: name,
+          sound: 'default',
+        },
+        trigger: null,
+      });
+    } catch {
+      showTransientMessage(`Downloaded ${name}`);
+    }
+  }, [showTransientMessage]);
+
   React.useEffect(() => {
     let mounted = true;
     if (!documentId) {
@@ -116,7 +139,7 @@ export default function DocumentDetailScreen() {
       return;
     }
     if (!token) {
-      Alert.alert('Session expired', 'Please sign in again to download this file.');
+      showTransientMessage('Session expired. Sign in again.');
       return;
     }
 
@@ -124,19 +147,31 @@ export default function DocumentDetailScreen() {
     const safeName = (document.file_name || `${documentId}.bin`).replace(/[\\/:*?"<>|]/g, '_');
     const documentDirectory = FileSystem.documentDirectory;
     if (!documentDirectory) {
-      Alert.alert('Download failed', 'Local storage is unavailable on this device.');
+      showTransientMessage('Download failed: storage unavailable.');
       return;
     }
-    const targetPath = `${documentDirectory}${safeName}`;
+    const appTargetPath = `${documentDirectory}${safeName}`;
+    const publicAndroidTargetPath = `/storage/emulated/0/Download/${safeName}`;
+    const targetPath = Platform.OS === 'android' ? publicAndroidTargetPath : appTargetPath;
 
     setIsDownloading(true);
     try {
       let activeToken = token;
-      let result = await FileSystem.downloadAsync(downloadEndpoint, targetPath, {
-        headers: {
-          Authorization: `Bearer ${activeToken}`,
-        },
-      });
+      let result: FileSystem.FileSystemDownloadResult;
+
+      try {
+        result = await FileSystem.downloadAsync(downloadEndpoint, targetPath, {
+          headers: {
+            Authorization: `Bearer ${activeToken}`,
+          },
+        });
+      } catch {
+        result = await FileSystem.downloadAsync(downloadEndpoint, appTargetPath, {
+          headers: {
+            Authorization: `Bearer ${activeToken}`,
+          },
+        });
+      }
 
       if (result.status === 401) {
         const refreshedToken = await refreshToken();
@@ -144,34 +179,37 @@ export default function DocumentDetailScreen() {
           throw new Error('Session expired. Please sign in again.');
         }
         activeToken = refreshedToken;
-        result = await FileSystem.downloadAsync(downloadEndpoint, targetPath, {
-          headers: {
-            Authorization: `Bearer ${activeToken}`,
-          },
-        });
+        try {
+          result = await FileSystem.downloadAsync(downloadEndpoint, targetPath, {
+            headers: {
+              Authorization: `Bearer ${activeToken}`,
+            },
+          });
+        } catch {
+          result = await FileSystem.downloadAsync(downloadEndpoint, appTargetPath, {
+            headers: {
+              Authorization: `Bearer ${activeToken}`,
+            },
+          });
+        }
       }
 
       if (result.status < 200 || result.status >= 300) {
         throw new Error(`Download failed with status ${result.status}.`);
       }
 
-      Alert.alert('Download complete', `${safeName} was saved to local app storage.`, [
-        {
-          text: 'Open',
-          onPress: () => {
-            void Linking.openURL(result.uri).catch(() => undefined);
-          },
-        },
-        { text: 'OK', style: 'cancel' },
-      ]);
+      await notifyDownloadComplete(safeName);
+      if (Platform.OS !== 'android') {
+        void Linking.openURL(result.uri).catch(() => undefined);
+      }
     } catch (downloadError) {
       const message =
         downloadError instanceof Error ? downloadError.message : 'Failed to download this file.';
-      Alert.alert('Download failed', message);
+      showTransientMessage(message);
     } finally {
       setIsDownloading(false);
     }
-  }, [document, documentId, isDownloading, refreshToken, token]);
+  }, [document, documentId, isDownloading, notifyDownloadComplete, refreshToken, showTransientMessage, token]);
 
   return (
     <View style={styles.container}>
