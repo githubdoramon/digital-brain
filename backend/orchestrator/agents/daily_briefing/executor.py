@@ -1296,7 +1296,7 @@ def _select_news_for_generation(context: dict[str, Any]) -> dict[str, Any]:
 
     for article in news_articles:
         cluster_id = str(article.get("cluster_id") or "")
-        url = (article.get("url") or "").strip().lower()
+        url = news_feeds.canonicalize_news_url(str(article.get("url") or "")).lower()
         title = (article.get("title") or "").strip().lower()
         key = url or cluster_id or title
         if not key or key in seen_keys:
@@ -1538,16 +1538,17 @@ def _generate_news_section_markdown(
     general_articles = selected_news.get("general_articles") or []
     sections: list[str] = ["## News & Topics"]
     wrote_any = False
+    seen_urls: set[str] = set()
 
     for label, articles in _group_topic_articles(topic_articles):
-        lines = _render_news_article_lines(articles)
+        lines = _render_news_article_lines(articles, seen_urls=seen_urls)
         if not lines:
             continue
         wrote_any = True
         sections.append(f"### {label}")
         sections.extend(lines)
 
-    general_lines = _render_news_article_lines(general_articles)
+    general_lines = _render_news_article_lines(general_articles, seen_urls=seen_urls)
     if general_lines:
         wrote_any = True
         sections.append("### General Headlines")
@@ -1675,11 +1676,17 @@ def _group_topic_articles(topic_articles: list[dict[str, Any]]) -> list[tuple[st
     return [(label, grouped[label]) for label in ordered_labels]
 
 
-def _render_news_article_lines(articles: list[dict[str, Any]]) -> list[str]:
+def _render_news_article_lines(
+    articles: list[dict[str, Any]],
+    *,
+    seen_urls: set[str] | None = None,
+) -> list[str]:
     lines: list[str] = []
+    dedupe_urls = seen_urls if seen_urls is not None else set()
     for article in articles:
         title = str(article.get("title") or "Untitled").strip()
         url = str(article.get("url") or "").strip()
+        canonical_url = news_feeds.canonicalize_news_url(url).lower()
         source = str(article.get("source") or "Unknown").strip()
         summary = _to_single_news_sentence(str(article.get("brief_summary") or "").strip())
         if not summary:
@@ -1687,6 +1694,10 @@ def _render_news_article_lines(articles: list[dict[str, Any]]) -> list[str]:
 
         if not url:
             continue
+        if canonical_url and canonical_url in dedupe_urls:
+            continue
+        if canonical_url:
+            dedupe_urls.add(canonical_url)
         if not summary:
             summary = "Notable development worth tracking for your priorities."
         lines.append(f"- [{title}]({url}) - {summary} ({source})")

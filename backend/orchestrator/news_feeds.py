@@ -71,6 +71,16 @@ _TRACKING_QUERY_KEYS = {
     "mc_eid",
     "ref",
     "spm",
+    "guccounter",
+    "guce_referrer",
+    "guce_referrer_sig",
+    "ocid",
+    "ncid",
+    "rss",
+    "output",
+    "outputtype",
+    "tpcc",
+    "sr_share",
 }
 
 RSS_FEEDS: dict[str, dict[str, str]] = {
@@ -697,6 +707,11 @@ def _canonicalize_url(url: str) -> str:
     query_pairs.sort(key=lambda item: (item[0], item[1]))
     query = "&".join(f"{k}={v}" for k, v in query_pairs)
     return urlunparse((scheme, netloc, path, "", query, ""))
+
+
+def canonicalize_news_url(url: str) -> str:
+    """Public helper for stable article URL normalization."""
+    return _canonicalize_url(url)
 
 
 def _story_fingerprint(article: NewsArticle) -> str:

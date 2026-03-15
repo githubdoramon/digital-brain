@@ -587,6 +587,32 @@ class TestGenerateNewsSectionMarkdown:
         assert "### General Headlines" in section
         assert "[Central bank signals rate pause](https://example.com/econ-1)" in section
 
+    def test_dedupes_same_link_across_topic_and_general_sections(self):
+        selected_news = {
+            "topic_articles": [
+                _make_news_article(
+                    title="How to use ChatGPT app integrations",
+                    url="https://techcrunch.com/2026/03/15/chatgpt-app-integrations/",
+                    summary="OpenAI added app integrations to ChatGPT.",
+                    source="techcrunch",
+                    topic_matches=["AI"],
+                )
+            ],
+            "general_articles": [
+                _make_news_article(
+                    title="How to use ChatGPT app integrations - TechCrunch",
+                    url="https://techcrunch.com/2026/03/15/chatgpt-app-integrations/?guccounter=1",
+                    summary="ChatGPT can now connect to DoorDash, Spotify, and Uber.",
+                    source="techcrunch.com",
+                    topic_matches=[],
+                )
+            ],
+        }
+
+        section = _generate_news_section_markdown(selected_news)
+
+        assert section.count("chatgpt-app-integrations") == 1
+
 
 class TestSelectNewsForGeneration:
     @patch("agents.daily_briefing.executor.news_feeds.get_cluster_signal_map", return_value={})
@@ -622,6 +648,40 @@ class TestSelectNewsForGeneration:
 
         selected_urls = [a["url"] for a in selected["topic_articles"]]
         assert selected_urls.count("https://example.com/story-1") == 1
+
+    @patch("agents.daily_briefing.executor.news_feeds.get_cluster_signal_map", return_value={})
+    @patch(
+        "agents.daily_briefing.executor.news_personalization.get_user_preference_weights",
+        return_value=({}, {}),
+    )
+    def test_dedupes_urls_that_only_differ_by_tracking_params(self, _mock_weights, _mock_signals):
+        context = _make_context(
+            news_articles=[
+                {
+                    **_make_news_article(
+                        title="Story canonical",
+                        url="https://techcrunch.com/2026/03/15/story",
+                        topic_matches=["AI"],
+                    ),
+                    "cluster_id": "story:one",
+                    "source_domain": "techcrunch.com",
+                },
+                {
+                    **_make_news_article(
+                        title="Story tracked",
+                        url="https://techcrunch.com/2026/03/15/story?guccounter=1&outputType=amp",
+                        topic_matches=["AI"],
+                    ),
+                    "cluster_id": "story:two",
+                    "source_domain": "techcrunch.com",
+                },
+            ]
+        )
+
+        selected = _select_news_for_generation(context)
+        selected_urls = [a["url"] for a in selected["topic_articles"]]
+
+        assert len(selected_urls) == 1
 
 
 class TestNewsSummaryEnrichment:

@@ -214,6 +214,11 @@ class TestCanonicalizeUrl:
         canonical = _canonicalize_url(raw)
         assert canonical == "https://example.com/story?id=123"
 
+    def test_removes_common_news_redirect_params(self):
+        raw = "https://techcrunch.com/2026/03/15/story/?guccounter=1&guce_referrer=https%3A%2F%2Fnews.google.com&outputType=amp"
+        canonical = _canonicalize_url(raw)
+        assert canonical == "https://techcrunch.com/2026/03/15/story"
+
 
 class TestNewsDataQueryPlanner:
     def test_deduplicates_normalized_queries(self):
