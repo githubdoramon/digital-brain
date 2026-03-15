@@ -1325,6 +1325,7 @@ export default function ChatScreen() {
     lastMessage?.id,
     lastMessage?.content,
     lastMessage?.pending,
+    lastMessage?.metadata?.progress_chip,
     listBottomInset,
     forceScrollNext,
   ]);
