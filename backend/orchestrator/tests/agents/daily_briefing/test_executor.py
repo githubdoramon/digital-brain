@@ -11,9 +11,9 @@ from agents.daily_briefing.executor import (
     _format_context_text,
     _format_event_for_analysis,
     _generate_news_section_markdown,
-    _select_news_for_generation,
     _generate_summary,
     _research_event,
+    _select_news_for_generation,
     _summarize_event,
     _synthesise_event_summary,
 )
