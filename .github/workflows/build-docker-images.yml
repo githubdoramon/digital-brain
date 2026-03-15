@@ -13,8 +13,33 @@ env:
   ECR_REGISTRY: ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.eu-central-1.amazonaws.com  # Change region if needed
 
 jobs:
+  detect-changes:
+    name: Detect Changed Areas
+    runs-on: ubuntu-latest
+    outputs:
+      backend: ${{ steps.filter.outputs.backend }}
+      frontend: ${{ steps.filter.outputs.frontend }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Filter changed paths
+        id: filter
+        uses: dorny/paths-filter@v3
+        with:
+          filters: |
+            backend:
+              - 'backend/**'
+              - '.github/workflows/build-docker-images.yml'
+            frontend:
+              - 'frontend/**'
+              - '.github/workflows/build-docker-images.yml'
+
   test-orchestrator:
     name: Test Orchestrator
+    needs: detect-changes
+    if: needs.detect-changes.outputs.backend == 'true'
     runs-on: ubuntu-latest
     env:
       # Required by backend imports (llm_helpers/auth) during test collection.
@@ -52,7 +77,10 @@ jobs:
 
   build-orchestrator:
     name: Build Orchestrator Image
-    needs: test-orchestrator
+    needs:
+      - detect-changes
+      - test-orchestrator
+    if: needs.detect-changes.outputs.backend == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -148,6 +176,8 @@ jobs:
 
   build-frontend:
     name: Build Frontend Image
+    needs: detect-changes
+    if: needs.detect-changes.outputs.frontend == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -239,3 +269,50 @@ jobs:
               break
             fi
           done
+
+  ci-status:
+    name: CI Status
+    needs:
+      - detect-changes
+      - test-orchestrator
+      - build-orchestrator
+      - build-frontend
+    if: always()
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Validate required jobs
+        run: |
+          set -euo pipefail
+
+          BACKEND_CHANGED='${{ needs.detect-changes.outputs.backend }}'
+          FRONTEND_CHANGED='${{ needs.detect-changes.outputs.frontend }}'
+          TEST_RESULT='${{ needs.test-orchestrator.result }}'
+          BUILD_ORCH_RESULT='${{ needs.build-orchestrator.result }}'
+          BUILD_FRONTEND_RESULT='${{ needs.build-frontend.result }}'
+
+          echo "backend changed: ${BACKEND_CHANGED}"
+          echo "frontend changed: ${FRONTEND_CHANGED}"
+          echo "test-orchestrator: ${TEST_RESULT}"
+          echo "build-orchestrator: ${BUILD_ORCH_RESULT}"
+          echo "build-frontend: ${BUILD_FRONTEND_RESULT}"
+
+          if [ "${BACKEND_CHANGED}" = "true" ]; then
+            if [ "${TEST_RESULT}" != "success" ]; then
+              echo "Backend tests did not succeed."
+              exit 1
+            fi
+            if [ "${BUILD_ORCH_RESULT}" != "success" ]; then
+              echo "Backend image build did not succeed."
+              exit 1
+            fi
+          fi
+
+          if [ "${FRONTEND_CHANGED}" = "true" ]; then
+            if [ "${BUILD_FRONTEND_RESULT}" != "success" ]; then
+              echo "Frontend image build did not succeed."
+              exit 1
+            fi
+          fi
+
+          echo "CI status check passed."
