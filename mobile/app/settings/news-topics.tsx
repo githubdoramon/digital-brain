@@ -6,8 +6,11 @@ import {
   ActivityIndicator,
   Alert,
   Animated,
+  KeyboardAvoidingView,
   Linking,
   Modal,
+  Platform,
+  ScrollView,
   StyleSheet,
   Text,
   TextInput,
@@ -397,6 +400,7 @@ type TopicFormModalProps = {
 };
 
 function TopicFormModal({ visible, initial, onSave, onCancel }: TopicFormModalProps) {
+  const insets = useSafeAreaInsets();
   const [label, setLabel] = useState('');
   const [keywordsText, setKeywordsText] = useState('');
 
@@ -432,37 +436,50 @@ function TopicFormModal({ visible, initial, onSave, onCancel }: TopicFormModalPr
   };
 
   return (
-    <Modal visible={visible} animationType="slide" transparent>
-      <View style={styles.modalOverlay}>
+    <Modal visible={visible} animationType="slide" transparent onRequestClose={onCancel}>
+      <KeyboardAvoidingView
+        style={styles.modalOverlay}
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        keyboardVerticalOffset={Platform.OS === 'ios' ? 16 : 0}
+      >
         <View style={styles.modalContent}>
-          <Text style={styles.modalTitle}>{initial ? 'Edit topic' : 'New topic'}</Text>
+          <ScrollView
+            keyboardShouldPersistTaps="handled"
+            contentContainerStyle={[
+              styles.modalBody,
+              { paddingBottom: Math.max(insets.bottom + 20, 40) },
+            ]}
+            showsVerticalScrollIndicator={false}
+          >
+            <Text style={styles.modalTitle}>{initial ? 'Edit topic' : 'New topic'}</Text>
 
-          <Text style={styles.fieldLabel}>Label</Text>
-          <TextInput
-            style={styles.input}
-            value={label}
-            onChangeText={setLabel}
-            placeholder="e.g. Artificial Intelligence"
-            placeholderTextColor={theme.colors.mutedInk}
-            autoFocus
-          />
+            <Text style={styles.fieldLabel}>Label</Text>
+            <TextInput
+              style={styles.input}
+              value={label}
+              onChangeText={setLabel}
+              placeholder="e.g. Artificial Intelligence"
+              placeholderTextColor={theme.colors.mutedInk}
+              autoFocus
+            />
 
-          <Text style={styles.fieldLabel}>Keywords (comma-separated)</Text>
-          <TextInput
-            style={[styles.input, styles.keywordsInput]}
-            value={keywordsText}
-            onChangeText={setKeywordsText}
-            placeholder="e.g. AI, LLM, GPT, machine learning"
-            placeholderTextColor={theme.colors.mutedInk}
-            multiline
-          />
+            <Text style={styles.fieldLabel}>Keywords (comma-separated)</Text>
+            <TextInput
+              style={[styles.input, styles.keywordsInput]}
+              value={keywordsText}
+              onChangeText={setKeywordsText}
+              placeholder="e.g. AI, LLM, GPT, machine learning"
+              placeholderTextColor={theme.colors.mutedInk}
+              multiline
+            />
 
-          <View style={styles.modalActions}>
-            <Button label="Cancel" variant="secondary" onPress={onCancel} style={styles.modalBtn} />
-            <Button label="Save" variant="primary" onPress={handleSave} style={styles.modalBtn} />
-          </View>
+            <View style={styles.modalActions}>
+              <Button label="Cancel" variant="secondary" onPress={onCancel} style={styles.modalBtn} />
+              <Button label="Save" variant="primary" onPress={handleSave} style={styles.modalBtn} />
+            </View>
+          </ScrollView>
         </View>
-      </View>
+      </KeyboardAvoidingView>
     </Modal>
   );
 }
@@ -631,8 +648,10 @@ const styles = StyleSheet.create({
     backgroundColor: theme.colors.card,
     borderTopLeftRadius: theme.radius.xl,
     borderTopRightRadius: theme.radius.xl,
+    maxHeight: '90%',
+  },
+  modalBody: {
     padding: 24,
-    paddingBottom: 40,
   },
   modalTitle: {
     fontSize: 20,
