@@ -548,6 +548,26 @@ def ingest_event(event: EventIn) -> None:
         conn.commit()
 
 
+def delete_event(event_id: str) -> bool:
+    cleaned_event_id = str(event_id or "").strip()
+    if not cleaned_event_id:
+        return False
+
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute("DELETE FROM event_contacts WHERE event_id = %s", (cleaned_event_id,))
+        cur.execute("DELETE FROM todo_events WHERE event_id = %s", (cleaned_event_id,))
+        cur.execute(
+            """
+            DELETE FROM events
+            WHERE id = %s
+            """,
+            (cleaned_event_id,),
+        )
+        deleted = cur.rowcount > 0
+        conn.commit()
+        return deleted
+
+
 def get_events(ids: list[str]) -> list[dict[str, Any]]:
     rows = fetch_events(ids)
     return [

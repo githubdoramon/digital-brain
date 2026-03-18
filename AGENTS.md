@@ -232,6 +232,8 @@ User Question → Intent Router → Conversational Profile Dispatch → Tool Vis
 - `POST /contact-groups` – Create contact group
 - `GET /contact-groups/{id}` – Get contact group
 - `DELETE /contact-groups/{id}` – Archive contact group
+- `DELETE /events/{id}` – Delete an event
+- `DELETE /mobile/events/{id}` – Delete an event from mobile clients
 - `GET /meetings/{id}` – Get meeting
 
 ### User Facts

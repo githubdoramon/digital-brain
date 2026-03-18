@@ -1,6 +1,6 @@
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import React from 'react';
-import { Alert, StyleSheet } from 'react-native';
+import { ActivityIndicator, Alert, StyleSheet, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Ionicons from '@expo/vector-icons/Ionicons';
 
@@ -172,6 +172,7 @@ function EventDetailView({ eventId, editable }: EventDetailViewProps) {
   const [availablePlaces, setAvailablePlaces] = React.useState<EventPlaceOption[]>([]);
   const [isEditing, setIsEditing] = React.useState(editable);
   const [isSaving, setIsSaving] = React.useState(false);
+  const [isDeleting, setIsDeleting] = React.useState(false);
 
   React.useEffect(() => {
     setIsEditing(editable);
@@ -311,6 +312,36 @@ function EventDetailView({ eventId, editable }: EventDetailViewProps) {
     [event, eventId],
   );
 
+  const performDelete = React.useCallback(async () => {
+    if (!eventId || isDeleting) return;
+    setIsDeleting(true);
+    try {
+      await apiFetch(`/mobile/events/${encodeURIComponent(eventId)}`, {
+        method: 'DELETE',
+      });
+      router.back();
+    } catch (error) {
+      console.warn('[events] delete failed', error);
+      Alert.alert('Delete failed', 'Unable to delete this event right now.');
+    } finally {
+      setIsDeleting(false);
+    }
+  }, [eventId, isDeleting, router]);
+
+  const handleDeletePress = React.useCallback(() => {
+    if (!eventId || isDeleting) return;
+    Alert.alert('Delete event?', 'This action cannot be undone.', [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Delete',
+        style: 'destructive',
+        onPress: () => {
+          void performDelete();
+        },
+      },
+    ]);
+  }, [eventId, isDeleting, performDelete]);
+
   const content = (
     <EventDetailsForm
       initialDraft={draft || {
@@ -343,26 +374,50 @@ function EventDetailView({ eventId, editable }: EventDetailViewProps) {
   return (
     <>
       {content}
-      <Pressable
-        accessibilityRole="button"
-        accessibilityLabel="Edit event"
-        onPress={() => setIsEditing(true)}
-        style={({ pressed }) => [
-          styles.fab,
-          { bottom: insets.bottom + 20 },
-          pressed && styles.fabPressed,
-        ]}
-      >
-        <Ionicons name="create-outline" size={22} color="#fff" />
-      </Pressable>
+      <View style={[styles.fabStack, { bottom: insets.bottom + 20 }]}>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Delete event"
+          onPress={handleDeletePress}
+          disabled={isDeleting}
+          style={({ pressed }) => [
+            styles.fab,
+            styles.deleteFab,
+            pressed && styles.fabPressed,
+            isDeleting && styles.fabDisabled,
+          ]}
+        >
+          {isDeleting ? (
+            <ActivityIndicator size="small" color="#fff" />
+          ) : (
+            <Ionicons name="trash-outline" size={21} color="#fff" />
+          )}
+        </Pressable>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Edit event"
+          onPress={() => setIsEditing(true)}
+          disabled={isDeleting}
+          style={({ pressed }) => [
+            styles.fab,
+            pressed && styles.fabPressed,
+            isDeleting && styles.fabDisabled,
+          ]}
+        >
+          <Ionicons name="create-outline" size={22} color="#fff" />
+        </Pressable>
+      </View>
     </>
   );
 }
 
 const styles = StyleSheet.create({
-  fab: {
+  fabStack: {
     position: 'absolute',
     right: 20,
+    gap: 12,
+  },
+  fab: {
     width: 56,
     height: 56,
     borderRadius: 28,
@@ -375,8 +430,14 @@ const styles = StyleSheet.create({
     shadowRadius: 14,
     elevation: 10,
   },
+  deleteFab: {
+    backgroundColor: '#c33f35',
+  },
   fabPressed: {
     transform: [{ scale: 0.97 }],
     opacity: 0.92,
+  },
+  fabDisabled: {
+    opacity: 0.7,
   },
 });

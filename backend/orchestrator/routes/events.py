@@ -111,6 +111,14 @@ def create_events_router(
             raise HTTPException(status_code=404, detail="Event not found")
         return events[0]
 
+    @router.delete("/events/{event_id}")
+    @router.delete("/mobile/events/{event_id}")
+    def delete_event(event_id: str, user: dict = Depends(get_current_user)):
+        deleted = events_service.delete_event(event_id)
+        if not deleted:
+            raise HTTPException(status_code=404, detail="Event not found")
+        return {"ok": True}
+
     @router.get("/meetings/{meeting_id}")
     def get_meeting(meeting_id: str, user: dict = Depends(get_current_user)):
         meeting = events_service.get_meeting(meeting_id)
