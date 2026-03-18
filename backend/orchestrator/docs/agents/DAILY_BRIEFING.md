@@ -35,6 +35,8 @@ This document captures behavior and quality rules for the daily briefing profile
 - News is bounded before LLM generation to avoid prompt overload.
 - Selection includes:
   - dynamic score-threshold selection (instead of strict fixed per-topic/source limits),
+  - per-topic hard cap (currently max 10 selected articles per topic label),
+  - minimum general-headline floor (currently at least 3 selected general headlines when available),
   - deduplication,
   - relevance scoring (topic matches, source quality, recency, overlap with event/todo terms),
   - trend/novelty signals from persisted story mention history,

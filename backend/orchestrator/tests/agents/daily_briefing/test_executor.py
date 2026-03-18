@@ -683,6 +683,101 @@ class TestSelectNewsForGeneration:
 
         assert len(selected_urls) == 1
 
+    @patch("agents.daily_briefing.executor.news_feeds.get_cluster_signal_map", return_value={})
+    @patch(
+        "agents.daily_briefing.executor.news_personalization.get_user_preference_weights",
+        return_value=({}, {}),
+    )
+    def test_enforces_per_topic_hard_cap(self, _mock_weights, _mock_signals):
+        relevance_blob = "alpha beta gamma delta epsilon zeta theta lambda"
+        context = _make_context(
+            events=[_make_event_context(title=relevance_blob)],
+            news_articles=[
+                {
+                    **_make_news_article(
+                        title=f"AI story {i}",
+                        url=f"https://example.com/ai-{i}",
+                        summary=f"{relevance_blob} update {i}",
+                        source="reuters",
+                        topic_matches=["AI"],
+                    ),
+                    "cluster_id": f"story:ai-{i}",
+                    "source_domain": "example.com",
+                }
+                for i in range(12)
+            ]
+        )
+
+        selected = _select_news_for_generation(context)
+
+        assert len(selected["topic_articles"]) == 10
+        assert all(article.get("topic_label") == "AI" for article in selected["topic_articles"])
+
+    @patch("agents.daily_briefing.executor.news_feeds.get_cluster_signal_map", return_value={})
+    @patch(
+        "agents.daily_briefing.executor.news_personalization.get_user_preference_weights",
+        return_value=({}, {}),
+    )
+    def test_guarantees_minimum_general_headlines(self, _mock_weights, _mock_signals):
+        topic_articles = [
+            {
+                **_make_news_article(
+                    title=f"AI top story {i}",
+                    url=f"https://example.com/ai-{i}",
+                    source="reuters",
+                    topic_matches=["AI"],
+                ),
+                "cluster_id": f"story:ai-{i}",
+                "source_domain": "example.com",
+            }
+            for i in range(10)
+        ] + [
+            {
+                **_make_news_article(
+                    title=f"Markets top story {i}",
+                    url=f"https://example.com/markets-{i}",
+                    source="reuters",
+                    topic_matches=["Markets"],
+                ),
+                "cluster_id": f"story:markets-{i}",
+                "source_domain": "example.com",
+            }
+            for i in range(10)
+        ] + [
+            {
+                **_make_news_article(
+                    title=f"Sports top story {i}",
+                    url=f"https://example.com/sports-{i}",
+                    source="reuters",
+                    topic_matches=["Sports"],
+                ),
+                "cluster_id": f"story:sports-{i}",
+                "source_domain": "example.com",
+            }
+            for i in range(10)
+        ]
+
+        general_articles = [
+            {
+                **_make_news_article(
+                    title=f"General low-signal {i}",
+                    url=f"https://example.com/general-{i}",
+                    summary="Brief update.",
+                    source="indie_blog",
+                    topic_matches=[],
+                ),
+                "cluster_id": f"story:general-{i}",
+                "source_domain": "example.com",
+            }
+            for i in range(3)
+        ]
+
+        context = _make_context(news_articles=[*topic_articles, *general_articles])
+
+        selected = _select_news_for_generation(context)
+
+        assert len(selected["general_articles"]) == 3
+
 
 class TestNewsSummaryEnrichment:
     @patch("agents.daily_briefing.executor.call_llm")

@@ -33,6 +33,8 @@ logger = logging.getLogger(__name__)
 DEFAULT_SIMILAR_LIMIT = 4
 BIRTHDAY_LOOKAHEAD_DAYS = 7
 MAX_NEWS_SELECTED_ARTICLES = 24
+NEWS_TOPIC_HARD_CAP = 10
+NEWS_GENERAL_MIN_SELECTED = 3
 NEWS_TOPIC_MIN_SCORE = 3.0
 NEWS_GENERAL_MIN_SCORE = 2.5
 NEWS_SOURCE_REPEAT_PENALTY = 0.8
@@ -1323,6 +1325,9 @@ def _select_news_for_generation(context: dict[str, Any]) -> dict[str, Any]:
     scored_topic.sort(key=lambda x: x[0], reverse=True)
     scored_general.sort(key=lambda x: x[0], reverse=True)
 
+    desired_general_min = min(NEWS_GENERAL_MIN_SELECTED, len(scored_general))
+    max_topic_slots = max(0, MAX_NEWS_SELECTED_ARTICLES - desired_general_min)
+
     topic_articles: list[dict[str, Any]] = []
     general_articles: list[dict[str, Any]] = []
     source_counts: dict[str, int] = {}
@@ -1332,6 +1337,10 @@ def _select_news_for_generation(context: dict[str, Any]) -> dict[str, Any]:
     for _, article, topic in scored_topic:
         if len(topic_articles) + len(general_articles) >= MAX_NEWS_SELECTED_ARTICLES:
             break
+        if len(topic_articles) >= max_topic_slots:
+            break
+        if topic_counts.get(topic, 0) >= NEWS_TOPIC_HARD_CAP:
+            continue
 
         raw_score = float(article.get("score_breakdown", {}).get("total", 0.0) or 0.0)
         source_key = normalize_search_text(
@@ -1378,6 +1387,46 @@ def _select_news_for_generation(context: dict[str, Any]) -> dict[str, Any]:
         article["score"] = round(adjusted_score, 4)
         article["section"] = "general"
         general_articles.append(article)
+
+    if len(general_articles) < desired_general_min:
+        selected_general_keys = {
+            news_feeds.canonicalize_news_url(str(article.get("url") or "")).lower()
+            or str(article.get("cluster_id") or "")
+            or normalize_search_text(str(article.get("title") or ""))
+            for article in general_articles
+        }
+        for _, article in scored_general:
+            if len(topic_articles) + len(general_articles) >= MAX_NEWS_SELECTED_ARTICLES:
+                break
+            if len(general_articles) >= desired_general_min:
+                break
+
+            article_key = (
+                news_feeds.canonicalize_news_url(str(article.get("url") or "")).lower()
+                or str(article.get("cluster_id") or "")
+                or normalize_search_text(str(article.get("title") or ""))
+            )
+            if not article_key or article_key in selected_general_keys:
+                continue
+
+            cluster_id = str(article.get("cluster_id") or "")
+            if cluster_id and cluster_id in used_clusters:
+                continue
+            if cluster_id:
+                used_clusters.add(cluster_id)
+
+            source_key = normalize_search_text(
+                str(article.get("source_domain") or article.get("source") or "unknown")
+            )
+            raw_score = float(article.get("score_breakdown", {}).get("total", 0.0) or 0.0)
+            repetition_penalty = source_counts.get(source_key, 0) * NEWS_SOURCE_REPEAT_PENALTY
+            adjusted_score = raw_score - repetition_penalty
+
+            source_counts[source_key] = source_counts.get(source_key, 0) + 1
+            article["score"] = round(adjusted_score, 4)
+            article["section"] = "general"
+            general_articles.append(article)
+            selected_general_keys.add(article_key)
 
     return {
         "topic_articles": topic_articles,
