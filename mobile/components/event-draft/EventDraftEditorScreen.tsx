@@ -16,6 +16,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { Card } from '@/components/Card';
 import { AppPressable as Pressable } from '@/components/AppPressable';
+import { Button } from '@/components/Button';
 import {
   COLLAPSING_CONTENT_TOP_PADDING,
   COLLAPSING_SECONDARY_TITLE_BLOCK_HEIGHT,
@@ -47,6 +48,9 @@ type EventDetailsFormProps = {
   headerTitle: string;
   headerSubtitle?: string;
   doneLabel?: string;
+  deleteLabel?: string;
+  onDelete?: () => void;
+  deleteDisabled?: boolean;
   onDone?: (draft: EventDraft) => void;
   onPressBack?: () => void;
 };
@@ -118,6 +122,9 @@ export function EventDetailsForm({
   headerTitle,
   headerSubtitle,
   doneLabel = 'Done',
+  deleteLabel = 'Delete',
+  onDelete,
+  deleteDisabled = false,
   onDone,
   onPressBack,
 }: EventDetailsFormProps) {
@@ -530,6 +537,21 @@ export function EventDetailsForm({
               </View>
             )}
           </Card>
+
+          {!editable && onDelete ? (
+            <Card style={styles.deleteSection}>
+              <Text style={styles.label}>Danger zone</Text>
+              <Text style={styles.deleteHint}>
+                This permanently deletes this event and unlinks related todos.
+              </Text>
+              <Button
+                label={deleteLabel}
+                variant="danger"
+                onPress={onDelete}
+                disabled={deleteDisabled}
+              />
+            </Card>
+          ) : null}
         </Animated.ScrollView>
 
         <CollapsingTopBar
@@ -809,6 +831,15 @@ const styles = StyleSheet.create({
     color: theme.colors.ink,
     fontSize: 14,
     lineHeight: 20,
+  },
+  deleteSection: {
+    padding: 16,
+    gap: 10,
+  },
+  deleteHint: {
+    fontSize: 13,
+    lineHeight: 18,
+    color: theme.colors.mutedInk,
   },
   emptyState: {
     flex: 1,

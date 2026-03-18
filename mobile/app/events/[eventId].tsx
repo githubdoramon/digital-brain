@@ -1,6 +1,6 @@
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import React from 'react';
-import { ActivityIndicator, Alert, StyleSheet, View } from 'react-native';
+import { Alert, StyleSheet } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Ionicons from '@expo/vector-icons/Ionicons';
 
@@ -362,6 +362,9 @@ function EventDetailView({ eventId, editable }: EventDetailViewProps) {
       headerTitle={title}
       headerSubtitle={subtitle}
       doneLabel={isSaving ? 'Saving...' : 'Save changes'}
+      deleteLabel={isDeleting ? 'Deleting...' : 'Delete event'}
+      onDelete={isEditing ? undefined : handleDeletePress}
+      deleteDisabled={isDeleting}
       onDone={isEditing && !isSaving ? handleSave : undefined}
       onPressBack={() => router.back()}
     />
@@ -374,50 +377,28 @@ function EventDetailView({ eventId, editable }: EventDetailViewProps) {
   return (
     <>
       {content}
-      <View style={[styles.fabStack, { bottom: insets.bottom + 20 }]}>
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel="Delete event"
-          onPress={handleDeletePress}
-          disabled={isDeleting}
-          style={({ pressed }) => [
-            styles.fab,
-            styles.deleteFab,
-            pressed && styles.fabPressed,
-            isDeleting && styles.fabDisabled,
-          ]}
-        >
-          {isDeleting ? (
-            <ActivityIndicator size="small" color="#fff" />
-          ) : (
-            <Ionicons name="trash-outline" size={21} color="#fff" />
-          )}
-        </Pressable>
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel="Edit event"
-          onPress={() => setIsEditing(true)}
-          disabled={isDeleting}
-          style={({ pressed }) => [
-            styles.fab,
-            pressed && styles.fabPressed,
-            isDeleting && styles.fabDisabled,
-          ]}
-        >
-          <Ionicons name="create-outline" size={22} color="#fff" />
-        </Pressable>
-      </View>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel="Edit event"
+        onPress={() => setIsEditing(true)}
+        disabled={isDeleting}
+        style={({ pressed }) => [
+          styles.fab,
+          { bottom: insets.bottom + 20 },
+          pressed && styles.fabPressed,
+          isDeleting && styles.fabDisabled,
+        ]}
+      >
+        <Ionicons name="create-outline" size={22} color="#fff" />
+      </Pressable>
     </>
   );
 }
 
 const styles = StyleSheet.create({
-  fabStack: {
+  fab: {
     position: 'absolute',
     right: 20,
-    gap: 12,
-  },
-  fab: {
     width: 56,
     height: 56,
     borderRadius: 28,
@@ -429,9 +410,6 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.3,
     shadowRadius: 14,
     elevation: 10,
-  },
-  deleteFab: {
-    backgroundColor: '#c33f35',
   },
   fabPressed: {
     transform: [{ scale: 0.97 }],
