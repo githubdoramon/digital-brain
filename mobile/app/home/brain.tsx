@@ -1342,6 +1342,12 @@ export default function ChatScreen() {
           style={styles.list}
           data={messages}
           keyExtractor={(item) => item.id}
+          onContentSizeChange={() => {
+            if (!isAtBottomRef.current && !forceScrollNext) return;
+            requestAnimationFrame(() => {
+              listRef.current?.scrollToEnd({ animated: forceScrollNext });
+            });
+          }}
           ListFooterComponent={<View style={{ height: listBottomInset }} />}
           contentContainerStyle={[
             styles.listContent,
