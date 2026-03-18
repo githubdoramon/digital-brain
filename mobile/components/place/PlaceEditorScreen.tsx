@@ -1,7 +1,8 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
+import { useFocusEffect } from '@react-navigation/native';
 import MapView, { Marker, PROVIDER_GOOGLE, Region } from 'react-native-maps';
 import * as Location from 'expo-location';
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert,
   KeyboardAvoidingView,
@@ -108,6 +109,7 @@ export function PlaceEditorScreen({ placeId }: { placeId?: string }) {
   const insets = useSafeAreaInsets();
   const normalizedPlaceId = normalizeRouteParam(placeId);
   const isCreating = !normalizedPlaceId;
+  const mapRef = useRef<MapView | null>(null);
   const [initial, setInitial] = useState<Draft | null>(null);
   const [draft, setDraft] = useState<Draft | null>(null);
   const [isSaving, setIsSaving] = useState(false);
@@ -115,6 +117,8 @@ export function PlaceEditorScreen({ placeId }: { placeId?: string }) {
   const [isLocating, setIsLocating] = useState(false);
   const [isGeocodingAddress, setIsGeocodingAddress] = useState(false);
   const [isLoading, setIsLoading] = useState(!isCreating);
+  const [isMapReady, setIsMapReady] = useState(false);
+  const [mapKey, setMapKey] = useState(0);
 
   useEffect(() => {
     if (isCreating) {
@@ -180,6 +184,35 @@ export function PlaceEditorScreen({ placeId }: { placeId?: string }) {
     if (!draft) return DEFAULT_REGION;
     return getRegionFromDraft(draft);
   }, [draft]);
+
+  useFocusEffect(
+    useCallback(() => {
+      if (Platform.OS === 'android') {
+        setIsMapReady(false);
+        setMapKey((current) => current + 1);
+      }
+      return undefined;
+    }, []),
+  );
+
+  const syncMapToRegion = useCallback(
+    (nextRegion: Region, animated: boolean) => {
+      const map = mapRef.current;
+      if (!map) return;
+      map.animateToRegion(nextRegion, animated ? 250 : 0);
+    },
+    [],
+  );
+
+  useEffect(() => {
+    if (!isMapReady) {
+      return;
+    }
+    const timeout = setTimeout(() => {
+      syncMapToRegion(region, !!markerCoordinate);
+    }, Platform.OS === 'android' ? 120 : 0);
+    return () => clearTimeout(timeout);
+  }, [isMapReady, markerCoordinate, region, syncMapToRegion]);
 
   useEffect(() => {
     if (!draft || isLocating) {
@@ -269,8 +302,8 @@ export function PlaceEditorScreen({ placeId }: { placeId?: string }) {
           latText: String(latitude),
           lonText: String(longitude),
           address: reverseAddress || current.address,
-          city: reverseCity || first.city || current.city,
-          country: reverseCountry || first.country || current.country,
+          city: reverseCity || current.city,
+          country: reverseCountry || current.country,
         };
       });
     } catch {
@@ -509,8 +542,17 @@ export function PlaceEditorScreen({ placeId }: { placeId?: string }) {
           <Text style={styles.helper}>Drag the marker to adjust precise coordinates.</Text>
           <View style={styles.mapWrap}>
             <MapView
+              key={Platform.OS === 'android' ? `place-map-${mapKey}` : 'place-map'}
+              ref={mapRef}
               style={styles.map}
-              region={region}
+              initialRegion={region}
+              onMapReady={() => {
+                setIsMapReady(true);
+                syncMapToRegion(region, false);
+              }}
+              showsBuildings
+              showsIndoors
+              showsCompass
               {...(Platform.OS === 'android' && { provider: PROVIDER_GOOGLE })}
             >
               {markerCoordinate ? (
@@ -519,10 +561,13 @@ export function PlaceEditorScreen({ placeId }: { placeId?: string }) {
                   draggable
                   onDragEnd={(event) => {
                     const { latitude, longitude } = event.nativeEvent.coordinate;
-                    setDraft({
-                      ...draft,
-                      latText: String(Number(latitude.toFixed(6))),
-                      lonText: String(Number(longitude.toFixed(6))),
+                    setDraft((current) => {
+                      if (!current) return current;
+                      return {
+                        ...current,
+                        latText: String(Number(latitude.toFixed(6))),
+                        lonText: String(Number(longitude.toFixed(6))),
+                      };
                     });
                   }}
                 />
