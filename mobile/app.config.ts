@@ -1,5 +1,5 @@
 import type { ConfigContext, ExpoConfig } from '@expo/config';
-import { withAppBuildGradle } from '@expo/config-plugins';
+import { withAppBuildGradle } from 'expo/config-plugins';
 import { existsSync } from 'fs';
 import { join } from 'path';
 
@@ -15,14 +15,6 @@ const resolveAppVariant = (): AppVariant => {
 
 const APP_VARIANT = resolveAppVariant();
 const IS_DEV = APP_VARIANT === AppVariant.Development;
-
-type AndroidConfigShape = {
-  config?: {
-    googleMaps?: {
-      apiKey?: string;
-    };
-  };
-};
 
 const getUniqueIdentifier = () => {
   if (IS_DEV) {
@@ -53,6 +45,29 @@ const requireConfigFile = (relativePath: string) => {
 
 const appJson = require('./app.json');
 
+type PluginEntry = NonNullable<ExpoConfig['plugins']>[number];
+
+const withPlugin = (
+  plugins: ExpoConfig['plugins'],
+  pluginName: string,
+  options?: Record<string, string>,
+): PluginEntry[] => {
+  const nextPlugins = [...(plugins ?? [])];
+  const hasOptions = !!options && Object.keys(options).length > 0;
+  const nextPlugin: PluginEntry = hasOptions ? [pluginName, options] : pluginName;
+  const existingPluginIndex = nextPlugins.findIndex((plugin) =>
+    Array.isArray(plugin) ? plugin[0] === pluginName : plugin === pluginName,
+  );
+
+  if (existingPluginIndex >= 0) {
+    nextPlugins[existingPluginIndex] = nextPlugin;
+  } else {
+    nextPlugins.push(nextPlugin);
+  }
+
+  return nextPlugins;
+};
+
 function withSystemDebugKeystore(config: ExpoConfig) {
   return withAppBuildGradle(config, (mod) => {
     if (mod.modResults.contents) {
@@ -69,9 +84,7 @@ export default ({ config }: ConfigContext): ExpoConfig => {
   const appName = getAppName();
   const bundleId = getUniqueIdentifier();
   const androidGoogleServicesFile = requireConfigFile('./google-services.json');
-
-  const baseAndroid = appJson.expo.android as AndroidConfigShape | undefined;
-  const overrideAndroid = config.android as AndroidConfigShape | undefined;
+  const googleMapsApiKey = process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY;
 
   const merged = {
     ...appJson.expo,
@@ -81,31 +94,20 @@ export default ({ config }: ConfigContext): ExpoConfig => {
       ...(appJson.expo.ios ?? {}),
       ...(config.ios ?? {}),
       bundleIdentifier: bundleId,
-      config: {
-        ...((appJson.expo.ios as ExpoConfig['ios'])?.config ?? {}),
-        ...((config.ios as ExpoConfig['ios'])?.config ?? {}),
-        ...(process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY ? { googleMapsApiKey: process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY } : {}),
-      },
     },
     android: {
       ...(appJson.expo.android ?? {}),
       ...(config.android ?? {}),
       package: bundleId,
       googleServicesFile: androidGoogleServicesFile,
-      config: {
-        ...(baseAndroid?.config ?? {}),
-        ...(overrideAndroid?.config ?? {}),
-        googleMaps: {
-          ...(baseAndroid?.config?.googleMaps ?? {}),
-          ...(overrideAndroid?.config?.googleMaps ?? {}),
-          ...(process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY ? { apiKey: process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY } : {}),
-        },
-      },
     },
   };
 
   return withSystemDebugKeystore({
     ...merged,
-    plugins: [...(merged.plugins ?? [])],
+    plugins: withPlugin(merged.plugins, 'react-native-maps', {
+      ...(googleMapsApiKey ? { androidGoogleMapsApiKey: googleMapsApiKey } : {}),
+      ...(googleMapsApiKey ? { iosGoogleMapsApiKey: googleMapsApiKey } : {}),
+    }),
   });
 };
