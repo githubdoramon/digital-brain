@@ -338,8 +338,10 @@ const styles = StyleSheet.create({
   navCard: {
     marginTop: 16,
     padding: 0,
+    overflow: 'hidden',
   },
   navRow: {
+    borderRadius: theme.radius.xl,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',

@@ -65,7 +65,7 @@ export function UiDirectiveInfoBlock({ block }: Props) {
           onPress={() => {
             void openLink(link.url);
           }}
-          style={({ pressed }) => [pressed && styles.linkButtonPressed]}
+          style={({ pressed }) => [styles.linkPressable, pressed && styles.linkButtonPressed]}
         >
           <Card variant="surface" style={styles.linkButton}>
             <View style={styles.linkRow}>
@@ -102,6 +102,10 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingVertical: 10,
     justifyContent: 'center',
+  },
+  linkPressable: {
+    borderRadius: theme.radius.lg,
+    overflow: 'hidden',
   },
   linkButtonPressed: {
     opacity: 0.78,

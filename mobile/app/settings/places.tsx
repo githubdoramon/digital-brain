@@ -249,8 +249,10 @@ const styles = StyleSheet.create({
   },
   card: {
     padding: 0,
+    overflow: 'hidden',
   },
   cardTapArea: {
+    borderRadius: theme.radius.lg,
     paddingHorizontal: 14,
     paddingVertical: 14,
     flexDirection: 'row',
