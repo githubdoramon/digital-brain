@@ -303,9 +303,9 @@ def _load_places_with_coordinates() -> list[dict[str, Any]]:
 
 
 def _known_place_threshold_meters(accuracy_m: float | None) -> float:
-    base = _env_float("LOCATION_INFERENCE_BASE_RADIUS_M", 120.0)
-    max_radius = _env_float("LOCATION_INFERENCE_MAX_RADIUS_M", 500.0)
-    multiplier = _env_float("LOCATION_INFERENCE_ACCURACY_MULTIPLIER", 1.5)
+    base = _env_float("LOCATION_INFERENCE_BASE_RADIUS_M", 45.0)
+    max_radius = _env_float("LOCATION_INFERENCE_MAX_RADIUS_M", 150.0)
+    multiplier = _env_float("LOCATION_INFERENCE_ACCURACY_MULTIPLIER", 1.0)
     dynamic = (accuracy_m or 0.0) * multiplier
     threshold = max(base, dynamic)
     return min(max_radius, threshold)

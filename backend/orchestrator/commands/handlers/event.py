@@ -95,6 +95,9 @@ _GENERIC_PLACE_ALIAS_TERMS = {
     "place",
 }
 
+_INFERRED_PLACE_AUTO_MATCH_MAX_DISTANCE_M = 60.0
+_INFERRED_PLACE_AUTO_MATCH_CONFIDENCE = {"high"}
+
 
 def _extract_client_location(context: dict[str, Any]) -> dict[str, Any] | None:
     client_context = context.get("client_context")
@@ -137,6 +140,27 @@ def _is_high_confidence_match(match: dict[str, Any] | None) -> bool:
     except (TypeError, ValueError):
         score = 0.0
     return score >= 92.0
+
+
+def _safe_float(value: Any) -> float | None:
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _should_autofill_inferred_place(inferred_location: dict[str, Any]) -> bool:
+    confidence = str(inferred_location.get("confidence") or "").strip().lower()
+    if confidence in _INFERRED_PLACE_AUTO_MATCH_CONFIDENCE:
+        return True
+
+    distance_m = _safe_float(inferred_location.get("distance_m"))
+    if distance_m is not None and distance_m <= _INFERRED_PLACE_AUTO_MATCH_MAX_DISTANCE_M:
+        return True
+
+    return False
 
 
 def _extract_contact_scoped_place_hint(where_text: str) -> dict[str, str] | None:
@@ -1836,10 +1860,15 @@ def handle_event(parsed: ParsedCommand, context: dict) -> dict[str, Any]:
         if isinstance(inferred_location, dict):
             inferred_name = str(inferred_location.get("place_name") or "").strip()
         if inferred_name and isinstance(inferred_location, dict):
+            resolution["inferred_location"] = inferred_location
+        if (
+            inferred_name
+            and isinstance(inferred_location, dict)
+            and _should_autofill_inferred_place(inferred_location)
+        ):
             where = inferred_name
             where_source = "inferred_location"
             extracted["where"] = inferred_name
-            resolution["inferred_location"] = inferred_location
             logger.info(
                 "[handle_event] Inferred place from location context: %s (source=%s)",
                 inferred_name,
@@ -1853,6 +1882,15 @@ def handle_event(parsed: ParsedCommand, context: dict) -> dict[str, Any]:
                     "confidence": str(inferred_location.get("confidence") or "medium"),
                     "matched_via": "inferred_location",
                 }
+        elif inferred_name and isinstance(inferred_location, dict):
+            logger.info(
+                "[handle_event] Skipped inferred place autofill: %s "
+                "(source=%s confidence=%s distance_m=%s)",
+                inferred_name,
+                inferred_location.get("source") or "unknown",
+                inferred_location.get("confidence") or "unknown",
+                inferred_location.get("distance_m"),
+            )
 
     if where:
         extracted_contact_hint = _extract_contact_scoped_place_hint(where)
