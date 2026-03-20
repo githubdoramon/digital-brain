@@ -208,6 +208,11 @@ export default function AboutMeScreen() {
         visible={showForm}
         fact={editingFact}
         onSave={saveFact}
+        onDelete={(factId) => {
+          setShowForm(false);
+          setEditingFact(null);
+          deleteFact(factId);
+        }}
         onCancel={() => {
           setShowForm(false);
           setEditingFact(null);
@@ -326,10 +331,11 @@ type FactEditModalProps = {
   visible: boolean;
   fact: UserFact | null;
   onSave: (factId: string, content: string, category: string, importance: number) => void;
+  onDelete: (factId: string) => void;
   onCancel: () => void;
 };
 
-function FactEditModal({ visible, fact, onSave, onCancel }: FactEditModalProps) {
+function FactEditModal({ visible, fact, onSave, onDelete, onCancel }: FactEditModalProps) {
   const [content, setContent] = useState('');
   const [category, setCategory] = useState('general');
   const [importance, setImportance] = useState(5);
@@ -350,6 +356,11 @@ function FactEditModal({ visible, fact, onSave, onCancel }: FactEditModalProps) 
     }
     if (!fact) return;
     onSave(fact.fact_id, trimmed, category, importance);
+  };
+
+  const handleDelete = () => {
+    if (!fact) return;
+    onDelete(fact.fact_id);
   };
 
   return (
@@ -418,6 +429,12 @@ function FactEditModal({ visible, fact, onSave, onCancel }: FactEditModalProps) 
             </View>
 
             <View style={styles.modalActions}>
+              <Button
+                label="Delete"
+                variant="danger"
+                onPress={handleDelete}
+                style={styles.modalBtn}
+              />
               <Button label="Cancel" variant="secondary" onPress={onCancel} style={styles.modalBtn} />
               <Button label="Save" variant="primary" onPress={handleSave} style={styles.modalBtn} />
             </View>
@@ -632,7 +649,7 @@ const styles = StyleSheet.create({
   },
 
   modalActions: {
-    flexDirection: 'row',
+    flexDirection: 'column',
     gap: 12,
     marginTop: 24,
   },
