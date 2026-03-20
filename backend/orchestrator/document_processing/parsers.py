@@ -34,6 +34,16 @@ MARKDOWN_EXTRACTION_KWARGS: dict[str, object] = {
     "force_ocr": False,
     "table_strategy": "lines_strict",
 }
+SUPPORTED_IMAGE_EXTENSIONS = {
+    ".png",
+    ".jpg",
+    ".jpeg",
+    ".bmp",
+    ".gif",
+    ".tiff",
+    ".tif",
+    ".webp",
+}
 
 
 def parse_document(path: Path, mime_type: str | None) -> DocumentParseResult:
@@ -46,7 +56,68 @@ def parse_document(path: Path, mime_type: str | None) -> DocumentParseResult:
         return _parse_docx(path)
     if suffix in {".txt", ".md"} or (mime_type and mime_type.startswith("text/")):
         return _parse_plain_text(path)
+    if _is_image_document(suffix=suffix, mime_type=mime_type):
+        return _parse_image(path)
     return _parse_binary_fallback(path)
+
+
+def _is_image_document(*, suffix: str, mime_type: str | None) -> bool:
+    if mime_type and mime_type.startswith("image/"):
+        return True
+    return suffix in SUPPORTED_IMAGE_EXTENSIONS
+
+
+def _parse_image(path: Path) -> DocumentParseResult:
+    ocr_text = _extract_text_from_image_with_tesseract(path)
+    if ocr_text is None:
+        return DocumentParseResult(
+            text="",
+            raw_text="",
+            parser_used="image_no_text",
+            warnings=["image_ocr_unavailable_or_failed"],
+            metadata={"ocr_engine": "tesseract", "ocr_applied": False},
+        )
+
+    text = ocr_text.strip()
+    warnings: list[str] = []
+    if not text:
+        warnings.append("image_ocr_no_text")
+    return DocumentParseResult(
+        text=text,
+        raw_text=text,
+        parser_used="image_ocr_tesseract",
+        warnings=warnings,
+        sections=_derive_sections_from_text(text),
+        metadata={"ocr_engine": "tesseract", "ocr_applied": True},
+    )
+
+
+def _extract_text_from_image_with_tesseract(path: Path) -> str | None:
+    tesseract_binary = shutil.which("tesseract")
+    if not tesseract_binary:
+        return None
+
+    command = [tesseract_binary, str(path), "stdout"]
+    try:
+        result = subprocess.run(
+            command,
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+    except subprocess.CalledProcessError as exc:
+        logger.warning(
+            "[documents] image OCR failed for %s: %s",
+            path,
+            (exc.stderr or str(exc)).strip(),
+        )
+        return None
+    except Exception as exc:
+        logger.warning("[documents] image OCR failed for %s: %s", path, exc, exc_info=exc)
+        return None
+
+    return result.stdout or ""
 
 
 def _parse_pdf(path: Path) -> DocumentParseResult:
@@ -481,7 +552,11 @@ def _parse_binary_fallback(path: Path) -> DocumentParseResult:
     try:
         with open(path, "rb") as handle:
             data = handle.read()
-        text = data.decode("utf-8", errors="ignore")
+        if _looks_like_text_binary(data):
+            text = data.decode("utf-8", errors="ignore")
+        else:
+            text = ""
+            warnings.append("binary_non_text_file")
     except Exception as exc:
         logger.warning(
             "[documents] binary fallback parse failed for %s: %s", path, exc, exc_info=exc
@@ -494,6 +569,25 @@ def _parse_binary_fallback(path: Path) -> DocumentParseResult:
         parser_used="binary_fallback",
         warnings=warnings,
     )
+
+
+def _looks_like_text_binary(data: bytes) -> bool:
+    if not data:
+        return True
+    if b"\x00" in data:
+        return False
+
+    sample = data[:4096]
+    try:
+        decoded = sample.decode("utf-8", errors="strict")
+    except UnicodeDecodeError:
+        return False
+
+    control_count = 0
+    for char in decoded:
+        if ord(char) < 32 and char not in {"\n", "\r", "\t"}:
+            control_count += 1
+    return (control_count / max(1, len(decoded))) < 0.02
 
 
 def _split_pdfminer_pages(text: str) -> list[str]:

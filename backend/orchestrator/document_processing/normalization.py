@@ -35,7 +35,7 @@ def normalize_document(parse_result: DocumentParseResult, *, max_chars: int) -> 
     }
     return NormalizedDocument(
         normalized_text=clipped,
-        raw_extracted_text=(parse_result.raw_text or "")[:max_chars],
+        raw_extracted_text=_sanitize_raw_text(parse_result.raw_text, max_chars=max_chars),
         parser_used=parse_result.parser_used,
         sections=normalized_sections,
         pages=cleaned_pages,
@@ -88,6 +88,14 @@ def _normalize_text(text: str) -> str:
     cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
     cleaned = re.sub(r"[ \t]+", " ", cleaned)
     return cleaned.strip()
+
+
+def _sanitize_raw_text(text: str, *, max_chars: int) -> str:
+    if not text:
+        return ""
+    cleaned = text.replace("\x00", "")
+    cleaned = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f]", "", cleaned)
+    return cleaned[:max_chars]
 
 
 def _merge_wrapped_lines(text: str) -> str:
