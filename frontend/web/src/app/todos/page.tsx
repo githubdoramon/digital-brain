@@ -615,8 +615,17 @@ function TodoCard({ todo, isUpdating, onToggle, onDelete, onUpdateDueDate }: Tod
       }}
     >
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: "12px" }}>
-        <div style={{ display: "grid", gap: "6px" }}>
-          <span style={{ fontSize: "0.75rem", color: "#9ca3af", textTransform: "uppercase", letterSpacing: "0.05em" }}>
+        <div style={{ display: "grid", gap: "6px", minWidth: 0 }}>
+          <span
+            style={{
+              fontSize: "0.75rem",
+              color: "#9ca3af",
+              textTransform: "uppercase",
+              letterSpacing: "0.05em",
+              overflowWrap: "anywhere",
+              wordBreak: "break-word",
+            }}
+          >
             {todo.todo_id}
           </span>
           <p style={{ margin: 0, fontSize: "1rem", lineHeight: 1.4, color: "#1f2937" }}>{todo.description}</p>
@@ -780,4 +789,3 @@ function TodoCard({ todo, isUpdating, onToggle, onDelete, onUpdateDueDate }: Tod
     </article>
   );
 }
-
