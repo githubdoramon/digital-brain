@@ -5,6 +5,7 @@ import * as Location from 'expo-location';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert,
+  Keyboard,
   KeyboardAvoidingView,
   Platform,
   ScrollView,
@@ -104,6 +105,12 @@ function getRegionFromDraft(draft: Draft): Region {
   };
 }
 
+function floatingOffset(insetBottom: number, keyboardHeight: number) {
+  const keyboardInset =
+    Platform.OS === 'ios' ? Math.max(0, keyboardHeight - insetBottom) : keyboardHeight;
+  return insetBottom + 20 + keyboardInset;
+}
+
 export function PlaceEditorScreen({ placeId }: { placeId?: string }) {
   const router = useRouter();
   const insets = useSafeAreaInsets();
@@ -119,6 +126,24 @@ export function PlaceEditorScreen({ placeId }: { placeId?: string }) {
   const [isLoading, setIsLoading] = useState(!isCreating);
   const [isMapReady, setIsMapReady] = useState(false);
   const [mapKey, setMapKey] = useState(0);
+  const [keyboardHeight, setKeyboardHeight] = useState(0);
+
+  useEffect(() => {
+    const showEvent = Platform.OS === 'ios' ? 'keyboardWillChangeFrame' : 'keyboardDidShow';
+    const hideEvent = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
+
+    const showListener = Keyboard.addListener(showEvent, (event) => {
+      setKeyboardHeight(Math.max(0, event.endCoordinates?.height ?? 0));
+    });
+    const hideListener = Keyboard.addListener(hideEvent, () => {
+      setKeyboardHeight(0);
+    });
+
+    return () => {
+      showListener.remove();
+      hideListener.remove();
+    };
+  }, []);
 
   useEffect(() => {
     if (isCreating) {
@@ -432,9 +457,11 @@ export function PlaceEditorScreen({ placeId }: { placeId?: string }) {
           styles.content,
           {
             paddingTop: insets.top + 56,
-            paddingBottom: insets.bottom + 120,
+            paddingBottom: floatingOffset(insets.bottom, keyboardHeight) + 96,
           },
         ]}
+        keyboardShouldPersistTaps="handled"
+        keyboardDismissMode="on-drag"
       >
         <Text style={styles.title}>{isCreating ? 'Create place' : 'Edit place'}</Text>
         <Text style={styles.subtitle}>Update details and adjust its map location.</Text>
@@ -615,6 +642,7 @@ export function PlaceEditorScreen({ placeId }: { placeId?: string }) {
         onPress={handleSave}
         disabled={isSaving}
         loading={isSaving}
+        bottomOffset={floatingOffset(insets.bottom, keyboardHeight)}
       />
     </KeyboardAvoidingView>
   );
