@@ -1708,12 +1708,19 @@ def _resolve_contact_via_hard_rules(user_email: str, person_text: str) -> dict[s
     except Exception:
         return None
 
-    rules = user_facts.get_hard_rules_for_scope(
-        user_email,
-        scope=RuleScope.CONTACT_RESOLUTION,
-        rule_type=RuleType.ENTITY_ALIAS,
-        limit=25,
-    )
+    try:
+        rules = user_facts.get_hard_rules_for_scope(
+            user_email,
+            scope=RuleScope.CONTACT_RESOLUTION,
+            rule_type=RuleType.ENTITY_ALIAS,
+            limit=25,
+        )
+    except Exception:
+        logger.exception(
+            "[contact_resolver] Failed to load hard rules for user=%s",
+            user_email,
+        )
+        return None
     if not rules:
         return None
 

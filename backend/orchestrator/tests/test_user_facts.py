@@ -337,6 +337,10 @@ class TestReconciliation:
             "Likes rock",
             category="preference",
             importance=7,
+            fact_mode="soft",
+            rule_type=None,
+            rule_scope=[],
+            rule_payload={},
             source_thread_id="t1",
         )
 
@@ -360,7 +364,14 @@ class TestReconciliation:
 
         assert action == "UPDATE"
         mock_update.assert_called_once_with(
-            "f1", content="Prefers rock over jazz", category="preference", importance=8
+            "f1",
+            content="Prefers rock over jazz",
+            category="preference",
+            importance=8,
+            fact_mode="soft",
+            rule_type=None,
+            rule_scope=[],
+            rule_payload={},
         )
 
     @patch("user_facts.delete_fact")
