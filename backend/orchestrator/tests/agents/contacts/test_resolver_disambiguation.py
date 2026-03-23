@@ -1,5 +1,8 @@
 """Tests for conservative contact disambiguation policy."""
 
+import sys
+import types
+
 from agents.contacts import resolver
 
 
@@ -524,3 +527,52 @@ def test_resolve_people_mentions_auto_resolves_collective_candidates(monkeypatch
     assert all(item["matched_via"] == "nested_relationship_group" for item in resolved)
     assert new == []
     assert ambiguous == []
+
+
+def test_resolve_contact_applies_hard_rule_before_disambiguation(monkeypatch):
+    monkeypatch.setattr(
+        resolver.contacts_service,
+        "find_self_contact",
+        lambda *_args, **_kwargs: None,
+    )
+
+    monkeypatch.setattr(
+        resolver,
+        "_llm_disambiguate_contact",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("LLM should not be called")),
+    )
+
+    facts_module = types.SimpleNamespace(
+        get_hard_rules_for_scope=lambda *_args, **_kwargs: [
+            {
+                "fact_id": "uf_rule",
+                "rule_type": "entity_alias",
+                "rule_payload": {
+                    "alias_text": "Dana",
+                    "target_text": "Dana Lewis",
+                },
+            }
+        ]
+    )
+    monkeypatch.setitem(sys.modules, "user_facts", facts_module)
+
+    monkeypatch.setattr(
+        resolver.contacts_service,
+        "search_contacts",
+        lambda query, **_kwargs: [
+            {
+                "contact_id": "contact:dana-lewis",
+                "display_name": "Dana Lewis",
+                "aliases": ["Dana"],
+                "match_score": 100,
+            }
+        ]
+        if query == "Dana Lewis"
+        else [],
+    )
+
+    result = resolver.resolve_contact("Dana", "user@example.com", event_context="with Dana")
+
+    assert result["status"] == "resolved"
+    assert result["matched_via"] == "hard_rule"
+    assert result["contact_id"] == "contact:dana-lewis"

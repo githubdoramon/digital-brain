@@ -11,9 +11,11 @@ Called as a FastAPI BackgroundTask from llm.py — never blocks user responses.
 from __future__ import annotations
 
 import json
+import re
 from typing import Any
 
 from observability.logger import get_runtime_logger
+from user_fact_rules import FactMode, RuleScope, RuleType
 from user_facts import VALID_CATEGORIES
 
 logger = get_runtime_logger(__name__)
@@ -22,6 +24,19 @@ logger = get_runtime_logger(__name__)
 MIN_USER_MESSAGE_LENGTH = 20
 
 _CATEGORIES_LIST = ", ".join(sorted(VALID_CATEGORIES))
+_RULE_SCOPE_LIST = ", ".join(scope.value for scope in RuleScope)
+_RULE_TYPE_LIST = ", ".join(rule_type.value for rule_type in RuleType)
+
+_EXPLICIT_ALIAS_RULE_PATTERNS = [
+    re.compile(
+        r"(?:^|\b)(?:when|whenever)\s+i\s+say\s+[\"']?(?P<alias>[^\"',.;:!?\n]+)[\"']?\s*,?\s*i\s+mean\s+[\"']?(?P<target>[^\"'\n]+?)[\"']?(?:[\.,;:!?]|$)",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"(?:^|\b)[\"']?(?P<alias>[a-z0-9][^\"',.;:!?\n]{0,80}?)[\"']?\s+means\s+[\"']?(?P<target>[a-z0-9][^\"'\n]{0,160}?)[\"']?(?:[\.,;:!?]|$)",
+        re.IGNORECASE,
+    ),
+]
 
 EXTRACTION_SYSTEM_PROMPT = """\
 You are a fact extraction system for a personal memory assistant.
@@ -35,6 +50,7 @@ EXTRACT facts that are:
 - Opinions and values (technology preferences, work-life balance views)
 - Long-term goals and aspirations (learning interests, career goals, savings targets)
 - Behavioral preferences (prefers concise answers, likes examples)
+- Deterministic interpretation rules explicitly stated by the user (for example, aliases or fixed mappings)
 
 DO NOT extract — the user's memory system already has dedicated storage for these:
 - Information about other people (relationships, names, who someone is) — already stored as CONTACTS in the memory system
@@ -49,8 +65,20 @@ For each fact, provide:
 - "content": A concise, self-contained statement (e.g., "Prefers rock music")
 - "category": One of: {categories_placeholder}
 - "importance": 1-10 (1-3=trivial, 4-6=useful context, 7-9=core identity/strong preference, 10=critical constraint)
+- "fact_mode": MUST be one of exactly ["soft", "hard_rule"]
+- "rule_type": for hard_rule MUST be one of exactly [{rule_types_placeholder}]; otherwise null
+- "rule_scope": for hard_rule MUST be an array using ONLY these enum values: [{rule_scopes_placeholder}]
+- "rule_payload": for hard_rule MUST be an object. For rule_type="entity_alias", include BOTH keys:
+  {"alias_text": "...", "target_text": "..."}
 - "action": One of: ADD, UPDATE, DELETE, NOOP
 - "target_fact_id": (only for UPDATE/DELETE) The fact_id of the existing fact being modified
+
+STRICT OUTPUT RULES:
+- Use ONLY the allowed enum values for rule_type and rule_scope. Never invent new strings.
+- If a deterministic mapping is explicitly stated (e.g., "when I say X, I mean Y"), output fact_mode="hard_rule".
+- For hard_rule records, do NOT leave rule_type/rule_scope/rule_payload empty.
+- For soft records, set rule_type to null, rule_scope to [], and rule_payload to {}.
+- Keep JSON schema-valid: no trailing text, no comments.
 
 When existing facts are provided, compare new candidates against them:
 - ADD: Genuinely new information not already captured
@@ -60,7 +88,9 @@ When existing facts are provided, compare new candidates against them:
 
 Return a JSON object: {"facts": [...]} with an array of fact operations.
 If no facts should be extracted, return: {"facts": []}
-""".replace("{categories_placeholder}", _CATEGORIES_LIST)
+""".replace("{categories_placeholder}", _CATEGORIES_LIST).replace(
+    "{rule_scopes_placeholder}", _RULE_SCOPE_LIST
+).replace("{rule_types_placeholder}", _RULE_TYPE_LIST)
 
 
 def maybe_extract_facts(
@@ -160,6 +190,31 @@ def _run_extraction(
             user_email,
         )
 
+    explicit_rules = _extract_explicit_hard_rules(user_message)
+    explicit_applied = 0
+    for rule in explicit_rules:
+        try:
+            user_facts.upsert_fact(
+                user_email,
+                rule["content"],
+                category=rule["category"],
+                importance=rule["importance"],
+                fact_mode=rule["fact_mode"],
+                rule_type=rule["rule_type"],
+                rule_scope=rule["rule_scope"],
+                rule_payload=rule["rule_payload"],
+                source_thread_id=thread_id,
+            )
+            explicit_applied += 1
+        except Exception:
+            logger.exception("[fact_extraction] failed to upsert explicit hard rule: %s", rule)
+    if explicit_applied:
+        logger.info(
+            "[fact_extraction] extracted %d explicit hard rule(s) for user=%s",
+            explicit_applied,
+            user_email,
+        )
+
 
 def _build_extraction_prompt(
     *,
@@ -210,7 +265,24 @@ def _reconcile_fact(
     content = (candidate.get("content") or "").strip()
     category = candidate.get("category", "general")
     importance = candidate.get("importance", 5)
+    fact_mode = candidate.get("fact_mode") or FactMode.SOFT.value
+    rule_type = candidate.get("rule_type")
+    rule_scope = candidate.get("rule_scope")
+    rule_payload = candidate.get("rule_payload")
     target_id = candidate.get("target_fact_id")
+
+    if not isinstance(rule_scope, list):
+        rule_scope = []
+    if not isinstance(rule_payload, dict):
+        rule_payload = {}
+
+    normalized_rule_type = str(rule_type or "").strip().lower()
+    if str(fact_mode).strip().lower() == FactMode.HARD_RULE.value and not content:
+        if normalized_rule_type == RuleType.ENTITY_ALIAS.value:
+            alias_text = str(rule_payload.get("alias_text") or "").strip()
+            target_text = str(rule_payload.get("target_text") or "").strip()
+            if alias_text and target_text:
+                content = f"If user says '{alias_text}', resolve as '{target_text}'."
 
     if action == "NOOP":
         return "NOOP"
@@ -223,6 +295,10 @@ def _reconcile_fact(
             content,
             category=category,
             importance=importance,
+            fact_mode=fact_mode,
+            rule_type=rule_type,
+            rule_scope=rule_scope,
+            rule_payload=rule_payload,
             source_thread_id=thread_id,
         )
         logger.info("[fact_extraction] ADD fact for user=%s: %s", user_email, content[:80])
@@ -237,6 +313,10 @@ def _reconcile_fact(
                     content,
                     category=category,
                     importance=importance,
+                    fact_mode=fact_mode,
+                    rule_type=rule_type,
+                    rule_scope=rule_scope,
+                    rule_payload=rule_payload,
                     source_thread_id=thread_id,
                 )
                 logger.info(
@@ -251,6 +331,10 @@ def _reconcile_fact(
             content=content,
             category=category,
             importance=importance,
+            fact_mode=fact_mode,
+            rule_type=rule_type,
+            rule_scope=rule_scope,
+            rule_payload=rule_payload,
         )
         logger.info(
             "[fact_extraction] UPDATE fact_id=%s for user=%s: %s",
@@ -301,3 +385,47 @@ def _get_contacts_summary(user_email: str) -> str:
     except Exception:
         logger.warning("[fact_extraction] failed to load contacts summary")
         return ""
+
+
+def _extract_explicit_hard_rules(user_message: str) -> list[dict[str, Any]]:
+    text = str(user_message or "").strip()
+    if not text:
+        return []
+
+    rules: list[dict[str, Any]] = []
+    seen: set[tuple[str, str]] = set()
+    for pattern in _EXPLICIT_ALIAS_RULE_PATTERNS:
+        for match in pattern.finditer(text):
+            alias_text = _clean_rule_fragment(match.group("alias"))
+            target_text = _clean_rule_fragment(match.group("target"))
+            if not alias_text or not target_text:
+                continue
+            key = (alias_text.casefold(), target_text.casefold())
+            if key in seen:
+                continue
+            seen.add(key)
+            rules.append(
+                {
+                    "content": f"If user says '{alias_text}', resolve as '{target_text}'.",
+                    "category": "behavioral",
+                    "importance": 9,
+                    "fact_mode": FactMode.HARD_RULE.value,
+                    "rule_type": RuleType.ENTITY_ALIAS.value,
+                    "rule_scope": [
+                        RuleScope.CONTACT_RESOLUTION.value,
+                        RuleScope.AGENT_GLOBAL.value,
+                    ],
+                    "rule_payload": {
+                        "alias_text": alias_text,
+                        "target_text": target_text,
+                    },
+                }
+            )
+
+    return rules
+
+
+def _clean_rule_fragment(value: str | None) -> str:
+    cleaned = str(value or "").strip().strip("\"'")
+    cleaned = re.sub(r"\s+", " ", cleaned)
+    return cleaned.strip(" .,:;!?")

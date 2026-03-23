@@ -15,6 +15,7 @@ from unittest.mock import MagicMock, patch
 # Ensure the orchestrator package is on the path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from user_fact_rules import RuleScope
 
 # ---------------------------------------------------------------------------
 # user_facts service tests
@@ -166,6 +167,65 @@ class TestGetFactsForContext:
         mock_search.return_value = []
         result = user_facts.get_facts_for_context("u@test.com", "test")
         assert result is None
+
+
+class TestHardRules:
+    @patch("user_facts.get_hard_rules_for_scope")
+    def test_formats_entity_alias_rule_context(self, mock_rules):
+        import user_facts
+
+        mock_rules.return_value = [
+            {
+                "fact_id": "f_rule",
+                "rule_type": "entity_alias",
+                "rule_payload": {
+                    "alias_text": "Dana",
+                    "target_text": "Dana Lewis",
+                },
+                "content": "fallback",
+            }
+        ]
+
+        context = user_facts.get_hard_rules_context("u@test.com", scope=RuleScope.CONTACT_RESOLUTION)
+        assert context is not None
+        assert "Deterministic user rules" in context
+        assert "Dana Lewis" in context
+
+    def test_upsert_hard_rule_requires_non_empty_scope(self):
+        import user_facts
+
+        try:
+            user_facts.upsert_fact(
+                "u@test.com",
+                "If user says 'Dana', resolve as 'Dana Lewis'.",
+                category="behavioral",
+                importance=9,
+                fact_mode="hard_rule",
+                rule_type="entity_alias",
+                rule_scope=[],
+                rule_payload={"alias_text": "Dana", "target_text": "Dana Lewis"},
+            )
+            raise AssertionError("Expected ValueError")
+        except ValueError as exc:
+            assert "rule_scope" in str(exc)
+
+    def test_upsert_hard_rule_rejects_invalid_scope_value(self):
+        import user_facts
+
+        try:
+            user_facts.upsert_fact(
+                "u@test.com",
+                "If user says 'Dana', resolve as 'Dana Lewis'.",
+                category="behavioral",
+                importance=9,
+                fact_mode="hard_rule",
+                rule_type="entity_alias",
+                rule_scope=["not_a_scope"],
+                rule_payload={"alias_text": "Dana", "target_text": "Dana Lewis"},
+            )
+            raise AssertionError("Expected ValueError")
+        except ValueError as exc:
+            assert "Invalid rule_scope" in str(exc)
 
 
 # ---------------------------------------------------------------------------
@@ -353,6 +413,36 @@ class TestReconciliation:
         )
         assert action == "NOOP"
 
+    @patch("user_facts.upsert_fact")
+    def test_hard_rule_add_passes_mode_and_payload(self, mock_upsert):
+        from fact_extraction import _reconcile_fact
+
+        mock_upsert.return_value = {"fact_id": "uf_rule"}
+
+        action = _reconcile_fact(
+            {
+                "action": "ADD",
+                "content": "",
+                "category": "behavioral",
+                "importance": 9,
+                "fact_mode": "hard_rule",
+                "rule_type": "entity_alias",
+                "rule_scope": [RuleScope.CONTACT_RESOLUTION.value, RuleScope.AGENT_GLOBAL.value],
+                "rule_payload": {
+                    "alias_text": "Dana",
+                    "target_text": "Dana Lewis",
+                },
+            },
+            user_email="u@test.com",
+            thread_id="t1",
+        )
+
+        assert action == "ADD"
+        kwargs = mock_upsert.call_args.kwargs
+        assert kwargs["fact_mode"] == "hard_rule"
+        assert kwargs["rule_type"] == "entity_alias"
+        assert kwargs["rule_payload"]["target_text"] == "Dana Lewis"
+
 
 class TestContactsSummary:
     """Test the contacts summary builder."""
@@ -414,3 +504,33 @@ class TestUserFactsContext:
 
         result = get_user_facts_context("", "test")
         assert result is None
+
+    @patch("user_facts.get_hard_rules_context")
+    @patch("user_facts.get_facts_for_context")
+    def test_merges_hard_rules_and_soft_facts(self, mock_facts, mock_hard):
+        mock_hard.return_value = (
+            "Deterministic user rules (apply before disambiguation):\n"
+            "- If the user says 'Dana', interpret it as 'Dana Lewis'."
+        )
+        mock_facts.return_value = "- [preference] Likes concise answers"
+
+        from prompts.context import get_user_facts_context
+
+        result = get_user_facts_context(
+            "u@test.com", "schedule meeting", scope=RuleScope.EVENT_COMMAND
+        )
+        assert result is not None
+        assert "Deterministic user rules" in result
+        assert "Known facts about this user" in result
+
+
+class TestExplicitHardRuleExtraction:
+    def test_extracts_alias_rule_pattern(self):
+        from fact_extraction import _extract_explicit_hard_rules
+
+        rules = _extract_explicit_hard_rules("Whenever I say Dana, I mean Dana Lewis.")
+
+        assert len(rules) == 1
+        payload = rules[0]["rule_payload"]
+        assert payload["alias_text"] == "Dana"
+        assert payload["target_text"] == "Dana Lewis"

@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 from typing import Any, Optional
 
 from observability.logger import get_runtime_logger
+from user_fact_rules import RuleScope
 
 logger = get_runtime_logger(__name__)
 
@@ -96,20 +97,39 @@ def get_self_context(email: str) -> Optional[str]:
     return f"You are assisting the user with email: {email}.{behavioral_guidance}"
 
 
-def get_user_facts_context(email: str, query: str) -> Optional[str]:
-    """Retrieve relevant user facts and format for prompt injection."""
+def get_user_facts_context(
+    email: str,
+    query: str,
+    *,
+    scope: RuleScope | str = RuleScope.AGENT_GLOBAL,
+) -> Optional[str]:
+    """Retrieve deterministic rules + soft facts for prompt injection."""
     if not email:
         return None
+
+    sections: list[str] = []
+
+    try:
+        import user_facts
+
+        hard_rules = user_facts.get_hard_rules_context(email, scope=scope)
+        if hard_rules:
+            sections.append(hard_rules)
+    except Exception as exc:
+        logger.warning("[context] Failed to get hard user rules: %s", exc)
+
     try:
         import user_facts
 
         facts_text = user_facts.get_facts_for_context(email, query)
-        if not facts_text:
-            return None
-        return f"Known facts about this user:\n{facts_text}"
+        if facts_text:
+            sections.append(f"Known facts about this user:\n{facts_text}")
     except Exception as exc:
         logger.warning("[context] Failed to get user facts: %s", exc)
+
+    if not sections:
         return None
+    return "\n\n".join(sections)
 
 
 def get_location_context(client_context: Optional[dict[str, Any]]) -> Optional[str]:

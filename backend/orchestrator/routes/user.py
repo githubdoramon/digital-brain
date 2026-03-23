@@ -86,12 +86,19 @@ def create_user_router() -> APIRouter:
         if not existing or existing.get("user_email") != user_email:
             raise HTTPException(status_code=404, detail="Fact not found")
 
-        updated = user_facts.update_fact(
-            fact_id,
-            content=payload.content,
-            category=payload.category,
-            importance=payload.importance,
-        )
+        try:
+            updated = user_facts.update_fact(
+                fact_id,
+                content=payload.content,
+                category=payload.category,
+                importance=payload.importance,
+                fact_mode=payload.fact_mode,
+                rule_type=payload.rule_type,
+                rule_scope=payload.rule_scope,
+                rule_payload=payload.rule_payload,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         if not updated:
             raise HTTPException(status_code=404, detail="Fact not found")
         return UserFactOut(**updated)

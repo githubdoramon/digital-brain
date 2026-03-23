@@ -38,6 +38,7 @@ from ui_dsl.clarification import (
     build_need_user_input,
     clarification_fields_from_ambiguous_contacts,
 )
+from user_fact_rules import RuleScope, RuleType
 
 logger = get_runtime_logger(__name__)
 
@@ -597,7 +598,7 @@ def extract_people_from_text(
 
     user_facts_block = ""
     if user_email:
-        facts_ctx = get_user_facts_context(user_email, text)
+        facts_ctx = get_user_facts_context(user_email, text, scope=RuleScope.CONTACT_RESOLUTION)
         if facts_ctx:
             user_facts_block = f"\n{facts_ctx}\n\n"
 
@@ -904,7 +905,7 @@ def resolve_contact(
             "confidence": "high" | "medium" | "low",
             "contact_id": Optional[str],
             "display_name": Optional[str],
-            "matched_via": "direct_match" | "relationship" | "nested_relationship" | "llm_disambiguation",
+            "matched_via": "direct_match" | "relationship" | "nested_relationship" | "llm_disambiguation" | "hard_rule",
             "resolution_path": Optional[List[str]],  # For nested: ["user", "Emma", "Dr. Smith"]
             "candidates": [{"contact_id": str, "display_name": str, "match_score": float}],
         }
@@ -937,6 +938,27 @@ def resolve_contact(
         logger.info("[contact_resolver] User token provided but no contact found by email")
         result["status"] = "new"
         result["display_name"] = "user"
+        return result
+
+    hard_rule_resolution = _resolve_contact_via_hard_rules(user_email, person_text)
+    if hard_rule_resolution:
+        result["status"] = "resolved"
+        result["confidence"] = "high"
+        result["contact_id"] = hard_rule_resolution.get("contact_id")
+        result["display_name"] = hard_rule_resolution.get("display_name")
+        result["matched_via"] = "hard_rule"
+        logger.info(
+            "[contact_resolver] Resolved '%s' via hard rule -> %s",
+            person_text,
+            result["display_name"],
+        )
+        trace.trace_contact_resolution_outcome(
+            "hard_rule_resolved",
+            {
+                "person_text": person_text,
+                "contact_id": result["contact_id"],
+            },
+        )
         return result
 
     # Step 1: Check for nested relationships (e.g., "my daughter's doctor")
@@ -1676,6 +1698,122 @@ def _is_name_level_match(person_text: str, display_name: str) -> bool:
     )
 
 
+def _resolve_contact_via_hard_rules(user_email: str, person_text: str) -> dict[str, str] | None:
+    mention = str(person_text or "").strip()
+    if not user_email or not mention:
+        return None
+
+    try:
+        import user_facts
+    except Exception:
+        return None
+
+    rules = user_facts.get_hard_rules_for_scope(
+        user_email,
+        scope=RuleScope.CONTACT_RESOLUTION,
+        rule_type=RuleType.ENTITY_ALIAS,
+        limit=25,
+    )
+    if not rules:
+        return None
+
+    mention_norm = normalize_search_text(mention)
+    if not mention_norm:
+        return None
+
+    matching_targets: list[str] = []
+    for rule in rules:
+        payload = rule.get("rule_payload") or {}
+        alias_text = str(payload.get("alias_text") or "").strip()
+        alias_norm = normalize_search_text(alias_text)
+        if alias_norm and alias_norm == mention_norm:
+            target_text = str(payload.get("target_text") or "").strip()
+            if target_text:
+                matching_targets.append(target_text)
+
+    if not matching_targets:
+        return None
+
+    dedup_targets: list[str] = []
+    seen_targets: set[str] = set()
+    for target in matching_targets:
+        norm = normalize_search_text(target)
+        if not norm or norm in seen_targets:
+            continue
+        seen_targets.add(norm)
+        dedup_targets.append(target)
+
+    if len(dedup_targets) != 1:
+        logger.warning(
+            "[contact_resolver] Conflicting hard rules for '%s' (%s targets)",
+            mention,
+            len(dedup_targets),
+        )
+        trace.trace_contact_resolution_outcome(
+            "hard_rule_skipped",
+            {
+                "person_text": mention,
+                "reason": "conflicting_targets",
+            },
+        )
+        return None
+
+    target_text = dedup_targets[0]
+    matches = contacts_service.search_contacts(
+        target_text,
+        search_by="name",
+        fuzzy_threshold=80,
+        limit=10,
+    )
+    selected = _select_unique_exact_contact_match(matches, target_text)
+    if not selected:
+        trace.trace_contact_resolution_outcome(
+            "hard_rule_skipped",
+            {
+                "person_text": mention,
+                "target": target_text,
+                "reason": "target_not_unique",
+            },
+        )
+        return None
+
+    return {
+        "contact_id": str(selected.get("contact_id") or ""),
+        "display_name": str(selected.get("display_name") or target_text),
+    }
+
+
+def _select_unique_exact_contact_match(
+    matches: list[dict[str, Any]],
+    target_text: str,
+) -> dict[str, Any] | None:
+    if not matches:
+        return None
+    target_norm = normalize_search_text(target_text)
+    if not target_norm:
+        return None
+
+    exact_matches: list[dict[str, Any]] = []
+    for match in matches:
+        display_name = str(match.get("display_name") or "")
+        display_norm = normalize_search_text(display_name)
+        alias_norms = [
+            normalize_search_text(str(alias or ""))
+            for alias in (match.get("aliases") or [])
+            if str(alias or "").strip()
+        ]
+        if display_norm == target_norm or target_norm in alias_norms:
+            exact_matches.append(match)
+
+    if len(exact_matches) == 1:
+        return exact_matches[0]
+    if len(exact_matches) > 1:
+        return None
+    if len(matches) == 1:
+        return matches[0]
+    return None
+
+
 def _infer_professions_for_new_contacts(
     new_contacts: list[dict[str, Any]],
     full_text: str,
@@ -2366,7 +2504,11 @@ def _llm_disambiguate_contact(
 
     user_facts_block = ""
     if user_email:
-        facts_ctx = get_user_facts_context(user_email, f"{person_text} {event_context[:200]}")
+        facts_ctx = get_user_facts_context(
+            user_email,
+            f"{person_text} {event_context[:200]}",
+            scope=RuleScope.CONTACT_RESOLUTION,
+        )
         if facts_ctx:
             user_facts_block = f"{facts_ctx}\n\n"
 

@@ -490,6 +490,10 @@ class UserFactOut(BaseModel):
     content: str
     category: str
     importance: int
+    fact_mode: str = "soft"
+    rule_type: str | None = None
+    rule_scope: list[str] = Field(default_factory=list)
+    rule_payload: dict[str, Any] = Field(default_factory=dict)
     source_thread_id: str | None = None
     access_count: int = 0
     last_accessed_at: datetime | str | None = None
@@ -503,6 +507,10 @@ class UserFactUpdateIn(BaseModel):
     content: str | None = None
     category: str | None = None
     importance: int | None = Field(default=None, ge=1, le=10)
+    fact_mode: str | None = None
+    rule_type: str | None = None
+    rule_scope: list[str] | None = None
+    rule_payload: dict[str, Any] | None = None
 
 
 class NewsTopicOut(BaseModel):

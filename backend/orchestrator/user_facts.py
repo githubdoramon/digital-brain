@@ -12,6 +12,7 @@ prompt so the agent can personalise responses.
 
 from __future__ import annotations
 
+import json
 import math
 import uuid
 from datetime import datetime, timezone
@@ -20,6 +21,14 @@ from typing import Any
 from db import get_conn
 from embeddings import embed_text
 from observability.logger import get_runtime_logger
+from user_fact_rules import (
+    VALID_FACT_MODE_VALUES,
+    FactMode,
+    RuleScope,
+    RuleType,
+    normalize_rule_scope,
+    normalize_rule_type,
+)
 
 logger = get_runtime_logger(__name__)
 
@@ -37,6 +46,7 @@ DEFAULT_CONTEXT_LIMIT = 8
 VALID_CATEGORIES = frozenset(
     ["preference", "biographical", "behavioral", "goal", "opinion", "constraint", "general"]
 )
+VALID_FACT_MODES = VALID_FACT_MODE_VALUES
 
 
 # ---------------------------------------------------------------------------
@@ -50,6 +60,7 @@ def get_user_facts(user_email: str, *, limit: int = 100) -> list[dict[str, Any]]
         cur.execute(
             """
             SELECT fact_id, user_email, content, category, importance,
+                   fact_mode, rule_type, rule_scope, rule_payload,
                    source_thread_id, access_count, last_accessed_at,
                    created_at, updated_at
             FROM user_facts
@@ -68,6 +79,7 @@ def get_fact(fact_id: str) -> dict[str, Any] | None:
         cur.execute(
             """
             SELECT fact_id, user_email, content, category, importance,
+                   fact_mode, rule_type, rule_scope, rule_payload,
                    source_thread_id, access_count, last_accessed_at,
                    created_at, updated_at
             FROM user_facts
@@ -85,6 +97,10 @@ def upsert_fact(
     *,
     category: str = "general",
     importance: int = 5,
+    fact_mode: FactMode | str = FactMode.SOFT,
+    rule_type: RuleType | str | None = None,
+    rule_scope: list[RuleScope | str] | None = None,
+    rule_payload: dict[str, Any] | None = None,
     source_thread_id: str | None = None,
     fact_id: str | None = None,
 ) -> dict[str, Any]:
@@ -92,6 +108,24 @@ def upsert_fact(
     if category not in VALID_CATEGORIES:
         category = "general"
     importance = max(1, min(10, importance))
+    fact_mode = _normalize_fact_mode(fact_mode)
+    invalid_scopes = _find_invalid_rule_scopes(rule_scope)
+    if invalid_scopes:
+        raise ValueError(f"Invalid rule_scope values: {', '.join(invalid_scopes)}")
+
+    normalized_rule_type = _normalize_rule_type(rule_type)
+    normalized_rule_scope = _normalize_rule_scope(rule_scope)
+    normalized_rule_payload = _normalize_rule_payload(rule_payload)
+
+    if fact_mode == FactMode.HARD_RULE.value:
+        if not normalized_rule_type:
+            raise ValueError("hard_rule facts require a valid rule_type")
+        if not normalized_rule_scope:
+            raise ValueError("hard_rule facts require at least one valid rule_scope")
+    else:
+        normalized_rule_type = None
+        normalized_rule_scope = []
+        normalized_rule_payload = {}
 
     fid = fact_id or f"uf_{uuid.uuid4().hex[:12]}"
     embedding = _generate_embedding(content)
@@ -102,20 +136,40 @@ def upsert_fact(
             """
             INSERT INTO user_facts
                 (fact_id, user_email, content, category, importance,
+                 fact_mode, rule_type, rule_scope, rule_payload,
                  content_embed, source_thread_id, created_at, updated_at)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s::text[], %s::jsonb, %s, %s, %s, %s)
             ON CONFLICT (fact_id) DO UPDATE SET
                 content = EXCLUDED.content,
                 category = EXCLUDED.category,
                 importance = EXCLUDED.importance,
+                fact_mode = EXCLUDED.fact_mode,
+                rule_type = EXCLUDED.rule_type,
+                rule_scope = EXCLUDED.rule_scope,
+                rule_payload = EXCLUDED.rule_payload,
                 content_embed = EXCLUDED.content_embed,
                 source_thread_id = EXCLUDED.source_thread_id,
                 updated_at = EXCLUDED.updated_at
             RETURNING fact_id, user_email, content, category, importance,
+                      fact_mode, rule_type, rule_scope, rule_payload,
                       source_thread_id, access_count, last_accessed_at,
                       created_at, updated_at
             """,
-            (fid, user_email, content, category, importance, embedding, source_thread_id, now, now),
+            (
+                fid,
+                user_email,
+                content,
+                category,
+                importance,
+                fact_mode,
+                normalized_rule_type,
+                normalized_rule_scope,
+                json.dumps(normalized_rule_payload),
+                embedding,
+                source_thread_id,
+                now,
+                now,
+            ),
         )
         row = cur.fetchone()
         conn.commit()
@@ -129,6 +183,10 @@ def update_fact(
     content: str | None = None,
     category: str | None = None,
     importance: int | None = None,
+    fact_mode: FactMode | str | None = None,
+    rule_type: RuleType | str | None = None,
+    rule_scope: list[RuleScope | str] | None = None,
+    rule_payload: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     """Partial update of a fact. Re-embeds if content changes."""
     updates: list[str] = ["updated_at = NOW()"]
@@ -152,6 +210,46 @@ def update_fact(
         updates.append("importance = %s")
         params.append(importance)
 
+    next_mode = _normalize_fact_mode(fact_mode) if fact_mode is not None else None
+    invalid_scopes = _find_invalid_rule_scopes(rule_scope)
+    if invalid_scopes:
+        raise ValueError(f"Invalid rule_scope values: {', '.join(invalid_scopes)}")
+
+    if next_mode is not None:
+        updates.append("fact_mode = %s")
+        params.append(next_mode)
+
+    normalized_rule_type = _normalize_rule_type(rule_type) if rule_type is not None else None
+    if next_mode == FactMode.HARD_RULE.value and rule_type is None:
+        raise ValueError("hard_rule updates must provide rule_type")
+    if rule_type is not None and not normalized_rule_type:
+        raise ValueError("Invalid rule_type value")
+
+    if rule_type is not None:
+        updates.append("rule_type = %s")
+        params.append(normalized_rule_type)
+
+    normalized_rule_scope = _normalize_rule_scope(rule_scope) if rule_scope is not None else None
+    if next_mode == FactMode.HARD_RULE.value and rule_scope is None:
+        raise ValueError("hard_rule updates must provide rule_scope")
+    if rule_scope is not None:
+        if next_mode == FactMode.HARD_RULE.value and not normalized_rule_scope:
+            raise ValueError("hard_rule facts require at least one valid rule_scope")
+        updates.append("rule_scope = %s::text[]")
+        params.append(normalized_rule_scope)
+
+    if rule_payload is not None:
+        updates.append("rule_payload = %s::jsonb")
+        params.append(json.dumps(_normalize_rule_payload(rule_payload)))
+
+    if next_mode == FactMode.HARD_RULE.value and rule_type is not None and not normalized_rule_type:
+        raise ValueError("hard_rule facts require a valid rule_type")
+
+    if next_mode == FactMode.SOFT.value:
+        updates.append("rule_type = NULL")
+        updates.append("rule_scope = '{}'::text[]")
+        updates.append("rule_payload = '{}'::jsonb")
+
     params.append(fact_id)
 
     with get_conn() as conn, conn.cursor() as cur:
@@ -161,6 +259,7 @@ def update_fact(
             SET {", ".join(updates)}
             WHERE fact_id = %s
             RETURNING fact_id, user_email, content, category, importance,
+                      fact_mode, rule_type, rule_scope, rule_payload,
                       source_thread_id, access_count, last_accessed_at,
                       created_at, updated_at
             """,
@@ -225,10 +324,12 @@ def search_user_facts(
         cur.execute(
             """
             SELECT fact_id, content, category, importance,
+                   fact_mode, rule_type, rule_scope, rule_payload,
                    access_count, last_accessed_at, created_at, updated_at,
                    1 - (content_embed <=> %s::vector) AS semantic_score
             FROM user_facts
             WHERE user_email = %s
+              AND COALESCE(fact_mode, 'soft') = 'soft'
               AND content_embed IS NOT NULL
             ORDER BY content_embed <=> %s::vector
             LIMIT %s
@@ -241,10 +342,12 @@ def search_user_facts(
         cur.execute(
             """
             SELECT fact_id, content, category, importance,
+                   fact_mode, rule_type, rule_scope, rule_payload,
                    access_count, last_accessed_at, created_at, updated_at,
                    ts_rank_cd(content_tsv, plainto_tsquery('english', unaccent(%s))) AS fts_score
             FROM user_facts
             WHERE user_email = %s
+              AND COALESCE(fact_mode, 'soft') = 'soft'
               AND content_tsv @@ plainto_tsquery('english', unaccent(%s))
             ORDER BY fts_score DESC
             LIMIT %s
@@ -294,6 +397,10 @@ def search_user_facts(
                 "content": base["content"],
                 "category": base["category"],
                 "importance": base["importance"],
+                "fact_mode": base.get("fact_mode") or "soft",
+                "rule_type": base.get("rule_type"),
+                "rule_scope": base.get("rule_scope") or [],
+                "rule_payload": base.get("rule_payload") or {},
                 "access_count": base["access_count"],
                 "last_accessed_at": base["last_accessed_at"],
                 "created_at": base["created_at"],
@@ -340,6 +447,84 @@ def get_facts_for_context(
     return "\n".join(lines)
 
 
+def get_hard_rules_for_scope(
+    user_email: str,
+    *,
+    scope: RuleScope | str,
+    rule_type: RuleType | str | None = None,
+    limit: int = 20,
+) -> list[dict[str, Any]]:
+    """Retrieve deterministic hard rules for a runtime scope."""
+    normalized_scope = normalize_rule_scope(scope)
+    if not user_email or not normalized_scope:
+        return []
+
+    params: list[Any] = [user_email, normalized_scope, RuleScope.AGENT_GLOBAL.value]
+    extra_filter = ""
+    if rule_type:
+        normalized_rule_type = _normalize_rule_type(rule_type)
+        if not normalized_rule_type:
+            return []
+        extra_filter = " AND COALESCE(rule_type, '') = %s"
+        params.append(normalized_rule_type)
+    params.append(limit)
+
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            f"""
+            SELECT fact_id, user_email, content, category, importance,
+                   fact_mode, rule_type, rule_scope, rule_payload,
+                   source_thread_id, access_count, last_accessed_at,
+                   created_at, updated_at
+            FROM user_facts
+            WHERE user_email = %s
+              AND COALESCE(fact_mode, %s) = %s
+              AND (
+                    COALESCE(array_length(rule_scope, 1), 0) = 0
+                    OR %s = ANY(rule_scope)
+                    OR %s = ANY(rule_scope)
+              )
+              {extra_filter}
+            ORDER BY importance DESC, updated_at DESC
+            LIMIT %s
+            """,
+            (
+                params[0],
+                FactMode.SOFT.value,
+                FactMode.HARD_RULE.value,
+                params[1],
+                params[2],
+                *params[3:],
+            ),
+        )
+        rows = [_row_to_dict(row) for row in cur.fetchall()]
+
+    if rows:
+        record_fact_access([str(item.get("fact_id") or "") for item in rows])
+    return rows
+
+
+def get_hard_rules_context(
+    user_email: str,
+    *,
+    scope: RuleScope | str,
+    limit: int = 12,
+) -> str | None:
+    """Format hard deterministic rules for prompt context."""
+    rules = get_hard_rules_for_scope(user_email, scope=scope, limit=limit)
+    if not rules:
+        return None
+
+    lines = ["Deterministic user rules (apply before disambiguation):"]
+    for rule in rules:
+        rendered = _render_rule_for_prompt(rule)
+        if rendered:
+            lines.append(f"- {rendered}")
+    if len(lines) == 1:
+        return None
+    return "\n".join(lines)
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -363,4 +548,64 @@ def _row_to_dict(row: Any) -> dict[str, Any]:
         val = d.get(key)
         if val and hasattr(val, "isoformat"):
             d[key] = val.isoformat()
+    if d.get("rule_scope") is None:
+        d["rule_scope"] = []
+    if d.get("rule_payload") is None:
+        d["rule_payload"] = {}
     return d
+
+
+def _normalize_fact_mode(fact_mode: str | None) -> str:
+    normalized = str(fact_mode or FactMode.SOFT.value).strip().lower()
+    if normalized in VALID_FACT_MODES:
+        return normalized
+    return FactMode.SOFT.value
+
+
+def _normalize_rule_type(rule_type: RuleType | str | None) -> str | None:
+    return normalize_rule_type(rule_type)
+
+
+def _normalize_rule_scope(rule_scope: list[RuleScope | str] | None) -> list[str]:
+    if not rule_scope:
+        return []
+    cleaned: list[str] = []
+    seen: set[str] = set()
+    for scope in rule_scope:
+        item = normalize_rule_scope(scope)
+        if not item or item in seen:
+            continue
+        seen.add(item)
+        cleaned.append(item)
+    return cleaned
+
+
+def _find_invalid_rule_scopes(rule_scope: list[RuleScope | str] | None) -> list[str]:
+    if not rule_scope:
+        return []
+    invalid: list[str] = []
+    for scope in rule_scope:
+        raw = str(scope or "").strip()
+        if not raw:
+            continue
+        if normalize_rule_scope(scope) is None:
+            invalid.append(raw)
+    return invalid
+
+
+def _normalize_rule_payload(rule_payload: dict[str, Any] | None) -> dict[str, Any]:
+    if not isinstance(rule_payload, dict):
+        return {}
+    return dict(rule_payload)
+
+
+def _render_rule_for_prompt(rule: dict[str, Any]) -> str:
+    rule_type = normalize_rule_type(rule.get("rule_type"))
+    payload = rule.get("rule_payload") or {}
+    if rule_type == RuleType.ENTITY_ALIAS.value:
+        alias = str(payload.get("alias_text") or "").strip()
+        target = str(payload.get("target_text") or "").strip()
+        if alias and target:
+            return f"If the user says '{alias}', interpret it as '{target}'."
+    content = str(rule.get("content") or "").strip()
+    return content

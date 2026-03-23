@@ -27,6 +27,7 @@ from ui_dsl.clarification import (
     normalize_clarification_fields,
     normalize_need_user_input,
 )
+from user_fact_rules import RuleScope
 
 logger = get_runtime_logger(__name__)
 
@@ -283,7 +284,11 @@ def _infer_follow_up_target_fields(
     from prompts.context import get_time_context, get_user_facts_context
 
     user_email = str(context.get("user_email") or "").strip()
-    user_facts_ctx = get_user_facts_context(user_email, follow_up_message) if user_email else None
+    user_facts_ctx = (
+        get_user_facts_context(user_email, follow_up_message, scope=RuleScope.EVENT_COMMAND)
+        if user_email
+        else None
+    )
     user_facts_block = f"\n{user_facts_ctx}\n" if user_facts_ctx else ""
     extraction_context = _format_field_inference_extraction_context(existing_extraction)
     time_context = get_time_context()
@@ -694,7 +699,11 @@ def _extract_event_entities_with_llm(
     user_email = context.get("user_email", "")
 
     # Get user facts for personalization (timezone, preferences, common locations, etc.)
-    user_facts_ctx = get_user_facts_context(user_email, message) if user_email else None
+    user_facts_ctx = (
+        get_user_facts_context(user_email, message, scope=RuleScope.EVENT_COMMAND)
+        if user_email
+        else None
+    )
 
     logger.debug("[event_extraction] Time context: %s", time_context)
     logger.debug("[event_extraction] User: %s", user_email)
@@ -1293,7 +1302,11 @@ def _suggest_relationships_from_context(
         contact_list,
     )
 
-    user_facts_ctx = get_user_facts_context(user_email, message) if user_email else None
+    user_facts_ctx = (
+        get_user_facts_context(user_email, message, scope=RuleScope.EVENT_COMMAND)
+        if user_email
+        else None
+    )
     user_facts_section = f"\n{user_facts_ctx}" if user_facts_ctx else ""
 
     prompt = f"""Analyze this event description and identify any implied relationships between the people mentioned.
