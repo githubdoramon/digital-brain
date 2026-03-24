@@ -360,3 +360,151 @@ def test_confirm_event_uses_explicit_place_id_modification(monkeypatch):
     assert result.success is True
     assert captured_event["event"] is not None
     assert captured_event["event"].place_id == "plc_selected"
+
+
+def test_confirm_event_filters_relationships_by_participant_override(monkeypatch):
+    command_data = _base_command_data()
+    command_data["resolution"]["contacts"] = [
+        {"contact_id": "contact-ana", "display_name": "Ana"},
+        {"contact_id": "contact-bruno", "display_name": "Bruno"},
+    ]
+
+    created_relationships: list[dict] = []
+
+    monkeypatch.setattr("commands.event.get_command_data", lambda _preview_id: command_data)
+    monkeypatch.setattr("commands.event.delete_command_data", lambda _preview_id: None)
+    monkeypatch.setattr(
+        "commands.event.clear_pending_event_by_preview_id", lambda _preview_id: None
+    )
+    monkeypatch.setattr("commands.event._persist_event_resolved", lambda _preview_id, _status: None)
+    monkeypatch.setattr("commands.event.events_service.ingest_event", lambda _event_in: None)
+    monkeypatch.setattr(
+        "commands.event.contacts_service.upsert_contact_relationship",
+        lambda rel_in: created_relationships.append(
+            {
+                "from_contact_id": rel_in.from_contact_id,
+                "to_contact_id": rel_in.to_contact_id,
+                "relationship_type": rel_in.relationship_type,
+            }
+        ),
+    )
+
+    payload = EventCommandConfirmation(
+        preview_id="event:preview:relationship-override",
+        confirmed=True,
+        modifications={
+            "contact_ids": ["contact-ana"],
+            "confirmed_relationships": [
+                {
+                    "from_display_name": "Ana",
+                    "to_display_name": "Bruno",
+                    "relationship_type": "colleague",
+                },
+                {
+                    "from_display_name": "Ana",
+                    "to_display_name": "Ana",
+                    "relationship_type": "self",
+                },
+            ],
+        },
+    )
+
+    result = confirm_event_command(payload, "user@example.com")
+
+    assert result.success is True
+    assert created_relationships == [
+        {
+            "from_contact_id": "contact-ana",
+            "to_contact_id": "contact-ana",
+            "relationship_type": "self",
+        }
+    ]
+
+
+def test_confirm_event_filters_group_members_by_participant_override(monkeypatch):
+    command_data = _base_command_data()
+    command_data["resolution"]["proposed_contact_groups"] = [
+        {
+            "name": "soccer team",
+            "description": "Contacts associated with group 'soccer team'.",
+            "aliases": ["soccer team"],
+            "source": "inferred",
+            "added_via": "selector_group",
+            "contact_ids": ["contact-ana", "contact-bruno"],
+            "replace_members": True,
+            "confirmed": False,
+        }
+    ]
+
+    upserts: list[dict] = []
+
+    monkeypatch.setattr("commands.event.get_command_data", lambda _preview_id: command_data)
+    monkeypatch.setattr("commands.event.delete_command_data", lambda _preview_id: None)
+    monkeypatch.setattr(
+        "commands.event.clear_pending_event_by_preview_id", lambda _preview_id: None
+    )
+    monkeypatch.setattr("commands.event._persist_event_resolved", lambda _preview_id, _status: None)
+    monkeypatch.setattr("commands.event.events_service.ingest_event", lambda _event_in: None)
+    monkeypatch.setattr(
+        "commands.event.contact_groups_service.upsert_group_from_selector",
+        lambda **kwargs: upserts.append(kwargs) or {"group_id": "group:filtered"},
+    )
+
+    payload = EventCommandConfirmation(
+        preview_id="event:preview:group-override",
+        confirmed=True,
+        modifications={"contact_ids": ["contact-ana"]},
+        group_confirmations={"soccer team": True},
+    )
+    result = confirm_event_command(payload, "user@example.com")
+
+    assert result.success is True
+    assert len(upserts) == 1
+    assert upserts[0]["member_contact_ids"] == ["contact-ana"]
+
+
+def test_confirm_event_creates_place_from_edited_where_when_unmatched(monkeypatch):
+    command_data = _base_command_data()
+    command_data["extracted"]["where"] = "Old place"
+
+    created_places_inputs: list[dict] = []
+    captured_event = {"event": None}
+
+    monkeypatch.setattr("commands.event.get_command_data", lambda _preview_id: command_data)
+    monkeypatch.setattr("commands.event.delete_command_data", lambda _preview_id: None)
+    monkeypatch.setattr(
+        "commands.event.clear_pending_event_by_preview_id", lambda _preview_id: None
+    )
+    monkeypatch.setattr("commands.event._persist_event_resolved", lambda _preview_id, _status: None)
+    monkeypatch.setattr(
+        "commands.event.events_service.ingest_event",
+        lambda event_in: captured_event.__setitem__("event", event_in),
+    )
+    monkeypatch.setattr(
+        "commands.event.places_service.find_best_place_match",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        "commands.event.places_service.ingest_place",
+        lambda place_in: created_places_inputs.append(
+            {
+                "place_id": place_in.place_id,
+                "name": place_in.name,
+            }
+        ),
+    )
+
+    payload = EventCommandConfirmation(
+        preview_id="event:preview:new-place-from-edit",
+        confirmed=True,
+        modifications={"where": "New cafe downtown"},
+    )
+    result = confirm_event_command(payload, "user@example.com")
+
+    assert result.success is True
+    assert len(created_places_inputs) == 1
+    assert created_places_inputs[0]["name"] == "New cafe downtown"
+    assert len(result.created_places) == 1
+    assert result.created_places[0]["name"] == "New cafe downtown"
+    assert captured_event["event"] is not None
+    assert captured_event["event"].place_id == created_places_inputs[0]["place_id"]

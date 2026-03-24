@@ -15,6 +15,7 @@ import contacts as contacts_service
 import conversations
 import events as events_service
 import places as places_service
+from search_normalization import normalize_search_text
 from observability.logger import get_runtime_logger
 from schemas import (
     ContactIn,
@@ -331,6 +332,7 @@ def confirm_event_command(
         extracted["types"] = normalized_modifications["types"]
     participant_override_enabled = "contact_ids" in normalized_modifications
     participant_override_ids = normalized_modifications.get("contact_ids", [])
+    participant_override_id_set: set[str] = set()
 
     try:
         created_contacts = []
@@ -401,6 +403,7 @@ def confirm_event_command(
                 else:
                     resolved_override_ids.append(oid)
             participant_override_ids = resolved_override_ids
+            participant_override_id_set = set(participant_override_ids)
             new_contacts_to_create: list[dict] = []
         else:
             new_contacts_to_create = list(resolution.get("new_entities", {}).get("contacts", []))
@@ -450,6 +453,10 @@ def confirm_event_command(
                 contact["display_name"]: contact["contact_id"]
                 for contact in resolution.get("contacts", [])
                 if contact.get("display_name") and contact.get("contact_id")
+                and (
+                    not participant_override_enabled
+                    or str(contact.get("contact_id") or "").strip() in participant_override_id_set
+                )
             }
             all_contact_map = {**existing_contact_map, **contact_id_map}
 
@@ -563,6 +570,7 @@ def confirm_event_command(
         where = extracted.get("where")
         matched_place = resolution.get("matched_place") if isinstance(resolution, dict) else None
         explicit_place_id = normalized_modifications.get("place_id")
+        where_was_modified = "where" in normalized_modifications
 
         if "place_id" in normalized_modifications:
             if explicit_place_id:
@@ -582,6 +590,46 @@ def confirm_event_command(
 
         if "place_id" in normalized_modifications:
             place_id = explicit_place_id or None
+
+        if place_id is None and where_was_modified:
+            where_text = str(where or "").strip()
+            if where_text:
+                best_match = places_service.find_best_place_match(
+                    where_text,
+                    fuzzy_threshold=98,
+                )
+                matched_place_id = str((best_match or {}).get("place_id") or "").strip()
+                matched_place_name = str((best_match or {}).get("name") or "").strip()
+                if matched_place_id:
+                    place_id = matched_place_id
+                    if (
+                        matched_place_name
+                        and normalize_search_text(where_text)
+                        != normalize_search_text(matched_place_name)
+                    ):
+                        places_service.add_place_alias(matched_place_id, where_text)
+                else:
+                    place_slug = _safe_entity_slug(where_text) or "place"
+                    place_id = f"plc_{place_slug}_{uuid4().hex[:6]}"
+                    place_in = PlaceIn(
+                        place_id=place_id,
+                        name=where_text,
+                        aliases=[],
+                        address=None,
+                        city=None,
+                        country=None,
+                        lat=None,
+                        lon=None,
+                        geohash=None,
+                    )
+                    places_service.ingest_place(place_in)
+                    created_places.append({"place_id": place_id, "name": where_text})
+                    place_id_map[where_text] = place_id
+                    logger.info(
+                        "[event_confirm] Created new place from edited where: %s -> %s",
+                        where_text,
+                        place_id,
+                    )
 
         if isinstance(matched_place, dict):
             alias_to_add = str(matched_place.get("pending_alias") or "").strip()
@@ -665,6 +713,12 @@ def confirm_event_command(
                 for contact_id in (proposed_group.get("contact_ids") or [])
                 if str(contact_id or "").strip()
             ]
+            if participant_override_enabled:
+                member_contact_ids = [
+                    contact_id
+                    for contact_id in member_contact_ids
+                    if contact_id in participant_override_id_set
+                ]
             if not member_contact_ids:
                 continue
             created_group = contact_groups_service.upsert_group_from_selector(

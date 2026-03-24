@@ -120,6 +120,8 @@ type EventCommandResultPayload = {
     contacts?: { contact_id?: unknown; display_name?: unknown }[];
     new_entities?: {
       contacts?: { display_name?: unknown; contact_id?: unknown }[];
+      places?: { name?: unknown }[];
+      documents?: { reference?: unknown }[];
     };
     matched_place?: {
       place_id?: unknown;
@@ -294,7 +296,17 @@ type ConfirmedRelationship = {
   reasoning?: string;
 };
 
-function buildConfirmedRelationships(commandResult: CommandResult | undefined): ConfirmedRelationship[] {
+function normalizeParticipantName(value: unknown): string {
+  return textValue(value).toLowerCase();
+}
+
+function buildConfirmedRelationships(
+  commandResult: CommandResult | undefined,
+  filter?: {
+    participantIds?: Set<string>;
+    participantNames?: Set<string>;
+  },
+): ConfirmedRelationship[] {
   if (!commandResult || typeof commandResult !== 'object') return [];
   const payload = commandResult as EventCommandResultPayload;
   const suggestions = Array.isArray(payload.relationship_suggestions)
@@ -307,11 +319,29 @@ function buildConfirmedRelationships(commandResult: CommandResult | undefined): 
     if (!relationshipType) {
       continue;
     }
+
+    const fromContactId = textValue(suggestion.from_contact_id);
+    const toContactId = textValue(suggestion.to_contact_id);
+    const fromDisplayName = textValue(suggestion.from_display_name);
+    const toDisplayName = textValue(suggestion.to_display_name);
+
+    if (filter?.participantIds || filter?.participantNames) {
+      const fromAllowed = fromContactId
+        ? filter.participantIds?.has(fromContactId)
+        : filter.participantNames?.has(normalizeParticipantName(fromDisplayName));
+      const toAllowed = toContactId
+        ? filter.participantIds?.has(toContactId)
+        : filter.participantNames?.has(normalizeParticipantName(toDisplayName));
+      if (!fromAllowed || !toAllowed) {
+        continue;
+      }
+    }
+
     confirmedRelationships.push({
-      from_contact_id: textValue(suggestion.from_contact_id) || undefined,
-      from_display_name: textValue(suggestion.from_display_name) || undefined,
-      to_contact_id: textValue(suggestion.to_contact_id) || undefined,
-      to_display_name: textValue(suggestion.to_display_name) || undefined,
+      from_contact_id: fromContactId || undefined,
+      from_display_name: fromDisplayName || undefined,
+      to_contact_id: toContactId || undefined,
+      to_display_name: toDisplayName || undefined,
       relationship_type: relationshipType,
       reciprocal_type: textValue(suggestion.reciprocal_type) || undefined,
       confidence: textValue(suggestion.confidence) || undefined,
@@ -545,6 +575,121 @@ function updateEventPreviewCard(
         : block,
     ),
   };
+}
+
+function upsertInfoCardBlock(
+  directives: UiDirectives,
+  previewId: string,
+  blockIdPrefix: string,
+  title: string,
+  lines: string[],
+): UiDirectives {
+  const blockId = `${blockIdPrefix}${previewId}`;
+  const actionBlockId = `event_actions:${previewId}`;
+  const filteredBlocks = directives.blocks.filter((block) => block.id !== blockId);
+
+  if (lines.length === 0) {
+    return {
+      ...directives,
+      blocks: filteredBlocks,
+    };
+  }
+
+  const cardBlock: UiDirectiveBlock = {
+    id: blockId,
+    type: 'info_card',
+    title,
+    body: lines.join('\n'),
+  };
+
+  const actionIndex = filteredBlocks.findIndex((block) => block.id === actionBlockId);
+  const nextBlocks = [...filteredBlocks];
+  if (actionIndex >= 0) {
+    nextBlocks.splice(actionIndex, 0, cardBlock);
+  } else {
+    nextBlocks.push(cardBlock);
+  }
+
+  return {
+    ...directives,
+    blocks: nextBlocks,
+  };
+}
+
+function updateEventAuxiliaryCards(
+  directives: UiDirectives,
+  commandResult: CommandResult | undefined,
+  previewId: string,
+  draft: EventDraft,
+): UiDirectives {
+  if (!commandResult || typeof commandResult !== 'object') {
+    return directives;
+  }
+
+  const payload = commandResult as EventCommandResultPayload;
+  const selectedNewContacts = draft.participants
+    .filter((participant) => participant.contactId.startsWith('new:'))
+    .map((participant) => participant.displayName.trim())
+    .filter(Boolean);
+  const uniqueNewContacts = Array.from(new Set(selectedNewContacts));
+
+  const newPlaces = Array.isArray(payload.resolution?.new_entities?.places)
+    ? payload.resolution?.new_entities?.places
+        .map((place) => textValue(place.name))
+        .filter(Boolean)
+    : [];
+  const newDocuments = Array.isArray(payload.resolution?.new_entities?.documents)
+    ? payload.resolution?.new_entities?.documents
+        .map((document) => textValue(document.reference))
+        .filter(Boolean)
+    : [];
+
+  const newEntityLines: string[] = [];
+  if (uniqueNewContacts.length > 0) {
+    newEntityLines.push(`Contacts: ${uniqueNewContacts.join(', ')}`);
+  }
+  if (newPlaces.length > 0) {
+    newEntityLines.push(`Places: ${newPlaces.join(', ')}`);
+  }
+  if (newDocuments.length > 0) {
+    newEntityLines.push(`Documents: ${newDocuments.join(', ')}`);
+  }
+
+  const participantIds = new Set(draft.participants.map((participant) => participant.contactId));
+  const participantNames = new Set(
+    draft.participants
+      .map((participant) => normalizeParticipantName(participant.displayName))
+      .filter(Boolean),
+  );
+  const filteredRelationships = buildConfirmedRelationships(commandResult, {
+    participantIds,
+    participantNames,
+  });
+  const relationshipLines = filteredRelationships
+    .slice(0, 6)
+    .map((relationship) => {
+      const fromName = textValue(relationship.from_display_name);
+      const toName = textValue(relationship.to_display_name);
+      const relationshipType = textValue(relationship.relationship_type);
+      if (!fromName || !toName || !relationshipType) return '';
+      return `${fromName} - ${relationshipType} - ${toName}`;
+    })
+    .filter(Boolean);
+
+  const withEntities = upsertInfoCardBlock(
+    directives,
+    previewId,
+    'event_new_entities:',
+    'New entities',
+    newEntityLines,
+  );
+  return upsertInfoCardBlock(
+    withEntities,
+    previewId,
+    'event_relationships:',
+    'Suggested relationships',
+    relationshipLines,
+  );
 }
 
 export default function ChatScreen() {
@@ -1190,7 +1335,26 @@ export default function ChatScreen() {
         setIsConfirmingEvent(true);
         try {
           const modifications = eventDraftModificationsByPreview[action.previewId] || {};
-          const confirmedRelationships = buildConfirmedRelationships(commandResult);
+          const baseDraftForConfirm = buildEventDraft(commandResult, action.previewId);
+          const participantIds = modifications.contact_ids
+            ? new Set(modifications.contact_ids)
+            : baseDraftForConfirm
+              ? new Set(baseDraftForConfirm.participants.map((participant) => participant.contactId))
+              : undefined;
+          const participantNames = baseDraftForConfirm
+            ? new Set(
+                baseDraftForConfirm.participants
+                  .filter((participant) =>
+                    participantIds ? participantIds.has(participant.contactId) : true,
+                  )
+                  .map((participant) => normalizeParticipantName(participant.displayName))
+                  .filter(Boolean),
+              )
+            : undefined;
+          const confirmedRelationships = buildConfirmedRelationships(commandResult, {
+            participantIds,
+            participantNames,
+          });
           const confirmPayload = {
             preview_id: action.previewId,
             confirmed: true,
@@ -1402,7 +1566,17 @@ export default function ChatScreen() {
                   previewModifications,
                   contactNameById,
                 );
-                directivesForCard = updateEventPreviewCard(directives, previewId, modifiedDraft);
+                const withUpdatedPreview = updateEventPreviewCard(
+                  directives,
+                  previewId,
+                  modifiedDraft,
+                );
+                directivesForCard = updateEventAuxiliaryCards(
+                  withUpdatedPreview,
+                  commandResult,
+                  previewId,
+                  modifiedDraft,
+                );
               }
             }
             const requestError = item.metadata?.request_error;
