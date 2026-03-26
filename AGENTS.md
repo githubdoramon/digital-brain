@@ -167,7 +167,8 @@ User Question → Intent Router → Conversational Profile Dispatch → Tool Vis
 - **Commit gate for backend changes**: never commit or push backend code changes without running backend tests first (at minimum affected tests; prefer full `pytest` when feasible).
 - **Profile intent ownership**: conversational profiles should declare intent ownership via `supports_intent` on the profile/interface implementation; avoid hardcoding intent lists inside the central registry.
 - **Agent-specific behavior docs**: detailed profile behavior for memory/disambiguation and briefing generation is documented in `backend/orchestrator/docs/agents/MEMORY_EXPERT.md` and `backend/orchestrator/docs/agents/DAILY_BRIEFING.md`.
-- **Daily briefing news quality**: render per-article one-sentence summaries after bounded selection (LLM rewrite with deterministic fallback), enforce a per-topic selection hard cap (currently 10) to avoid single-topic dominance, guarantee a small floor of general headlines when available (currently 3), append a short news digest paragraph to the overall briefing summary when selected news exists, and use confidence-scored topic matching with accent-insensitive normalization to reduce wrong-cluster assignments.
+- **Daily briefing news quality**: render per-article one-sentence summaries after bounded selection (LLM rewrite with deterministic fallback), enforce a per-topic selection hard cap (currently 10) to avoid single-topic dominance, guarantee a small floor of general headlines when available (currently 3), and use confidence-scored topic matching with accent-insensitive normalization to reduce wrong-cluster assignments.
+- **Daily briefing summary policy**: keep the summary deterministic and compact (meeting count + pending todo count only), do not include preference-based idea suggestions, omit news digest text, and append weather outlook only when a user last-known location is available.
 - **News intelligence persistence**: keep story-level clusters/mentions and selected briefing news items in DB tables so ranking can use trend + novelty history and mobile interactions can be attributed to stable briefing item IDs.
 - **Daily briefing event quality**: event prep summaries should prioritize non-obvious, context-grounded guidance, filter low-value generic advice, and clearly separate current upcoming-event context from historical similar-event references.
 - **Validation semantics**: post-execution validation must treat clarification-required search/resolution results as `need_user_input`, not generic empty-result retries.
@@ -249,6 +250,8 @@ User Question → Intent Router → Conversational Profile Dispatch → Tool Vis
 - `PUT /mobile/settings/notifications/{notification_type}` – Update channels for one notification type
 - `POST /mobile/devices/register` – Register Expo push token for mobile device
 - `DELETE /mobile/devices/unregister` – Unregister Expo push token for mobile device
+- `POST /mobile/location` – Upsert user last-known location for weather-aware briefings
+- `GET /mobile/location` – Read user last-known location
 
 ### Daily Briefings
 - `GET /mobile/briefings/daily` – Get daily briefing or immediate pending status (auto-enqueues generation)

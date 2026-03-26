@@ -1,8 +1,10 @@
-import DateTimePicker, { DateType, useDefaultStyles } from 'react-native-ui-datepicker';
+import { DateType } from 'react-native-ui-datepicker';
 import React, { useEffect, useMemo, useState } from 'react';
-import { Modal, StyleSheet, Text, View } from 'react-native';
+import { StyleSheet, Text, View } from 'react-native';
 
 import { AppPressable as Pressable } from '@/components/AppPressable';
+import { BottomSheet } from '@/components/BottomSheet';
+import { LightDateTimePicker } from '@/components/LightDateTimePicker';
 import { theme } from '@/theme';
 
 import { formatValueForMode, parseValueToDate, PickerMode } from './helpers';
@@ -37,9 +39,7 @@ export function UiDirectiveDateTimePickerSheet({
   onClose,
   onConfirm,
 }: Props) {
-  const defaultPickerStyles = useDefaultStyles('light');
   const isTimeOnly = mode === 'time';
-  console.log('mode', mode);
   const initialDate = useMemo(() => parseValueToDate(value, mode), [mode, value]);
   const [draftDate, setDraftDate] = useState<Date>(initialDate);
 
@@ -53,92 +53,65 @@ export function UiDirectiveDateTimePickerSheet({
     mode === 'datetime' ? 'Pick date and time' : mode === 'time' ? 'Pick time' : 'Pick a date';
 
   return (
-    <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
-      <View style={styles.modalContainer} pointerEvents="box-none">
-        <Pressable style={styles.modalBackdrop} onPress={onClose} />
-        <View style={styles.modalSheet} pointerEvents="auto">
-          <View style={styles.header}>
-            <Pressable
-              onPress={onClose}
-              style={({ pressed }) => [styles.headerAction, pressed && styles.actionPressed]}
-              accessibilityRole="button"
-              accessibilityLabel="Cancel picker"
-            >
-              <Text style={styles.cancelText}>Cancel</Text>
-            </Pressable>
-            <Text style={styles.title}>{title}</Text>
-            <Pressable
-              onPress={() => {
-                onConfirm(formatValueForMode(draftDate, mode));
-              }}
-              style={({ pressed }) => [styles.headerAction, pressed && styles.actionPressed]}
-              accessibilityRole="button"
-              accessibilityLabel="Confirm picker value"
-            >
-              <Text style={styles.doneText}>Done</Text>
-            </Pressable>
-          </View>
-
-          <DateTimePicker
-            mode="single"
-            date={draftDate}
-            timePicker={mode !== 'date'}
-            initialView={isTimeOnly ? 'time' : 'day'}
-            hideHeader={isTimeOnly}
-            hideWeekdays={isTimeOnly}
-            disableMonthPicker={isTimeOnly}
-            disableYearPicker={isTimeOnly}
-            onChange={({ date }) => {
-              const resolved = resolvePickerDate(date);
-              if (resolved) {
-                setDraftDate(resolved);
-              }
-            }}
-            styles={{
-              ...defaultPickerStyles,
-              today: {
-                ...defaultPickerStyles.today,
-                borderColor: theme.colors.accent,
-              },
-              selected: {
-                ...defaultPickerStyles.selected,
-                backgroundColor: theme.colors.accent,
-              },
-              selected_label: {
-                ...defaultPickerStyles.selected_label,
-                color: '#fff',
-              },
-              day: {
-                ...defaultPickerStyles.day,
-                borderRadius: 10,
-              },
-            }}
-            style={[styles.picker, isTimeOnly && styles.timePicker]}
-          />
-        </View>
+    <BottomSheet visible={visible} onClose={onClose} baseBottomPadding={12}>
+      <View style={styles.header}>
+        <Pressable
+          onPress={onClose}
+          style={({ pressed }) => [styles.headerAction, pressed && styles.actionPressed]}
+          accessibilityRole="button"
+          accessibilityLabel="Cancel picker"
+        >
+          <Text style={styles.cancelText}>Cancel</Text>
+        </Pressable>
+        <Text style={styles.title}>{title}</Text>
+        <Pressable
+          onPress={() => {
+            onConfirm(formatValueForMode(draftDate, mode));
+          }}
+          style={({ pressed }) => [styles.headerAction, pressed && styles.actionPressed]}
+          accessibilityRole="button"
+          accessibilityLabel="Confirm picker value"
+        >
+          <Text style={styles.doneText}>Done</Text>
+        </Pressable>
       </View>
-    </Modal>
+
+      <LightDateTimePicker
+        mode="single"
+        date={draftDate}
+        timePicker={mode !== 'date'}
+        initialView={isTimeOnly ? 'time' : 'day'}
+        hideHeader={isTimeOnly}
+        hideWeekdays={isTimeOnly}
+        disableMonthPicker={isTimeOnly}
+        disableYearPicker={isTimeOnly}
+        onChange={({ date }) => {
+          const resolved = resolvePickerDate(date);
+          if (resolved) {
+            setDraftDate(resolved);
+          }
+        }}
+        styles={{
+          today: {
+            borderColor: theme.colors.accent,
+          },
+          selected: {
+            backgroundColor: theme.colors.accent,
+          },
+          selected_label: {
+            color: '#fff',
+          },
+          day: {
+            borderRadius: 10,
+          },
+        }}
+        style={[styles.picker, isTimeOnly && styles.timePicker]}
+      />
+    </BottomSheet>
   );
 }
 
 const styles = StyleSheet.create({
-  modalBackdrop: {
-    ...StyleSheet.absoluteFillObject,
-    backgroundColor: 'rgba(15, 18, 20, 0.3)',
-    zIndex: 1,
-  },
-  modalContainer: {
-    flex: 1,
-    justifyContent: 'flex-end',
-  },
-  modalSheet: {
-    backgroundColor: '#fff',
-    paddingTop: 12,
-    borderTopLeftRadius: 22,
-    borderTopRightRadius: 22,
-    paddingBottom: 12,
-    zIndex: 2,
-  },
   header: {
     flexDirection: 'row',
     alignItems: 'center',

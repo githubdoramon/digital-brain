@@ -1,7 +1,8 @@
 import React, { useMemo, useState } from 'react';
-import { Linking, Modal, StyleSheet, Text, View } from 'react-native';
+import { Linking, StyleSheet, Text, View } from 'react-native';
 
 import { AppPressable as Pressable } from '@/components/AppPressable';
+import { BottomSheet } from '@/components/BottomSheet';
 import { theme } from '@/theme';
 
 type ContactActionMenuProps = {
@@ -51,25 +52,23 @@ export function ContactActionMenu({ emails, phones }: ContactActionMenuProps) {
       <Pressable style={styles.button} onPress={() => setOpen(true)}>
         <Text style={styles.buttonText}>Contact</Text>
       </Pressable>
-      <Modal transparent animationType="fade" visible={open} onRequestClose={() => setOpen(false)}>
-        <Pressable style={styles.overlay} onPress={() => setOpen(false)}>
-          <View style={styles.sheet}>
-            <Text style={styles.sheetTitle}>Reach out</Text>
-            {actions.map((action) => (
-              <Pressable
-                key={action.label}
-                onPress={() => {
-                  setOpen(false);
-                  action.onPress();
-                }}
-                style={styles.actionRow}
-              >
-                <Text style={styles.actionText}>{action.label}</Text>
-              </Pressable>
-            ))}
-          </View>
-        </Pressable>
-      </Modal>
+      <BottomSheet visible={open} onClose={() => setOpen(false)}>
+        <View style={styles.sheet}>
+          <Text style={styles.sheetTitle}>Reach out</Text>
+          {actions.map((action) => (
+            <Pressable
+              key={action.label}
+              onPress={() => {
+                setOpen(false);
+                action.onPress();
+              }}
+              style={styles.actionRow}
+            >
+              <Text style={styles.actionText}>{action.label}</Text>
+            </Pressable>
+          ))}
+        </View>
+      </BottomSheet>
     </>
   );
 }
@@ -88,18 +87,8 @@ const styles = StyleSheet.create({
     fontSize: 14,
     letterSpacing: 0.5,
   },
-  overlay: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.2)',
-    justifyContent: 'flex-end',
-  },
   sheet: {
-    backgroundColor: '#fff',
-    borderTopLeftRadius: theme.radius.xl,
-    borderTopRightRadius: theme.radius.xl,
-    padding: 20,
-    borderTopWidth: 1,
-    borderColor: theme.colors.line,
+    paddingBottom: 6,
   },
   sheetTitle: {
     fontSize: 16,

@@ -215,6 +215,12 @@ def build_daily_briefing(
 
     logger.info("[briefing] Unlinked todos: %d", len(all_todos))
 
+    weather_summary = _build_weather_summary(
+        local_date=local_date,
+        timezone_name=timezone_name,
+        user_email=user_email,
+    )
+
     context = {
         "date": local_date.isoformat(),
         "timezone": timezone_name,
@@ -225,6 +231,7 @@ def build_daily_briefing(
         "all_todos": all_todos,
         "upcoming_birthdays": upcoming_birthdays,
         "news_articles": news_articles,
+        "weather_summary": weather_summary,
     }
 
     selected_news = (
@@ -1859,145 +1866,61 @@ def _build_briefing_prompt(context: dict[str, Any]) -> str:
     )
 
 
-_MAX_SUMMARY_RETRIES = 1
-
-
 def _generate_summary(
     context: dict[str, Any],
     markdown: str,
     *,
     user_email: str | None = None,
 ) -> str:
-    system_prompt = (
-        "You summarize daily briefings into a single short paragraph. This is future-oriented prep. "
-        "Output plain text only — no markdown, no headers, no bullet points. "
-        "Keep it under 2 sentences. Use ASCII characters only. Mention "
-        "meeting count and todo count when available. Be practical and direct. "
-        "Output ONLY the summary text. No reasoning, no preamble."
-    )
-    prompt = (
-        "Generate a daily summary for the user based on this information.\n"
-        f"Event count: {len(context.get('events') or [])}\n"
-        f"Todo count: {_count_todos(context.get('events') or [], context.get('all_todos') or [])}\n"
-        "Briefing markdown (reference only):\n"
-        f"{markdown}"
-    )
-    user_context = _get_daily_briefing_user_context(
-        user_email,
-        f"daily briefing summary {context.get('date', '')}",
-    )
-    if user_context:
-        system_prompt = f"{system_prompt}\n\n{user_context}"
+    del markdown  # Summary is deterministic and does not inspect full markdown content.
+    del user_email  # Summary should not vary based on inferred user preference context.
 
-    summary = call_llm(
-        prompt,
-        system_prompt=system_prompt,
-        temperature=0.2,
-        use_simpler_model=False,
-    )
+    event_count = len(context.get("events") or [])
+    todo_count = _count_todos(context.get("events") or [], context.get("all_todos") or [])
+    weather_summary = str(context.get("weather_summary") or "").strip()
 
-    # Validate and retry once if needed
-    vresult = validate_summary(summary)
-    if not vresult.valid:
-        logger.warning("[briefing] Summary failed validation: %s — retrying", vresult.reasons)
-        summary = call_llm(
-            f"Rewrite this as a plain-text summary in 1-2 sentences. No markdown. No reasoning.\n\n{summary}",
-            system_prompt=system_prompt,
-            temperature=0.1,
-            use_simpler_model=False,
-        )
-        vresult = validate_summary(summary)
-        if not vresult.valid:
-            logger.error("[briefing] Summary retry still invalid: %s", vresult.reasons)
+    meeting_label = "meeting" if event_count == 1 else "meetings"
+    todo_label = "todo" if todo_count == 1 else "todos"
+    parts = [f"Today: {event_count} {meeting_label} and {todo_count} pending {todo_label}."]
+    if weather_summary:
+        parts.append(weather_summary)
 
-    base_summary = (summary or "").strip()
-    if not base_summary:
-        return base_summary
+    summary = " ".join(part.strip() for part in parts if part and part.strip())
+    validation = validate_summary(summary)
+    if validation.valid:
+        return summary
 
-    news_digest = _generate_news_summary_digest(context, user_email=user_email)
-    if not news_digest:
-        return base_summary
-
-    combined_summary = f"{base_summary}\n{news_digest.strip()}"
-    final_validation = validate_summary(combined_summary)
-    if final_validation.valid:
-        return combined_summary
-
-    logger.warning(
-        "[briefing] Combined summary + news digest failed validation: %s; keeping base summary",
-        final_validation.reasons,
-    )
-    return base_summary
+    logger.warning("[briefing] Deterministic summary failed validation: %s", validation.reasons)
+    cleaned = re.sub(r"\s+", " ", summary).replace("#", "").strip()
+    if len(cleaned) > 500:
+        cleaned = cleaned[:497].rstrip() + "..."
+    return cleaned
 
 
-def _generate_news_summary_digest(
-    context: dict[str, Any],
+def _build_weather_summary(
     *,
-    user_email: str | None = None,
+    local_date: date,
+    timezone_name: str,
+    user_email: str | None,
 ) -> str:
-    """Generate a short paragraph with the most relevant news developments."""
-    selected_news = context.get("selected_news") or {}
-    topic_articles = selected_news.get("topic_articles") or []
-    general_articles = selected_news.get("general_articles") or []
-    candidates = [*topic_articles, *general_articles]
-    if not candidates:
+    if not user_email:
         return ""
-
-    lines: list[str] = []
-    for idx, article in enumerate(candidates, start=1):
-        title = str(article.get("title") or "Untitled").strip()
-        source = str(article.get("source") or "Unknown").strip()
-        topics = ", ".join(str(t).strip() for t in (article.get("topic_matches") or []) if t)
-        summary = (
-            str(article.get("brief_summary") or "").strip()
-            or str(article.get("summary") or "").strip()
-        )
-        summary = _to_single_news_sentence(summary)
-        lines.append(
-            f"{idx}. {title} | source={source} | topics={topics or 'General'} | note={summary or 'N/A'}"
-        )
-
-    system_prompt = (
-        "You write a short news paragraph for the end of a daily briefing summary. "
-        "Output exactly one compact paragraph in plain text (1-2 sentences, max 300 chars). "
-        "Review all selected articles, decide what is actually consequential, and ignore low-signal items. "
-        "Highlight only the most consequential development(s). No markdown, no bullets, no links. "
-        "Use ASCII characters only."
-    )
-    user_context = _get_daily_briefing_user_context(
-        user_email,
-        f"daily briefing news digest {context.get('date', '')}",
-    )
-    if user_context:
-        system_prompt = f"{system_prompt}\n\n{user_context}"
-
-    prompt = (
-        "From these selected articles, write one short paragraph for the overall summary.\n"
-        "Use the full list below, but mention only truly relevant developments and discard trivial items.\n"
-        "If nothing is summary-worthy, return an empty string.\n"
-        "Focus on what changed and why it matters for the user.\n"
-        f"Selected articles:\n{chr(10).join(lines)}"
-    )
 
     try:
-        digest = call_llm(
-            prompt,
-            system_prompt=system_prompt,
-            temperature=0.3,
-            use_simpler_model=False,
+        from user_locations import get_last_known_location
+        from weather_forecast import build_daily_weather_summary
+
+        location = get_last_known_location(user_email)
+        if not location:
+            return ""
+        return build_daily_weather_summary(
+            location=location,
+            target_date=local_date,
+            timezone_name=timezone_name,
         )
     except Exception:
-        logger.warning("[briefing] News digest generation failed", exc_info=True)
+        logger.warning("[briefing] Weather summary unavailable", exc_info=True)
         return ""
-
-    cleaned = re.sub(r"\s+", " ", str(digest or "")).strip()
-    if not cleaned:
-        return ""
-    if len(cleaned) > 260:
-        cleaned = cleaned[:257].rstrip() + "..."
-    if cleaned and cleaned[-1] not in ".!?":
-        cleaned += "."
-    return cleaned
 
 
 def _condense_notes(notes: str, limit: int = 48) -> str:

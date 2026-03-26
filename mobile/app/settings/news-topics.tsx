@@ -8,7 +8,6 @@ import {
   Animated,
   KeyboardAvoidingView,
   Linking,
-  Modal,
   Platform,
   ScrollView,
   StyleSheet,
@@ -21,6 +20,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { apiFetch } from '@/api/client';
 import { useAuth } from '@/auth/AuthContext';
 import { AppPressable as Pressable } from '@/components/AppPressable';
+import { BottomSheet } from '@/components/BottomSheet';
 import { Button } from '@/components/Button';
 import { Card } from '@/components/Card';
 import {
@@ -436,7 +436,7 @@ function TopicFormModal({ visible, initial, onSave, onCancel }: TopicFormModalPr
   };
 
   return (
-    <Modal visible={visible} animationType="slide" transparent onRequestClose={onCancel}>
+    <BottomSheet visible={visible} onClose={onCancel}>
       <KeyboardAvoidingView
         style={styles.modalOverlay}
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
@@ -480,7 +480,7 @@ function TopicFormModal({ visible, initial, onSave, onCancel }: TopicFormModalPr
           </ScrollView>
         </View>
       </KeyboardAvoidingView>
-    </Modal>
+    </BottomSheet>
   );
 }
 
@@ -641,13 +641,9 @@ const styles = StyleSheet.create({
   // -- Modal --
   modalOverlay: {
     flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.4)',
-    justifyContent: 'flex-end',
   },
   modalContent: {
     backgroundColor: theme.colors.card,
-    borderTopLeftRadius: theme.radius.xl,
-    borderTopRightRadius: theme.radius.xl,
     maxHeight: '90%',
   },
   modalBody: {

@@ -19,7 +19,7 @@ This document captures behavior and quality rules for the daily briefing profile
    - Build deterministic sections in code for birthdays and outstanding todos.
    - Build `## News & Topics` deterministically in code from the bounded news subset (topic grouping is code-owned), with per-article one-sentence LLM summaries generated after selection.
    - Assemble final markdown in code (no full-document rewrite pass).
-6. Run summary generation (plain text), and append a short news digest paragraph at the end when selected news exists.
+6. Build a deterministic plain-text summary that includes only meeting/todo counts and (when location is available) a weather outlook for the day.
 
 ## Parallelism
 
@@ -65,6 +65,14 @@ This document captures behavior and quality rules for the daily briefing profile
 - Event prep output should suppress low-value generic advice (for example "review notes", "confirm agenda", "prepare talking points") and only keep context-grounded, non-obvious items.
 - Event synthesis should explicitly separate current upcoming-event context from historical similar-event references.
 - Keep `Day Overview` strategic and concise, while `Schedule` carries the concrete per-event timeline.
+
+## Summary Rules
+
+- The briefing summary is deterministic (no LLM rewrite pass).
+- Include meeting and pending-todo counts only; do not describe specific meetings/todos in the summary.
+- Do not include preference-driven idea suggestions in the summary.
+- Do not include a news digest paragraph in the summary.
+- If a user last-known location exists, append a weather outlook sentence for the briefing day.
 
 ## User Context Injection
 

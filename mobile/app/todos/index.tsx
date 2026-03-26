@@ -2,12 +2,11 @@ import Ionicons from '@expo/vector-icons/Ionicons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import React from 'react';
-import DateTimePicker, { DateType, useDefaultStyles } from 'react-native-ui-datepicker';
+import { DateType } from 'react-native-ui-datepicker';
 import {
   ActivityIndicator,
   Animated,
   KeyboardAvoidingView,
-  Modal,
   Platform,
   StyleSheet,
   Text,
@@ -18,6 +17,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { apiFetch } from '@/api/client';
 import { AppPressable as Pressable } from '@/components/AppPressable';
+import { BottomSheet } from '@/components/BottomSheet';
 import { Card } from '@/components/Card';
 import {
   COLLAPSING_CONTENT_TOP_PADDING,
@@ -26,6 +26,7 @@ import {
   CollapsingTopBar,
 } from '@/components/CollapsingTopBar';
 import { FloatingSaveButton } from '@/components/FloatingSaveButton';
+import { LightDateTimePicker } from '@/components/LightDateTimePicker';
 import { TopNoticeProvider, useTopNotice } from '@/components/top-notice';
 import { theme } from '@/theme';
 import { matchesContactSearch } from '@/utils/contactSearch';
@@ -141,7 +142,6 @@ function NewTodoContent() {
       eventIds: [],
     })
   );
-  const defaultPickerStyles = useDefaultStyles('light');
 
   const trimmedDescription = description.trim();
   const trimmedDueDate = dueDate.trim();
@@ -604,69 +604,54 @@ function NewTodoContent() {
           loading={saving}
         />
       </KeyboardAvoidingView>
-      <Modal
-        visible={showDatePicker}
-        transparent
-        animationType="slide"
-        onRequestClose={handleCloseDatePicker}
-      >
-        <View style={styles.modalContainer} pointerEvents="box-none">
-          <Pressable style={styles.modalBackdrop} onPress={handleCloseDatePicker} />
-          <View style={styles.modalSheet} pointerEvents="auto">
-            <View style={styles.datePickerHeader}>
-              <Pressable
-                onPress={handleCloseDatePicker}
-                style={({ pressed }) => [
-                  styles.datePickerAction,
-                  pressed && styles.datePickerDonePressed,
-                ]}
-              >
-                <Text style={styles.datePickerCancelText}>Cancel</Text>
-              </Pressable>
-              <Text style={styles.datePickerTitle}>Pick a date</Text>
-              <Pressable
-                onPress={handleConfirmDate}
-                style={({ pressed }) => [
-                  styles.datePickerAction,
-                  pressed && styles.datePickerDonePressed,
-                ]}
-              >
-                <Text style={styles.datePickerDoneText}>Done</Text>
-              </Pressable>
-            </View>
-            <DateTimePicker
-              mode="single"
-              date={activePickerDate}
-              onChange={({ date }) => {
-                const resolved = resolvePickerDate(date);
-                if (resolved) {
-                  setDraftDate(resolved);
-                }
-              }}
-              styles={{
-                ...defaultPickerStyles,
-                today: {
-                  ...defaultPickerStyles.today,
-                  borderColor: theme.colors.accent,
-                },
-                selected: {
-                  ...defaultPickerStyles.selected,
-                  backgroundColor: theme.colors.accent,
-                },
-                selected_label: {
-                  ...defaultPickerStyles.selected_label,
-                  color: '#fff',
-                },
-                day: {
-                  ...defaultPickerStyles.day,
-                  borderRadius: 10,
-                },
-              }}
-              style={styles.datePicker}
-            />
-          </View>
+      <BottomSheet visible={showDatePicker} onClose={handleCloseDatePicker} baseBottomPadding={12}>
+        <View style={styles.datePickerHeader}>
+          <Pressable
+            onPress={handleCloseDatePicker}
+            style={({ pressed }) => [
+              styles.datePickerAction,
+              pressed && styles.datePickerDonePressed,
+            ]}
+          >
+            <Text style={styles.datePickerCancelText}>Cancel</Text>
+          </Pressable>
+          <Text style={styles.datePickerTitle}>Pick a date</Text>
+          <Pressable
+            onPress={handleConfirmDate}
+            style={({ pressed }) => [
+              styles.datePickerAction,
+              pressed && styles.datePickerDonePressed,
+            ]}
+          >
+            <Text style={styles.datePickerDoneText}>Done</Text>
+          </Pressable>
         </View>
-      </Modal>
+        <LightDateTimePicker
+          mode="single"
+          date={activePickerDate}
+          onChange={({ date }) => {
+            const resolved = resolvePickerDate(date);
+            if (resolved) {
+              setDraftDate(resolved);
+            }
+          }}
+          styles={{
+            today: {
+              borderColor: theme.colors.accent,
+            },
+            selected: {
+              backgroundColor: theme.colors.accent,
+            },
+            selected_label: {
+              color: '#fff',
+            },
+            day: {
+              borderRadius: 10,
+            },
+          }}
+          style={styles.datePicker}
+        />
+      </BottomSheet>
     </LinearGradient>
   );
 }
@@ -753,23 +738,6 @@ const styles = StyleSheet.create({
   dateFieldPlaceholder: {
     fontSize: 14,
     color: theme.colors.mutedInk,
-  },
-  modalBackdrop: {
-    ...StyleSheet.absoluteFillObject,
-    backgroundColor: 'rgba(15, 18, 20, 0.3)',
-    zIndex: 1,
-  },
-  modalContainer: {
-    flex: 1,
-    justifyContent: 'flex-end',
-  },
-  modalSheet: {
-    backgroundColor: '#fff',
-    paddingTop: 12,
-    borderTopLeftRadius: 22,
-    borderTopRightRadius: 22,
-    paddingBottom: 12,
-    zIndex: 2,
   },
   datePickerHeader: {
     flexDirection: 'row',

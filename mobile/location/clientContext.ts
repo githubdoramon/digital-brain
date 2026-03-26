@@ -1,5 +1,7 @@
 import * as Location from 'expo-location';
 
+import { apiFetch } from '@/api/client';
+
 export type ClientLocationContext = {
   lat: number;
   lon: number;
@@ -16,6 +18,8 @@ export type ClientContext = {
 
 let cachedClientContext: ClientContext | null = null;
 let locationRequestInFlight = false;
+let locationSyncInFlight = false;
+let lastSyncedLocationSignature: string | null = null;
 
 function roundCoordinate(value: number): number {
   return Math.round(value * 1000) / 1000;
@@ -68,12 +72,43 @@ function requestLocationInBackground(): void {
           source: 'expo_location',
         },
       };
+      syncLocationToBackend();
     } catch {
       // Best-effort only; keep timezone/locale context when location fails.
     } finally {
       locationRequestInFlight = false;
     }
   })();
+}
+
+function syncLocationToBackend(): void {
+  const location = cachedClientContext?.location;
+  if (!location || locationSyncInFlight) {
+    return;
+  }
+
+  const signature = `${location.lat}:${location.lon}:${location.captured_at}`;
+  if (signature === lastSyncedLocationSignature) {
+    return;
+  }
+
+  locationSyncInFlight = true;
+  void apiFetch('/mobile/location', {
+    method: 'POST',
+    body: JSON.stringify({
+      ...location,
+      timezone: cachedClientContext?.timezone,
+    }),
+  })
+    .then(() => {
+      lastSyncedLocationSignature = signature;
+    })
+    .catch(() => {
+      // Best-effort sync; location context should still be available for ask flows.
+    })
+    .finally(() => {
+      locationSyncInFlight = false;
+    });
 }
 
 export function primeClientContext(): void {

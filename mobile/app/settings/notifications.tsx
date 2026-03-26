@@ -8,7 +8,6 @@ import {
   ActivityIndicator,
   Alert,
   Animated,
-  Modal,
   StyleSheet,
   Switch,
   Text,
@@ -19,6 +18,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { apiFetch } from '@/api/client';
 import { useAuth } from '@/auth/AuthContext';
 import { AppPressable as Pressable } from '@/components/AppPressable';
+import { BottomSheet } from '@/components/BottomSheet';
 import { Button } from '@/components/Button';
 import { Card } from '@/components/Card';
 import {
@@ -67,6 +67,7 @@ export default function NotificationSettingsScreen() {
   const [sheetOpen, setSheetOpen] = useState(false);
   const [activeTypeId, setActiveTypeId] = useState<string | null>(null);
   const [draftChannels, setDraftChannels] = useState<Set<NotificationChannel>>(new Set());
+  const [savingTypeId, setSavingTypeId] = useState<string | null>(null);
 
   const activeSetting = useMemo(
     () => settings.find((item) => item.notificationType === activeTypeId) ?? null,
@@ -167,6 +168,7 @@ export default function NotificationSettingsScreen() {
       if (isSaving) return;
       if (!enabled) {
         setIsSaving(true);
+        setSavingTypeId(item.notificationType);
         try {
           await persistChannels(item.notificationType, []);
         } catch (error) {
@@ -179,6 +181,7 @@ export default function NotificationSettingsScreen() {
           Alert.alert('Update failed', 'We could not save notification settings.');
         } finally {
           setIsSaving(false);
+          setSavingTypeId(null);
         }
         return;
       }
@@ -190,11 +193,28 @@ export default function NotificationSettingsScreen() {
     [isSaving, persistChannels, signOut],
   );
 
+  const openTypeSheet = useCallback(
+    (item: NotificationTypeSetting) => {
+      if (isSaving) return;
+      setActiveTypeId(item.notificationType);
+      setDraftChannels(new Set(item.channels));
+      setSheetOpen(true);
+    },
+    [isSaving],
+  );
+
+  const closeTypeSheet = useCallback(() => {
+    setSheetOpen(false);
+    setActiveTypeId(null);
+    setDraftChannels(new Set());
+  }, []);
+
   const handleApplyChannels = useCallback(async () => {
     if (!activeSetting || isSaving) return;
     const selectedChannels = Array.from(draftChannels);
-    setSheetOpen(false);
+    closeTypeSheet();
     setIsSaving(true);
+    setSavingTypeId(activeSetting.notificationType);
     try {
       await persistChannels(activeSetting.notificationType, selectedChannels);
       if (!selectedChannels.length) {
@@ -210,10 +230,9 @@ export default function NotificationSettingsScreen() {
       Alert.alert('Update failed', 'We could not save notification settings.');
     } finally {
       setIsSaving(false);
-      setActiveTypeId(null);
-      setDraftChannels(new Set());
+      setSavingTypeId(null);
     }
-  }, [activeSetting, draftChannels, isSaving, persistChannels, signOut]);
+  }, [activeSetting, closeTypeSheet, draftChannels, isSaving, persistChannels, signOut]);
 
   const toggleDraftChannel = useCallback((channel: NotificationChannel) => {
     setDraftChannels((prev) => {
@@ -259,25 +278,38 @@ export default function NotificationSettingsScreen() {
           </Card>
         ) : (
           settings.map((item) => (
-            <Card key={item.notificationType} style={[styles.card, styles.rowCard]}>
-              <View style={styles.rowTextWrap}>
-                <Text style={styles.rowTitle}>{item.title}</Text>
-                <Text style={styles.rowSubtitle}>{formatChannels(item.channels)}</Text>
-              </View>
-              <Switch
-                value={item.enabled}
-                onValueChange={(value) => {
-                  void handleToggle(item, value);
-                }}
-                trackColor={{ false: theme.colors.line, true: theme.colors.paleTeal }}
-                thumbColor={item.enabled ? theme.colors.accent : '#f2f2f2'}
+            <Card key={item.notificationType} style={[styles.card, styles.rowCard]}
+            >
+              <Pressable
+                style={styles.rowPressable}
+                onPress={() => openTypeSheet(item)}
                 disabled={isSaving}
-              />
+              >
+                <View style={styles.rowTextWrap}>
+                  <Text style={styles.rowTitle}>{item.title}</Text>
+                  <Text style={styles.rowSubtitle}>{formatChannels(item.channels)}</Text>
+                </View>
+                <View style={styles.rowActions}>
+                  <Switch
+                    value={item.enabled}
+                    onValueChange={(value) => {
+                      void handleToggle(item, value);
+                    }}
+                    trackColor={{ false: theme.colors.line, true: theme.colors.paleTeal }}
+                    thumbColor={item.enabled ? theme.colors.accent : '#f2f2f2'}
+                    disabled={isSaving}
+                  />
+                  <Ionicons name="chevron-forward" size={18} color={theme.colors.mutedInk} />
+                </View>
+                {savingTypeId === item.notificationType ? (
+                  <View style={styles.rowSavingOverlay} pointerEvents="none">
+                    <ActivityIndicator color={theme.colors.accentDeep} />
+                  </View>
+                ) : null}
+              </Pressable>
             </Card>
           ))
         )}
-
-        {isSaving ? <Text style={styles.savingText}>Saving preference...</Text> : null}
       </Animated.ScrollView>
 
       <CollapsingTopBar
@@ -287,77 +319,54 @@ export default function NotificationSettingsScreen() {
         onPressBack={() => router.back()}
       />
 
-      <Modal
-        visible={sheetOpen}
-        transparent
-        animationType="slide"
-        onRequestClose={() => {
-          setSheetOpen(false);
-          setActiveTypeId(null);
-          setDraftChannels(new Set());
-        }}
-      >
-        <View style={styles.sheetBackdrop}>
-          <Pressable
-            style={StyleSheet.absoluteFill}
-            onPress={() => {
-              setSheetOpen(false);
-              setActiveTypeId(null);
-              setDraftChannels(new Set());
-            }}
-          />
-          <View style={[styles.sheet, { paddingBottom: insets.bottom + 18 }]}>
-            <Text style={styles.sheetTitle}>Delivery channels</Text>
-            <Text style={styles.sheetSubtitle}>
-              {activeSetting?.title || 'Notification'}
-            </Text>
+      <BottomSheet visible={sheetOpen} onClose={closeTypeSheet}>
+        <Text style={styles.sheetTitle}>Delivery channels</Text>
+        <Text style={styles.sheetSubtitle}>
+          {activeSetting?.title || 'Notification'}
+        </Text>
 
-            <View style={styles.sheetOptions}>
-              {CHANNELS.map((channel) => {
-                const selected = draftChannels.has(channel);
-                return (
-                  <Pressable
-                    key={channel}
-                    style={[styles.optionRow, selected && styles.optionRowSelected]}
-                    onPress={() => toggleDraftChannel(channel)}
-                  >
-                    <View style={styles.optionLabelWrap}>
-                      <Text style={styles.optionTitle}>
-                        {channel === 'push' ? 'Push' : 'Email'}
-                      </Text>
-                    </View>
-                    <Ionicons
-                      name={selected ? 'checkbox' : 'square-outline'}
-                      size={22}
-                      color={selected ? theme.colors.accentDeep : theme.colors.mutedInk}
-                    />
-                  </Pressable>
-                );
-              })}
-            </View>
-
-            <View style={styles.sheetButtons}>
-              <Button
-                label="Cancel"
-                variant="secondary"
-                onPress={() => {
-                  setSheetOpen(false);
-                  setActiveTypeId(null);
-                  setDraftChannels(new Set());
-                }}
-                style={styles.sheetButton}
-              />
-              <Button
-                label="Apply"
-                onPress={() => {
-                  void handleApplyChannels();
-                }}
-                style={styles.sheetButton}
-              />
-            </View>
-          </View>
+        <View style={styles.sheetOptions}>
+          {CHANNELS.map((channel) => {
+            const selected = draftChannels.has(channel);
+            return (
+              <Pressable
+                key={channel}
+                style={[styles.optionRow, selected && styles.optionRowSelected]}
+                onPress={() => toggleDraftChannel(channel)}
+              >
+                <View style={styles.optionLabelWrap}>
+                  <Text style={styles.optionTitle}>
+                    {channel === 'push' ? 'Push' : 'Email'}
+                  </Text>
+                </View>
+                <Ionicons
+                  name={selected ? 'checkbox' : 'square-outline'}
+                  size={22}
+                  color={selected ? theme.colors.accentDeep : theme.colors.mutedInk}
+                />
+              </Pressable>
+            );
+          })}
         </View>
-      </Modal>
+
+        <View style={styles.sheetButtons}>
+          <Button
+            label="Cancel"
+            variant="secondary"
+            onPress={() => {
+              closeTypeSheet();
+            }}
+            style={styles.sheetButton}
+          />
+          <Button
+            label="Apply"
+            onPress={() => {
+              void handleApplyChannels();
+            }}
+            style={styles.sheetButton}
+          />
+        </View>
+      </BottomSheet>
     </LinearGradient>
   );
 }
@@ -389,13 +398,32 @@ const styles = StyleSheet.create({
     color: theme.colors.mutedInk,
   },
   rowCard: {
+    padding: 0,
+    overflow: 'hidden',
+  },
+  rowPressable: {
+    minHeight: 84,
+    paddingHorizontal: 18,
+    paddingVertical: 16,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    gap: 10,
+    gap: 12,
   },
   rowTextWrap: {
     flex: 1,
+  },
+  rowActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  rowSavingOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(255,255,255,0.3)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: theme.radius.xl,
   },
   rowTitle: {
     fontSize: 16,
@@ -406,25 +434,6 @@ const styles = StyleSheet.create({
     marginTop: 6,
     fontSize: 13,
     color: theme.colors.mutedInk,
-  },
-  savingText: {
-    marginTop: 16,
-    marginLeft: 4,
-    fontSize: 12,
-    color: theme.colors.mutedInk,
-  },
-  sheetBackdrop: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.25)',
-    justifyContent: 'flex-end',
-  },
-  sheet: {
-    backgroundColor: '#fff',
-    borderTopLeftRadius: 20,
-    borderTopRightRadius: 20,
-    paddingTop: 16,
-    paddingHorizontal: 18,
-    gap: 12,
   },
   sheetTitle: {
     fontSize: 16,

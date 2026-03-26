@@ -3,6 +3,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 
 import devices as devices_service
+import user_locations
 import user_facts
 from auth import get_current_user
 from notifications.preferences import (
@@ -20,6 +21,8 @@ from schemas import (
     PushNotificationsUpdateIn,
     UserFactOut,
     UserFactUpdateIn,
+    UserLocationOut,
+    UserLocationUpdateIn,
 )
 
 
@@ -93,6 +96,34 @@ def create_user_router() -> APIRouter:
         if not deleted:
             raise HTTPException(status_code=404, detail="Device not found")
         return {"ok": True}
+
+    @router.post("/mobile/location", response_model=UserLocationOut)
+    def update_mobile_location(payload: UserLocationUpdateIn, user: dict = Depends(get_current_user)):
+        email = user.get("email") or user.get("user_email")
+        if not email:
+            raise HTTPException(status_code=400, detail="User email is missing")
+        return user_locations.upsert_user_location(
+            user_email=email,
+            lat=payload.lat,
+            lon=payload.lon,
+            accuracy_m=payload.accuracy_m,
+            captured_at=payload.captured_at,
+            source=payload.source,
+            timezone_name=payload.timezone,
+            place_name=payload.place_name,
+            city=payload.city,
+            country=payload.country,
+        )
+
+    @router.get("/mobile/location", response_model=UserLocationOut)
+    def read_mobile_location(user: dict = Depends(get_current_user)):
+        email = user.get("email") or user.get("user_email")
+        if not email:
+            raise HTTPException(status_code=400, detail="User email is missing")
+        location = user_locations.get_last_known_location(email)
+        if not location:
+            raise HTTPException(status_code=404, detail="Location not found")
+        return location
 
     @router.get("/user/facts", response_model=list[UserFactOut])
     @router.get("/mobile/user/facts", response_model=list[UserFactOut])

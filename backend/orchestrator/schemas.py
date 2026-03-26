@@ -335,6 +335,27 @@ class ClientLocationIn(BaseModel):
     ) = None
 
 
+class UserLocationUpdateIn(ClientLocationIn):
+    timezone: str | None = None
+    place_name: str | None = None
+    city: str | None = None
+    country: str | None = None
+
+
+class UserLocationOut(BaseModel):
+    user_email: str
+    lat: float
+    lon: float
+    accuracy_m: float | None = None
+    captured_at: datetime
+    source: str | None = None
+    timezone: str | None = None
+    place_name: str | None = None
+    city: str | None = None
+    country: str | None = None
+    updated_at: datetime
+
+
 class ClientContextIn(BaseModel):
     timezone: str | None = None
     locale: str | None = None
