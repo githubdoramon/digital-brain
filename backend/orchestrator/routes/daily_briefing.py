@@ -8,6 +8,7 @@ from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, R
 import daily_briefings
 from async_jobs import enqueue_job, mark_failed, mark_running, mark_succeeded
 from auth import get_current_user, require_service_api_key
+from notifications import DAILY_BRIEFING_NOTIFICATION_TYPE, send_notification_to_user
 from observability.logger import get_runtime_logger
 from schemas import DailyBriefingIn, DailyBriefingOut
 
@@ -139,6 +140,7 @@ def _run_daily_briefing_job(
             result={"briefing_id": result.get("briefing_id")},
             status_message="Daily briefing ready",
         )
+        _notify_daily_briefing_ready(user_email=user_email, result=result)
         logger.info(
             "[briefing.job] Job completed job=%s briefing_id=%s",
             job_id,
@@ -238,3 +240,19 @@ def _pending_briefing_response(
         "markdown": "",
         "news_items": [],
     }
+
+
+def _notify_daily_briefing_ready(*, user_email: str, result: dict[str, Any]) -> None:
+    summary = str(result.get("summary") or "").strip()
+    message = summary or "Your daily briefing is ready."
+    if len(message) > 220:
+        message = f"{message[:217].rstrip()}..."
+    try:
+        send_notification_to_user(
+            notification_type=DAILY_BRIEFING_NOTIFICATION_TYPE,
+            user_email=user_email,
+            title="Daily briefing ready",
+            message=message,
+        )
+    except Exception:
+        logger.warning("[briefing.job] Failed to send push notification user=%s", user_email)

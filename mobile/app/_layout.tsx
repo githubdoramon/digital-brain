@@ -5,7 +5,7 @@ import * as IntentLauncher from 'expo-intent-launcher';
 import { Stack, useRouter, useSegments } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
 import { StatusBar } from 'expo-status-bar';
-import { useEffect } from 'react';
+import { useCallback, useEffect, useRef } from 'react';
 import 'react-native-reanimated';
 import { Linking, Platform } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
@@ -62,6 +62,8 @@ function RootLayoutNav({ loaded }: { loaded: boolean }) {
   const router = useRouter();
   const segments = useSegments();
   const { token, isLoading } = useAuth();
+  const lastNotificationResponse = Notifications.useLastNotificationResponse();
+  const lastHandledNotificationIdRef = useRef<string | null>(null);
 
   useEffect(() => {
     if (isLoading || !loaded) return;
@@ -76,23 +78,8 @@ function RootLayoutNav({ loaded }: { loaded: boolean }) {
     }
   }, [token, segments, isLoading, router, loaded]);
 
-  useEffect(() => {
-    let responseListener: Notifications.Subscription | undefined;
-    let receivedListener: Notifications.Subscription | undefined;
-
-    (async () => {
-      await Notifications.setNotificationChannelAsync('default', {
-        name: 'Default',
-        importance: Notifications.AndroidImportance.MAX,
-        vibrationPattern: [0, 250, 250, 250],
-        lightColor: '#FF231F7C',
-      });
-    })();
-
-    receivedListener = Notifications.addNotificationReceivedListener(() => {
-      // Foreground notifications are handled by the global handler.
-    });
-    responseListener = Notifications.addNotificationResponseReceivedListener((response) => {
+  const handleNotificationResponse = useCallback(
+    (response: Notifications.NotificationResponse) => {
       const data = response.notification.request.content.data as {
         kind?: string;
         fileUri?: string;
@@ -127,13 +114,42 @@ function RootLayoutNav({ loaded }: { loaded: boolean }) {
       }
 
       router.push('/home');
+    },
+    [router],
+  );
+
+  useEffect(() => {
+    let responseListener: Notifications.Subscription | undefined;
+    let receivedListener: Notifications.Subscription | undefined;
+
+    (async () => {
+      await Notifications.setNotificationChannelAsync('default', {
+        name: 'Default',
+        importance: Notifications.AndroidImportance.MAX,
+        vibrationPattern: [0, 250, 250, 250],
+        lightColor: '#FF231F7C',
+      });
+    })();
+
+    receivedListener = Notifications.addNotificationReceivedListener(() => {
+      // Foreground notifications are handled by the global handler.
     });
+    responseListener = Notifications.addNotificationResponseReceivedListener(handleNotificationResponse);
 
     return () => {
       receivedListener?.remove();
       responseListener?.remove();
     };
-  }, [router]);
+  }, [handleNotificationResponse]);
+
+  useEffect(() => {
+    if (!lastNotificationResponse) return;
+    const notificationId = lastNotificationResponse.notification.request.identifier;
+    if (!notificationId) return;
+    if (lastHandledNotificationIdRef.current === notificationId) return;
+    lastHandledNotificationIdRef.current = notificationId;
+    handleNotificationResponse(lastNotificationResponse);
+  }, [handleNotificationResponse, lastNotificationResponse]);
 
   return (
     <ThemeProvider
@@ -162,6 +178,12 @@ function RootLayoutNav({ loaded }: { loaded: boolean }) {
       />
       <Stack.Screen
         name="settings/index"
+        options={{
+          headerShown: false,
+        }}
+      />
+      <Stack.Screen
+        name="settings/notifications"
         options={{
           headerShown: false,
         }}

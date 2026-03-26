@@ -242,6 +242,13 @@ User Question → Intent Router → Conversational Profile Dispatch → Tool Vis
 - `PUT /user/facts/{id}` – Update/correct a fact
 - `DELETE /user/facts/{id}` – Delete a fact
 
+### Mobile Settings
+- `GET /mobile/settings` – Legacy push notification summary
+- `GET /mobile/settings/notifications` – List per-type notification settings and channels
+- `PUT /mobile/settings/notifications/{notification_type}` – Update channels for one notification type
+- `POST /mobile/devices/register` – Register Expo push token for mobile device
+- `DELETE /mobile/devices/unregister` – Unregister Expo push token for mobile device
+
 ### Daily Briefings
 - `GET /mobile/briefings/daily` – Get daily briefing or immediate pending status (auto-enqueues generation)
 - `GET /mobile/briefings/latest` – Get latest generated briefing

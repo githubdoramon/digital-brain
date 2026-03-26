@@ -5,10 +5,18 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Response
 import devices as devices_service
 import user_facts
 from auth import get_current_user
-from notifications.preferences import get_push_settings, update_push_settings
+from notifications.preferences import (
+    get_notification_settings,
+    get_push_settings,
+    update_notification_channels,
+    update_push_settings,
+)
 from schemas import (
     DeviceRegisterIn,
+    NotificationSettingsListOut,
     NotificationSettingsOut,
+    NotificationTypeChannelsUpdateIn,
+    NotificationTypeSettingsOut,
     PushNotificationsUpdateIn,
     UserFactOut,
     UserFactUpdateIn,
@@ -34,6 +42,30 @@ def create_user_router() -> APIRouter:
         if not email:
             raise HTTPException(status_code=400, detail="User email is missing")
         return update_push_settings(email, payload.enabled)
+
+    @router.get("/mobile/settings/notifications", response_model=NotificationSettingsListOut)
+    def read_notification_settings(user: dict = Depends(get_current_user)):
+        email = user.get("email") or user.get("user_email")
+        if not email:
+            raise HTTPException(status_code=400, detail="User email is missing")
+        return get_notification_settings(email)
+
+    @router.put(
+        "/mobile/settings/notifications/{notification_type}",
+        response_model=NotificationTypeSettingsOut,
+    )
+    def update_notification_type_settings(
+        notification_type: str,
+        payload: NotificationTypeChannelsUpdateIn,
+        user: dict = Depends(get_current_user),
+    ):
+        email = user.get("email") or user.get("user_email")
+        if not email:
+            raise HTTPException(status_code=400, detail="User email is missing")
+        try:
+            return update_notification_channels(email, notification_type, payload.channels)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @router.post("/mobile/devices/register")
     def register_device(payload: DeviceRegisterIn, user: dict = Depends(get_current_user)):

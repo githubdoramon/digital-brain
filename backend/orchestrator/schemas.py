@@ -256,6 +256,30 @@ class PushNotificationTestIn(BaseModel):
     message: str
 
 
+class NotificationTypeSettingsOut(BaseModel):
+    notification_type: str = Field(alias="notificationType")
+    title: str
+    enabled: bool
+    channels: list[Literal["push", "email"]] = Field(default_factory=list)
+    created_at: datetime | None = Field(default=None, alias="createdAt")
+    updated_at: datetime | None = Field(default=None, alias="updatedAt")
+
+    class Config:
+        populate_by_name = True
+
+
+class NotificationSettingsListOut(BaseModel):
+    push_available: bool = Field(alias="pushAvailable")
+    types: list[NotificationTypeSettingsOut] = Field(default_factory=list)
+
+    class Config:
+        populate_by_name = True
+
+
+class NotificationTypeChannelsUpdateIn(BaseModel):
+    channels: list[Literal["push", "email"]] = Field(default_factory=list)
+
+
 class DailyBriefingIn(BaseModel):
     date: str
     timezone: str

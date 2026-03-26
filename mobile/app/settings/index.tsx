@@ -1,20 +1,15 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
-import React, { useCallback, useEffect, useState } from 'react';
-import * as SecureStore from 'expo-secure-store';
+import React from 'react';
 import {
-  ActivityIndicator,
-  Alert,
   Animated,
   StyleSheet,
-  Switch,
   Text,
   View,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { apiFetch } from '@/api/client';
 import { useAuth } from '@/auth/AuthContext';
 import { AppPressable as Pressable } from '@/components/AppPressable';
 import { Button } from '@/components/Button';
@@ -25,156 +20,13 @@ import {
   COLLAPSING_TOP_BAR_HEIGHT,
   CollapsingTopBar,
 } from '@/components/CollapsingTopBar';
-import {
-  getDeviceRegistrationIfGranted,
-  registerForPushNotifications,
-} from '@/notifications/register';
 import { theme } from '@/theme';
-
-type SettingsResponse = {
-  pushNotificationsEnabled: boolean;
-};
-
-const TOKEN_KEY = 'digitalbrain.expoPushToken';
 
 export default function SettingsScreen() {
   const router = useRouter();
-  const { token, signOut } = useAuth();
+  const { signOut } = useAuth();
   const insets = useSafeAreaInsets();
   const scrollY = React.useRef(new Animated.Value(0)).current;
-  const [isLoading, setIsLoading] = useState(true);
-  const [isSaving, setIsSaving] = useState(false);
-  const [pushEnabled, setPushEnabled] = useState(false);
-
-  const unregisterDevice = useCallback(async () => {
-    const existing = await SecureStore.getItemAsync(TOKEN_KEY);
-    if (!existing) return;
-    await apiFetch(`/mobile/devices/unregister?expoPushToken=${encodeURIComponent(existing)}`, {
-      method: 'DELETE',
-      token,
-    });
-    await SecureStore.deleteItemAsync(TOKEN_KEY);
-  }, [token]);
-
-  const reconcilePushState = useCallback(
-    async (backendEnabled: boolean) => {
-      const registration = await getDeviceRegistrationIfGranted();
-      if (registration && backendEnabled) {
-        setPushEnabled(true);
-        return;
-      }
-      if (!registration && !backendEnabled) {
-        setPushEnabled(false);
-        return;
-      }
-      if (registration && !backendEnabled) {
-        try {
-          await apiFetch('/mobile/settings/push-notifications', {
-            method: 'PUT',
-            body: JSON.stringify({ enabled: true }),
-            token,
-          });
-          await apiFetch('/mobile/devices/register', {
-            method: 'POST',
-            body: JSON.stringify(registration),
-            token,
-          });
-          await SecureStore.setItemAsync(TOKEN_KEY, registration.expoPushToken);
-          setPushEnabled(true);
-          return;
-        } catch (error) {
-          console.error('push reconciliation failed', error);
-          // fall through to disable below
-        }
-      }
-
-      if (backendEnabled && !registration) {
-        try {
-          await apiFetch('/mobile/settings/push-notifications', {
-            method: 'PUT',
-            body: JSON.stringify({ enabled: false }),
-            token,
-          });
-        } catch (error) {
-          console.error('failed to disable push settings', error);
-          // noop: keep state if backend update fails
-        }
-        await unregisterDevice();
-      }
-      setPushEnabled(false);
-    },
-    [token, unregisterDevice],
-  );
-
-  useEffect(() => {
-    let mounted = true;
-    token && (async () => {
-      try {
-        const response = (await apiFetch('/mobile/settings', { token })) as SettingsResponse;
-        if (mounted) {
-          await reconcilePushState(Boolean(response?.pushNotificationsEnabled));
-        }
-      } finally {
-        if (mounted) {
-          setIsLoading(false);
-        }
-      }
-    })();
-    return () => {
-      mounted = false;
-    };
-  }, [token, reconcilePushState]);
-
-  const togglePush = async (value: boolean) => {
-    const previous = pushEnabled;
-    setPushEnabled(value);
-    setIsSaving(true);
-    try {
-      if (value) {
-        const registration = await registerForPushNotifications();
-        if (!registration) {
-          Alert.alert(
-            'Notifications unavailable',
-            'Enable notifications in system settings or use a physical device to register.',
-          );
-          setPushEnabled(false);
-          return;
-        }
-        await apiFetch('/mobile/settings/push-notifications', {
-          method: 'PUT',
-          body: JSON.stringify({ enabled: true }),
-          token,
-        });
-        await apiFetch('/mobile/devices/register', {
-          method: 'POST',
-          body: JSON.stringify(registration),
-          token,
-        });
-        await SecureStore.setItemAsync(TOKEN_KEY, registration.expoPushToken);
-        setPushEnabled(true);
-      } else {
-        await apiFetch('/mobile/settings/push-notifications', {
-          method: 'PUT',
-          body: JSON.stringify({ enabled: false }),
-          token,
-        });
-        await unregisterDevice();
-        setPushEnabled(false);
-      }
-    } catch (error) {
-      const authExpired = (error as Error & { authExpired?: boolean }).authExpired;
-      if (authExpired) {
-        await signOut();
-        Alert.alert('Session expired', 'Please sign in again.');
-        return;
-      }
-      console.error('togglePush error', error);
-      Alert.alert('Update failed', 'We could not update push settings. Please try again.');
-      setPushEnabled(previous);
-    } finally {
-      setIsSaving(false);
-    }
-  };
 
   return (
     <LinearGradient
@@ -198,27 +50,19 @@ export default function SettingsScreen() {
           },
         ]}
       >
-        <Card style={styles.card}>
-          <View style={styles.row}>
+        <Card style={[styles.card, styles.navCard]}>
+          <Pressable
+            style={styles.navRow}
+            onPress={() => router.push('/settings/notifications')}
+          >
             <View style={styles.textBlock}>
-              <Text style={styles.rowTitle}>Push notifications</Text>
+              <Text style={styles.rowTitle}>Notifications</Text>
               <Text style={styles.rowSubtitle}>
-                Turn on quick alerts for new memories and follow-ups.
+                Choose alerts per type and delivery channel.
               </Text>
             </View>
-            {isLoading ? (
-              <ActivityIndicator color={theme.colors.accent} />
-            ) : (
-              <Switch
-                value={pushEnabled}
-                onValueChange={togglePush}
-                trackColor={{ false: theme.colors.line, true: theme.colors.paleTeal }}
-                thumbColor={pushEnabled ? theme.colors.accent : '#f2f2f2'}
-                disabled={isSaving}
-              />
-            )}
-          </View>
-          {isSaving && <Text style={styles.saving}>Saving preference…</Text>}
+            <Ionicons name="chevron-forward" size={20} color={theme.colors.mutedInk} />
+          </Pressable>
         </Card>
 
       <Card style={[styles.card, styles.navCard]}>
@@ -311,12 +155,6 @@ const styles = StyleSheet.create({
     borderRadius: theme.radius.xl,
     padding: 20,
   },
-  row: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: 16,
-  },
   textBlock: {
     flex: 1,
   },
@@ -328,11 +166,6 @@ const styles = StyleSheet.create({
   rowSubtitle: {
     marginTop: 6,
     fontSize: 13,
-    color: theme.colors.mutedInk,
-  },
-  saving: {
-    marginTop: 12,
-    fontSize: 12,
     color: theme.colors.mutedInk,
   },
   navCard: {
