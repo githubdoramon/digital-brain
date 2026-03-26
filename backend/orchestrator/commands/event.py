@@ -15,7 +15,6 @@ import contacts as contacts_service
 import conversations
 import events as events_service
 import places as places_service
-from search_normalization import normalize_search_text
 from observability.logger import get_runtime_logger
 from schemas import (
     ContactIn,
@@ -25,6 +24,7 @@ from schemas import (
     EventIn,
     PlaceIn,
 )
+from search_normalization import normalize_search_text
 
 from . import get_command_registry, parse_command
 from .storage import (
