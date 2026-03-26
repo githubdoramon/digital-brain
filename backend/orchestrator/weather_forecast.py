@@ -64,7 +64,6 @@ def build_daily_weather_summary(
                 "timezone": timezone_name,
                 "start_date": target_date.isoformat(),
                 "end_date": target_date.isoformat(),
-                "forecast_days": 1,
             },
             timeout=5,
         )
