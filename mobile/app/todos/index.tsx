@@ -30,6 +30,7 @@ import { LightDateTimePicker } from '@/components/LightDateTimePicker';
 import { TopNoticeProvider, useTopNotice } from '@/components/top-notice';
 import { theme } from '@/theme';
 import { matchesContactSearch } from '@/utils/contactSearch';
+import { formatDateOnlyLocal } from '@/utils/date';
 
 const dueDatePattern = /^\d{4}-\d{2}-\d{2}$/;
 
@@ -64,7 +65,7 @@ type TodoSnapshot = {
 };
 
 function formatIsoDate(value: Date) {
-  return value.toISOString().slice(0, 10);
+  return formatDateOnlyLocal(value);
 }
 
 function resolvePickerDate(value: DateType): Date | null {

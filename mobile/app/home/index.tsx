@@ -28,6 +28,7 @@ import {
 import { renderAssistantMarkdown } from '@/components/MarkdownRenderer';
 import { useTopNotice } from '@/components/top-notice';
 import { theme } from '@/theme';
+import { formatTodayLocal } from '@/utils/date';
 
 type DailyBriefing = {
   status?: 'ready' | 'pending' | 'failed';
@@ -71,7 +72,7 @@ type TodoItem = {
 };
 
 function formatToday(): string {
-  return new Date().toISOString().slice(0, 10);
+  return formatTodayLocal();
 }
 
 function formatTimezone(): string {

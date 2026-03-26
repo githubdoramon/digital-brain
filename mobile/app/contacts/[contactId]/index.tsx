@@ -29,6 +29,7 @@ import { LightDateTimePicker } from '@/components/LightDateTimePicker';
 import { LinkedPlacesCard } from '@/components/contact/LinkedPlacesCard';
 import { RelationshipChips } from '@/components/RelationshipChips';
 import { theme } from '@/theme';
+import { formatDateOnlyLocal } from '@/utils/date';
 import { normalizeRouteParam } from '@/utils/text';
 
 type Relationship = {
@@ -62,7 +63,7 @@ const textToList = (value: string) =>
     .filter(Boolean);
 
 function formatIsoDate(value: Date) {
-  return value.toISOString().slice(0, 10);
+  return formatDateOnlyLocal(value);
 }
 
 function resolvePickerDate(value: DateType): Date | null {

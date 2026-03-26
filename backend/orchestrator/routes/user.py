@@ -3,8 +3,8 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 
 import devices as devices_service
-import user_locations
 import user_facts
+import user_locations
 from auth import get_current_user
 from notifications.preferences import (
     get_notification_settings,
