@@ -59,6 +59,7 @@ import {
   consumeEventDraftEditResult,
   createEventDraftEditSession,
 } from '@/events/draftEditorSession';
+import { normalizeSearch } from '@/utils/text';
 
 type Message = {
   id: string;
@@ -633,11 +634,23 @@ function updateEventAuxiliaryCards(
     .filter(Boolean);
   const uniqueNewContacts = Array.from(new Set(selectedNewContacts));
 
-  const newPlaces = Array.isArray(payload.resolution?.new_entities?.places)
+  const resolutionNewPlaces = Array.isArray(payload.resolution?.new_entities?.places)
     ? payload.resolution?.new_entities?.places
         .map((place) => textValue(place.name))
         .filter(Boolean)
     : [];
+  const extractedWhere = textValue(payload.extracted?.where);
+  const normalizedDraftWhere = normalizeSearch(draft.where.trim());
+  const normalizedExtractedWhere = normalizeSearch(extractedWhere);
+  const whereWasEdited = normalizedDraftWhere !== normalizedExtractedWhere;
+  const newPlaces = draft.placeId
+    ? []
+    : whereWasEdited
+      ? resolutionNewPlaces.filter(
+          (placeName) =>
+            Boolean(normalizedDraftWhere) && normalizeSearch(placeName) === normalizedDraftWhere,
+        )
+      : resolutionNewPlaces;
   const newDocuments = Array.isArray(payload.resolution?.new_entities?.documents)
     ? payload.resolution?.new_entities?.documents
         .map((document) => textValue(document.reference))

@@ -499,11 +499,31 @@ def confirm_event_command(
 
         created_places = []
         place_id_map = {}
+        where = extracted.get("where")
+        where_text_for_resolution_places = str(where or "").strip()
+        where_was_modified = "where" in normalized_modifications
+        explicit_place_id = normalized_modifications.get("place_id")
+        selected_where_normalized = (
+            normalize_search_text(where_text_for_resolution_places)
+            if where_text_for_resolution_places
+            else ""
+        )
 
         for new_place in resolution.get("new_entities", {}).get("places", []):
             place_name = str(new_place.get("name") or "").strip()
             if not place_name:
                 continue
+
+            # If the user explicitly selected a place, or edited the "where"
+            # field, don't blindly create all originally proposed places.
+            # This prevents stale preview candidates from being persisted.
+            if "place_id" in normalized_modifications:
+                continue
+            if where_was_modified:
+                if not selected_where_normalized:
+                    continue
+                if normalize_search_text(place_name) != selected_where_normalized:
+                    continue
 
             existing_place_id = str(new_place.get("existing_place_id") or "").strip()
             if existing_place_id:
@@ -567,10 +587,7 @@ def confirm_event_command(
         )
 
         place_id = None
-        where = extracted.get("where")
         matched_place = resolution.get("matched_place") if isinstance(resolution, dict) else None
-        explicit_place_id = normalized_modifications.get("place_id")
-        where_was_modified = "where" in normalized_modifications
 
         if "place_id" in normalized_modifications:
             if explicit_place_id:

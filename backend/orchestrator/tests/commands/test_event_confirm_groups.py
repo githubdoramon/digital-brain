@@ -325,12 +325,18 @@ def test_confirm_event_handles_mixed_timezone_awareness(monkeypatch):
 def test_confirm_event_uses_explicit_place_id_modification(monkeypatch):
     command_data = _base_command_data()
     command_data["extracted"]["where"] = "my place"
+    command_data["resolution"]["new_entities"]["places"] = [
+        {
+            "name": "my place",
+        }
+    ]
     command_data["resolution"]["matched_place"] = {
         "place_id": "plc_old",
         "name": "Old Place",
     }
 
     captured_event = {"event": None}
+    created_places: list[str] = []
 
     monkeypatch.setattr("commands.event.get_command_data", lambda _preview_id: command_data)
     monkeypatch.setattr("commands.event.delete_command_data", lambda _preview_id: None)
@@ -346,6 +352,10 @@ def test_confirm_event_uses_explicit_place_id_modification(monkeypatch):
         "commands.event.places_service.get_place",
         lambda place_id: {"place_id": place_id} if place_id == "plc_selected" else None,
     )
+    monkeypatch.setattr(
+        "commands.event.places_service.ingest_place",
+        lambda place_in: created_places.append(place_in.place_id),
+    )
 
     payload = EventCommandConfirmation(
         preview_id="event:preview:explicit-place",
@@ -360,6 +370,7 @@ def test_confirm_event_uses_explicit_place_id_modification(monkeypatch):
     assert result.success is True
     assert captured_event["event"] is not None
     assert captured_event["event"].place_id == "plc_selected"
+    assert created_places == []
 
 
 def test_confirm_event_filters_relationships_by_participant_override(monkeypatch):
@@ -496,6 +507,58 @@ def test_confirm_event_creates_place_from_edited_where_when_unmatched(monkeypatc
 
     payload = EventCommandConfirmation(
         preview_id="event:preview:new-place-from-edit",
+        confirmed=True,
+        modifications={"where": "New cafe downtown"},
+    )
+    result = confirm_event_command(payload, "user@example.com")
+
+    assert result.success is True
+    assert len(created_places_inputs) == 1
+    assert created_places_inputs[0]["name"] == "New cafe downtown"
+    assert len(result.created_places) == 1
+    assert result.created_places[0]["name"] == "New cafe downtown"
+    assert captured_event["event"] is not None
+    assert captured_event["event"].place_id == created_places_inputs[0]["place_id"]
+
+
+def test_confirm_event_edited_where_does_not_persist_stale_new_place_candidates(monkeypatch):
+    command_data = _base_command_data()
+    command_data["extracted"]["where"] = "Old place"
+    command_data["resolution"]["new_entities"]["places"] = [
+        {
+            "name": "Old place",
+        }
+    ]
+
+    created_places_inputs: list[dict] = []
+    captured_event = {"event": None}
+
+    monkeypatch.setattr("commands.event.get_command_data", lambda _preview_id: command_data)
+    monkeypatch.setattr("commands.event.delete_command_data", lambda _preview_id: None)
+    monkeypatch.setattr(
+        "commands.event.clear_pending_event_by_preview_id", lambda _preview_id: None
+    )
+    monkeypatch.setattr("commands.event._persist_event_resolved", lambda _preview_id, _status: None)
+    monkeypatch.setattr(
+        "commands.event.events_service.ingest_event",
+        lambda event_in: captured_event.__setitem__("event", event_in),
+    )
+    monkeypatch.setattr(
+        "commands.event.places_service.find_best_place_match",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        "commands.event.places_service.ingest_place",
+        lambda place_in: created_places_inputs.append(
+            {
+                "place_id": place_in.place_id,
+                "name": place_in.name,
+            }
+        ),
+    )
+
+    payload = EventCommandConfirmation(
+        preview_id="event:preview:edited-where-no-duplicates",
         confirmed=True,
         modifications={"where": "New cafe downtown"},
     )

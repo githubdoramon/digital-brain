@@ -3,7 +3,7 @@ import Ionicons from '@expo/vector-icons/Ionicons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Tabs } from 'expo-router';
 import { BottomTabBarProps } from '@react-navigation/bottom-tabs';
-import { Animated, GestureResponderEvent, Platform, StyleSheet, Text, View } from 'react-native';
+import { Animated, AppState, GestureResponderEvent, Platform, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { AppPressable as Pressable } from '@/components/AppPressable';
@@ -240,6 +240,16 @@ function TabBar({ state, navigation }: BottomTabBarProps) {
 export default function TabLayout() {
   React.useEffect(() => {
     primeClientContext();
+
+    const subscription = AppState.addEventListener('change', (nextState) => {
+      if (nextState === 'active') {
+        primeClientContext();
+      }
+    });
+
+    return () => {
+      subscription.remove();
+    };
   }, []);
 
   return (
