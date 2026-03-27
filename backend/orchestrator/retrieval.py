@@ -915,7 +915,7 @@ def fetch_contact_summaries(contact_ids: Sequence[str]) -> dict[str, dict[str, A
     with get_conn() as conn, conn.cursor() as cur:
         cur.execute(
             """
-            SELECT contact_id, display_name, aliases, tags, comments
+            SELECT contact_id, display_name, aliases, emails, tags, comments
             FROM contacts
             WHERE contact_id = ANY(%s)
             """,
@@ -930,6 +930,7 @@ def fetch_contact_summaries(contact_ids: Sequence[str]) -> dict[str, dict[str, A
             "contact_id": row["contact_id"],
             "display_name": row.get("display_name"),
             "aliases": row.get("aliases") or [],
+            "emails": row.get("emails") or [],
             "tags": row.get("tags") or [],
             "comments": row.get("comments") or "",
             "snippet": make_snippet(snippet_source, length=200),

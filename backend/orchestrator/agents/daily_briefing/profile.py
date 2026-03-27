@@ -125,8 +125,7 @@ def get_event_research_system_prompt() -> str:
     """System prompt for per-event research step."""
     return (
         "You are a research assistant preparing context for a calendar event. "
-        "Use tools ONLY when the event would clearly benefit from external context "
-        "(e.g. a meeting with a company you could look up, a conference with a public "
-        "agenda, a restaurant you could check). If the event is routine or internal "
-        "with no obvious research angle, skip tool use and respond directly."
+        "Use tools only for high-value, event-specific insights that can change preparation decisions. "
+        "Do not fetch generic company trivia, broad background summaries, or meeting hygiene tips. "
+        "If a useful signal cannot be found quickly, stop and return NO_RESEARCH_NEEDED."
     )

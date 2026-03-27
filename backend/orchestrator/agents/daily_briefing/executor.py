@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+from math import ceil
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date, datetime, time, timedelta, timezone
 from time import perf_counter
@@ -25,12 +26,14 @@ from agents.daily_briefing.validators import (
     validate_summary,
 )
 from db import get_conn
-from llm_helpers import call_llm
+from llm_helpers import call_llm, call_llm_json
 from search_normalization import normalize_search_text
 
 logger = logging.getLogger(__name__)
 
 DEFAULT_SIMILAR_LIMIT = 4
+ATTENDEE_OVERLAP_THRESHOLD = 0.8
+ATTENDEE_OVERLAP_CANDIDATE_MULTIPLIER = 4
 BIRTHDAY_LOOKAHEAD_DAYS = 7
 MAX_NEWS_SELECTED_ARTICLES = 24
 NEWS_TOPIC_HARD_CAP = 10
@@ -78,6 +81,11 @@ _LOW_VALUE_PREP_PATTERNS = [
     re.compile(r"\badd\b.*\b(calendar|agenda)\b", re.IGNORECASE),
     re.compile(r"\bcheck\b.*\b(calendar|invite|time)\b", re.IGNORECASE),
 ]
+
+_EVIDENCE_MARKER_RE = re.compile(
+    r"\(\s*evidence\s*:\s*(history|todo|current_notes|research:[^)]+|https?://[^)\s]+)\s*\)$",
+    re.IGNORECASE,
+)
 
 
 def _get_daily_briefing_user_context(user_email: str | None, query: str) -> str:
@@ -504,25 +512,172 @@ def _fetch_similar_events(
     day_start: datetime,
     limit: int,
 ) -> list[dict[str, Any]]:
-    title = (event.get("title") or "").strip()
-    if not title or limit <= 0:
+    if limit <= 0:
         return []
-    matches = _fetch_similar_by_title(event["id"], title, day_start, limit)
+    event_id = str(event.get("id") or "").strip()
+    if not event_id:
+        return []
+
+    matches: list[dict[str, Any]] = []
+    seen_ids: set[str] = set()
+
+    title = (event.get("title") or "").strip()
+    if title:
+        title_matches = _fetch_similar_by_title(event_id, title, day_start, limit)
+        for row in title_matches:
+            rid = str(row.get("id") or "").strip()
+            if not rid or rid in seen_ids:
+                continue
+            seen_ids.add(rid)
+            row["similarity_match_type"] = "title_exact"
+            matches.append(row)
+
     if len(matches) >= limit:
         return matches
 
     remaining = limit - len(matches)
     recurrence_key = _extract_recurrence_key(event)
-    if not recurrence_key:
+    if recurrence_key and remaining > 0:
+        recurrence_matches = _fetch_similar_by_recurrence(
+            event_id,
+            recurrence_key,
+            day_start,
+            remaining,
+        )
+        for row in recurrence_matches:
+            rid = str(row.get("id") or "").strip()
+            if not rid or rid in seen_ids:
+                continue
+            seen_ids.add(rid)
+            row["similarity_match_type"] = "recurrence"
+            matches.append(row)
+            if len(matches) >= limit:
+                return matches
+
+    remaining = limit - len(matches)
+    if remaining <= 0:
         return matches
 
-    recurrence_matches = _fetch_similar_by_recurrence(
-        event["id"],
-        recurrence_key,
+    attendee_matches = _fetch_similar_by_attendee_overlap(
+        event,
         day_start,
-        remaining,
+        limit=max(remaining * ATTENDEE_OVERLAP_CANDIDATE_MULTIPLIER, remaining),
     )
-    return matches + recurrence_matches
+    for row in attendee_matches:
+        rid = str(row.get("id") or "").strip()
+        if not rid or rid in seen_ids:
+            continue
+        seen_ids.add(rid)
+        matches.append(row)
+        if len(matches) >= limit:
+            break
+    return matches
+
+
+def _fetch_similar_by_attendee_overlap(
+    event: dict[str, Any],
+    day_start: datetime,
+    limit: int,
+) -> list[dict[str, Any]]:
+    current_people = [
+        str(contact_id).strip() for contact_id in (event.get("people") or []) if str(contact_id).strip()
+    ]
+    current_set = set(current_people)
+    attendee_count = len(current_set)
+    event_id = str(event.get("id") or "").strip()
+    if not event_id or attendee_count == 0 or limit <= 0:
+        return []
+
+    min_overlap = max(1, ceil(attendee_count * ATTENDEE_OVERLAP_THRESHOLD))
+
+    from db import fetch_event_people
+
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT
+              e.id,
+              e.start_date,
+              e.end_date,
+              e.tags,
+              e.types,
+              e.title,
+              e.summary,
+              e.external_id,
+              e.raw,
+              e.place_id,
+              p.name AS place_name,
+              p.city,
+              p.country,
+              p.lat,
+              p.lon,
+              COUNT(DISTINCT CASE WHEN ec.contact_id = ANY(%s) THEN ec.contact_id END) AS overlap_count
+            FROM events AS e
+            LEFT JOIN places AS p ON p.place_id = e.place_id
+            LEFT JOIN event_contacts ec ON ec.event_id = e.id
+            WHERE e.id <> %s
+              AND e.start_date < %s
+            GROUP BY
+              e.id,
+              e.start_date,
+              e.end_date,
+              e.tags,
+              e.types,
+              e.title,
+              e.summary,
+              e.external_id,
+              e.raw,
+              e.place_id,
+              p.name,
+              p.city,
+              p.country,
+              p.lat,
+              p.lon
+            HAVING COUNT(DISTINCT CASE WHEN ec.contact_id = ANY(%s) THEN ec.contact_id END) >= %s
+            ORDER BY overlap_count DESC, e.start_date DESC
+            LIMIT %s
+            """,
+            (list(current_set), event_id, day_start, list(current_set), min_overlap, limit),
+        )
+        rows = [dict(row) for row in cur.fetchall()]
+        event_ids = [r["id"] for r in rows]
+        people_map = fetch_event_people(cur, event_ids)
+        for r in rows:
+            r["people"] = people_map.get(r["id"], [])
+
+    scored_matches: list[tuple[float, dict[str, Any]]] = []
+    for row in rows:
+        overlap_count = int(row.get("overlap_count") or 0)
+        normalized_row = _normalize_event_row(row)
+        candidate_people = {
+            str(contact_id).strip()
+            for contact_id in (normalized_row.get("people") or [])
+            if str(contact_id).strip()
+        }
+        if not candidate_people:
+            continue
+        intersection_count = len(current_set & candidate_people)
+        overlap_ratio = intersection_count / attendee_count if attendee_count else 0.0
+        if overlap_ratio < ATTENDEE_OVERLAP_THRESHOLD and not (
+            attendee_count == len(candidate_people) == intersection_count
+        ):
+            continue
+
+        is_exact = attendee_count == len(candidate_people) == intersection_count
+        normalized_row["attendee_overlap_ratio"] = round(overlap_ratio, 3)
+        normalized_row["attendee_overlap_count"] = overlap_count
+        normalized_row["similarity_match_type"] = "attendee_exact" if is_exact else "attendee_overlap"
+        score = overlap_ratio + (0.15 if is_exact else 0.0)
+        scored_matches.append((score, normalized_row))
+
+    scored_matches.sort(
+        key=lambda item: (
+            item[0],
+            str(item[1].get("start_date") or ""),
+        ),
+        reverse=True,
+    )
+    return [row for _score, row in scored_matches]
 
 
 def _fetch_similar_by_title(
@@ -729,7 +884,13 @@ def _summarize_event(
 
     # -- Phase 1: optional web research via tool loop -------------------------
     t0 = perf_counter()
-    research_notes = _research_event(event_text, title, timezone_name, user_email=user_email)
+    research_notes = _research_event(
+        event_text,
+        title,
+        timezone_name,
+        event_context=event_context,
+        user_email=user_email,
+    )
     if research_notes:
         logger.info(
             "[briefing.event] Research for '%s': %d chars (%.0fms)",
@@ -792,7 +953,14 @@ def _format_event_for_analysis(event_context: dict[str, Any]) -> str:
             s_title = s.get("title") or "Untitled"
             s_date = s.get("local_start") or s.get("start_date") or ""
             s_summary = s.get("summary") or ""
-            lines.append(f"  - {s_date} | {s_title}")
+            match_type = str(s.get("similarity_match_type") or "history").strip()
+            overlap_ratio = s.get("attendee_overlap_ratio")
+            if overlap_ratio is not None:
+                lines.append(
+                    f"  - {s_date} | {s_title} [match={match_type}, attendee_overlap={overlap_ratio}]"
+                )
+            else:
+                lines.append(f"  - {s_date} | {s_title} [match={match_type}]")
             if s_summary:
                 lines.append(f"    Notes: {_condense_notes(s_summary, limit=30)}")
 
@@ -820,6 +988,7 @@ def _research_event(
     title: str,
     timezone_name: str,
     *,
+    event_context: dict[str, Any] | None = None,
     user_email: str | None = None,
 ) -> str:
     """Run a bounded web-research tool loop for a single event.
@@ -827,6 +996,36 @@ def _research_event(
     Returns the LLM's research notes (may be empty if no research was needed
     or the call failed).
     """
+    value_signals = _build_event_research_value_signals(
+        title=title,
+        event_text=event_text,
+        event_context=event_context or {},
+        user_email=user_email,
+    )
+    if not value_signals["should_research"]:
+        logger.info(
+            "[briefing.event] Research gate for '%s': skipped (score=%s, reasons=%s)",
+            title,
+            value_signals["score"],
+            ", ".join(value_signals["reasons"]),
+        )
+        return ""
+
+    plan = _plan_event_research(
+        title=title,
+        timezone_name=timezone_name,
+        event_text=event_text,
+        value_signals=value_signals,
+        user_email=user_email,
+    )
+    if not plan.get("should_research"):
+        logger.info(
+            "[briefing.event] Research planner for '%s': skipped (%s)",
+            title,
+            plan.get("reason") or "no high-value target",
+        )
+        return ""
+
     research_profile = build_event_research_profile()
     if research_profile.build_tools_and_handlers is None:
         return ""
@@ -838,20 +1037,28 @@ def _research_event(
         research_profile.get_system_prompt() if research_profile.get_system_prompt else ""
     )
 
+    planned_targets = plan.get("targets") or []
+    targets_block = "\n".join(
+        f"- Query: {str(target.get('query') or '').strip()} | Why now: {str(target.get('why') or '').strip()}"
+        for target in planned_targets
+        if str(target.get("query") or "").strip()
+    )
     research_prompt = (
-        "You are preparing background research for an upcoming calendar event.\n"
-        "If external context would help the user prepare (company info, public agenda, "
-        "venue details, relevant news, suggested reading material), use the web_search "
-        "and fetch_web_page tools to gather it. Keep searches targeted and concise.\n"
-        "If the event is routine or internal with no obvious research angle, "
-        "respond with: NO_RESEARCH_NEEDED\n\n"
-        f"Timezone: {timezone_name}\n\n"
-        "Perspective: this is preparation for the calendar owner. If the owner appears "
-        "by name or alias in notes, treat that as 'you' (second person), not a third person.\n\n"
+        "You are preparing targeted event research for an upcoming calendar event.\n"
+        "Research is allowed, but only if it provides high-value preparation context for this specific meeting.\n"
+        "Do NOT return generic company descriptions, meeting hygiene, or trivia.\n"
+        "If you cannot find high-signal context quickly, respond with exactly: NO_RESEARCH_NEEDED\n\n"
+        "Use web_search and fetch_web_page only for the targeted research goals below.\n"
+        "Maximum scope: up to 3 concise searches and focused page fetches.\n\n"
+        "Output format (strict):\n"
+        "- <finding>. Why it matters: <meeting-specific impact>. Source: <https://...>\n"
+        "Only include findings that contain both a concrete 'Why it matters' and a valid source URL.\n\n"
+        f"Timezone: {timezone_name}\n"
+        f"Research rationale score: {value_signals['score']}\n"
+        f"Rationale: {', '.join(value_signals['reasons'])}\n\n"
+        f"Planned high-value targets:\n{targets_block or '- No valid targets identified'}\n\n"
         "Differentiate clearly between the current upcoming event and historical references.\n"
-        f"{event_text}\n\n"
-        "Return your research findings as concise bullet points. "
-        "Include source URLs when available."
+        f"{event_text}\n"
     )
 
     user_context = _get_daily_briefing_user_context(
@@ -878,16 +1085,253 @@ def _research_event(
                 tool_calls_made,
             )
             return ""
+        cleaned = _sanitize_research_findings(content)
+        if not cleaned:
+            logger.info(
+                "[briefing.event] Research for '%s': dropped (no grounded findings) (%d tool call(s))",
+                title,
+                tool_calls_made,
+            )
+            return ""
+
         logger.info(
             "[briefing.event] Research for '%s': %d chars, %d tool call(s)",
             title,
-            len(content),
+            len(cleaned),
             tool_calls_made,
         )
-        return content
+        return cleaned
     except Exception:
         logger.warning("[briefing.event] Research failed for '%s', skipping", title, exc_info=True)
         return ""
+
+
+def _build_event_research_value_signals(
+    *,
+    title: str,
+    event_text: str,
+    event_context: dict[str, Any],
+    user_email: str | None,
+) -> dict[str, Any]:
+    score = 0
+    reasons: list[str] = []
+
+    normalized_title = normalize_search_text(title)
+    title_tokens = [token for token in re.split(r"[^a-z0-9]+", normalized_title) if token]
+    if len(title_tokens) >= 2:
+        score += 1
+        reasons.append("specific_title")
+
+    similar_events = event_context.get("similar_events") or []
+    if not similar_events:
+        score += 2
+        reasons.append("no_history")
+    else:
+        historical_notes = [
+            str(similar.get("summary") or "").strip() for similar in similar_events if similar.get("summary")
+        ]
+        if len(historical_notes) >= 2:
+            score -= 1
+            reasons.append("history_already_rich")
+
+    contacts = event_context.get("contacts") or []
+    external_contact_count = _count_external_contacts(contacts, user_email)
+    if external_contact_count > 0:
+        score += 2
+        reasons.append("external_attendees")
+
+    research_keywords = {
+        "acquisition",
+        "api",
+        "architecture",
+        "audit",
+        "beta",
+        "board",
+        "compliance",
+        "contract",
+        "demo",
+        "design",
+        "kickoff",
+        "launch",
+        "legal",
+        "migration",
+        "negotiation",
+        "okr",
+        "partnership",
+        "pilot",
+        "planning",
+        "pricing",
+        "procurement",
+        "proposal",
+        "qbr",
+        "quarterly",
+        "renewal",
+        "roadmap",
+        "rfp",
+        "risk",
+        "sales",
+        "security",
+        "sla",
+        "strategy",
+        "technical",
+        "vendor",
+        "interview",
+        "customer",
+        "client",
+        "onboarding",
+        "integration",
+        "incident",
+        "postmortem",
+        "retrospective",
+        "discovery",
+        "escalation",
+        "funding",
+        "investor",
+        "press",
+        "market",
+        "research",
+        "workshop",
+        "summit",
+        "conference",
+        "webinar",
+        "governance",
+        "performance",
+        "capacity",
+        "supply",
+        "logistics",
+    }
+    if any(token in research_keywords for token in title_tokens):
+        score += 2
+        reasons.append("high_signal_title")
+
+    if "WEB RESEARCH FINDINGS" in event_text:
+        score -= 2
+        reasons.append("already_has_research")
+
+    should_research = score >= 2
+    return {
+        "score": score,
+        "reasons": reasons,
+        "should_research": should_research,
+        "external_contact_count": external_contact_count,
+    }
+
+
+def _count_external_contacts(contacts: list[dict[str, Any]], user_email: str | None) -> int:
+    if not contacts:
+        return 0
+    owner_domain = ""
+    if user_email and "@" in user_email:
+        owner_domain = user_email.split("@", 1)[1].strip().lower()
+
+    count = 0
+    for contact in contacts:
+        emails = [str(email).strip().lower() for email in (contact.get("emails") or []) if email]
+        if not emails:
+            comments = normalize_search_text(str(contact.get("comments") or ""))
+            tags = [normalize_search_text(str(tag or "")) for tag in (contact.get("tags") or [])]
+            if "external" in comments or any(tag == "external" for tag in tags):
+                count += 1
+            continue
+        if owner_domain and any(email.endswith(f"@{owner_domain}") for email in emails):
+            continue
+        count += 1
+    return count
+
+
+def _plan_event_research(
+    *,
+    title: str,
+    timezone_name: str,
+    event_text: str,
+    value_signals: dict[str, Any],
+    user_email: str | None,
+) -> dict[str, Any]:
+    user_context = _get_daily_briefing_user_context(
+        user_email,
+        f"daily briefing research plan {title}",
+    )
+    prompt = (
+        "Decide whether this event needs external web research and propose the smallest useful scope.\n"
+        "Return strict JSON with keys: should_research (bool), reason (string), targets (array up to 3).\n"
+        "Each target item must be: {\"query\": string, \"why\": string}.\n"
+        "Only allow targets that could materially improve preparation for this exact event.\n"
+        "Reject generic prep work, broad learning, and low-confidence fishing.\n"
+        "If uncertain, set should_research=false.\n\n"
+        f"Timezone: {timezone_name}\n"
+        f"Value signals score: {value_signals.get('score')}\n"
+        f"Signals: {', '.join(value_signals.get('reasons') or [])}\n\n"
+        f"Event context:\n{event_text}\n"
+    )
+    if user_context:
+        prompt = f"{prompt}\n\nUSER CONTEXT:\n{user_context}"
+
+    try:
+        planned_raw = call_llm_json(
+            prompt,
+            system_prompt=(
+                "You are a strict research planner. Return JSON only."
+            ),
+            temperature=0,
+            use_simpler_model=False,
+        )
+        planned = planned_raw if isinstance(planned_raw, dict) else {}
+    except Exception:
+        logger.warning("[briefing.event] Research planner failed for '%s'", title, exc_info=True)
+        return {
+            "should_research": bool(value_signals.get("should_research")),
+            "reason": "planner_failed",
+            "targets": [
+                {
+                    "query": title,
+                    "why": "Find high-signal public context that can change prep decisions.",
+                }
+            ],
+        }
+
+    should_research = bool(planned.get("should_research"))
+    reason = str(planned.get("reason") or "").strip() or "no_reason"
+    raw_targets = planned.get("targets") if isinstance(planned.get("targets"), list) else []
+    targets: list[dict[str, str]] = []
+    for target in raw_targets[:3]:
+        if not isinstance(target, dict):
+            continue
+        query = str(target.get("query") or "").strip()
+        why = str(target.get("why") or "").strip()
+        if not query or not why:
+            continue
+        targets.append({"query": query, "why": why})
+
+    if should_research and not targets:
+        return {
+            "should_research": False,
+            "reason": "planner_returned_no_targets",
+            "targets": [],
+        }
+    return {
+        "should_research": should_research,
+        "reason": reason,
+        "targets": targets,
+    }
+
+
+def _sanitize_research_findings(raw_text: str) -> str:
+    lines: list[str] = []
+    for raw_line in str(raw_text or "").splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        normalized = line[1:].strip() if line.startswith("-") else line
+        if not normalized:
+            continue
+
+        has_why = "why it matters:" in normalized.lower()
+        has_source = bool(re.search(r"source:\s*https?://", normalized, re.IGNORECASE))
+        if not (has_why and has_source):
+            continue
+        lines.append(f"- {normalized}")
+
+    return "\n".join(lines)
 
 
 def _synthesise_event_summary(
@@ -925,6 +1369,7 @@ def _synthesise_event_summary(
         "Use this interpretation rule:\n"
         "- 'CURRENT UPCOMING EVENT' and 'Current event notes' are about the event being prepared now.\n"
         "- 'Historical similar occurrences' are past references for pattern extraction only.\n"
+        "- When historical similar occurrences exist, first summarize the most important points discussed in those past meetings before adding any new prep advice.\n"
         "Never mix up current commitments with historical notes.\n\n"
         "Perspective: this summary is for the calendar owner. Use second-person framing where useful\n"
         "(for example 'you will review metrics'). If owner names/aliases appear in notes,\n"
@@ -932,23 +1377,26 @@ def _synthesise_event_summary(
         "'align with <owner name>' when referring to the owner.\n\n"
         "Quality bar (strict):\n"
         "- Only include non-obvious, high-value points grounded in the provided context/research.\n"
-        "- Do not include generic advice, like uploading documents somewhere if you don't know which documents you are talking about.\n"
-        "- Do not suggest invite reminders, the meetings are already schedule and have their own reminders. Also do not suggest reaching out to people to remind them about the meeting or about its agenda.\n"
-        "- Do not suggest testing/verifying audio or video quality, or testing connection speed.\n"
-        "- All links, meeting times, credentials are correct and do not require double-checking.\n"
-        "- Do NOT output generic prep advice (for example, reviewing notes, checking agenda,\n"
+        "- Never invent facts. Every non-reading bullet MUST end with an evidence marker.\n"
+        "- Evidence marker format: (evidence: history) or (evidence: todo) or (evidence: current_notes) or (evidence: research:https://url).\n"
+        "- DO NOT include generic advice, like uploading documents somewhere if you don't know which documents you are talking about.\n"
+        "- DO NOT suggest invite reminders, the meetings are already schedule and have their own reminders. Also do not suggest reaching out to people to remind them about the meeting or about its agenda.\n"
+        "- DO NOT suggest testing/verifying audio or video quality, or testing connection speed.\n"
+        "- All links, meeting times, credentials ARE correct and DO NOT require double-checking.\n"
+        "- DO NOT output generic prep advice (for example, reviewing notes, checking agenda,\n"
         "  preparing talking points, or calendar hygiene).\n"
         "- Your goal is to do work that the user would have to do themselves, not to just point out what they need to do.\n"
+        "- If there is no meaningful grounded insight, respond exactly with NO_MEANINGFUL_PREP.\n"
         "- If a section has no meaningful insight, omit that section.\n\n"
         "Respond with exactly these sections (skip a section if nothing relevant):\n"
         "KEY POINTS:\n"
-        "- Important context from past occurrences or notes\n\n"
+        "- Start with 2-4 most important points discussed in past occurrences when available; otherwise use current notes (evidence required)\n\n"
         "ACTION ITEMS:\n"
-        "- Pending todos, follow-ups, or preparation tasks\n\n"
+        "- Pending todos, follow-ups, or preparation tasks (evidence required)\n\n"
         "SUGGESTED READING:\n"
         "- Links or material worth reviewing before this event (from research or notes)\n\n"
         "PREP FOCUS:\n"
-        "- One sentence on what to prioritize before this event"
+        "- One sentence on what to prioritize before this event (evidence required)"
     )
 
     try:
@@ -958,6 +1406,8 @@ def _synthesise_event_summary(
             temperature=0.1,
             use_simpler_model=False,
         )
+        if str(result or "").strip().upper().startswith("NO_MEANINGFUL_PREP"):
+            return ""
         return _sanitize_event_summary_output(result)
     except Exception:
         logger.warning("Failed to summarize event '%s', using fallback", title, exc_info=True)
@@ -989,6 +1439,14 @@ def _sanitize_event_summary_output(raw_text: str) -> str:
         if not normalized:
             continue
         if current_section != "SUGGESTED READING" and _is_low_value_prep_line(normalized):
+            continue
+        if current_section != "SUGGESTED READING":
+            if not _EVIDENCE_MARKER_RE.search(normalized):
+                continue
+            normalized = _EVIDENCE_MARKER_RE.sub("", normalized).strip()
+        elif not re.search(r"https?://", normalized, re.IGNORECASE):
+            continue
+        if not normalized:
             continue
         sections[current_section].append(normalized)
 
@@ -1167,8 +1625,6 @@ def _build_event_sections_deterministic(context: dict[str, Any]) -> str:
         if key_points:
             for point in key_points[:3]:
                 lines.append(f"- {point}")
-        else:
-            lines.append("- Review the latest context and objectives for this event.")
         if action_items:
             for action in action_items[:4]:
                 lines.append(f"- {action}")
@@ -1179,6 +1635,8 @@ def _build_event_sections_deterministic(context: dict[str, Any]) -> str:
                 lines.append(f"- Pending todo: {desc}")
         if prep_focus:
             lines.append(f"- Prep focus: {prep_focus}")
+        if not key_points and not action_items and not prep_focus and not linked_todos:
+            lines.append("- No grounded prep insights available from current context.")
         lines.append("")
     return "\n".join(lines).strip()
 

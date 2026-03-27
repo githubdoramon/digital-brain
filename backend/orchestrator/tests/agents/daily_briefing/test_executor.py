@@ -2,17 +2,21 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from unittest.mock import MagicMock, patch
 
 from agents.daily_briefing.executor import (
     BIRTHDAY_LOOKAHEAD_DAYS,
+    _build_event_research_value_signals,
     _build_briefing_prompt,
     _enrich_selected_news_summaries,
+    _fetch_similar_events,
     _format_context_text,
     _format_event_for_analysis,
     _generate_news_section_markdown,
     _generate_summary,
     _research_event,
+    _sanitize_research_findings,
     _select_news_for_generation,
     _summarize_event,
     _synthesise_event_summary,
@@ -249,8 +253,27 @@ class TestFormatEventForAnalysis:
 class TestResearchEvent:
     @patch("agents.daily_briefing.executor.run_profiled_tool_loop")
     @patch("agents.daily_briefing.executor.build_event_research_profile")
-    def test_returns_research_content(self, mock_build_profile, mock_tool_loop):
+    @patch("agents.daily_briefing.executor._plan_event_research")
+    @patch("agents.daily_briefing.executor._build_event_research_value_signals")
+    def test_returns_research_content(
+        self,
+        mock_value_signals,
+        mock_plan_research,
+        mock_build_profile,
+        mock_tool_loop,
+    ):
         """Research loop returns useful findings."""
+        mock_value_signals.return_value = {
+            "score": 3,
+            "reasons": ["high_signal_title"],
+            "should_research": True,
+            "external_contact_count": 1,
+        }
+        mock_plan_research.return_value = {
+            "should_research": True,
+            "reason": "high_value",
+            "targets": [{"query": "Acme Corp", "why": "Partner context"}],
+        }
         mock_profile = MagicMock()
         mock_profile.build_tools_and_handlers.return_value = (
             [{"type": "function", "function": {"name": "web_search"}}],
@@ -261,7 +284,7 @@ class TestResearchEvent:
         mock_build_profile.return_value = mock_profile
 
         mock_tool_loop.return_value = {
-            "content": "- Acme Corp raised $50M Series B\n- Source: https://example.com"
+            "content": "- Acme Corp raised $50M Series B. Why it matters: gives leverage context before pricing discussion. Source: https://example.com"
         }
 
         result = _research_event("Event: Acme Intro Call", "Acme Intro Call", "UTC")
@@ -271,8 +294,27 @@ class TestResearchEvent:
 
     @patch("agents.daily_briefing.executor.run_profiled_tool_loop")
     @patch("agents.daily_briefing.executor.build_event_research_profile")
-    def test_no_research_needed_returns_empty(self, mock_build_profile, mock_tool_loop):
+    @patch("agents.daily_briefing.executor._plan_event_research")
+    @patch("agents.daily_briefing.executor._build_event_research_value_signals")
+    def test_no_research_needed_returns_empty(
+        self,
+        mock_value_signals,
+        mock_plan_research,
+        mock_build_profile,
+        mock_tool_loop,
+    ):
         """When the LLM decides no research is needed, return empty string."""
+        mock_value_signals.return_value = {
+            "score": 3,
+            "reasons": ["specific_title"],
+            "should_research": True,
+            "external_contact_count": 0,
+        }
+        mock_plan_research.return_value = {
+            "should_research": True,
+            "reason": "high_value",
+            "targets": [{"query": "Team standup", "why": "none"}],
+        }
         mock_profile = MagicMock()
         mock_profile.build_tools_and_handlers.return_value = (
             [{"type": "function", "function": {"name": "web_search"}}],
@@ -291,8 +333,27 @@ class TestResearchEvent:
         "agents.daily_briefing.executor.run_profiled_tool_loop", side_effect=Exception("timeout")
     )
     @patch("agents.daily_briefing.executor.build_event_research_profile")
-    def test_graceful_failure(self, mock_build_profile, mock_tool_loop):
+    @patch("agents.daily_briefing.executor._plan_event_research")
+    @patch("agents.daily_briefing.executor._build_event_research_value_signals")
+    def test_graceful_failure(
+        self,
+        mock_value_signals,
+        mock_plan_research,
+        mock_build_profile,
+        mock_tool_loop,
+    ):
         """Research failures should not crash the pipeline."""
+        mock_value_signals.return_value = {
+            "score": 3,
+            "reasons": ["high_signal_title"],
+            "should_research": True,
+            "external_contact_count": 1,
+        }
+        mock_plan_research.return_value = {
+            "should_research": True,
+            "reason": "high_value",
+            "targets": [{"query": "Something", "why": "unknown org"}],
+        }
         mock_profile = MagicMock()
         mock_profile.build_tools_and_handlers.return_value = (
             [{"type": "function", "function": {"name": "web_search"}}],
@@ -305,6 +366,94 @@ class TestResearchEvent:
         result = _research_event("Event: Something", "Something", "UTC")
         assert result == ""
 
+    @patch("agents.daily_briefing.executor._build_event_research_value_signals")
+    def test_value_gate_can_skip_without_calling_tools(self, mock_value_signals):
+        mock_value_signals.return_value = {
+            "score": 0,
+            "reasons": ["history_already_rich"],
+            "should_research": False,
+            "external_contact_count": 0,
+        }
+
+        result = _research_event("Event: Weekly Standup", "Weekly Standup", "UTC")
+        assert result == ""
+
+
+class TestResearchFindingSanitization:
+    def test_keeps_only_findings_with_why_and_source(self):
+        raw = (
+            "- Funding round announced. Why it matters: changes negotiation leverage. Source: https://example.com/news\n"
+            "- Generic background paragraph without source\n"
+            "- Product release. Source: https://example.com/release\n"
+        )
+        cleaned = _sanitize_research_findings(raw)
+        assert "Funding round announced" in cleaned
+        assert "Generic background" not in cleaned
+        assert "Product release" not in cleaned
+
+
+class TestResearchValueSignals:
+    def test_scores_external_high_signal_event_for_research(self):
+        signals = _build_event_research_value_signals(
+            title="Customer integration kickoff",
+            event_text="CURRENT UPCOMING EVENT: Customer integration kickoff",
+            event_context={
+                "similar_events": [],
+                "contacts": [
+                    {
+                        "display_name": "Partner Lead",
+                        "emails": ["lead@partner.com"],
+                        "tags": [],
+                        "comments": "",
+                    }
+                ],
+            },
+            user_email="owner@mycompany.com",
+        )
+        assert signals["should_research"] is True
+        assert signals["score"] >= 2
+
+
+class TestSimilarEventsFallback:
+    @patch("agents.daily_briefing.executor._fetch_similar_by_attendee_overlap")
+    @patch("agents.daily_briefing.executor._fetch_similar_by_recurrence")
+    @patch("agents.daily_briefing.executor._fetch_similar_by_title")
+    def test_uses_attendee_overlap_when_title_and_recurrence_empty(
+        self,
+        mock_by_title,
+        mock_by_recurrence,
+        mock_by_attendee,
+    ):
+        mock_by_title.return_value = []
+        mock_by_recurrence.return_value = []
+        mock_by_attendee.return_value = [
+            {
+                "id": "evt_old",
+                "title": "Different name but same crew",
+                "start_date": "2026-01-01T10:00:00+00:00",
+                "end_date": "2026-01-01T11:00:00+00:00",
+                "summary": "Past discussion",
+                "people": ["contact:a", "contact:b"],
+                "attendee_overlap_ratio": 1.0,
+                "similarity_match_type": "attendee_exact",
+            }
+        ]
+
+        event = {
+            "id": "evt_new",
+            "title": "New naming",
+            "people": ["contact:a", "contact:b"],
+            "raw": {},
+        }
+        result = _fetch_similar_events(
+            event,
+            day_start=datetime(2026, 2, 1, tzinfo=timezone.utc),
+            limit=3,
+        )
+
+        assert len(result) == 1
+        assert result[0]["similarity_match_type"] == "attendee_exact"
+
 
 # ---------------------------------------------------------------------------
 # _synthesise_event_summary – final synthesis with research
@@ -314,7 +463,7 @@ class TestResearchEvent:
 class TestSynthesiseEventSummary:
     @patch("agents.daily_briefing.executor.call_llm")
     def test_includes_research_in_prompt(self, mock_call_llm):
-        mock_call_llm.return_value = "KEY POINTS:\n- Acme raised funding"
+        mock_call_llm.return_value = "KEY POINTS:\n- Acme raised funding (evidence: research:https://example.com)"
         result = _synthesise_event_summary(
             "Event: Acme Call",
             "- Acme raised $50M\n- Source: https://example.com",
@@ -329,7 +478,7 @@ class TestSynthesiseEventSummary:
 
     @patch("agents.daily_briefing.executor.call_llm")
     def test_no_research_section_when_empty(self, mock_call_llm):
-        mock_call_llm.return_value = "KEY POINTS:\n- Routine standup"
+        mock_call_llm.return_value = "KEY POINTS:\n- Routine standup (evidence: history)"
         _synthesise_event_summary("Event: Standup", "", "Standup", "UTC")
         prompt = mock_call_llm.call_args[0][0]
         assert "WEB RESEARCH FINDINGS" not in prompt
@@ -345,13 +494,13 @@ class TestSynthesiseEventSummary:
     def test_filters_low_value_generic_action_items(self, mock_call_llm):
         mock_call_llm.return_value = (
             "KEY POINTS:\n"
-            "- Procurement asked for final budget sign-off by 15:00.\n"
+            "- Procurement asked for final budget sign-off by 15:00. (evidence: history)\n"
             "ACTION ITEMS:\n"
-            "- Review previous meeting notes.\n"
-            "- Prepare talking points.\n"
-            "- Send finance risk memo before the meeting.\n"
+            "- Review previous meeting notes. (evidence: history)\n"
+            "- Prepare talking points. (evidence: history)\n"
+            "- Send finance risk memo before the meeting. (evidence: todo)\n"
             "PREP FOCUS:\n"
-            "- Confirm the agenda.\n"
+            "- Confirm the agenda. (evidence: history)\n"
         )
 
         result = _synthesise_event_summary("Event: Finance Review", "", "Finance Review", "UTC")
@@ -364,6 +513,20 @@ class TestSynthesiseEventSummary:
     @patch("agents.daily_briefing.executor.call_llm", side_effect=Exception("LLM down"))
     def test_returns_empty_on_failure(self, mock_call_llm):
         result = _synthesise_event_summary("Event: X", "", "X", "UTC")
+        assert result == ""
+
+    @patch("agents.daily_briefing.executor.call_llm")
+    def test_drops_non_grounded_lines_without_evidence_marker(self, mock_call_llm):
+        mock_call_llm.return_value = (
+            "KEY POINTS:\n"
+            "- This is likely about launching in a new market.\n"
+            "ACTION ITEMS:\n"
+            "- Gather unknown competitor intel.\n"
+            "PREP FOCUS:\n"
+            "- General preparation mindset.\n"
+        )
+
+        result = _synthesise_event_summary("Event: Strategy", "", "Strategy", "UTC")
         assert result == ""
 
 

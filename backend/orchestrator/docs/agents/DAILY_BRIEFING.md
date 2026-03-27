@@ -11,7 +11,10 @@ This document captures behavior and quality rules for the daily briefing profile
 ## Generation Flow
 
 1. Gather event context for the day, similar past events, linked todos, contacts.
-2. Run per-event deep analysis (`_summarize_event`) using dedicated calls.
+2. Run per-event deep analysis (`_summarize_event`) using dedicated calls:
+   - Similar history retrieval uses exact title and recurrence keys first.
+   - If those miss, fallback to attendee-overlap history (exact attendee set first, then >=80% overlap), ranked by overlap and recency.
+   - Event web research is allowed for any event, but gated by value signals and a strict planning pass.
 3. Gather birthdays and unlinked pending todos.
 4. Aggregate news via `news_feeds.fetch_news()` (Tavily + NewsData + RSS), then story-cluster and persist mention history.
 5. Generate final markdown in focused passes:
@@ -64,7 +67,19 @@ This document captures behavior and quality rules for the daily briefing profile
 - Event prep should avoid phrasing like "align with <owner name>" when that name is the user.
 - Event prep output should suppress low-value generic advice (for example "review notes", "confirm agenda", "prepare talking points") and only keep context-grounded, non-obvious items.
 - Event synthesis should explicitly separate current upcoming-event context from historical similar-event references.
+- Event synthesis must be evidence-grounded: prep bullets without explicit evidence anchors are dropped.
 - Keep `Day Overview` strategic and concise, while `Schedule` carries the concrete per-event timeline.
+
+## Event Research Policy
+
+- Research can run for any event, including events that already have historical recurrence context.
+- Research must pass a value gate (e.g., external attendees, high-signal event framing, or context gaps) before tool usage.
+- A planning pass proposes up to 3 targeted queries with explicit "why this matters now" rationale.
+- Research output is accepted only when each finding contains both:
+  - meeting-specific impact ("why it matters"), and
+  - source URL.
+- Generic company overviews, meeting hygiene reminders, and unsupported suggestions are treated as low-value and removed.
+- If no grounded high-value finding is available, research is skipped and event prep remains sparse.
 
 ## Summary Rules
 
