@@ -55,7 +55,9 @@ def test_ingest_external_event_updates_existing_event_time(monkeypatch):
     assert captured[0].end_date == incoming_end
 
 
-def test_ingest_external_event_authoritatively_replaces_people_summary_and_place(monkeypatch):
+def test_ingest_external_event_authoritatively_replaces_people_and_place_but_keeps_summary(
+    monkeypatch,
+):
     existing_event_id = "google:def456:event"
     incoming_start = datetime(2026, 2, 25, 15, 30, tzinfo=timezone.utc)
 
@@ -104,7 +106,7 @@ def test_ingest_external_event_authoritatively_replaces_people_summary_and_place
     assert captured[0].end_date is None
     assert captured[0].place_id is None
     assert captured[0].people == []
-    assert captured[0].summary == "New concise summary"
+    assert captured[0].summary == "Old summary"
 
 
 def test_merge_event_stays_additive_by_default():

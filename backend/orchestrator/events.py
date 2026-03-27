@@ -819,7 +819,7 @@ def _merge_event(
         merged_place_id = incoming.place_id
         merged_people = list(dict.fromkeys(incoming.people or []))
 
-        #don't override summaries because we might already have injected new things from granola for example
+        # Keep existing summary text because it may include richer notes from other sources.
         merged_summary = existing.get("summary") or incoming.summary or ""
     else:
         existing_end = existing.get("end_date")
