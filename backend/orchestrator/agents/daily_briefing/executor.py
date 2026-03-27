@@ -3,9 +3,9 @@ from __future__ import annotations
 import json
 import logging
 import re
-from math import ceil
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date, datetime, time, timedelta, timezone
+from math import ceil
 from time import perf_counter
 from typing import Any
 from uuid import uuid4

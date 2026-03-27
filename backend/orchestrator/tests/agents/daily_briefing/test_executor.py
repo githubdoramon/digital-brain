@@ -7,8 +7,8 @@ from unittest.mock import MagicMock, patch
 
 from agents.daily_briefing.executor import (
     BIRTHDAY_LOOKAHEAD_DAYS,
-    _build_event_research_value_signals,
     _build_briefing_prompt,
+    _build_event_research_value_signals,
     _enrich_selected_news_summaries,
     _fetch_similar_events,
     _format_context_text,
