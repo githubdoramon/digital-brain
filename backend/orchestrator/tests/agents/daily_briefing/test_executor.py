@@ -15,6 +15,7 @@ from agents.daily_briefing.executor import (
     _format_event_for_analysis,
     _generate_news_section_markdown,
     _generate_summary,
+    _normalize_similarity_attendees,
     _research_event,
     _sanitize_research_findings,
     _select_news_for_generation,
@@ -453,6 +454,57 @@ class TestSimilarEventsFallback:
 
         assert len(result) == 1
         assert result[0]["similarity_match_type"] == "attendee_exact"
+
+    @patch("agents.daily_briefing.executor._fetch_similar_by_attendee_overlap")
+    @patch("agents.daily_briefing.executor._fetch_similar_by_recurrence")
+    @patch("agents.daily_briefing.executor._fetch_similar_by_title")
+    def test_skips_attendee_overlap_when_only_self_attendee(
+        self,
+        mock_by_title,
+        mock_by_recurrence,
+        mock_by_attendee,
+    ):
+        mock_by_title.return_value = []
+        mock_by_recurrence.return_value = []
+        mock_by_attendee.return_value = [
+            {
+                "id": "evt_old",
+                "title": "Should not be used",
+                "start_date": "2026-01-01T10:00:00+00:00",
+                "end_date": "2026-01-01T11:00:00+00:00",
+                "summary": "Past discussion",
+                "people": ["contact:user"],
+            }
+        ]
+
+        event = {
+            "id": "evt_new",
+            "title": "Solo sync",
+            "people": ["contact:user"],
+            "raw": {},
+        }
+        result = _fetch_similar_events(
+            event,
+            day_start=datetime(2026, 2, 1, tzinfo=timezone.utc),
+            limit=3,
+            self_contact_id="contact:user",
+        )
+
+        assert result == []
+        mock_by_attendee.assert_not_called()
+
+
+class TestSimilarityAttendeeNormalization:
+    def test_excludes_self_and_blanks(self):
+        normalized = _normalize_similarity_attendees(
+            ["contact:user", "contact:alice", "", "contact:alice", "  "],
+            "contact:user",
+        )
+        assert normalized == {"contact:alice"}
+
+    def test_can_return_empty_when_only_self_present(self):
+        normalized = _normalize_similarity_attendees(["contact:user"], "contact:user")
+        assert normalized == set()
 
 
 # ---------------------------------------------------------------------------

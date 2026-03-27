@@ -14,6 +14,7 @@ This document captures behavior and quality rules for the daily briefing profile
 2. Run per-event deep analysis (`_summarize_event`) using dedicated calls:
    - Similar history retrieval uses exact title and recurrence keys first.
    - If those miss, fallback to attendee-overlap history (exact attendee set first, then >=80% overlap), ranked by overlap and recency.
+   - Attendee-overlap comparison excludes the current user from both sides and ignores zero-attendee matches after that filtering.
    - Event web research is allowed for any event, but gated by value signals and a strict planning pass.
 3. Gather birthdays and unlinked pending todos.
 4. Aggregate news via `news_feeds.fetch_news()` (Tavily + NewsData + RSS), then story-cluster and persist mention history.

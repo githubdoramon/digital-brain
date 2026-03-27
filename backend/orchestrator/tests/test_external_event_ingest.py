@@ -139,3 +139,51 @@ def test_merge_event_stays_additive_by_default():
     assert merged.place_id == existing["place_id"]
     assert merged.people == ["contact:ana", "contact:bruno"]
     assert merged.summary == "Old notes\n\nNew notes"
+
+
+def test_resolve_attendee_contacts_groups_all_attendees_by_domain(monkeypatch):
+    contact_map = {
+        "alice@acme.com": ("contact:alice", False),
+        "bob@acme.com": ("contact:bob", True),
+        "carol@other.com": ("contact:carol", False),
+        "me@acme.com": ("contact:me", False),
+    }
+
+    monkeypatch.setattr(
+        "events.contacts_service.ensure_contact_for_email",
+        lambda email: contact_map[email.lower()],
+    )
+
+    unique_contacts, attendee_contacts_by_domain = events._resolve_attendee_contacts(
+        ["alice@acme.com", "bob@acme.com", "carol@other.com"],
+        contact_cache={},
+        current_user={"email": "me@acme.com"},
+    )
+
+    assert unique_contacts == ["contact:alice", "contact:bob", "contact:carol", "contact:me"]
+    assert sorted(attendee_contacts_by_domain["acme.com"]) == [
+        "contact:alice",
+        "contact:bob",
+        "contact:me",
+    ]
+    assert attendee_contacts_by_domain["other.com"] == ["contact:carol"]
+
+
+def test_create_coworker_relationships_skips_existing_pairs(monkeypatch):
+    created_relationship_ids: list[str] = []
+
+    monkeypatch.setattr(
+        "events._get_existing_relationship_ids",
+        lambda _relationship_ids: {"rel:coworker:acme.com:contact:a:contact:b"},
+    )
+    monkeypatch.setattr(
+        "events.contacts_service.upsert_contact_relationship",
+        lambda rel: created_relationship_ids.append(rel.relationship_id),
+    )
+
+    events._create_coworker_relationships({"acme.com": ["contact:a", "contact:b", "contact:c"]})
+
+    assert created_relationship_ids == [
+        "rel:coworker:acme.com:contact:a:contact:c",
+        "rel:coworker:acme.com:contact:b:contact:c",
+    ]

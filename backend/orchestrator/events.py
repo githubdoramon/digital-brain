@@ -106,7 +106,7 @@ def _resolve_attendee_contacts(
     current_user: dict | None,
 ) -> tuple[list[str], dict[str, list[str]]]:
     contact_ids: list[str] = []
-    new_contacts_by_domain: dict[str, list[str]] = {}
+    attendee_contacts_by_domain: dict[str, list[str]] = {}
 
     for email in attendee_emails:
         normalized = contacts_service.normalize_email(email)
@@ -120,9 +120,9 @@ def _resolve_attendee_contacts(
                 contact_cache[normalized] = (contact_id, created_now)
         if contact_id:
             contact_ids.append(contact_id)
-            if created_now and normalized and "@" in normalized:
+            if normalized and "@" in normalized:
                 domain = normalized.split("@", 1)[1]
-                new_contacts_by_domain.setdefault(domain, []).append(contact_id)
+                attendee_contacts_by_domain.setdefault(domain, []).append(contact_id)
 
     unique_contacts = list(dict.fromkeys(contact_ids))
 
@@ -136,29 +136,59 @@ def _resolve_attendee_contacts(
                     contact_cache[normalized_current] = (contact_id, created_now)
                 if contact_id and contact_id not in unique_contacts:
                     unique_contacts.append(contact_id)
+                if contact_id and normalized_current and "@" in normalized_current:
+                    domain = normalized_current.split("@", 1)[1]
+                    attendee_contacts_by_domain.setdefault(domain, []).append(contact_id)
 
-    return unique_contacts, new_contacts_by_domain
+    return unique_contacts, attendee_contacts_by_domain
 
 
-def _create_coworker_relationships(new_contacts_by_domain: dict[str, list[str]]) -> None:
-    for domain, ids in new_contacts_by_domain.items():
-        if len(ids) < 2:
+def _get_existing_relationship_ids(relationship_ids: Sequence[str]) -> set[str]:
+    if not relationship_ids:
+        return set()
+
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT relationship_id
+            FROM contact_relationships
+            WHERE relationship_id = ANY(%s)
+            """,
+            (list(relationship_ids),),
+        )
+        rows = [dict(row) for row in cur.fetchall()]
+        existing_ids: set[str] = set()
+        for row in rows:
+            relationship_id = str(row["relationship_id"] or "")
+            if relationship_id:
+                existing_ids.add(relationship_id)
+        return existing_ids
+
+
+def _create_coworker_relationships(attendee_contacts_by_domain: dict[str, list[str]]) -> None:
+    candidate_relationships: list[tuple[str, str, str]] = []
+    for domain, ids in attendee_contacts_by_domain.items():
+        unique_ids = sorted(set(ids))
+        if len(unique_ids) < 2:
             continue
-        seen_pairs = set()
-        for a, b in combinations(sorted(set(ids)), 2):
-            pair_key = (a, b)
-            if pair_key in seen_pairs:
-                continue
-            seen_pairs.add(pair_key)
+        for a, b in combinations(unique_ids, 2):
             relationship_id = f"rel:coworker:{domain}:{a}:{b}"
-            rel = ContactRelationshipIn(
-                relationship_id=relationship_id,
-                from_contact_id=a,
-                to_contact_id=b,
-                relationship_type="Co-worker",
-                reciprocal_type="Co-worker",
-            )
-            contacts_service.upsert_contact_relationship(rel)
+            candidate_relationships.append((relationship_id, a, b))
+
+    existing_relationship_ids = _get_existing_relationship_ids(
+        [relationship_id for relationship_id, _a, _b in candidate_relationships]
+    )
+    for relationship_id, a, b in candidate_relationships:
+        if relationship_id in existing_relationship_ids:
+            continue
+        rel = ContactRelationshipIn(
+            relationship_id=relationship_id,
+            from_contact_id=a,
+            to_contact_id=b,
+            relationship_type="Co-worker",
+            reciprocal_type="Co-worker",
+        )
+        contacts_service.upsert_contact_relationship(rel)
 
 
 def ingest_external_event(payload: ExternalEventPayload) -> str:
@@ -187,14 +217,14 @@ def ingest_external_event(payload: ExternalEventPayload) -> str:
     attendee_emails = event.attendees_emails or []
     contact_cache: dict[str, tuple[str | None, bool]] = {}
     current_user = _load_current_user_from_env()
-    unique_contacts, new_contacts_by_domain = _resolve_attendee_contacts(
+    unique_contacts, attendee_contacts_by_domain = _resolve_attendee_contacts(
         attendee_emails,
         contact_cache=contact_cache,
         current_user=current_user,
     )
     if unique_contacts:
         event.people = unique_contacts
-    _create_coworker_relationships(new_contacts_by_domain)
+    _create_coworker_relationships(attendee_contacts_by_domain)
 
     ingest_event(event)
     return normalized_event_id
@@ -219,12 +249,12 @@ def ingest_meeting_notes(
     )
     for meeting in meetings:
         attendee_emails = meeting.attendees_emails or []
-        unique_contacts, new_contacts_by_domain = _resolve_attendee_contacts(
+        unique_contacts, attendee_contacts_by_domain = _resolve_attendee_contacts(
             attendee_emails,
             contact_cache=contact_cache,
             current_user=current_user,
         )
-        _create_coworker_relationships(new_contacts_by_domain)
+        _create_coworker_relationships(attendee_contacts_by_domain)
 
         normalized_meeting_id: str | None = None
         provided_meeting_id = getattr(meeting, "id", None)
@@ -255,9 +285,6 @@ def ingest_meeting_notes(
 
         if not event_id:
             event_id = f"meeting:{meeting.date.strftime('%Y%m%dT%H%M%S')}-{_slugify(title)}-{uuid4().hex[:8]}"
-
-        # if existing_event and not event_external_id:
-        #     event_external_id = _get_event_external_id(event_id)
 
         raw_payload = {
             "content": meeting.content,
@@ -791,7 +818,9 @@ def _merge_event(
         merged_end = incoming.end_date
         merged_place_id = incoming.place_id
         merged_people = list(dict.fromkeys(incoming.people or []))
-        merged_summary = incoming.summary
+
+        #don't override summaries because we might already have injected new things from granola for example
+        merged_summary = existing.get("summary") or incoming.summary or ""
     else:
         existing_end = existing.get("end_date")
         incoming_end = incoming.end_date

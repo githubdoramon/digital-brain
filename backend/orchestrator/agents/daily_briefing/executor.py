@@ -153,8 +153,16 @@ def build_daily_briefing(
 
     # -- 1. Gather raw event data ------------------------------------------------
     t0 = perf_counter()
+    from contacts import get_self_contact_id
+
     events = [_apply_timezone(event, tz) for event in _fetch_events_for_span(start_utc, end_utc)]
-    event_contexts = _build_event_contexts_parallel(events, tz, start_utc)
+    self_contact_id = get_self_contact_id(user_email) if user_email else None
+    event_contexts = _build_event_contexts_parallel(
+        events,
+        tz,
+        start_utc,
+        self_contact_id=self_contact_id,
+    )
     logger.info(
         "[briefing] Events: %d found, %d with similar history (%.0fms)",
         len(events),
@@ -417,6 +425,8 @@ def _build_event_contexts_parallel(
     events: list[dict[str, Any]],
     tz: ZoneInfo,
     start_utc: datetime,
+    *,
+    self_contact_id: str | None = None,
 ) -> list[dict[str, Any]]:
     if not events:
         return []
@@ -425,7 +435,7 @@ def _build_event_contexts_parallel(
     max_workers = min(EVENT_ENRICHMENT_MAX_WORKERS, len(events))
     with ThreadPoolExecutor(max_workers=max_workers) as pool:
         future_map = {
-            pool.submit(_build_single_event_context, event, tz, start_utc): idx
+            pool.submit(_build_single_event_context, event, tz, start_utc, self_contact_id): idx
             for idx, event in enumerate(events)
         }
         for future in as_completed(future_map):
@@ -453,10 +463,16 @@ def _build_single_event_context(
     event: dict[str, Any],
     tz: ZoneInfo,
     start_utc: datetime,
+    self_contact_id: str | None,
 ) -> dict[str, Any]:
     similar_events = [
         _apply_timezone(similar, tz)
-        for similar in _fetch_similar_events(event, start_utc, DEFAULT_SIMILAR_LIMIT)
+        for similar in _fetch_similar_events(
+            event,
+            start_utc,
+            DEFAULT_SIMILAR_LIMIT,
+            self_contact_id=self_contact_id,
+        )
     ]
     event_todos = todos_service.list_event_todos(event["id"], pending_only=True)
     related_todos = _collect_related_event_todos(similar_events)
@@ -511,6 +527,8 @@ def _fetch_similar_events(
     event: dict[str, Any],
     day_start: datetime,
     limit: int,
+    *,
+    self_contact_id: str | None = None,
 ) -> list[dict[str, Any]]:
     if limit <= 0:
         return []
@@ -558,10 +576,14 @@ def _fetch_similar_events(
     if remaining <= 0:
         return matches
 
+    if not _normalize_similarity_attendees(event.get("people") or [], self_contact_id):
+        return matches
+
     attendee_matches = _fetch_similar_by_attendee_overlap(
         event,
         day_start,
         limit=max(remaining * ATTENDEE_OVERLAP_CANDIDATE_MULTIPLIER, remaining),
+        self_contact_id=self_contact_id,
     )
     for row in attendee_matches:
         rid = str(row.get("id") or "").strip()
@@ -578,11 +600,10 @@ def _fetch_similar_by_attendee_overlap(
     event: dict[str, Any],
     day_start: datetime,
     limit: int,
+    *,
+    self_contact_id: str | None = None,
 ) -> list[dict[str, Any]]:
-    current_people = [
-        str(contact_id).strip() for contact_id in (event.get("people") or []) if str(contact_id).strip()
-    ]
-    current_set = set(current_people)
+    current_set = _normalize_similarity_attendees(event.get("people") or [], self_contact_id)
     attendee_count = len(current_set)
     event_id = str(event.get("id") or "").strip()
     if not event_id or attendee_count == 0 or limit <= 0:
@@ -649,11 +670,10 @@ def _fetch_similar_by_attendee_overlap(
     for row in rows:
         overlap_count = int(row.get("overlap_count") or 0)
         normalized_row = _normalize_event_row(row)
-        candidate_people = {
-            str(contact_id).strip()
-            for contact_id in (normalized_row.get("people") or [])
-            if str(contact_id).strip()
-        }
+        candidate_people = _normalize_similarity_attendees(
+            normalized_row.get("people") or [],
+            self_contact_id,
+        )
         if not candidate_people:
             continue
         intersection_count = len(current_set & candidate_people)
@@ -678,6 +698,17 @@ def _fetch_similar_by_attendee_overlap(
         reverse=True,
     )
     return [row for _score, row in scored_matches]
+
+
+def _normalize_similarity_attendees(
+    attendees: list[Any],
+    self_contact_id: str | None,
+) -> set[str]:
+    normalized = {str(contact_id).strip() for contact_id in attendees if str(contact_id).strip()}
+    self_id = str(self_contact_id or "").strip()
+    if self_id:
+        normalized.discard(self_id)
+    return normalized
 
 
 def _fetch_similar_by_title(
