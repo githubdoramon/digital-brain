@@ -14,7 +14,6 @@ import contacts as contacts_service
 from db import enrich_people, fetch_events, get_conn
 from embeddings import embed_text
 from observability.logger import get_runtime_logger
-from search_normalization import normalize_search_text
 from schemas import (
     ContactRelationshipIn,
     EventIn,
@@ -22,6 +21,7 @@ from schemas import (
     MeetingIn,
     TodoIn,
 )
+from search_normalization import normalize_search_text
 from tags_manager import (
     _merge_tag_lists,
     _normalize_strings,
