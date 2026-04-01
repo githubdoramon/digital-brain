@@ -766,19 +766,11 @@ def _extract_next_steps(content: str | None, *, user_tokens: Sequence[str] | Non
             continue
 
         indent, text = list_item
-        if current_group_indent is not None and indent <= current_group_indent:
-            logger.debug(
-                "[meeting_notes] Leaving assignee group: prior_indent=%s new_indent=%d line=%r",
-                current_group_indent,
-                indent,
-                _preview_meeting_line(text),
-            )
-            current_group_indent = None
-            current_group_is_user = False
-
-        if _matches_user_token(text, normalized_user_tokens) or _looks_like_person_label(text):
+        is_user_label = _matches_user_token(text, normalized_user_tokens)
+        is_person_label = is_user_label or _looks_like_person_label(text)
+        if is_person_label:
             current_group_indent = indent
-            current_group_is_user = _matches_user_token(text, normalized_user_tokens)
+            current_group_is_user = is_user_label
             last_captured_index = None
             logger.debug(
                 "[meeting_notes] Assignee bullet detected: label=%r matched_user=%s indent=%d",
@@ -789,20 +781,22 @@ def _extract_next_steps(content: str | None, *, user_tokens: Sequence[str] | Non
             continue
 
         normalized_text = normalize_search_text(text)
-        if current_group_indent is not None and indent > current_group_indent:
+        if current_group_indent is not None:
             if current_group_is_user:
                 steps.append(text)
                 last_captured_index = len(steps) - 1
                 logger.debug(
-                    "[meeting_notes] Captured grouped step[%d]: indent=%d text=%r",
+                    "[meeting_notes] Captured grouped step[%d]: group_indent=%s indent=%d text=%r",
                     last_captured_index,
+                    current_group_indent,
                     indent,
                     _preview_meeting_line(text),
                 )
             else:
                 last_captured_index = None
                 logger.debug(
-                    "[meeting_notes] Skipped grouped step for other assignee: indent=%d text=%r",
+                    "[meeting_notes] Skipped grouped step for other assignee: group_indent=%s indent=%d text=%r",
+                    current_group_indent,
                     indent,
                     _preview_meeting_line(text),
                 )

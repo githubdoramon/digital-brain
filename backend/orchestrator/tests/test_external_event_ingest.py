@@ -227,6 +227,25 @@ Seb
     ]
 
 
+def test_extract_next_steps_supports_same_indent_assignee_and_task_bullets():
+    content = """### Next Steps
+- Ramon
+- Add V1 scope topic to today's standup agenda
+- Continue exploring legal workarounds for active gamification features; loop
+  in the team for ideas
+- Seb
+- Clearly communicate V1 scope and expectations to the team at today's standup
+- Follow up on crypto casino license option via his contact
+"""
+
+    steps = events._extract_next_steps(content, user_tokens=["Ramon"])
+
+    assert steps == [
+        "Add V1 scope topic to today's standup agenda",
+        "Continue exploring legal workarounds for active gamification features; loop in the team for ideas",
+    ]
+
+
 def test_ingest_meeting_notes_creates_todos_from_grouped_user_section(monkeypatch):
     monkeypatch.setattr(
         "events._load_current_user_from_env",
@@ -298,4 +317,43 @@ Seb
     assert [todo.description for todo in created_todos] == [
         "Share updated scope draft before Friday",
         "Follow up with legal on the open licensing question",
+    ]
+
+
+def test_ingest_meeting_notes_creates_todos_from_same_indent_grouped_bullets(monkeypatch):
+    monkeypatch.setattr(
+        "events._load_current_user_from_env",
+        lambda: {"name": "Alex Carter", "email": "user@example.com"},
+    )
+    monkeypatch.setattr("events._resolve_attendee_contacts", lambda *_args, **_kwargs: ([], {}))
+    monkeypatch.setattr("events._create_coworker_relationships", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr("events._event_exists", lambda _event_id: False)
+    monkeypatch.setattr("events._find_matching_meeting_event", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr("events._get_event_by_id", lambda _event_id: None)
+    monkeypatch.setattr("events._get_existing_todo_signatures", lambda _event_id: set())
+    monkeypatch.setattr("events.ingest_event", lambda _event: None)
+
+    created_todos: list[TodoIn] = []
+
+    meeting = MeetingIn(
+        id="meeting-789",
+        title="Seb / Ramon 1:1",
+        date=datetime(2026, 4, 1, 10, 59, tzinfo=timezone.utc),
+        content="""### Next Steps
+- Ramon
+- Add V1 scope topic to today's standup agenda
+- Continue exploring legal workarounds for active gamification features; loop
+  in the team for ideas
+- Seb
+- Clearly communicate V1 scope and expectations to the team at today's standup
+- Follow up on crypto casino license option via his contact
+""",
+        attendeesEmails=[],
+    )
+
+    events.ingest_meeting_notes([meeting], todo_writer=lambda todo: created_todos.append(todo))
+
+    assert [todo.description for todo in created_todos] == [
+        "Add V1 scope topic to today's standup agenda",
+        "Continue exploring legal workarounds for active gamification features; loop in the team for ideas",
     ]
