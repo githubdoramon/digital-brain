@@ -647,6 +647,15 @@ def _clean_next_step_text(text: str) -> str:
     return cleaned.strip(" :-")
 
 
+def _preview_meeting_line(text: str | None, *, limit: int = 120) -> str:
+    if not text:
+        return ""
+    compact = " ".join(str(text).split())
+    if len(compact) <= limit:
+        return compact
+    return f"{compact[: limit - 3]}..."
+
+
 def _extract_list_item(line: str) -> tuple[int, str] | None:
     match = re.match(r"^(\s*)(?:[-*+o•◦▪‣]|\d+[.)])\s+(.+)$", line)
     if not match:
@@ -685,6 +694,7 @@ def _looks_like_person_label(text: str) -> bool:
 
 def _extract_next_steps(content: str | None, *, user_tokens: Sequence[str] | None = None) -> list[str]:
     if not content:
+        logger.debug("[meeting_notes] Next steps extractor skipped: empty content")
         return []
     lines = content.splitlines()
     steps: list[str] = []
@@ -693,6 +703,11 @@ def _extract_next_steps(content: str | None, *, user_tokens: Sequence[str] | Non
     current_group_is_user = False
     last_captured_index: int | None = None
     normalized_user_tokens = [normalize_search_text(token) for token in (user_tokens or []) if token]
+    logger.debug(
+        "[meeting_notes] Next steps extractor start: lines=%d user_tokens=%s",
+        len(lines),
+        normalized_user_tokens,
+    )
     for raw_line in lines:
         line = raw_line.rstrip()
         stripped = line.strip()
@@ -705,10 +720,19 @@ def _extract_next_steps(content: str | None, *, user_tokens: Sequence[str] | Non
             current_group_indent = None
             current_group_is_user = False
             last_captured_index = None
+            logger.debug(
+                "[meeting_notes] Next steps section detected: heading=%r",
+                _preview_meeting_line(stripped),
+            )
             continue
         if not in_section:
             continue
         if is_heading:
+            logger.debug(
+                "[meeting_notes] Next steps section ended by heading: heading=%r extracted=%d",
+                _preview_meeting_line(stripped),
+                len(steps),
+            )
             break
 
         list_item = _extract_list_item(line)
@@ -717,15 +741,38 @@ def _extract_next_steps(content: str | None, *, user_tokens: Sequence[str] | Non
                 current_group_indent = -1
                 current_group_is_user = _matches_user_token(stripped, normalized_user_tokens)
                 last_captured_index = None
+                logger.debug(
+                    "[meeting_notes] Assignee label detected: label=%r matched_user=%s indent=%d",
+                    _preview_meeting_line(stripped),
+                    current_group_is_user,
+                    current_group_indent,
+                )
                 continue
             if last_captured_index is not None:
                 continuation = _clean_next_step_text(stripped)
                 if continuation:
                     steps[last_captured_index] = f"{steps[last_captured_index]} {continuation}".strip()
+                    logger.debug(
+                        "[meeting_notes] Appended continuation to step[%d]: continuation=%r result=%r",
+                        last_captured_index,
+                        _preview_meeting_line(continuation),
+                        _preview_meeting_line(steps[last_captured_index]),
+                    )
+            else:
+                logger.debug(
+                    "[meeting_notes] Ignored non-list line in next steps: line=%r",
+                    _preview_meeting_line(stripped),
+                )
             continue
 
         indent, text = list_item
         if current_group_indent is not None and indent <= current_group_indent:
+            logger.debug(
+                "[meeting_notes] Leaving assignee group: prior_indent=%s new_indent=%d line=%r",
+                current_group_indent,
+                indent,
+                _preview_meeting_line(text),
+            )
             current_group_indent = None
             current_group_is_user = False
 
@@ -733,6 +780,12 @@ def _extract_next_steps(content: str | None, *, user_tokens: Sequence[str] | Non
             current_group_indent = indent
             current_group_is_user = _matches_user_token(text, normalized_user_tokens)
             last_captured_index = None
+            logger.debug(
+                "[meeting_notes] Assignee bullet detected: label=%r matched_user=%s indent=%d",
+                _preview_meeting_line(text),
+                current_group_is_user,
+                current_group_indent,
+            )
             continue
 
         normalized_text = normalize_search_text(text)
@@ -740,16 +793,38 @@ def _extract_next_steps(content: str | None, *, user_tokens: Sequence[str] | Non
             if current_group_is_user:
                 steps.append(text)
                 last_captured_index = len(steps) - 1
+                logger.debug(
+                    "[meeting_notes] Captured grouped step[%d]: indent=%d text=%r",
+                    last_captured_index,
+                    indent,
+                    _preview_meeting_line(text),
+                )
             else:
                 last_captured_index = None
+                logger.debug(
+                    "[meeting_notes] Skipped grouped step for other assignee: indent=%d text=%r",
+                    indent,
+                    _preview_meeting_line(text),
+                )
             continue
 
         if normalized_user_tokens and not any(token and token in normalized_text for token in normalized_user_tokens):
             last_captured_index = None
+            logger.debug(
+                "[meeting_notes] Skipped inline step without user token: text=%r normalized=%r",
+                _preview_meeting_line(text),
+                _preview_meeting_line(normalized_text),
+            )
             continue
 
         steps.append(text)
         last_captured_index = len(steps) - 1
+        logger.debug(
+            "[meeting_notes] Captured inline step[%d]: text=%r",
+            last_captured_index,
+            _preview_meeting_line(text),
+        )
+    logger.debug("[meeting_notes] Next steps extractor complete: extracted=%d", len(steps))
     return steps
 
 
