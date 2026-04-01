@@ -14,6 +14,7 @@ import contacts as contacts_service
 from db import enrich_people, fetch_events, get_conn
 from embeddings import embed_text
 from observability.logger import get_runtime_logger
+from search_normalization import normalize_search_text
 from schemas import (
     ContactRelationshipIn,
     EventIn,
@@ -329,7 +330,7 @@ def ingest_meeting_notes(
             continue
 
         existing_todo_signatures = _get_existing_todo_signatures(event_id)
-        steps = _extract_next_steps(meeting.content)
+        steps = _extract_next_steps(meeting.content, user_tokens=user_tokens)
         if not steps:
             logger.debug(
                 "[meeting_notes] No next steps found for event %s (%s)",
@@ -341,10 +342,6 @@ def ingest_meeting_notes(
         skipped_not_assigned = 0
         skipped_empty_or_duplicate = 0
         for _idx, step in enumerate(steps):
-            step_lower = step.lower()
-            if not any(token in step_lower for token in user_tokens):
-                skipped_not_assigned += 1
-                continue
             normalized_step = _normalize_todo_description(step)
             if not normalized_step or normalized_step in existing_todo_signatures:
                 skipped_empty_or_duplicate += 1
@@ -638,34 +635,116 @@ def _build_user_tokens(user: dict | None) -> list[str]:
     if name:
         parts = [p.strip().lower() for p in re.split(r"\s+", name) if p.strip()]
         tokens.extend(parts)
+        normalized_name = normalize_search_text(name)
+        if normalized_name:
+            tokens.append(normalized_name)
     return [token for token in tokens if token]
 
 
-def _extract_next_steps(content: str | None) -> list[str]:
+def _clean_next_step_text(text: str) -> str:
+    cleaned = re.sub(r"^[*_`~\s]+|[*_`~\s]+$", "", text or "")
+    cleaned = re.sub(r"\s+", " ", cleaned)
+    return cleaned.strip(" :-")
+
+
+def _extract_list_item(line: str) -> tuple[int, str] | None:
+    match = re.match(r"^(\s*)(?:[-*+o]|\d+[.)])\s+(.+)$", line)
+    if not match:
+        return None
+    indent = len(match.group(1).expandtabs(2))
+    text = _clean_next_step_text(match.group(2))
+    if not text:
+        return None
+    return indent, text
+
+
+def _matches_user_token(text: str, user_tokens: Sequence[str]) -> bool:
+    normalized_text = normalize_search_text(_clean_next_step_text(text))
+    if not normalized_text:
+        return False
+    for token in user_tokens:
+        normalized_token = normalize_search_text(token)
+        if not normalized_token:
+            continue
+        if normalized_text == normalized_token:
+            return True
+    return False
+
+
+def _looks_like_person_label(text: str) -> bool:
+    cleaned = _clean_next_step_text(text)
+    if not cleaned or len(cleaned) > 40:
+        return False
+    if re.search(r"[.!?]", cleaned):
+        return False
+    words = [word for word in re.split(r"\s+", cleaned) if word]
+    if not words or len(words) > 4:
+        return False
+    return all(re.match(r"^[A-Z][A-Za-z'\-]*$|^[A-Z]{2,}$", word) for word in words)
+
+
+def _extract_next_steps(content: str | None, *, user_tokens: Sequence[str] | None = None) -> list[str]:
     if not content:
         return []
     lines = content.splitlines()
     steps: list[str] = []
     in_section = False
+    current_group_indent: int | None = None
+    current_group_is_user = False
+    last_captured_index: int | None = None
+    normalized_user_tokens = [normalize_search_text(token) for token in (user_tokens or []) if token]
     for raw_line in lines:
-        line = raw_line.strip()
-        if not line:
+        line = raw_line.rstrip()
+        stripped = line.strip()
+        if not stripped:
+            last_captured_index = None
             continue
-        is_heading = line.startswith("#")
-        if is_heading and "next steps" in line.lower():
+        is_heading = stripped.startswith("#")
+        if is_heading and "next steps" in normalize_search_text(stripped):
             in_section = True
+            current_group_indent = None
+            current_group_is_user = False
+            last_captured_index = None
             continue
-        if in_section and is_heading:
+        if not in_section:
+            continue
+        if is_heading:
             break
-        if in_section:
-            if line.startswith(("-", "*")):
-                step = line.lstrip("-* ").strip()
-                if step:
-                    steps.append(step)
+
+        list_item = _extract_list_item(line)
+        if not list_item:
+            if last_captured_index is not None:
+                continuation = _clean_next_step_text(stripped)
+                if continuation:
+                    steps[last_captured_index] = f"{steps[last_captured_index]} {continuation}".strip()
+            continue
+
+        indent, text = list_item
+        if current_group_indent is not None and indent <= current_group_indent:
+            current_group_indent = None
+            current_group_is_user = False
+
+        if _matches_user_token(text, normalized_user_tokens) or _looks_like_person_label(text):
+            current_group_indent = indent
+            current_group_is_user = _matches_user_token(text, normalized_user_tokens)
+            last_captured_index = None
+            continue
+
+        normalized_text = normalize_search_text(text)
+        if current_group_indent is not None and indent > current_group_indent:
+            if current_group_is_user:
+                steps.append(text)
+                last_captured_index = len(steps) - 1
             else:
-                match = re.match(r"^\d+[\.)]\s*(.+)$", line)
-                if match:
-                    steps.append(match.group(1).strip())
+                last_captured_index = None
+            continue
+
+        if normalized_user_tokens and not any(token and token in normalized_text for token in normalized_user_tokens):
+            last_captured_index = None
+            continue
+
+        steps.append(text)
+        last_captured_index = len(steps) - 1
     return steps
 
 

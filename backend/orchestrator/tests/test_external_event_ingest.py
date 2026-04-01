@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 
 import events
-from schemas import EventIn, ExternalEventPayload
+from schemas import EventIn, ExternalEventPayload, MeetingIn, TodoIn
 
 
 def test_ingest_external_event_updates_existing_event_time(monkeypatch):
@@ -188,4 +188,59 @@ def test_create_coworker_relationships_skips_existing_pairs(monkeypatch):
     assert created_relationship_ids == [
         "rel:coworker:acme.com:contact:a:contact:c",
         "rel:coworker:acme.com:contact:b:contact:c",
+    ]
+
+
+def test_extract_next_steps_supports_grouped_assignee_lists():
+    content = """# Next Steps
+- Ramon
+  - Add V1 scope topic to today's standup agenda
+  - Continue exploring legal workarounds for active gamification features; loop
+    in the team for ideas
+- Seb
+  - Clearly communicate V1 scope and expectations to the team at today's standup
+"""
+
+    steps = events._extract_next_steps(content, user_tokens=["Ramon"])
+
+    assert steps == [
+        "Add V1 scope topic to today's standup agenda",
+        "Continue exploring legal workarounds for active gamification features; loop in the team for ideas",
+    ]
+
+
+def test_ingest_meeting_notes_creates_todos_from_grouped_user_section(monkeypatch):
+    monkeypatch.setattr(
+        "events._load_current_user_from_env",
+        lambda: {"name": "Ram\u00f3n Costa", "email": "user@example.com"},
+    )
+    monkeypatch.setattr("events._resolve_attendee_contacts", lambda *_args, **_kwargs: ([], {}))
+    monkeypatch.setattr("events._create_coworker_relationships", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr("events._event_exists", lambda _event_id: False)
+    monkeypatch.setattr("events._find_matching_meeting_event", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr("events._get_event_by_id", lambda _event_id: None)
+    monkeypatch.setattr("events._get_existing_todo_signatures", lambda _event_id: set())
+    monkeypatch.setattr("events.ingest_event", lambda _event: None)
+
+    created_todos: list[TodoIn] = []
+
+    meeting = MeetingIn(
+        id="meeting-123",
+        title="Weekly sync",
+        date=datetime(2026, 2, 27, 9, 0, tzinfo=timezone.utc),
+        content="""# Next Steps
+- Ramon
+  - Share updated scope draft before Friday
+  - Follow up with legal on the open licensing question
+- Seb
+  - Align the rollout note with the team
+""",
+        attendeesEmails=[],
+    )
+
+    events.ingest_meeting_notes([meeting], todo_writer=lambda todo: created_todos.append(todo))
+
+    assert [todo.description for todo in created_todos] == [
+        "Share updated scope draft before Friday",
+        "Follow up with legal on the open licensing question",
     ]
