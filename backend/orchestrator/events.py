@@ -648,7 +648,7 @@ def _clean_next_step_text(text: str) -> str:
 
 
 def _extract_list_item(line: str) -> tuple[int, str] | None:
-    match = re.match(r"^(\s*)(?:[-*+o]|\d+[.)])\s+(.+)$", line)
+    match = re.match(r"^(\s*)(?:[-*+o•◦▪‣]|\d+[.)])\s+(.+)$", line)
     if not match:
         return None
     indent = len(match.group(1).expandtabs(2))
@@ -713,6 +713,11 @@ def _extract_next_steps(content: str | None, *, user_tokens: Sequence[str] | Non
 
         list_item = _extract_list_item(line)
         if not list_item:
+            if _matches_user_token(stripped, normalized_user_tokens) or _looks_like_person_label(stripped):
+                current_group_indent = -1
+                current_group_is_user = _matches_user_token(stripped, normalized_user_tokens)
+                last_captured_index = None
+                continue
             if last_captured_index is not None:
                 continuation = _clean_next_step_text(stripped)
                 if continuation:
