@@ -635,6 +635,14 @@ def _build_notification_message(
     total_amount_to_purchase = _count_unique_items(buy_actions)
 
     seen: set[str] = set()
+    consume_items: list[str] = []
+    for action in consume_actions:
+        name = action.item.name
+        if name not in seen:
+            consume_items.append(name)
+            seen.add(name)
+
+    seen = set()
     buy_items: list[str] = []
     for action in buy_actions:
         name = action.item.name
@@ -647,8 +655,12 @@ def _build_notification_message(
         lines.append(f"- Mover {consume_amount} items para consumo")
     if total_amount_to_purchase:
         lines.append(f"- Comprar {total_amount_to_purchase} items")
-    if buy_items:
+    if consume_items:
         lines.append("")
+        lines.append(f"Items para mover para consumo: {', '.join(consume_items)}")
+    if buy_items:
+        if not consume_items:
+            lines.append("")
         lines.append(f"Items para comprar: {', '.join(buy_items)}")
     return "\n".join(lines) + "\n"
 
