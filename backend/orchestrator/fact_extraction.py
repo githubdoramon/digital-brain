@@ -160,7 +160,7 @@ def _run_extraction(
             prompt,
             system_prompt=EXTRACTION_SYSTEM_PROMPT,
             temperature=0.0,
-            use_simpler_model=True,
+            use_fast_model=True,
             timeout=60,
         )
     except (json.JSONDecodeError, RuntimeError) as exc:

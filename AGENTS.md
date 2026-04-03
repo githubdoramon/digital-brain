@@ -299,7 +299,9 @@ frontend/web/src/
 ```bash
 # LLM Configuration
 LLM_BASE_URL=http://localhost:11434    # Ollama or OpenAI-compatible
-LLM_CHAT_MODEL=mistral
+LLM_CHAT_MODEL_FAST=mistral
+LLM_CHAT_MODEL_SMART=gpt-4o
+OLLAMA_FAST_KEEP_ALIVE=-1
 LLM_API_KEY=                           # Optional
 LLM_TIMEOUT=120
 LLM_CHAT_MODEL_FAST=mistral            # Optional fast profile override

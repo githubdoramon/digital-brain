@@ -725,7 +725,7 @@ Return ONLY a valid JSON, nothing more, no other text or explanation:
         try:
             # Use low temperature for consistent structured output
             result = _call_contact_resolution_llm_json(
-                prompt, timeout=60, temperature=0.1, top_p=0.9, use_simpler_model=True
+                prompt, timeout=60, temperature=0.1, top_p=0.9, use_fast_model=True
             )
             people = result.get("people", [])
             raw_collective_selectors = result.get("collective_selectors", [])
@@ -2230,7 +2230,7 @@ Return ONLY valid JSON:
 
     try:
         llm_result = _call_contact_resolution_llm_json(
-            prompt, timeout=60, temperature=0.1, top_p=0.9, use_simpler_model=True
+            prompt, timeout=60, temperature=0.1, top_p=0.9, use_fast_model=True
         )
     except Exception:
         return {
@@ -2558,7 +2558,7 @@ Return ONLY a valid JSON, nothing more, no other text or explanation:
     try:
         # Use low temperature for consistent disambiguation
         llm_response = _call_contact_resolution_llm_json(
-            prompt, timeout=60, temperature=0.1, top_p=0.9, use_simpler_model=True
+            prompt, timeout=60, temperature=0.1, top_p=0.9, use_fast_model=True
         )
 
         decision = llm_response.get("decision")
@@ -2623,7 +2623,7 @@ Return ONLY a valid JSON, nothing more, no other text or explanation:
     try:
         # Use low temperature for consistent profession inference
         result = _call_contact_resolution_llm_json(
-            prompt, timeout=20, temperature=0.1, top_p=0.9, use_simpler_model=True
+            prompt, timeout=20, temperature=0.1, top_p=0.9, use_fast_model=True
         )
         return result.get("profession")
     except Exception:
@@ -2677,7 +2677,7 @@ Return ONLY valid JSON:
 
     try:
         result = _call_contact_resolution_llm_json(
-            prompt, timeout=60, temperature=0.1, top_p=0.9, use_simpler_model=True
+            prompt, timeout=60, temperature=0.1, top_p=0.9, use_fast_model=True
         )
     except Exception:
         return []
@@ -2749,7 +2749,7 @@ Return ONLY a valid JSON:
 
     try:
         result = _call_contact_resolution_llm_json(
-            prompt, timeout=20, temperature=0.1, top_p=0.9, use_simpler_model=True
+            prompt, timeout=20, temperature=0.1, top_p=0.9, use_fast_model=True
         )
     except Exception:
         return None

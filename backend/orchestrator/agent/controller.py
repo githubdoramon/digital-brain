@@ -29,6 +29,7 @@ from agent.agent_interfaces import (
     build_default_conversational_interface,
 )
 from agents.registry import build_conversational_profile_registry, choose_profile_interface
+from llm_config import get_fast_model
 from location_inference import infer_current_place
 from observability import trace
 from observability.logger import get_runtime_logger
@@ -114,7 +115,7 @@ class AgentController:
 
         # LLM configuration
         self.llm_base_url = os.getenv("LLM_BASE_URL", "")
-        self.llm_model = os.getenv("LLM_CHAT_MODEL", "")
+        self.llm_model = get_fast_model()
         self.llm_api_key = os.getenv("LLM_API_KEY", "")
         self.llm_timeout = int(os.getenv("LLM_TIMEOUT", "120"))
         self.router_restriction_mode = os.getenv("ROUTER_RESTRICTION_MODE", "conservative").strip()

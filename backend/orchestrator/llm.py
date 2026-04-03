@@ -11,17 +11,17 @@ from collections.abc import AsyncGenerator
 from typing import Any
 
 import conversations
+from llm_config import get_fast_model, get_smart_model
 from observability.logger import get_runtime_logger
 
 logger = get_runtime_logger(__name__)
 
 LLM_BASE_URL = os.getenv("LLM_BASE_URL")
-LLM_CHAT_MODEL = os.getenv("LLM_CHAT_MODEL")
 
 if not LLM_BASE_URL:
     raise RuntimeError("LLM_BASE_URL environment variable is required")
-if not LLM_CHAT_MODEL:
-    raise RuntimeError("LLM_CHAT_MODEL environment variable is required")
+get_fast_model()
+get_smart_model()
 
 logger.info("[llm] Bounded agent architecture ENABLED")
 

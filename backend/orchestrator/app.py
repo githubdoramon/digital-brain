@@ -11,6 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 import conversations
 from db import get_conn
 from db_migrations import run_pending_migrations
+from llm_helpers import warm_fast_model
 from observability.log_stream import configure_logging, install_stdout_logger
 from observability.logger import get_runtime_logger
 from routes.automation import create_automation_router
@@ -117,6 +118,11 @@ async def lifespan(app: FastAPI):
 
     with get_conn():
         pass
+
+    try:
+        warm_fast_model()
+    except Exception:
+        logger.exception("Fast-model warmup failed; continuing startup")
 
     yield
 

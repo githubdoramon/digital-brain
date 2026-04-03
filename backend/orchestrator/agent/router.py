@@ -129,7 +129,7 @@ class IntentRouter:
 
         Args:
             llm_base_url: Base URL for LLM API (defaults to INTENT_ROUTER_BASE_URL or LLM_BASE_URL)
-            llm_model: Model to use (defaults to INTENT_ROUTER_MODEL or LLM_CHAT_MODEL)
+            llm_model: Model to use (defaults to INTENT_ROUTER_MODEL or LLM_CHAT_MODEL_FAST)
             llm_api_key: API key (defaults to INTENT_ROUTER_API_KEY or LLM_API_KEY)
             llm_timeout: Timeout for LLM calls (default 20s)
             enable_llm_routing: Whether to use LLM for classification (False = rule-based only)
@@ -138,7 +138,7 @@ class IntentRouter:
             "INTENT_ROUTER_BASE_URL", os.getenv("LLM_BASE_URL", "")
         )
         self.llm_model = llm_model or os.getenv(
-            "INTENT_ROUTER_MODEL", os.getenv("LLM_CHAT_MODEL_SIMPLER", "")
+            "INTENT_ROUTER_MODEL", os.getenv("LLM_CHAT_MODEL_FAST", "")
         )
         self.llm_api_key = llm_api_key or os.getenv(
             "INTENT_ROUTER_API_KEY", os.getenv("LLM_API_KEY", "")

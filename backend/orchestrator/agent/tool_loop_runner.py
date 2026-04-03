@@ -22,17 +22,11 @@ def run_profiled_tool_loop(
         "tools": tools,
         "tool_handlers": tool_handlers,
         "system_prompt": system_prompt,
-        "use_simpler_model": False,
+        "use_fast_model": False,
         "timeout": profile.timeout_seconds,
         "temperature": profile.temperature,
         "top_p": profile.top_p,
         "max_steps": profile.max_steps,
         "max_tool_calls": profile.max_tool_calls,
     }
-    try:
-        return call_llm_with_tools(prompt, **call_kwargs)
-    except TypeError as exc:
-        if "use_simpler_model" not in str(exc):
-            raise
-        call_kwargs.pop("use_simpler_model", None)
-        return call_llm_with_tools(prompt, **call_kwargs)
+    return call_llm_with_tools(prompt, **call_kwargs)

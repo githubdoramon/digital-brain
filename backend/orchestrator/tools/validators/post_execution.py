@@ -81,7 +81,7 @@ class PostExecutionValidator:
 
         Args:
             llm_base_url: Base URL for LLM API (defaults to POST_VALIDATOR_BASE_URL or LLM_BASE_URL)
-            llm_model: Model to use (defaults to POST_VALIDATOR_MODEL or LLM_CHAT_MODEL)
+            llm_model: Model to use (defaults to POST_VALIDATOR_MODEL or LLM_CHAT_MODEL_FAST)
             llm_api_key: API key (defaults to POST_VALIDATOR_API_KEY or LLM_API_KEY)
             llm_timeout: Timeout for LLM calls
             enable_llm_validation: Whether to use LLM for ambiguous cases
@@ -90,7 +90,7 @@ class PostExecutionValidator:
             "POST_VALIDATOR_BASE_URL", os.getenv("LLM_BASE_URL", "")
         )
         self.llm_model = llm_model or os.getenv(
-            "POST_VALIDATOR_MODEL", os.getenv("LLM_CHAT_MODEL", "")
+            "POST_VALIDATOR_MODEL", os.getenv("LLM_CHAT_MODEL_FAST", "")
         )
         self.llm_api_key = llm_api_key or os.getenv(
             "POST_VALIDATOR_API_KEY", os.getenv("LLM_API_KEY", "")

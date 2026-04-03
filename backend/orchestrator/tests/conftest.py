@@ -177,7 +177,8 @@ def mock_requests(monkeypatch):
 def setup_test_env(monkeypatch):
     """Set up environment variables for testing."""
     monkeypatch.setenv("LLM_BASE_URL", "http://localhost:11434/v1")
-    monkeypatch.setenv("LLM_CHAT_MODEL", "llama3.3:70b")
+    monkeypatch.setenv("LLM_CHAT_MODEL_FAST", "llama3.2:3b")
+    monkeypatch.setenv("LLM_CHAT_MODEL_SMART", "llama3.3:70b")
     monkeypatch.setenv("AGENT_MAX_STEPS", "5")
     monkeypatch.setenv("AGENT_MAX_TOOL_CALLS", "10")
     monkeypatch.setenv("AGENT_MAX_REPAIRS", "5")

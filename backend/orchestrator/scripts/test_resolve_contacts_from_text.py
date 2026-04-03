@@ -39,9 +39,14 @@ def parse_args() -> argparse.Namespace:
         help="LLM_BASE_URL override (defaults to env, then http://localhost:11434)",
     )
     parser.add_argument(
-        "--llm-chat-model",
-        default=os.getenv("LLM_CHAT_MODEL"),
-        help="LLM_CHAT_MODEL override (defaults to env, then mistral)",
+        "--llm-chat-model-fast",
+        default=os.getenv("LLM_CHAT_MODEL_FAST"),
+        help="LLM_CHAT_MODEL_FAST override (defaults to env, then mistral)",
+    )
+    parser.add_argument(
+        "--llm-chat-model-smart",
+        default=os.getenv("LLM_CHAT_MODEL_SMART"),
+        help="LLM_CHAT_MODEL_SMART override (defaults to env, then mistral)",
     )
     parser.add_argument(
         "--compact",
@@ -77,7 +82,8 @@ def main() -> int:
 
     # resolver imports llm_helpers at module import time and requires these vars.
     os.environ["LLM_BASE_URL"] = args.llm_base_url or "http://localhost:11434"
-    os.environ["LLM_CHAT_MODEL"] = args.llm_chat_model or "mistral"
+    os.environ["LLM_CHAT_MODEL_FAST"] = args.llm_chat_model_fast or "mistral"
+    os.environ["LLM_CHAT_MODEL_SMART"] = args.llm_chat_model_smart or "mistral"
 
     from agents.contacts.resolver import resolve_contacts_from_text  # noqa: E402
 

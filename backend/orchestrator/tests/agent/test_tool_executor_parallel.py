@@ -3,7 +3,8 @@
 import os
 
 os.environ.setdefault("LLM_BASE_URL", "http://localhost:11434")
-os.environ.setdefault("LLM_CHAT_MODEL", "test-model")
+os.environ.setdefault("LLM_CHAT_MODEL_FAST", "test-fast-model")
+os.environ.setdefault("LLM_CHAT_MODEL_SMART", "test-smart-model")
 
 from agent.tool_executor import ToolExecutionCoordinator
 

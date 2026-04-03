@@ -5,13 +5,13 @@ import os
 from collections.abc import Iterable, Sequence
 from typing import Literal
 
+from llm_config import get_smart_model
 from observability.logger import get_runtime_logger
 
 logger = get_runtime_logger(__name__)
 
 MAX_LABEL_PROMPT_CHARS = int(os.getenv("DOCUMENT_LABEL_PROMPT_CHARS", "10000"))
 MAX_SUGGESTED_TAGS = int(os.getenv("DOCUMENT_LABEL_MAX_COUNT", "5"))
-LLM_CHAT_MODEL = os.getenv("LLM_CHAT_MODEL")
 OLLAMA_TIMEOUT = int(os.getenv("OLLAMA_TIMEOUT", "60"))
 
 MAJOR_TAGS = [
@@ -148,8 +148,8 @@ def _call_llm_text(
     return call_llm(
         prompt,
         system_prompt=system_prompt,
-        model=LLM_CHAT_MODEL,
-        use_simpler_model=False,
+        model=get_smart_model(),
+        use_fast_model=False,
         timeout=timeout,
     )
 
@@ -219,7 +219,7 @@ def _suggest_tags(
     subject: Literal["document", "event"],
 ) -> list[str]:
     cleaned = (content or "").strip()
-    if not cleaned or not LLM_CHAT_MODEL:
+    if not cleaned:
         return []
 
     prompt_content = cleaned[:MAX_LABEL_PROMPT_CHARS]

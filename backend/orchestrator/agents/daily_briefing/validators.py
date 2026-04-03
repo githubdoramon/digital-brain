@@ -281,7 +281,7 @@ def _validate_llm_judge(content: str) -> ValidationResult:
             system_prompt="You are a strict document quality judge. Respond with PASS or FAIL: <reason>. Nothing else.",
             temperature=0,
             max_tokens=80,
-            use_simpler_model=True,
+            use_fast_model=True,
         )
         result = result.strip()
         if result.upper().startswith("PASS"):

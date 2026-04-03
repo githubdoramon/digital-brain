@@ -15,6 +15,12 @@ from typing import Any, Optional
 import httpx
 import requests
 
+from llm_config import (
+    get_fast_keep_alive,
+    get_ollama_api_base_url,
+    is_ollama_base_url,
+    resolve_chat_model,
+)
 from observability.logger import get_runtime_logger
 
 logger = get_runtime_logger(__name__)
@@ -22,9 +28,6 @@ logger = get_runtime_logger(__name__)
 # LLM Configuration
 LLM_BASE_URL = os.getenv("LLM_BASE_URL")
 LLM_API_KEY = os.getenv("LLM_API_KEY", "")
-LLM_CHAT_MODEL = os.getenv("LLM_CHAT_MODEL")
-LLM_CHAT_MODEL_FAST = os.getenv("LLM_CHAT_MODEL_FAST")
-LLM_CHAT_MODEL_SIMPLER = os.getenv("LLM_CHAT_MODEL_SIMPLER")
 LLM_TIMEOUT = int(os.getenv("LLM_TIMEOUT", "120"))
 LLM_MAX_RETRIES = int(os.getenv("LLM_MAX_RETRIES", "3"))
 LLM_RETRY_BASE_DELAY = float(os.getenv("LLM_RETRY_BASE_DELAY", "1.0"))
@@ -63,24 +66,31 @@ def get_llm_headers() -> dict[str, str]:
     return headers
 
 
-def _resolve_model(model: Optional[str], use_simpler_model: Optional[bool]) -> str:
-    regular_model = _get_required_setting("LLM_CHAT_MODEL", LLM_CHAT_MODEL)
-    fast_model = _get_optional_setting("LLM_CHAT_MODEL_FAST", LLM_CHAT_MODEL_FAST)
-    simpler_model = _get_optional_setting("LLM_CHAT_MODEL_SIMPLER", LLM_CHAT_MODEL_SIMPLER)
-    if model:
-        return str(model)
-    if use_simpler_model is True and simpler_model:
-        return simpler_model
-    if use_simpler_model is False:
-        return regular_model
-    return fast_model or regular_model
+def _maybe_attach_fast_model_keep_alive(payload: dict[str, Any]) -> None:
+    base_url = _get_required_setting("LLM_BASE_URL", LLM_BASE_URL)
+    if not is_ollama_base_url(base_url):
+        return
+
+    model_name = str(payload.get("model") or "").strip()
+    if not model_name:
+        return
+
+    try:
+        fast_model = resolve_chat_model(use_fast_model=True)
+    except RuntimeError:
+        return
+
+    if model_name != fast_model:
+        return
+
+    payload["keep_alive"] = get_fast_keep_alive()
 
 
 def build_chat_payload(
     messages: list[dict[str, Any]],
     *,
     model: Optional[str] = None,
-    use_simpler_model: Optional[bool] = None,
+    use_fast_model: Optional[bool] = None,
     stream: bool = False,
     max_tokens: Optional[int] = None,
     temperature: Optional[float] = None,
@@ -88,8 +98,9 @@ def build_chat_payload(
     tools: Optional[list[dict[str, Any]]] = None,
     tool_choice: Optional[str | dict[str, Any]] = None,
 ) -> dict[str, Any]:
+    resolved_model = resolve_chat_model(model=model, use_fast_model=use_fast_model)
     payload: dict[str, Any] = {
-        "model": _resolve_model(model, use_simpler_model),
+        "model": resolved_model,
         "messages": messages,
         "stream": stream,
     }
@@ -108,7 +119,40 @@ def build_chat_payload(
         if tool_choice is not None:
             payload["tool_choice"] = tool_choice
 
+    _maybe_attach_fast_model_keep_alive(payload)
+
     return payload
+
+
+def warm_fast_model(*, timeout: Optional[int] = None) -> bool:
+    base_url = _get_required_setting("LLM_BASE_URL", LLM_BASE_URL)
+    if not is_ollama_base_url(base_url):
+        logger.info("[llm_helpers] Skip fast-model warmup for non-Ollama base URL")
+        return False
+
+    model_name = resolve_chat_model(use_fast_model=True)
+    payload = {
+        "model": model_name,
+        "messages": [],
+        "stream": False,
+        "keep_alive": get_fast_keep_alive(),
+    }
+    response = requests.post(
+        f"{get_ollama_api_base_url(base_url)}/api/chat",
+        headers=get_llm_headers(),
+        json=payload,
+        timeout=timeout or min(LLM_TIMEOUT, 30),
+    )
+    response.raise_for_status()
+    data = response.json()
+    _raise_for_llm_error(data)
+    logger.info(
+        "[llm_helpers] Warmed fast model model=%s keep_alive=%s done_reason=%s",
+        model_name,
+        payload["keep_alive"],
+        data.get("done_reason", ""),
+    )
+    return True
 
 
 def _raise_for_llm_error(data: dict[str, Any]) -> None:
@@ -238,7 +282,10 @@ def _post_chat_completion(
             else:
                 raise
 
-    raise last_exception  # type: ignore[misc]
+    if last_exception is None:
+        raise RuntimeError("LLM request failed without an exception")
+    assert last_exception is not None
+    raise last_exception
 
 
 def _build_messages(prompt: str, system_prompt: Optional[str] = None) -> list[dict[str, str]]:
@@ -253,7 +300,7 @@ def _call_llm_raw(
     messages: list[dict[str, str]],
     *,
     model: Optional[str] = None,
-    use_simpler_model: Optional[bool] = None,
+    use_fast_model: Optional[bool] = None,
     timeout: Optional[int] = None,
     max_tokens: Optional[int] = None,
     temperature: Optional[float] = None,
@@ -264,7 +311,7 @@ def _call_llm_raw(
     payload = build_chat_payload(
         messages,
         model=model,
-        use_simpler_model=use_simpler_model,
+        use_fast_model=use_fast_model,
         stream=False,
         max_tokens=max_tokens,
         temperature=temperature,
@@ -290,13 +337,13 @@ def call_llm_chat(
     tools: Optional[list[dict[str, Any]]] = None,
     tool_choice: Optional[str | dict[str, Any]] = None,
     model: Optional[str] = None,
-    use_simpler_model: Optional[bool] = None,
+    use_fast_model: Optional[bool] = None,
     timeout: Optional[int] = None,
 ) -> dict[str, Any]:
     data = _call_llm_raw(
         messages,
         model=model,
-        use_simpler_model=use_simpler_model,
+        use_fast_model=use_fast_model,
         timeout=timeout,
         tools=tools,
         tool_choice=tool_choice,
@@ -311,14 +358,14 @@ async def stream_llm_chat(
     tools: Optional[list[dict[str, Any]]] = None,
     tool_choice: Optional[str | dict[str, Any]] = None,
     model: Optional[str] = None,
-    use_simpler_model: Optional[bool] = None,
+    use_fast_model: Optional[bool] = None,
     timeout: Optional[int] = None,
 ) -> AsyncGenerator[str, None]:
     base_url = _get_required_setting("LLM_BASE_URL", LLM_BASE_URL)
     payload = build_chat_payload(
         messages,
         model=model,
-        use_simpler_model=use_simpler_model,
+        use_fast_model=use_fast_model,
         stream=True,
         tools=tools,
         tool_choice=tool_choice,
@@ -379,7 +426,10 @@ async def stream_llm_chat(
             else:
                 raise
 
-    raise last_exception  # type: ignore[misc]
+    if last_exception is None:
+        raise RuntimeError("LLM stream request failed without an exception")
+    assert last_exception is not None
+    raise last_exception
 
 
 def call_llm(
@@ -387,7 +437,7 @@ def call_llm(
     *,
     system_prompt: Optional[str] = None,
     model: Optional[str] = None,
-    use_simpler_model: Optional[bool] = None,
+    use_fast_model: Optional[bool] = None,
     timeout: Optional[int] = None,
     max_tokens: Optional[int] = None,
     temperature: Optional[float] = None,
@@ -400,7 +450,7 @@ def call_llm(
         prompt: The user prompt/question
         system_prompt: Optional system prompt for instructions
         model: Override the default model
-        use_simpler_model: Use the simpler model when available
+        use_fast_model: Use the fast model when available
         timeout: Override the default timeout (seconds)
         max_tokens: Maximum tokens in response
         temperature: Sampling temperature (0-1, lower = more deterministic)
@@ -417,7 +467,7 @@ def call_llm(
     data = _call_llm_raw(
         messages,
         model=model,
-        use_simpler_model=use_simpler_model,
+        use_fast_model=use_fast_model,
         timeout=timeout,
         max_tokens=max_tokens,
         temperature=temperature,
@@ -436,7 +486,7 @@ def call_llm_json(
     *,
     system_prompt: Optional[str] = None,
     model: Optional[str] = None,
-    use_simpler_model: Optional[bool] = None,
+    use_fast_model: Optional[bool] = None,
     timeout: Optional[int] = None,
     max_tokens: Optional[int] = None,
     temperature: Optional[float] = None,
@@ -451,7 +501,7 @@ def call_llm_json(
         prompt: The user prompt/question
         system_prompt: Optional system prompt for instructions
         model: Override the default model
-        use_simpler_model: Use the simpler model when available
+        use_fast_model: Use the fast model when available
         timeout: Override the default timeout (seconds)
         max_tokens: Maximum tokens in response
         temperature: Sampling temperature (0-1, lower = more deterministic)
@@ -468,7 +518,7 @@ def call_llm_json(
         prompt,
         system_prompt=system_prompt,
         model=model,
-        use_simpler_model=use_simpler_model,
+        use_fast_model=use_fast_model,
         timeout=timeout,
         max_tokens=max_tokens,
         temperature=temperature,
@@ -491,7 +541,7 @@ def call_llm_with_tools(
     tool_handlers: dict[str, Any],
     system_prompt: Optional[str] = None,
     model: Optional[str] = None,
-    use_simpler_model: Optional[bool] = None,
+    use_fast_model: Optional[bool] = None,
     timeout: Optional[int] = None,
     max_tokens: Optional[int] = None,
     temperature: Optional[float] = None,
@@ -512,7 +562,7 @@ def call_llm_with_tools(
         data = _call_llm_raw(
             messages,
             model=model,
-            use_simpler_model=use_simpler_model,
+            use_fast_model=use_fast_model,
             timeout=timeout,
             max_tokens=max_tokens,
             temperature=temperature,
@@ -572,7 +622,7 @@ def call_llm_json_with_tools(
     tool_handlers: dict[str, Any],
     system_prompt: Optional[str] = None,
     model: Optional[str] = None,
-    use_simpler_model: Optional[bool] = None,
+    use_fast_model: Optional[bool] = None,
     timeout: Optional[int] = None,
     max_tokens: Optional[int] = None,
     temperature: Optional[float] = None,
@@ -590,7 +640,7 @@ def call_llm_json_with_tools(
         tool_handlers=tool_handlers,
         system_prompt=system_prompt,
         model=model,
-        use_simpler_model=use_simpler_model,
+        use_fast_model=use_fast_model,
         timeout=timeout,
         max_tokens=max_tokens,
         temperature=temperature,
@@ -617,7 +667,7 @@ def call_llm_with_context(
     additional_context: Optional[dict[str, str]] = None,
     system_prompt: Optional[str] = None,
     model: Optional[str] = None,
-    use_simpler_model: Optional[bool] = None,
+    use_fast_model: Optional[bool] = None,
     timeout: Optional[int] = None,
 ) -> str:
     """
@@ -632,7 +682,7 @@ def call_llm_with_context(
         additional_context: Additional context key-value pairs
         system_prompt: Optional system prompt for instructions
         model: Override the default model
-        use_simpler_model: Use the simpler model when available
+        use_fast_model: Use the fast model when available
         timeout: Override the default timeout (seconds)
 
     Returns:
@@ -660,6 +710,6 @@ def call_llm_with_context(
         full_prompt,
         system_prompt=system_prompt,
         model=model,
-        use_simpler_model=use_simpler_model,
+        use_fast_model=use_fast_model,
         timeout=timeout,
     )

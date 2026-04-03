@@ -24,6 +24,7 @@ from document_processing import (
     parse_document,
 )
 from embeddings import embed_text
+from llm_config import get_smart_model
 from observability.logger import get_runtime_logger
 from search_normalization import normalize_search_list, normalize_search_text
 from tags_manager import (
@@ -62,7 +63,6 @@ MAX_TITLE_PROMPT_CHARS = int(os.getenv("DOCUMENT_TITLE_PROMPT_CHARS", "2000"))
 MAX_DATE_PROMPT_CHARS = int(os.getenv("DOCUMENT_DATE_PROMPT_CHARS", "2000"))
 MAX_DESCRIPTION_PROMPT_CHARS = int(os.getenv("DOCUMENT_DESCRIPTION_PROMPT_CHARS", "1200"))
 
-LLM_CHAT_MODEL = os.getenv("LLM_CHAT_MODEL")
 OLLAMA_TIMEOUT = int(os.getenv("OLLAMA_TIMEOUT", "60"))
 
 
@@ -77,8 +77,8 @@ def _call_llm_text(
     return call_llm(
         prompt,
         system_prompt=system_prompt,
-        model=LLM_CHAT_MODEL,
-        use_simpler_model=False,
+        model=get_smart_model(),
+        use_fast_model=False,
         timeout=timeout,
     )
 
@@ -94,8 +94,8 @@ def _call_llm_json_response(
     return call_llm_json(
         prompt,
         system_prompt=system_prompt,
-        model=LLM_CHAT_MODEL,
-        use_simpler_model=False,
+        model=get_smart_model(),
+        use_fast_model=False,
         timeout=timeout,
     )
 
@@ -628,7 +628,7 @@ def _safe_int(value: Any) -> int | None:
 
 def _suggest_document_date(content: str, fallback: str | None) -> datetime | None:
     cleaned = (content or fallback or "").strip()
-    if not cleaned or not LLM_CHAT_MODEL:
+    if not cleaned:
         return None
     excerpt = cleaned[:MAX_DATE_PROMPT_CHARS]
     system_prompt = (
@@ -791,8 +791,6 @@ def _translate_text_to_english(
     trimmed = (text or "").strip()
     if not trimmed:
         return text
-    if not LLM_CHAT_MODEL:
-        return text
     excerpt = trimmed[:max_chars]
     system_prompt = (
         "Translate the user's text into fluent English. Respond with the translation only. "
@@ -851,7 +849,7 @@ def _translate_content_for_storage(
     document_id: str | None = None,
 ) -> tuple[str, bool]:
     cleaned = (content or "").strip()
-    if not cleaned or not LLM_CHAT_MODEL:
+    if not cleaned:
         return cleaned, False
 
     chunk_chars = max(200, min(MAX_TRANSLATION_CHUNK_CHARS, MAX_CONTENT_CHARS))
@@ -886,7 +884,7 @@ def _update_content_storage_metadata(
 
 def _translate_tags_to_english(tags: Sequence[str]) -> list[str]:
     normalized = [t for t in tags if t]
-    if not normalized or not LLM_CHAT_MODEL:
+    if not normalized:
         return normalized
     prompt = (
         "Translate each of the following labels into concise English (1-3 words). If a tag is already in English, just return the exact same tag. "
@@ -917,7 +915,7 @@ def _translate_tags_to_english(tags: Sequence[str]) -> list[str]:
 
 def _summarize_description(content: str) -> str | None:
     cleaned = (content or "").strip()
-    if not cleaned or not LLM_CHAT_MODEL:
+    if not cleaned:
         return None
     excerpt = cleaned[:MAX_DESCRIPTION_PROMPT_CHARS]
     system_prompt = (
@@ -1659,7 +1657,7 @@ def _derive_title_from_filename(filename: str | None) -> str | None:
 
 def _suggest_title(content: str, fallback: str | None) -> str | None:
     cleaned = (content or "").strip()
-    if not cleaned or not LLM_CHAT_MODEL:
+    if not cleaned:
         return _derive_title_from_filename(fallback)
     excerpt = cleaned[:MAX_TITLE_PROMPT_CHARS]
     system_prompt = (

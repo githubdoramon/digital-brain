@@ -1304,7 +1304,7 @@ def _plan_event_research(
                 "You are a strict research planner. Return JSON only."
             ),
             temperature=0,
-            use_simpler_model=False,
+            use_fast_model=False,
         )
         planned = planned_raw if isinstance(planned_raw, dict) else {}
     except Exception:
@@ -1435,7 +1435,7 @@ def _synthesise_event_summary(
             user_prompt,
             system_prompt=system_prompt,
             temperature=0.1,
-            use_simpler_model=False,
+            use_fast_model=False,
         )
         if str(result or "").strip().upper().startswith("NO_MEANINGFUL_PREP"):
             return ""
@@ -1621,7 +1621,7 @@ def _generate_event_sections_markdown(
             "You write concise daily prep sections. Output markdown only with the requested sections."
         ),
         temperature=0.1,
-        use_simpler_model=False,
+        use_fast_model=False,
     ).strip()
 
 
@@ -2195,7 +2195,7 @@ def _generate_article_brief_summary(
             prompt,
             system_prompt=system_prompt,
             temperature=0.3,
-            use_simpler_model=False,
+            use_fast_model=False,
         )
     except Exception:
         logger.warning("[briefing] LLM article summary generation failed for '%s'", title, exc_info=True)
