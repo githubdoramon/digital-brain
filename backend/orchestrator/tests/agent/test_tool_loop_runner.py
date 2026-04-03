@@ -13,6 +13,7 @@ def test_run_profiled_tool_loop_passes_profile_limits(monkeypatch):
         tools,
         tool_handlers,
         system_prompt,
+        use_fast_model,
         timeout,
         temperature,
         top_p,
@@ -21,6 +22,7 @@ def test_run_profiled_tool_loop_passes_profile_limits(monkeypatch):
     ):
         captured["prompt"] = prompt
         captured["system_prompt"] = system_prompt
+        captured["use_fast_model"] = use_fast_model
         captured["timeout"] = timeout
         captured["temperature"] = temperature
         captured["top_p"] = top_p
@@ -47,6 +49,7 @@ def test_run_profiled_tool_loop_passes_profile_limits(monkeypatch):
     )
 
     assert result == {"content": "ok"}
+    assert captured["use_fast_model"] is False
     assert captured["timeout"] == 42
     assert captured["max_steps"] == 3
     assert captured["max_tool_calls"] == 5
