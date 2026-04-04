@@ -46,6 +46,9 @@ EMAIL_DOMAIN_PATTERN = re.compile(r"@([a-z0-9][a-z0-9.-]*\.[a-z]{2,})", re.IGNOR
 _CONTACT_RESOLUTION_MODEL_OVERRIDE: ContextVar[str | None] = ContextVar(
     "contact_resolution_model_override", default=None
 )
+_CONTACT_RESOLUTION_TIMEOUT_OVERRIDE: ContextVar[int | None] = ContextVar(
+    "contact_resolution_timeout_override", default=None
+)
 
 
 @contextmanager
@@ -58,15 +61,30 @@ def use_contact_resolution_model(model: str | None):
         _CONTACT_RESOLUTION_MODEL_OVERRIDE.reset(token)
 
 
+@contextmanager
+def use_contact_resolution_timeout(timeout_seconds: int | None):
+    normalized_timeout = timeout_seconds if isinstance(timeout_seconds, int) and timeout_seconds > 0 else None
+    token = _CONTACT_RESOLUTION_TIMEOUT_OVERRIDE.set(normalized_timeout)
+    try:
+        yield
+    finally:
+        _CONTACT_RESOLUTION_TIMEOUT_OVERRIDE.reset(token)
+
+
 def _call_contact_resolution_llm_json(prompt: str, **kwargs: Any) -> dict[str, Any]:
     model_override = _CONTACT_RESOLUTION_MODEL_OVERRIDE.get()
+    timeout_override = _CONTACT_RESOLUTION_TIMEOUT_OVERRIDE.get()
     if model_override and "model" not in kwargs:
         kwargs["model"] = model_override
+    if timeout_override and "timeout" not in kwargs:
+        kwargs["timeout"] = timeout_override
     if model_override:
         logger.debug(
             "[contact_resolver] Using model override for LLM call: %s",
             model_override,
         )
+    if timeout_override:
+        logger.debug("[contact_resolver] Using timeout override for LLM call: %ss", timeout_override)
     return call_llm_json(prompt, **kwargs)
 
 

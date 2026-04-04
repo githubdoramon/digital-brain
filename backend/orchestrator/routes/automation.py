@@ -97,11 +97,13 @@ def create_automation_router() -> APIRouter:
 
         state = AgentState(goal=f"tool_run:{payload.tool_name}")
         llm_model_override = str(payload.llm_model or "").strip() or None
+        timeout_seconds = payload.timeout_seconds
         logger.info(
-            "[tools/run] Running tool=%s user=%s llm_model=%s",
+            "[tools/run] Running tool=%s user=%s llm_model=%s timeout=%s",
             payload.tool_name,
             user_email,
             llm_model_override or "default",
+            timeout_seconds if timeout_seconds is not None else "default",
         )
         search_limit = normalized_args.get("limit")
         if not isinstance(search_limit, int):
@@ -117,6 +119,7 @@ def create_automation_router() -> APIRouter:
                 user_email=user_email,
                 conversation_history=None,
                 llm_model=llm_model_override,
+                timeout=timeout_seconds,
             )
         except Exception as exc:
             raise HTTPException(status_code=500, detail=f"Tool execution failed: {exc}") from exc
@@ -129,6 +132,7 @@ def create_automation_router() -> APIRouter:
             result=result,
             duration_ms=duration_ms,
             llm_model=llm_model_override,
+            timeout_seconds=timeout_seconds,
         )
 
     @router.post("/webhooks/telegram/messages")

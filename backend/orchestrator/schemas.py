@@ -216,6 +216,7 @@ class ToolRunIn(BaseModel):
     tool_name: str
     args: dict[str, Any] = Field(default_factory=dict)
     llm_model: str | None = None
+    timeout_seconds: int | None = None
 
 
 class ToolRunOut(BaseModel):
@@ -225,6 +226,7 @@ class ToolRunOut(BaseModel):
     result: dict[str, Any] = Field(default_factory=dict)
     duration_ms: float
     llm_model: str | None = None
+    timeout_seconds: int | None = None
 
 
 class PushNotificationsUpdateIn(BaseModel):

@@ -13,6 +13,7 @@ type ToolRunResponse = {
   result: Record<string, unknown>;
   duration_ms: number;
   llm_model?: string | null;
+  timeout_seconds?: number | null;
 };
 
 type MemoryResult = {
@@ -172,6 +173,7 @@ export default function ToolsPage() {
     text: "",
   });
   const [llmModel, setLlmModel] = useState("");
+  const [timeoutSeconds, setTimeoutSeconds] = useState("60");
   const [response, setResponse] = useState<ToolRunResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
@@ -203,6 +205,7 @@ export default function ToolsPage() {
     setResponse(null);
 
     const args: Record<string, unknown> = {};
+    const normalizedTimeout = Number(timeoutSeconds);
 
     if (tool === "search_memories") {
       args.query = searchForm.query.trim();
@@ -265,6 +268,10 @@ export default function ToolsPage() {
         tool_name: tool,
         args,
         llm_model: llmModel.trim() || undefined,
+        timeout_seconds:
+          timeoutSeconds.trim() && Number.isFinite(normalizedTimeout) && normalizedTimeout > 0
+            ? normalizedTimeout
+            : undefined,
       });
       setResponse(result);
     } catch (err) {
@@ -316,6 +323,25 @@ export default function ToolsPage() {
           />
           <span style={{ fontSize: "0.8rem", color: "#666" }}>
             Leave empty to use the default model configured in environment variables.
+          </span>
+        </div>
+
+        <div style={{ display: "grid", gap: "6px" }}>
+          <label htmlFor="timeoutSeconds" style={{ fontWeight: 600, fontSize: "0.9rem" }}>
+            Timeout (seconds)
+          </label>
+          <input
+            id="timeoutSeconds"
+            type="number"
+            min={1}
+            max={600}
+            value={timeoutSeconds}
+            onChange={(event) => setTimeoutSeconds(event.target.value)}
+            placeholder="60"
+            style={{ padding: "10px 12px", borderRadius: "8px", border: "1px solid #d7d7d7" }}
+          />
+          <span style={{ fontSize: "0.8rem", color: "#666" }}>
+            Applies to tool-run LLM calls that support per-request timeout overrides.
           </span>
         </div>
 
@@ -617,6 +643,7 @@ export default function ToolsPage() {
             <div style={{ display: "grid", gap: "4px", fontSize: "0.9rem", color: "#334155" }}>
               <span>Tool: {response.tool_name}</span>
               <span>LLM model: {response.llm_model || "default (.env)"}</span>
+              <span>Timeout: {response.timeout_seconds ?? "default"} s</span>
               <span>Duration: {response.duration_ms.toFixed(1)} ms</span>
             </div>
           </div>

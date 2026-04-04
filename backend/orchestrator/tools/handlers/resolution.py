@@ -85,8 +85,11 @@ def handle_resolve_contacts(
 
     payload: dict[str, Any] = {"text": text, "user_email": runtime_email}
     llm_model = str(kwargs.get("llm_model") or "").strip()
+    timeout = kwargs.get("timeout")
     if llm_model:
         payload["llm_model"] = llm_model
+    if isinstance(timeout, int) and timeout > 0:
+        payload["timeout"] = timeout
     if conversation_history:
         payload["conversation_messages"] = conversation_history[-8:]
 

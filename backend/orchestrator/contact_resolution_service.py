@@ -4,7 +4,11 @@ from __future__ import annotations
 
 from typing import Any
 
-from agents.contacts.resolver import resolve_contacts_from_text, use_contact_resolution_model
+from agents.contacts.resolver import (
+    resolve_contacts_from_text,
+    use_contact_resolution_model,
+    use_contact_resolution_timeout,
+)
 from observability.logger import get_runtime_logger
 from ui_dsl.clarification import (
     build_need_user_input,
@@ -65,11 +69,12 @@ def resolve_contacts_request(data: dict[str, Any]) -> dict[str, Any]:
 
     try:
         with use_contact_resolution_model(data.get("llm_model")):
-            result = resolve_contacts_from_text(
-                str(text),
-                str(user_email),
-                conversation_messages=data.get("conversation_messages"),
-            )
+            with use_contact_resolution_timeout(data.get("timeout")):
+                result = resolve_contacts_from_text(
+                    str(text),
+                    str(user_email),
+                    conversation_messages=data.get("conversation_messages"),
+                )
 
         if not isinstance(result, dict):
             return {"status": "error", "message": "Invalid contact resolution response"}
