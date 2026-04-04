@@ -21,7 +21,7 @@ def test_build_chat_payload_attaches_keep_alive_only_for_fast_model(monkeypatch)
     )
 
     assert fast_payload["model"] == "fast-model"
-    assert fast_payload["keep_alive"] == "-1"
+    assert fast_payload["keep_alive"] == -1
     assert smart_payload["model"] == "smart-model"
     assert "keep_alive" not in smart_payload
 
@@ -47,7 +47,7 @@ def test_warm_fast_model_uses_ollama_chat_endpoint(monkeypatch):
     assert mock_post.call_args.args[0] == "http://localhost:11434/api/chat"
     assert kwargs["json"] == {
         "model": "fast-model",
-        "messages": [],
+        "messages": [{"role": "user", "content": "ping"}],
         "stream": False,
         "keep_alive": "24h",
     }

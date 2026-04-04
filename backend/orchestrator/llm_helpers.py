@@ -133,7 +133,7 @@ def warm_fast_model(*, timeout: Optional[int] = None) -> bool:
     model_name = resolve_chat_model(use_fast_model=True)
     payload = {
         "model": model_name,
-        "messages": [],
+        "messages": [{"role": "user", "content": "ping"}],
         "stream": False,
         "keep_alive": get_fast_keep_alive(),
     }

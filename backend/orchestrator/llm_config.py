@@ -23,8 +23,11 @@ def get_smart_model() -> str:
     return model
 
 
-def get_fast_keep_alive() -> str:
-    return os.getenv("OLLAMA_FAST_KEEP_ALIVE", OLLAMA_FAST_KEEP_ALIVE).strip() or "-1"
+def get_fast_keep_alive() -> str | int:
+    value = os.getenv("OLLAMA_FAST_KEEP_ALIVE", OLLAMA_FAST_KEEP_ALIVE).strip() or "-1"
+    if value.lstrip("-").isdigit():
+        return int(value)
+    return value
 
 
 def resolve_chat_model(*, model: str | None = None, use_fast_model: bool | None = None) -> str:
