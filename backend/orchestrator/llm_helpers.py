@@ -481,39 +481,15 @@ def call_llm(
     return content
 
 
-def _extract_json_content(raw_content: str) -> tuple[str, bool]:
+def _extract_json_content(raw_content: str) -> str:
     """Extract JSON content from a raw LLM string, handling fenced blocks."""
     content = raw_content.strip()
-    had_markdown_fence = False
 
     if "```json" in content:
-        content = content.split("```json", 1)[1].split("```", 1)[0].strip()
-        had_markdown_fence = True
-    elif "```" in content:
-        content = content.split("```", 1)[1].split("```", 1)[0].strip()
-        had_markdown_fence = True
-
-    return content, had_markdown_fence
-
-
-def _parse_llm_json_content(raw_content: str, *, source: str) -> dict[str, Any]:
-    """Normalize and parse JSON returned by the LLM, with comparison logs."""
-    normalized_content, had_markdown_fence = _extract_json_content(raw_content)
-    logger.info(
-        "[llm_helpers] Normalized JSON content source=%s fenced=%s raw=%s normalized=%s",
-        source,
-        had_markdown_fence,
-        json.dumps(raw_content, ensure_ascii=False),
-        json.dumps(normalized_content, ensure_ascii=False),
-    )
-
-    parsed = json.loads(normalized_content)
-    logger.info(
-        "[llm_helpers] Parsed JSON object source=%s keys=%s",
-        source,
-        sorted(parsed.keys()) if isinstance(parsed, dict) else "(non-dict)",
-    )
-    return parsed
+        return content.split("```json", 1)[1].split("```", 1)[0].strip()
+    if "```" in content:
+        return content.split("```", 1)[1].split("```", 1)[0].strip()
+    return content
 
 
 def call_llm_json(
@@ -560,7 +536,7 @@ def call_llm_json(
         top_p=top_p,
     )
 
-    return _parse_llm_json_content(content, source="call_llm_json")
+    return json.loads(_extract_json_content(content))
 
 
 def call_llm_with_tools(
@@ -680,7 +656,7 @@ def call_llm_json_with_tools(
     )
 
     content = result.get("content", "")
-    return _parse_llm_json_content(content, source="call_llm_json_with_tools")
+    return json.loads(_extract_json_content(content))
 
 
 def call_llm_with_context(

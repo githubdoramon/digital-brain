@@ -76,7 +76,7 @@ def _call_contact_resolution_llm_json(prompt: str, **kwargs: Any) -> dict[str, A
     timeout_override = _CONTACT_RESOLUTION_TIMEOUT_OVERRIDE.get()
     if model_override and "model" not in kwargs:
         kwargs["model"] = model_override
-    if timeout_override and "timeout" not in kwargs:
+    if timeout_override:
         kwargs["timeout"] = timeout_override
     if model_override:
         logger.debug(
@@ -2042,9 +2042,16 @@ def _resolve_nested_relationship(
         # Filter to only those in intermediate contact's relationships
         relationships = intermediate_rels.get("relationships", [])
         related_ids = {
-            rel["related_contact"]["contact_id"]
+            contact_id
             for rel in relationships
-            if "related_contact" in rel
+            for contact_id in [
+                str(
+                    (rel.get("related_contact") or {}).get("contact_id")
+                    or rel.get("contact_id")
+                    or ""
+                ).strip()
+            ]
+            if contact_id
         }
 
         filtered = [m for m in matches if m["contact_id"] in related_ids]

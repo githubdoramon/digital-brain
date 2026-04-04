@@ -576,3 +576,67 @@ def test_resolve_contact_applies_hard_rule_before_disambiguation(monkeypatch):
     assert result["status"] == "resolved"
     assert result["matched_via"] == "hard_rule"
     assert result["contact_id"] == "contact:dana-lewis"
+
+
+def test_contact_resolution_timeout_override_replaces_inner_timeout(monkeypatch):
+    captured: dict[str, object] = {}
+
+    def fake_call_llm_json(_prompt, **kwargs):
+        captured.update(kwargs)
+        return {"people": [], "collective_selectors": []}
+
+    monkeypatch.setattr(resolver, "call_llm_json", fake_call_llm_json)
+
+    with resolver.use_contact_resolution_timeout(120):
+        resolver._call_contact_resolution_llm_json("prompt", timeout=60, use_fast_model=True)
+
+    assert captured["timeout"] == 120
+
+
+def test_nested_relationship_fallback_uses_top_level_contact_id(monkeypatch):
+    monkeypatch.setattr(
+        resolver.contacts_service,
+        "get_contact_relationships",
+        lambda *_args, **_kwargs: {
+            "relationships": [
+                {
+                    "contact_id": "contact:family-member",
+                    "related_contact": {"display_name": "Family Member"},
+                }
+            ]
+        },
+    )
+    monkeypatch.setattr(
+        resolver,
+        "_resolve_via_relationship",
+        lambda *_args, **_kwargs: {
+            "found": False,
+            "contact_id": None,
+            "display_name": None,
+            "confidence": "low",
+            "candidates": [],
+        },
+    )
+    monkeypatch.setattr(
+        resolver.contacts_service,
+        "search_contacts",
+        lambda *_args, **_kwargs: [
+            {"contact_id": "contact:family-member", "display_name": "Family Member"}
+        ],
+    )
+
+    result = resolver._resolve_nested_relationship(
+        ["Dana", "family"],
+        "user@example.com",
+        resolution_cache={
+            "Dana": {
+                "status": "resolved",
+                "contact_id": "contact:dana-lewis",
+                "display_name": "Dana Lewis",
+            }
+        },
+    )
+
+    assert result["found"] is True
+    assert result["contact_id"] == "contact:family-member"
+    assert result["display_name"] == "Family Member"
