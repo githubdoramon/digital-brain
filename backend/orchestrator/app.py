@@ -63,9 +63,9 @@ def _resolve_session_context(
     question = payload.question
     is_new_session = False
     parsed_command = parse_command(question)
-    reset_requested = bool(parsed_command and parsed_command.command == "new")
-    if reset_requested:
-        question = parsed_command.args
+    reset_requested = parsed_command is not None and parsed_command.command == "new"
+    if parsed_command is not None and reset_requested:
+        question = parsed_command.args or ""
         force_new_session = True
 
     if requested_thread_id and not force_new_session:
