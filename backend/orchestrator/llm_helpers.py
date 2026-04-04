@@ -481,6 +481,41 @@ def call_llm(
     return content
 
 
+def _extract_json_content(raw_content: str) -> tuple[str, bool]:
+    """Extract JSON content from a raw LLM string, handling fenced blocks."""
+    content = raw_content.strip()
+    had_markdown_fence = False
+
+    if "```json" in content:
+        content = content.split("```json", 1)[1].split("```", 1)[0].strip()
+        had_markdown_fence = True
+    elif "```" in content:
+        content = content.split("```", 1)[1].split("```", 1)[0].strip()
+        had_markdown_fence = True
+
+    return content, had_markdown_fence
+
+
+def _parse_llm_json_content(raw_content: str, *, source: str) -> dict[str, Any]:
+    """Normalize and parse JSON returned by the LLM, with comparison logs."""
+    normalized_content, had_markdown_fence = _extract_json_content(raw_content)
+    logger.info(
+        "[llm_helpers] Normalized JSON content source=%s fenced=%s raw=%s normalized=%s",
+        source,
+        had_markdown_fence,
+        json.dumps(raw_content, ensure_ascii=False),
+        json.dumps(normalized_content, ensure_ascii=False),
+    )
+
+    parsed = json.loads(normalized_content)
+    logger.info(
+        "[llm_helpers] Parsed JSON object source=%s keys=%s",
+        source,
+        sorted(parsed.keys()) if isinstance(parsed, dict) else "(non-dict)",
+    )
+    return parsed
+
+
 def call_llm_json(
     prompt: str,
     *,
@@ -525,13 +560,7 @@ def call_llm_json(
         top_p=top_p,
     )
 
-    # Extract JSON from potential markdown code blocks
-    if "```json" in content:
-        content = content.split("```json")[1].split("```")[0].strip()
-    elif "```" in content:
-        content = content.split("```")[1].split("```")[0].strip()
-
-    return json.loads(content)
+    return _parse_llm_json_content(content, source="call_llm_json")
 
 
 def call_llm_with_tools(
@@ -651,12 +680,7 @@ def call_llm_json_with_tools(
     )
 
     content = result.get("content", "")
-    if "```json" in content:
-        content = content.split("```json")[1].split("```")[0].strip()
-    elif "```" in content:
-        content = content.split("```")[1].split("```")[0].strip()
-
-    return json.loads(content)
+    return _parse_llm_json_content(content, source="call_llm_json_with_tools")
 
 
 def call_llm_with_context(

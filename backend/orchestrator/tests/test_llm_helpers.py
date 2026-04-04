@@ -52,3 +52,60 @@ def test_warm_fast_model_uses_ollama_chat_endpoint(monkeypatch):
         "keep_alive": "24h",
     }
     assert kwargs["timeout"] == 12
+
+
+def test_call_llm_json_logs_normalized_fenced_content(monkeypatch):
+    info_mock = MagicMock()
+
+    monkeypatch.setattr(llm_helpers.logger, "info", info_mock)
+    monkeypatch.setattr(llm_helpers, "call_llm", lambda *_args, **_kwargs: '```json\n{"people": ["user"]}\n```')
+
+    result = llm_helpers.call_llm_json("extract people")
+
+    assert result == {"people": ["user"]}
+    assert info_mock.call_count == 2
+    assert info_mock.call_args_list[0].args[0] == (
+        "[llm_helpers] Normalized JSON content source=%s fenced=%s raw=%s normalized=%s"
+    )
+    assert info_mock.call_args_list[0].args[1:] == (
+        "call_llm_json",
+        True,
+        '"```json\\n{\\"people\\": [\\"user\\"]}\\n```"',
+        '"{\\"people\\": [\\"user\\"]}"',
+    )
+    assert info_mock.call_args_list[1].args == (
+        "[llm_helpers] Parsed JSON object source=%s keys=%s",
+        "call_llm_json",
+        ["people"],
+    )
+
+
+def test_call_llm_json_with_tools_logs_normalized_content(monkeypatch):
+    info_mock = MagicMock()
+
+    monkeypatch.setattr(llm_helpers.logger, "info", info_mock)
+    monkeypatch.setattr(
+        llm_helpers,
+        "call_llm_with_tools",
+        lambda *_args, **_kwargs: {"content": '{"collective_selectors": [], "people": ["user"]}'},
+    )
+
+    result = llm_helpers.call_llm_json_with_tools(
+        "extract people",
+        tools=[],
+        tool_handlers={},
+    )
+
+    assert result == {"collective_selectors": [], "people": ["user"]}
+    assert info_mock.call_args_list[0].args == (
+        "[llm_helpers] Normalized JSON content source=%s fenced=%s raw=%s normalized=%s",
+        "call_llm_json_with_tools",
+        False,
+        '"{\\"collective_selectors\\": [], \\"people\\": [\\"user\\"]}"',
+        '"{\\"collective_selectors\\": [], \\"people\\": [\\"user\\"]}"',
+    )
+    assert info_mock.call_args_list[1].args == (
+        "[llm_helpers] Parsed JSON object source=%s keys=%s",
+        "call_llm_json_with_tools",
+        ["collective_selectors", "people"],
+    )
