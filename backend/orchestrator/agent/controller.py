@@ -2214,7 +2214,7 @@ class AgentController:
         collected: list[dict[str, Any]] = []
         seen_ids: set[str] = set()
         for call in state.tool_calls:
-            if call.tool_name != "get_events" or not call.success:
+            if call.tool_name not in {"get_events", "summarize_memories"} or not call.success:
                 continue
             events = (call.result or {}).get("events", [])
             if not isinstance(events, list):
@@ -2235,18 +2235,46 @@ class AgentController:
         collected: list[dict[str, Any]] = []
         seen_ids: set[str] = set()
         for call in state.tool_calls:
-            if call.tool_name != "get_document" or not call.success:
+            if not call.success:
                 continue
-            document = (call.result or {}).get("document")
-            if not isinstance(document, dict):
+            if call.tool_name == "get_document":
+                document = (call.result or {}).get("document")
+                if not isinstance(document, dict):
+                    continue
+                compact = self._compact_document_result(document)
+                document_id = str(compact.get("document_id") or "").strip()
+                dedupe_key = document_id or json.dumps(compact, sort_keys=True, default=str)
+                if dedupe_key in seen_ids:
+                    continue
+                seen_ids.add(dedupe_key)
+                collected.append(compact)
                 continue
-            compact = self._compact_document_result(document)
-            document_id = str(compact.get("document_id") or "").strip()
-            dedupe_key = document_id or json.dumps(compact, sort_keys=True, default=str)
-            if dedupe_key in seen_ids:
+            if call.tool_name != "summarize_memories":
                 continue
-            seen_ids.add(dedupe_key)
-            collected.append(compact)
+            documents = (call.result or {}).get("inspected_documents") or (call.result or {}).get(
+                "documents"
+            )
+            if not isinstance(documents, list):
+                continue
+            for document in documents:
+                if not isinstance(document, dict):
+                    continue
+                compact = {
+                    "document_id": document.get("document_id") or document.get("id"),
+                    "title": document.get("title"),
+                    "tags": document.get("tags"),
+                    "document_date": document.get("document_date"),
+                    "file_name": document.get("file_name"),
+                    "file_mime": document.get("file_mime"),
+                    "file_size": document.get("file_size"),
+                    "snippet": document.get("snippet"),
+                }
+                document_id = str(compact.get("document_id") or "").strip()
+                dedupe_key = document_id or json.dumps(compact, sort_keys=True, default=str)
+                if dedupe_key in seen_ids:
+                    continue
+                seen_ids.add(dedupe_key)
+                collected.append(compact)
         return collected
 
     def _compact_document_result(self, document: dict[str, Any]) -> dict[str, Any]:

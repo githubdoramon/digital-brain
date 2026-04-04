@@ -268,6 +268,12 @@ class PreExecutionValidator:
             if action is None:
                 return "Provide either 'event_ids' or a time span ('time_start' + 'time_end') for get_events"
 
+        if tool_name == "summarize_memories":
+            has_time_start = bool(str(params.get("time_start") or "").strip())
+            has_time_end = bool(str(params.get("time_end") or "").strip())
+            if not has_time_start or not has_time_end:
+                return "When using summarize_memories, provide both 'time_start' and 'time_end'"
+
         if tool_name == "lookup_contact_places":
             has_contact_id = bool(str(params.get("contact_id") or "").strip())
             has_contact_query = bool(str(params.get("contact_query") or "").strip())
@@ -317,6 +323,11 @@ class PreExecutionValidator:
                 hints.append(
                     "Provide both 'time_start' and 'time_end' in ISO 8601 for strict event windows"
                 )
+
+        if tool_name == "summarize_memories":
+            hints.append(
+                "Use summarize_memories for bounded recap windows with 'time_start' and 'time_end'"
+            )
 
         if tool_name == "lookup_contact_places":
             has_contact_id = bool(str(params.get("contact_id") or "").strip())

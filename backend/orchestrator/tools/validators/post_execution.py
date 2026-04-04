@@ -239,6 +239,22 @@ class PostExecutionValidator:
                     extracted_facts=facts,
                 )
 
+        if tool_name == "summarize_memories":
+            summary = str(result.get("summary") or "").strip()
+            count = int(result.get("count", 0) or 0)
+            if summary:
+                facts = self._extract_facts_from_result(tool_name, result)
+                facts.append("GOAL_ACHIEVED: Memory recap synthesized")
+                return PostExecutionResult(
+                    coverage=GoalCoverage.SATISFIED,
+                    reason=(
+                        f"Recap synthesized from {count} memories"
+                        if count > 0
+                        else "Recap synthesized"
+                    ),
+                    extracted_facts=facts,
+                )
+
         # Check resolve_contacts - extract resolution status and ambiguity signals
         if tool_name == "resolve_contacts":
             status = ToolStatus.from_value(result.get("status"))
@@ -533,6 +549,12 @@ Rules:
             doc = result.get("document")
             if doc:
                 facts.append(f"Retrieved document: {doc.get('title', 'untitled')}")
+
+        elif tool_name == "summarize_memories":
+            summary = str(result.get("summary") or "").strip()
+            count = int(result.get("count", 0) or 0)
+            if summary:
+                facts.append(f"Synthesized memory recap from {count} items")
 
         elif tool_name == "web_search":
             results = result.get("results", [])

@@ -24,7 +24,7 @@ logger = get_runtime_logger(__name__)
 
 # Tool group definitions - maps group names to tool names
 TOOL_GROUPS = {
-    "memory": ["search_memories", "get_events", "get_document"],
+    "memory": ["search_memories", "get_events", "get_document", "summarize_memories"],
     "resolution": [
         "resolve_contacts",
         "lookup_contact",
@@ -235,6 +235,24 @@ def _register_all_tools(registry: ToolRegistry) -> None:
                     items_type="string",
                 ),
                 ToolParameter(
+                    name="tags",
+                    type="array",
+                    description=(
+                        "Optional tag filter for action=`by_time_span`. Use for domain-bounded windows like work or health. Multiple tags use OR logic."
+                    ),
+                    required=False,
+                    items_type="string",
+                ),
+                ToolParameter(
+                    name="types",
+                    type="array",
+                    description=(
+                        "Optional event-type filter for action=`by_time_span` (for example meeting, communication, task). Multiple types use OR logic."
+                    ),
+                    required=False,
+                    items_type="string",
+                ),
+                ToolParameter(
                     name="sort_order",
                     type="string",
                     description=(
@@ -339,6 +357,24 @@ def _register_all_tools(registry: ToolRegistry) -> None:
                     items_type="string",
                 ),
                 ToolParameter(
+                    name="tags",
+                    type="array",
+                    description=(
+                        "Optional tag filter for action=`by_time_span`. Use for domain-bounded windows like work or health. Multiple tags use OR logic."
+                    ),
+                    required=False,
+                    items_type="string",
+                ),
+                ToolParameter(
+                    name="types",
+                    type="array",
+                    description=(
+                        "Optional event-type filter for action=`by_time_span` (for example meeting, communication, task). Multiple types use OR logic."
+                    ),
+                    required=False,
+                    items_type="string",
+                ),
+                ToolParameter(
                     name="sort_order",
                     type="string",
                     description="Sort order for action=`by_time_span`: `newest` or `oldest`.",
@@ -374,6 +410,77 @@ def _register_all_tools(registry: ToolRegistry) -> None:
                     type="string",
                     description="Document ID from search results.",
                     required=True,
+                ),
+            ],
+            constraints=["read_only"],
+        )
+    )
+
+    # summarize_memories
+    registry.register(
+        ToolContract(
+            name="summarize_memories",
+            description=(
+                "Bounded recap tool for time-window summaries across events and documents. "
+                "Use this for recap/report questions like 'summarize my work last week', "
+                "'important topics from meetings this month', or 'what came out of my work discussions'. "
+                "It retrieves a bounded set of relevant events and documents, inspects detailed documents when helpful, "
+                "and returns grounded topics, outcomes, decisions, and follow-ups."
+            ),
+            parameters=[
+                ToolParameter(
+                    name="time_start",
+                    type="string",
+                    description="ISO 8601 lower time bound for the recap window.",
+                    required=True,
+                ),
+                ToolParameter(
+                    name="time_end",
+                    type="string",
+                    description="ISO 8601 upper time bound for the recap window.",
+                    required=True,
+                ),
+                ToolParameter(
+                    name="query_focus",
+                    type="string",
+                    description=(
+                        "Optional recap focus such as summary, topics, decisions, outcomes, or follow_ups."
+                    ),
+                    required=False,
+                ),
+                ToolParameter(
+                    name="tags",
+                    type="array",
+                    description=(
+                        "Optional domain tags such as Work, Health, or Finance. Multiple tags use OR logic."
+                    ),
+                    required=False,
+                    items_type="string",
+                ),
+                ToolParameter(
+                    name="contact_ids",
+                    type="array",
+                    description="Optional resolved contact IDs for person-scoped recaps.",
+                    required=False,
+                    items_type="string",
+                ),
+                ToolParameter(
+                    name="types",
+                    type="array",
+                    description="Optional event-type filters such as meeting or communication.",
+                    required=False,
+                    items_type="string",
+                ),
+                ToolParameter(
+                    name="limit",
+                    type="integer",
+                    description=(
+                        "Optional cap for retrieved events/documents before synthesis. Use larger values for broad recaps."
+                    ),
+                    required=False,
+                    default=40,
+                    minimum=1,
+                    validator=validate_positive_int,
                 ),
             ],
             constraints=["read_only"],

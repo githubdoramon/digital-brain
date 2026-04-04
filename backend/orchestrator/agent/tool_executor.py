@@ -31,6 +31,7 @@ DEDUPLICATION_SAFE_TOOLS = {
     "search_memories",
     "get_events",
     "get_document",
+    "summarize_memories",
     "lookup_contact",
     "lookup_places",
     "lookup_contact_places",
@@ -599,6 +600,13 @@ class ToolExecutionCoordinator:
                 return f"Retrieved document: {doc.get('title', 'untitled')}"
             return None
 
+        if tool_name == "summarize_memories":
+            summary = str(result.get("summary") or "").strip()
+            count = int(result.get("count", 0) or 0)
+            if summary:
+                return f"summarize_memories: synthesized recap from {count} items"
+            return None
+
         if tool_name == "resolve_contacts":
             status = ToolStatus.from_value(result.get("status"))
             resolved = len(result.get("resolved_contacts", []))
@@ -698,6 +706,8 @@ class ToolExecutionCoordinator:
             return self._compact_get_document_result(result)
         if tool_name == "get_events":
             return self._compact_get_events_result(result)
+        if tool_name == "summarize_memories":
+            return self._compact_summarize_memories_result(result)
 
         return result
 
@@ -790,6 +800,33 @@ class ToolExecutionCoordinator:
                 }
             compact_events.append(compact_event)
         return {"events": compact_events, "count": int(result.get("count", len(events)) or 0)}
+
+    def _compact_summarize_memories_result(self, result: dict[str, Any]) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "summary": self._truncate_text(result.get("summary"), 1200),
+            "focus": result.get("focus"),
+            "count": int(result.get("count", 0) or 0),
+        }
+        source_items = result.get("source_items")
+        if isinstance(source_items, list):
+            payload["source_items"] = source_items[:8]
+        events = result.get("events")
+        if isinstance(events, list):
+            payload["events"] = self._compact_get_events_result({"events": events}).get("events", [])
+        documents = result.get("documents")
+        if isinstance(documents, list):
+            payload["documents"] = [
+                {
+                    "id": document.get("id"),
+                    "title": document.get("title"),
+                    "tags": document.get("tags"),
+                    "document_date": document.get("document_date"),
+                    "snippet": self._truncate_text(document.get("snippet"), 280),
+                }
+                for document in documents
+                if isinstance(document, dict)
+            ][:8]
+        return payload
 
     def _track_information_candidates_from_search(
         self,

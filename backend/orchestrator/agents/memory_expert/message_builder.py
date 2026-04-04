@@ -10,6 +10,7 @@ from observability.logger import get_runtime_logger
 from prompts.context import (
     get_location_context,
     get_self_context,
+    get_tag_context,
     get_time_context,
     get_user_facts_context,
 )
@@ -31,6 +32,11 @@ def _cached_system_prompt(search_limit: int) -> str:
 @lru_cache(maxsize=1)
 def _cached_protocol_prompt() -> str:
     return get_memory_expert_protocol_prompt()
+
+
+@lru_cache(maxsize=1)
+def _cached_tag_context() -> str:
+    return get_tag_context() or ""
 
 
 def inject_memory_expert_skills(
@@ -78,6 +84,9 @@ def build_memory_expert_messages(
     messages: list[dict[str, Any]] = []
 
     messages.append({"role": "system", "content": _cached_system_prompt(search_limit)})
+    tags_context = _cached_tag_context()
+    if tags_context:
+        messages.append({"role": "system", "content": tags_context})
     messages.append({"role": "system", "content": _cached_protocol_prompt()})
 
     if user_email:

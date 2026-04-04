@@ -29,6 +29,13 @@ When a query is person-referential and memory search lacks `contact_ids`:
 - For strict interaction-ranking windows (for example "who did I meet most this week"), prefer `get_events(action=by_time_span)` and then rank counterparts.
 - Router pre-resolution policy should skip pre-resolve for non-person-referential ranking/discovery prompts.
 
+## Domain-Scoped Recaps
+
+- For bounded recap/report questions with explicit windows (for example "summarize my work last week"), prefer structured retrieval first.
+- Use domain tags like `Work` as precision hints when the user clearly names a domain, but do not make tags mandatory for broader semantic discovery.
+- Treat documents as first-class evidence for outcomes, topics, and decisions; events remain primary for chronology.
+- Prefer `summarize_memories` for combined event+document recap synthesis when available.
+
 ## Validation Semantics
 
 - Clarification-required resolution/search outcomes are treated as `need_user_input` (not generic empty retries).

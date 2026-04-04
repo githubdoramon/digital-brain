@@ -181,6 +181,11 @@ class TestPreExecutionSemanticValidation:
         assert "contact_id" in "; ".join(result.errors)
         assert "group_query" in "; ".join(result.errors)
 
+    def test_summarize_memories_requires_time_bounds(self, validator):
+        result = validator.validate("summarize_memories", {"query_focus": "topics"})
+        assert result.valid is False
+        assert "time_start" in "; ".join(result.errors)
+
     def test_lookup_place_contacts_requires_place_selector(self, validator):
         result = validator.validate("lookup_place_contacts", {"role_hint": "home"})
         assert result.valid is False
@@ -344,6 +349,24 @@ class TestPostValidatorContactResolution:
         )
         assert result.coverage == GoalCoverage.NEEDS_MORE_TOOLS
         assert "Document retrieved" in result.reason
+
+    def test_summarize_memories_result_is_sufficient(self, validator):
+        result = validator.validate(
+            tool_name="summarize_memories",
+            params={
+                "time_start": "2026-01-01T00:00:00Z",
+                "time_end": "2026-01-31T23:59:59Z",
+            },
+            result={
+                "summary": "Overview\n- Project Apollo moved forward.",
+                "count": 3,
+                "source_items": [{"kind": "event", "id": "event:1", "title": "Apollo sync"}],
+            },
+            goal="Summarize my work last week",
+            known_facts=[],
+        )
+        assert result.coverage == GoalCoverage.SATISFIED
+        assert any("GOAL_ACHIEVED" in fact for fact in result.extracted_facts)
 
 
 class TestFactExtraction:

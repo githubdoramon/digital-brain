@@ -6,7 +6,12 @@ These are extracted from the original llm_tools.py for better organization.
 """
 
 from .homeassistant import handle_home_assistant
-from .memory import handle_get_document, handle_get_events, handle_search_memories
+from .memory import (
+    handle_get_document,
+    handle_get_events,
+    handle_search_memories,
+    handle_summarize_memories,
+)
 from .resolution import (
     handle_lookup_contact,
     handle_lookup_contact_places,
@@ -25,6 +30,7 @@ HANDLERS = {
     "search_memories": handle_search_memories,
     "get_events": handle_get_events,
     "get_document": handle_get_document,
+    "summarize_memories": handle_summarize_memories,
     "resolve_contacts": handle_resolve_contacts,
     "lookup_contact": handle_lookup_contact,
     "select_contacts": handle_select_contacts,
@@ -51,6 +57,7 @@ __all__ = [
     "handle_search_memories",
     "handle_get_events",
     "handle_get_document",
+    "handle_summarize_memories",
     "handle_resolve_contacts",
     "handle_lookup_contact",
     "handle_select_contacts",

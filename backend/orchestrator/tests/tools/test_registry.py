@@ -332,6 +332,38 @@ class TestPreregisteredTools:
         assert is_valid is True
         assert error is None
 
+    def test_get_events_accepts_tags_and_types(self, populated_registry):
+        contract = populated_registry.get_contract("get_events")
+        assert contract is not None
+
+        is_valid, error, _ = contract.validate_params(
+            {
+                "action": "by_time_span",
+                "time_start": "2026-01-01T00:00:00Z",
+                "time_end": "2026-01-31T23:59:59Z",
+                "tags": ["Work"],
+                "types": ["meeting"],
+            }
+        )
+        assert is_valid is True
+        assert error is None
+
+    def test_summarize_memories_registered(self, populated_registry):
+        contract = populated_registry.get_contract("summarize_memories")
+        assert contract is not None
+        assert "summarize_memories" in TOOL_GROUPS["memory"]
+
+        is_valid, error, _ = contract.validate_params(
+            {
+                "time_start": "2026-01-01T00:00:00Z",
+                "time_end": "2026-01-31T23:59:59Z",
+                "tags": ["Work"],
+                "query_focus": "topics",
+            }
+        )
+        assert is_valid is True
+        assert error is None
+
     def test_select_contacts_limit_supports_unbounded_values(self, populated_registry):
         contract = populated_registry.get_contract("select_contacts")
         assert contract is not None
