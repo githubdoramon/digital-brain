@@ -162,6 +162,13 @@ class PreExecutionValidator:
         contract = self.registry.get_contract(tool_name)
         if contract:
             normalized = contract.normalize(canonical_params)
+            if tool_name == "get_events":
+                action = GetEventsAction.from_value(normalized.get("action"))
+                has_event_ids = bool(normalized.get("event_ids"))
+                if action is None and has_event_ids:
+                    action = GetEventsAction.BY_IDS
+                if action is GetEventsAction.BY_IDS:
+                    normalized.pop("limit", None)
             return result, normalized
 
         return result, canonical_params
@@ -183,6 +190,14 @@ class PreExecutionValidator:
                     obj[key] = normalized_values
 
         _strip_id_fields(canonical)
+
+        if tool_name == "get_events":
+            action = GetEventsAction.from_value(canonical.get("action"))
+            has_event_ids = bool(canonical.get("event_ids"))
+            if action is None and has_event_ids:
+                action = GetEventsAction.BY_IDS
+            if action is GetEventsAction.BY_IDS:
+                canonical.pop("limit", None)
 
         return canonical
 

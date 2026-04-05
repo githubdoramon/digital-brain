@@ -700,6 +700,9 @@ class ToolExecutionCoordinator:
         if not isinstance(result, dict):
             return {"result": str(result)}
 
+        if self._should_preserve_raw_tool_result(result):
+            return result
+
         if tool_name == "search_memories":
             return self._compact_search_memories_result(result)
         if tool_name == "get_document":
@@ -710,6 +713,14 @@ class ToolExecutionCoordinator:
             return self._compact_summarize_memories_result(result)
 
         return result
+
+    def _should_preserve_raw_tool_result(self, result: dict[str, Any]) -> bool:
+        """Keep validation and execution failures intact for model-visible repair."""
+        if result.get("valid") is False:
+            return True
+        if result.get("error"):
+            return True
+        return False
 
     def _compact_search_memories_result(self, result: dict[str, Any]) -> dict[str, Any]:
         rows = result.get("results")

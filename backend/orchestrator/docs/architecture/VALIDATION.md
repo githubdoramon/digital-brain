@@ -38,6 +38,11 @@ Repair feedback now includes:
 - valid parameter guidance
 - targeted semantic repair suggestions
 
+Important runtime rule:
+
+- Pre-validation feedback must remain visible to the model on the next turn. If a tool result is compacted for prompt-size reasons, do not compact validation/error payloads into empty success-shaped results. Preserve fields like `valid=false`, `error`, and `suggestions` verbatim so the model repairs the actual bad argument instead of retrying blindly.
+- For action-scoped tools, normalize away irrelevant parameters before execution when safe. Example: `get_events(action=by_ids)` should not carry a `limit` value, because `limit` only applies to `by_time_span` retrieval.
+
 ## Post-Execution Validation
 
 Source: `tools/validators/post_execution.py`

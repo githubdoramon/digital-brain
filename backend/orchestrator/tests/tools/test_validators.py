@@ -175,6 +175,18 @@ class TestPreExecutionSemanticValidation:
         assert result.valid is False
         assert "time_start" in "; ".join(result.errors)
 
+    def test_get_events_by_ids_drops_irrelevant_limit_during_normalization(self, validator):
+        result, normalized = validator.validate_and_normalize(
+            "get_events",
+            {"action": "by_ids", "event_ids": ["event:123"], "limit": 0},
+        )
+
+        assert result.valid is True
+        assert normalized is not None
+        assert normalized["action"] == "by_ids"
+        assert normalized["event_ids"] == ["event:123"]
+        assert "limit" not in normalized
+
     def test_lookup_contact_places_requires_contact_selector(self, validator):
         result = validator.validate("lookup_contact_places", {"role_hint": "home"})
         assert result.valid is False
