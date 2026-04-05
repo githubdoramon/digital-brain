@@ -2140,8 +2140,9 @@ class AgentController:
             return text
 
         cleaned = re.sub(r"[\[【]\s*[A-Za-z_-]+:[A-Za-z0-9_\-]+\s*[\]】]", "", text)
-        cleaned = re.sub(r"\s+([,.;:!?])", r"\1", cleaned)
-        cleaned = re.sub(r"\s{2,}", " ", cleaned)
+        cleaned = re.sub(r"[^\S\r\n]+([,.;:!?])", r"\1", cleaned)
+        cleaned = re.sub(r"[^\S\r\n]{2,}", " ", cleaned)
+        cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
         return cleaned.strip()
 
     def _build_linked_items(self, state: AgentState, max_items: int = 5) -> list[dict[str, Any]]:

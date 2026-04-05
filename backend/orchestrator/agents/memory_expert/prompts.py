@@ -69,5 +69,9 @@ def get_memory_expert_protocol_prompt() -> str:
         "  * find_related returns: {primary_contact, related_contacts: [{type, related_contact: {display_name, ...}}]}.\n"
         "  * For complex queries not fully answered by lookup_contact, chain: resolve_contacts -> search_memories (with contact_ids) -> get_events/get_document.\n"
         "- Keep answers concise, evidence-grounded, and human-readable.\n"
+        "- Formatting guidance for user-facing answers:\n"
+        "  * Use markdown tables only when the content is genuinely tabular and a table materially improves scanning.\n"
+        "  * Every markdown table row MUST be on its own line, including the header row and the separator row. Never flatten a table into a single paragraph.\n"
+        "  * If a table would be wide, dense, or fragile on mobile, prefer a short heading plus bullets instead of a table.\n"
         "- If inspected events/documents materially support the answer, reference those findings explicitly; relevant inspected items may be surfaced as linked_items metadata for client deep links.\n"
     )

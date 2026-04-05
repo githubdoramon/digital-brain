@@ -270,6 +270,25 @@ class TestResponseBundle:
         assert "Sorry, I couldn't complete your request." in bundle["answer"]
         assert "Reason: verification failed (missing completion evidence)." in bundle["answer"]
 
+    def test_strip_tool_reference_artifacts_preserves_markdown_table_newlines(self):
+        controller = _build_controller()
+
+        answer = (
+            "**Main work topics**\n\n"
+            "| # | Topic |\n"
+            "|---|---|\n"
+            "| 1 | Payments |\n"
+            "| 2 | Mobile |\n\n"
+            "**Synopsis**\n"
+            "- Follow-up details here."
+        )
+
+        cleaned = controller._strip_tool_reference_artifacts(answer)
+
+        assert "**Main work topics**\n\n| # | Topic |" in cleaned
+        assert "|---|---|\n| 1 | Payments |\n| 2 | Mobile |" in cleaned
+        assert "| 2 | Mobile |\n\n**Synopsis**" in cleaned
+
 
 class TestToolExposurePolicy:
     """Tests for tool exposure strategy in the controller."""
