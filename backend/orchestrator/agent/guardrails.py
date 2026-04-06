@@ -3,8 +3,15 @@
 from __future__ import annotations
 
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
+
+from dateparser.search import search_dates
+
+try:
+    from zoneinfo import ZoneInfo
+except ImportError:  # pragma: no cover
+    ZoneInfo = None  # type: ignore[assignment]
 
 
 def sanitize_goal_text(text: str) -> str:
@@ -214,6 +221,89 @@ def detect_future_temporal_intent(query: str) -> bool:
         r"\bnext month\b",
     ]
     return any(re.search(pattern, q) for pattern in future_patterns)
+
+
+_EXPLICIT_DATE_HINT = re.compile(
+    r"(\b\d{4}-\d{1,2}-\d{1,2}\b|\b\d{1,2}[/-]\d{1,2}(?:[/-]\d{2,4})?\b|\b(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\b|\b\d{1,2}(?:st|nd|rd|th)?\s+(?:of\s+)?(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\b)",
+    flags=re.IGNORECASE,
+)
+
+
+def _resolve_request_timezone(timezone_name: str | None) -> timezone:
+    cleaned = str(timezone_name or "").strip()
+    if cleaned and ZoneInfo is not None:
+        try:
+            return ZoneInfo(cleaned)
+        except Exception:
+            pass
+    return timezone.utc
+
+
+def _looks_like_explicit_date_phrase(raw_text: str) -> bool:
+    text = str(raw_text or "").strip()
+    if not text:
+        return False
+    if re.search(r"\b(next|last|this|today|tomorrow|yesterday|week|month|year)\b", text, re.IGNORECASE):
+        return False
+    return bool(_EXPLICIT_DATE_HINT.search(text))
+
+
+def extract_explicit_time_bounds(
+    query: str,
+    *,
+    reference_time_iso: str | None = None,
+    timezone_name: str | None = None,
+) -> tuple[str, str] | None:
+    """Extract an explicit calendar-date window from free text."""
+    text = str(query or "").strip()
+    if not text:
+        return None
+
+    request_tz = _resolve_request_timezone(timezone_name)
+    settings: dict[str, Any] = {
+        "RETURN_AS_TIMEZONE_AWARE": True,
+        "PREFER_DATES_FROM": "past",
+        "TIMEZONE": str(getattr(request_tz, "key", request_tz)),
+        "TO_TIMEZONE": str(getattr(request_tz, "key", request_tz)),
+    }
+
+    if reference_time_iso:
+        try:
+            relative_base = datetime.fromisoformat(reference_time_iso)
+            if relative_base.tzinfo is None:
+                relative_base = relative_base.replace(tzinfo=timezone.utc)
+            settings["RELATIVE_BASE"] = relative_base.astimezone(request_tz)
+        except Exception:
+            pass
+
+    found = search_dates(text, settings=settings)
+    if not found:
+        return None
+
+    day_windows: list[tuple[datetime, datetime]] = []
+    seen_days: set[str] = set()
+    for raw_match, parsed_dt in found:
+        if not _looks_like_explicit_date_phrase(raw_match):
+            continue
+        current_dt = parsed_dt
+        if current_dt.tzinfo is None:
+            current_dt = current_dt.replace(tzinfo=request_tz)
+        else:
+            current_dt = current_dt.astimezone(request_tz)
+        day_start = current_dt.replace(hour=0, minute=0, second=0, microsecond=0)
+        day_key = day_start.date().isoformat()
+        if day_key in seen_days:
+            continue
+        seen_days.add(day_key)
+        day_end = day_start + timedelta(days=1) - timedelta(microseconds=1)
+        day_windows.append((day_start, day_end))
+
+    if not day_windows:
+        return None
+
+    time_start = min(window[0] for window in day_windows)
+    time_end = max(window[1] for window in day_windows)
+    return time_start.isoformat(), time_end.isoformat()
 
 
 def utc_now_iso() -> str:

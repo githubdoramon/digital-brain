@@ -826,6 +826,43 @@ class TestContactAwareMemorySearch:
         assert args.get("time_start") == "2026-02-07T12:00:00+00:00"
         assert args.get("time_end") in {None, ""}
 
+    def test_explicit_calendar_date_sets_day_bounds(self, controller, monkeypatch):
+        state = AgentState(goal="March 23rd is when we talked about it")
+        state.request_context = {"timezone": "UTC"}
+        monkeypatch.setattr("agent.controller.utc_now_iso", lambda: "2026-04-06T13:45:21+00:00")
+
+        args, preempt = controller._prepare_memory_search_arguments(
+            args={"query": "Avery Hill wife pregnant March 23 2026"},
+            state=state,
+            question="March 23rd is when we talked about it",
+            user_email=None,
+            conversation_history=[],
+        )
+
+        assert preempt is None
+        assert args.get("time_start") == "2026-03-23T00:00:00+00:00"
+        assert args.get("time_end") == "2026-03-23T23:59:59.999999+00:00"
+        assert args.get("limit") == 25
+
+    def test_explicit_calendar_date_without_year_uses_request_reference_year(
+        self, controller, monkeypatch
+    ):
+        state = AgentState(goal="March 23rd is when we talked about it")
+        state.request_context = {"timezone": "UTC"}
+        monkeypatch.setattr("agent.controller.utc_now_iso", lambda: "2026-04-06T13:45:21+00:00")
+
+        args, preempt = controller._prepare_memory_search_arguments(
+            args={"query": "March 23rd is when we talked about it"},
+            state=state,
+            question="March 23rd is when we talked about it",
+            user_email=None,
+            conversation_history=[],
+        )
+
+        assert preempt is None
+        assert args.get("time_start") == "2026-03-23T00:00:00+00:00"
+        assert args.get("time_end") == "2026-03-23T23:59:59.999999+00:00"
+
     def test_low_signal_name_query_uses_goal_when_contact_scope_exists(self, controller):
         state = AgentState(goal="When did I last meet Gio?")
         state.resolution["active_contact_scope_ids"] = ["contact-gio"]

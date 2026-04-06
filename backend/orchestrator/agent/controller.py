@@ -54,6 +54,7 @@ from .enums import (
 from .guardrails import (
     detect_future_temporal_intent,
     detect_temporal_sort_order,
+    extract_explicit_time_bounds,
     optimize_query_for_scoped_contacts,
     sanitize_goal_text,
     utc_now_iso,
@@ -1715,6 +1716,17 @@ class AgentController:
             temporal_now_ref = utc_now_iso()
             state.request_context["temporal_now_iso"] = temporal_now_ref
 
+        explicit_time_bounds = None
+        if not normalized_args.get("time_start") and not normalized_args.get("time_end"):
+            timezone_name = str(state.request_context.get("timezone") or "").strip() or None
+            explicit_time_bounds = extract_explicit_time_bounds(
+                query_text or goal_text,
+                reference_time_iso=temporal_now_ref,
+                timezone_name=timezone_name,
+            )
+            if explicit_time_bounds is not None:
+                normalized_args["time_start"], normalized_args["time_end"] = explicit_time_bounds
+
         is_future_temporal_query = detect_future_temporal_intent(
             query_text
         ) or detect_future_temporal_intent(goal_text)
@@ -1726,7 +1738,7 @@ class AgentController:
             and not normalized_args.get("time_end")
         ):
             normalized_args["time_end"] = temporal_now_ref
-        if sort_order:
+        if sort_order or explicit_time_bounds:
             # Temporal questions are accuracy-sensitive. Use a wider candidate window.
             current_limit = normalized_args.get("limit")
             try:
