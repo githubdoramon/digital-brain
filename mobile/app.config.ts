@@ -85,10 +85,16 @@ export default ({ config }: ConfigContext): ExpoConfig => {
   const bundleId = getUniqueIdentifier();
   const androidGoogleServicesFile = requireConfigFile('./google-services.json');
   const googleMapsApiKey = process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY;
+  const buildTimestamp = process.env.EXPO_PUBLIC_BUILD_TIMESTAMP ?? new Date().toISOString();
 
   const merged = {
     ...appJson.expo,
     ...config,
+    extra: {
+      ...(appJson.expo.extra ?? {}),
+      ...(config.extra ?? {}),
+      buildTimestamp,
+    },
     name: appName,
     ios: {
       ...(appJson.expo.ios ?? {}),

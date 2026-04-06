@@ -1,4 +1,6 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
+import * as Application from 'expo-application';
+import Constants from 'expo-constants';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
 import React from 'react';
@@ -22,11 +24,27 @@ import {
 } from '@/components/CollapsingTopBar';
 import { theme } from '@/theme';
 
+function formatBuildTimestamp(value: string | null | undefined): string {
+  if (!value) {
+    return 'Unknown';
+  }
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) {
+    return value;
+  }
+  return parsed.toLocaleString();
+}
+
 export default function SettingsScreen() {
   const router = useRouter();
   const { signOut } = useAuth();
   const insets = useSafeAreaInsets();
   const scrollY = React.useRef(new Animated.Value(0)).current;
+  const appVersion = Application.nativeApplicationVersion ?? Constants.expoConfig?.version ?? 'Unknown';
+  const buildNumber = Application.nativeBuildVersion ?? 'Unknown';
+  const buildTimestamp = formatBuildTimestamp(
+    (Constants.expoConfig?.extra as { buildTimestamp?: string } | undefined)?.buildTimestamp,
+  );
 
   return (
     <LinearGradient
@@ -125,6 +143,13 @@ export default function SettingsScreen() {
         </Pressable>
       </Card>
 
+        <Card style={[styles.card, styles.versionCard]}>
+          <Text style={styles.versionLabel}>App version</Text>
+          <Text style={styles.versionValue}>{`${appVersion} (${buildNumber})`}</Text>
+          <Text style={styles.versionLabel}>Build timestamp</Text>
+          <Text style={styles.versionValue}>{buildTimestamp}</Text>
+        </Card>
+
 
         <Button
           label="Sign out"
@@ -187,5 +212,21 @@ const styles = StyleSheet.create({
     borderRadius: theme.radius.md,
     paddingHorizontal: 18,
     backgroundColor: theme.colors.ink,
+  },
+  versionCard: {
+    marginTop: 16,
+    gap: 4,
+  },
+  versionLabel: {
+    marginTop: 4,
+    fontSize: 12,
+    color: theme.colors.mutedInk,
+    textTransform: 'uppercase',
+    letterSpacing: 0.6,
+  },
+  versionValue: {
+    fontSize: 14,
+    color: theme.colors.ink,
+    fontWeight: '600',
   },
 });

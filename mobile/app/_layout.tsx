@@ -12,6 +12,7 @@ import { SafeAreaProvider } from 'react-native-safe-area-context';
 import * as Notifications from 'expo-notifications';
 
 import { AuthProvider, useAuth } from '@/auth/AuthContext';
+import { syncBackgroundLocationTracking } from '@/location/backgroundLocation';
 import { theme } from '@/theme';
 
 export {
@@ -77,6 +78,13 @@ function RootLayoutNav({ loaded }: { loaded: boolean }) {
       router.replace('/home');
     }
   }, [token, segments, isLoading, router, loaded]);
+
+  useEffect(() => {
+    if (isLoading) {
+      return;
+    }
+    void syncBackgroundLocationTracking(Boolean(token));
+  }, [isLoading, token]);
 
   const handleNotificationResponse = useCallback(
     (response: Notifications.NotificationResponse) => {

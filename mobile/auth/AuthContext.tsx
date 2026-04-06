@@ -4,11 +4,7 @@ import * as SecureStore from 'expo-secure-store';
 import { Alert } from 'react-native';
 
 import { apiFetch, setAuthRefreshHandler, setAuthTokenProvider } from '@/api/client';
-
-const TOKEN_KEY = 'digitalbrain.googleIdToken';
-const EMAIL_KEY = 'digitalbrain.userEmail';
-const NAME_KEY = 'digitalbrain.userName';
-const PHOTO_KEY = 'digitalbrain.userPhoto';
+import { AUTH_EMAIL_KEY, AUTH_NAME_KEY, AUTH_PHOTO_KEY, AUTH_TOKEN_KEY } from '@/auth/storageKeys';
 
 type AuthContextValue = {
   token: string | null;
@@ -61,21 +57,21 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           hasEmail: Boolean(userInfo?.user?.email),
         });
         setToken(idToken);
-        await SecureStore.setItemAsync(TOKEN_KEY, idToken);
+        await SecureStore.setItemAsync(AUTH_TOKEN_KEY, idToken);
         const userEmail = userInfo?.user?.email ?? null;
         const userName = userInfo?.user?.name ?? null;
         const userPhoto = userInfo?.user?.photo ?? null;
         if (userEmail) {
           setEmail(userEmail);
-          await SecureStore.setItemAsync(EMAIL_KEY, userEmail);
+          await SecureStore.setItemAsync(AUTH_EMAIL_KEY, userEmail);
         }
         if (userName) {
           setName(userName);
-          await SecureStore.setItemAsync(NAME_KEY, userName);
+          await SecureStore.setItemAsync(AUTH_NAME_KEY, userName);
         }
         if (userPhoto) {
           setPhoto(userPhoto);
-          await SecureStore.setItemAsync(PHOTO_KEY, userPhoto);
+          await SecureStore.setItemAsync(AUTH_PHOTO_KEY, userPhoto);
         }
         return idToken;
       } catch (error) {
@@ -88,10 +84,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         setEmail(null);
         setName(null);
         setPhoto(null);
-        await SecureStore.deleteItemAsync(TOKEN_KEY);
-        await SecureStore.deleteItemAsync(EMAIL_KEY);
-        await SecureStore.deleteItemAsync(NAME_KEY);
-        await SecureStore.deleteItemAsync(PHOTO_KEY);
+        await SecureStore.deleteItemAsync(AUTH_TOKEN_KEY);
+        await SecureStore.deleteItemAsync(AUTH_EMAIL_KEY);
+        await SecureStore.deleteItemAsync(AUTH_NAME_KEY);
+        await SecureStore.deleteItemAsync(AUTH_PHOTO_KEY);
         try {
           await GoogleSignin.signOut();
         } catch (signOutError) {
@@ -119,10 +115,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     let mounted = true;
     (async () => {
       if (mounted) {
-        const storedToken = await SecureStore.getItemAsync(TOKEN_KEY);
-        const storedEmail = await SecureStore.getItemAsync(EMAIL_KEY);
-        const storedName = await SecureStore.getItemAsync(NAME_KEY);
-        const storedPhoto = await SecureStore.getItemAsync(PHOTO_KEY);
+        const storedToken = await SecureStore.getItemAsync(AUTH_TOKEN_KEY);
+        const storedEmail = await SecureStore.getItemAsync(AUTH_EMAIL_KEY);
+        const storedName = await SecureStore.getItemAsync(AUTH_NAME_KEY);
+        const storedPhoto = await SecureStore.getItemAsync(AUTH_PHOTO_KEY);
         console.info('[auth] restore session', {
           hasStoredToken: Boolean(storedToken),
           hasStoredEmail: Boolean(storedEmail),
@@ -166,13 +162,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         if (status === 403) {
           await GoogleSignin.revokeAccess();
           await GoogleSignin.signOut();
-          await SecureStore.deleteItemAsync(TOKEN_KEY);
+          await SecureStore.deleteItemAsync(AUTH_TOKEN_KEY);
           setToken(null);
           Alert.alert('Access denied', 'Your account is not authorized to use this app.');
         } else if (authExpired) {
           await GoogleSignin.revokeAccess();
           await GoogleSignin.signOut();
-          await SecureStore.deleteItemAsync(TOKEN_KEY);
+          await SecureStore.deleteItemAsync(AUTH_TOKEN_KEY);
           setToken(null);
           Alert.alert('Session expired', 'Please sign in again.');
         }
@@ -186,13 +182,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setEmail(email);
       setName(userName);
       setPhoto(userPhoto);
-      await SecureStore.setItemAsync(TOKEN_KEY, idToken);
-      await SecureStore.setItemAsync(EMAIL_KEY, email);
+      await SecureStore.setItemAsync(AUTH_TOKEN_KEY, idToken);
+      await SecureStore.setItemAsync(AUTH_EMAIL_KEY, email);
       if (userName) {
-        await SecureStore.setItemAsync(NAME_KEY, userName);
+        await SecureStore.setItemAsync(AUTH_NAME_KEY, userName);
       }
       if (userPhoto) {
-        await SecureStore.setItemAsync(PHOTO_KEY, userPhoto);
+        await SecureStore.setItemAsync(AUTH_PHOTO_KEY, userPhoto);
       }
     } catch (error) {
       console.error(error);
@@ -209,10 +205,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setName(null);
     setPhoto(null);
     await GoogleSignin.signOut();
-    await SecureStore.deleteItemAsync(TOKEN_KEY);
-    await SecureStore.deleteItemAsync(EMAIL_KEY);
-    await SecureStore.deleteItemAsync(NAME_KEY);
-    await SecureStore.deleteItemAsync(PHOTO_KEY);
+    await SecureStore.deleteItemAsync(AUTH_TOKEN_KEY);
+    await SecureStore.deleteItemAsync(AUTH_EMAIL_KEY);
+    await SecureStore.deleteItemAsync(AUTH_NAME_KEY);
+    await SecureStore.deleteItemAsync(AUTH_PHOTO_KEY);
   }, []);
 
   const authFetch = useCallback(
