@@ -163,6 +163,7 @@ class StepLog:
 
     # Model output
     model_content: Optional[str] = None
+    model_reasoning: Optional[str] = None
     had_tool_calls: bool = False
 
     # Tool calls in this step
@@ -179,6 +180,7 @@ class StepLog:
             "completion_tokens": self.completion_tokens,
             "llm_duration_ms": self.llm_duration_ms,
             "model_content": self.model_content[:500] if self.model_content else None,
+            "model_reasoning": self.model_reasoning[:500] if self.model_reasoning else None,
             "had_tool_calls": self.had_tool_calls,
             "tool_calls": [tc.to_dict() for tc in self.tool_calls],
         }
@@ -368,6 +370,7 @@ class AgentLogger:
         prompt_tokens: Optional[int] = None,
         completion_tokens: Optional[int] = None,
         content: Optional[str] = None,
+        reasoning: Optional[str] = None,
         had_tool_calls: bool = False,
     ) -> None:
         """Log LLM call metrics for a step."""
@@ -382,6 +385,7 @@ class AgentLogger:
                     step.prompt_tokens = prompt_tokens
                     step.completion_tokens = completion_tokens
                     step.model_content = content
+                    step.model_reasoning = reasoning
                     step.had_tool_calls = had_tool_calls
                     break
 
@@ -783,15 +787,19 @@ def trace_llm_response(
     has_tool_calls: bool,
     tool_count: int = 0,
     content_preview: Optional[str] = None,
+    reasoning_preview: Optional[str] = None,
 ) -> None:
     """Log LLM response."""
     if _should_log(LogLevel.INFO):
         _emit(LogLevel.INFO, f"[agent.llm] Response received ({duration_ms:.0f}ms)")
         if has_tool_calls:
             _emit(LogLevel.INFO, f"[agent.llm]   → Requested {tool_count} tool call(s)")
-        elif content_preview:
+        if content_preview:
             preview = _truncate(content_preview.replace("\n", " "), 100)
             _emit(LogLevel.INFO, f'[agent.llm]   → Text response: "{preview}"')
+        if reasoning_preview:
+            preview = _truncate(reasoning_preview.replace("\n", " "), 160)
+            _emit(LogLevel.INFO, f'[agent.llm]   → Reasoning: "{preview}"')
 
 
 def trace_empty_response(step_count: int) -> None:

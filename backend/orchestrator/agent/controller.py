@@ -535,6 +535,7 @@ class AgentController:
 
                 message = response.get("message", {})
                 content = (message.get("content") or "").strip()
+                reasoning = str(message.get("reasoning") or "").strip()
                 tool_calls = message.get("tool_calls") or []
 
                 # Trace LLM response
@@ -543,12 +544,14 @@ class AgentController:
                     has_tool_calls=bool(tool_calls),
                     tool_count=len(tool_calls),
                     content_preview=content if not tool_calls else None,
+                    reasoning_preview=reasoning or None,
                 )
                 self.logger.log_llm_call(
                     run_id,
                     state.step_count,
                     llm_duration,
                     content=content,
+                    reasoning=reasoning or None,
                     had_tool_calls=bool(tool_calls),
                 )
 
@@ -800,6 +803,7 @@ class AgentController:
 
                 tool_calls = []
                 current_content = ""
+                current_reasoning = ""
                 streamed_any = False
                 self._set_active_llm_policy(state=state, question=question, tools_count=len(tools))
                 trace.trace_llm_request(len(tools))
@@ -813,6 +817,10 @@ class AgentController:
                         current_content += delta
                         yield {"type": "token", "content": delta}
                         streamed_any = True
+
+                    reasoning_delta = str(message.get("reasoning") or "")
+                    if reasoning_delta:
+                        current_reasoning += reasoning_delta
 
                     chunk_tools = message.get("tool_calls")
                     if chunk_tools:
@@ -828,12 +836,14 @@ class AgentController:
                     has_tool_calls=bool(tool_calls),
                     tool_count=len(tool_calls),
                     content_preview=final_content_preview,
+                    reasoning_preview=current_reasoning.strip() or None,
                 )
                 self.logger.log_llm_call(
                     run_id,
                     state.step_count,
                     llm_duration,
                     content=final_content_preview,
+                    reasoning=current_reasoning.strip() or None,
                     had_tool_calls=bool(tool_calls),
                 )
 

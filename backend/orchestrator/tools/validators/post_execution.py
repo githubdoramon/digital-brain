@@ -16,6 +16,7 @@ import json
 import os
 import sys
 from dataclasses import dataclass, field
+from datetime import datetime
 from enum import Enum
 from typing import Any, Optional
 
@@ -474,8 +475,11 @@ Rules:
         compact: dict[str, Any]
         if tool_name == "get_events":
             events = result.get("events") if isinstance(result.get("events"), list) else []
-            compact = {
-                "events": [
+            compact_events: list[dict[str, Any]] = []
+            for event in events[:8]:
+                if not isinstance(event, dict):
+                    continue
+                compact_events.append(
                     {
                         "id": event.get("id") or event.get("event_id"),
                         "title": event.get("title"),
@@ -484,13 +488,15 @@ Rules:
                         "tags": event.get("tags"),
                         "types": event.get("types"),
                     }
-                    for event in events[:8]
-                    if isinstance(event, dict)
-                ],
+                )
+            compact = {
+                "events": compact_events,
                 "count": result.get("count", len(events)),
             }
         elif tool_name == "get_document":
-            document = result.get("document") if isinstance(result.get("document"), dict) else {}
+            document: dict[str, Any] = (
+                result.get("document") if isinstance(result.get("document"), dict) else {}
+            )
             compact = {
                 "document": {
                     "document_id": document.get("document_id"),
@@ -507,8 +513,11 @@ Rules:
             }
         elif tool_name == "search_memories":
             results = result.get("results") if isinstance(result.get("results"), list) else []
-            compact = {
-                "results": [
+            compact_results: list[dict[str, Any]] = []
+            for row in results[:10]:
+                if not isinstance(row, dict):
+                    continue
+                compact_results.append(
                     {
                         "id": row.get("id"),
                         "kind": row.get("kind"),
@@ -517,9 +526,9 @@ Rules:
                         "summary": str(row.get("summary") or "")[:1000],
                         "snippet": str(row.get("snippet") or "")[:800],
                     }
-                    for row in results[:10]
-                    if isinstance(row, dict)
-                ],
+                )
+            compact = {
+                "results": compact_results,
                 "count": result.get("count", len(results)),
             }
         elif tool_name == "summarize_memories":
@@ -1047,10 +1056,9 @@ class GoalCompletionValidator:
             detail_requirement_reason = (
                 f"Top candidate requires detailed inspection before finalizing ({candidate_kind})"
             )
-        detail_requirement_action = (
-            f"Call {required_detail_tool} on the most relevant candidate result"
-            if required_detail_tool
-            else "Inspect the most relevant candidate result"
+        detail_requirement_action = self._build_detail_requirement_action(
+            best_search_candidate,
+            required_detail_tool,
         )
 
         final_content_lower = (final_content or "").lower().strip()
@@ -1165,6 +1173,11 @@ class GoalCompletionValidator:
 
     def _find_best_search_candidate(self, tool_calls: list, goal: str) -> dict[str, Any] | None:
         """Find best candidate across search calls, preferring goal-aligned evidence."""
+        if self._is_current_status_query(goal):
+            current_status_candidate = self._find_latest_event_candidate(tool_calls)
+            if current_status_candidate is not None:
+                return current_status_candidate
+
         preferred_kinds = self._preferred_candidate_kinds(goal)
         best_candidate: dict[str, Any] | None = None
         best_composite = float("-inf")
@@ -1234,11 +1247,103 @@ class GoalCompletionValidator:
 
     def _preferred_candidate_kinds(self, goal: str) -> list[str]:
         goal_lower = (goal or "").lower()
+        if self._is_current_status_query(goal):
+            return ["event", "document"]
         if self._is_temporal_interaction_query(goal):
             return ["event", "document"]
         if any(token in goal_lower for token in ("document", "contract", "pdf", "file", "policy")):
             return ["document", "event"]
         return []
+
+    def _find_latest_event_candidate(self, tool_calls: list) -> dict[str, Any] | None:
+        """Find the newest event candidate across search results for current-status questions."""
+        newest_candidate: dict[str, Any] | None = None
+        newest_key: tuple[datetime, float] | None = None
+
+        for call in tool_calls:
+            if getattr(call, "tool_name", "") != "search_memories" or not getattr(call, "success", False):
+                continue
+            rows = (getattr(call, "result", {}) or {}).get("results", [])
+            if not isinstance(rows, list):
+                continue
+
+            for row in rows:
+                if not isinstance(row, dict):
+                    continue
+                if str(row.get("kind") or "").strip().lower() != "event":
+                    continue
+                candidate_id = str(row.get("id") or "").strip()
+                if not candidate_id:
+                    continue
+
+                event_time = self._parse_candidate_datetime(
+                    row.get("start_date") or row.get("end_date") or row.get("document_date")
+                )
+                if event_time is None:
+                    continue
+
+                score = self._safe_float(row.get("score"), default=-1.0)
+                candidate_key = (event_time, score)
+                if newest_key is not None and candidate_key <= newest_key:
+                    continue
+
+                newest_key = candidate_key
+                newest_candidate = {
+                    "id": candidate_id,
+                    "kind": "event",
+                    "title": str(row.get("title") or "").strip(),
+                    "score": score,
+                    "composite": score,
+                    "goal_overlap": 0.0,
+                }
+
+        return newest_candidate
+
+    def _build_detail_requirement_action(
+        self,
+        candidate: dict[str, Any] | None,
+        required_detail_tool: str | None,
+    ) -> str:
+        """Build a precise follow-up action so the model does not need to reconstruct IDs."""
+        if required_detail_tool is None:
+            return "Inspect the most relevant candidate result"
+        if not isinstance(candidate, dict):
+            return f"Call {required_detail_tool} on the most relevant candidate result"
+
+        candidate_id = str(candidate.get("id") or "").strip()
+        candidate_title = str(candidate.get("title") or "").strip()
+        candidate_label = f"'{candidate_title}' " if candidate_title else ""
+
+        if required_detail_tool == "get_document" and candidate_id:
+            return (
+                f"Call get_document with document_id='{candidate_id}' for {candidate_label}"
+                "before responding"
+            )
+        if required_detail_tool == "get_events" and candidate_id:
+            if candidate_label:
+                return (
+                    f"Call get_events with action='by_ids' and event_ids=['{candidate_id}'] "
+                    f"for {candidate_label}before responding"
+                )
+            return (
+                f"Call get_events with action='by_ids' and event_ids=['{candidate_id}'] "
+                "before responding"
+            )
+        return f"Call {required_detail_tool} on the most relevant candidate result"
+
+    def _is_current_status_query(self, goal: str) -> bool:
+        goal_lower = (goal or "").lower()
+        progress_markers = (
+            "how many weeks",
+            "how many months",
+            "how far along",
+            "pregnant",
+            "pregnancy",
+            "due date",
+            "currently",
+            "right now",
+        )
+        return any(marker in goal_lower for marker in progress_markers)
 
     def _is_temporal_interaction_query(self, goal: str) -> bool:
         goal_lower = (goal or "").lower()
@@ -1273,3 +1378,12 @@ class GoalCompletionValidator:
             return float(str(value))
         except (TypeError, ValueError):
             return default
+
+    def _parse_candidate_datetime(self, value: Any) -> datetime | None:
+        text = str(value or "").strip()
+        if not text:
+            return None
+        try:
+            return datetime.fromisoformat(text.replace("Z", "+00:00"))
+        except ValueError:
+            return None

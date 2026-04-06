@@ -43,6 +43,23 @@ async def stream_llm_with_tools(
 ) -> AsyncGenerator[dict[str, Any], None]:
     """Stream chat-completions chunks and normalize tool-call deltas."""
     accumulated_tool_calls: dict[int, dict[str, Any]] = {}
+    accumulated_reasoning = ""
+
+    def _coerce_text(value: Any) -> str:
+        if isinstance(value, str):
+            return value
+        if isinstance(value, list):
+            parts: list[str] = []
+            for item in value:
+                if isinstance(item, str):
+                    parts.append(item)
+                    continue
+                if isinstance(item, dict):
+                    text = item.get("text") or item.get("content")
+                    if isinstance(text, str):
+                        parts.append(text)
+            return "".join(parts)
+        return ""
 
     async for line in stream_llm_chat(
         messages,
@@ -68,6 +85,11 @@ async def stream_llm_with_tools(
 
             delta = chunk.get("choices", [{}])[0].get("delta", {})
             finish_reason = chunk.get("choices", [{}])[0].get("finish_reason")
+            reasoning_delta = _coerce_text(
+                delta.get("reasoning") or delta.get("reasoning_content")
+            )
+            if reasoning_delta:
+                accumulated_reasoning += reasoning_delta
 
             if "tool_calls" in delta:
                 for tc in delta["tool_calls"]:
@@ -90,10 +112,15 @@ async def stream_llm_with_tools(
                                 "function"
                             ]["arguments"]
 
-            normalized = {"message": {"content": delta.get("content", "")}}
+            normalized_message: dict[str, Any] = {"content": delta.get("content", "")}
+            if accumulated_reasoning:
+                normalized_message["reasoning"] = accumulated_reasoning
+
+            normalized: dict[str, Any] = {}
+            normalized["message"] = normalized_message
 
             if finish_reason in ("tool_calls", "stop") and accumulated_tool_calls:
-                normalized["message"]["tool_calls"] = list(accumulated_tool_calls.values())
+                normalized_message["tool_calls"] = list(accumulated_tool_calls.values())
                 normalized["done"] = True
             elif finish_reason == "stop":
                 normalized["done"] = True

@@ -526,3 +526,110 @@ class TestGoalCompletionValidatorTemporal:
         assert achieved is False
         assert "contradicts retrieved results" in reason
         assert pending
+
+    def test_current_status_query_prefers_latest_event_candidate(self):
+        validator = GoalCompletionValidator()
+        tool_calls = [
+            ToolCallRecord(
+                tool_name="search_memories",
+                arguments={"query": "pregnant"},
+                result={
+                    "results": [
+                        {
+                            "id": "doc:lab",
+                            "kind": "document",
+                            "title": "Clinical Laboratory Test Results Report",
+                            "score": 1.5,
+                            "document_date": "2025-10-29T00:00:00+00:00",
+                        },
+                        {
+                            "id": "meeting:older",
+                            "kind": "event",
+                            "title": "Avery <> Ramon - 1:1",
+                            "score": 0.59,
+                            "start_date": "2025-12-09T11:29:00+00:00",
+                        },
+                        {
+                            "id": "meeting:newer",
+                            "kind": "event",
+                            "title": "Avery <> Ramon - 1:1",
+                            "score": 0.57,
+                            "start_date": "2026-04-06T11:30:00+01:00",
+                        },
+                    ],
+                    "count": 3,
+                },
+                duration_ms=50,
+                success=True,
+            )
+        ]
+
+        achieved, reason, pending = validator.check_goal_achieved(
+            goal="How many weeks is Avery Hill's wife pregnant with?",
+            tool_calls=tool_calls,
+            known_facts=["Found 3 relevant memories"],
+            final_content="",
+        )
+
+        assert achieved is False
+        assert "must be inspected with get_events" in reason
+        assert pending == [
+            "Call get_events with action='by_ids' and event_ids=['meeting:newer'] for 'Avery <> Ramon - 1:1' before responding"
+        ]
+
+    def test_current_status_query_with_inspected_latest_event_is_achieved(self):
+        validator = GoalCompletionValidator()
+        tool_calls = [
+            ToolCallRecord(
+                tool_name="search_memories",
+                arguments={"query": "pregnant"},
+                result={
+                    "results": [
+                        {
+                            "id": "doc:lab",
+                            "kind": "document",
+                            "title": "Clinical Laboratory Test Results Report",
+                            "score": 1.5,
+                            "document_date": "2025-10-29T00:00:00+00:00",
+                        },
+                        {
+                            "id": "meeting:newer",
+                            "kind": "event",
+                            "title": "Avery <> Ramon - 1:1",
+                            "score": 0.57,
+                            "start_date": "2026-04-06T11:30:00+01:00",
+                        },
+                    ],
+                    "count": 2,
+                },
+                duration_ms=50,
+                success=True,
+            ),
+            ToolCallRecord(
+                tool_name="get_events",
+                arguments={"action": "by_ids", "event_ids": ["meeting:newer"]},
+                result={
+                    "events": [
+                        {
+                            "id": "meeting:newer",
+                            "title": "Avery <> Ramon - 1:1",
+                            "summary": "due date: April 15",
+                        }
+                    ],
+                    "count": 1,
+                },
+                duration_ms=40,
+                success=True,
+            ),
+        ]
+
+        achieved, reason, pending = validator.check_goal_achieved(
+            goal="How many weeks is Avery Hill's wife pregnant with?",
+            tool_calls=tool_calls,
+            known_facts=["Retrieved 1 event details"],
+            final_content="Avery's wife is about 39 weeks pregnant.",
+        )
+
+        assert achieved is True
+        assert "Query returned" in reason
+        assert not pending
