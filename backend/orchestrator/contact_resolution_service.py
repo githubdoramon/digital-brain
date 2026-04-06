@@ -74,6 +74,7 @@ def resolve_contacts_request(data: dict[str, Any]) -> dict[str, Any]:
                     str(text),
                     str(user_email),
                     conversation_messages=data.get("conversation_messages"),
+                    mode=str(data.get("mode") or "full").strip().lower() or "full",
                 )
 
         if not isinstance(result, dict):

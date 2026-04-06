@@ -171,7 +171,11 @@ def resolve_contacts_for_text(
     try:
         from contact_resolution_service import resolve_contacts_request
 
-        payload: dict[str, Any] = {"text": normalized_text, "user_email": user_email}
+        payload: dict[str, Any] = {
+            "text": normalized_text,
+            "user_email": user_email,
+            "mode": "minimal",
+        }
         context_messages = list((conversation_history or [])[-8:])
         if (
             not context_messages

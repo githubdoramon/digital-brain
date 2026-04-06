@@ -357,6 +357,180 @@ def test_resolve_contact_uses_any_search_for_role_queries(monkeypatch):
     assert captured["kwargs"]["search_by"] == "any"
 
 
+def test_resolve_contacts_short_circuits_simple_relationship_query(monkeypatch):
+    llm_calls = []
+
+    monkeypatch.setattr(
+        resolver.contacts_service,
+        "find_self_contact",
+        lambda *_a, **_k: {"contact_id": "user-1", "display_name": "Test User"},
+    )
+    monkeypatch.setattr(
+        resolver.contacts_service,
+        "get_contact_relationships",
+        lambda *_a, **_k: {
+            "relationships": [
+                {
+                    "contact_id": "contact-daughter",
+                    "related_contact": {
+                        "contact_id": "contact-daughter",
+                        "display_name": "Emma",
+                    },
+                    "type": "parent",
+                    "other_type": "daughter",
+                }
+            ]
+        },
+    )
+    monkeypatch.setattr(
+        resolver,
+        "call_llm_json",
+        lambda *args, **kwargs: llm_calls.append((args, kwargs)) or {"people": []},
+    )
+
+    result = resolver.resolve_contacts_from_text(
+        "When did I last meet my daughter?",
+        "user@example.com",
+        mode=resolver.MINIMAL_RESOLUTION_MODE,
+    )
+
+    assert result["status"] == "success"
+    assert any(item["display_name"] == "Emma" for item in result["resolved_contacts"])
+    assert llm_calls == []
+
+
+def test_minimal_mode_skips_enrichment_steps(monkeypatch):
+    monkeypatch.setattr(
+        resolver,
+        "extract_people_from_text",
+        lambda *_args, **_kwargs: ["John Smith"],
+    )
+    monkeypatch.setattr(
+        resolver,
+        "_resolve_people_mentions",
+        lambda *args, **kwargs: (
+            [
+                {
+                    "original_text": "John Smith",
+                    "contact_id": "contact-1",
+                    "display_name": "John Smith",
+                    "matched_via": "direct_match",
+                    "confidence": "high",
+                    "resolution_path": None,
+                }
+            ],
+            [],
+            [],
+            {},
+        ),
+    )
+
+    def fail_professions(*_args, **_kwargs):
+        raise AssertionError("profession inference should be skipped in minimal mode")
+
+    def fail_relationships(*_args, **_kwargs):
+        raise AssertionError("relationship inference should be skipped in minimal mode")
+
+    monkeypatch.setattr(resolver, "_infer_professions_for_new_contacts", fail_professions)
+    monkeypatch.setattr(resolver, "_infer_relationship_pairs", fail_relationships)
+
+    result = resolver.resolve_contacts_from_text(
+        "John Smith",
+        "user@example.com",
+        mode=resolver.MINIMAL_RESOLUTION_MODE,
+    )
+
+    assert result["status"] == "success"
+    assert result["suggested_relationships"] == []
+
+
+def test_suggest_missing_relationships_prefetches_relationship_graph(monkeypatch):
+    relationship_calls = []
+
+    monkeypatch.setattr(
+        resolver.contacts_service,
+        "find_self_contact",
+        lambda *_a, **_k: {"contact_id": "user-1", "display_name": "User"},
+    )
+
+    def fake_get_contact_relationships(contact_id, include_contact_details=False):
+        relationship_calls.append((contact_id, include_contact_details))
+        return {
+            "found": True,
+            "relationships": [
+                {"contact_id": "contact-2"} if contact_id == "contact-1" else {"contact_id": "contact-9"}
+            ],
+        }
+
+    monkeypatch.setattr(
+        resolver.contacts_service,
+        "get_contact_relationships",
+        fake_get_contact_relationships,
+    )
+    monkeypatch.setattr(
+        resolver,
+        "_infer_relationship_types",
+        lambda *_args, **_kwargs: {"type": "doctor", "other_type": "patient"},
+    )
+    monkeypatch.setattr(resolver, "_infer_profession_from_text", lambda *_args, **_kwargs: None)
+
+    suggestions = resolver._suggest_missing_relationships(
+        pairs=[
+            {"person_text": "Alice", "anchor_text": "Bob", "relationship_hint": "doctor"},
+            {"person_text": "Alice", "anchor_text": "Cara", "relationship_hint": "doctor"},
+        ],
+        full_text="Alice is Bob's doctor and Cara's doctor",
+        user_email="user@example.com",
+        resolution_cache={
+            "Alice": {"status": "resolved", "contact_id": "contact-1", "display_name": "Alice"},
+            "Bob": {"status": "resolved", "contact_id": "contact-2", "display_name": "Bob"},
+            "Cara": {"status": "resolved", "contact_id": "contact-3", "display_name": "Cara"},
+        },
+        profession_by_text={},
+    )
+
+    assert len(suggestions) == 1
+    assert sorted(relationship_calls) == [
+        ("contact-1", False),
+        ("contact-2", False),
+        ("contact-3", False),
+    ]
+
+
+def test_extract_people_splits_selector_prompt(monkeypatch):
+    prompts = []
+
+    def fake_call_llm_json(prompt, **_kwargs):
+        prompts.append(prompt)
+        prompt_lower = prompt.lower()
+        if "extract collective participant selectors" in prompt_lower:
+            return {
+                "selectors": [
+                    {
+                        "kind": "email_domain",
+                        "value": "acme.example",
+                        "raw": "@acme.example",
+                        "deterministic": True,
+                    }
+                ]
+            }
+        return {"people": ["user", "John Smith"]}
+
+    monkeypatch.setattr(resolver, "call_llm_json", fake_call_llm_json)
+
+    people, selectors = resolver.extract_people_from_text(
+        "I met John Smith and everyone with @acme.example",
+        include_collective_selectors=True,
+    )
+
+    assert people == ["user", "John Smith"]
+    assert selectors[0]["kind"] == "email_domain"
+    assert len(prompts) == 2
+    assert "extract all person references" in prompts[0].lower()
+    assert "collective group selectors" not in prompts[0].lower()
+    assert "extract collective participant selectors" in prompts[1].lower()
+
+
 def test_relationship_candidates_include_match_reason():
     relationship_context = {
         "relationships": [

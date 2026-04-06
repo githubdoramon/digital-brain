@@ -4,7 +4,7 @@ import contact_resolution_service as service
 
 
 def test_service_builds_need_user_input_for_ambiguity(monkeypatch):
-    def fake_resolve(_text, _user_email, conversation_messages=None):
+    def fake_resolve(_text, _user_email, conversation_messages=None, mode="full"):
         return {
             "status": "success",
             "text": "When did I meet Gio?",
@@ -39,7 +39,7 @@ def test_service_builds_need_user_input_for_ambiguity(monkeypatch):
 
 
 def test_service_normalizes_existing_need_user_input(monkeypatch):
-    def fake_resolve(_text, _user_email, conversation_messages=None):
+    def fake_resolve(_text, _user_email, conversation_messages=None, mode="full"):
         return {
             "status": "need_user_input",
             "text": "When did I meet Gio?",
@@ -76,3 +76,31 @@ def test_service_normalizes_existing_need_user_input(monkeypatch):
     assert result["status"] == "need_user_input"
     assert result["need_user_input"]["prompt"] == "Which Gio did you mean?"
     assert result["need_user_input"]["submission_mode"] == "ui_submission"
+
+
+def test_service_forwards_resolution_mode(monkeypatch):
+    captured = {}
+
+    def fake_resolve(_text, _user_email, conversation_messages=None, mode="full"):
+        captured["mode"] = mode
+        return {
+            "status": "success",
+            "text": _text,
+            "people_mentioned": ["John Smith"],
+            "resolved_contacts": [],
+            "new_contacts": [],
+            "ambiguous_contacts": [],
+        }
+
+    monkeypatch.setattr(service, "resolve_contacts_from_text", fake_resolve)
+
+    result = service.resolve_contacts_request(
+        {
+            "text": "John Smith",
+            "user_email": "user@example.com",
+            "mode": "minimal",
+        }
+    )
+
+    assert result["status"] == "success"
+    assert captured["mode"] == "minimal"

@@ -83,7 +83,7 @@ def handle_resolve_contacts(
     if not runtime_email:
         return {"error": "user_email is required"}
 
-    payload: dict[str, Any] = {"text": text, "user_email": runtime_email}
+    payload: dict[str, Any] = {"text": text, "user_email": runtime_email, "mode": "minimal"}
     llm_model = str(kwargs.get("llm_model") or "").strip()
     timeout = kwargs.get("timeout")
     if llm_model:

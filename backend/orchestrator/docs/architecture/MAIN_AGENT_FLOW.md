@@ -123,6 +123,13 @@ sequenceDiagram
 
 The LLM router prompt instructs the model to set `pre_resolve_contacts=true` only when the query references a specific person by name, pronoun, or relationship term. Discovery/ranking queries (e.g. "who did I meet most this week?") get `pre_resolve_contacts=false` so the agent can use `get_events(by_time_span)` to retrieve raw interaction data and rank counterparts itself. Rule-based routes use the intent-level default from `INTENT_PRE_RESOLVE_CONTACTS`.
 
+### Contact resolution latency policy
+
+- Pre-resolution and agent `resolve_contacts` tool calls run the resolver in `minimal` mode.
+- `minimal` mode stops after mention extraction, deterministic selector resolution, direct contact resolution, and ambiguity detection; it skips profession inference and relationship-suggestion enrichment.
+- The resolver now attempts a deterministic short-circuit before LLM extraction for straightforward cases like exact names, `my <relationship>` phrases, and deterministic group selectors.
+- Contact-resolution prompt context is tiered: hard user rules are loaded first, while soft user facts are deferred to ambiguity/disambiguation prompts.
+
 ## Clarification Behavior
 
 - Clarification is returned immediately when pending contact disambiguation or UI form follow-up is required.

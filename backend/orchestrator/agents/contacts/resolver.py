@@ -23,6 +23,7 @@ Design principles:
 import inspect
 import os
 import re
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from contextvars import ContextVar
 from typing import Any, Optional
@@ -43,6 +44,42 @@ from user_fact_rules import RuleScope, RuleType
 logger = get_runtime_logger(__name__)
 
 EMAIL_DOMAIN_PATTERN = re.compile(r"@([a-z0-9][a-z0-9.-]*\.[a-z]{2,})", re.IGNORECASE)
+MINIMAL_RESOLUTION_MODE = "minimal"
+FULL_RESOLUTION_MODE = "full"
+_REQUEST_CACHE_MISS = object()
+_SHORT_CIRCUIT_RELATIONSHIP_TERMS = (
+    "mom",
+    "mother",
+    "dad",
+    "father",
+    "wife",
+    "husband",
+    "partner",
+    "son",
+    "daughter",
+    "friend",
+    "colleague",
+    "coworker",
+    "boss",
+    "manager",
+    "doctor",
+    "therapist",
+    "teacher",
+    "coach",
+    "brother",
+    "sister",
+)
+_SHORT_CIRCUIT_RELATIONSHIP_PATTERN = re.compile(
+    r"\b(?:my|our)\s+(?:best\s+)?(?:" + "|".join(_SHORT_CIRCUIT_RELATIONSHIP_TERMS) + r")\b",
+    re.IGNORECASE,
+)
+_SHORT_CIRCUIT_NAME_PATTERN = re.compile(
+    r"\b(?:Dr\.|Mr\.|Mrs\.|Ms\.|Prof\.)?\s*[A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,2}\b"
+)
+_SHORT_CIRCUIT_BLOCKERS_PATTERN = re.compile(
+    r"\b(her|his|their|him|them|she|he|they)\b|\b(?:my|our)\s+[a-z]+\s*'s\b",
+    re.IGNORECASE,
+)
 _CONTACT_RESOLUTION_MODEL_OVERRIDE: ContextVar[str | None] = ContextVar(
     "contact_resolution_model_override", default=None
 )
@@ -90,6 +127,139 @@ def _call_contact_resolution_llm_json(prompt: str, **kwargs: Any) -> dict[str, A
 
 def _with_clarification_guidelines(prompt: str) -> str:
     return append_clarification_guidelines(prompt)
+
+
+def _build_request_context(
+    *,
+    user_email: str,
+    mode: str,
+    full_text: str,
+    conversation_messages: list[dict[str, str]] | None,
+) -> dict[str, Any]:
+    return {
+        "user_email": user_email,
+        "mode": mode,
+        "full_text": full_text,
+        "conversation_messages": conversation_messages,
+        "self_contact": _REQUEST_CACHE_MISS,
+        "relationship_contexts": {},
+        "hard_rule_rows": _REQUEST_CACHE_MISS,
+        "hard_rules_context": _REQUEST_CACHE_MISS,
+        "soft_facts_context": {},
+    }
+
+
+def _get_request_self_contact(request_context: dict[str, Any] | None) -> dict[str, Any] | None:
+    if not request_context:
+        return None
+    cached = request_context.get("self_contact", _REQUEST_CACHE_MISS)
+    if cached is _REQUEST_CACHE_MISS:
+        user_email = str(request_context.get("user_email") or "").strip()
+        request_context["self_contact"] = (
+            contacts_service.find_self_contact(user_email) if user_email else None
+        )
+    value = request_context.get("self_contact")
+    return value if isinstance(value, dict) else None
+
+
+def _get_relationship_context(
+    contact_id: str,
+    *,
+    include_contact_details: bool,
+    request_context: dict[str, Any] | None,
+) -> dict[str, Any]:
+    cache_key = f"{contact_id}:{'full' if include_contact_details else 'basic'}"
+    if request_context is not None:
+        cache = request_context.setdefault("relationship_contexts", {})
+        if cache_key in cache:
+            cached_value = cache[cache_key]
+            return cached_value if isinstance(cached_value, dict) else {"relationships": []}
+
+    try:
+        relationships = contacts_service.get_contact_relationships(
+            contact_id,
+            include_contact_details=include_contact_details,
+        )
+    except Exception:
+        relationships = {"relationships": []}
+
+    if request_context is not None:
+        cache = request_context.setdefault("relationship_contexts", {})
+        cache[cache_key] = relationships
+    return relationships
+
+
+def _get_hard_rule_rows(request_context: dict[str, Any] | None) -> list[dict[str, Any]]:
+    if not request_context:
+        return []
+    cached = request_context.get("hard_rule_rows", _REQUEST_CACHE_MISS)
+    if cached is _REQUEST_CACHE_MISS:
+        try:
+            import user_facts
+
+            request_context["hard_rule_rows"] = user_facts.get_hard_rules_for_scope(
+                str(request_context.get("user_email") or ""),
+                scope=RuleScope.CONTACT_RESOLUTION,
+                rule_type=RuleType.ENTITY_ALIAS,
+                limit=25,
+            )
+        except Exception:
+            logger.exception(
+                "[contact_resolver] Failed to load hard rules for user=%s",
+                request_context.get("user_email"),
+            )
+            request_context["hard_rule_rows"] = []
+    value = request_context.get("hard_rule_rows")
+    return value if isinstance(value, list) else []
+
+
+def _get_contact_resolution_user_facts_context(
+    user_email: str | None,
+    query: str,
+    *,
+    include_soft_facts: bool,
+    request_context: dict[str, Any] | None,
+) -> str | None:
+    if not user_email:
+        return None
+
+    sections: list[str] = []
+    try:
+        import user_facts
+
+        if request_context is not None:
+            cached_hard = request_context.get("hard_rules_context", _REQUEST_CACHE_MISS)
+            if cached_hard is _REQUEST_CACHE_MISS:
+                request_context["hard_rules_context"] = user_facts.get_hard_rules_context(
+                    user_email,
+                    scope=RuleScope.CONTACT_RESOLUTION,
+                )
+            hard_rules_context = request_context.get("hard_rules_context")
+        else:
+            hard_rules_context = user_facts.get_hard_rules_context(
+                user_email,
+                scope=RuleScope.CONTACT_RESOLUTION,
+            )
+        if hard_rules_context:
+            sections.append(str(hard_rules_context))
+
+        if include_soft_facts:
+            if request_context is not None:
+                soft_cache = request_context.setdefault("soft_facts_context", {})
+                cache_key = normalize_search_text(query)
+                if cache_key not in soft_cache:
+                    soft_cache[cache_key] = user_facts.get_facts_for_context(user_email, query)
+                facts_text = soft_cache.get(cache_key)
+            else:
+                facts_text = user_facts.get_facts_for_context(user_email, query)
+            if facts_text:
+                sections.append(f"Known facts about this user:\n{facts_text}")
+    except Exception as exc:
+        logger.warning("[contact_resolver] Failed to get user facts context: %s", exc)
+
+    if not sections:
+        return None
+    return "\n\n".join(sections)
 
 
 def _build_contact_need_user_input(
@@ -211,6 +381,11 @@ def _extract_collective_selectors(text: str) -> list[dict[str, str]]:
         if domain:
             _append("email_domain", domain, raw=match.group(0), deterministic=True)
 
+    for match in re.finditer(r"@([a-z0-9][a-z0-9.-]{1,80})\s+email\b", normalized_text):
+        domain = (match.group(1) or "").strip().lower()
+        if domain:
+            _append("email_domain", domain, raw=match.group(0), deterministic=False)
+
     company_patterns = [
         r"(?:all|everyone|everybody)\s+(?:people\s+)?(?:from|at)\s+company\s+([a-z0-9][a-z0-9 .&'\-]{1,80})",
         r"(?:all|everyone|everybody)\s+(?:people\s+)?(?:from|at)\s+([a-z0-9][a-z0-9 .&'\-]{1,80})",
@@ -252,6 +427,78 @@ def _extract_collective_selectors(text: str) -> list[dict[str, str]]:
             break
 
     return selectors
+
+
+def _should_attempt_fast_person_extraction(text: str) -> bool:
+    normalized = str(text or "").strip()
+    if not normalized:
+        return False
+    if _is_unknown_person_aggregate_question(normalized):
+        return True
+    if _SHORT_CIRCUIT_BLOCKERS_PATTERN.search(normalized):
+        return False
+    return True
+
+
+def _fast_extract_people_from_text(
+    text: str,
+) -> tuple[list[str], list[dict[str, str]], bool]:
+    raw_text = str(text or "").strip()
+    if not _should_attempt_fast_person_extraction(raw_text):
+        return [], [], False
+
+    selector_mentions = _extract_collective_selectors(raw_text)
+    if _is_unknown_person_aggregate_question(raw_text):
+        return [], selector_mentions, True
+
+    people: list[str] = []
+    seen: set[str] = set()
+
+    def _append_person(value: str) -> None:
+        cleaned = str(value or "").strip(" .,!?;:\"'")
+        normalized = normalize_search_text(cleaned)
+        if not normalized or normalized in seen:
+            return
+        if _is_overly_generic_person_reference(cleaned):
+            return
+        seen.add(normalized)
+        people.append(cleaned)
+
+    if re.search(r"\b(i|me|my|we|us|our)\b", raw_text, flags=re.IGNORECASE) and re.search(
+        r"\b(meet|met|talk|talked|spoke|speak|chat|chatted|call|called|text|texted|email|emailed|see|saw|visit|visited|had lunch|had dinner|went with|met with)\b",
+        raw_text,
+        flags=re.IGNORECASE,
+    ):
+        _append_person("user")
+    elif re.match(
+        r"^(had\s+(?:lunch|dinner)\s+with|met\s+with|saw\s+[A-Z]|visited\s+[A-Z]|called\s+[A-Z])",
+        raw_text,
+        flags=re.IGNORECASE,
+    ):
+        _append_person("user")
+
+    for match in _SHORT_CIRCUIT_RELATIONSHIP_PATTERN.finditer(raw_text):
+        _append_person(match.group(0))
+
+    for match in _SHORT_CIRCUIT_NAME_PATTERN.finditer(raw_text):
+        candidate = str(match.group(0) or "").strip()
+        if not candidate:
+            continue
+        candidate_norm = normalize_search_text(candidate)
+        candidate_tokens = [token for token in candidate.replace(".", " ").split() if token]
+        has_title = bool(re.match(r"^(Dr\.|Mr\.|Mrs\.|Ms\.|Prof\.)\s+", candidate))
+        if len(candidate_tokens) < 2 and not has_title:
+            continue
+        if candidate_norm in {"i", "we", "who", "when", "where", "what", "why", "how"}:
+            continue
+        if candidate_norm.startswith(("my ", "our ")):
+            continue
+        _append_person(candidate)
+
+    if not people and not selector_mentions:
+        return [], [], False
+
+    return people, selector_mentions, True
 
 
 def _merge_collective_selectors(*batches: list[dict[str, str]]) -> list[dict[str, str]]:
@@ -584,11 +831,120 @@ def _repair_split_possessive_title_entities(
     return repaired
 
 
+def _build_people_extraction_prompt(
+    *,
+    text: str,
+    conversation_block: str,
+    user_facts_block: str,
+) -> str:
+    prompt = f"""Extract all person references from this text.
+
+Text: \"{text}\"
+
+{conversation_block}{user_facts_block}IMPORTANT CONTEXT USAGE:
+- Focus on the current Text above.
+- Use Conversation messages only to resolve references inside this Text.
+- Do NOT include people that appear only in conversation history.
+- If the text is an analytical question asking for an unknown person (e.g., \"who did I meet most\"), do NOT output placeholders.
+
+Extract ONLY people references including:
+- Proper names (e.g., \"John Smith\")
+- Relational terms (e.g., \"my daughter\", \"the doctor\")
+- Nested relationships when clear (e.g., \"my daughter's doctor\")
+- The current user as \"user\" only if they are a participant in the event
+
+Normalization rules:
+- If text has \"X's <corporate/professional title>\" where X is an organization/company/team, output ONE person mention formatted as \"<title> at X\".
+- If a proper name and a relationship/profession clearly describe the SAME person in the same clause, return ONLY the proper name.
+- If a generic role is later identified by a specific name in the same text, return ONLY the named person for that role.
+- Keep possessive markers in relationship phrases: \"my daughter\", not \"daughter\".
+- Do NOT include second-person pronouns.
+- Do NOT include non-specific placeholders like \"the person\", \"someone\", \"anybody\".
+
+Pronoun resolution rules:
+- Resolve possessive pronouns only when the referent is crystal clear and creates a valid person reference.
+- If a possessive pronoun cannot be resolved confidently, omit that ambiguous reference.
+
+Return ONLY valid JSON:
+{{
+  \"people\": [\"person1\", \"my daughter\", \"person2's doctor\"]
+}}"""
+    return _with_clarification_guidelines(prompt)
+
+
+def _build_collective_selector_prompt(
+    *,
+    text: str,
+    conversation_block: str,
+) -> str:
+    prompt = f"""Extract collective participant selectors from this text.
+
+Text: \"{text}\"
+
+{conversation_block}Rules:
+- Return only collective participant selectors, not individual people.
+- Allowed selector kinds: email_domain, company, group, tag.
+- Examples:
+  * \"everyone with @acme.example\" -> {{\"kind\":\"email_domain\",\"value\":\"acme.example\",\"raw\":\"@acme.example\",\"deterministic\":true}}
+  * \"everyone from company Acme\" -> {{\"kind\":\"company\",\"value\":\"Acme\",\"raw\":\"everyone from company Acme\",\"deterministic\":true}}
+  * \"all people from my soccer team\" -> {{\"kind\":\"group\",\"value\":\"soccer team\",\"raw\":\"my soccer team\",\"deterministic\":false}}
+- Do not use family/relationship groups as collective selectors.
+
+Return ONLY valid JSON:
+{{
+  \"selectors\": [
+    {{
+      \"kind\": \"group\",
+      \"value\": \"soccer team\",
+      \"raw\": \"my soccer team\",
+      \"deterministic\": false
+    }}
+  ]
+}}"""
+    return _with_clarification_guidelines(prompt)
+
+
+def _extract_collective_selectors_via_llm(
+    *,
+    text: str,
+    conversation_block: str,
+) -> list[dict[str, str]]:
+    prompt = _build_collective_selector_prompt(
+        text=text,
+        conversation_block=conversation_block,
+    )
+    result = _call_contact_resolution_llm_json(
+        prompt, timeout=30, temperature=0.1, top_p=0.9, use_fast_model=True
+    )
+    raw_selectors = result.get("selectors", [])
+    llm_collective_selectors: list[dict[str, str]] = []
+    if isinstance(raw_selectors, list):
+        for selector in raw_selectors:
+            if not isinstance(selector, dict):
+                continue
+            kind = str(selector.get("kind") or "").strip().lower()
+            if kind not in {"email_domain", "company", "group", "tag"}:
+                continue
+            value = str(selector.get("value") or "").strip()
+            if not value:
+                continue
+            llm_collective_selectors.append(
+                {
+                    "kind": kind,
+                    "value": value,
+                    "raw": str(selector.get("raw") or value).strip(),
+                    "deterministic": "true" if bool(selector.get("deterministic")) else "false",
+                }
+            )
+    return llm_collective_selectors
+
+
 def extract_people_from_text(
     text: str,
     conversation_messages: list[dict[str, str]] | None = None,
     include_collective_selectors: bool = False,
     user_email: str | None = None,
+    user_facts_context: str | None = None,
 ) -> list[str] | tuple[list[str], list[dict[str, str]]]:
     """
     Extract person mentions from text using LLM.
@@ -603,8 +959,6 @@ def extract_people_from_text(
         By default: list of people.
         When include_collective_selectors=True: (people, selectors).
     """
-    from prompts.context import get_user_facts_context
-
     logger.debug("[contact_resolver] extract_people_from_text: %s", text)
     conversation_block = ""
     if conversation_messages:
@@ -615,130 +969,24 @@ def extract_people_from_text(
             )
 
     user_facts_block = ""
-    if user_email:
-        facts_ctx = get_user_facts_context(user_email, text, scope=RuleScope.CONTACT_RESOLUTION)
-        if facts_ctx:
-            user_facts_block = f"\n{facts_ctx}\n\n"
-
-    prompt = f"""Extract all person references from this text.
-
-Text: "{text}"
-
-{conversation_block}{user_facts_block}IMPORTANT CONTEXT USAGE:
-- Focus on the current Text above.
-- Use Conversation messages only to resolve references inside this Text (e.g., pronouns, ellipsis).
-- Do NOT include people that appear only in conversation history.
-- If the text is an analytical question asking for an unknown person (e.g., "who did I meet most"), do NOT output placeholder entities like "the person" or "someone".
-
-Extract ONLY people - all person references including:
-- Proper names (e.g., "John Smith")
-- Relational terms (e.g., "my daughter", "the doctor")
-- Nested relationships (e.g., "my daughter's doctor", "my son's teacher", "my wife's family") - Also correct any spelling if user mistyped (for example, daughters instead of daugther's)
-- The current user IF they are a participant in the event (e.g., "I visited my daughter" - both "I" and "my daughter" are participants)
-
-POSSESSIVE ORG TITLES (IMPORTANT):
-- If text has "X's <corporate/professional title>" and X is an organization/brand/company/team, this is ONE person mention, not two people.
-- Rewrite it as "<title> at X" as a single entry.
-- NEVER output ["X", "<title>"] for this case.
-- Examples:
-  * "Walmart's Marketing Manager" → ["Marketing Manager at Walmart"]
-  * "Apple's Head of Engineering" → ["Head of Engineering at Apple"]
-  * "OpenAI's CTO met us" → ["CTO at OpenAI"]
-
-PERSON NESTED RELATIONSHIPS (keep these as person references):
-- "my daughter's doctor" stays ["my daughter", "my daughter's doctor"]
-- "John's doctor" stays ["John", "John's doctor"]
-
-SAME-PERSON APPOSITIVES (AVOID DUPLICATES):
-- If a proper name and a relationship/profession describe the SAME person in the same clause/sentence, return ONLY the proper name.
-- Do NOT add an extra relationship entry when it is clearly the same person.
-- Examples:
-  * "my daughter visited John, who is her eye doctor" → ["my daughter", "John"]
-  * "I met Sarah, my therapist" → ["user", "Sarah"]
-  * "John the plumber fixed the sink" → ["John"]
-  * "Dr. Smith, my mother's cardiologist" → ["Dr. Smith", "my mother's cardiologist"] (two people: Dr. Smith and my mother)
-
-NAME OVERRIDES GENERIC ROLE:
-- If a generic role or attribute (e.g., "her eye doctor", "the dentist", "a friend") is later identified by a specific name in the same text, return ONLY the named person for that role.
-- Keep the related person (e.g., "Marjorie") but do NOT duplicate the role mention.
-- Examples:
-  * "Marjorie saw her heart doctor. The doctor was Dr. John." → ["Marjorie", "Dr. John"]
-  * "I met with my best friend. Her name is Lee." → ["user", "Lee"]
-
-CRITICAL RULES:
-- If the user is a participant/actor in the event (doing something or something happening to them), include "user" to represent them
-- Examples where user should be included:
-  * "I visited my daughter" → ["user", "my daughter"] (user is actively doing something)
-  * "John and I went to the store" → ["John", "user"] (user is part of the group)
-  * "My daughter visited me" → ["my daughter", "user"] (something happened to the user)
-- Examples where user should NOT be included:
-  * "My daughter visited her mother" → ["my daughter", "my daughter's mother"] (user is just narrator, not participant; note pronoun resolution)
-  * "John met with Mary" → ["John", "Mary"] (user is just narrator)
-- Do NOT include second-person pronouns: "you", "your", "yours"
-
-PRONOUN RESOLUTION:
-- Resolve possessive pronouns (her, his, their) when they refer to someone already mentioned
-- You MUST be able to identify WHO the pronoun refers to before resolving it. this is critical to the right outcome.
-- If unclear or ambiguous, you sohuld fail the resolution and return a JSON like this
-{{
-    "people": [],
-    "ambiguous_text": true
-}}"
-
-Examples of CORRECT pronoun resolution:
-- "my daughter met her mother" → ["my daughter", "my daughter's mother"]
-  * "her" clearly refers to "my daughter" (only one person mentioned before "her")
-- "John visited his doctor" → ["John", "John's doctor"]
-  * "his" clearly refers to "John" (only one person mentioned before "his")
-- "Emma and her sister went out" → ["Emma", "Emma's sister"]
-  * "her" clearly refers to "Emma" (closest preceding person)
-
-Examples of INCORRECT - do NOT resolve these:
-- "She met her mother" → ["she", "her mother"]
-  * "her" could refer to "she" but "she" is a pronoun, not a clear person reference
-- "The doctor saw her patient" → ["the doctor", "her patient"]
-  * "her" clearly refers to "the doctor", so keep separate (doctor's patient, not nested)
-
-CRITICAL: Only resolve pronouns when the referent is crystal clear and creates a valid nested relationship
-
-IMPORTANT:
-- ALWAYS keep possessive markers in relationship phrases: "my daughter" NOT "daughter"
-- Keep relationship phrases intact (e.g., "my daughter's doctor" as ONE entity)
-- Include proper names and resolvable role/relationship references (e.g., "my daughter", "the doctor" in concrete event statements)
-- If a person is mentioned multiple ways, include all mentions
-- Use the special token "user" to represent the current user when they are a participant
-- Only extract people mentioned by the user. Assistant questions are NOT facts.
-- Do NOT include non-specific placeholders that are not identifiable entities: "the person", "a person", "people", "someone", "somebody", "anyone", "anybody".
-
-Examples:
-- "Who is the person I've met the most in the last 2 weeks?" -> []
-- "Who did I meet the most in the last 2 weeks?" -> []
-
-COLLECTIVE GROUP SELECTORS (ALSO EXTRACT):
-- If the text includes participant groups by attribute/cohort, return them in "collective_selectors".
-- Allowed selector kinds: email_domain, company, group, tag.
-- Examples:
-  * "everyone with @acme.example" -> {{"kind":"email_domain","value":"acme.example","raw":"@acme.example","deterministic":true}}
-  * "everyone from company Acme" -> {{"kind":"company","value":"Acme","raw":"everyone from company Acme","deterministic":true}}
-  * "all people from my soccer team" -> {{"kind":"group","value":"soccer team","raw":"my soccer team","deterministic":false}}
-- Keep people and selectors independently; a message may contain both.
-- Do not use collective groups for pure relationship grouping (for example someone's family members).
-
-Return ONLY a valid JSON, nothing more, no other text or explanation:
-{{
-    "people": ["person1", "my daughter", "person2's doctor"],
-    "collective_selectors": [
-      {{
-        "kind": "group",
-        "value": "soccer team",
-        "raw": "my soccer team",
-        "deterministic": false
-      }}
-    ]
-}}"""
-    prompt = _with_clarification_guidelines(prompt)
+    facts_ctx = user_facts_context
+    if not facts_ctx and user_email:
+        facts_ctx = _get_contact_resolution_user_facts_context(
+            user_email,
+            text,
+            include_soft_facts=False,
+            request_context=None,
+        )
+    if facts_ctx:
+        user_facts_block = f"\n{facts_ctx}\n\n"
+    prompt = _build_people_extraction_prompt(
+        text=text,
+        conversation_block=conversation_block,
+        user_facts_block=user_facts_block,
+    )
 
     max_retries = 3
+    llm_collective_selectors: list[dict[str, str]] = []
     for attempt in range(max_retries):
         try:
             # Use low temperature for consistent structured output
@@ -746,29 +994,6 @@ Return ONLY a valid JSON, nothing more, no other text or explanation:
                 prompt, timeout=60, temperature=0.1, top_p=0.9, use_fast_model=True
             )
             people = result.get("people", [])
-            raw_collective_selectors = result.get("collective_selectors", [])
-
-            llm_collective_selectors: list[dict[str, str]] = []
-            if isinstance(raw_collective_selectors, list):
-                for selector in raw_collective_selectors:
-                    if not isinstance(selector, dict):
-                        continue
-                    kind = str(selector.get("kind") or "").strip().lower()
-                    if kind not in {"email_domain", "company", "group", "tag"}:
-                        continue
-                    value = str(selector.get("value") or "").strip()
-                    if not value:
-                        continue
-                    llm_collective_selectors.append(
-                        {
-                            "kind": kind,
-                            "value": value,
-                            "raw": str(selector.get("raw") or value).strip(),
-                            "deterministic": "true"
-                            if bool(selector.get("deterministic"))
-                            else "false",
-                        }
-                    )
 
             # Validate extraction: check for unresolved pronouns
             invalid_extractions = []
@@ -870,6 +1095,19 @@ For possessive org titles, output ONE person mention only, formatted as "<title>
                 cleaned_people = without_user
 
             if include_collective_selectors:
+                try:
+                    llm_collective_selectors = _extract_collective_selectors_via_llm(
+                        text=text,
+                        conversation_block=conversation_block,
+                    )
+                except Exception as selector_exc:
+                    logger.warning(
+                        "[contact_resolver] Failed to extract collective selectors: %s",
+                        selector_exc,
+                        exc_info=selector_exc,
+                    )
+
+            if include_collective_selectors:
                 return cleaned_people, llm_collective_selectors
             return cleaned_people
         except Exception as e:
@@ -902,6 +1140,7 @@ def resolve_contact(
     *,
     event_context: Optional[str] = None,
     resolution_cache: Optional[dict[str, dict[str, Any]]] = None,
+    request_context: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """
     Resolve a person mention to a specific contact.
@@ -944,7 +1183,9 @@ def resolve_contact(
 
     # Short-circuit for the current user: resolve directly by email.
     if person_text.lower().strip() == "user":
-        user_contact = contacts_service.find_self_contact(user_email)
+        user_contact = _get_request_self_contact(request_context)
+        if user_contact is None:
+            user_contact = contacts_service.find_self_contact(user_email)
         if user_contact:
             result["status"] = "resolved"
             result["confidence"] = "high"
@@ -958,7 +1199,11 @@ def resolve_contact(
         result["display_name"] = "user"
         return result
 
-    hard_rule_resolution = _resolve_contact_via_hard_rules(user_email, person_text)
+    hard_rule_resolution = _resolve_contact_via_hard_rules(
+        user_email,
+        person_text,
+        request_context=request_context,
+    )
     if hard_rule_resolution:
         result["status"] = "resolved"
         result["confidence"] = "high"
@@ -985,7 +1230,12 @@ def resolve_contact(
     logger.debug("[contact_resolver] User email: %s", user_email)
     if nested_parts and len(nested_parts) > 1:
         logger.info("[contact_resolver] Detected nested relationship: %s", nested_parts)
-        nested_result = _resolve_nested_relationship(nested_parts, user_email, resolution_cache)
+        nested_result = _resolve_nested_relationship(
+            nested_parts,
+            user_email,
+            resolution_cache,
+            request_context=request_context,
+        )
 
         if nested_result["found"]:
             result["status"] = "resolved"
@@ -1059,11 +1309,14 @@ def resolve_contact(
     logger.debug("[contact_resolver] Relationship type: %s", relationship_type)
     if relationship_type:
         # Get user's relationships
-        user_contact = contacts_service.find_self_contact(user_email)
+        user_contact = _get_request_self_contact(request_context)
+        if user_contact is None:
+            user_contact = contacts_service.find_self_contact(user_email)
         if user_contact:
-            relationships = contacts_service.get_contact_relationships(
-                user_contact["contact_id"],
+            relationships = _get_relationship_context(
+                str(user_contact["contact_id"]),
                 include_contact_details=True,
+                request_context=request_context,
             )
 
             rel_result = _resolve_via_relationship(relationship_type, relationships)
@@ -1180,27 +1433,6 @@ def resolve_contact(
             for m in matches
         ]
 
-        # Try LLM disambiguation if we have event context
-        if event_context:
-            llm_result = _llm_disambiguate_contact(
-                person_text=person_text,
-                candidates=result["candidates"],
-                event_context=event_context,
-                user_email=user_email,
-            )
-
-            if llm_result["resolved"]:
-                result["status"] = "resolved"
-                result["confidence"] = llm_result["confidence"]
-                result["contact_id"] = llm_result["contact_id"]
-                result["display_name"] = llm_result["display_name"]
-                result["matched_via"] = "llm_disambiguation"
-                logger.info(
-                    "[contact_resolver] LLM resolved: %s",
-                    llm_result["display_name"],
-                )
-                return result
-
         # Still ambiguous - return candidates
         result["status"] = "candidates"
         logger.warning("[contact_resolver] Ambiguous, returning candidates")
@@ -1211,6 +1443,9 @@ def resolve_contacts_from_text(
     text: str,
     user_email: str,
     conversation_messages: list[dict[str, str]] | None = None,
+    *,
+    mode: str = FULL_RESOLUTION_MODE,
+    request_context: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """
     Complete pipeline: extract people from text and resolve them to contacts.
@@ -1270,40 +1505,56 @@ def resolve_contacts_from_text(
     logger.info("[contact_resolver] RESOLVING CONTACTS FROM TEXT")
     logger.debug("[contact_resolver] Text: '%s'", text)
     logger.debug("[contact_resolver] User: %s", user_email)
+    resolution_mode = mode if mode in {MINIMAL_RESOLUTION_MODE, FULL_RESOLUTION_MODE} else FULL_RESOLUTION_MODE
+    if request_context is None:
+        request_context = _build_request_context(
+            user_email=user_email,
+            mode=resolution_mode,
+            full_text=text,
+            conversation_messages=conversation_messages,
+        )
 
     # Step 1: Extract people
     logger.info("[contact_resolver] Step 1: Extracting people...")
     effective_text = text
+    people, selector_mentions, fast_path_applied = _fast_extract_people_from_text(effective_text)
+    llm_selector_mentions: list[dict[str, str]] = []
 
-    extract_kwargs: dict[str, Any] = {
-        "conversation_messages": conversation_messages,
-        "user_email": user_email,
-    }
-    try:
-        signature = inspect.signature(extract_people_from_text)
-        if "include_collective_selectors" in signature.parameters:
-            extract_kwargs["include_collective_selectors"] = True
-    except (TypeError, ValueError):
-        pass
+    if not fast_path_applied:
+        extract_kwargs: dict[str, Any] = {
+            "conversation_messages": conversation_messages,
+            "user_email": user_email,
+            "user_facts_context": _get_contact_resolution_user_facts_context(
+                user_email,
+                effective_text,
+                include_soft_facts=False,
+                request_context=request_context,
+            ),
+        }
+        try:
+            signature = inspect.signature(extract_people_from_text)
+            if "include_collective_selectors" in signature.parameters:
+                extract_kwargs["include_collective_selectors"] = True
+        except (TypeError, ValueError):
+            pass
 
-    extraction_raw = extract_people_from_text(
-        effective_text,
-        **extract_kwargs,
-    )
-    if (
-        isinstance(extraction_raw, tuple)
-        and len(extraction_raw) == 2
-        and isinstance(extraction_raw[0], list)
-        and isinstance(extraction_raw[1], list)
-    ):
-        people = extraction_raw[0]
-        llm_selector_mentions = extraction_raw[1]
-    else:
-        people = extraction_raw if isinstance(extraction_raw, list) else []
-        llm_selector_mentions = []
+        extraction_raw = extract_people_from_text(
+            effective_text,
+            **extract_kwargs,
+        )
+        if (
+            isinstance(extraction_raw, tuple)
+            and len(extraction_raw) == 2
+            and isinstance(extraction_raw[0], list)
+            and isinstance(extraction_raw[1], list)
+        ):
+            people = extraction_raw[0]
+            llm_selector_mentions = extraction_raw[1]
+        else:
+            people = extraction_raw if isinstance(extraction_raw, list) else []
+            llm_selector_mentions = []
     logger.info("[contact_resolver] Extracted %s people: %s", len(people), people)
 
-    selector_mentions = _extract_collective_selectors(effective_text)
     selector_mentions = _merge_collective_selectors(selector_mentions, llm_selector_mentions)
     logger.info(
         "[contact_resolver] Extracted %s collective selectors: %s",
@@ -1345,6 +1596,7 @@ def resolve_contacts_from_text(
             user_email,
             effective_text,
             conversation_messages=conversation_messages,
+            request_context=request_context,
         )
     else:
         resolved_contacts = []
@@ -1357,13 +1609,43 @@ def resolve_contacts_from_text(
             resolved_contacts + selector_resolved_contacts
         )
 
+    if resolution_mode == MINIMAL_RESOLUTION_MODE:
+        result = {
+            "status": "success",
+            "text": effective_text,
+            "people_mentioned": people,
+            "selector_mentions": selector_mentions,
+            "resolved_contacts": resolved_contacts,
+            "new_contacts": new_contacts,
+            "ambiguous_contacts": ambiguous_contacts,
+            "suggested_relationships": [],
+            "group_upsert_candidates": group_upsert_candidates,
+            "group_confirmation_candidates": group_confirmation_candidates,
+        }
+        if ambiguous_contacts:
+            result["status"] = "need_user_input"
+            result["need_user_input"] = _build_contact_need_user_input(
+                ambiguous_contacts=ambiguous_contacts,
+                people_mentioned=people,
+            )
+        return result
+
     # Step 3: Infer professions for new contacts
     logger.info("[contact_resolver] Step 3: Inferring professions for new contacts...")
-    profession_by_text = _infer_professions_for_new_contacts(new_contacts, effective_text)
-
-    # Step 4: Infer relationship pairs from text (deduped)
     logger.info("[contact_resolver] Step 4: Inferring relationship pairs...")
-    relationship_pairs = _infer_relationship_pairs(people, effective_text)
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        profession_future = executor.submit(
+            _infer_professions_for_new_contacts,
+            new_contacts,
+            effective_text,
+        )
+        relationship_pairs_future = executor.submit(
+            _infer_relationship_pairs,
+            people,
+            effective_text,
+        )
+        profession_by_text = profession_future.result()
+        relationship_pairs = relationship_pairs_future.result()
 
     # Step 5: Suggest missing relationships (only when none exist yet)
     logger.info("[contact_resolver] Step 5: Suggesting missing relationships...")
@@ -1373,6 +1655,7 @@ def resolve_contacts_from_text(
         user_email=user_email,
         resolution_cache=resolution_cache,
         profession_by_text=profession_by_text,
+        request_context=request_context,
     )
 
     logger.info("[contact_resolver] Resolution complete:")
@@ -1417,6 +1700,7 @@ def _resolve_people_mentions(
     user_email: str,
     full_text: str,
     conversation_messages: list[dict[str, str]] | None = None,
+    request_context: dict[str, Any] | None = None,
 ) -> tuple[
     list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]], dict[str, dict[str, Any]]
 ]:
@@ -1439,6 +1723,7 @@ def _resolve_people_mentions(
                 user_email,
                 event_context=full_text,
                 resolution_cache=resolution_cache,
+                request_context=request_context,
             )
             resolution_cache[person_text] = resolution
 
@@ -1499,6 +1784,7 @@ def _resolve_people_mentions(
                     full_text,
                     conversation_messages=conversation_messages,
                     user_email=user_email,
+                    request_context=request_context,
                 )
             if llm_result.get("resolved") and _should_accept_llm_disambiguation(
                 person_text=person_text,
@@ -1716,29 +2002,36 @@ def _is_name_level_match(person_text: str, display_name: str) -> bool:
     )
 
 
-def _resolve_contact_via_hard_rules(user_email: str, person_text: str) -> dict[str, str] | None:
+def _resolve_contact_via_hard_rules(
+    user_email: str,
+    person_text: str,
+    *,
+    request_context: dict[str, Any] | None = None,
+) -> dict[str, str] | None:
     mention = str(person_text or "").strip()
     if not user_email or not mention:
         return None
 
-    try:
-        import user_facts
-    except Exception:
-        return None
+    rules = _get_hard_rule_rows(request_context)
+    if not rules:
+        try:
+            import user_facts
+        except Exception:
+            return None
 
-    try:
-        rules = user_facts.get_hard_rules_for_scope(
-            user_email,
-            scope=RuleScope.CONTACT_RESOLUTION,
-            rule_type=RuleType.ENTITY_ALIAS,
-            limit=25,
-        )
-    except Exception:
-        logger.exception(
-            "[contact_resolver] Failed to load hard rules for user=%s",
-            user_email,
-        )
-        return None
+        try:
+            rules = user_facts.get_hard_rules_for_scope(
+                user_email,
+                scope=RuleScope.CONTACT_RESOLUTION,
+                rule_type=RuleType.ENTITY_ALIAS,
+                limit=25,
+            )
+        except Exception:
+            logger.exception(
+                "[contact_resolver] Failed to load hard rules for user=%s",
+                user_email,
+            )
+            return None
     if not rules:
         return None
 
@@ -1898,6 +2191,7 @@ def _resolve_nested_relationship(
     parts: list[str],
     user_email: str,
     resolution_cache: Optional[dict[str, dict[str, Any]]] = None,
+    request_context: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """
     Resolve nested relationship like ["my daughter", "doctor"].
@@ -1952,7 +2246,10 @@ def _resolve_nested_relationship(
         first_resolution = resolution_cache[first_part]
     else:
         first_resolution = resolve_contact(
-            first_part, user_email, resolution_cache=resolution_cache
+            first_part,
+            user_email,
+            resolution_cache=resolution_cache,
+            request_context=request_context,
         )
         if resolution_cache is not None:
             resolution_cache[first_part] = first_resolution
@@ -1979,9 +2276,10 @@ def _resolve_nested_relationship(
 
     # Step 2: Get intermediate contact's relationships
     try:
-        intermediate_rels = contacts_service.get_contact_relationships(
-            intermediate_contact_id,
+        intermediate_rels = _get_relationship_context(
+            str(intermediate_contact_id),
             include_contact_details=True,
+            request_context=request_context,
         )
     except Exception as e:
         logger.warning(
@@ -2007,6 +2305,17 @@ def _resolve_nested_relationship(
         second_part, intermediate_rels, for_nested_resolution=True
     )
     logger.debug("[contact_resolver] Nested: Relationship result: %s", rel_result)
+
+    if not rel_result["found"] and not rel_result["candidates"]:
+        rel_result = _resolve_via_relationship(
+            second_part,
+            intermediate_rels,
+            for_nested_resolution=False,
+        )
+        logger.debug(
+            "[contact_resolver] Nested: Fallback direct relationship result: %s",
+            rel_result,
+        )
 
     if rel_result["found"]:
         result["found"] = True
@@ -2493,6 +2802,7 @@ def _llm_disambiguate_contact(
     event_context: str,
     conversation_messages: list[dict[str, str]] | None = None,
     user_email: str | None = None,
+    request_context: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """
     Use LLM to disambiguate between multiple contact candidates.
@@ -2509,8 +2819,6 @@ def _llm_disambiguate_contact(
             "confidence": str,
         }
     """
-    from prompts.context import get_user_facts_context
-
     formatted_candidates: list[str] = []
     for i, candidate in enumerate(candidates):
         aliases = [
@@ -2536,10 +2844,11 @@ def _llm_disambiguate_contact(
 
     user_facts_block = ""
     if user_email:
-        facts_ctx = get_user_facts_context(
+        facts_ctx = _get_contact_resolution_user_facts_context(
             user_email,
             f"{person_text} {event_context[:200]}",
-            scope=RuleScope.CONTACT_RESOLUTION,
+            include_soft_facts=True,
+            request_context=request_context,
         )
         if facts_ctx:
             user_facts_block = f"{facts_ctx}\n\n"
@@ -2793,23 +3102,35 @@ Return ONLY a valid JSON:
 def _relationship_exists_between_contacts(
     from_contact_id: str,
     to_contact_id: str,
+    *,
+    relationship_edges: set[tuple[str, str]] | None = None,
+    request_context: dict[str, Any] | None = None,
 ) -> bool:
+    if relationship_edges is not None:
+        sorted_ids = sorted([str(from_contact_id), str(to_contact_id)])
+        return (sorted_ids[0], sorted_ids[1]) in relationship_edges
     return _relationship_exists_one_way(
-        from_contact_id, to_contact_id
-    ) or _relationship_exists_one_way(to_contact_id, from_contact_id)
+        from_contact_id,
+        to_contact_id,
+        request_context=request_context,
+    ) or _relationship_exists_one_way(
+        to_contact_id,
+        from_contact_id,
+        request_context=request_context,
+    )
 
 
 def _relationship_exists_one_way(
     from_contact_id: str,
     to_contact_id: str,
+    *,
+    request_context: dict[str, Any] | None = None,
 ) -> bool:
-    try:
-        rels = contacts_service.get_contact_relationships(
-            from_contact_id,
-            include_contact_details=False,
-        )
-    except Exception:
-        return False
+    rels = _get_relationship_context(
+        str(from_contact_id),
+        include_contact_details=False,
+        request_context=request_context,
+    )
 
     if not rels.get("found"):
         return False
@@ -2821,6 +3142,43 @@ def _relationship_exists_one_way(
     return False
 
 
+def _build_relationship_edge_cache(
+    contact_ids: set[str],
+    *,
+    request_context: dict[str, Any] | None = None,
+) -> set[tuple[str, str]]:
+    if not contact_ids:
+        return set()
+
+    edges: set[tuple[str, str]] = set()
+
+    def _load_edges(contact_id: str) -> None:
+        rels = _get_relationship_context(
+            contact_id,
+            include_contact_details=False,
+            request_context=request_context,
+        )
+        if not rels.get("found"):
+            return
+        relationships = rels.get("relationships", [])
+        for rel in relationships:
+            related_contact_id = str(rel.get("contact_id") or "").strip()
+            if not related_contact_id:
+                continue
+            sorted_ids = sorted([contact_id, related_contact_id])
+            edges.add((sorted_ids[0], sorted_ids[1]))
+
+    max_workers = min(4, len(contact_ids))
+    if max_workers <= 1:
+        for contact_id in sorted(contact_ids):
+            _load_edges(contact_id)
+        return edges
+
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        list(executor.map(_load_edges, sorted(contact_ids)))
+    return edges
+
+
 def _suggest_missing_relationships(
     *,
     pairs: list[dict[str, str]],
@@ -2828,18 +3186,22 @@ def _suggest_missing_relationships(
     user_email: str,
     resolution_cache: dict[str, dict[str, Any]],
     profession_by_text: dict[str, Optional[str]],
+    request_context: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     if not pairs:
         return []
 
     user_contact_id = None
-    user_contact = contacts_service.find_self_contact(user_email)
+    user_contact = _get_request_self_contact(request_context)
+    if user_contact is None:
+        user_contact = contacts_service.find_self_contact(user_email)
     if user_contact:
         user_contact_id = user_contact.get("contact_id")
 
     suggestions: list[dict[str, Any]] = []
     seen_pairs: set[tuple[str, str]] = set()
     relationship_cache: dict[tuple[str, str], bool] = {}
+    resolved_contact_ids: set[str] = set()
 
     def _resolution_for(text: str) -> Optional[dict[str, Any]]:
         if text.lower().strip() == "user":
@@ -2864,12 +3226,19 @@ def _suggest_missing_relationships(
     def _relationship_exists_cached(
         person_contact_id: str,
         anchor_contact_id: str,
+        *,
+        relationship_edges: set[tuple[str, str]] | None = None,
     ) -> bool:
         sorted_ids = sorted([str(person_contact_id), str(anchor_contact_id)])
         key = (sorted_ids[0], sorted_ids[1])
         if key in relationship_cache:
             return relationship_cache[key]
-        exists = _relationship_exists_between_contacts(person_contact_id, anchor_contact_id)
+        exists = _relationship_exists_between_contacts(
+            person_contact_id,
+            anchor_contact_id,
+            relationship_edges=relationship_edges,
+            request_context=request_context,
+        )
         relationship_cache[key] = exists
         return exists
 
@@ -2877,6 +3246,40 @@ def _suggest_missing_relationships(
         if text not in profession_by_text or profession_by_text[text] is None:
             profession_by_text[text] = _infer_profession_from_text(text, full_text)
         return profession_by_text[text]
+
+    for pair in pairs:
+        person_text = pair.get("person_text")
+        anchor_text = pair.get("anchor_text")
+        relationship_hint = pair.get("relationship_hint")
+        if not person_text or not anchor_text or not relationship_hint:
+            continue
+
+        person_resolution = _resolution_for(person_text)
+        anchor_resolution = _resolution_for(anchor_text)
+        if not person_resolution or not anchor_resolution:
+            continue
+        if (
+            person_resolution.get("status") == "candidates"
+            or anchor_resolution.get("status") == "candidates"
+        ):
+            continue
+
+        person_key = _entity_key(person_text, person_resolution)
+        anchor_key = _entity_key(anchor_text, anchor_resolution)
+        if not person_key or not anchor_key or person_key == anchor_key:
+            continue
+
+        person_contact_id = str(person_resolution.get("contact_id") or "").strip()
+        anchor_contact_id = str(anchor_resolution.get("contact_id") or "").strip()
+        if person_contact_id:
+            resolved_contact_ids.add(person_contact_id)
+        if anchor_contact_id:
+            resolved_contact_ids.add(anchor_contact_id)
+
+    relationship_edges = _build_relationship_edge_cache(
+        resolved_contact_ids,
+        request_context=request_context,
+    )
 
     for pair in pairs:
         person_text = pair.get("person_text")
@@ -2909,7 +3312,11 @@ def _suggest_missing_relationships(
         person_contact_id = person_resolution.get("contact_id")
         anchor_contact_id = anchor_resolution.get("contact_id")
         if person_contact_id and anchor_contact_id:
-            if _relationship_exists_cached(person_contact_id, anchor_contact_id):
+            if _relationship_exists_cached(
+                person_contact_id,
+                anchor_contact_id,
+                relationship_edges=relationship_edges,
+            ):
                 continue
 
         person_profession = _profession_for(person_text)
