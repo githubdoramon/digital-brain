@@ -201,6 +201,7 @@ class ToolExecutionCoordinator:
 
         if isinstance(args, dict):
             args = {key: value for key, value in args.items() if value is not None}
+            args = self._repair_reference_ids(args=args, state=state)
 
         trace.trace_tool_call_start(tool_name, args)
         trace.trace_tool_lifecycle_start(tool_name, call_id, args)
@@ -284,6 +285,7 @@ class ToolExecutionCoordinator:
                 return validation.to_feedback()
             if isinstance(normalized_args, dict):
                 args = normalized_args
+                args = self._repair_reference_ids(args=args, state=state)
             trace.trace_pre_validation_pass(tool_name)
 
         blocked_repeat = self._block_redundant_tool_execution(
@@ -577,6 +579,111 @@ class ToolExecutionCoordinator:
             salience=min(1.0, salience),
             related_query=str(args.get("query") or "").strip(),
         )
+
+    def _repair_reference_ids(
+        self,
+        *,
+        args: dict[str, Any],
+        state: AgentState,
+    ) -> dict[str, Any]:
+        """Repair shortened/ellipsized ids across generic *_id and *_ids arguments."""
+        repaired_args = dict(args)
+        repairs: list[tuple[str, str, str]] = []
+
+        for key, value in list(repaired_args.items()):
+            if not isinstance(key, str):
+                continue
+            if key.endswith("_id") and isinstance(value, str):
+                repaired_value = self._resolve_reference_id(value, state=state)
+                if repaired_value and repaired_value != value:
+                    repaired_args[key] = repaired_value
+                    repairs.append((key, value, repaired_value))
+                continue
+            if key.endswith("_ids") and isinstance(value, list):
+                repaired_list: list[Any] = []
+                changed = False
+                for item in value:
+                    if isinstance(item, str):
+                        repaired_item = self._resolve_reference_id(item, state=state)
+                        if repaired_item and repaired_item != item:
+                            repaired_list.append(repaired_item)
+                            repairs.append((key, item, repaired_item))
+                            changed = True
+                            continue
+                    repaired_list.append(item)
+                if changed:
+                    repaired_args[key] = repaired_list
+
+        if repairs:
+            preview = [f"{key}: {old} -> {new}" for key, old, new in repairs[:3]]
+            trace.trace_decision(
+                "Repaired shortened id references",
+                "Matched against remembered candidates and prior tool results",
+                {"repairs": preview},
+            )
+
+        return repaired_args
+
+    def _resolve_reference_id(
+        self,
+        raw_id: str,
+        *,
+        state: AgentState,
+    ) -> str | None:
+        text = str(raw_id or "").strip()
+        if not text:
+            return None
+        if "..." not in text:
+            return text
+
+        prefix = text.split("...", 1)[0].strip()
+        if not prefix:
+            return text
+
+        matches: list[str] = []
+        for candidate in state.information_candidates:
+            if not isinstance(candidate, dict):
+                continue
+            candidate_id = str(candidate.get("candidate_id") or "").strip()
+            if candidate_id.startswith(prefix):
+                matches.append(candidate_id)
+
+        if not matches:
+            for previous in reversed(state.tool_calls):
+                previous_result = previous.result or {}
+                for candidate_id in self._collect_ids_from_result(previous_result):
+                    if candidate_id.startswith(prefix):
+                        matches.append(candidate_id)
+
+        unique_matches = list(dict.fromkeys(match for match in matches if match))
+        if len(unique_matches) == 1:
+            return unique_matches[0]
+        return text
+
+    def _collect_ids_from_result(self, result: dict[str, Any]) -> list[str]:
+        """Collect id-like values from prior tool results for generic repair."""
+        collected: list[str] = []
+
+        def _walk(value: Any) -> None:
+            if isinstance(value, dict):
+                for key, item in value.items():
+                    if isinstance(key, str) and key.endswith("_id") and isinstance(item, str):
+                        text = item.strip()
+                        if text:
+                            collected.append(text)
+                    elif key == "id" and isinstance(item, str):
+                        text = item.strip()
+                        if text:
+                            collected.append(text)
+                    else:
+                        _walk(item)
+                return
+            if isinstance(value, list):
+                for item in value:
+                    _walk(item)
+
+        _walk(result)
+        return list(dict.fromkeys(collected))
 
     def execute_handler(
         self,

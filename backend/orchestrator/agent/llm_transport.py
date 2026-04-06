@@ -7,6 +7,9 @@ from collections.abc import AsyncGenerator
 from typing import Any
 
 from llm_helpers import call_llm_chat, stream_llm_chat
+from observability.logger import get_runtime_logger
+
+logger = get_runtime_logger(__name__)
 
 
 def call_llm_with_tools(
@@ -44,6 +47,7 @@ async def stream_llm_with_tools(
     """Stream chat-completions chunks and normalize tool-call deltas."""
     accumulated_tool_calls: dict[int, dict[str, Any]] = {}
     accumulated_reasoning = ""
+    accumulated_content = ""
 
     def _coerce_text(value: Any) -> str:
         if isinstance(value, str):
@@ -113,6 +117,7 @@ async def stream_llm_with_tools(
                             ]["arguments"]
 
             normalized_message: dict[str, Any] = {"content": delta.get("content", "")}
+            accumulated_content += str(delta.get("content", "") or "")
             if accumulated_reasoning:
                 normalized_message["reasoning"] = accumulated_reasoning
 
@@ -124,6 +129,15 @@ async def stream_llm_with_tools(
                 normalized["done"] = True
             elif finish_reason == "stop":
                 normalized["done"] = True
+
+            if normalized.get("done"):
+                content_preview = accumulated_content.strip().replace("\n", " ")[:400]
+                reasoning_preview = accumulated_reasoning.strip().replace("\n", " ")[:400]
+                logger.info(
+                    "[llm_helpers] LLM response (stream final): content=%s reasoning=%s",
+                    content_preview or "",
+                    reasoning_preview or "",
+                )
 
             yield normalized
         except json.JSONDecodeError:

@@ -6,6 +6,7 @@ os.environ.setdefault("LLM_BASE_URL", "http://localhost:11434")
 os.environ.setdefault("LLM_CHAT_MODEL_FAST", "test-fast-model")
 os.environ.setdefault("LLM_CHAT_MODEL_SMART", "test-smart-model")
 
+from agent.state import AgentState
 from agent.tool_executor import ToolExecutionCoordinator
 
 
@@ -110,3 +111,65 @@ def test_build_tool_message_payload_compacts_when_budget_is_tight():
 
     assert len(payload["events"][0]["summary"]) < 30000
     assert payload["_meta"]["compacted_for_budget"] is True
+
+
+def test_repair_reference_ids_recovers_ellipsized_event_id_from_candidates():
+    coordinator = ToolExecutionCoordinator(_DummyController())
+    state = AgentState(goal="How many weeks is Avery Hill's wife pregnant with?")
+    state.remember_information_candidate(
+        kind="event",
+        candidate_id="google:na1m412fkp6aa9pjgjl5su0kv2_20260406T103000Z:b06712cd",
+        label="Avery <> Ramon - 1:1",
+    )
+
+    repaired = coordinator._repair_reference_ids(
+        args={"action": "by_ids", "event_ids": ["google:na1m412fkp6aa9pj..."]},
+        state=state,
+    )
+
+    assert repaired["event_ids"] == ["google:na1m412fkp6aa9pjgjl5su0kv2_20260406T103000Z:b06712cd"]
+
+
+def test_repair_reference_ids_recovers_ellipsized_document_id_from_candidates():
+    coordinator = ToolExecutionCoordinator(_DummyController())
+    state = AgentState(goal="Inspect the lab report")
+    state.remember_information_candidate(
+        kind="document",
+        candidate_id="doc:ea6a1d3a1c4846e9906ff0b361e55529",
+        label="Clinical Laboratory Test Results Report",
+    )
+
+    repaired = coordinator._repair_reference_ids(
+        args={"document_id": "doc:ea6a1d3a1c48..."},
+        state=state,
+    )
+
+    assert repaired["document_id"] == "doc:ea6a1d3a1c4846e9906ff0b361e55529"
+
+
+def test_repair_reference_ids_recovers_generic_contact_and_place_ids():
+    coordinator = ToolExecutionCoordinator(_DummyController())
+    state = AgentState(goal="Who lives at this place?")
+    state.remember_information_candidate(
+        kind="contact",
+        candidate_id="contact:avery-acme-xyz",
+        label="Avery Hill",
+    )
+    state.remember_information_candidate(
+        kind="place",
+        candidate_id="place:home-springfield-portugal",
+        label="Home",
+    )
+
+    repaired = coordinator._repair_reference_ids(
+        args={
+            "contact_id": "contact:avery-s...",
+            "place_id": "place:home-a...",
+            "contact_ids": ["contact:avery-s..."],
+        },
+        state=state,
+    )
+
+    assert repaired["contact_id"] == "contact:avery-acme-xyz"
+    assert repaired["place_id"] == "place:home-springfield-portugal"
+    assert repaired["contact_ids"] == ["contact:avery-acme-xyz"]

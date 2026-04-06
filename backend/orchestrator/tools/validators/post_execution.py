@@ -1173,7 +1173,7 @@ class GoalCompletionValidator:
 
     def _find_best_search_candidate(self, tool_calls: list, goal: str) -> dict[str, Any] | None:
         """Find best candidate across search calls, preferring goal-aligned evidence."""
-        if self._is_current_status_query(goal):
+        if self._is_evolving_status_query(goal):
             current_status_candidate = self._find_latest_event_candidate(tool_calls)
             if current_status_candidate is not None:
                 return current_status_candidate
@@ -1247,7 +1247,7 @@ class GoalCompletionValidator:
 
     def _preferred_candidate_kinds(self, goal: str) -> list[str]:
         goal_lower = (goal or "").lower()
-        if self._is_current_status_query(goal):
+        if self._is_evolving_status_query(goal):
             return ["event", "document"]
         if self._is_temporal_interaction_query(goal):
             return ["event", "document"]
@@ -1312,36 +1312,31 @@ class GoalCompletionValidator:
 
         candidate_id = str(candidate.get("id") or "").strip()
         candidate_title = str(candidate.get("title") or "").strip()
-        candidate_label = f"'{candidate_title}' " if candidate_title else ""
+        candidate_label = f"'{candidate_title}'" if candidate_title else ""
 
         if required_detail_tool == "get_document" and candidate_id:
-            return (
-                f"Call get_document with document_id='{candidate_id}' for {candidate_label}"
-                "before responding"
-            )
+            return f"Call get_document with document_id='{candidate_id}' for {candidate_label} before responding"
         if required_detail_tool == "get_events" and candidate_id:
             if candidate_label:
-                return (
-                    f"Call get_events with action='by_ids' and event_ids=['{candidate_id}'] "
-                    f"for {candidate_label}before responding"
-                )
+                return f"Call get_events with action='by_ids' and event_ids=['{candidate_id}'] for {candidate_label} before responding"
             return (
                 f"Call get_events with action='by_ids' and event_ids=['{candidate_id}'] "
                 "before responding"
             )
         return f"Call {required_detail_tool} on the most relevant candidate result"
 
-    def _is_current_status_query(self, goal: str) -> bool:
+    def _is_evolving_status_query(self, goal: str) -> bool:
         goal_lower = (goal or "").lower()
         progress_markers = (
-            "how many weeks",
-            "how many months",
             "how far along",
-            "pregnant",
-            "pregnancy",
-            "due date",
+            "how long is",
+            "how much longer",
+            "status",
+            "progress",
             "currently",
             "right now",
+            "at the moment",
+            "latest status",
         )
         return any(marker in goal_lower for marker in progress_markers)
 

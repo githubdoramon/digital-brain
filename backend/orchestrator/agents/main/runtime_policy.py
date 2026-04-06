@@ -43,6 +43,7 @@ def build_force_completion_prompt(goal_check: dict[str, Any]) -> str:
         "INCOMPLETE: You have not completed the user's request yet. "
         f"Status: {goal_check['reason']}. "
         f"Required: {goal_check['pending_actions'][0]}. "
+        "Use the EXACT id and arguments shown in Required; do not shorten, ellipsize, or paraphrase them. "
         "Do NOT respond to the user - FIRST invoke the appropriate tool to complete the action."
     )
 

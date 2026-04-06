@@ -29,6 +29,11 @@ When a query is person-referential and memory search lacks `contact_ids`:
 - For strict interaction-ranking windows (for example "who did I meet most this week"), prefer `get_events(action=by_time_span)` and then rank counterparts.
 - Router pre-resolution policy should skip pre-resolve for non-person-referential ranking/discovery prompts.
 
+## Current-Status Queries
+
+- For evolving status questions, prefer the newest aligned event evidence over older semantic hits.
+- When newer evidence gives a more current reference point than an older relative description, use the newer evidence instead of repeating stale relative phrasing verbatim.
+
 ## Domain-Scoped Recaps
 
 - For bounded recap/report questions with explicit windows (for example "summarize my work last week"), prefer structured retrieval first.

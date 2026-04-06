@@ -270,6 +270,17 @@ class TestResponseBundle:
         assert "Sorry, I couldn't complete your request." in bundle["answer"]
         assert "Reason: verification failed (missing completion evidence)." in bundle["answer"]
 
+    def test_build_pending_completion_tool_call_parses_exact_get_events_action(self):
+        controller = _build_controller(AgentConfig(max_steps=3, max_tool_calls=5))
+
+        call = controller._build_pending_completion_tool_call(
+            "Call get_events with action='by_ids' and event_ids=['google:event-123'] for 'Avery <> Ramon - 1:1' before responding"
+        )
+
+        assert call is not None
+        assert call["function"]["name"] == "get_events"
+        assert "google:event-123" in call["function"]["arguments"]
+
     def test_strip_tool_reference_artifacts_preserves_markdown_table_newlines(self):
         controller = _build_controller()
 

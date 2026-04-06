@@ -19,6 +19,7 @@ import re
 
 # Import with absolute paths to avoid circular imports
 import sys
+import uuid
 from collections.abc import AsyncGenerator
 from contextvars import ContextVar
 from time import perf_counter
@@ -663,6 +664,17 @@ class AgentController:
                     and goal_check["pending_actions"]
                     and state.step_count < self.config.max_steps - 1
                 ):
+                    if await self._execute_pending_completion_action(
+                        pending_action=goal_check["pending_actions"][0],
+                        state=state,
+                        messages=messages,
+                        question=question,
+                        search_limit=search_limit,
+                        run_id=run_id,
+                        user_email=user_email,
+                        conversation_history=conversation_history,
+                    ):
+                        continue
                     trace.trace_decision(
                         "Preventing premature completion",
                         "Goal not achieved, forcing continuation",
@@ -1000,6 +1012,18 @@ class AgentController:
                     and goal_check["pending_actions"]
                     and state.step_count < self.config.max_steps - 1
                 ):
+                    if await self._execute_pending_completion_action_stream(
+                        pending_action=goal_check["pending_actions"][0],
+                        state=state,
+                        messages=messages,
+                        question=question,
+                        search_limit=search_limit,
+                        run_id=run_id,
+                        user_email=user_email,
+                        conversation_history=conversation_history,
+                    ):
+                        yield {"type": "status", "message": "Completing action..."}
+                        continue
                     trace.trace_decision(
                         "Preventing premature completion (stream)",
                         "Goal not achieved, forcing continuation",
@@ -1415,6 +1439,134 @@ class AgentController:
                 return {}
             return parsed if isinstance(parsed, dict) else {}
         return {}
+
+    def _build_pending_completion_tool_call(self, pending_action: str) -> dict[str, Any] | None:
+        """Parse deterministic pending-action text into an exact tool call."""
+        text = str(pending_action or "").strip()
+        if not text:
+            return None
+
+        document_match = re.search(
+            r"Call\s+get_document\s+with\s+document_id='([^']+)'",
+            text,
+            flags=re.IGNORECASE,
+        )
+        if document_match:
+            document_id = document_match.group(1).strip()
+            return {
+                "id": f"auto_completion_{uuid.uuid4().hex[:8]}",
+                "type": "function",
+                "function": {
+                    "name": "get_document",
+                    "arguments": json.dumps({"document_id": document_id}),
+                },
+            }
+
+        event_match = re.search(
+            r"Call\s+get_events\s+with\s+action='by_ids'\s+and\s+event_ids=\['([^']+)'\]",
+            text,
+            flags=re.IGNORECASE,
+        )
+        if event_match:
+            event_id = event_match.group(1).strip()
+            return {
+                "id": f"auto_completion_{uuid.uuid4().hex[:8]}",
+                "type": "function",
+                "function": {
+                    "name": "get_events",
+                    "arguments": json.dumps({"action": "by_ids", "event_ids": [event_id]}),
+                },
+            }
+
+        return None
+
+    async def _execute_pending_completion_action(
+        self,
+        *,
+        pending_action: str,
+        state: AgentState,
+        messages: list[dict[str, Any]],
+        question: str,
+        search_limit: int,
+        run_id: str,
+        user_email: Optional[str],
+        conversation_history: Optional[list[dict[str, str]]],
+    ) -> bool:
+        """Execute deterministic pending follow-up actions directly when possible."""
+        tool_call = self._build_pending_completion_tool_call(pending_action)
+        if tool_call is None:
+            return False
+
+        trace.trace_decision(
+            "Executing pending completion action directly",
+            "Controller synthesized exact follow-up tool call",
+            {"pending_action": pending_action},
+        )
+        await self._handle_tool_calls(
+            [tool_call],
+            state,
+            messages,
+            question,
+            search_limit,
+            run_id,
+            user_email=user_email,
+            conversation_history=conversation_history,
+        )
+        return True
+
+    async def _execute_pending_completion_action_stream(
+        self,
+        *,
+        pending_action: str,
+        state: AgentState,
+        messages: list[dict[str, Any]],
+        question: str,
+        search_limit: int,
+        run_id: str,
+        user_email: Optional[str],
+        conversation_history: Optional[list[dict[str, str]]],
+    ) -> bool:
+        """Stream-safe version of deterministic pending follow-up execution."""
+        tool_call = self._build_pending_completion_tool_call(pending_action)
+        if tool_call is None:
+            return False
+
+        trace.trace_decision(
+            "Executing pending completion action directly (stream)",
+            "Controller synthesized exact follow-up tool call",
+            {"pending_action": pending_action},
+        )
+        function = tool_call.get("function", {})
+        tool_name = str(function.get("name") or "unknown")
+        args = self._normalize_stream_tool_args(function.get("arguments", {}))
+
+        messages.append({"role": "assistant", "content": "", "tool_calls": [tool_call]})
+        result = await self._execute_tool_call(
+            tool_call,
+            state,
+            question,
+            search_limit,
+            run_id,
+            user_email=user_email,
+            conversation_history=conversation_history,
+        )
+        messages.append(
+            {
+                "role": "tool",
+                "tool_call_id": tool_call.get("id"),
+                "content": json.dumps(
+                    self.tool_executor.build_tool_message_payload(
+                        tool_name,
+                        result,
+                        args=args,
+                        messages=messages,
+                    ),
+                    ensure_ascii=False,
+                    default=str,
+                ),
+            }
+        )
+        return True
 
     def _get_completion_evidence(
         self,

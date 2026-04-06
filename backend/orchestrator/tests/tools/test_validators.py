@@ -527,7 +527,7 @@ class TestGoalCompletionValidatorTemporal:
         assert "contradicts retrieved results" in reason
         assert pending
 
-    def test_current_status_query_prefers_latest_event_candidate(self):
+    def test_evolving_status_query_prefers_latest_event_candidate(self):
         validator = GoalCompletionValidator()
         tool_calls = [
             ToolCallRecord(
@@ -565,7 +565,7 @@ class TestGoalCompletionValidatorTemporal:
         ]
 
         achieved, reason, pending = validator.check_goal_achieved(
-            goal="How many weeks is Avery Hill's wife pregnant with?",
+            goal="What is Avery Hill's current status?",
             tool_calls=tool_calls,
             known_facts=["Found 3 relevant memories"],
             final_content="",
@@ -577,7 +577,7 @@ class TestGoalCompletionValidatorTemporal:
             "Call get_events with action='by_ids' and event_ids=['meeting:newer'] for 'Avery <> Ramon - 1:1' before responding"
         ]
 
-    def test_current_status_query_with_inspected_latest_event_is_achieved(self):
+    def test_evolving_status_query_with_inspected_latest_event_is_achieved(self):
         validator = GoalCompletionValidator()
         tool_calls = [
             ToolCallRecord(
@@ -624,10 +624,10 @@ class TestGoalCompletionValidatorTemporal:
         ]
 
         achieved, reason, pending = validator.check_goal_achieved(
-            goal="How many weeks is Avery Hill's wife pregnant with?",
+            goal="What is Avery Hill's current status?",
             tool_calls=tool_calls,
             known_facts=["Retrieved 1 event details"],
-            final_content="Avery's wife is about 39 weeks pregnant.",
+            final_content="Avery's latest status is that paternity leave is imminent.",
         )
 
         assert achieved is True
