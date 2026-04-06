@@ -640,11 +640,12 @@ const styles = StyleSheet.create({
 
   // -- Modal --
   modalOverlay: {
-    flex: 1,
+    width: '100%',
   },
   modalContent: {
     backgroundColor: theme.colors.card,
     maxHeight: '90%',
+    overflow: 'hidden',
   },
   modalBody: {
     padding: 24,
