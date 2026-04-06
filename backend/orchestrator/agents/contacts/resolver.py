@@ -2158,6 +2158,39 @@ def _unordered_text_pair_key(person_text: str, anchor_text: str) -> Optional[tup
     return (sorted_keys[0], sorted_keys[1])
 
 
+def _match_cached_resolved_contact_for_nested_first_part(
+    first_part: str,
+    resolution_cache: Optional[dict[str, dict[str, Any]]],
+) -> dict[str, Any] | None:
+    if not resolution_cache:
+        return None
+
+    first_part_norm = normalize_search_text(first_part)
+    if not first_part_norm:
+        return None
+
+    for cached_text, cached_resolution in resolution_cache.items():
+        if not isinstance(cached_resolution, dict):
+            continue
+        if cached_resolution.get("status") != "resolved":
+            continue
+
+        display_name = str(cached_resolution.get("display_name") or "").strip()
+        if display_name and _is_name_level_match(first_part, display_name):
+            logger.info(
+                "[contact_resolver] Nested: Reusing resolved full-name anchor '%s' for '%s'",
+                display_name,
+                first_part,
+            )
+            return dict(cached_resolution)
+
+        cached_text_norm = normalize_search_text(str(cached_text or ""))
+        if cached_text_norm and cached_text_norm == first_part_norm:
+            return dict(cached_resolution)
+
+    return None
+
+
 def _parse_nested_relationship(text: str) -> Optional[list[str]]:
     """
     Parse nested relationship like "my daughter's doctor" into ["my daughter", "doctor"].
@@ -2238,13 +2271,21 @@ def _resolve_nested_relationship(
 
     # Step 1: Resolve first part (check cache first)
     first_part = parts[0]
+    cached_anchor_resolution = _match_cached_resolved_contact_for_nested_first_part(
+        first_part,
+        resolution_cache,
+    )
+    if cached_anchor_resolution is not None:
+        first_resolution = cached_anchor_resolution
+        if resolution_cache is not None and first_part not in resolution_cache:
+            resolution_cache[first_part] = first_resolution
     if resolution_cache and first_part in resolution_cache:
         logger.debug(
             "[contact_resolver] Nested: Using cached resolution for first part: '%s'",
             first_part,
         )
         first_resolution = resolution_cache[first_part]
-    else:
+    elif cached_anchor_resolution is None:
         first_resolution = resolve_contact(
             first_part,
             user_email,

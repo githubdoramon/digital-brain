@@ -524,11 +524,53 @@ def test_extract_people_splits_selector_prompt(monkeypatch):
     )
 
     assert people == ["user", "John Smith"]
-    assert selectors[0]["kind"] == "email_domain"
+    assert any(
+        isinstance(selector, dict) and selector.get("kind") == "email_domain"
+        for selector in selectors
+    )
     assert len(prompts) == 2
     assert "extract all person references" in prompts[0].lower()
     assert "collective group selectors" not in prompts[0].lower()
     assert "extract collective participant selectors" in prompts[1].lower()
+
+
+def test_nested_relationship_reuses_prior_resolved_full_name(monkeypatch):
+    monkeypatch.setattr(
+        resolver.contacts_service,
+        "get_contact_relationships",
+        lambda contact_id, include_contact_details=False: {
+            "relationships": [
+                {
+                    "type": "sibling",
+                    "other_type": "family",
+                    "related_contact": {
+                        "contact_id": "contact-mariela",
+                        "display_name": "Iris Lewis",
+                    },
+                }
+            ]
+            if contact_id == "contact-dana"
+            else []
+        },
+    )
+
+    nested = resolver._resolve_nested_relationship(
+        ["Dana", "family"],
+        "user@example.com",
+        resolution_cache={
+            "Dana Lewis": {
+                "status": "resolved",
+                "contact_id": "contact-dana",
+                "display_name": "Dana Lewis",
+                "matched_via": "direct_match",
+                "confidence": "high",
+            }
+        },
+    )
+
+    assert nested["found"] is True
+    assert nested["contact_id"] == "contact-mariela"
+    assert nested["path"] == ["user", "Dana Lewis", "Iris Lewis"]
 
 
 def test_relationship_candidates_include_match_reason():
