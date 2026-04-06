@@ -268,15 +268,16 @@ def _normalize_focus(value: Any) -> str:
 def _build_document_summary_text(document: dict[str, Any]) -> str:
     raw_metadata = document.get("raw_metadata") or {}
     preview_source = (
-        document.get("content_preview")
+        document.get("content")
+        or document.get("content_preview")
         or raw_metadata.get("content_english_for_embedding")
+        or raw_metadata.get("content")
         or raw_metadata.get("original_content")
-        or document.get("content")
         or document.get("description")
         or document.get("snippet")
         or ""
     )
-    return _truncate_text(preview_source, 1200)
+    return str(preview_source or "").strip()
 
 
 def _format_event_people(people: list[Any]) -> str:
@@ -289,6 +290,22 @@ def _format_event_people(people: list[Any]) -> str:
         if label:
             names.append(label)
     return ", ".join(names)
+
+
+def _append_bounded_lines(
+    target: list[str],
+    *,
+    line: str,
+    current_chars: int,
+    max_chars: int,
+) -> int:
+    if not line:
+        return current_chars
+    proposed = current_chars + len(line) + 1
+    if target and proposed > max_chars:
+        return current_chars
+    target.append(line)
+    return proposed
 
 
 def _build_summary_fallback(
@@ -338,8 +355,10 @@ def _synthesize_memory_summary(
 ) -> str:
     from llm_helpers import call_llm
 
+    evidence_char_budget = 48_000
+    current_chars = 0
     event_lines: list[str] = []
-    for index, event in enumerate(events[:12], start=1):
+    for index, event in enumerate(events, start=1):
         people = _format_event_people(event.get("people") or [])
         parts = [
             f"[{index}] {str(event.get('title') or 'Untitled event').strip()}",
@@ -351,23 +370,37 @@ def _synthesize_memory_summary(
             parts.append("tags=" + ", ".join(str(value) for value in event.get("tags") or []))
         if people:
             parts.append(f"people={people}")
-        summary = _truncate_text(event.get("summary"), 500)
+        summary = _truncate_text(event.get("summary"), 4000)
         if summary:
             parts.append(f"summary={summary}")
-        event_lines.append(" | ".join(parts))
+        current_chars = _append_bounded_lines(
+            event_lines,
+            line=" | ".join(parts),
+            current_chars=current_chars,
+            max_chars=evidence_char_budget,
+        )
+        if current_chars >= evidence_char_budget:
+            break
 
     document_lines: list[str] = []
-    for index, document in enumerate(inspected_documents[:8], start=1):
+    for index, document in enumerate(inspected_documents, start=1):
         parts = [
             f"[{index}] {str(document.get('title') or 'Untitled document').strip()}",
             f"date={document.get('document_date') or document.get('created_at') or 'unknown'}",
         ]
         if document.get("tags"):
             parts.append("tags=" + ", ".join(str(value) for value in document.get("tags") or []))
-        preview = _build_document_summary_text(document)
+        preview = _truncate_text(_build_document_summary_text(document), 8000)
         if preview:
             parts.append(f"content={preview}")
-        document_lines.append(" | ".join(parts))
+        current_chars = _append_bounded_lines(
+            document_lines,
+            line=" | ".join(parts),
+            current_chars=current_chars,
+            max_chars=evidence_char_budget,
+        )
+        if current_chars >= evidence_char_budget:
+            break
 
     system_prompt = (
         "You are synthesizing a bounded recap from personal memory evidence. "
@@ -384,6 +417,11 @@ def _synthesize_memory_summary(
         f"Events ({len(events)}):\n" + ("\n".join(event_lines) if event_lines else "None") + "\n\n"
         f"Documents ({len(inspected_documents)} inspected of {len(documents)} matched):\n"
         + ("\n".join(document_lines) if document_lines else "None")
+        + (
+            "\n\nNote: evidence was budget-bounded after preserving the highest-detail items first."
+            if len(event_lines) < len(events) or len(document_lines) < len(inspected_documents)
+            else ""
+        )
     )
     try:
         return call_llm(
@@ -470,7 +508,7 @@ def handle_summarize_memories(
     ]
 
     inspected_documents: list[dict[str, Any]] = []
-    for row in matched_documents[: min(len(matched_documents), 8)]:
+    for row in matched_documents[: min(len(matched_documents), result_limit)]:
         document_id = str(row.get("id") or "").strip()
         if not document_id:
             continue

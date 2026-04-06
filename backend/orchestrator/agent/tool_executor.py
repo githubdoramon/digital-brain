@@ -49,6 +49,32 @@ _SET_LIKE_ARG_KEYS = {
     "types",
 }
 
+ESTIMATED_PROMPT_CHAR_BUDGET = 120_000
+ESTIMATED_RESPONSE_CHAR_RESERVE = 12_000
+MAX_RAW_TOOL_PAYLOAD_CHARS = 36_000
+MAX_COMPACT_TOOL_PAYLOAD_CHARS = 18_000
+
+SEARCH_RESULT_ITEM_LIMIT = 10
+COMPACT_SEARCH_RESULT_ITEM_LIMIT = 6
+SEARCH_SNIPPET_CHARS = 600
+COMPACT_SEARCH_SNIPPET_CHARS = 320
+SEARCH_SUMMARY_CHARS = 900
+COMPACT_SEARCH_SUMMARY_CHARS = 420
+
+EVENT_RESULT_ITEM_LIMIT = 12
+COMPACT_EVENT_RESULT_ITEM_LIMIT = 6
+EVENT_SUMMARY_CHARS = 1600
+COMPACT_EVENT_SUMMARY_CHARS = 600
+DETAILED_EVENT_SUMMARY_CHARS = 6000
+COMPACT_DETAILED_EVENT_SUMMARY_CHARS = 1800
+
+DOCUMENT_PREVIEW_CHARS = 8000
+COMPACT_DOCUMENT_PREVIEW_CHARS = 2400
+SUMMARY_RESULT_CHARS = 4000
+COMPACT_SUMMARY_RESULT_CHARS = 1800
+SUMMARY_SOURCE_ITEM_LIMIT = 12
+COMPACT_SUMMARY_SOURCE_ITEM_LIMIT = 6
+
 class ToolExecutionCoordinator:
     """Execute tool calls with guardrails, validation, and state bookkeeping."""
 
@@ -100,12 +126,18 @@ class ToolExecutionCoordinator:
                 for call, result in zip(batch, batch_results):
                     function = call.get("function", {})
                     tool_name = str(function.get("name") or "").strip()
+                    args = self._extract_call_arguments(call)
                     messages.append(
                         {
                             "role": "tool",
                             "tool_call_id": call.get("id"),
                             "content": json.dumps(
-                                self.build_tool_message_payload(tool_name, result),
+                                self.build_tool_message_payload(
+                                    tool_name,
+                                    result,
+                                    args=args if isinstance(args, dict) else None,
+                                    messages=messages,
+                                ),
                                 ensure_ascii=False,
                                 default=str,
                             ),
@@ -125,13 +157,19 @@ class ToolExecutionCoordinator:
                     user_email=user_email,
                     conversation_history=conversation_history,
                 )
+                args = self._extract_call_arguments(call)
 
                 messages.append(
                     {
                         "role": "tool",
                         "tool_call_id": call.get("id"),
                         "content": json.dumps(
-                            self.build_tool_message_payload(tool_name, result),
+                            self.build_tool_message_payload(
+                                tool_name,
+                                result,
+                                args=args if isinstance(args, dict) else None,
+                                messages=messages,
+                            ),
                             ensure_ascii=False,
                             default=str,
                         ),
@@ -681,38 +719,60 @@ class ToolExecutionCoordinator:
         """Build a short, stable summary used in tracing."""
         if result.get("error"):
             return f"Error: {result.get('error')}"
+        representative = self._representative_titles(result)
         if "count" in result:
-            return f"{result['count']} items"
+            count_summary = f"{result['count']} items"
+            return f"{count_summary}: {representative}" if representative else count_summary
         if "tools" in result:
             return f"Listed {len(result['tools'])} tools"
         if "rows" in result:
             return f"{len(result['rows'])} rows"
         if "results" in result:
-            return f"{len(result['results'])} results"
+            results_summary = f"{len(result['results'])} results"
+            return f"{results_summary}: {representative}" if representative else results_summary
         return "OK" if success else "Failed"
 
     def build_tool_message_payload(
         self,
         tool_name: str,
         result: dict[str, Any],
+        *,
+        args: dict[str, Any] | None = None,
+        messages: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
-        """Build a compact tool payload for LLM context to limit token bloat."""
+        """Build a budget-aware tool payload for LLM context."""
         if not isinstance(result, dict):
             return {"result": str(result)}
 
-        if self._should_preserve_raw_tool_result(result):
-            return result
+        sanitized_result = dict(result)
+        sanitized_result.pop("_executed_args", None)
 
-        if tool_name == "search_memories":
-            return self._compact_search_memories_result(result)
-        if tool_name == "get_document":
-            return self._compact_get_document_result(result)
-        if tool_name == "get_events":
-            return self._compact_get_events_result(result)
-        if tool_name == "summarize_memories":
-            return self._compact_summarize_memories_result(result)
+        if self._should_preserve_raw_tool_result(sanitized_result):
+            return sanitized_result
 
-        return result
+        if self._should_keep_raw_tool_result(
+            tool_name,
+            args=args or {},
+            result=sanitized_result,
+            messages=messages or [],
+        ):
+            return sanitized_result
+
+        compact_payload = self._compact_tool_result(
+            tool_name,
+            sanitized_result,
+            args=args or {},
+            aggressive=False,
+        )
+        if not self._tool_payload_exceeds_cap(compact_payload, MAX_COMPACT_TOOL_PAYLOAD_CHARS):
+            return compact_payload
+
+        return self._compact_tool_result(
+            tool_name,
+            sanitized_result,
+            args=args or {},
+            aggressive=True,
+        )
 
     def _should_preserve_raw_tool_result(self, result: dict[str, Any]) -> bool:
         """Keep validation and execution failures intact for model-visible repair."""
@@ -720,15 +780,26 @@ class ToolExecutionCoordinator:
             return True
         if result.get("error"):
             return True
+        validation = result.get("_validation")
+        if isinstance(validation, dict) and validation:
+            return True
         return False
 
-    def _compact_search_memories_result(self, result: dict[str, Any]) -> dict[str, Any]:
+    def _compact_search_memories_result(
+        self,
+        result: dict[str, Any],
+        *,
+        aggressive: bool,
+    ) -> dict[str, Any]:
         rows = result.get("results")
         if not isinstance(rows, list):
             return result
 
         compact_rows: list[dict[str, Any]] = []
-        for row_obj in rows:
+        row_limit = COMPACT_SEARCH_RESULT_ITEM_LIMIT if aggressive else SEARCH_RESULT_ITEM_LIMIT
+        snippet_limit = COMPACT_SEARCH_SNIPPET_CHARS if aggressive else SEARCH_SNIPPET_CHARS
+        summary_limit = COMPACT_SEARCH_SUMMARY_CHARS if aggressive else SEARCH_SUMMARY_CHARS
+        for row_obj in rows[:row_limit]:
             row = row_obj if isinstance(row_obj, dict) else None
             if not isinstance(row, dict):
                 continue
@@ -743,8 +814,8 @@ class ToolExecutionCoordinator:
                 "tags": row.get("tags"),
                 "types": row.get("types"),
             }
-            snippet = self._truncate_text(row.get("snippet"), 280)
-            summary = self._truncate_text(row.get("summary"), 280)
+            snippet = self._truncate_text(row.get("snippet"), snippet_limit)
+            summary = self._truncate_text(row.get("summary"), summary_limit)
             if snippet:
                 compact_row["snippet"] = snippet
             if summary:
@@ -752,7 +823,12 @@ class ToolExecutionCoordinator:
             compact_rows.append(compact_row)
         return {"results": compact_rows, "count": int(result.get("count", len(rows)) or 0)}
 
-    def _compact_get_document_result(self, result: dict[str, Any]) -> dict[str, Any]:
+    def _compact_get_document_result(
+        self,
+        result: dict[str, Any],
+        *,
+        aggressive: bool,
+    ) -> dict[str, Any]:
         document = result.get("document")
         if not isinstance(document, dict):
             return result
@@ -762,7 +838,9 @@ class ToolExecutionCoordinator:
             cast(dict[str, Any], raw_metadata_obj) if isinstance(raw_metadata_obj, dict) else {}
         )
         preview_source = (
-            document.get("content_preview")
+            document.get("content")
+            or document.get("content_preview")
+            or raw_metadata.get("content")
             or raw_metadata.get("content_english_for_embedding")
             or raw_metadata.get("original_content")
             or ""
@@ -776,20 +854,43 @@ class ToolExecutionCoordinator:
             "file_name": document.get("file_name"),
             "file_mime": document.get("file_mime"),
             "file_size": document.get("file_size"),
-            "snippet": self._truncate_text(document.get("snippet"), 280),
+            "snippet": self._truncate_text(
+                document.get("snippet"),
+                COMPACT_SEARCH_SNIPPET_CHARS if aggressive else SEARCH_SNIPPET_CHARS,
+            ),
         }
-        preview = self._truncate_text(preview_source, 500)
+        preview = self._truncate_text(
+            preview_source,
+            COMPACT_DOCUMENT_PREVIEW_CHARS if aggressive else DOCUMENT_PREVIEW_CHARS,
+        )
         if preview:
-            compact_document["snippet"] = preview
+            compact_document["content_preview"] = preview
         return {"document": compact_document}
 
-    def _compact_get_events_result(self, result: dict[str, Any]) -> dict[str, Any]:
+    def _compact_get_events_result(
+        self,
+        result: dict[str, Any],
+        *,
+        args: dict[str, Any],
+        aggressive: bool,
+    ) -> dict[str, Any]:
         events = result.get("events", [])
         if not isinstance(events, list):
             return result
 
+        action = str(args.get("action") or "").strip().lower()
+        detail_mode = action == "by_ids"
+        event_limit = len(events) if detail_mode else (
+            COMPACT_EVENT_RESULT_ITEM_LIMIT if aggressive else EVENT_RESULT_ITEM_LIMIT
+        )
+        summary_limit = (
+            COMPACT_DETAILED_EVENT_SUMMARY_CHARS if aggressive else DETAILED_EVENT_SUMMARY_CHARS
+        ) if detail_mode else (
+            COMPACT_EVENT_SUMMARY_CHARS if aggressive else EVENT_SUMMARY_CHARS
+        )
+
         compact_events: list[dict[str, Any]] = []
-        for event in events:
+        for event in events[:event_limit]:
             if not isinstance(event, dict):
                 continue
             compact_event: dict[str, Any] = {
@@ -797,11 +898,14 @@ class ToolExecutionCoordinator:
                 "title": event.get("title"),
                 "start_date": event.get("start_date"),
                 "end_date": event.get("end_date"),
-                "summary": self._truncate_text(event.get("summary"), 280),
+                "summary": self._truncate_text(event.get("summary"), summary_limit),
                 "people": event.get("people") or [],
                 "tags": event.get("tags"),
                 "types": event.get("types"),
             }
+            external_id = event.get("external_id")
+            if external_id:
+                compact_event["external_id"] = external_id
             place = event.get("place")
             if isinstance(place, dict):
                 compact_event["place"] = {
@@ -812,18 +916,32 @@ class ToolExecutionCoordinator:
             compact_events.append(compact_event)
         return {"events": compact_events, "count": int(result.get("count", len(events)) or 0)}
 
-    def _compact_summarize_memories_result(self, result: dict[str, Any]) -> dict[str, Any]:
+    def _compact_summarize_memories_result(
+        self,
+        result: dict[str, Any],
+        *,
+        aggressive: bool,
+    ) -> dict[str, Any]:
         payload: dict[str, Any] = {
-            "summary": self._truncate_text(result.get("summary"), 1200),
+            "summary": self._truncate_text(
+                result.get("summary"),
+                COMPACT_SUMMARY_RESULT_CHARS if aggressive else SUMMARY_RESULT_CHARS,
+            ),
             "focus": result.get("focus"),
             "count": int(result.get("count", 0) or 0),
         }
         source_items = result.get("source_items")
         if isinstance(source_items, list):
-            payload["source_items"] = source_items[:8]
+            payload["source_items"] = source_items[
+                : COMPACT_SUMMARY_SOURCE_ITEM_LIMIT if aggressive else SUMMARY_SOURCE_ITEM_LIMIT
+            ]
         events = result.get("events")
         if isinstance(events, list):
-            payload["events"] = self._compact_get_events_result({"events": events}).get("events", [])
+            payload["events"] = self._compact_get_events_result(
+                {"events": events},
+                args={"action": "by_time_span"},
+                aggressive=aggressive,
+            ).get("events", [])
         documents = result.get("documents")
         if isinstance(documents, list):
             payload["documents"] = [
@@ -832,12 +950,156 @@ class ToolExecutionCoordinator:
                     "title": document.get("title"),
                     "tags": document.get("tags"),
                     "document_date": document.get("document_date"),
-                    "snippet": self._truncate_text(document.get("snippet"), 280),
+                    "snippet": self._truncate_text(
+                        document.get("snippet"),
+                        COMPACT_SEARCH_SNIPPET_CHARS if aggressive else SEARCH_SNIPPET_CHARS,
+                    ),
                 }
                 for document in documents
                 if isinstance(document, dict)
-            ][:8]
+            ][:
+                COMPACT_SUMMARY_SOURCE_ITEM_LIMIT if aggressive else SUMMARY_SOURCE_ITEM_LIMIT
+            ]
         return payload
+
+    def _should_keep_raw_tool_result(
+        self,
+        tool_name: str,
+        *,
+        args: dict[str, Any],
+        result: dict[str, Any],
+        messages: list[dict[str, Any]],
+    ) -> bool:
+        raw_chars = self._serialized_size(result)
+        if raw_chars <= 0:
+            return True
+        if raw_chars <= 2_000:
+            return True
+        if raw_chars > MAX_RAW_TOOL_PAYLOAD_CHARS:
+            return False
+
+        message_chars = self._estimate_message_chars(messages)
+        available_chars = max(
+            20_000,
+            ESTIMATED_PROMPT_CHAR_BUDGET - ESTIMATED_RESPONSE_CHAR_RESERVE - message_chars,
+        )
+        if raw_chars <= available_chars:
+            return True
+
+        detail_priority = self._tool_detail_priority(tool_name, args=args, result=result)
+        if detail_priority == "high" and raw_chars <= int(available_chars * 1.15):
+            return True
+        return False
+
+    def _tool_payload_exceeds_cap(self, payload: dict[str, Any], cap: int) -> bool:
+        return self._serialized_size(payload) > cap
+
+    def _compact_tool_result(
+        self,
+        tool_name: str,
+        result: dict[str, Any],
+        *,
+        args: dict[str, Any],
+        aggressive: bool,
+    ) -> dict[str, Any]:
+        if tool_name == "search_memories":
+            payload = self._compact_search_memories_result(result, aggressive=aggressive)
+        elif tool_name == "get_document":
+            payload = self._compact_get_document_result(result, aggressive=aggressive)
+        elif tool_name == "get_events":
+            payload = self._compact_get_events_result(result, args=args, aggressive=aggressive)
+        elif tool_name == "summarize_memories":
+            payload = self._compact_summarize_memories_result(result, aggressive=aggressive)
+        else:
+            payload = result
+        return self._annotate_budget_compaction(payload, result, aggressive=aggressive)
+
+    def _annotate_budget_compaction(
+        self,
+        payload: dict[str, Any],
+        raw_result: dict[str, Any],
+        *,
+        aggressive: bool,
+    ) -> dict[str, Any]:
+        if payload is raw_result:
+            return payload
+        compact_payload = dict(payload)
+        meta_raw = compact_payload.get("_meta")
+        meta = dict(meta_raw) if isinstance(meta_raw, dict) else {}
+        meta["compacted_for_budget"] = True
+        meta["compaction_level"] = "aggressive" if aggressive else "standard"
+        meta["raw_chars"] = self._serialized_size(raw_result)
+        compact_payload["_meta"] = meta
+        return compact_payload
+
+    def _tool_detail_priority(
+        self,
+        tool_name: str,
+        *,
+        args: dict[str, Any],
+        result: dict[str, Any],
+    ) -> str:
+        if tool_name == "get_document":
+            return "high"
+        if tool_name == "get_events" and str(args.get("action") or "").strip().lower() == "by_ids":
+            return "high"
+        if tool_name == "summarize_memories":
+            return "medium"
+        if tool_name == "get_events" and int(result.get("count", 0) or 0) <= 3:
+            return "medium"
+        return "low"
+
+    def _estimate_message_chars(self, messages: list[dict[str, Any]]) -> int:
+        total = 0
+        for message in messages:
+            if not isinstance(message, dict):
+                continue
+            total += len(str(message.get("role") or ""))
+            content = message.get("content")
+            if isinstance(content, str):
+                total += len(content)
+            else:
+                total += len(json.dumps(content, ensure_ascii=False, default=str))
+            tool_calls = message.get("tool_calls")
+            if tool_calls is not None:
+                total += len(json.dumps(tool_calls, ensure_ascii=False, default=str))
+        return total
+
+    def _extract_call_arguments(self, call: dict[str, Any]) -> dict[str, Any] | None:
+        function = call.get("function")
+        if not isinstance(function, dict):
+            return None
+        raw_args = function.get("arguments", {})
+        if isinstance(raw_args, dict):
+            return raw_args
+        if isinstance(raw_args, str):
+            try:
+                parsed = json.loads(raw_args)
+            except json.JSONDecodeError:
+                return None
+            return parsed if isinstance(parsed, dict) else None
+        return None
+
+    def _serialized_size(self, value: Any) -> int:
+        return len(json.dumps(value, ensure_ascii=False, default=str))
+
+    def _representative_titles(self, result: dict[str, Any]) -> str:
+        items = result.get("events") or result.get("results") or result.get("rows") or []
+        if not isinstance(items, list):
+            return ""
+        labels: list[str] = []
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            label = str(item.get("title") or item.get("name") or "").strip()
+            if not label:
+                continue
+            labels.append(label)
+            if len(labels) >= 2:
+                break
+        if not labels:
+            return ""
+        return "; ".join(labels)
 
     def _track_information_candidates_from_search(
         self,

@@ -883,6 +883,16 @@ class AgentController:
                             "result": result,
                         }
 
+                        function = call.get("function", {})
+                        raw_args = function.get("arguments", {}) if isinstance(function, dict) else {}
+                        if isinstance(raw_args, str):
+                            try:
+                                args = json.loads(raw_args)
+                            except json.JSONDecodeError:
+                                args = None
+                        else:
+                            args = raw_args if isinstance(raw_args, dict) else None
+
                         messages.append(
                             {
                                 "role": "tool",
@@ -891,6 +901,8 @@ class AgentController:
                                     self.tool_executor.build_tool_message_payload(
                                         func_name,
                                         result,
+                                        args=args if isinstance(args, dict) else None,
+                                        messages=messages,
                                     ),
                                     ensure_ascii=False,
                                     default=str,

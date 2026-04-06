@@ -28,6 +28,8 @@ from observability import trace
 from tools.action_enums import LookupContactAction
 from ui_dsl.clarification import extract_need_user_input
 
+VALIDATOR_RESULT_CHAR_BUDGET = 16_000
+
 
 class GoalCoverage(str, Enum):
     """Result of goal coverage check."""
@@ -429,10 +431,7 @@ class PostExecutionValidator:
         completed_actions: Optional[list[str]] = None,
     ) -> str:
         """Build the prompt for LLM validation."""
-        # Truncate result if too large
-        result_str = json.dumps(result, default=str)
-        if len(result_str) > 2000:
-            result_str = result_str[:2000] + "... (truncated)"
+        result_str = self._serialize_result_for_prompt(tool_name, result)
 
         facts_str = "\n".join(f"- {f}" for f in known_facts) if known_facts else "None"
         actions_str = (
@@ -466,6 +465,77 @@ Rules:
 - "needs_more_tools": More data is needed, suggest which tools to use
 - "need_user_input": Clarification required from user
 - "failed": The tool failed or returned unusable data"""
+
+    def _serialize_result_for_prompt(self, tool_name: str, result: dict[str, Any]) -> str:
+        raw = json.dumps(result, default=str)
+        if len(raw) <= VALIDATOR_RESULT_CHAR_BUDGET:
+            return raw
+
+        compact: dict[str, Any]
+        if tool_name == "get_events":
+            events = result.get("events") if isinstance(result.get("events"), list) else []
+            compact = {
+                "events": [
+                    {
+                        "id": event.get("id") or event.get("event_id"),
+                        "title": event.get("title"),
+                        "start_date": event.get("start_date"),
+                        "summary": str(event.get("summary") or "")[:3000],
+                        "tags": event.get("tags"),
+                        "types": event.get("types"),
+                    }
+                    for event in events[:8]
+                    if isinstance(event, dict)
+                ],
+                "count": result.get("count", len(events)),
+            }
+        elif tool_name == "get_document":
+            document = result.get("document") if isinstance(result.get("document"), dict) else {}
+            compact = {
+                "document": {
+                    "document_id": document.get("document_id"),
+                    "title": document.get("title"),
+                    "tags": document.get("tags"),
+                    "document_date": document.get("document_date"),
+                    "content": str(
+                        document.get("content")
+                        or document.get("content_preview")
+                        or document.get("snippet")
+                        or ""
+                    )[:8000],
+                }
+            }
+        elif tool_name == "search_memories":
+            results = result.get("results") if isinstance(result.get("results"), list) else []
+            compact = {
+                "results": [
+                    {
+                        "id": row.get("id"),
+                        "kind": row.get("kind"),
+                        "title": row.get("title"),
+                        "score": row.get("score"),
+                        "summary": str(row.get("summary") or "")[:1000],
+                        "snippet": str(row.get("snippet") or "")[:800],
+                    }
+                    for row in results[:10]
+                    if isinstance(row, dict)
+                ],
+                "count": result.get("count", len(results)),
+            }
+        elif tool_name == "summarize_memories":
+            compact = {
+                "summary": str(result.get("summary") or "")[:6000],
+                "focus": result.get("focus"),
+                "count": result.get("count"),
+                "source_items": (result.get("source_items") or [])[:10],
+            }
+        else:
+            compact = result
+
+        compact_raw = json.dumps(compact, default=str)
+        if len(compact_raw) <= VALIDATOR_RESULT_CHAR_BUDGET:
+            return compact_raw
+        return compact_raw[:VALIDATOR_RESULT_CHAR_BUDGET] + "... (budget-truncated)"
 
     def _call_llm(self, prompt: str) -> str:
         """Make LLM API call for validation."""

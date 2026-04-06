@@ -234,3 +234,21 @@ def test_summarize_memories_combines_events_and_documents(monkeypatch):
     assert result["events"][0]["id"] == "event:1"
     assert result["documents"][0]["id"] == "doc:1"
     assert {item["kind"] for item in result["source_items"]} == {"event", "document"}
+
+
+def test_get_document_includes_full_content(monkeypatch):
+    fake_document = {
+        "document_id": "doc:1",
+        "title": "Long notes",
+        "content_preview": "preview",
+        "content": "full document body",
+        "raw_metadata": {},
+    }
+
+    monkeypatch.setitem(sys.modules, "documents", SimpleNamespace(get_document=lambda _id: fake_document))
+
+    from tools.handlers.memory import handle_get_document
+
+    result = handle_get_document({"document_id": "doc:1"})
+
+    assert result["document"]["content"] == "full document body"

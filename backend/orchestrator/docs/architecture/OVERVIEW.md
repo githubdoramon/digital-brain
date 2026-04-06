@@ -112,6 +112,7 @@ sequenceDiagram
 - Adaptive model routing is always enabled (`agent/model_routing.py`) and selects model/timeout per step.
 - Planner/verifier checks are runtime-enforced (`agent/planning_policy.py`) before final answer completion.
 - Tool execution coordinator supports parallel batches for independent read-only tool calls.
+- Tool-result reinjection is budget-aware: inspected entities (for example `get_events(action=by_ids)` and `get_document`) stay raw when the prompt budget allows, while broad retrieval results are compacted only when the assembled prompt would otherwise exceed the estimated budget.
 - Chat deep-link metadata (`linked_items`) is controller-derived from inspected event/document tool results; prompts can signal when inspection is worthwhile, but the model does not emit `linked_items` directly.
 - User context is modeled as scoped hard rules plus soft facts in `user_facts`: hard rules are applied deterministically in handlers when possible, while soft facts are retrieved/ranked for prompt context.
 

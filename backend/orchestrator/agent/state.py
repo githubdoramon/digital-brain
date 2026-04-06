@@ -16,9 +16,9 @@ from datetime import datetime, timezone
 from typing import Any, Optional
 
 MAX_INFORMATION_CANDIDATES = 24
-MAX_INFORMATION_CANDIDATES_IN_CONTEXT = 4
+MAX_INFORMATION_CANDIDATES_IN_CONTEXT = 6
 MAX_EPISODIC_MEMORIES = 24
-MAX_EPISODIC_IN_CONTEXT = 4
+MAX_EPISODIC_IN_CONTEXT = 6
 
 
 @dataclass
@@ -538,13 +538,11 @@ class AgentState:
                 lines.append(f"CLARIFICATIONS_REQUESTED: {self.clarification_requests_count}")
 
         if self.known_facts:
-            # Include last 5 facts to limit context size
-            recent_facts = self.known_facts[-5:]
+            recent_facts = self.known_facts[-8:]
             lines.append(f"KNOWN_FACTS: {'; '.join(recent_facts)}")
 
         if self.completed_actions:
-            # Include last 3 actions
-            recent_actions = self.completed_actions[-3:]
+            recent_actions = self.completed_actions[-5:]
             lines.append(f"COMPLETED: {'; '.join(recent_actions)}")
 
         if self.pending_actions:
@@ -561,10 +559,10 @@ class AgentState:
                 step for step in self.execution_plan if step not in self.completed_plan_steps
             ]
             if remaining:
-                lines.append("PLAN_REMAINING: " + "; ".join(remaining[:2]))
+                lines.append("PLAN_REMAINING: " + "; ".join(remaining[:4]))
 
         if self.verifier_notes:
-            lines.append("VERIFIER_NOTES: " + "; ".join(self.verifier_notes[-2:]))
+            lines.append("VERIFIER_NOTES: " + "; ".join(self.verifier_notes[-4:]))
 
         if self.information_candidates:
 
@@ -649,8 +647,8 @@ class AgentState:
                 if action_id:
                     submission_parts.append(f"action_id={action_id}")
                 if text_fallback:
-                    preview = text_fallback[:120]
-                    if len(text_fallback) > 120:
+                    preview = text_fallback[:240]
+                    if len(text_fallback) > 240:
                         preview += "..."
                     submission_parts.append(f"text_fallback={preview!r}")
                 if submission_parts:

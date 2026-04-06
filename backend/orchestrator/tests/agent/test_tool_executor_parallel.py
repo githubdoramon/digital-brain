@@ -64,3 +64,49 @@ def test_build_tool_message_payload_preserves_execution_errors():
     )
 
     assert payload == {"error": "time_start and time_end are required", "count": 0}
+
+
+def test_build_tool_message_payload_keeps_raw_detail_for_event_inspection():
+    coordinator = ToolExecutionCoordinator(_DummyController())
+
+    payload = coordinator.build_tool_message_payload(
+        "get_events",
+        {
+            "events": [
+                {
+                    "id": "event:1",
+                    "title": "Avery <> Ramon - 1:1",
+                    "summary": "A" * 1200,
+                }
+            ],
+            "count": 1,
+        },
+        args={"action": "by_ids", "event_ids": ["event:1"]},
+        messages=[{"role": "user", "content": "What did Avery say?"}],
+    )
+
+    assert payload["events"][0]["summary"] == "A" * 1200
+    assert "_meta" not in payload
+
+
+def test_build_tool_message_payload_compacts_when_budget_is_tight():
+    coordinator = ToolExecutionCoordinator(_DummyController())
+
+    payload = coordinator.build_tool_message_payload(
+        "get_events",
+        {
+            "events": [
+                {
+                    "id": "event:1",
+                    "title": "Avery <> Ramon - 1:1",
+                    "summary": "B" * 30000,
+                }
+            ],
+            "count": 1,
+        },
+        args={"action": "by_ids", "event_ids": ["event:1"]},
+        messages=[{"role": "system", "content": "x" * 100000}],
+    )
+
+    assert len(payload["events"][0]["summary"]) < 30000
+    assert payload["_meta"]["compacted_for_budget"] is True

@@ -1378,6 +1378,7 @@ def _row_to_document(
     if include_content:
         content = row.get("content") or ""
         document["content_preview"] = content[:1000]
+        document["content"] = content
     return document
 
 
