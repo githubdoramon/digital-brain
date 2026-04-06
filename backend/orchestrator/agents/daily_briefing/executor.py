@@ -7,7 +7,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date, datetime, time, timedelta, timezone
 from math import ceil
 from time import perf_counter
-from typing import Any
+from typing import Any, cast
 from uuid import uuid4
 from zoneinfo import ZoneInfo
 
@@ -28,6 +28,7 @@ from agents.daily_briefing.validators import (
 from db import get_conn
 from llm_helpers import call_llm, call_llm_json
 from search_normalization import normalize_search_text
+from tools.handlers.memory import handle_summarize_memories
 
 logger = logging.getLogger(__name__)
 
@@ -939,7 +940,10 @@ def _summarize_event(
     # -- Phase 2: synthesise everything into a structured summary -------------
     t0 = perf_counter()
     summary = _synthesise_event_summary(
-        event_text, research_notes, title, timezone_name, user_email=user_email
+        event_context,
+        research_notes,
+        timezone_name,
+        user_email=user_email,
     )
     logger.info(
         "[briefing.event] Synthesis for '%s': %d chars (%.0fms)",
@@ -1306,7 +1310,7 @@ def _plan_event_research(
             temperature=0,
             use_fast_model=False,
         )
-        planned = planned_raw if isinstance(planned_raw, dict) else {}
+        planned: dict[str, Any] = planned_raw if isinstance(planned_raw, dict) else {}
     except Exception:
         logger.warning("[briefing.event] Research planner failed for '%s'", title, exc_info=True)
         return {
@@ -1322,7 +1326,8 @@ def _plan_event_research(
 
     should_research = bool(planned.get("should_research"))
     reason = str(planned.get("reason") or "").strip() or "no_reason"
-    raw_targets = planned.get("targets") if isinstance(planned.get("targets"), list) else []
+    planned_targets: Any = planned.get("targets")
+    raw_targets = cast(list[Any], planned_targets) if isinstance(planned_targets, list) else []
     targets: list[dict[str, str]] = []
     for target in raw_targets[:3]:
         if not isinstance(target, dict):
@@ -1366,83 +1371,220 @@ def _sanitize_research_findings(raw_text: str) -> str:
 
 
 def _synthesise_event_summary(
-    event_text: str,
+    event_context: dict[str, Any],
     research_notes: str,
-    title: str,
     timezone_name: str,
     *,
     user_email: str | None = None,
 ) -> str:
-    """Combine event data + research into a structured preparation summary."""
-    research_block = ""
-    if research_notes:
-        research_block = (
-            f"\n\nWEB RESEARCH FINDINGS (incorporate relevant points):\n{research_notes}"
-        )
+    """Build a structured preparation summary from summarize_memories output."""
+    title = str(event_context.get("title") or "Untitled").strip() or "Untitled"
+    memory_args = _build_event_memory_summary_args(event_context)
+    memory_summary = ""
 
-    user_context_block = ""
-    if user_email:
-        user_ctx = _get_daily_briefing_user_context(user_email, f"{title} {event_text[:200]}")
-        if user_ctx:
-            user_context_block = f"\n\n{user_ctx}\n"
+    if memory_args is not None:
+        try:
+            result = handle_summarize_memories(
+                memory_args,
+                question=(
+                    "Summarize the most relevant historical context, outcomes, decisions, and "
+                    f"follow-ups that would help prepare for the upcoming event '{title}'."
+                ),
+                search_limit=int(memory_args.get("limit") or 12),
+            )
+            memory_summary = str(result.get("summary") or "").strip()
+        except Exception:
+            logger.warning(
+                "[briefing.event] summarize_memories failed for '%s'",
+                title,
+                exc_info=True,
+            )
 
-    system_prompt = (
-        "You are a concise briefing analyst. Analyze the event context below and produce a "
-        "focused preparation summary. Output plain text with bullet points. No greetings, no "
-        "meta-commentary. Be specific and actionable."
+    rendered = _render_event_summary_from_memory(
+        event_context,
+        memory_summary,
+        research_notes,
+        timezone_name=timezone_name,
+        user_email=user_email,
     )
-    user_prompt = (
-        f"Analyze this upcoming event and produce a preparation summary.\n"
-        f"Timezone: {timezone_name}\n\n"
-        f"{event_text}"
-        f"{research_block}"
-        f"{user_context_block}\n\n"
-        "Use this interpretation rule:\n"
-        "- 'CURRENT UPCOMING EVENT' and 'Current event notes' are about the event being prepared now.\n"
-        "- 'Historical similar occurrences' are past references for pattern extraction only.\n"
-        "- When historical similar occurrences exist, first summarize the most important points discussed in those past meetings before adding any new prep advice.\n"
-        "Never mix up current commitments with historical notes.\n\n"
-        "Perspective: this summary is for the calendar owner. Use second-person framing where useful\n"
-        "(for example 'you will review metrics'). If owner names/aliases appear in notes,\n"
-        "rewrite those references to second person. Avoid third-person self-references like\n"
-        "'align with <owner name>' when referring to the owner.\n\n"
-        "Quality bar (strict):\n"
-        "- Only include non-obvious, high-value points grounded in the provided context/research.\n"
-        "- Never invent facts. Every non-reading bullet MUST end with an evidence marker.\n"
-        "- Evidence marker format: (evidence: history) or (evidence: todo) or (evidence: current_notes) or (evidence: research:https://url).\n"
-        "- DO NOT include generic advice, like uploading documents somewhere if you don't know which documents you are talking about.\n"
-        "- DO NOT suggest invite reminders, the meetings are already schedule and have their own reminders. Also do not suggest reaching out to people to remind them about the meeting or about its agenda.\n"
-        "- DO NOT suggest testing/verifying audio or video quality, or testing connection speed.\n"
-        "- All links, meeting times, credentials ARE correct and DO NOT require double-checking.\n"
-        "- DO NOT output generic prep advice (for example, reviewing notes, checking agenda,\n"
-        "  preparing talking points, or calendar hygiene).\n"
-        "- Your goal is to do work that the user would have to do themselves, not to just point out what they need to do.\n"
-        "- If there is no meaningful grounded insight, respond exactly with NO_MEANINGFUL_PREP.\n"
-        "- If a section has no meaningful insight, omit that section.\n\n"
-        "Respond with exactly these sections (skip a section if nothing relevant):\n"
-        "KEY POINTS:\n"
-        "- Start with 2-4 most important points discussed in past occurrences when available; otherwise use current notes (evidence required)\n\n"
-        "ACTION ITEMS:\n"
-        "- Pending todos, follow-ups, or preparation tasks (evidence required)\n\n"
-        "SUGGESTED READING:\n"
-        "- Links or material worth reviewing before this event (from research or notes)\n\n"
-        "PREP FOCUS:\n"
-        "- One sentence on what to prioritize before this event (evidence required)"
+    return _sanitize_event_summary_output(rendered)
+
+
+def _build_event_memory_summary_args(event_context: dict[str, Any]) -> dict[str, Any] | None:
+    current_start = _parse_datetime(event_context.get("start_date") or event_context.get("local_start"))
+    if current_start is None:
+        return None
+
+    similar_events = event_context.get("similar_events") or []
+    historical_dates = [
+        dt
+        for dt in (
+            _parse_datetime(similar.get("start_date") or similar.get("local_start"))
+            for similar in similar_events
+        )
+        if dt is not None
+    ]
+    if historical_dates:
+        time_start = min(historical_dates) - timedelta(days=7)
+    else:
+        time_start = current_start - timedelta(days=120)
+
+    contact_ids = [
+        str(contact_id).strip()
+        for contact_id in (event_context.get("people") or [])
+        if str(contact_id).strip()
+    ]
+    tags = [str(tag).strip() for tag in (event_context.get("tags") or []) if str(tag).strip()]
+    event_types = [
+        str(event_type).strip()
+        for event_type in (event_context.get("types") or [])
+        if str(event_type).strip()
+    ]
+
+    return {
+        "time_start": time_start.astimezone(timezone.utc).isoformat(),
+        "time_end": current_start.astimezone(timezone.utc).isoformat(),
+        "query_focus": "summary",
+        "contact_ids": contact_ids,
+        "tags": tags,
+        "types": event_types,
+        "limit": 12,
+    }
+
+
+def _render_event_summary_from_memory(
+    event_context: dict[str, Any],
+    memory_summary: str,
+    research_notes: str,
+    *,
+    timezone_name: str,
+    user_email: str | None = None,
+) -> str:
+    del timezone_name, user_email
+
+    memory_sections = _parse_memory_summary_sections(memory_summary)
+    key_points = _dedupe_lines(
+        [
+            *memory_sections["key_topics"][:3],
+            *memory_sections["outcomes"][:2],
+        ]
     )
 
-    try:
-        result = call_llm(
-            user_prompt,
-            system_prompt=system_prompt,
-            temperature=0.1,
-            use_fast_model=False,
-        )
-        if str(result or "").strip().upper().startswith("NO_MEANINGFUL_PREP"):
-            return ""
-        return _sanitize_event_summary_output(result)
-    except Exception:
-        logger.warning("Failed to summarize event '%s', using fallback", title, exc_info=True)
-        return ""
+    if not key_points:
+        current_notes = _condense_notes(str(event_context.get("summary") or ""), limit=32)
+        if current_notes:
+            key_points.append(current_notes)
+
+    action_items = _dedupe_lines(
+        [
+            *memory_sections["follow_ups"][:4],
+            *[
+                str(todo.get("description") or "").strip()
+                for todo in (event_context.get("todos") or [])
+                if str(todo.get("description") or "").strip()
+            ][:3],
+            *[
+                str(todo.get("description") or "").strip()
+                for todo in (event_context.get("related_todos") or [])
+                if str(todo.get("description") or "").strip()
+            ][:2],
+        ]
+    )
+
+    suggested_reading = _extract_research_links(research_notes)
+    prep_focus = _select_prep_focus(memory_sections, key_points, action_items)
+
+    lines: list[str] = []
+    if key_points:
+        lines.append("KEY POINTS:")
+        for item in key_points:
+            lines.append(f"- {item}")
+        lines.append("")
+
+    if action_items:
+        lines.append("ACTION ITEMS:")
+        for item in action_items:
+            lines.append(f"- {item}")
+        lines.append("")
+
+    if suggested_reading:
+        lines.append("SUGGESTED READING:")
+        for item in suggested_reading:
+            lines.append(f"- {item}")
+        lines.append("")
+
+    if prep_focus:
+        lines.append("PREP FOCUS:")
+        lines.append(f"- {prep_focus}")
+
+    return "\n".join(lines).strip()
+
+
+def _parse_memory_summary_sections(summary: str) -> dict[str, list[str]]:
+    sections = {
+        "overview": [],
+        "key_topics": [],
+        "outcomes": [],
+        "follow_ups": [],
+    }
+    mode = ""
+    section_map = {
+        "OVERVIEW": "overview",
+        "KEY TOPICS": "key_topics",
+        "OUTCOMES/DECISIONS": "outcomes",
+        "FOLLOW-UPS": "follow_ups",
+    }
+
+    for raw_line in str(summary or "").splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        upper = line.rstrip(":").upper()
+        if upper in section_map:
+            mode = section_map[upper]
+            continue
+        if not mode:
+            continue
+        normalized = line[1:].strip() if line.startswith("-") else line
+        if normalized:
+            sections[mode].append(normalized)
+    return sections
+
+
+def _extract_research_links(research_notes: str) -> list[str]:
+    urls = _dedupe_lines(re.findall(r"https?://[^\s)]+", str(research_notes or ""), re.IGNORECASE))
+    return urls[:3]
+
+
+def _select_prep_focus(
+    memory_sections: dict[str, list[str]],
+    key_points: list[str],
+    action_items: list[str],
+) -> str:
+    for candidate in (
+        *(memory_sections.get("overview") or []),
+        *key_points,
+        *action_items,
+    ):
+        cleaned = str(candidate or "").strip().rstrip(".")
+        if cleaned and not _is_low_value_prep_line(cleaned):
+            return cleaned
+    return ""
+
+
+def _dedupe_lines(items: list[str]) -> list[str]:
+    seen: set[str] = set()
+    result: list[str] = []
+    for item in items:
+        cleaned = re.sub(r"\s+", " ", str(item or "")).strip()
+        if not cleaned:
+            continue
+        normalized = normalize_search_text(cleaned)
+        if normalized in seen:
+            continue
+        seen.add(normalized)
+        result.append(cleaned)
+    return result
 
 
 def _sanitize_event_summary_output(raw_text: str) -> str:
@@ -1472,8 +1614,6 @@ def _sanitize_event_summary_output(raw_text: str) -> str:
         if current_section != "SUGGESTED READING" and _is_low_value_prep_line(normalized):
             continue
         if current_section != "SUGGESTED READING":
-            if not _EVIDENCE_MARKER_RE.search(normalized):
-                continue
             normalized = _EVIDENCE_MARKER_RE.sub("", normalized).strip()
         elif not re.search(r"https?://", normalized, re.IGNORECASE):
             continue

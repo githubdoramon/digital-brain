@@ -8,6 +8,7 @@ from unittest.mock import MagicMock, patch
 from agents.daily_briefing.executor import (
     BIRTHDAY_LOOKAHEAD_DAYS,
     _build_briefing_prompt,
+    _build_event_memory_summary_args,
     _build_event_research_value_signals,
     _enrich_selected_news_summaries,
     _fetch_similar_events,
@@ -508,78 +509,73 @@ class TestSimilarityAttendeeNormalization:
 
 
 # ---------------------------------------------------------------------------
-# _synthesise_event_summary – final synthesis with research
+# _synthesise_event_summary – summarize_memories-backed synthesis
 # ---------------------------------------------------------------------------
 
 
+class TestBuildEventMemorySummaryArgs:
+    def test_uses_history_window_and_event_filters(self):
+        event = _make_event_context(
+            contacts=[{"contact_id": "contact:alice"}],
+            similar_events=[
+                {
+                    "start_date": "2026-01-10T09:00:00+00:00",
+                    "local_start": "2026-01-10T09:00:00+00:00",
+                }
+            ],
+        )
+        event["people"] = ["contact:alice", "contact:bob"]
+
+        args = _build_event_memory_summary_args(event)
+
+        assert args is not None
+        assert args["contact_ids"] == ["contact:alice", "contact:bob"]
+        assert args["tags"] == ["recurring"]
+        assert args["types"] == ["meeting"]
+        assert args["limit"] == 12
+        assert args["time_end"] == "2026-02-15T09:00:00+00:00"
+        assert args["time_start"] == "2026-01-03T09:00:00+00:00"
+
+
 class TestSynthesiseEventSummary:
-    @patch("agents.daily_briefing.executor.call_llm")
-    def test_includes_research_in_prompt(self, mock_call_llm):
-        mock_call_llm.return_value = "KEY POINTS:\n- Acme raised funding (evidence: research:https://example.com)"
+    @patch("agents.daily_briefing.executor.handle_summarize_memories")
+    def test_renders_memory_summary_with_research_links(self, mock_summarize_memories):
+        mock_summarize_memories.return_value = {
+            "summary": (
+                "Overview:\n"
+                "- Budget alignment is the main open thread.\n"
+                "Key topics:\n"
+                "- Procurement needs updated pricing assumptions.\n"
+                "Outcomes/decisions:\n"
+                "- Finance asked for final budget sign-off before review.\n"
+                "Follow-ups:\n"
+                "- Send finance risk memo before the meeting."
+            )
+        }
+        event = _make_event_context(
+            title="Finance Review",
+            todos=[{"status": "pending", "description": "Bring revised cost model"}],
+        )
         result = _synthesise_event_summary(
-            "Event: Acme Call",
-            "- Acme raised $50M\n- Source: https://example.com",
-            "Acme Call",
+            event,
+            "- Acme raised $50M. Why it matters: changes diligence posture. Source: https://example.com",
             "UTC",
         )
-        assert "Acme raised" in result
-        # Verify research was injected into the prompt
-        prompt = mock_call_llm.call_args[0][0]
-        assert "WEB RESEARCH FINDINGS" in prompt
-        assert "Acme raised $50M" in prompt
+        assert "Procurement needs updated pricing assumptions" in result
+        assert "Finance asked for final budget sign-off before review" in result
+        assert "Send finance risk memo before the meeting" in result
+        assert "Bring revised cost model" in result
+        assert "https://example.com" in result
+        assert "PREP FOCUS" in result
 
-    @patch("agents.daily_briefing.executor.call_llm")
-    def test_no_research_section_when_empty(self, mock_call_llm):
-        mock_call_llm.return_value = "KEY POINTS:\n- Routine standup (evidence: history)"
-        _synthesise_event_summary("Event: Standup", "", "Standup", "UTC")
-        prompt = mock_call_llm.call_args[0][0]
-        assert "WEB RESEARCH FINDINGS" not in prompt
+    @patch("agents.daily_briefing.executor.handle_summarize_memories")
+    def test_falls_back_to_current_notes_when_memory_summary_empty(self, mock_summarize_memories):
+        mock_summarize_memories.return_value = {"summary": ""}
+        event = _make_event_context(summary="Discuss Q1 roadmap and hiring plan")
 
-    @patch("agents.daily_briefing.executor.call_llm")
-    def test_prompt_requests_suggested_reading(self, mock_call_llm):
-        mock_call_llm.return_value = "SUGGESTED READING:\n- https://example.com"
-        _synthesise_event_summary("Event: Conf", "- agenda link", "Conf", "UTC")
-        prompt = mock_call_llm.call_args[0][0]
-        assert "SUGGESTED READING" in prompt
+        result = _synthesise_event_summary(event, "", "UTC")
 
-    @patch("agents.daily_briefing.executor.call_llm")
-    def test_filters_low_value_generic_action_items(self, mock_call_llm):
-        mock_call_llm.return_value = (
-            "KEY POINTS:\n"
-            "- Procurement asked for final budget sign-off by 15:00. (evidence: history)\n"
-            "ACTION ITEMS:\n"
-            "- Review previous meeting notes. (evidence: history)\n"
-            "- Prepare talking points. (evidence: history)\n"
-            "- Send finance risk memo before the meeting. (evidence: todo)\n"
-            "PREP FOCUS:\n"
-            "- Confirm the agenda. (evidence: history)\n"
-        )
-
-        result = _synthesise_event_summary("Event: Finance Review", "", "Finance Review", "UTC")
-
-        assert "Review previous meeting notes" not in result
-        assert "Prepare talking points" not in result
-        assert "Confirm the agenda" not in result
-        assert "Send finance risk memo" in result
-
-    @patch("agents.daily_briefing.executor.call_llm", side_effect=Exception("LLM down"))
-    def test_returns_empty_on_failure(self, mock_call_llm):
-        result = _synthesise_event_summary("Event: X", "", "X", "UTC")
-        assert result == ""
-
-    @patch("agents.daily_briefing.executor.call_llm")
-    def test_drops_non_grounded_lines_without_evidence_marker(self, mock_call_llm):
-        mock_call_llm.return_value = (
-            "KEY POINTS:\n"
-            "- This is likely about launching in a new market.\n"
-            "ACTION ITEMS:\n"
-            "- Gather unknown competitor intel.\n"
-            "PREP FOCUS:\n"
-            "- General preparation mindset.\n"
-        )
-
-        result = _synthesise_event_summary("Event: Strategy", "", "Strategy", "UTC")
-        assert result == ""
+        assert "Discuss Q1 roadmap and hiring plan" in result
 
 
 # ---------------------------------------------------------------------------
@@ -600,6 +596,7 @@ class TestSummarizeEvent:
         mock_synthesise.assert_called_once()
         # Research output should be passed to synthesis
         synth_args = mock_synthesise.call_args
+        assert synth_args[0][0] == event
         assert synth_args[0][1] == "- Found company info"  # research_notes arg
         assert "KEY POINTS" in result
 
@@ -612,6 +609,7 @@ class TestSummarizeEvent:
         _summarize_event(event, "UTC")
 
         synth_args = mock_synthesise.call_args
+        assert synth_args[0][0] == event
         assert synth_args[0][1] == ""  # empty research
 
 

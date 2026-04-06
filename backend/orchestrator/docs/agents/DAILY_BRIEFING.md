@@ -15,6 +15,7 @@ This document captures behavior and quality rules for the daily briefing profile
    - Similar history retrieval uses exact title and recurrence keys first.
    - If those miss, fallback to attendee-overlap history (exact attendee set first, then >=80% overlap), ranked by overlap and recency.
    - Attendee-overlap comparison excludes the current user from both sides and ignores zero-attendee matches after that filtering.
+   - Prep synthesis is memory-tool-driven: each event calls `summarize_memories` over the bounded historical window instead of using a bespoke freeform synthesis prompt, then renders the tool output into briefing sections.
    - Event web research is allowed for any event, but gated by value signals and a strict planning pass.
 3. Gather birthdays and unlinked pending todos.
 4. Aggregate news via `news_feeds.fetch_news()` (Tavily + NewsData + RSS), then story-cluster and persist mention history.
@@ -67,8 +68,8 @@ This document captures behavior and quality rules for the daily briefing profile
 - Prefer owner-facing language (for example, "you will review...") and avoid third-person owner references.
 - Event prep should avoid phrasing like "align with <owner name>" when that name is the user.
 - Event prep output should suppress low-value generic advice (for example "review notes", "confirm agenda", "prepare talking points") and only keep context-grounded, non-obvious items.
+- Event prep should favor `summarize_memories` output as the primary source of historical topics, outcomes/decisions, and follow-ups, with current notes/todos only filling gaps.
 - Event synthesis should explicitly separate current upcoming-event context from historical similar-event references.
-- Event synthesis must be evidence-grounded: prep bullets without explicit evidence anchors are dropped.
 - Keep `Day Overview` strategic and concise, while `Schedule` carries the concrete per-event timeline.
 
 ## Event Research Policy
