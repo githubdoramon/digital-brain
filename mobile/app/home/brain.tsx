@@ -713,6 +713,7 @@ export default function ChatScreen() {
   const scrollY = useRef(new Animated.Value(0)).current;
   const listRef = useRef<FlatList<Message>>(null);
   const inputRef = useRef<TextInput>(null);
+  const scrollFallbackTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [input, setInput] = useState('');
   const [isSending, setIsSending] = useState(false);
   const [threadId, setThreadId] = useState<string | null>(null);
@@ -739,7 +740,9 @@ export default function ChatScreen() {
       : Math.max(0, keyboardHeight - insets.bottom) + 2*COMPOSER_KEYBOARD_GAP
     : 0;
   const listBottomInset =
-    composerHeight > 0 ? composerHeight + 16 : insets.bottom + tabBarHeight + 80;
+    composerHeight > 0
+      ? composerHeight + composerBottomOffset + 16
+      : insets.bottom + tabBarHeight + keyboardHeight + 80;
 
   const allowed = email === 'REDACTED-EMAIL';
   const canSend = input.trim().length > 0 && !isSending && allowed;
@@ -1488,13 +1491,38 @@ export default function ChatScreen() {
     [router],
   );
 
+  const scrollToBottom = useCallback(
+    (animated: boolean) => {
+      if (scrollFallbackTimeoutRef.current) {
+        clearTimeout(scrollFallbackTimeoutRef.current);
+      }
+
+      const runScroll = () => {
+        listRef.current?.scrollToEnd({ animated });
+      };
+
+      requestAnimationFrame(() => {
+        requestAnimationFrame(runScroll);
+      });
+
+      scrollFallbackTimeoutRef.current = setTimeout(runScroll, animated ? 140 : 0);
+    },
+    [],
+  );
+
+  useEffect(() => {
+    return () => {
+      if (scrollFallbackTimeoutRef.current) {
+        clearTimeout(scrollFallbackTimeoutRef.current);
+      }
+    };
+  }, []);
+
   useEffect(() => {
     if (!listRef.current) return;
     if (!isAtBottomRef.current && !forceScrollNext) return;
 
-    requestAnimationFrame(() => {
-      listRef.current?.scrollToEnd({ animated: forceScrollNext });
-    });
+    scrollToBottom(forceScrollNext);
     if (forceScrollNext) {
       setForceScrollNext(false);
     }
@@ -1505,6 +1533,7 @@ export default function ChatScreen() {
     lastMessage?.metadata?.progress_chip,
     listBottomInset,
     forceScrollNext,
+    scrollToBottom,
   ]);
 
   return (
@@ -1521,10 +1550,10 @@ export default function ChatScreen() {
           keyExtractor={(item) => item.id}
           onContentSizeChange={() => {
             if (!isAtBottomRef.current && !forceScrollNext) return;
-            requestAnimationFrame(() => {
-              listRef.current?.scrollToEnd({ animated: forceScrollNext });
-            });
+            scrollToBottom(forceScrollNext);
           }}
+          keyboardShouldPersistTaps="handled"
+          keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'on-drag'}
           ListFooterComponent={<View style={{ height: listBottomInset }} />}
           contentContainerStyle={[
             styles.listContent,
@@ -1616,6 +1645,9 @@ export default function ChatScreen() {
                       directives={directivesForCard}
                       isSubmitting={isSending || isConfirmingEvent || isSupersededEventCard}
                       resolvedStatus={item.metadata?.event_resolved}
+                      onFieldFocus={() => {
+                        setForceScrollNext(true);
+                      }}
                       onSubmit={(submission) => {
                         void handleDirectiveSubmission(
                           item.id,

@@ -20,6 +20,7 @@ type Props = {
   isSubmitting: boolean;
   getFieldValue: (field: UiDirectiveField) => string;
   setFieldValue: (field: UiDirectiveField, value: string) => void;
+  onFieldFocus?: () => void;
   onSubmit: () => void;
 };
 
@@ -37,6 +38,7 @@ export function UiDirectiveFormBlock({
   isSubmitting,
   getFieldValue,
   setFieldValue,
+  onFieldFocus,
   onSubmit,
 }: Props) {
   const fields = block.fields || [];
@@ -117,6 +119,7 @@ export function UiDirectiveFormBlock({
               <TextInput
                 value={value}
                 onChangeText={(next) => setFieldValue(field, next)}
+                onFocus={onFieldFocus}
                 placeholder={field.placeholder || ''}
                 placeholderTextColor={theme.colors.mutedInk}
                 keyboardType={keyboardTypeForFieldKind(field.kind)}

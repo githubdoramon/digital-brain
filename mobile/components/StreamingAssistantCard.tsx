@@ -60,8 +60,8 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
   },
   content: {
-    fontSize: 13,
-    lineHeight: 18,
+    fontSize: 14,
+    lineHeight: 20,
     color: '#3A4756',
   },
   contentScrollBase: {
@@ -72,7 +72,9 @@ const styles = StyleSheet.create({
     maxHeight: MAX_CONTENT_HEIGHT,
   },
   contentScrollInner: {
-    paddingBottom: 2,
+    justifyContent: 'center',
+    paddingTop: 1,
+    paddingBottom: 1,
   },
   progressChipWrap: {
     marginTop: 10,

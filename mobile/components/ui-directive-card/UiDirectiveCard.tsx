@@ -23,6 +23,7 @@ type Props = {
   directives: UiDirectives;
   isSubmitting?: boolean;
   resolvedStatus?: EventResolvedStatus;
+  onFieldFocus?: () => void;
   onSubmit: (submission: UiSubmissionInput) => void;
 };
 
@@ -97,7 +98,13 @@ type EventEditAction = {
   option: UiDirectiveOption;
 };
 
-export function UiDirectiveCard({ directives, isSubmitting = false, resolvedStatus, onSubmit }: Props) {
+export function UiDirectiveCard({
+  directives,
+  isSubmitting = false,
+  resolvedStatus,
+  onFieldFocus,
+  onSubmit,
+}: Props) {
   const isResolved = Boolean(resolvedStatus);
   const [formValues, setFormValues] = useState<Record<string, string>>({});
   const blocks = useMemo(() => directives.blocks || [], [directives.blocks]);
@@ -250,6 +257,7 @@ export function UiDirectiveCard({ directives, isSubmitting = false, resolvedStat
                 isSubmitting={isSubmitting}
                 getFieldValue={(field) => getFieldValue(block, field)}
                 setFieldValue={(field, value) => setFieldValue(block, field, value)}
+                onFieldFocus={onFieldFocus}
                 onSubmit={() => submitForm(block)}
               />
             ) : null}
