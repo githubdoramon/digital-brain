@@ -12,6 +12,7 @@ from notifications.preferences import (
     update_notification_channels,
     update_push_settings,
 )
+from observability.logger import get_runtime_logger
 from schemas import (
     DeviceRegisterIn,
     NotificationSettingsListOut,
@@ -24,6 +25,8 @@ from schemas import (
     UserLocationOut,
     UserLocationUpdateIn,
 )
+
+logger = get_runtime_logger(__name__)
 
 
 def create_user_router() -> APIRouter:
@@ -102,6 +105,14 @@ def create_user_router() -> APIRouter:
         email = user.get("email") or user.get("user_email")
         if not email:
             raise HTTPException(status_code=400, detail="User email is missing")
+        logger.info(
+            "[mobile/location] Received location update user=%s lat=%.6f lon=%.6f source=%s captured_at=%s",
+            email,
+            payload.lat,
+            payload.lon,
+            payload.source or "unknown",
+            payload.captured_at.isoformat() if payload.captured_at else "none",
+        )
         return user_locations.upsert_user_location(
             user_email=email,
             lat=payload.lat,

@@ -1,6 +1,7 @@
 import * as Location from 'expo-location';
 
 import { apiFetch } from '@/api/client';
+import { reportLocationDebugEvent } from '@/location/debugState';
 
 export type ClientLocationContext = {
   lat: number;
@@ -56,14 +57,21 @@ function getBaseClientContext(): ClientContext {
 
 function requestLocationInBackground(): void {
   if (locationRequestInFlight) {
+    reportLocationDebugEvent('foreground_location_skipped', {
+      message: 'Location request already in flight',
+    });
     return;
   }
 
   locationRequestInFlight = true;
+  reportLocationDebugEvent('foreground_location_requested');
   void (async () => {
     try {
       const permission = await Location.requestForegroundPermissionsAsync();
       if (permission.status !== 'granted') {
+        reportLocationDebugEvent('foreground_permission_denied', {
+          message: 'Foreground location permission not granted',
+        });
         return;
       }
 
@@ -74,6 +82,10 @@ function requestLocationInBackground(): void {
       const lat = roundCoordinate(Number(position.coords.latitude));
       const lon = roundCoordinate(Number(position.coords.longitude));
       if (!Number.isFinite(lat) || !Number.isFinite(lon)) {
+        reportLocationDebugEvent('foreground_location_invalid', {
+          message: 'Invalid foreground coordinates',
+          payload: { lat, lon },
+        });
         return;
       }
 
@@ -93,8 +105,19 @@ function requestLocationInBackground(): void {
           source: 'expo_location',
         },
       };
+      reportLocationDebugEvent('foreground_location_captured', {
+        payload: {
+          lat,
+          lon,
+          accuracy_m: accuracy,
+          captured_at: capturedAt,
+        },
+      });
       syncLocationToBackend();
-    } catch {
+    } catch (error) {
+      reportLocationDebugEvent('foreground_location_error', {
+        error,
+      });
       // Best-effort only; keep timezone/locale context when location fails.
     } finally {
       locationRequestInFlight = false;
@@ -105,22 +128,41 @@ function requestLocationInBackground(): void {
 function syncLocationToBackend(): void {
   const location = cachedClientContext?.location;
   if (!location || locationSyncInFlight) {
+    if (!location) {
+      reportLocationDebugEvent('location_sync_skipped', {
+        message: 'No location in client context',
+      });
+    }
     return;
   }
 
   if (lastSyncedLocation) {
     const movedMeters = calculateDistanceMeters(location, lastSyncedLocation);
     if (movedMeters < LOCATION_SYNC_MIN_DISTANCE_METERS) {
+      reportLocationDebugEvent('location_sync_skipped', {
+        message: `Movement below threshold (${Math.round(movedMeters)}m)`,
+        payload: {
+          moved_meters: Math.round(movedMeters),
+          threshold_meters: LOCATION_SYNC_MIN_DISTANCE_METERS,
+        },
+      });
       return;
     }
   }
 
   const signature = `${location.lat}:${location.lon}`;
   if (lastSyncedLocation && signature === `${lastSyncedLocation.lat}:${lastSyncedLocation.lon}`) {
+    reportLocationDebugEvent('location_sync_skipped', {
+      message: 'Same coordinates already synced',
+      payload: { lat: location.lat, lon: location.lon },
+    });
     return;
   }
 
   locationSyncInFlight = true;
+  reportLocationDebugEvent('location_sync_attempt', {
+    payload: { lat: location.lat, lon: location.lon, captured_at: location.captured_at },
+  });
   void apiFetch('/mobile/location', {
     method: 'POST',
     body: JSON.stringify({
@@ -130,8 +172,14 @@ function syncLocationToBackend(): void {
   })
     .then(() => {
       lastSyncedLocation = { ...location };
+      reportLocationDebugEvent('location_sync_success', {
+        payload: { lat: location.lat, lon: location.lon, captured_at: location.captured_at },
+      });
     })
-    .catch(() => {
+    .catch((error) => {
+      reportLocationDebugEvent('location_sync_error', {
+        error,
+      });
       // Best-effort sync; location context should still be available for ask flows.
     })
     .finally(() => {

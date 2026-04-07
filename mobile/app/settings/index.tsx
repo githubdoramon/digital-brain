@@ -22,6 +22,15 @@ import {
   COLLAPSING_TOP_BAR_HEIGHT,
   CollapsingTopBar,
 } from '@/components/CollapsingTopBar';
+import {
+  getBackgroundLocationDebugStatus,
+  type BackgroundLocationDebugStatus,
+} from '@/location/backgroundLocation';
+import {
+  getLocationDebugSnapshot,
+  subscribeLocationDebug,
+  type LocationDebugSnapshot,
+} from '@/location/debugState';
 import { theme } from '@/theme';
 
 function formatBuildTimestamp(value: string | null | undefined): string {
@@ -40,11 +49,35 @@ export default function SettingsScreen() {
   const { signOut } = useAuth();
   const insets = useSafeAreaInsets();
   const scrollY = React.useRef(new Animated.Value(0)).current;
+  const [locationDebug, setLocationDebug] = React.useState<LocationDebugSnapshot>(() =>
+    getLocationDebugSnapshot(),
+  );
+  const [backgroundStatus, setBackgroundStatus] = React.useState<BackgroundLocationDebugStatus | null>(null);
+  const [isRefreshingLocationDebug, setIsRefreshingLocationDebug] = React.useState(false);
   const appVersion = Application.nativeApplicationVersion ?? Constants.expoConfig?.version ?? 'Unknown';
   const buildNumber = Application.nativeBuildVersion ?? 'Unknown';
   const buildTimestamp = formatBuildTimestamp(
     (Constants.expoConfig?.extra as { buildTimestamp?: string } | undefined)?.buildTimestamp,
   );
+
+  const refreshLocationDebug = React.useCallback(async () => {
+    setIsRefreshingLocationDebug(true);
+    try {
+      const status = await getBackgroundLocationDebugStatus();
+      setBackgroundStatus(status);
+      setLocationDebug(getLocationDebugSnapshot());
+    } finally {
+      setIsRefreshingLocationDebug(false);
+    }
+  }, []);
+
+  React.useEffect(() => {
+    const unsubscribe = subscribeLocationDebug((next) => {
+      setLocationDebug(next);
+    });
+    void refreshLocationDebug();
+    return unsubscribe;
+  }, [refreshLocationDebug]);
 
   return (
     <LinearGradient
@@ -150,6 +183,25 @@ export default function SettingsScreen() {
           <Text style={styles.versionValue}>{buildTimestamp}</Text>
         </Card>
 
+        <Card style={[styles.card, styles.versionCard]}>
+          <Text style={styles.versionLabel}>Location debug</Text>
+          <Text style={styles.versionValue}>Foreground permission: {backgroundStatus?.foregroundPermission ?? 'unknown'}</Text>
+          <Text style={styles.versionValue}>Background permission: {backgroundStatus?.backgroundPermission ?? 'unknown'}</Text>
+          <Text style={styles.versionValue}>Background task started: {backgroundStatus?.taskStarted ? 'yes' : 'no'}</Text>
+          <Text style={styles.versionValue}>Last event: {locationDebug.lastEventName ?? 'none'}</Text>
+          <Text style={styles.versionValue}>Last event at: {formatBuildTimestamp(locationDebug.lastEventAt)}</Text>
+          <Text style={styles.versionValue}>Last message: {locationDebug.lastMessage ?? 'none'}</Text>
+          <Text style={styles.versionValue}>Last error: {locationDebug.lastError ?? 'none'}</Text>
+          <Button
+            label={isRefreshingLocationDebug ? 'Refreshing...' : 'Refresh location debug'}
+            onPress={() => {
+              void refreshLocationDebug();
+            }}
+            variant="secondary"
+            style={styles.debugRefreshButton}
+          />
+        </Card>
+
 
         <Button
           label="Sign out"
@@ -228,5 +280,9 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: theme.colors.ink,
     fontWeight: '600',
+  },
+  debugRefreshButton: {
+    marginTop: 8,
+    alignSelf: 'stretch',
   },
 });

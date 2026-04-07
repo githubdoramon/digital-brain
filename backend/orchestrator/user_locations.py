@@ -64,6 +64,33 @@ def _should_skip_location_update(
     return elapsed_seconds < LOCATION_THROTTLE_MIN_SECONDS
 
 
+def _build_skip_reason(
+    *,
+    existing: dict[str, Any] | None,
+    lat: float,
+    lon: float,
+    captured_at: datetime,
+) -> str:
+    if not existing:
+        return "no_existing_location"
+
+    existing_captured_at = _normalize_timestamp(existing.get("captured_at"))
+    if existing_captured_at and captured_at <= existing_captured_at:
+        return "stale_or_duplicate_timestamp"
+
+    moved_meters = _distance_meters(existing, {"lat": lat, "lon": lon})
+    if moved_meters >= LOCATION_DEDUPE_MIN_DISTANCE_METERS:
+        return "significant_movement"
+
+    if not existing_captured_at:
+        return "small_movement_no_timestamp"
+
+    elapsed_seconds = (captured_at - existing_captured_at).total_seconds()
+    if elapsed_seconds < LOCATION_THROTTLE_MIN_SECONDS:
+        return "small_movement_within_throttle_window"
+    return "small_movement_after_throttle_window"
+
+
 def upsert_user_location(
     *,
     user_email: str,
@@ -79,6 +106,14 @@ def upsert_user_location(
 ) -> dict[str, Any]:
     safe_source = (source or "unknown").strip() or "unknown"
     resolved_captured_at = captured_at or datetime.now(timezone.utc)
+    logger.info(
+        "[user_locations] Upsert request user=%s lat=%.6f lon=%.6f source=%s captured_at=%s",
+        user_email,
+        lat,
+        lon,
+        safe_source,
+        resolved_captured_at.isoformat(),
+    )
 
     enriched_place_name = (place_name or "").strip() or None
     enriched_city = (city or "").strip() or None
@@ -101,7 +136,18 @@ def upsert_user_location(
         lon=lon,
         captured_at=resolved_captured_at,
     ):
-        logger.info("[user_locations] Skipped update for user=%s due to dedupe/throttle", user_email)
+        skip_reason = _build_skip_reason(
+            existing=existing,
+            lat=lat,
+            lon=lon,
+            captured_at=resolved_captured_at,
+        )
+        logger.info(
+            "[user_locations] Skipped update for user=%s reason=%s existing_captured_at=%s",
+            user_email,
+            skip_reason,
+            (_normalize_timestamp(existing.get("captured_at")) if existing else None),
+        )
         return existing
 
     if not (enriched_place_name and enriched_city and enriched_country):
@@ -167,7 +213,13 @@ def upsert_user_location(
         row = cur.fetchone()
         conn.commit()
 
-    logger.info("[user_locations] Updated user location for user=%s", user_email)
+    logger.info(
+        "[user_locations] Updated user location for user=%s lat=%.6f lon=%.6f source=%s",
+        user_email,
+        lat,
+        lon,
+        safe_source,
+    )
     return dict(row or {})
 
 
