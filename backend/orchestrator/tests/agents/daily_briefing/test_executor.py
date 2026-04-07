@@ -32,7 +32,7 @@ from agents.daily_briefing.executor import (
 def _make_event_context(
     *,
     title: str = "Team Standup",
-    deep_summary: str = "",
+    event_prep: dict | None = None,
     summary: str = "",
     todos: list | None = None,
     contacts: list | None = None,
@@ -49,7 +49,7 @@ def _make_event_context(
         "place": {"name": "Office", "city": "Aurora", "country": "WT"},
         "people": [],
         "contacts": contacts or [],
-        "deep_summary": deep_summary,
+        "event_prep": event_prep or {},
         "summary": summary,
         "todos": todos or [],
         "related_todos": related_todos or [],
@@ -105,21 +105,22 @@ def _make_context(
 
 
 # ---------------------------------------------------------------------------
-# _format_context_text – deep summary integration
+# _format_context_text – structured prep integration
 # ---------------------------------------------------------------------------
 
 
 class TestFormatContextWithDeepSummary:
-    def test_deep_summary_included_in_context(self):
-        event = _make_event_context(deep_summary="KEY POINTS:\n- Past standup went long")
+    def test_event_prep_included_in_context(self):
+        event = _make_event_context(
+            event_prep={"key_points": ["Past standup went long"], "action_items": [], "prep_focus": ""}
+        )
         ctx = _make_context(events=[event])
         text = _format_context_text(ctx)
-        assert "Analysis (key points, action items, prep focus):" in text
+        assert "Structured prep:" in text
         assert "Past standup went long" in text
 
-    def test_fallback_when_deep_summary_empty(self):
+    def test_fallback_when_event_prep_empty(self):
         event = _make_event_context(
-            deep_summary="",
             summary="We discussed Q1 roadmap",
             todos=[{"status": "pending", "description": "Follow up on Q1"}],
         )
@@ -127,8 +128,7 @@ class TestFormatContextWithDeepSummary:
         text = _format_context_text(ctx)
         assert "Context from prior notes" in text
         assert "Follow up on Q1" in text
-        # deep summary header should NOT appear
-        assert "Analysis (key points" not in text
+        assert "Structured prep:" not in text
 
     def test_no_events_still_works(self):
         ctx = _make_context(events=[])
@@ -181,7 +181,7 @@ class TestBriefingPromptBirthdays:
     def test_prompt_mentions_pre_computed_analysis(self):
         ctx = _make_context()
         prompt = _build_briefing_prompt(ctx)
-        assert "pre-computed analysis" in prompt
+        assert "structured prep" in prompt
 
 
 # ---------------------------------------------------------------------------
@@ -540,7 +540,6 @@ class TestSynthesiseEventSummary:
         )
         result = _synthesise_event_summary(
             event,
-            "- Acme raised $50M. Why it matters: changes diligence posture. Source: https://example.com",
             "UTC",
         )
 
@@ -552,12 +551,12 @@ class TestSynthesiseEventSummary:
             "2026-02-03T09:00:00+00:00",
             "2026-02-04T09:00:00+00:00",
         ]
-        assert "Procurement needs updated pricing assumptions" in result
-        assert "Finance asked for final budget sign-off before review" in result
-        assert "Send finance risk memo before the meeting" in result
-        assert "Bring revised cost model" in result
-        assert "https://example.com" in result
-        assert "PREP FOCUS" in result
+        assert any("Procurement needs updated pricing assumptions" in item for item in result["key_points"])
+        assert any("Finance asked for final budget sign-off before review" in item for item in result["key_points"])
+        assert any("Send finance risk memo before the meeting" in item for item in result["action_items"])
+        assert any("Bring revised cost model" in item for item in result["action_items"])
+        assert result["prep_focus"]
+        assert result["history_source"] == "history"
 
     @patch("agents.daily_briefing.executor._synthesize_memory_summary")
     def test_falls_back_to_current_notes_when_history_summary_empty(self, mock_synthesize_memory_summary):
@@ -565,32 +564,35 @@ class TestSynthesiseEventSummary:
         event = _make_event_context(summary="Discuss Q1 roadmap and hiring plan")
         event["similar_events"] = [{"title": "Past standup", "start_date": "2026-02-01T09:00:00+00:00"}]
 
-        result = _synthesise_event_summary(event, "", "UTC")
+        result = _synthesise_event_summary(event, "UTC")
 
-        assert "Discuss Q1 roadmap and hiring plan" in result
+        assert any("Discuss Q1 roadmap and hiring plan" in item for item in result["key_points"])
 
     @patch("agents.daily_briefing.executor._synthesise_event_summary_from_current_context")
     def test_uses_current_context_fallback_when_no_history(self, mock_fallback):
-        mock_fallback.return_value = "PREP FOCUS:\n- Review external context"
+        mock_fallback.return_value = {"history_source": "current_context", "prep_focus": "Review external context"}
         event = _make_event_context(title="New Partner Intro", similar_events=[])
 
-        result = _synthesise_event_summary(event, "- research", "UTC")
+        result = _synthesise_event_summary(event, "UTC")
 
         mock_fallback.assert_called_once()
-        assert result == "PREP FOCUS:\n- Review external context"
+        assert result == {"history_source": "current_context", "prep_focus": "Review external context"}
 
 
 class TestSynthesiseEventSummaryFromCurrentContext:
     @patch("agents.daily_briefing.executor.call_llm")
     def test_includes_research_in_prompt(self, mock_call_llm):
         mock_call_llm.return_value = "KEY POINTS:\n- Acme raised funding"
+        event = _make_event_context(title="Acme Call")
         result = _synthesise_event_summary_from_current_context(
+            event,
             "Event: Acme Call",
             "- Acme raised $50M\n- Source: https://example.com",
             "Acme Call",
             "UTC",
         )
-        assert "Acme raised" in result
+        assert "Acme raised" in result["key_points"][0]
+        assert result["suggested_reading"] == ["https://example.com"]
         prompt = mock_call_llm.call_args[0][0]
         assert "WEB RESEARCH FINDINGS" in prompt
         assert "Acme raised $50M" in prompt
@@ -603,32 +605,16 @@ class TestSynthesiseEventSummaryFromCurrentContext:
 
 class TestSummarizeEvent:
     @patch("agents.daily_briefing.executor._synthesise_event_summary")
-    @patch("agents.daily_briefing.executor._research_event")
-    def test_calls_research_then_synthesis(self, mock_research, mock_synthesise):
-        mock_research.return_value = "- Found company info"
-        mock_synthesise.return_value = "KEY POINTS:\n- Important context"
+    def test_calls_synthesis_once(self, mock_synthesise):
+        mock_synthesise.return_value = {"key_points": ["Important context"], "action_items": []}
         event = _make_event_context(title="Intro Call")
         result = _summarize_event(event, "UTC")
 
-        mock_research.assert_called_once()
         mock_synthesise.assert_called_once()
-        # Research output should be passed to synthesis
         synth_args = mock_synthesise.call_args
         assert synth_args[0][0] == event
-        assert synth_args[0][1] == "- Found company info"  # research_notes arg
-        assert "KEY POINTS" in result
-
-    @patch("agents.daily_briefing.executor._synthesise_event_summary")
-    @patch("agents.daily_briefing.executor._research_event")
-    def test_passes_empty_research_to_synthesis(self, mock_research, mock_synthesise):
-        mock_research.return_value = ""
-        mock_synthesise.return_value = "PREP FOCUS:\n- Review agenda"
-        event = _make_event_context(title="Standup")
-        _summarize_event(event, "UTC")
-
-        synth_args = mock_synthesise.call_args
-        assert synth_args[0][0] == event
-        assert synth_args[0][1] == ""  # empty research
+        assert synth_args[0][1] == "UTC"
+        assert result["key_points"] == ["Important context"]
 
 
 # ---------------------------------------------------------------------------

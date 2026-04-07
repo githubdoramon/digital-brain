@@ -487,6 +487,16 @@ def _build_single_event_context(
     }
 
 
+def _empty_event_prep() -> dict[str, Any]:
+    return {
+        "history_source": "none",
+        "key_points": [],
+        "action_items": [],
+        "suggested_reading": [],
+        "prep_focus": "",
+    }
+
+
 def _summarize_events_parallel(
     event_contexts: list[dict[str, Any]],
     timezone_name: str,
@@ -505,14 +515,14 @@ def _summarize_events_parallel(
         for future in as_completed(future_map):
             idx = future_map[future]
             try:
-                event_contexts[idx]["deep_summary"] = future.result()
+                event_contexts[idx]["event_prep"] = future.result()
             except Exception:
                 logger.warning(
                     "[briefing] Failed deep analysis for '%s'",
                     event_contexts[idx].get("title") or "Untitled",
                     exc_info=True,
                 )
-                event_contexts[idx]["deep_summary"] = ""
+                event_contexts[idx]["event_prep"] = _empty_event_prep()
     return event_contexts
 
 
@@ -896,62 +906,24 @@ def _fetch_upcoming_birthdays(
 
 def _summarize_event(
     event_context: dict[str, Any], timezone_name: str, *, user_email: str | None = None
-) -> str:
-    """Produce a focused summary for a single event.
-
-    Two phases:
-    1. **Research** – a lightweight tool loop with ``web_search`` and
-       ``fetch_web_page``.  The LLM decides whether external research would
-       help (company background, public agenda, venue info, etc.) or skips
-       tool use for routine/internal events.
-    2. **Synthesis** – a plain ``call_llm`` that combines the event data with
-       any research findings into a structured preparation summary.
-
-    Using a per-event call avoids the "wall of text" problem where the model
-    has to juggle many events at once and produces shallow output.
-    """
+) -> dict[str, Any]:
+    """Produce structured prep for a single event."""
     title = event_context.get("title") or "Untitled"
-    event_text = _format_event_for_analysis(event_context)
     logger.info("[briefing.event] Analyzing: '%s'", title)
-
-    # -- Phase 1: optional web research via tool loop -------------------------
     t0 = perf_counter()
-    research_notes = _research_event(
-        event_text,
-        title,
-        timezone_name,
-        event_context=event_context,
-        user_email=user_email,
-    )
-    if research_notes:
-        logger.info(
-            "[briefing.event] Research for '%s': %d chars (%.0fms)",
-            title,
-            len(research_notes),
-            (perf_counter() - t0) * 1000,
-        )
-    else:
-        logger.info(
-            "[briefing.event] Research for '%s': skipped/none (%.0fms)",
-            title,
-            (perf_counter() - t0) * 1000,
-        )
-
-    # -- Phase 2: synthesise everything into a structured summary -------------
-    t0 = perf_counter()
-    summary = _synthesise_event_summary(
+    prep = _synthesise_event_summary(
         event_context,
-        research_notes,
         timezone_name,
         user_email=user_email,
     )
     logger.info(
-        "[briefing.event] Synthesis for '%s': %d chars (%.0fms)",
+        "[briefing.event] Prep synthesis for '%s': %d key points, %d action items (%.0fms)",
         title,
-        len(summary),
+        len(prep.get("key_points") or []),
+        len(prep.get("action_items") or []),
         (perf_counter() - t0) * 1000,
     )
-    return summary
+    return prep
 
 
 def _format_event_for_analysis(event_context: dict[str, Any]) -> str:
@@ -1372,12 +1344,11 @@ def _sanitize_research_findings(raw_text: str) -> str:
 
 def _synthesise_event_summary(
     event_context: dict[str, Any],
-    research_notes: str,
     timezone_name: str,
     *,
     user_email: str | None = None,
-) -> str:
-    """Build event prep from the last matching occurrences, with fallback synthesis."""
+) -> dict[str, Any]:
+    """Build structured event prep from matching history or current context."""
     title = str(event_context.get("title") or "Untitled").strip() or "Untitled"
     historical_events = [
         dict(similar)
@@ -1414,16 +1385,24 @@ def _synthesise_event_summary(
         rendered = _render_event_summary_from_memory(
             event_context,
             memory_summary,
-            research_notes,
-            timezone_name=timezone_name,
-            user_email=user_email,
         )
-        sanitized = _sanitize_event_summary_output(rendered)
-        if sanitized:
-            return sanitized
+        if rendered["key_points"] or rendered["action_items"] or rendered["prep_focus"]:
+            return rendered
 
     event_text = _format_event_for_analysis(event_context)
+    research_notes = _research_event(
+        event_text,
+        title,
+        timezone_name,
+        event_context=event_context,
+        user_email=user_email,
+    )
+    if research_notes:
+        logger.info("[briefing.event] Research for '%s': %d chars", title, len(research_notes))
+    else:
+        logger.info("[briefing.event] Research for '%s': skipped/none", title)
     return _synthesise_event_summary_from_current_context(
+        event_context,
         event_text,
         research_notes,
         title,
@@ -1433,13 +1412,14 @@ def _synthesise_event_summary(
 
 
 def _synthesise_event_summary_from_current_context(
+    event_context: dict[str, Any],
     event_text: str,
     research_notes: str,
     title: str,
     timezone_name: str,
     *,
     user_email: str | None = None,
-) -> str:
+) -> dict[str, Any]:
     """Fallback synthesis when there is no useful historical event evidence."""
     research_block = ""
     if research_notes:
@@ -1504,22 +1484,33 @@ def _synthesise_event_summary_from_current_context(
             use_fast_model=False,
         )
         if str(result or "").strip().upper().startswith("NO_MEANINGFUL_PREP"):
-            return ""
-        return _sanitize_event_summary_output(result)
+            return _build_event_prep(
+                history_source="current_context",
+                action_items=_event_todo_descriptions(event_context),
+                suggested_reading=_extract_research_links(research_notes),
+            )
+        return _build_event_prep_from_summary_text(
+            result,
+            history_source="current_context",
+            default_action_items=_event_todo_descriptions(event_context),
+            suggested_reading=_extract_research_links(research_notes),
+        )
     except Exception:
         logger.warning("Failed to summarize event '%s', using fallback", title, exc_info=True)
-        return ""
+        return _build_event_prep(
+            history_source="current_context",
+            key_points=[_condense_notes(str(event_context.get("summary") or ""), limit=32)]
+            if str(event_context.get("summary") or "").strip()
+            else [],
+            action_items=_event_todo_descriptions(event_context),
+            suggested_reading=_extract_research_links(research_notes),
+        )
 
 
 def _render_event_summary_from_memory(
     event_context: dict[str, Any],
-    memory_summary: str,
-    research_notes: str,
-    *,
-    timezone_name: str,
-    user_email: str | None = None,
-) -> str:
-    del timezone_name, user_email
+    memory_summary: str
+) -> dict[str, Any]:
 
     memory_sections = _parse_memory_summary_sections(memory_summary)
     key_points = _dedupe_lines(
@@ -1550,33 +1541,74 @@ def _render_event_summary_from_memory(
         ]
     )
 
-    suggested_reading = _extract_research_links(research_notes)
     prep_focus = _select_prep_focus(memory_sections, key_points, action_items)
+    return _build_event_prep(
+        history_source="history",
+        key_points=key_points,
+        action_items=action_items,
+        prep_focus=prep_focus,
+    )
+def _build_event_prep(
+    *,
+    history_source: str,
+    key_points: list[str] | None = None,
+    action_items: list[str] | None = None,
+    suggested_reading: list[str] | None = None,
+    prep_focus: str = "",
+) -> dict[str, Any]:
+    return {
+        "history_source": history_source,
+        "key_points": _dedupe_lines(key_points or []),
+        "action_items": _dedupe_lines(action_items or []),
+        "suggested_reading": _dedupe_lines(suggested_reading or [])[:3],
+        "prep_focus": str(prep_focus or "").strip(),
+    }
 
-    lines: list[str] = []
-    if key_points:
-        lines.append("KEY POINTS:")
-        for item in key_points:
-            lines.append(f"- {item}")
-        lines.append("")
 
-    if action_items:
-        lines.append("ACTION ITEMS:")
-        for item in action_items:
-            lines.append(f"- {item}")
-        lines.append("")
+def _normalize_event_prep(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        return _empty_event_prep()
+    return _build_event_prep(
+        history_source=str(value.get("history_source") or "none"),
+        key_points=list(value.get("key_points") or []),
+        action_items=list(value.get("action_items") or []),
+        suggested_reading=list(value.get("suggested_reading") or []),
+        prep_focus=str(value.get("prep_focus") or ""),
+    )
 
-    if suggested_reading:
-        lines.append("SUGGESTED READING:")
-        for item in suggested_reading:
-            lines.append(f"- {item}")
-        lines.append("")
 
-    if prep_focus:
-        lines.append("PREP FOCUS:")
-        lines.append(f"- {prep_focus}")
+def _build_event_prep_from_summary_text(
+    raw_text: str,
+    *,
+    history_source: str,
+    default_action_items: list[str] | None = None,
+    suggested_reading: list[str] | None = None,
+) -> dict[str, Any]:
+    sanitized = _sanitize_event_summary_output(raw_text)
+    if not sanitized:
+        return _build_event_prep(
+            history_source=history_source,
+            action_items=default_action_items,
+            suggested_reading=suggested_reading,
+        )
 
-    return "\n".join(lines).strip()
+    key_points, action_items, prep_focus = _extract_deep_summary_sections(sanitized)
+    return _build_event_prep(
+        history_source=history_source,
+        key_points=key_points,
+        action_items=[*(action_items or []), *(default_action_items or [])],
+        suggested_reading=suggested_reading,
+        prep_focus=prep_focus,
+    )
+
+
+def _event_todo_descriptions(event_context: dict[str, Any]) -> list[str]:
+    items: list[str] = []
+    for todo in (event_context.get("todos") or [])[:3]:
+        desc = str(todo.get("description") or "").strip()
+        if desc:
+            items.append(desc)
+    return items
 
 
 def _parse_memory_summary_sections(summary: str) -> dict[str, list[str]]:
@@ -1726,7 +1758,7 @@ def _generate_markdown(
                 else {"topic_articles": [], "general_articles": []}
             )
 
-    core_sections = ""
+    core_sections = _build_event_sections_deterministic(context)
     news_section = ""
 
     if news_input:
@@ -1737,22 +1769,16 @@ def _generate_markdown(
         )
         t_parallel = perf_counter()
         with ThreadPoolExecutor(max_workers=BRIEFING_SECTION_MAX_WORKERS) as pool:
-            core_future = pool.submit(
-                _generate_event_sections_markdown, context, user_email=user_email
-            )
             news_future = pool.submit(
                 _generate_news_section_markdown,
                 selected_news_data,
                 user_email=user_email,
             )
-            core_sections = core_future.result()
             news_section = news_future.result()
         logger.info(
             "[briefing] Parallel section generation complete (%.0fms)",
             (perf_counter() - t_parallel) * 1000,
         )
-    else:
-        core_sections = _generate_event_sections_markdown(context, user_email=user_email)
 
     event_validation = validate_event_sections(core_sections, context)
     if not event_validation.valid:
@@ -1850,22 +1876,23 @@ def _build_event_sections_deterministic(context: dict[str, Any]) -> str:
         time_label = _format_event_time_label(event.get("local_start"), event.get("local_end"))
         title = event.get("title") or "Untitled"
         lines.append(f"### {time_label} - {title}")
-        deep_summary = event.get("deep_summary") or ""
-        key_points, action_items, prep_focus = _extract_deep_summary_sections(deep_summary)
+        event_prep = _normalize_event_prep(event.get("event_prep"))
+        key_points = event_prep.get("key_points") or []
+        action_items = event_prep.get("action_items") or []
+        suggested_reading = event_prep.get("suggested_reading") or []
+        prep_focus = str(event_prep.get("prep_focus") or "").strip()
         if key_points:
             for point in key_points[:3]:
                 lines.append(f"- {point}")
         if action_items:
             for action in action_items[:4]:
                 lines.append(f"- {action}")
-        linked_todos = event.get("todos") or []
-        for todo in linked_todos[:3]:
-            desc = str(todo.get("description") or "").strip()
-            if desc:
-                lines.append(f"- Pending todo: {desc}")
+        if suggested_reading:
+            for item in suggested_reading[:3]:
+                lines.append(f"- Suggested reading: {item}")
         if prep_focus:
             lines.append(f"- Prep focus: {prep_focus}")
-        if not key_points and not action_items and not prep_focus and not linked_todos:
+        if not key_points and not action_items and not prep_focus and not suggested_reading:
             lines.append("- No grounded prep insights available from current context.")
         lines.append("")
     return "\n".join(lines).strip()
@@ -1886,13 +1913,16 @@ def _format_event_generation_context(context: dict[str, Any]) -> str:
         location = _format_event_location(event.get("place") or {})
         if location:
             lines.append(f"   Location: {location}")
-        deep_summary = (event.get("deep_summary") or "").strip()
-        if deep_summary:
-            lines.append("   Analysis:")
-            for item in deep_summary.splitlines()[:12]:
-                stripped = item.strip()
-                if stripped:
-                    lines.append(f"   {stripped}")
+        event_prep = _normalize_event_prep(event.get("event_prep"))
+        if event_prep.get("key_points") or event_prep.get("action_items") or event_prep.get("prep_focus"):
+            lines.append("   Prep:")
+            for item in (event_prep.get("key_points") or [])[:3]:
+                lines.append(f"   - Key point: {item}")
+            for item in (event_prep.get("action_items") or [])[:4]:
+                lines.append(f"   - Action item: {item}")
+            prep_focus = str(event_prep.get("prep_focus") or "").strip()
+            if prep_focus:
+                lines.append(f"   - Prep focus: {prep_focus}")
     return "\n".join(lines)
 
 
@@ -2519,8 +2549,8 @@ def _build_briefing_prompt(context: dict[str, Any]) -> str:
         "- NEVER produce generic category lists — every bullet must contain a specific fact,\n"
         "  title, action item, or recommendation.\n"
         "- Focus ONLY on today's events and their linked todos.\n"
-        "- Each event already has a pre-computed analysis with key points, action items, and prep\n"
-        "  focus. Incorporate that analysis into the Event Prep section -- do NOT ignore it.\n"
+        "- Each event already has structured prep with key points, action items, suggested reading,\n"
+        "  and prep focus. Incorporate that prep into the Event Prep section -- do NOT ignore it.\n"
         "\n"
         "TOOL GUIDANCE:\n"
         "- Use search_memories for event-specific past notes.\n"
@@ -2656,16 +2686,24 @@ def _format_context_text(context: dict[str, Any]) -> str:
         contacts = event.get("contacts") or []
         lines.append(f"- People: {_format_contacts(contacts)}")
 
-        # Use the pre-computed deep summary instead of raw similar events / todos
-        deep_summary = event.get("deep_summary") or ""
-        if deep_summary:
-            lines.append("- Analysis (key points, action items, prep focus):")
-            for dl in deep_summary.split("\n"):
-                stripped = dl.strip()
-                if stripped:
-                    lines.append(f"  {stripped}")
+        event_prep = _normalize_event_prep(event.get("event_prep"))
+        if (
+            event_prep.get("key_points")
+            or event_prep.get("action_items")
+            or event_prep.get("prep_focus")
+            or event_prep.get("suggested_reading")
+        ):
+            lines.append("- Structured prep:")
+            for item in (event_prep.get("key_points") or [])[:3]:
+                lines.append(f"  - Key point: {item}")
+            for item in (event_prep.get("action_items") or [])[:4]:
+                lines.append(f"  - Action item: {item}")
+            for item in (event_prep.get("suggested_reading") or [])[:3]:
+                lines.append(f"  - Suggested reading: {item}")
+            prep_focus = str(event_prep.get("prep_focus") or "").strip()
+            if prep_focus:
+                lines.append(f"  - Prep focus: {prep_focus}")
         else:
-            # Fallback: include minimal raw data if per-event LLM failed
             summary = event.get("summary") or ""
             if summary:
                 lines.append("- Context from prior notes (for prep):")

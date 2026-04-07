@@ -17,11 +17,11 @@ This document captures behavior and quality rules for the daily briefing profile
    - Attendee-overlap comparison excludes the current user from both sides and ignores zero-attendee matches after that filtering.
    - Prep synthesis reuses the `summarize_memories` summary flow/prompt over the last 4 matching prior occurrences for that event, instead of broad memory search.
    - If there are no prior occurrences, fallback matching uses the same attendees. If history is still empty, a final freeform prep synthesis may use current context plus targeted research.
-   - Event web research is allowed for any event, but gated by value signals and a strict planning pass.
+   - Per-event prep has a single responsibility: produce one structured prep payload (`key_points`, `action_items`, `suggested_reading`, `prep_focus`). Research runs only in the no-history fallback path.
 3. Gather birthdays and unlinked pending todos.
 4. Aggregate news via `news_feeds.fetch_news()` (Tavily + NewsData + RSS), then story-cluster and persist mention history.
 5. Generate final markdown in focused passes:
-   - Event-critical sections first (`Day Overview`, `Schedule`, `Event Prep`) in an isolated prompt.
+   - Build event-critical sections (`Day Overview`, `Schedule`, `Event Prep`) deterministically from the structured per-event prep payloads (no second event-summary rewrite pass).
    - Build deterministic sections in code for birthdays and outstanding todos.
    - Build `## News & Topics` deterministically in code from the bounded news subset (topic grouping is code-owned), with per-article one-sentence LLM summaries generated after selection.
    - Assemble final markdown in code (no full-document rewrite pass).
@@ -71,11 +71,12 @@ This document captures behavior and quality rules for the daily briefing profile
 - Event prep output should suppress low-value generic advice (for example "review notes", "confirm agenda", "prepare talking points") and only keep context-grounded, non-obvious items.
 - Event prep should favor the last 4 matching prior occurrences as the primary source of historical topics, outcomes/decisions, and follow-ups, with current notes/todos only filling gaps.
 - Event synthesis should explicitly separate current upcoming-event context from historical similar-event references.
+- Do not summarize event prep twice; once the structured per-event prep payload is built, final briefing rendering should be deterministic.
 - Keep `Day Overview` strategic and concise, while `Schedule` carries the concrete per-event timeline.
 
 ## Event Research Policy
 
-- Research can run for any event, including events that already have historical recurrence context.
+- Research should not run on the main history-synthesis path for events that already have useful prior-occurrence evidence.
 - Research must pass a value gate (e.g., external attendees, high-signal event framing, or context gaps) before tool usage.
 - A planning pass proposes up to 3 targeted queries with explicit "why this matters now" rationale.
 - Research output is accepted only when each finding contains both:
