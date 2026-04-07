@@ -8,7 +8,6 @@ from unittest.mock import MagicMock, patch
 from agents.daily_briefing.executor import (
     BIRTHDAY_LOOKAHEAD_DAYS,
     _build_briefing_prompt,
-    _build_event_memory_summary_args,
     _build_event_research_value_signals,
     _enrich_selected_news_summaries,
     _fetch_similar_events,
@@ -22,6 +21,7 @@ from agents.daily_briefing.executor import (
     _select_news_for_generation,
     _summarize_event,
     _synthesise_event_summary,
+    _synthesise_event_summary_from_current_context,
 )
 
 # ---------------------------------------------------------------------------
@@ -509,58 +509,49 @@ class TestSimilarityAttendeeNormalization:
 
 
 # ---------------------------------------------------------------------------
-# _synthesise_event_summary – summarize_memories-backed synthesis
+# _synthesise_event_summary – matching-history synthesis
 # ---------------------------------------------------------------------------
 
 
-class TestBuildEventMemorySummaryArgs:
-    def test_uses_history_window_and_event_filters(self):
-        event = _make_event_context(
-            contacts=[{"contact_id": "contact:alice"}],
-            similar_events=[
-                {
-                    "start_date": "2026-01-10T09:00:00+00:00",
-                    "local_start": "2026-01-10T09:00:00+00:00",
-                }
-            ],
-        )
-        event["people"] = ["contact:alice", "contact:bob"]
-
-        args = _build_event_memory_summary_args(event)
-
-        assert args is not None
-        assert args["contact_ids"] == ["contact:alice", "contact:bob"]
-        assert args["tags"] == ["recurring"]
-        assert args["types"] == ["meeting"]
-        assert args["limit"] == 12
-        assert args["time_end"] == "2026-02-15T09:00:00+00:00"
-        assert args["time_start"] == "2026-01-03T09:00:00+00:00"
-
-
 class TestSynthesiseEventSummary:
-    @patch("agents.daily_briefing.executor.handle_summarize_memories")
-    def test_renders_memory_summary_with_research_links(self, mock_summarize_memories):
-        mock_summarize_memories.return_value = {
-            "summary": (
-                "Overview:\n"
-                "- Budget alignment is the main open thread.\n"
-                "Key topics:\n"
-                "- Procurement needs updated pricing assumptions.\n"
-                "Outcomes/decisions:\n"
-                "- Finance asked for final budget sign-off before review.\n"
-                "Follow-ups:\n"
-                "- Send finance risk memo before the meeting."
-            )
-        }
+    @patch("agents.daily_briefing.executor._synthesize_memory_summary")
+    def test_uses_last_four_similar_occurrences(self, mock_synthesize_memory_summary):
+        mock_synthesize_memory_summary.return_value = (
+            "Overview:\n"
+            "- Budget alignment is the main open thread.\n"
+            "Key topics:\n"
+            "- Procurement needs updated pricing assumptions.\n"
+            "Outcomes/decisions:\n"
+            "- Finance asked for final budget sign-off before review.\n"
+            "Follow-ups:\n"
+            "- Send finance risk memo before the meeting."
+        )
         event = _make_event_context(
             title="Finance Review",
             todos=[{"status": "pending", "description": "Bring revised cost model"}],
+            similar_events=[
+                {
+                    "title": "Finance Review",
+                    "start_date": f"2026-02-0{i}T09:00:00+00:00",
+                    "summary": f"notes {i}",
+                }
+                for i in range(1, 6)
+            ],
         )
         result = _synthesise_event_summary(
             event,
             "- Acme raised $50M. Why it matters: changes diligence posture. Source: https://example.com",
             "UTC",
         )
+
+        synth_kwargs = mock_synthesize_memory_summary.call_args.kwargs
+        assert len(synth_kwargs["events"]) == 4
+        assert [item["start_date"] for item in synth_kwargs["events"]] == [
+            "2026-02-01T09:00:00+00:00",
+            "2026-02-02T09:00:00+00:00",
+            "2026-02-03T09:00:00+00:00",
+            "2026-02-04T09:00:00+00:00",
+        ]
         assert "Procurement needs updated pricing assumptions" in result
         assert "Finance asked for final budget sign-off before review" in result
         assert "Send finance risk memo before the meeting" in result
@@ -568,14 +559,41 @@ class TestSynthesiseEventSummary:
         assert "https://example.com" in result
         assert "PREP FOCUS" in result
 
-    @patch("agents.daily_briefing.executor.handle_summarize_memories")
-    def test_falls_back_to_current_notes_when_memory_summary_empty(self, mock_summarize_memories):
-        mock_summarize_memories.return_value = {"summary": ""}
+    @patch("agents.daily_briefing.executor._synthesize_memory_summary")
+    def test_falls_back_to_current_notes_when_history_summary_empty(self, mock_synthesize_memory_summary):
+        mock_synthesize_memory_summary.return_value = ""
         event = _make_event_context(summary="Discuss Q1 roadmap and hiring plan")
+        event["similar_events"] = [{"title": "Past standup", "start_date": "2026-02-01T09:00:00+00:00"}]
 
         result = _synthesise_event_summary(event, "", "UTC")
 
         assert "Discuss Q1 roadmap and hiring plan" in result
+
+    @patch("agents.daily_briefing.executor._synthesise_event_summary_from_current_context")
+    def test_uses_current_context_fallback_when_no_history(self, mock_fallback):
+        mock_fallback.return_value = "PREP FOCUS:\n- Review external context"
+        event = _make_event_context(title="New Partner Intro", similar_events=[])
+
+        result = _synthesise_event_summary(event, "- research", "UTC")
+
+        mock_fallback.assert_called_once()
+        assert result == "PREP FOCUS:\n- Review external context"
+
+
+class TestSynthesiseEventSummaryFromCurrentContext:
+    @patch("agents.daily_briefing.executor.call_llm")
+    def test_includes_research_in_prompt(self, mock_call_llm):
+        mock_call_llm.return_value = "KEY POINTS:\n- Acme raised funding"
+        result = _synthesise_event_summary_from_current_context(
+            "Event: Acme Call",
+            "- Acme raised $50M\n- Source: https://example.com",
+            "Acme Call",
+            "UTC",
+        )
+        assert "Acme raised" in result
+        prompt = mock_call_llm.call_args[0][0]
+        assert "WEB RESEARCH FINDINGS" in prompt
+        assert "Acme raised $50M" in prompt
 
 
 # ---------------------------------------------------------------------------

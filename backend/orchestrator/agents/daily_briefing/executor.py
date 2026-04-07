@@ -28,7 +28,7 @@ from agents.daily_briefing.validators import (
 from db import get_conn
 from llm_helpers import call_llm, call_llm_json
 from search_normalization import normalize_search_text
-from tools.handlers.memory import handle_summarize_memories
+from tools.handlers.memory import _synthesize_memory_summary
 
 logger = logging.getLogger(__name__)
 
@@ -1377,79 +1377,138 @@ def _synthesise_event_summary(
     *,
     user_email: str | None = None,
 ) -> str:
-    """Build a structured preparation summary from summarize_memories output."""
+    """Build event prep from the last matching occurrences, with fallback synthesis."""
     title = str(event_context.get("title") or "Untitled").strip() or "Untitled"
-    memory_args = _build_event_memory_summary_args(event_context)
-    memory_summary = ""
+    historical_events = [
+        dict(similar)
+        for similar in (event_context.get("similar_events") or [])[:DEFAULT_SIMILAR_LIMIT]
+        if isinstance(similar, dict)
+    ]
 
-    if memory_args is not None:
+    if historical_events:
         try:
-            result = handle_summarize_memories(
-                memory_args,
+            memory_summary = _synthesize_memory_summary(
                 question=(
-                    "Summarize the most relevant historical context, outcomes, decisions, and "
-                    f"follow-ups that would help prepare for the upcoming event '{title}'."
+                    "Summarize the most relevant points, outcomes, decisions, and follow-ups from "
+                    f"the previous occurrences of '{title}' that matter for the upcoming meeting."
                 ),
-                search_limit=int(memory_args.get("limit") or 12),
+                focus="summary",
+                tags=[str(tag).strip() for tag in (event_context.get("tags") or []) if str(tag).strip()],
+                event_types=[
+                    str(event_type).strip()
+                    for event_type in (event_context.get("types") or [])
+                    if str(event_type).strip()
+                ],
+                events=historical_events,
+                documents=[],
+                inspected_documents=[],
             )
-            memory_summary = str(result.get("summary") or "").strip()
         except Exception:
             logger.warning(
-                "[briefing.event] summarize_memories failed for '%s'",
+                "[briefing.event] historical summary synthesis failed for '%s'",
                 title,
                 exc_info=True,
             )
+            memory_summary = ""
 
-    rendered = _render_event_summary_from_memory(
-        event_context,
-        memory_summary,
+        rendered = _render_event_summary_from_memory(
+            event_context,
+            memory_summary,
+            research_notes,
+            timezone_name=timezone_name,
+            user_email=user_email,
+        )
+        sanitized = _sanitize_event_summary_output(rendered)
+        if sanitized:
+            return sanitized
+
+    event_text = _format_event_for_analysis(event_context)
+    return _synthesise_event_summary_from_current_context(
+        event_text,
         research_notes,
-        timezone_name=timezone_name,
+        title,
+        timezone_name,
         user_email=user_email,
     )
-    return _sanitize_event_summary_output(rendered)
 
 
-def _build_event_memory_summary_args(event_context: dict[str, Any]) -> dict[str, Any] | None:
-    current_start = _parse_datetime(event_context.get("start_date") or event_context.get("local_start"))
-    if current_start is None:
-        return None
-
-    similar_events = event_context.get("similar_events") or []
-    historical_dates = [
-        dt
-        for dt in (
-            _parse_datetime(similar.get("start_date") or similar.get("local_start"))
-            for similar in similar_events
+def _synthesise_event_summary_from_current_context(
+    event_text: str,
+    research_notes: str,
+    title: str,
+    timezone_name: str,
+    *,
+    user_email: str | None = None,
+) -> str:
+    """Fallback synthesis when there is no useful historical event evidence."""
+    research_block = ""
+    if research_notes:
+        research_block = (
+            f"\n\nWEB RESEARCH FINDINGS (incorporate relevant points):\n{research_notes}"
         )
-        if dt is not None
-    ]
-    if historical_dates:
-        time_start = min(historical_dates) - timedelta(days=7)
-    else:
-        time_start = current_start - timedelta(days=120)
 
-    contact_ids = [
-        str(contact_id).strip()
-        for contact_id in (event_context.get("people") or [])
-        if str(contact_id).strip()
-    ]
-    tags = [str(tag).strip() for tag in (event_context.get("tags") or []) if str(tag).strip()]
-    event_types = [
-        str(event_type).strip()
-        for event_type in (event_context.get("types") or [])
-        if str(event_type).strip()
-    ]
+    user_context_block = ""
+    if user_email:
+        user_ctx = _get_daily_briefing_user_context(user_email, f"{title} {event_text[:200]}")
+        if user_ctx:
+            user_context_block = f"\n\n{user_ctx}\n"
 
-    return {
-        "time_start": time_start.astimezone(timezone.utc).isoformat(),
-        "time_end": current_start.astimezone(timezone.utc).isoformat(),
-        "query_focus": "summary",
-        "contact_ids": contact_ids,
-        "tags": tags,
-        "types": event_types,
-        "limit": 12,
-    }
+    system_prompt = (
+        "You are a concise briefing analyst. Analyze the event context below and produce a "
+        "focused preparation summary. Output plain text with bullet points. No greetings, no "
+        "meta-commentary. Be specific and actionable."
+    )
+    user_prompt = (
+        f"Analyze this upcoming event and produce a preparation summary.\n"
+        f"Timezone: {timezone_name}\n\n"
+        f"{event_text}"
+        f"{research_block}"
+        f"{user_context_block}\n\n"
+        "Use this interpretation rule:\n"
+        "- 'CURRENT UPCOMING EVENT' and 'Current event notes' are about the event being prepared now.\n"
+        "- 'Historical similar occurrences' are past references for pattern extraction only.\n"
+        "- When historical similar occurrences exist, first summarize the most important points discussed in those past meetings before adding any new prep advice.\n"
+        "Never mix up current commitments with historical notes.\n\n"
+        "Perspective: this summary is for the calendar owner. Use second-person framing where useful\n"
+        "(for example 'you will review metrics'). If owner names/aliases appear in notes,\n"
+        "rewrite those references to second person. Avoid third-person self-references like\n"
+        "'align with <owner name>' when referring to the owner.\n\n"
+        "Quality bar (strict):\n"
+        "- Only include non-obvious, high-value points grounded in the provided context/research.\n"
+        "- Never invent facts.\n"
+        "- DO NOT include generic advice, like uploading documents somewhere if you don't know which documents you are talking about.\n"
+        "- DO NOT suggest invite reminders, the meetings are already schedule and have their own reminders. Also do not suggest reaching out to people to remind them about the meeting or about its agenda.\n"
+        "- DO NOT suggest testing/verifying audio or video quality, or testing connection speed.\n"
+        "- All links, meeting times, credentials ARE correct and DO NOT require double-checking.\n"
+        "- DO NOT output generic prep advice (for example, reviewing notes, checking agenda,\n"
+        "  preparing talking points, or calendar hygiene).\n"
+        "- Your goal is to do work that the user would have to do themselves, not to just point out what they need to do.\n"
+        "- If there is no meaningful grounded insight, respond exactly with NO_MEANINGFUL_PREP.\n"
+        "- If a section has no meaningful insight, omit that section.\n\n"
+        "Respond with exactly these sections (skip a section if nothing relevant):\n"
+        "KEY POINTS:\n"
+        "- The most important context for this event\n\n"
+        "ACTION ITEMS:\n"
+        "- Concrete preparation tasks\n\n"
+        "SUGGESTED READING:\n"
+        "- Links or material worth reviewing before this event (from research or notes)\n\n"
+        "PREP FOCUS:\n"
+        "- One sentence on what to prioritize before this event"
+    )
+
+    try:
+        result = call_llm(
+            user_prompt,
+            system_prompt=system_prompt,
+            temperature=0.1,
+            use_fast_model=False,
+        )
+        if str(result or "").strip().upper().startswith("NO_MEANINGFUL_PREP"):
+            return ""
+        return _sanitize_event_summary_output(result)
+    except Exception:
+        logger.warning("Failed to summarize event '%s', using fallback", title, exc_info=True)
+        return ""
 
 
 def _render_event_summary_from_memory(
