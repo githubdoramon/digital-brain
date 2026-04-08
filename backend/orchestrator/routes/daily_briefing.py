@@ -10,7 +10,7 @@ from async_jobs import enqueue_job, mark_failed, mark_running, mark_succeeded
 from auth import get_current_user, require_service_api_key
 from notifications import DAILY_BRIEFING_NOTIFICATION_TYPE, send_notification_to_user
 from observability.logger import get_runtime_logger
-from schemas import DailyBriefingIn, DailyBriefingOut
+from schemas import DailyBriefingEventSummaryDebugIn, DailyBriefingIn, DailyBriefingOut
 
 logger = get_runtime_logger(__name__)
 
@@ -97,6 +97,27 @@ def create_daily_briefing_router(
             message="Daily briefing generation queued.",
             status="pending",
         )
+
+    @router.post("/debug/daily-briefing/event-summary")
+    def debug_daily_briefing_event_summary(
+        payload: DailyBriefingEventSummaryDebugIn,
+    ):
+        from agents.daily_briefing.executor import build_daily_briefing_event_summary_debug
+
+        user_email = (payload.user_email or user.get("email") or "").strip()
+        if not user_email:
+            raise HTTPException(status_code=400, detail="Authenticated user email missing")
+
+        try:
+            return build_daily_briefing_event_summary_debug(
+                event_id=payload.event_id,
+                timezone_name=payload.timezone,
+                user_email=user_email,
+            )
+        except ValueError as exc:
+            detail = str(exc)
+            status_code = 404 if detail.startswith("Event not found:") else 400
+            raise HTTPException(status_code=status_code, detail=detail) from exc
 
     return router
 

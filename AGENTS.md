@@ -195,7 +195,7 @@ User Question → Intent Router → Conversational Profile Dispatch → Tool Vis
 - **Entity ID hygiene**: when generating IDs from user-provided names/titles (contacts, places, etc.), always slug/sanitize to safe URL/path characters (for example lowercase `a-z0-9-`) and avoid reserved characters like `#`, `?`, `/`, `%`.
 - **Contact disambiguation policy**: ambiguity auto-resolution strictness is controlled by `CONTACT_DISAMBIGUATION_STRICTNESS` (`strict`/`balanced`/`lenient`).
 - **Skills vs prompts policy**: behavioral guidance that overlaps with tool contracts or profile prompts belongs in the prompt, not as a separate skill definition. Skill definitions (`skill_definitions/`) are reserved for genuinely unique guidance not covered elsewhere (e.g. `tagging-guide`). Do not create skills that restate tool contracts or profile protocol.
-- **Logging policy**: never use `print` in orchestrator runtime code (only in scripts/tests). Use `logging.getLogger(__name__)` with `debug/info/warning/error` (or `logger.log(DECISION_LEVEL, ...)` for decisions). Logging must flow through `observability/log_stream.py` so frontend log streaming can filter by level. For streaming endpoints, rely on authenticated user context (no service API key) unless explicitly required.
+- **Logging policy**: never use `print` in orchestrator runtime code (only in scripts/tests). Use `logging.getLogger(__name__)` with `debug/info/warning/error` (or `logger.log(DECISION_LEVEL, ...)` for decisions). Logging must flow through `observability/log_stream.py` so frontend log streaming can filter by level, and normal orchestrator logs should also remain visible in the backend process output for local debugging. For streaming endpoints, rely on authenticated user context (no service API key) unless explicitly required.
 - **Componentize aggressively**: never let a single file grow into a monolith. Extract reusable UI components (web and mobile), utility functions, hooks, and sub-modules into their own files as soon as a file starts handling multiple concerns. For React (web and mobile): split pages into small, focused components; co-locate them in a nearby `components/` folder or a feature-scoped directory. For backend: extract helpers, data transforms, and sub-handlers into dedicated modules. A file doing layout + data fetching + business logic + styling is a sign it needs to be broken up. Aim for each file to have a single clear responsibility.
 - **FastAPI route modularity**: keep endpoint definitions in feature-scoped modules under `backend/orchestrator/routes/` and keep `backend/orchestrator/app.py` focused on app bootstrap, shared middleware/dependencies, and router composition.
 - **Document ingestion pipeline**: document parsing should flow through `backend/orchestrator/document_processing/` (parser selection, normalization, and structured chunking) before embeddings are generated. Keep parser fallbacks resilient (never hard-fail on unsupported formats), persist parser metadata in `raw_metadata`, and use `scripts/reembed_all.py` after parser/chunking improvements to refresh stored embeddings. Image uploads should go through OCR-capable parsers when available, and non-text binaries must not be decoded into pseudo-text during fallback parsing.
@@ -266,6 +266,7 @@ User Question → Intent Router → Conversational Profile Dispatch → Tool Vis
 - `GET /mobile/briefings/daily` – Get daily briefing or immediate pending status (auto-enqueues generation)
 - `GET /mobile/briefings/latest` – Get latest generated briefing
 - `POST /agents/daily-briefing/run` – Service API key endpoint to enqueue generation
+- `POST /debug/daily-briefing/event-summary` – Run daily-briefing meeting prep synthesis for one event and inspect intermediate debug data
 
 ### News Topics
 - `GET /news-topics` – List tracked topics
@@ -279,6 +280,8 @@ User Question → Intent Router → Conversational Profile Dispatch → Tool Vis
 
 ### System
 - `GET /system/versions` – Service versions
+- `GET /system/logs` – Read recent in-memory runtime logs
+- `GET /system/logs/stream` – Stream runtime logs over SSE
 - `POST /access/gate` – Face recognition (Immich)
 
 ## Frontend Structure

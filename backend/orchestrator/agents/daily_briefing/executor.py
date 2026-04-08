@@ -316,6 +316,42 @@ def build_daily_briefing(
     }
 
 
+def build_daily_briefing_event_summary_debug(
+    *,
+    event_id: str,
+    timezone_name: str,
+    user_email: str | None = None,
+) -> dict[str, Any]:
+    import events as events_service
+    from contacts import get_self_contact_id
+
+    event = events_service.get_meeting(event_id)
+    if not event:
+        raise ValueError(f"Event not found: {event_id}")
+
+    tz = _resolve_timezone(timezone_name)
+    event_with_timezone = _apply_timezone(event, tz)
+    start_utc = _parse_datetime(event_with_timezone.get("start_date")) or datetime.now(timezone.utc)
+    self_contact_id = get_self_contact_id(user_email) if user_email else None
+    event_context = _build_single_event_context(
+        event_with_timezone,
+        tz,
+        start_utc,
+        self_contact_id,
+    )
+    debug_bundle = _build_event_summary_debug_bundle(
+        event_context,
+        timezone_name,
+        user_email=user_email,
+    )
+    return {
+        "event_id": event_id,
+        "timezone": timezone_name,
+        "event": event_with_timezone,
+        **debug_bundle,
+    }
+
+
 def _parse_date(value: str) -> date:
     cleaned = (value or "").strip()
     if not cleaned:
@@ -998,11 +1034,26 @@ def _research_event(
     event_context: dict[str, Any] | None = None,
     user_email: str | None = None,
 ) -> str:
-    """Run a bounded web-research tool loop for a single event.
+    """Run a bounded web-research tool loop for a single event."""
+    debug_result = _research_event_debug(
+        event_text,
+        title,
+        timezone_name,
+        event_context=event_context,
+        user_email=user_email,
+    )
+    return str(debug_result.get("notes") or "")
 
-    Returns the LLM's research notes (may be empty if no research was needed
-    or the call failed).
-    """
+
+def _research_event_debug(
+    event_text: str,
+    title: str,
+    timezone_name: str,
+    *,
+    event_context: dict[str, Any] | None = None,
+    user_email: str | None = None,
+) -> dict[str, Any]:
+    """Run event research and return debug metadata plus grounded notes."""
     value_signals = _build_event_research_value_signals(
         title=title,
         event_text=event_text,
@@ -1016,7 +1067,17 @@ def _research_event(
             value_signals["score"],
             ", ".join(value_signals["reasons"]),
         )
-        return ""
+        return {
+            "status": "skipped_value_gate",
+            "notes": "",
+            "value_signals": value_signals,
+            "plan": {
+                "should_research": False,
+                "reason": "value_gate",
+                "targets": [],
+            },
+            "tool_calls": 0,
+        }
 
     plan = _plan_event_research(
         title=title,
@@ -1031,14 +1092,32 @@ def _research_event(
             title,
             plan.get("reason") or "no high-value target",
         )
-        return ""
+        return {
+            "status": "skipped_planner",
+            "notes": "",
+            "value_signals": value_signals,
+            "plan": plan,
+            "tool_calls": 0,
+        }
 
     research_profile = build_event_research_profile()
     if research_profile.build_tools_and_handlers is None:
-        return ""
+        return {
+            "status": "skipped_no_tools",
+            "notes": "",
+            "value_signals": value_signals,
+            "plan": plan,
+            "tool_calls": 0,
+        }
     tools, tool_handlers = research_profile.build_tools_and_handlers()
     if not tools:
-        return ""
+        return {
+            "status": "skipped_no_tools",
+            "notes": "",
+            "value_signals": value_signals,
+            "plan": plan,
+            "tool_calls": 0,
+        }
     runtime = research_profile.runtime
     system_prompt = (
         research_profile.get_system_prompt() if research_profile.get_system_prompt else ""
@@ -1091,7 +1170,13 @@ def _research_event(
                 title,
                 tool_calls_made,
             )
-            return ""
+            return {
+                "status": "no_research_needed",
+                "notes": "",
+                "value_signals": value_signals,
+                "plan": plan,
+                "tool_calls": tool_calls_made,
+            }
         cleaned = _sanitize_research_findings(content)
         if not cleaned:
             logger.info(
@@ -1099,7 +1184,13 @@ def _research_event(
                 title,
                 tool_calls_made,
             )
-            return ""
+            return {
+                "status": "dropped_ungrounded",
+                "notes": "",
+                "value_signals": value_signals,
+                "plan": plan,
+                "tool_calls": tool_calls_made,
+            }
 
         logger.info(
             "[briefing.event] Research for '%s': %d chars, %d tool call(s)",
@@ -1107,10 +1198,22 @@ def _research_event(
             len(cleaned),
             tool_calls_made,
         )
-        return cleaned
+        return {
+            "status": "researched",
+            "notes": cleaned,
+            "value_signals": value_signals,
+            "plan": plan,
+            "tool_calls": tool_calls_made,
+        }
     except Exception:
         logger.warning("[briefing.event] Research failed for '%s', skipping", title, exc_info=True)
-        return ""
+        return {
+            "status": "failed",
+            "notes": "",
+            "value_signals": value_signals,
+            "plan": plan,
+            "tool_calls": 0,
+        }
 
 
 def _build_event_research_value_signals(
@@ -1349,6 +1452,20 @@ def _synthesise_event_summary(
     user_email: str | None = None,
 ) -> dict[str, Any]:
     """Build structured event prep from matching history or current context."""
+    debug_bundle = _build_event_summary_debug_bundle(
+        event_context,
+        timezone_name,
+        user_email=user_email,
+    )
+    return _normalize_event_prep(debug_bundle.get("event_prep"))
+
+
+def _build_event_summary_debug_bundle(
+    event_context: dict[str, Any],
+    timezone_name: str,
+    *,
+    user_email: str | None = None,
+) -> dict[str, Any]:
     title = str(event_context.get("title") or "Untitled").strip() or "Untitled"
     historical_events = [
         dict(similar)
@@ -1382,26 +1499,36 @@ def _synthesise_event_summary(
             )
             memory_summary = ""
 
-        rendered = _render_event_summary_from_memory(
-            event_context,
-            memory_summary,
-        )
+        rendered = _render_event_summary_from_memory(event_context, memory_summary)
         if rendered["key_points"] or rendered["action_items"] or rendered["prep_focus"]:
-            return rendered
+            return {
+                "path": "history",
+                "formatted_event_text": "",
+                "memory_summary": memory_summary,
+                "research": {
+                    "status": "skipped_history",
+                    "notes": "",
+                    "value_signals": None,
+                    "plan": None,
+                    "tool_calls": 0,
+                },
+                "event_prep": rendered,
+            }
 
     event_text = _format_event_for_analysis(event_context)
-    research_notes = _research_event(
+    research = _research_event_debug(
         event_text,
         title,
         timezone_name,
         event_context=event_context,
         user_email=user_email,
     )
+    research_notes = str(research.get("notes") or "")
     if research_notes:
         logger.info("[briefing.event] Research for '%s': %d chars", title, len(research_notes))
     else:
         logger.info("[briefing.event] Research for '%s': skipped/none", title)
-    return _synthesise_event_summary_from_current_context(
+    event_prep = _synthesise_event_summary_from_current_context(
         event_context,
         event_text,
         research_notes,
@@ -1409,6 +1536,13 @@ def _synthesise_event_summary(
         timezone_name,
         user_email=user_email,
     )
+    return {
+        "path": "current_context",
+        "formatted_event_text": event_text,
+        "memory_summary": "",
+        "research": research,
+        "event_prep": event_prep,
+    }
 
 
 def _synthesise_event_summary_from_current_context(

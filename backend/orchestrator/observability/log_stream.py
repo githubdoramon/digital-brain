@@ -194,6 +194,21 @@ _stdout_installed = False
 _logging_configured = False
 
 
+def _resolve_handler_level(level: str | None) -> int:
+    normalized = (level or "").strip().lower()
+    if not normalized:
+        normalized = "info"
+    if normalized == "debug":
+        return INTENTIONAL_DEBUG_LEVEL
+    if normalized == "decision":
+        return DECISION_LEVEL
+    if normalized == "warning":
+        return logging.WARNING
+    if normalized == "error":
+        return logging.ERROR
+    return logging.INFO
+
+
 def get_log_buffer() -> LogBuffer:
     global _buffer
     if _buffer is None:
@@ -279,6 +294,19 @@ class LogBufferHandler(logging.Handler):
         return "debug"
 
 
+class ConsoleLogHandler(logging.StreamHandler):
+    @staticmethod
+    def _should_emit(record: logging.LogRecord) -> bool:
+        if record.levelno >= logging.WARNING:
+            return True
+        return LogBufferHandler._is_orchestrator_record(record)
+
+    def emit(self, record: logging.LogRecord) -> None:
+        if not self._should_emit(record):
+            return
+        super().emit(record)
+
+
 def configure_logging(level: str | None = None) -> None:
     global _logging_configured
     if _logging_configured:
@@ -296,6 +324,11 @@ def configure_logging(level: str | None = None) -> None:
     handler.setLevel(logging.DEBUG)
     handler.setFormatter(logging.Formatter("%(message)s"))
     root.addHandler(handler)
+
+    console_handler = ConsoleLogHandler(stream=sys.stderr)
+    console_handler.setLevel(_resolve_handler_level(level))
+    console_handler.setFormatter(logging.Formatter("%(message)s"))
+    root.addHandler(console_handler)
 
     _logging_configured = True
 

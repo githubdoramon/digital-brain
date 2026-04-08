@@ -9,6 +9,7 @@ from agents.daily_briefing.executor import (
     BIRTHDAY_LOOKAHEAD_DAYS,
     _build_briefing_prompt,
     _build_event_research_value_signals,
+    _build_event_summary_debug_bundle,
     _enrich_selected_news_summaries,
     _fetch_similar_events,
     _format_context_text,
@@ -17,6 +18,7 @@ from agents.daily_briefing.executor import (
     _generate_summary,
     _normalize_similarity_attendees,
     _research_event,
+    _research_event_debug,
     _sanitize_research_findings,
     _select_news_for_generation,
     _summarize_event,
@@ -381,6 +383,23 @@ class TestResearchEvent:
         assert result == ""
 
 
+class TestResearchEventDebug:
+    @patch("agents.daily_briefing.executor._build_event_research_value_signals")
+    def test_exposes_skip_reason_when_value_gate_blocks_research(self, mock_value_signals):
+        mock_value_signals.return_value = {
+            "score": 0,
+            "reasons": ["history_already_rich"],
+            "should_research": False,
+            "external_contact_count": 0,
+        }
+
+        result = _research_event_debug("Event: Weekly Standup", "Weekly Standup", "UTC")
+
+        assert result["status"] == "skipped_value_gate"
+        assert result["notes"] == ""
+        assert result["plan"]["reason"] == "value_gate"
+
+
 class TestResearchFindingSanitization:
     def test_keeps_only_findings_with_why_and_source(self):
         raw = (
@@ -569,14 +588,62 @@ class TestSynthesiseEventSummary:
         assert any("Discuss Q1 roadmap and hiring plan" in item for item in result["key_points"])
 
     @patch("agents.daily_briefing.executor._synthesise_event_summary_from_current_context")
-    def test_uses_current_context_fallback_when_no_history(self, mock_fallback):
+    @patch("agents.daily_briefing.executor._research_event_debug")
+    def test_uses_current_context_fallback_when_no_history(self, mock_research, mock_fallback):
+        mock_research.return_value = {
+            "status": "skipped_value_gate",
+            "notes": "",
+            "value_signals": {"should_research": False},
+            "plan": {"should_research": False},
+            "tool_calls": 0,
+        }
         mock_fallback.return_value = {"history_source": "current_context", "prep_focus": "Review external context"}
         event = _make_event_context(title="New Partner Intro", similar_events=[])
 
         result = _synthesise_event_summary(event, "UTC")
 
+        mock_research.assert_called_once()
         mock_fallback.assert_called_once()
-        assert result == {"history_source": "current_context", "prep_focus": "Review external context"}
+        assert result == {
+            "history_source": "current_context",
+            "key_points": [],
+            "action_items": [],
+            "suggested_reading": [],
+            "prep_focus": "Review external context",
+        }
+
+
+class TestEventSummaryDebugBundle:
+    @patch("agents.daily_briefing.executor._synthesize_memory_summary")
+    def test_surfaces_history_path_details(self, mock_synthesize_memory_summary):
+        mock_synthesize_memory_summary.return_value = (
+            "Overview:\n"
+            "- Budget alignment is the main open thread.\n"
+            "Key topics:\n"
+            "- Procurement needs updated pricing assumptions.\n"
+            "Outcomes/decisions:\n"
+            "- Finance asked for final budget sign-off before review.\n"
+            "Follow-ups:\n"
+            "- Send finance risk memo before the meeting."
+        )
+        event = _make_event_context(
+            title="Finance Review",
+            todos=[{"status": "pending", "description": "Bring revised cost model"}],
+            similar_events=[
+                {
+                    "title": "Finance Review",
+                    "start_date": "2026-02-01T09:00:00+00:00",
+                    "summary": "Previous notes",
+                }
+            ],
+        )
+
+        result = _build_event_summary_debug_bundle(event, "UTC")
+
+        assert result["path"] == "history"
+        assert "Budget alignment" in result["memory_summary"]
+        assert result["research"]["status"] == "skipped_history"
+        assert any("Bring revised cost model" in item for item in result["event_prep"]["action_items"])
 
 
 class TestSynthesiseEventSummaryFromCurrentContext:

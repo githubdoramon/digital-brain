@@ -288,6 +288,15 @@ class DailyBriefingIn(BaseModel):
     user_email: str | None = None
 
 
+class DailyBriefingEventSummaryDebugIn(BaseModel):
+    event_id: str = Field(alias="eventId")
+    timezone: str
+    user_email: str | None = Field(default=None, alias="userEmail")
+
+    class Config:
+        populate_by_name = True
+
+
 class DailyBriefingNewsItemOut(BaseModel):
     briefing_item_id: str
     briefing_id: str | None = None
