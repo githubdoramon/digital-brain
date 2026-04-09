@@ -91,7 +91,7 @@ This document captures behavior and quality rules for the daily briefing profile
 - Include meeting and pending-todo counts only; do not describe specific meetings/todos in the summary.
 - Do not include preference-driven idea suggestions in the summary.
 - Do not include a news digest paragraph in the summary.
-- If a user last-known location exists, append a weather outlook sentence for the briefing day.
+- If a latest user location exists in history, append a weather outlook sentence for the briefing day.
 
 ## User Context Injection
 

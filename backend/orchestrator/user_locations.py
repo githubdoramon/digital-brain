@@ -11,7 +11,6 @@ from observability.logger import get_runtime_logger
 logger = get_runtime_logger(__name__)
 
 LOCATION_DEDUPE_MIN_DISTANCE_METERS = 50.0
-LOCATION_THROTTLE_MIN_SECONDS = 180
 
 
 def _distance_meters(first: dict[str, Any], second: dict[str, Any]) -> float:
@@ -54,14 +53,7 @@ def _should_skip_location_update(
         return True
 
     moved_meters = _distance_meters(existing, {"lat": lat, "lon": lon})
-    if moved_meters >= LOCATION_DEDUPE_MIN_DISTANCE_METERS:
-        return False
-
-    if not existing_captured_at:
-        return True
-
-    elapsed_seconds = (captured_at - existing_captured_at).total_seconds()
-    return elapsed_seconds < LOCATION_THROTTLE_MIN_SECONDS
+    return moved_meters < LOCATION_DEDUPE_MIN_DISTANCE_METERS
 
 
 def _build_skip_reason(
@@ -81,14 +73,7 @@ def _build_skip_reason(
     moved_meters = _distance_meters(existing, {"lat": lat, "lon": lon})
     if moved_meters >= LOCATION_DEDUPE_MIN_DISTANCE_METERS:
         return "significant_movement"
-
-    if not existing_captured_at:
-        return "small_movement_no_timestamp"
-
-    elapsed_seconds = (captured_at - existing_captured_at).total_seconds()
-    if elapsed_seconds < LOCATION_THROTTLE_MIN_SECONDS:
-        return "small_movement_within_throttle_window"
-    return "small_movement_after_throttle_window"
+    return "movement_below_threshold"
 
 
 def upsert_user_location(
@@ -107,7 +92,7 @@ def upsert_user_location(
     safe_source = (source or "unknown").strip() or "unknown"
     resolved_captured_at = captured_at or datetime.now(timezone.utc)
     logger.info(
-        "[user_locations] Upsert request user=%s lat=%.6f lon=%.6f source=%s captured_at=%s",
+        "[user_locations] Record request user=%s lat=%.6f lon=%.6f source=%s captured_at=%s",
         user_email,
         lat,
         lon,
@@ -123,8 +108,10 @@ def upsert_user_location(
         cur.execute(
             """
             SELECT user_email, lat, lon, accuracy_m, captured_at, source, timezone, place_name, city, country, updated_at
-            FROM user_last_known_locations
+            FROM user_location_history
             WHERE user_email = %s
+            ORDER BY captured_at DESC, updated_at DESC, id DESC
+            LIMIT 1
             """,
             (user_email,),
         )
@@ -170,7 +157,7 @@ def upsert_user_location(
     with get_conn() as conn, conn.cursor() as cur:
         cur.execute(
             """
-            INSERT INTO user_last_known_locations (
+            INSERT INTO user_location_history (
               user_email,
               lat,
               lon,
@@ -183,18 +170,6 @@ def upsert_user_location(
               country
             )
             VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-            ON CONFLICT (user_email)
-            DO UPDATE SET
-              lat = EXCLUDED.lat,
-              lon = EXCLUDED.lon,
-              accuracy_m = EXCLUDED.accuracy_m,
-              captured_at = EXCLUDED.captured_at,
-              source = EXCLUDED.source,
-              timezone = EXCLUDED.timezone,
-              place_name = EXCLUDED.place_name,
-              city = EXCLUDED.city,
-              country = EXCLUDED.country,
-              updated_at = NOW()
             RETURNING user_email, lat, lon, accuracy_m, captured_at, source, timezone, place_name, city, country, updated_at
             """,
             (
@@ -214,7 +189,7 @@ def upsert_user_location(
         conn.commit()
 
     logger.info(
-        "[user_locations] Updated user location for user=%s lat=%.6f lon=%.6f source=%s",
+        "[user_locations] Recorded user location for user=%s lat=%.6f lon=%.6f source=%s",
         user_email,
         lat,
         lon,
@@ -228,8 +203,10 @@ def get_last_known_location(user_email: str) -> dict[str, Any] | None:
         cur.execute(
             """
             SELECT user_email, lat, lon, accuracy_m, captured_at, source, timezone, place_name, city, country, updated_at
-            FROM user_last_known_locations
+            FROM user_location_history
             WHERE user_email = %s
+            ORDER BY captured_at DESC, updated_at DESC, id DESC
+            LIMIT 1
             """,
             (user_email,),
         )

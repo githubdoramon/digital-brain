@@ -68,7 +68,7 @@ def test_should_not_skip_when_significant_movement_detected():
     assert should_skip is False
 
 
-def test_should_not_skip_after_throttle_window_even_with_small_movement():
+def test_should_skip_small_movement_even_after_long_delay():
     current = datetime.now(timezone.utc)
     existing = {
         "lat": 38.7222,
@@ -83,4 +83,4 @@ def test_should_not_skip_after_throttle_window_even_with_small_movement():
         captured_at=current + timedelta(minutes=10),
     )
 
-    assert should_skip is False
+    assert should_skip is True

@@ -169,7 +169,7 @@ User Question → Intent Router → Conversational Profile Dispatch → Tool Vis
 - **Profile intent ownership**: conversational profiles should declare intent ownership via `supports_intent` on the profile/interface implementation; avoid hardcoding intent lists inside the central registry.
 - **Agent-specific behavior docs**: detailed profile behavior for memory/disambiguation and briefing generation is documented in `backend/orchestrator/docs/agents/MEMORY_EXPERT.md` and `backend/orchestrator/docs/agents/DAILY_BRIEFING.md`.
 - **Daily briefing news quality**: render per-article one-sentence summaries after bounded selection (LLM rewrite with deterministic fallback), enforce a per-topic selection hard cap (currently 10) to avoid single-topic dominance, guarantee a small floor of general headlines when available (currently 3), and use confidence-scored topic matching with accent-insensitive normalization to reduce wrong-cluster assignments.
-- **Daily briefing summary policy**: keep the summary deterministic and compact (meeting count + pending todo count only), do not include preference-based idea suggestions, omit news digest text, and append weather outlook only when a user last-known location is available.
+- **Daily briefing summary policy**: keep the summary deterministic and compact (meeting count + pending todo count only), do not include preference-based idea suggestions, omit news digest text, and append weather outlook only when a latest user location from history is available.
 - **News intelligence persistence**: keep story-level clusters/mentions and selected briefing news items in DB tables so ranking can use trend + novelty history and mobile interactions can be attributed to stable briefing item IDs.
 - **Daily briefing event quality**: event prep summaries should prioritize non-obvious, context-grounded guidance, summarize the last 4 matching prior occurrences of the same meeting using the `summarize_memories` synthesis flow (not broad memory search), fall back to attendee-overlap history when title/recurrence matches are absent, and only use freeform current-context/research synthesis when no useful prior occurrences exist. Keep per-event prep single-responsibility: no web research on the main history-synthesis path, and no second event-summary rewrite after structured prep is built.
 - **Validation semantics**: post-execution validation must treat clarification-required search/resolution results as `need_user_input`, not generic empty-result retries.
@@ -259,8 +259,8 @@ User Question → Intent Router → Conversational Profile Dispatch → Tool Vis
 - `PUT /mobile/settings/notifications/{notification_type}` – Update channels for one notification type
 - `POST /mobile/devices/register` – Register Expo push token for mobile device
 - `DELETE /mobile/devices/unregister` – Unregister Expo push token for mobile device
-- `POST /mobile/location` – Upsert user last-known location for weather-aware briefings
-- `GET /mobile/location` – Read user last-known location
+- `POST /mobile/location` – Append a user location history entry when movement exceeds the dedupe threshold
+- `GET /mobile/location` – Read the latest user location
 
 ### Daily Briefings
 - `GET /mobile/briefings/daily` – Get daily briefing or immediate pending status (auto-enqueues generation)
