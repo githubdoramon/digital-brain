@@ -73,13 +73,35 @@ _SHORT_CIRCUIT_RELATIONSHIP_PATTERN = re.compile(
     r"\b(?:my|our)\s+(?:best\s+)?(?:" + "|".join(_SHORT_CIRCUIT_RELATIONSHIP_TERMS) + r")\b",
     re.IGNORECASE,
 )
+_SHORT_CIRCUIT_NAME_TOKEN = r"[A-ZÀ-ÖØ-Þ][A-Za-zÀ-ÖØ-öø-ÿ'-]*"
 _SHORT_CIRCUIT_NAME_PATTERN = re.compile(
-    r"\b(?:Dr\.|Mr\.|Mrs\.|Ms\.|Prof\.)?\s*[A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,2}\b"
+    rf"\b(?:Dr\.|Mr\.|Mrs\.|Ms\.|Prof\.)?\s*{_SHORT_CIRCUIT_NAME_TOKEN}(?:\s+{_SHORT_CIRCUIT_NAME_TOKEN}){{0,2}}\b"
 )
 _SHORT_CIRCUIT_BLOCKERS_PATTERN = re.compile(
     r"\b(her|his|their|him|them|she|he|they)\b|\b(?:my|our)\s+[a-z]+\s*'s\b",
     re.IGNORECASE,
 )
+_LIKELY_MULTI_PERSON_CONNECTOR_PATTERN = re.compile(
+    r",|&|\b(?:and|plus|along with)\b",
+    re.IGNORECASE,
+)
+_SHARED_POSSESSIVE_RELATIONSHIP_PATTERN = re.compile(
+    r"\b(?P<prefix>my|our)\s+(?P<body>(?:best\s+)?(?:"
+    + "|".join(_SHORT_CIRCUIT_RELATIONSHIP_TERMS)
+    + r")(?:\s*(?:,|&|and)\s*(?:best\s+)?(?:"
+    + "|".join(_SHORT_CIRCUIT_RELATIONSHIP_TERMS)
+    + r"))+)\b",
+    re.IGNORECASE,
+)
+_POSSESSIVE_COLLECTIVE_PATTERN = re.compile(
+    rf"\b(?P<owner>{_SHORT_CIRCUIT_NAME_TOKEN}(?:\s+{_SHORT_CIRCUIT_NAME_TOKEN}){{0,2}})'s\s+(?P<group>(?:whole|entire)\s+family)\b"
+)
+_LIST_WITH_CONTEXT_PATTERN = re.compile(
+    r"\b(?:with|along with)\s+(?P<list>.+?)(?=(?:\s+\b(?:at|from|in|on|near|inside|during|around)\b)|[.!?]|$)",
+    re.IGNORECASE,
+)
+_LIST_SPLIT_PATTERN = re.compile(r"\s*(?:,|&|\band\b|\bplus\b)\s*", re.IGNORECASE)
+_PRECEDING_PLACE_PREPOSITION_PATTERN = re.compile(r"(?:^|\s)(?:at|in|near|inside)\s*$", re.IGNORECASE)
 _CONTACT_RESOLUTION_MODEL_OVERRIDE: ContextVar[str | None] = ContextVar(
     "contact_resolution_model_override", default=None
 )
@@ -440,6 +462,58 @@ def _should_attempt_fast_person_extraction(text: str) -> bool:
     return True
 
 
+def _extract_shared_possessive_relationship_mentions(text: str) -> list[str]:
+    mentions: list[str] = []
+    for match in _SHARED_POSSESSIVE_RELATIONSHIP_PATTERN.finditer(text):
+        prefix = str(match.group("prefix") or "").strip()
+        body = str(match.group("body") or "").strip()
+        if not prefix or not body:
+            continue
+        for raw_term in _LIST_SPLIT_PATTERN.split(body):
+            term = str(raw_term or "").strip()
+            if not term:
+                continue
+            mentions.append(f"{prefix} {term}")
+    return mentions
+
+
+def _extract_possessive_collective_mentions(text: str) -> list[str]:
+    mentions: list[str] = []
+    for match in _POSSESSIVE_COLLECTIVE_PATTERN.finditer(text):
+        owner = str(match.group("owner") or "").strip()
+        group = str(match.group("group") or "").strip()
+        if owner and group:
+            mentions.append(f"{owner}'s {group}")
+    return mentions
+
+
+def _looks_like_list_person_mention(value: str) -> bool:
+    candidate = str(value or "").strip()
+    if not candidate:
+        return False
+    if _SHORT_CIRCUIT_RELATIONSHIP_PATTERN.fullmatch(candidate):
+        return True
+    if _POSSESSIVE_COLLECTIVE_PATTERN.fullmatch(candidate):
+        return True
+    if not _SHORT_CIRCUIT_NAME_PATTERN.fullmatch(candidate):
+        return False
+    tokens = [token for token in candidate.replace(".", " ").split() if token]
+    return 1 <= len(tokens) <= 3
+
+
+def _extract_people_from_with_lists(text: str) -> list[str]:
+    mentions: list[str] = []
+    for match in _LIST_WITH_CONTEXT_PATTERN.finditer(text):
+        raw_list = str(match.group("list") or "").strip()
+        if not raw_list:
+            continue
+        for raw_part in _LIST_SPLIT_PATTERN.split(raw_list):
+            candidate = str(raw_part or "").strip(" .,!?;:\"'")
+            if _looks_like_list_person_mention(candidate):
+                mentions.append(candidate)
+    return mentions
+
+
 def _fast_extract_people_from_text(
     text: str,
 ) -> tuple[list[str], list[dict[str, str]], bool]:
@@ -453,47 +527,78 @@ def _fast_extract_people_from_text(
 
     people: list[str] = []
     seen: set[str] = set()
+    inferred_user = False
+    explicit_people_count = 0
 
-    def _append_person(value: str) -> None:
+    def _append_person(value: str) -> bool:
         cleaned = str(value or "").strip(" .,!?;:\"'")
         normalized = normalize_search_text(cleaned)
         if not normalized or normalized in seen:
-            return
+            return False
         if _is_overly_generic_person_reference(cleaned):
-            return
+            return False
         seen.add(normalized)
         people.append(cleaned)
+        return True
 
     if re.search(r"\b(i|me|my|we|us|our)\b", raw_text, flags=re.IGNORECASE) and re.search(
-        r"\b(meet|met|talk|talked|spoke|speak|chat|chatted|call|called|text|texted|email|emailed|see|saw|visit|visited|had lunch|had dinner|went with|met with)\b",
+        r"\b(meet|met|talk|talked|spoke|speak|chat|chatted|call|called|text|texted|email|emailed|see|saw|visit|visited|had lunch|had dinner|had drinks|went with|met with)\b",
         raw_text,
         flags=re.IGNORECASE,
     ):
-        _append_person("user")
+        inferred_user = _append_person("user") or inferred_user
     elif re.match(
         r"^(had\s+(?:lunch|dinner)\s+with|met\s+with|saw\s+[A-Z]|visited\s+[A-Z]|called\s+[A-Z])",
         raw_text,
         flags=re.IGNORECASE,
     ):
-        _append_person("user")
+        inferred_user = _append_person("user") or inferred_user
 
     for match in _SHORT_CIRCUIT_RELATIONSHIP_PATTERN.finditer(raw_text):
-        _append_person(match.group(0))
+        if _append_person(match.group(0)):
+            explicit_people_count += 1
+
+    for candidate in _extract_shared_possessive_relationship_mentions(raw_text):
+        if _append_person(candidate):
+            explicit_people_count += 1
+
+    for candidate in _extract_possessive_collective_mentions(raw_text):
+        if _append_person(candidate):
+            explicit_people_count += 1
+
+    for candidate in _extract_people_from_with_lists(raw_text):
+        if _append_person(candidate):
+            explicit_people_count += 1
 
     for match in _SHORT_CIRCUIT_NAME_PATTERN.finditer(raw_text):
         candidate = str(match.group(0) or "").strip()
         if not candidate:
             continue
+        if _PRECEDING_PLACE_PREPOSITION_PATTERN.search(raw_text[: match.start()]):
+            continue
         candidate_norm = normalize_search_text(candidate)
         candidate_tokens = [token for token in candidate.replace(".", " ").split() if token]
         has_title = bool(re.match(r"^(Dr\.|Mr\.|Mrs\.|Ms\.|Prof\.)\s+", candidate))
+        if candidate_tokens and candidate_tokens[-1] == "I":
+            continue
         if len(candidate_tokens) < 2 and not has_title:
             continue
         if candidate_norm in {"i", "we", "who", "when", "where", "what", "why", "how"}:
             continue
         if candidate_norm.startswith(("my ", "our ")):
             continue
-        _append_person(candidate)
+        if _append_person(candidate):
+            explicit_people_count += 1
+
+    if inferred_user and explicit_people_count == 0 and not selector_mentions:
+        return [], [], False
+
+    if (
+        explicit_people_count == 1
+        and not selector_mentions
+        and _LIKELY_MULTI_PERSON_CONNECTOR_PATTERN.search(raw_text)
+    ):
+        return [], [], False
 
     if not people and not selector_mentions:
         return [], [], False

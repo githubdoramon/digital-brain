@@ -399,6 +399,92 @@ def test_resolve_contacts_short_circuits_simple_relationship_query(monkeypatch):
     assert llm_calls == []
 
 
+def test_resolve_contacts_does_not_short_circuit_user_only_fast_path(monkeypatch):
+    captured = {}
+
+    def fake_extract_people(text, conversation_messages=None, **kwargs):
+        captured["text"] = text
+        return ["gio", "pedro"]
+
+    monkeypatch.setattr(resolver, "extract_people_from_text", fake_extract_people)
+    monkeypatch.setattr(
+        resolver,
+        "_resolve_people_mentions",
+        lambda *args, **kwargs: ([], [], [], {}),
+    )
+
+    result = resolver.resolve_contacts_from_text(
+        "when did i meet gio and pedro?",
+        "user@example.com",
+        mode=resolver.MINIMAL_RESOLUTION_MODE,
+    )
+
+    assert captured["text"] == "when did i meet gio and pedro?"
+    assert result["people_mentioned"] == ["gio", "pedro"]
+
+
+def test_resolve_contacts_does_not_short_circuit_partial_multi_person_fast_path(monkeypatch):
+    captured = {}
+
+    def fake_extract_people(text, conversation_messages=None, **kwargs):
+        captured["text"] = text
+        return ["John", "pedro"]
+
+    monkeypatch.setattr(resolver, "extract_people_from_text", fake_extract_people)
+    monkeypatch.setattr(
+        resolver,
+        "_resolve_people_mentions",
+        lambda *args, **kwargs: ([], [], [], {}),
+    )
+
+    result = resolver.resolve_contacts_from_text(
+        "I met John and pedro yesterday",
+        "user@example.com",
+        mode=resolver.MINIMAL_RESOLUTION_MODE,
+    )
+
+    assert captured["text"] == "I met John and pedro yesterday"
+    assert result["people_mentioned"] == ["John", "pedro"]
+
+
+def test_resolve_contacts_extracts_family_mentions_from_event_sentence(monkeypatch):
+    captured = {}
+
+    def fake_resolve_people_mentions(people, *_args, **_kwargs):
+        captured["people"] = people
+        return [], [], [], {}
+
+    monkeypatch.setattr(resolver, "_resolve_people_mentions", fake_resolve_people_mentions)
+
+    result = resolver.resolve_contacts_from_text(
+        "yesterday at 19h I went to the pizza place, at Riverside Village, to celebrate my birthday. My wife and daughter, and Dana's whole family went as well. We talked a lot about my work and the possibility of me getting fired soon.",
+        "user@example.com",
+        mode=resolver.MINIMAL_RESOLUTION_MODE,
+    )
+
+    assert captured["people"] == ["user", "My wife", "My daughter", "Dana's whole family"]
+    assert result["people_mentioned"] == captured["people"]
+
+
+def test_resolve_contacts_extracts_full_name_list_without_place(monkeypatch):
+    captured = {}
+
+    def fake_resolve_people_mentions(people, *_args, **_kwargs):
+        captured["people"] = people
+        return [], [], [], {}
+
+    monkeypatch.setattr(resolver, "_resolve_people_mentions", fake_resolve_people_mentions)
+
+    result = resolver.resolve_contacts_from_text(
+        "Yesterday I had drinks with Dana, Felix Reed, Théo, and Morgan Brooks at The Tide from 8pm to 11pm.",
+        "user@example.com",
+        mode=resolver.MINIMAL_RESOLUTION_MODE,
+    )
+
+    assert captured["people"] == ["user", "Dana", "Felix Reed", "Théo", "Morgan Brooks"]
+    assert "The Tide" not in result["people_mentioned"]
+
+
 def test_minimal_mode_skips_enrichment_steps(monkeypatch):
     monkeypatch.setattr(
         resolver,
