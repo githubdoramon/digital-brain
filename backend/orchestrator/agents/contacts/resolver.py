@@ -522,8 +522,12 @@ def _fast_extract_people_from_text(
         return [], [], False
 
     selector_mentions = _extract_collective_selectors(raw_text)
+    collective_people_mentions = _extract_possessive_collective_mentions(raw_text)
     if _is_unknown_person_aggregate_question(raw_text):
         return [], selector_mentions, True
+
+    if selector_mentions or collective_people_mentions:
+        return [], [], False
 
     people: list[str] = []
     seen: set[str] = set()
@@ -559,10 +563,6 @@ def _fast_extract_people_from_text(
             explicit_people_count += 1
 
     for candidate in _extract_shared_possessive_relationship_mentions(raw_text):
-        if _append_person(candidate):
-            explicit_people_count += 1
-
-    for candidate in _extract_possessive_collective_mentions(raw_text):
         if _append_person(candidate):
             explicit_people_count += 1
 

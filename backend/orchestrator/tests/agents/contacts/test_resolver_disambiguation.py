@@ -447,14 +447,20 @@ def test_resolve_contacts_does_not_short_circuit_partial_multi_person_fast_path(
     assert result["people_mentioned"] == ["John", "pedro"]
 
 
-def test_resolve_contacts_extracts_family_mentions_from_event_sentence(monkeypatch):
+def test_resolve_contacts_group_mentions_bypass_fast_path(monkeypatch):
     captured = {}
 
-    def fake_resolve_people_mentions(people, *_args, **_kwargs):
-        captured["people"] = people
-        return [], [], [], {}
+    def fake_extract_people(text, conversation_messages=None, **kwargs):
+        captured["text"] = text
+        captured["kwargs"] = kwargs
+        return ["My wife", "My daughter", "Dana's whole family"]
 
-    monkeypatch.setattr(resolver, "_resolve_people_mentions", fake_resolve_people_mentions)
+    monkeypatch.setattr(resolver, "extract_people_from_text", fake_extract_people)
+    monkeypatch.setattr(
+        resolver,
+        "_resolve_people_mentions",
+        lambda *args, **kwargs: ([], [], [], {}),
+    )
 
     result = resolver.resolve_contacts_from_text(
         "yesterday at 19h I went to the pizza place, at Riverside Village, to celebrate my birthday. My wife and daughter, and Dana's whole family went as well. We talked a lot about my work and the possibility of me getting fired soon.",
@@ -462,8 +468,38 @@ def test_resolve_contacts_extracts_family_mentions_from_event_sentence(monkeypat
         mode=resolver.MINIMAL_RESOLUTION_MODE,
     )
 
-    assert captured["people"] == ["user", "My wife", "My daughter", "Dana's whole family"]
-    assert result["people_mentioned"] == captured["people"]
+    assert captured["text"].startswith("yesterday at 19h I went to the pizza place")
+    assert result["people_mentioned"] == ["My wife", "My daughter", "Dana's whole family"]
+
+
+def test_resolve_contacts_collective_selector_bypasses_fast_path(monkeypatch):
+    captured = {}
+
+    def fake_extract_people(text, conversation_messages=None, **kwargs):
+        captured["text"] = text
+        captured["kwargs"] = kwargs
+        return (["Dana"], [{"kind": "group", "value": "my engineering team", "raw": "my engineering team"}])
+
+    monkeypatch.setattr(resolver, "extract_people_from_text", fake_extract_people)
+    monkeypatch.setattr(
+        resolver,
+        "_resolve_people_mentions",
+        lambda *args, **kwargs: ([], [], [], {}),
+    )
+    monkeypatch.setattr(
+        resolver,
+        "_resolve_collective_selectors",
+        lambda *args, **kwargs: ([], [], []),
+    )
+
+    result = resolver.resolve_contacts_from_text(
+        "Yesterday I met Dana and my engineering team for coffee.",
+        "user@example.com",
+        mode=resolver.MINIMAL_RESOLUTION_MODE,
+    )
+
+    assert captured["text"] == "Yesterday I met Dana and my engineering team for coffee."
+    assert result["people_mentioned"] == ["Dana"]
 
 
 def test_resolve_contacts_extracts_full_name_list_without_place(monkeypatch):
