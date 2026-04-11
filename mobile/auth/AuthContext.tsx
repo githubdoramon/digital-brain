@@ -1,4 +1,4 @@
-import { GoogleSignin, SignInSuccessResponse } from '@react-native-google-signin/google-signin';
+import { GoogleSignin } from '@react-native-google-signin/google-signin';
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import * as SecureStore from 'expo-secure-store';
 import { Alert } from 'react-native';
@@ -54,13 +54,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           throw new Error('Google sign-in did not return an ID token.');
         }
         console.info('[auth] refreshToken success', {
-          hasEmail: Boolean(userInfo?.user?.email),
+          hasEmail: userInfo.type === 'success' ? Boolean(userInfo.data.user.email) : false,
         });
         setToken(idToken);
         await SecureStore.setItemAsync(AUTH_TOKEN_KEY, idToken);
-        const userEmail = userInfo?.user?.email ?? null;
-        const userName = userInfo?.user?.name ?? null;
-        const userPhoto = userInfo?.user?.photo ?? null;
+        const userEmail = userInfo.type === 'success' ? userInfo.data.user.email : null;
+        const userName = userInfo.type === 'success' ? userInfo.data.user.name ?? null : null;
+        const userPhoto = userInfo.type === 'success' ? userInfo.data.user.photo ?? null : null;
         if (userEmail) {
           setEmail(userEmail);
           await SecureStore.setItemAsync(AUTH_EMAIL_KEY, userEmail);
@@ -175,10 +175,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         throw error;
       }
       console.info('[auth] signInWithGoogle success');
+      if (response.type !== 'success') {
+        return;
+      }
       setToken(idToken);
-      const email = (response as SignInSuccessResponse)!.data!.user!.email;
-      const userName = (response as SignInSuccessResponse)!.data!.user!.name ?? null;
-      const userPhoto = (response as SignInSuccessResponse)!.data!.user!.photo ?? null;
+      const email = response.data.user.email;
+      const userName = response.data.user.name ?? null;
+      const userPhoto = response.data.user.photo ?? null;
       setEmail(email);
       setName(userName);
       setPhoto(userPhoto);

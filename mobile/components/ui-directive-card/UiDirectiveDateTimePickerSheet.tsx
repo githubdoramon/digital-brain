@@ -85,7 +85,7 @@ export function UiDirectiveDateTimePickerSheet({
         hideWeekdays={isTimeOnly}
         disableMonthPicker={isTimeOnly}
         disableYearPicker={isTimeOnly}
-        onChange={({ date }) => {
+        onChange={({ date }: { date: DateType }) => {
           const resolved = resolvePickerDate(date);
           if (resolved) {
             setDraftDate(resolved);
@@ -105,7 +105,7 @@ export function UiDirectiveDateTimePickerSheet({
             borderRadius: 10,
           },
         }}
-        style={[styles.picker, isTimeOnly && styles.timePicker]}
+        style={isTimeOnly ? { ...styles.picker, ...styles.timePicker } : styles.picker}
       />
     </BottomSheet>
   );

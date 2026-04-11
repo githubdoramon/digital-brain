@@ -10,6 +10,11 @@ type ContactActionMenuProps = {
   phones: string[];
 };
 
+type ContactAction = {
+  label: string;
+  onPress: () => Promise<unknown>;
+};
+
 const normalizePhone = (phone: string) => phone.replace(/[^0-9+]/g, '');
 
 export function ContactActionMenu({ emails, phones }: ContactActionMenuProps) {
@@ -18,9 +23,8 @@ export function ContactActionMenu({ emails, phones }: ContactActionMenuProps) {
   const phone = phones[0];
   const whatsapp = phone ? normalizePhone(phone) : null;
 
-  const actions = useMemo(
-    () =>
-      [
+  const actions = useMemo<ContactAction[]>(() => {
+      const rawActions: Array<ContactAction | null> = [
         phone
           ? {
               label: 'Call',
@@ -39,9 +43,9 @@ export function ContactActionMenu({ emails, phones }: ContactActionMenuProps) {
               onPress: () => Linking.openURL(`https://wa.me/${whatsapp}`),
             }
           : null,
-      ].filter(Boolean),
-    [email, phone, whatsapp],
-  );
+      ];
+      return rawActions.filter((action): action is ContactAction => action !== null);
+    }, [email, phone, whatsapp]);
 
   if (actions.length === 0) {
     return null;

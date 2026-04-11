@@ -328,7 +328,7 @@ export default function DailyScreen() {
     : briefing
       ? `${briefing.event_count} events • ${briefing.todo_count} todos`
       : 'No summary metrics yet';
-  const formatEventTitle = (event: TodoItem['events'][number]) =>
+  const formatEventTitle = (event: NonNullable<TodoItem['events']>[number]) =>
     event.title?.trim() || 'Linked event';
   const profileName = name || email || 'You';
 

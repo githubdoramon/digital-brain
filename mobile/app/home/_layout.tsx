@@ -61,7 +61,7 @@ function TabBar({ state, navigation }: BottomTabBarProps) {
     });
 
     if (!targetTab) {
-      targetTab = leftTabs.reduce<(typeof leftTabs)[number] | null>((closest, tab) => {
+      targetTab = leftTabs.reduce<((typeof leftTabs)[number] | undefined)>((closest, tab) => {
         const layout = tabLayouts.current[tab.name];
         if (!layout) return closest;
         const center = layout.x + layout.width / 2;
@@ -70,7 +70,7 @@ function TabBar({ state, navigation }: BottomTabBarProps) {
         if (!closestLayout) return tab;
         const closestCenter = closestLayout.x + closestLayout.width / 2;
         return Math.abs(locationX - center) < Math.abs(locationX - closestCenter) ? tab : closest;
-      }, null);
+      }, undefined);
     }
 
     if (!targetTab) return;

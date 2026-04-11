@@ -1,17 +1,15 @@
 import React from 'react';
 import DateTimePicker, { useDefaultStyles } from 'react-native-ui-datepicker';
-import type { DatePickerBaseProps, Styles } from 'react-native-ui-datepicker';
 
 import { theme } from '@/theme';
 
-type LightDateTimePickerProps = DatePickerBaseProps & {
-  styles?: Styles;
-};
+type LightDateTimePickerProps = React.ComponentProps<typeof DateTimePicker>;
+type PickerStyles = NonNullable<LightDateTimePickerProps['styles']>;
 
 export function LightDateTimePicker({ styles, ...props }: LightDateTimePickerProps) {
   const defaultPickerStyles = useDefaultStyles('light');
 
-  const mergedStyles = React.useMemo<Styles>(
+  const mergedStyles = React.useMemo<PickerStyles>(
     () => ({
       ...defaultPickerStyles,
       ...styles,

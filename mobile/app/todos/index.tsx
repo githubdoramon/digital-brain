@@ -630,7 +630,7 @@ function NewTodoContent() {
         <LightDateTimePicker
           mode="single"
           date={activePickerDate}
-          onChange={({ date }) => {
+          onChange={({ date }: { date: DateType }) => {
             const resolved = resolvePickerDate(date);
             if (resolved) {
               setDraftDate(resolved);

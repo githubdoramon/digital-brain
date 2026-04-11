@@ -101,6 +101,7 @@ def create_daily_briefing_router(
     @router.post("/debug/daily-briefing/event-summary")
     def debug_daily_briefing_event_summary(
         payload: DailyBriefingEventSummaryDebugIn,
+        user: dict = Depends(get_current_user),
     ):
         from agents.daily_briefing.executor import build_daily_briefing_event_summary_debug
 
