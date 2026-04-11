@@ -61,6 +61,8 @@ import {
 } from '@/events/draftEditorSession';
 import { normalizeSearch } from '@/utils/text';
 
+import { getHomeTabBarClearance } from './tabBarMetrics';
+
 type Message = {
   id: string;
   role: 'user' | 'assistant';
@@ -710,6 +712,7 @@ export default function ChatScreen() {
   const { token, signOut, email, name, photo, isLoading: isAuthLoading } = useAuth();
   const insets = useSafeAreaInsets();
   const tabBarHeight = useBottomTabBarHeight();
+  const tabBarClearance = Math.max(tabBarHeight, getHomeTabBarClearance(insets.bottom));
   const scrollY = useRef(new Animated.Value(0)).current;
   const listRef = useRef<FlatList<Message>>(null);
   const inputRef = useRef<TextInput>(null);
@@ -742,7 +745,7 @@ export default function ChatScreen() {
   const listBottomInset =
     composerHeight > 0
       ? composerHeight + composerBottomOffset + 16
-      : insets.bottom + tabBarHeight + keyboardHeight + 80;
+      : tabBarClearance + keyboardHeight + 80;
 
   const allowed = email === 'REDACTED-EMAIL';
   const canSend = input.trim().length > 0 && !isSending && allowed;
@@ -1732,7 +1735,7 @@ export default function ChatScreen() {
             styles.composer,
             {
               bottom: composerBottomOffset,
-              paddingBottom: (keyboardVisible ? 24 : insets.bottom + tabBarHeight + 8),
+              paddingBottom: keyboardVisible ? 24 : tabBarClearance + 8,
               paddingRight: 16,
               gap: 10,
             },
