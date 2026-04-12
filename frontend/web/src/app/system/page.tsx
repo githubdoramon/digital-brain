@@ -117,6 +117,24 @@ function formatLogTimestamp(input: string): string {
   });
 }
 
+function formatLogEntryForExport(entry: LogEntry): string {
+  const segments = getLogSegments(entry);
+  const message = segments
+    .map((segment) => {
+      if (segment.kind === "text") {
+        return segment.content;
+      }
+      try {
+        return JSON.stringify(segment.value, null, 2);
+      } catch {
+        return segment.content;
+      }
+    })
+    .join("");
+
+  return `[${entry.timestamp}] ${entry.level.toUpperCase()} ${message}`;
+}
+
 function tryParseJsonAt(text: string, start: number): { end: number; value: unknown; raw: string } | null {
   const first = text[start];
   if (first !== "{" && first !== "[") {
@@ -586,6 +604,32 @@ export default function SystemStatusPage() {
   const activeMatchRowKey = hasSearchMatches
     ? matchedLogRowKeys[((activeLogMatchIndex % matchedLogRowKeys.length) + matchedLogRowKeys.length) % matchedLogRowKeys.length]
     : null;
+  const exportableLogsText = [
+    "Orchestrator Logs Export",
+    `Generated: ${new Date().toISOString()}`,
+    `Visible entries: ${filteredLogs.length} of ${logEntries.length}`,
+    `Status: ${isLogPaused ? "Paused" : logConnected ? "Connected" : "Connecting"}`,
+    `Levels: ${selectedLevels.length ? selectedLevels.join(", ") : "none"}`,
+    `Search query: ${logSearchQuery || "(none)"}`,
+    logError ? `Error: ${logError}` : null,
+    "",
+    ...filteredLogs.map(formatLogEntryForExport),
+  ]
+    .filter((line): line is string => line !== null)
+    .join("\n");
+
+  const downloadVisibleLogs = () => {
+    const blob = new Blob([exportableLogsText], { type: "text/plain;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    const timestamp = new Date().toISOString().replace(/[.:]/g, "-");
+    anchor.href = url;
+    anchor.download = `orchestrator-logs-${timestamp}.txt`;
+    document.body.appendChild(anchor);
+    anchor.click();
+    document.body.removeChild(anchor);
+    URL.revokeObjectURL(url);
+  };
 
   useEffect(() => {
     setActiveLogMatchIndex(0);
@@ -726,6 +770,20 @@ export default function SystemStatusPage() {
             }}
           >
             All levels
+          </button>
+          <button
+            type="button"
+            onClick={downloadVisibleLogs}
+            style={{
+              border: "1px solid #d1d5db",
+              borderRadius: "8px",
+              padding: "6px 10px",
+              fontSize: "0.8rem",
+              background: "#fff",
+              cursor: "pointer",
+            }}
+          >
+            Save .txt
           </button>
           <button
             type="button"
