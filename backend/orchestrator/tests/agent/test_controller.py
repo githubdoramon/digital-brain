@@ -911,6 +911,131 @@ class TestContactAwareMemorySearch:
         assert args.get("sort_order") == "newest"
         assert args.get("limit") == 25
 
+    def test_get_events_preparation_resolves_contact_and_drops_overfiltering(
+        self, controller, monkeypatch
+    ):
+        state = AgentState(goal="When did I last meet Gio?")
+        monkeypatch.setattr(
+            "contact_resolution_service.resolve_contacts_request",
+            lambda _payload: {
+                "status": "success",
+                "people_mentioned": ["Gio"],
+                "resolved_contacts": [
+                    {
+                        "contact_id": "contact-gio",
+                        "display_name": "Giovanni Panerai",
+                        "original_text": "Gio",
+                    }
+                ],
+                "ambiguous_contacts": [],
+            },
+        )
+        monkeypatch.setattr("agent.controller.utc_now_iso", lambda: "2026-02-07T12:00:00+00:00")
+
+        args, preempt = controller._prepare_get_events_arguments(
+            args={
+                "action": "by_time_span",
+                "tags": ["meeting"],
+                "types": ["communication"],
+            },
+            state=state,
+            question="When did I last meet Gio?",
+            user_email="user@example.com",
+            conversation_history=[],
+        )
+
+        assert preempt is None
+        assert args.get("contact_ids") == ["contact-gio"]
+        assert args.get("sort_order") == "newest"
+        assert args.get("time_end") == "2026-02-07T12:00:00+00:00"
+        assert "tags" not in args
+        assert "types" not in args
+
+    def test_get_events_preparation_accepts_open_ended_future_query(self, controller, monkeypatch):
+        state = AgentState(goal="What meetings are scheduled with Gio next week?")
+        monkeypatch.setattr("agent.controller.utc_now_iso", lambda: "2026-02-07T12:00:00+00:00")
+
+        args, preempt = controller._prepare_get_events_arguments(
+            args={"action": "by_time_span", "contact_ids": ["contact-gio"]},
+            state=state,
+            question="What meetings are scheduled with Gio next week?",
+            user_email=None,
+            conversation_history=[],
+        )
+
+        assert preempt is None
+        assert args.get("time_start") == "2026-02-07T12:00:00+00:00"
+        assert args.get("time_end") in {None, ""}
+
+    def test_ensure_contact_scope_reuses_existing_scope_without_reresolving(
+        self, controller, monkeypatch
+    ):
+        state = AgentState(goal="When did I last meet Gio?")
+        state.resolution["active_contact_scope"] = [
+            {
+                "mention_text": "Gio",
+                "display_name": "Giovanni Panerai",
+                "contact_id": "contact-gio",
+            }
+        ]
+        state.resolution["active_contact_scope_ids"] = ["contact-gio"]
+        called = {"count": 0}
+
+        def fake_resolver(_payload):
+            called["count"] += 1
+            return {"status": "success", "resolved_contacts": []}
+
+        monkeypatch.setattr("contact_resolution_service.resolve_contacts_request", fake_resolver)
+
+        active_scope, active_ids, preempt, attempted = controller._ensure_contact_scope(
+            state=state,
+            text="When did I last meet Gio?",
+            user_email="user@example.com",
+            conversation_history=[],
+            require_person_query=True,
+        )
+
+        assert preempt is None
+        assert attempted is False
+        assert active_ids == ["contact-gio"]
+        assert active_scope[0]["contact_id"] == "contact-gio"
+        assert called["count"] == 0
+
+    def test_ensure_contact_scope_surfaces_existing_clarification_without_reresolving(
+        self, controller, monkeypatch
+    ):
+        state = AgentState(goal="When did I meet John?")
+        state.resolution["pending_contact_need_user_input"] = {
+            "kind": "disambiguation",
+            "prompt": "Which John do you mean?",
+            "submission_mode": "text",
+        }
+        state.resolution["pending_contact_people"] = ["John"]
+        state.resolution["pending_contact_ambiguous_contacts"] = [
+            {"original_text": "John", "candidates": []}
+        ]
+        called = {"count": 0}
+
+        def fake_resolver(_payload):
+            called["count"] += 1
+            return {"status": "success", "resolved_contacts": []}
+
+        monkeypatch.setattr("contact_resolution_service.resolve_contacts_request", fake_resolver)
+
+        _active_scope, active_ids, preempt, attempted = controller._ensure_contact_scope(
+            state=state,
+            text="When did I meet John?",
+            user_email="user@example.com",
+            conversation_history=[],
+            require_person_query=True,
+        )
+
+        assert attempted is False
+        assert active_ids == []
+        assert preempt is not None
+        assert preempt.get("status") == "need_user_input"
+        assert called["count"] == 0
+
     def test_builds_contact_scope_context_message(self, controller):
         state = AgentState(goal="When did I last meet Gio?")
         state.resolution["active_contact_scope"] = [
@@ -1092,6 +1217,49 @@ class TestContactAwareMemorySearch:
 
         assert prompt is None
         assert state.resolution.get("active_contact_scope_ids") == ["contact-gio"]
+
+    def test_update_contact_resolution_state_sets_active_scope(self, controller):
+        state = AgentState(goal="When did I last meet Gio?")
+
+        controller._update_contact_resolution_state(
+            state,
+            {"text": "Gio"},
+            {
+                "status": "success",
+                "resolved_contacts": [
+                    {
+                        "contact_id": "contact-gio",
+                        "display_name": "Giovanni Panerai",
+                        "original_text": "Gio",
+                    }
+                ],
+            },
+        )
+
+        assert state.resolution.get("active_contact_scope_ids") == ["contact-gio"]
+        assert state.resolution.get("active_contact_scope_text") == "Gio"
+
+    def test_update_contact_resolution_state_sets_pending_clarification_and_ui(self, controller):
+        state = AgentState(goal="When did I meet John?")
+
+        controller._update_contact_resolution_state(
+            state,
+            {"text": "John"},
+            {
+                "status": "need_user_input",
+                "people_mentioned": ["John"],
+                "ambiguous_contacts": [{"original_text": "John", "candidates": []}],
+                "need_user_input": {
+                    "kind": "disambiguation",
+                    "prompt": "Which John do you mean?",
+                    "submission_mode": "ui_submission",
+                },
+            },
+        )
+
+        assert state.resolution.get("pending_contact_scope_text") == "John"
+        assert state.resolution.get("pending_contact_people") == ["John"]
+        assert state.ui_directives is not None
 
     def test_primes_contacts_even_for_generic_question(self, controller, monkeypatch):
         state = AgentState(goal="What happened last week?")

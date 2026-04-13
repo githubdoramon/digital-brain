@@ -336,14 +336,17 @@ def _register_all_tools(registry: ToolRegistry) -> None:
                     type="string",
                     description=(
                         "ISO 8601 lower bound for action=`by_time_span` (inclusive). "
-                        "Use for strict windows like 'this week' or 'last month'."
+                        "Optional for open-ended future/history lookups; combine with `time_end` for a closed window."
                     ),
                     required=False,
                 ),
                 ToolParameter(
                     name="time_end",
                     type="string",
-                    description="ISO 8601 upper bound for action=`by_time_span` (inclusive).",
+                    description=(
+                        "ISO 8601 upper bound for action=`by_time_span` (inclusive). "
+                        "Optional for open-ended history lookups; combine with `time_start` for a closed window."
+                    ),
                     required=False,
                 ),
                 ToolParameter(

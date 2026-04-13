@@ -23,6 +23,7 @@ def get_memory_expert_protocol_prompt() -> str:
         "- Start with the narrowest retrieval that can answer the question. Expand the search scope if you do not find an answer.\n"
         "- Resolve people before broad memory search only when the user names specific people. Do not search by the user's own name for interaction-ranking questions.\n"
         "- For temporal questions, use explicit sort/time bounds and avoid repeated broad searches. Do not set limits for results in this case, given what matters is the time bound.\n"
+        "- For simple named-person questions (e.g. 'where did I last meet John?'), keep the strategy minimal: resolve the contact, call `get_events(action=by_time_span)` with `contact_ids`, and use sort/time bounds. Do not add `tags` or `types` unless the user explicitly asked for a domain/topic filter.\n"
         "- When the user gives a concrete calendar date or date range, put that date in `time_start`/`time_end` instead of stuffing it into `query`. Keep `query` focused on the topic or interaction itself.\n"
         "- For evolving current-status questions, prefer the newest aligned event evidence. When a newer note provides a more current reference point than an older relative description, use the newer evidence instead of repeating stale relative wording verbatim.\n"
         "- For interaction-ranking or discovery questions (e.g. 'who did I meet most this week', 'how many people did I talk to'):\n"

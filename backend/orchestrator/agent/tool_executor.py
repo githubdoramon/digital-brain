@@ -259,6 +259,34 @@ class ToolExecutionCoordinator:
                     call_id=call_id,
                     default_summary="Blocked redundant memory search",
                 )
+        elif tool_name == "get_events":
+            args, preempt_result = self.controller._prepare_get_events_arguments(
+                args=args,
+                state=state,
+                question=question,
+                user_email=user_email,
+                conversation_history=conversation_history,
+            )
+            trace.trace_tool_args_normalized(tool_name, args)
+            if preempt_result is not None:
+                prompt = ""
+                need_user_input = extract_need_user_input(
+                    preempt_result,
+                    default_source=tool_name,
+                )
+                if need_user_input:
+                    prompt = str(need_user_input.get("prompt") or "").strip()
+                if prompt:
+                    state.add_question(prompt)
+                return self._finalize_early_tool_result(
+                    tool_name=tool_name,
+                    args=args,
+                    result=preempt_result,
+                    state=state,
+                    run_id=run_id,
+                    call_id=call_id,
+                    default_summary="Preempted for clarification",
+                )
 
         if self.controller.config.enable_validation:
             trace.trace_pre_validation_start(tool_name)

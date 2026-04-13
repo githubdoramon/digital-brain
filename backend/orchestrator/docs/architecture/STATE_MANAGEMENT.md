@@ -108,6 +108,18 @@ This supports analysis of ambiguity rates and UX friction.
 
 Prompt bloat controls are enforced by capped candidate injection.
 
+## Contact Scope Reuse
+
+Scoped contact resolution is stored under `state.resolution` and reused across
+controller phases.
+
+- Shared reuse-or-resolve logic lives in `backend/orchestrator/agent/contact_scope.py`.
+- The same module also owns controller-side resolution state shaping, redundant-resolution blocking, and pre-resolution bookkeeping.
+- The helper checks existing resolved scope first, then pending clarification, and
+  only then performs an on-demand resolution attempt.
+- Current controller consumers include request-level pre-resolution plus
+  argument normalization for `search_memories` and `get_events`.
+
 ## Serialization
 
 - `to_metadata()` provides compact run metadata for logs and persistence.

@@ -28,11 +28,51 @@ def test_get_events_by_ids_uses_events_service(monkeypatch):
     assert result["events"][0]["id"] == "event:1"
 
 
-def test_get_events_by_time_span_requires_bounds():
+def test_get_events_by_time_span_requires_at_least_one_bound(monkeypatch):
+    class _Cursor:
+        def execute(self, query, params):
+            self.query = query
+            self.params = params
+
+        def fetchall(self):
+            return []
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    class _Conn:
+        def cursor(self):
+            return _Cursor()
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    fake_db = SimpleNamespace(
+        get_conn=lambda: _Conn(),
+        fetch_event_people=lambda cur, event_ids: {},
+        resolve_contact_names=lambda cur, contact_ids: {},
+        enrich_people=lambda people, names: people,
+    )
+    monkeypatch.setitem(sys.modules, "events", SimpleNamespace(get_events=lambda _ids: []))
+    monkeypatch.setitem(sys.modules, "db", fake_db)
+
     result = handle_get_events({"action": "by_time_span", "time_start": "2026-02-01T00:00:00Z"})
 
+    assert "error" not in result
+    assert result["count"] == 0
+
+
+def test_get_events_by_time_span_rejects_missing_all_bounds():
+    result = handle_get_events({"action": "by_time_span"})
+
     assert "error" in result
-    assert "time_start and time_end" in result["error"]
+    assert "time_start or time_end" in result["error"]
 
 
 def test_search_memories_all_query_uses_unbounded_limit(monkeypatch):
@@ -163,6 +203,56 @@ def test_get_events_by_time_span_applies_tags_and_types(monkeypatch):
     assert "unnest(COALESCE(e.types" in query_text
     assert ["work"] in query_params
     assert ["meeting"] in query_params
+
+
+def test_get_events_by_time_span_accepts_only_time_end(monkeypatch):
+    executed: list[tuple[str, tuple[object, ...]]] = []
+
+    class _Cursor:
+        def execute(self, query, params):
+            executed.append((query, params))
+
+        def fetchall(self):
+            return []
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    class _Conn:
+        def cursor(self):
+            return _Cursor()
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    fake_db = SimpleNamespace(
+        get_conn=lambda: _Conn(),
+        fetch_event_people=lambda cur, event_ids: {},
+        resolve_contact_names=lambda cur, contact_ids: {},
+        enrich_people=lambda people, names: people,
+    )
+    monkeypatch.setitem(sys.modules, "events", SimpleNamespace(get_events=lambda _ids: []))
+    monkeypatch.setitem(sys.modules, "db", fake_db)
+
+    result = handle_get_events(
+        {
+            "action": "by_time_span",
+            "time_end": "2026-02-28T23:59:59Z",
+            "limit": 10,
+        }
+    )
+
+    assert result["count"] == 0
+    query_text, query_params = executed[0]
+    assert "e.start_date <= %s" in query_text
+    assert "e.start_date >= %s" not in query_text
+    assert query_params == ("2026-02-28T23:59:59Z", 10)
 
 
 def test_summarize_memories_combines_events_and_documents(monkeypatch):

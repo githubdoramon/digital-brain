@@ -99,9 +99,9 @@ def handle_get_events(
     elif action == "by_time_span":
         time_start = str(args.get("time_start") or "").strip()
         time_end = str(args.get("time_end") or "").strip()
-        if not time_start or not time_end:
+        if not time_start and not time_end:
             return {
-                "error": "time_start and time_end are required when action='by_time_span'",
+                "error": "time_start or time_end is required when action='by_time_span'",
                 "events": [],
                 "count": 0,
             }
@@ -129,8 +129,15 @@ def handle_get_events(
         types = [str(value).strip() for value in (args.get("types") or []) if str(value).strip()]
 
         with get_conn() as conn, conn.cursor() as cur:
-            filters: list[str] = ["e.start_date >= %s", "e.start_date <= %s"]
-            params: list[Any] = [time_start, time_end]
+            filters: list[str] = []
+            params: list[Any] = []
+
+            if time_start:
+                filters.append("e.start_date >= %s")
+                params.append(time_start)
+            if time_end:
+                filters.append("e.start_date <= %s")
+                params.append(time_end)
 
             if contact_ids:
                 filters.append(

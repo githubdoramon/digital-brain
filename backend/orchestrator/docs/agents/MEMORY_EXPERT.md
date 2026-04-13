@@ -17,6 +17,15 @@ When a query is person-referential and memory search lacks `contact_ids`:
 3. If ambiguous, return clarification-needed outcome instead of unfiltered retrieval.
 4. Prevent repetitive identical `resolve_contacts` calls after clarification/no-person outcomes.
 
+Controller-side contact-scope lifecycle is centralized in
+`backend/orchestrator/agent/contact_scope.py`, with thin controller wrappers.
+
+- `ensure_contact_scope(...)` reuses existing scope, surfaces pending clarification, and performs on-demand resolution only when needed.
+- `apply_contact_resolution_result(...)` owns resolution-state shaping for scope IDs, pending clarification payloads, and related UI directives.
+- `block_redundant_contact_resolution(...)` prevents repeated identical resolver calls after ambiguity/no-people outcomes.
+- `record_pre_resolution_outcome(...)` handles the request-level bookkeeping for pre-resolution facts and clarification prompts.
+- Current consumers include request-level pre-resolution, `search_memories` normalization, direct `get_events(action=by_time_span)` normalization, and redundant-resolution guarding.
+
 ## Collective Selectors
 
 - Selector phrases can resolve to groups even without explicit names (for example domain/company/team selectors).

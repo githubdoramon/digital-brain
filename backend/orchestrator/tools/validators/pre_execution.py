@@ -277,11 +277,11 @@ class PreExecutionValidator:
             if action is GetEventsAction.BY_IDS and not has_event_ids:
                 return "When action='by_ids', provide non-empty 'event_ids'"
 
-            if action is GetEventsAction.BY_TIME_SPAN and (not has_time_start or not has_time_end):
-                return "When action='by_time_span', provide both 'time_start' and 'time_end'"
+            if action is GetEventsAction.BY_TIME_SPAN and not (has_time_start or has_time_end):
+                return "When action='by_time_span', provide at least one of 'time_start' or 'time_end'"
 
             if action is None:
-                return "Provide either 'event_ids' or a time span ('time_start' + 'time_end') for get_events"
+                return "Provide either 'event_ids' or a time bound ('time_start' and/or 'time_end') for get_events"
 
         if tool_name == "summarize_memories":
             has_time_start = bool(str(params.get("time_start") or "").strip())
@@ -336,7 +336,7 @@ class PreExecutionValidator:
                 hints.append("Use 'event_ids' from search_memories results when action='by_ids'")
             if action is GetEventsAction.BY_TIME_SPAN:
                 hints.append(
-                    "Provide both 'time_start' and 'time_end' in ISO 8601 for strict event windows"
+                    "Provide at least one ISO 8601 time bound; use both for a closed window or one for open-ended history/future lookups"
                 )
 
         if tool_name == "summarize_memories":

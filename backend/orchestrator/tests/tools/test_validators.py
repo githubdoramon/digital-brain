@@ -167,11 +167,15 @@ class TestPreExecutionSemanticValidation:
         assert result.valid is False
         assert "event_ids" in "; ".join(result.errors)
 
-    def test_get_events_by_time_span_requires_both_bounds(self, validator):
+    def test_get_events_by_time_span_accepts_single_bound(self, validator):
         result = validator.validate(
             "get_events",
             {"action": "by_time_span", "time_start": "2026-02-01T00:00:00Z"},
         )
+        assert result.valid is True
+
+    def test_get_events_by_time_span_requires_at_least_one_bound(self, validator):
+        result = validator.validate("get_events", {"action": "by_time_span"})
         assert result.valid is False
         assert "time_start" in "; ".join(result.errors)
 
