@@ -9,6 +9,7 @@ from ui_dsl.command_adapters import command_result_to_ui_directives
 
 from .contact_resolution import (
     build_contact_clarification_result,
+    get_user_clarification_prompt_for_contact_resolution,
     is_contact_referential_memory_query,
     resolve_contacts_for_text,
 )
@@ -267,7 +268,7 @@ def record_pre_resolution_outcome(*, state: Any) -> str | None:
     """Record facts from the latest pre-resolution attempt and return clarification prompt."""
     pending_need_user_input = state.resolution.get("pending_contact_need_user_input")
     if pending_need_user_input:
-        prompt = str(pending_need_user_input.get("prompt") or "").strip()
+        prompt = get_user_clarification_prompt_for_contact_resolution(state)
         if prompt:
             state.add_question(prompt)
             return prompt
