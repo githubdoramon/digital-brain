@@ -284,6 +284,23 @@ def test_extract_people_restores_named_possessive_family_group(monkeypatch):
     assert selectors == []
 
 
+def test_extract_people_restores_named_possessive_coworker_group(monkeypatch):
+    def fake_call_llm_json(prompt, **_kwargs):
+        if "Extract collective participant selectors" in prompt:
+            return {"selectors": []}
+        return {"people": ["Ramon"]}
+
+    monkeypatch.setattr(resolver, "call_llm_json", fake_call_llm_json)
+
+    people, selectors = resolver.extract_people_from_text(
+        "Alex's co workers",
+        include_collective_selectors=True,
+    )
+
+    assert people == ["Ramon", "Alex's co workers"]
+    assert selectors == []
+
+
 def test_llm_disambiguation_prompt_includes_aliases_and_match_hints(monkeypatch):
     captured = {}
 
@@ -531,6 +548,50 @@ def test_resolve_contacts_restores_named_family_group_after_llm_extraction(monke
     )
 
     assert result["people_mentioned"] == ["Morgan Brooks", "Morgan Brooks's whole family"]
+
+
+def test_resolve_contacts_restores_named_coworker_group_after_llm_extraction(monkeypatch):
+    def fake_call_llm_json(prompt, **_kwargs):
+        if "Extract collective participant selectors" in prompt:
+            return {"selectors": []}
+        return {"people": ["Ramon"]}
+
+    monkeypatch.setattr(resolver, "call_llm_json", fake_call_llm_json)
+    monkeypatch.setattr(
+        resolver,
+        "_resolve_people_mentions",
+        lambda people, *_args, **_kwargs: (
+            [
+                {
+                    "original_text": people[0],
+                    "contact_id": "contact:alex-carter",
+                    "display_name": "Alex Carter",
+                    "matched_via": "direct_match",
+                    "confidence": "high",
+                    "resolution_path": None,
+                },
+                {
+                    "original_text": people[1],
+                    "contact_id": "contact:avery",
+                    "display_name": "Avery Hill",
+                    "matched_via": "nested_relationship_group",
+                    "confidence": "high",
+                    "resolution_path": None,
+                },
+            ],
+            [],
+            [],
+            {},
+        ),
+    )
+
+    result = resolver.resolve_contacts_from_text(
+        "Alex's co workers",
+        "user@example.com",
+        mode=resolver.MINIMAL_RESOLUTION_MODE,
+    )
+
+    assert result["people_mentioned"] == ["Ramon", "Alex's co workers"]
 
 
 def test_resolve_contacts_collective_selector_bypasses_fast_path(monkeypatch):
@@ -996,6 +1057,75 @@ def test_resolve_contact_my_whole_family_anchors_on_user(monkeypatch):
     assert {item["contact_id"] for item in result["candidates"]} == {
         "contact:robin",
         "contact:jamie",
+    }
+
+
+def test_resolve_contact_named_coworker_group_uses_related_candidates(monkeypatch):
+    monkeypatch.setattr(
+        resolver.contacts_service,
+        "find_self_contact",
+        lambda *_a, **_k: None,
+    )
+    monkeypatch.setattr(
+        resolver.contacts_service,
+        "search_contacts",
+        lambda query, **_kwargs: [
+            {
+                "contact_id": "contact:alex-carter",
+                "display_name": "Alex Carter",
+                "match_score": 100,
+                "aliases": [],
+            }
+        ]
+        if query == "Ramon"
+        else [],
+    )
+    monkeypatch.setattr(
+        resolver.contacts_service,
+        "get_contact_relationships",
+        lambda contact_id, **_kwargs: {
+            "relationships": [
+                {
+                    "contact_id": "contact:avery",
+                    "type": "co-worker",
+                    "other_type": "co-worker",
+                    "related_contact": {"display_name": "Avery Hill"},
+                },
+                {
+                    "contact_id": "contact:philipp",
+                    "type": "co-worker",
+                    "other_type": "co-worker",
+                    "related_contact": {"display_name": "Philipp"},
+                },
+                {
+                    "contact_id": "contact:gio",
+                    "type": "friend",
+                    "other_type": "friend",
+                    "related_contact": {"display_name": "Giovanni Panerai"},
+                },
+            ]
+        }
+        if contact_id == "contact:alex-carter"
+        else {"relationships": []},
+    )
+    monkeypatch.setattr(
+        resolver,
+        "call_llm_json",
+        lambda *_args, **_kwargs: {
+            "candidate_numbers": [1, 2],
+            "collective_reference": True,
+            "confidence": "high",
+            "reasoning": "co workers refers to Ramon coworkers",
+        },
+    )
+
+    result = resolver.resolve_contact("Alex's co workers", "user@example.com")
+
+    assert result["status"] == "candidates"
+    assert result["auto_resolve_candidates"] is True
+    assert {item["contact_id"] for item in result["candidates"]} == {
+        "contact:avery",
+        "contact:philipp",
     }
 
 

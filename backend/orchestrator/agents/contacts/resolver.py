@@ -93,8 +93,17 @@ _SHARED_POSSESSIVE_RELATIONSHIP_PATTERN = re.compile(
     + r"))+)\b",
     re.IGNORECASE,
 )
+_POSSESSIVE_COLLECTIVE_OWNER_TOKEN = r"[A-Za-zÀ-ÖØ-öø-ÿ'-]+"
+_POSSESSIVE_COLLECTIVE_GROUP_PATTERN = (
+    r"(?:whole|entire)\s+family"
+    r"|family"
+    r"|co(?:-|\s)?workers?"
+    r"|colleagues"
+    r"|friends"
+)
 _POSSESSIVE_COLLECTIVE_PATTERN = re.compile(
-    rf"\b(?P<owner>{_SHORT_CIRCUIT_NAME_TOKEN}(?:\s+{_SHORT_CIRCUIT_NAME_TOKEN}){{0,2}})'s\s+(?P<group>(?:whole|entire)\s+family)\b"
+    rf"\b(?P<owner>{_POSSESSIVE_COLLECTIVE_OWNER_TOKEN}(?:\s+{_POSSESSIVE_COLLECTIVE_OWNER_TOKEN}){{0,2}})'s\s+(?P<group>{_POSSESSIVE_COLLECTIVE_GROUP_PATTERN})\b",
+    re.IGNORECASE,
 )
 _LIST_WITH_CONTEXT_PATTERN = re.compile(
     r"\b(?:with|along with)\s+(?P<list>.+?)(?=(?:\s+\b(?:at|from|in|on|near|inside|during|around)\b)|[.!?]|$)",
@@ -991,7 +1000,7 @@ Normalization rules:
 - If a proper name and a relationship/profession clearly describe the SAME person in the same clause, return ONLY the proper name.
 - If a generic role is later identified by a specific name in the same text, return ONLY the named person for that role.
 - Keep possessive markers in relationship phrases: \"my daughter\", not \"daughter\".
-- For named collective family phrases like \"Morgan Brooks's whole family\", include BOTH the anchor person (\"Morgan Brooks\") and the possessive family phrase exactly as written.
+- For named collective relationship-group phrases like \"John's whole family\" or \"Paul's work buddies\", include BOTH the anchor person and the possessive group phrase exactly as written.
 - Do NOT include second-person pronouns.
 - Do NOT include non-specific placeholders like \"the person\", \"someone\", \"anybody\".
 
