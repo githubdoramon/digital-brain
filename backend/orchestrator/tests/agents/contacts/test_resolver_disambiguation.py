@@ -267,6 +267,23 @@ def test_extract_people_ignores_generic_unknown_person_query(monkeypatch):
     assert people == []
 
 
+def test_extract_people_restores_named_possessive_family_group(monkeypatch):
+    def fake_call_llm_json(prompt, **_kwargs):
+        if "Extract collective participant selectors" in prompt:
+            return {"selectors": []}
+        return {"people": ["Morgan Brooks"]}
+
+    monkeypatch.setattr(resolver, "call_llm_json", fake_call_llm_json)
+
+    people, selectors = resolver.extract_people_from_text(
+        "Morgan Brooks's whole family",
+        include_collective_selectors=True,
+    )
+
+    assert people == ["Morgan Brooks", "Morgan Brooks's whole family"]
+    assert selectors == []
+
+
 def test_llm_disambiguation_prompt_includes_aliases_and_match_hints(monkeypatch):
     captured = {}
 
@@ -470,6 +487,50 @@ def test_resolve_contacts_group_mentions_bypass_fast_path(monkeypatch):
 
     assert captured["text"].startswith("yesterday at 19h I went to the pizza place")
     assert result["people_mentioned"] == ["My wife", "My daughter", "Dana's whole family"]
+
+
+def test_resolve_contacts_restores_named_family_group_after_llm_extraction(monkeypatch):
+    def fake_call_llm_json(prompt, **_kwargs):
+        if "Extract collective participant selectors" in prompt:
+            return {"selectors": []}
+        return {"people": ["Morgan Brooks"]}
+
+    monkeypatch.setattr(resolver, "call_llm_json", fake_call_llm_json)
+    monkeypatch.setattr(
+        resolver,
+        "_resolve_people_mentions",
+        lambda people, *_args, **_kwargs: (
+            [
+                {
+                    "original_text": people[0],
+                    "contact_id": "contact:morgan-lyn-brooks",
+                    "display_name": "Morgan Lyn Brooks",
+                    "matched_via": "multi_token_name_match",
+                    "confidence": "high",
+                    "resolution_path": None,
+                },
+                {
+                    "original_text": people[1],
+                    "contact_id": "contact:alice-brooks",
+                    "display_name": "Alice Brooks",
+                    "matched_via": "nested_relationship_group",
+                    "confidence": "high",
+                    "resolution_path": None,
+                },
+            ],
+            [],
+            [],
+            {},
+        ),
+    )
+
+    result = resolver.resolve_contacts_from_text(
+        "Morgan Brooks's whole family",
+        "user@example.com",
+        mode=resolver.MINIMAL_RESOLUTION_MODE,
+    )
+
+    assert result["people_mentioned"] == ["Morgan Brooks", "Morgan Brooks's whole family"]
 
 
 def test_resolve_contacts_collective_selector_bypasses_fast_path(monkeypatch):

@@ -936,6 +936,34 @@ def _repair_split_possessive_title_entities(
     return repaired
 
 
+def _repair_missing_possessive_collective_mentions(
+    text: str,
+    people: list[str],
+) -> list[str]:
+    possessive_mentions = _extract_possessive_collective_mentions(text)
+    if not possessive_mentions:
+        return people
+
+    repaired = list(people)
+    normalized_people = {_normalize_entity_for_match(person) for person in repaired}
+    for collective_mention in possessive_mentions:
+        mention_norm = _normalize_entity_for_match(collective_mention)
+        if mention_norm in normalized_people:
+            continue
+
+        owner, _, _group = collective_mention.partition("'s ")
+        owner_norm = _normalize_entity_for_match(owner)
+        if owner_norm and owner_norm in normalized_people:
+            logger.info(
+                "[contact_resolver] Restoring possessive collective mention '%s' from source text",
+                collective_mention,
+            )
+            repaired.append(collective_mention)
+            normalized_people.add(mention_norm)
+
+    return repaired
+
+
 def _build_people_extraction_prompt(
     *,
     text: str,
@@ -963,6 +991,7 @@ Normalization rules:
 - If a proper name and a relationship/profession clearly describe the SAME person in the same clause, return ONLY the proper name.
 - If a generic role is later identified by a specific name in the same text, return ONLY the named person for that role.
 - Keep possessive markers in relationship phrases: \"my daughter\", not \"daughter\".
+- For named collective family phrases like \"Morgan Brooks's whole family\", include BOTH the anchor person (\"Morgan Brooks\") and the possessive family phrase exactly as written.
 - Do NOT include second-person pronouns.
 - Do NOT include non-specific placeholders like \"the person\", \"someone\", \"anybody\".
 
@@ -1179,6 +1208,7 @@ For possessive org titles, output ONE person mention only, formatted as "<title>
                 filtered_people.append(person)
 
             repaired_people = _repair_split_possessive_title_entities(text, filtered_people)
+            repaired_people = _repair_missing_possessive_collective_mentions(text, repaired_people)
             cleaned_people = []
             for person in repaired_people:
                 if _is_overly_generic_person_reference(person):
