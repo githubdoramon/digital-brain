@@ -223,3 +223,28 @@ def test_search_contacts_with_none_limit_returns_all_matches(monkeypatch):
     results = contacts.search_contacts("gmail.com", search_by="email", limit=None)
 
     assert len(results) == 3
+
+
+def test_search_contacts_prioritizes_all_query_name_parts(monkeypatch):
+    monkeypatch.setattr(
+        contacts,
+        "_lexical_candidate_contact_ids",
+        lambda *_a, **_k: ["contact:alex", "contact:morgan-lyn-brooks", "contact:alice-brooks"],
+    )
+    monkeypatch.setattr(contacts, "_vector_candidate_contact_scores", lambda *_a, **_k: {})
+    monkeypatch.setattr(
+        contacts,
+        "_load_contacts",
+        lambda *_a, **_k: [
+            _contact("contact:alex", "Alex"),
+            _contact("contact:morgan-lyn-brooks", "Morgan Lyn Brooks"),
+            _contact("contact:alice-brooks", "Alice Brooks"),
+        ],
+    )
+    monkeypatch.setattr(contacts, "list_contacts", lambda: [])
+
+    results = contacts.search_contacts("Morgan Brooks", search_by="name", limit=5)
+
+    assert len(results) == 3
+    assert results[0]["contact_id"] == "contact:morgan-lyn-brooks"
+    assert results[0]["match_reason"] == "all query name parts match: morgan lyn brooks"

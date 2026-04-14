@@ -1229,6 +1229,15 @@ def _score_contacts(
                             match_reason = f"query contains name: {name}"
                         continue
 
+                query_parts = [part for part in query_lower.split() if part]
+                name_parts = [part for part in name.split() if part]
+                if len(query_parts) >= 2 and all(part in name_parts for part in query_parts):
+                    score = 94
+                    if score > best_score:
+                        best_score = score
+                        match_reason = f"all query name parts match: {name}"
+                    continue
+
                 for qpart in query_lower.split():
                     for npart in name.split():
                         if qpart == npart:

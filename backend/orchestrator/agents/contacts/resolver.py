@@ -1517,6 +1517,19 @@ def resolve_contact(
         return result
 
     else:
+        unique_multi_token_match = _select_unique_multi_token_name_match(matches, search_name)
+        if unique_multi_token_match is not None:
+            result["status"] = "resolved"
+            result["confidence"] = "high"
+            result["contact_id"] = unique_multi_token_match["contact_id"]
+            result["display_name"] = unique_multi_token_match["display_name"]
+            result["matched_via"] = "multi_token_name_match"
+            logger.info(
+                "[contact_resolver] Unique multi-token name match: %s",
+                unique_multi_token_match["display_name"],
+            )
+            return result
+
         # Multiple matches - need disambiguation
         logger.debug(
             "[contact_resolver] Matches found: %s",
@@ -1907,6 +1920,15 @@ def _resolve_people_mentions(
                     "resolution_path": None,
                 }
                 resolved_contacts.append(resolved_contact)
+                resolution_cache[person_text] = {
+                    "status": "resolved",
+                    "contact_id": llm_result.get("contact_id"),
+                    "display_name": llm_result.get("display_name"),
+                    "matched_via": "llm_disambiguation",
+                    "confidence": llm_result.get("confidence", "medium"),
+                    "resolution_path": None,
+                    "candidates": resolution.get("candidates", []),
+                }
                 trace.trace_contact_resolution_outcome(
                     "auto_disambiguated",
                     {
@@ -2237,6 +2259,31 @@ def _select_unique_exact_contact_match(
     return None
 
 
+def _select_unique_multi_token_name_match(
+    matches: list[dict[str, Any]],
+    target_text: str,
+) -> dict[str, Any] | None:
+    query_tokens = re.findall(r"[a-z0-9']+", normalize_search_text(target_text))
+    if len(query_tokens) < 2:
+        return None
+
+    matching_candidates: list[dict[str, Any]] = []
+    for match in matches:
+        candidate_names = [str(match.get("display_name") or "").strip(), *(match.get("aliases") or [])]
+        for candidate_name in candidate_names:
+            candidate_tokens = set(
+                re.findall(r"[a-z0-9']+", normalize_search_text(str(candidate_name or "")))
+            )
+            if candidate_tokens and all(token in candidate_tokens for token in query_tokens):
+                matching_candidates.append(match)
+                break
+
+    if len(matching_candidates) == 1:
+        return matching_candidates[0]
+
+    return None
+
+
 def _infer_professions_for_new_contacts(
     new_contacts: list[dict[str, Any]],
     full_text: str,
@@ -2376,6 +2423,7 @@ def _resolve_nested_relationship(
 
     # Step 1: Resolve first part (check cache first)
     first_part = parts[0]
+    first_resolution: dict[str, Any] | None = None
     cached_anchor_resolution = _match_cached_resolved_contact_for_nested_first_part(
         first_part,
         resolution_cache,
@@ -2399,6 +2447,9 @@ def _resolve_nested_relationship(
         )
         if resolution_cache is not None:
             resolution_cache[first_part] = first_resolution
+
+    if first_resolution is None:
+        return result
 
     if first_resolution["status"] != "resolved":
         logger.info(

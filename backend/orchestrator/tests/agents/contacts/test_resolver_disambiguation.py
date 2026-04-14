@@ -695,6 +695,106 @@ def test_nested_relationship_reuses_prior_resolved_full_name(monkeypatch):
     assert nested["path"] == ["user", "Dana Lewis", "Iris Lewis"]
 
 
+def test_resolve_contact_short_circuits_unique_multi_token_name_match(monkeypatch):
+    monkeypatch.setattr(
+        resolver,
+        "_llm_disambiguate_contact",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("LLM should not be called")),
+    )
+    monkeypatch.setattr(
+        resolver.contacts_service,
+        "find_self_contact",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        resolver.contacts_service,
+        "search_contacts",
+        lambda *_args, **_kwargs: [
+            {
+                "contact_id": "contact:alex",
+                "display_name": "Alex",
+                "match_score": 88,
+                "match_reason": "name part match: alex",
+                "aliases": [],
+            },
+            {
+                "contact_id": "contact:morgan-lyn-brooks",
+                "display_name": "Morgan Lyn Brooks",
+                "match_score": 94,
+                "match_reason": "all query name parts match: morgan lyn brooks",
+                "aliases": [],
+            },
+            {
+                "contact_id": "contact:alice-brooks",
+                "display_name": "Alice Brooks",
+                "match_score": 88,
+                "match_reason": "name part match: brooks",
+                "aliases": [],
+            },
+        ],
+    )
+
+    result = resolver.resolve_contact("Morgan Brooks", "user@example.com")
+
+    assert result["status"] == "resolved"
+    assert result["matched_via"] == "multi_token_name_match"
+    assert result["contact_id"] == "contact:morgan-lyn-brooks"
+
+
+def test_resolve_people_mentions_updates_cache_after_llm_disambiguation(monkeypatch):
+    def fake_resolve_contact(person_text, *_args, resolution_cache=None, **_kwargs):
+        if person_text == "Morgan Brooks":
+            return {
+                "status": "candidates",
+                "candidates": [
+                    {"contact_id": "contact:alex", "display_name": "Alex"},
+                    {
+                        "contact_id": "contact:morgan-lyn-brooks",
+                        "display_name": "Morgan Lyn Brooks",
+                    },
+                ],
+            }
+        if person_text == "Morgan Brooks's whole family":
+            assert resolution_cache is not None
+            assert resolution_cache["Morgan Brooks"]["status"] == "resolved"
+            assert resolution_cache["Morgan Brooks"]["contact_id"] == "contact:morgan-lyn-brooks"
+            return {
+                "status": "resolved",
+                "contact_id": "contact:family-group",
+                "display_name": "Morgan Brooks family",
+                "matched_via": "nested_relationship_group",
+                "confidence": "high",
+                "resolution_path": ["user", "Morgan Lyn Brooks", "Morgan Brooks family"],
+            }
+        raise AssertionError(f"unexpected person_text: {person_text}")
+
+    monkeypatch.setattr(resolver, "resolve_contact", fake_resolve_contact)
+    monkeypatch.setattr(
+        resolver,
+        "_llm_disambiguate_contact",
+        lambda *_args, **_kwargs: {
+            "resolved": True,
+            "contact_id": "contact:morgan-lyn-brooks",
+            "display_name": "Morgan Lyn Brooks",
+            "confidence": "high",
+        },
+    )
+
+    resolved, new, ambiguous, cache = resolver._resolve_people_mentions(
+        people=["Morgan Brooks", "Morgan Brooks's whole family"],
+        user_email="user@example.com",
+        full_text="Morgan Brooks's whole family",
+    )
+
+    assert [item["contact_id"] for item in resolved] == [
+        "contact:morgan-lyn-brooks",
+        "contact:family-group",
+    ]
+    assert cache["Morgan Brooks"]["status"] == "resolved"
+    assert new == []
+    assert ambiguous == []
+
+
 def test_relationship_candidates_include_match_reason():
     relationship_context = {
         "relationships": [
