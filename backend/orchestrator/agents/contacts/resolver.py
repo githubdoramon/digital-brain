@@ -77,6 +77,19 @@ _SHORT_CIRCUIT_NAME_TOKEN = r"[A-ZÀ-ÖØ-Þ][A-Za-zÀ-ÖØ-öø-ÿ'-]*"
 _SHORT_CIRCUIT_NAME_PATTERN = re.compile(
     rf"\b(?:Dr\.|Mr\.|Mrs\.|Ms\.|Prof\.)?\s*{_SHORT_CIRCUIT_NAME_TOKEN}(?:\s+{_SHORT_CIRCUIT_NAME_TOKEN}){{0,2}}\b"
 )
+_BLOCKED_RELATIONSHIP_TERMS = {
+    "attendee",
+    "attendees",
+    "co-attendee",
+    "guest",
+    "guests",
+    "host",
+    "hosts",
+    "participant",
+    "participants",
+    "visitor",
+    "visitors",
+}
 _SHORT_CIRCUIT_BLOCKERS_PATTERN = re.compile(
     r"\b(her|his|their|him|them|she|he|they)\b|\b(?:my|our)\s+[a-z]+\s*'s\b",
     re.IGNORECASE,
@@ -3213,6 +3226,26 @@ def _normalize_relationship_type(value: Optional[str]) -> Optional[str]:
     return cleaned.lower() if cleaned else None
 
 
+def _is_meaningful_relationship_hint(value: Optional[str]) -> bool:
+    normalized = normalize_search_text(value or "")
+    if not normalized:
+        return False
+    tokens = [token for token in normalized.replace("-", " ").split() if token]
+    if not tokens:
+        return False
+    return not all(token in _BLOCKED_RELATIONSHIP_TERMS for token in tokens)
+
+
+def _is_meaningful_relationship_type(value: Optional[str]) -> bool:
+    normalized = _normalize_relationship_type(value)
+    if not normalized:
+        return False
+    tokens = [token for token in normalized.replace("-", " ").split() if token]
+    if not tokens:
+        return False
+    return not all(token in _BLOCKED_RELATIONSHIP_TERMS for token in tokens)
+
+
 def _infer_relationship_pairs(people: list[str], full_text: str) -> list[dict[str, str]]:
     """
     Infer explicit relationship pairs between people mentioned in text.
@@ -3233,6 +3266,8 @@ People mentions (exact strings):
 
 Rules:
 - Only include relationships explicitly stated in the text.
+- Only include durable interpersonal relationships or meaningful real-world roles.
+- Do NOT include temporary event roles or co-presence labels such as guest, host, attendee, participant, or visitor.
 - "person_text" and "anchor_text" must be in the list above or "user".
 - "relationship_hint" should be the role/profession/relationship term (e.g., "neurologist", "teacher", "mother", "personal trainer").
 - Prefer specific types over general terms WHEN POSSIBLE (e.g., "Electric Engineer" over "Engineer", "Orthopedist" over "Doctor").
@@ -3267,6 +3302,8 @@ Return ONLY valid JSON:
         anchor_text = item.get("anchor_text")
         relationship_hint = item.get("relationship_hint")
         if not person_text or not anchor_text or not relationship_hint:
+            continue
+        if not _is_meaningful_relationship_hint(relationship_hint):
             continue
         if person_text == anchor_text:
             continue
@@ -3310,6 +3347,7 @@ Full context: "{full_text}"
 
 Rules:
 - If the relationship hint does not indicate a relationship, return nulls.
+- Do NOT convert temporary event roles or co-presence labels into saved relationships. Reject hints like guest, host, attendee, participant, or visitor.
 - "type" is what Person A is to Person B.
 - "other_type" is what Person B is to Person A.
 - Use concise, lowercase terms.
@@ -3336,6 +3374,10 @@ Return ONLY a valid JSON:
 
     invalid_types = {"self", "same", "same person", "identical", "me"}
     if not rel_type or not other_type or rel_type in invalid_types or other_type in invalid_types:
+        return None
+    if not _is_meaningful_relationship_type(rel_type):
+        return None
+    if not _is_meaningful_relationship_type(other_type):
         return None
 
     return {"type": rel_type, "other_type": other_type}

@@ -1294,3 +1294,54 @@ def test_nested_relationship_fallback_uses_top_level_contact_id(monkeypatch):
     assert result["found"] is True
     assert result["contact_id"] == "contact:family-member"
     assert result["display_name"] == "Family Member"
+
+
+def test_infer_relationship_pairs_filters_generic_event_roles(monkeypatch):
+    monkeypatch.setattr(
+        resolver,
+        "_call_contact_resolution_llm_json",
+        lambda *_args, **_kwargs: {
+            "relationships": [
+                {
+                    "person_text": "user",
+                    "anchor_text": "Dana Lewis",
+                    "relationship_hint": "guest",
+                },
+                {
+                    "person_text": "Alice",
+                    "anchor_text": "Bob",
+                    "relationship_hint": "doctor",
+                },
+            ]
+        },
+    )
+
+    result = resolver._infer_relationship_pairs(
+        ["user", "Dana Lewis", "Alice", "Bob"],
+        "Went to Dana's place and Alice is Bob's doctor",
+    )
+
+    assert result == [
+        {
+            "person_text": "Alice",
+            "anchor_text": "Bob",
+            "relationship_hint": "doctor",
+        }
+    ]
+
+
+def test_infer_relationship_types_rejects_generic_event_roles(monkeypatch):
+    monkeypatch.setattr(
+        resolver,
+        "_call_contact_resolution_llm_json",
+        lambda *_args, **_kwargs: {"type": "attendee", "other_type": "host"},
+    )
+
+    result = resolver._infer_relationship_types(
+        "user",
+        "Dana Lewis",
+        "guest",
+        "Went to Dana's place",
+    )
+
+    assert result is None
