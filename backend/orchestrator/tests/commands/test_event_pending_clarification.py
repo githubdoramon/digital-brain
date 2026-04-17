@@ -132,7 +132,7 @@ def test_handle_event_raises_when_llm_is_unavailable(monkeypatch):
 def test_replace_generic_terms_handles_none_values():
     assert event_handler._replace_generic_terms_in_text(None, {"my wife": "Ana"}) == ""
     assert (
-        event_handler._replace_generic_terms_in_text("Dinner with my wife", {"my wife": None})
+        event_handler._replace_generic_terms_in_text("Dinner with my wife", {"my wife": ""})
         == "Dinner with "
     )
 
@@ -573,6 +573,142 @@ def test_handle_event_uses_contact_place_relation_before_global_match(monkeypatc
     pending_link = result.get("resolution", {}).get("pending_contact_place_link")
     assert pending_link
     assert pending_link.get("contact_id") == "contact:jose"
+    assert pending_link.get("role") == "home"
+
+
+def test_handle_event_maps_curly_apostrophe_place_to_contact_home(monkeypatch):
+    def fake_extract_event_entities(
+        event_message,
+        context,
+        existing_extracted=None,
+        clarification_messages=None,
+    ):
+        return {
+            "title": "Visited",
+            "summary": "Visited Dana",
+            "when": None,
+            "where": "Dana’s place",
+            "tags": ["personal"],
+            "types": ["memory"],
+            "need_user_input": None,
+        }
+
+    def fake_resolve_contacts(*_args, **_kwargs):
+        return (
+            {
+                "contacts": [
+                    {
+                        "contact_id": "contact:dana",
+                        "display_name": "Dana Lewis",
+                        "query": "Dana Lewis",
+                        "confidence": "high",
+                    }
+                ],
+                "new_entities": {"contacts": [], "places": [], "documents": []},
+                "name_replacements": {},
+            },
+            {"ambiguous_contacts": [], "suggested_relationships": []},
+        )
+
+    monkeypatch.setattr(
+        "commands.handlers.event._extract_event_entities_with_llm",
+        fake_extract_event_entities,
+    )
+    monkeypatch.setattr(
+        "commands.handlers.event._resolve_contacts_with_agent",
+        fake_resolve_contacts,
+    )
+    monkeypatch.setattr(
+        "commands.handlers.event.places_service.resolve_contact_place",
+        lambda *_a, **_k: {
+            "place_id": "plc_dana_home",
+            "name": "Dana Lewis Home",
+            "confidence": "high",
+            "matched_via": "contact_place_relation",
+        },
+    )
+    monkeypatch.setattr(
+        "commands.handlers.event.places_service.find_best_place_match",
+        lambda *_a, **_k: None,
+    )
+
+    parsed = ParsedCommand(command="event", args="visit", raw_message="/event visit")
+    context = {"user_email": "user@example.com", "event_pending_key": "user@example.com:thread-curly"}
+
+    result = handle_event(parsed, context)
+    assert result.get("type") == "event_confirmation"
+    assert result.get("extracted", {}).get("where") == "Dana Lewis Home"
+    assert result.get("resolution", {}).get("matched_place", {}).get("place_id") == "plc_dana_home"
+
+
+def test_handle_event_suggests_new_contact_scoped_place_when_unresolved(monkeypatch):
+    def fake_extract_event_entities(
+        event_message,
+        context,
+        existing_extracted=None,
+        clarification_messages=None,
+    ):
+        return {
+            "title": "Visited",
+            "summary": "Visited Dana",
+            "when": None,
+            "where": "Dana's place",
+            "tags": ["personal"],
+            "types": ["memory"],
+            "need_user_input": None,
+        }
+
+    def fake_resolve_contacts(*_args, **_kwargs):
+        return (
+            {
+                "contacts": [
+                    {
+                        "contact_id": "contact:dana",
+                        "display_name": "Dana Lewis",
+                        "query": "Dana Lewis",
+                        "confidence": "high",
+                    }
+                ],
+                "new_entities": {"contacts": [], "places": [], "documents": []},
+                "name_replacements": {},
+            },
+            {"ambiguous_contacts": [], "suggested_relationships": []},
+        )
+
+    monkeypatch.setattr(
+        "commands.handlers.event._extract_event_entities_with_llm",
+        fake_extract_event_entities,
+    )
+    monkeypatch.setattr(
+        "commands.handlers.event._resolve_contacts_with_agent",
+        fake_resolve_contacts,
+    )
+    monkeypatch.setattr(
+        "commands.handlers.event.places_service.resolve_contact_place",
+        lambda *_a, **_k: None,
+    )
+    monkeypatch.setattr(
+        "commands.handlers.event.places_service.find_best_place_match",
+        lambda *_a, **_k: None,
+    )
+    monkeypatch.setattr(
+        "commands.handlers.event.geocode_place_name",
+        lambda *_a, **_k: None,
+    )
+
+    parsed = ParsedCommand(command="event", args="visit", raw_message="/event visit")
+    context = {"user_email": "user@example.com", "event_pending_key": "user@example.com:thread-new-place"}
+
+    result = handle_event(parsed, context)
+    assert result.get("type") == "event_confirmation"
+    assert result.get("extracted", {}).get("where") == "Dana Lewis Home"
+    assert result.get("resolution", {}).get("matched_place") is None
+    assert result.get("resolution", {}).get("new_entities", {}).get("places") == [
+        {"name": "Dana Lewis Home", "query": "Dana's place"}
+    ]
+    pending_link = result.get("resolution", {}).get("pending_contact_place_link")
+    assert pending_link
+    assert pending_link.get("contact_id") == "contact:dana"
     assert pending_link.get("role") == "home"
 
 

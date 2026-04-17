@@ -43,50 +43,36 @@ _EVENT_FIELD_RULES: dict[str, dict[str, bool]] = {
     "who": {"extractable": False},
 }
 
-_PLACE_ROLE_SYNONYMS = {
+_PLACE_ROLE_DEFINITIONS = {
     # Home-like
-    "home": "home",
-    "house": "home",
-    "residence": "home",
-    "apartment": "home",
-    "apt": "home",
-    "condo": "home",
-    "flat": "home",
-    "parents": "family_home",
-    "family": "family_home",
-    "partner": "partner_home",
-    "secondary": "secondary_home",
+    "home": {"label": "Home", "aliases": {"home", "house", "place", "residence", "apartment", "apt", "condo", "flat"}},
+    "family_home": {"label": "Family Home", "aliases": {"parents", "family"}},
+    "partner_home": {"label": "Partner Home", "aliases": {"partner"}},
+    "secondary_home": {"label": "Secondary Home", "aliases": {"secondary"}},
     # Work-like
-    "work": "work",
-    "office": "work",
-    "workplace": "work",
-    "job": "work",
-    "company": "work",
-    "hq": "hq",
-    "headquarters": "hq",
-    "branch": "branch_office",
-    "coworking": "coworking",
-    "cowork": "coworking",
-    "client": "client_site",
+    "work": {"label": "Work", "aliases": {"work", "office", "workplace", "job", "company"}},
+    "hq": {"label": "HQ", "aliases": {"hq", "headquarters"}},
+    "branch_office": {"label": "Branch Office", "aliases": {"branch"}},
+    "coworking": {"label": "Coworking", "aliases": {"coworking", "cowork"}},
+    "client_site": {"label": "Client Site", "aliases": {"client"}},
     # Education
-    "school": "school",
-    "campus": "campus",
-    "college": "school",
-    "university": "school",
+    "school": {"label": "School", "aliases": {"school", "college", "university"}},
+    "campus": {"label": "Campus", "aliases": {"campus"}},
     # Other common categories
-    "gym": "gym",
-    "club": "club",
-    "community": "community_space",
-    "church": "worship_place",
-    "temple": "worship_place",
-    "mosque": "worship_place",
-    "hospital": "healthcare",
-    "clinic": "healthcare",
-    "doctor": "healthcare",
-    "favorite": "favorite_spot",
-    "spot": "frequent_spot",
-    "frequent": "frequent_spot",
-    "other": "other",
+    "gym": {"label": "Gym", "aliases": {"gym"}},
+    "club": {"label": "Club", "aliases": {"club"}},
+    "community_space": {"label": "Community Space", "aliases": {"community"}},
+    "worship_place": {"label": "Place of Worship", "aliases": {"church", "temple", "mosque"}},
+    "healthcare": {"label": "Healthcare", "aliases": {"hospital", "clinic", "doctor"}},
+    "favorite_spot": {"label": "Favorite Spot", "aliases": {"favorite"}},
+    "frequent_spot": {"label": "Frequent Spot", "aliases": {"spot", "frequent"}},
+    "other": {"label": "Place", "aliases": {"other"}},
+}
+
+_PLACE_ROLE_SYNONYMS = {
+    alias: role
+    for role, config in _PLACE_ROLE_DEFINITIONS.items()
+    for alias in config["aliases"]
 }
 
 _GENERIC_PLACE_ALIAS_TERMS = {
@@ -99,8 +85,7 @@ _GENERIC_PLACE_ALIAS_TERMS = {
 
 _INFERRED_PLACE_AUTO_MATCH_MAX_DISTANCE_M = 60.0
 _INFERRED_PLACE_AUTO_MATCH_CONFIDENCE = {"high"}
-
-
+_CONTACT_SCOPED_POSSESSIVE_PATTERN = r"(?:'|’|`|´)s"
 def _extract_client_location(context: dict[str, Any]) -> dict[str, Any] | None:
     client_context = context.get("client_context")
     if not isinstance(client_context, dict):
@@ -171,7 +156,10 @@ def _extract_contact_scoped_place_hint(where_text: str) -> dict[str, str] | None
         return None
 
     patterns = [
-        re.compile(r"^(?P<person>.+?)\s*'s\s+(?P<role>[a-zA-Z\s]+)$", flags=re.IGNORECASE),
+        re.compile(
+            rf"^(?P<person>.+?)\s*{_CONTACT_SCOPED_POSSESSIVE_PATTERN}\s+(?P<role>[a-zA-Z\s]+)$",
+            flags=re.IGNORECASE,
+        ),
         re.compile(r"^(?P<role>[a-zA-Z\s]+)\s+of\s+(?P<person>.+?)$", flags=re.IGNORECASE),
         re.compile(r"^at\s+(?P<person>.+?)\s+(?P<role>[a-zA-Z\s]+)$", flags=re.IGNORECASE),
     ]
@@ -189,6 +177,25 @@ def _extract_contact_scoped_place_hint(where_text: str) -> dict[str, str] | None
                 "raw_role": role,
             }
     return None
+
+
+def _build_contact_scoped_place_name(contact_place_hint: dict[str, Any]) -> str | None:
+    contact_name = str(
+        contact_place_hint.get("contact_display_name")
+        or contact_place_hint.get("contact_query")
+        or ""
+    ).strip()
+    role = str(contact_place_hint.get("role") or "").strip()
+    if not contact_name or not role:
+        return None
+
+    role_config = _PLACE_ROLE_DEFINITIONS.get(role)
+    role_label = str((role_config or {}).get("label") or "").strip()
+    if not role_label:
+        role_label = role.replace("_", " ").strip().title()
+    if not role_label:
+        return None
+    return f"{contact_name} {role_label}".strip()
 
 
 def _resolve_contact_id_from_resolution(
@@ -216,6 +223,19 @@ def _resolve_contact_id_from_resolution(
             return contact_id, display_name or None, query_text or None, confidence
         if query_text and normalize_search_text(query_text) == normalized_target:
             return contact_id, display_name or None, query_text or None, confidence
+
+    partial_matches: list[tuple[str, str, str, str | None]] = []
+    for contact_id, display_name, query_text, confidence in candidates:
+        display_name_norm = normalize_search_text(display_name)
+        query_text_norm = normalize_search_text(query_text) if query_text else ""
+        if normalized_target and (
+            normalized_target in display_name_norm or normalized_target in query_text_norm
+        ):
+            partial_matches.append((contact_id, display_name, query_text, confidence))
+
+    if len(partial_matches) == 1:
+        contact_id, display_name, query_text, confidence = partial_matches[0]
+        return contact_id, display_name or None, query_text or None, confidence
 
     return None, None, None, None
 
@@ -739,12 +759,12 @@ def _extract_event_entities_with_llm(
     extraction_prompt = f"""You are extracting structured information from a user's event description to create a memory entry.
 
 Current context:
-- Date/time: {time_context}
-- User: {user_email}
-{user_facts_block}
-Event description: "{message}"
+- Date/time: {time_context}\n
+- User: {user_email}\n
+{user_facts_block}\n
+Event description: "{message}"\n
 
-{existing_context}{target_field_context}{conversation_context}{clarification_context}
+{existing_context}{target_field_context}{conversation_context}{clarification_context}\n
 
 Extract the following information:
 1. **What happened**: A brief title (5-10 words) and detailed summary
@@ -1997,6 +2017,13 @@ def handle_event(parsed: ParsedCommand, context: dict) -> dict[str, Any]:
                 "query": where,
             }
 
+            suggested_contact_place_name = None
+            if contact_place_hint:
+                suggested_contact_place_name = _build_contact_scoped_place_name(contact_place_hint)
+                if suggested_contact_place_name:
+                    extracted["where"] = suggested_contact_place_name
+                    new_place_payload["name"] = suggested_contact_place_name
+
             if where_source == "inferred_location" and isinstance(inferred_location, dict):
                 address = str(inferred_location.get("address") or "").strip()
                 city = str(inferred_location.get("city") or "").strip()
@@ -2011,7 +2038,7 @@ def handle_event(parsed: ParsedCommand, context: dict) -> dict[str, Any]:
                     value = inferred_location.get(coordinate)
                     if value is not None:
                         new_place_payload[coordinate] = value
-            elif where_source == "extracted":
+            elif where_source == "extracted" and not contact_place_hint:
                 near_lat = None
                 near_lon = None
                 if isinstance(client_location, dict):
@@ -2029,6 +2056,17 @@ def handle_event(parsed: ParsedCommand, context: dict) -> dict[str, Any]:
                             new_place_payload[field_name] = field_value
 
             resolution["new_entities"]["places"].append(new_place_payload)
+
+            if (
+                contact_place_hint
+                and str(contact_place_hint.get("confidence") or "").strip().lower() == "high"
+            ):
+                resolution["pending_contact_place_link"] = {
+                    "contact_id": contact_place_hint.get("contact_id"),
+                    "role": contact_place_hint.get("role"),
+                    "source": contact_place_hint.get("source") or "event_inference",
+                    "confidence": contact_place_hint.get("confidence") or "high",
+                }
 
         final_matched_place = (
             resolution.get("matched_place") if isinstance(resolution, dict) else None
