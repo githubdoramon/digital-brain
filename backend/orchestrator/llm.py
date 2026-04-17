@@ -343,7 +343,7 @@ async def answer_question_stream(
 
 def _generate_thread_title(question: str) -> str | None:
     """Generate a thread title from the first question."""
-    from llm_helpers import call_llm
+    from llm_helpers import LLMUnavailableError, call_llm
 
     prompt = (
         "Generate a very short title (3-6 words) for a conversation that starts with this question. "
@@ -359,5 +359,8 @@ def _generate_thread_title(question: str) -> str | None:
 
         return title if title else None
     except Exception as exc:
+        if isinstance(exc, LLMUnavailableError):
+            logger.warning("[agent] LLM unavailable while generating thread title; leaving default title")
+            return None
         logger.warning("[agent] Failed to generate thread title: %s", exc, exc_info=exc)
         return None

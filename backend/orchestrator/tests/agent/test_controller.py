@@ -14,6 +14,7 @@ from agent.guardrails import build_contact_scope_context
 from agent.limits import AgentConfig, LimitType
 from agent.state import AgentState, ToolCallRecord
 from agents.main.agent import build_main_conversational_agent
+from llm_helpers import LLMUnavailableError
 
 
 def _build_controller(config: AgentConfig | None = None) -> AgentController:
@@ -1035,6 +1036,23 @@ class TestContactAwareMemorySearch:
         assert preempt is not None
         assert preempt.get("status") == "need_user_input"
         assert called["count"] == 0
+
+    def test_ensure_contact_scope_reraises_llm_unavailable(self, controller, monkeypatch):
+        state = AgentState(goal="When did I meet Gio?")
+
+        def fake_resolver(_payload):
+            raise LLMUnavailableError("LLM service is unavailable")
+
+        monkeypatch.setattr("contact_resolution_service.resolve_contacts_request", fake_resolver)
+
+        with pytest.raises(LLMUnavailableError):
+            controller._ensure_contact_scope(
+                state=state,
+                text="When did I meet Gio?",
+                user_email="user@example.com",
+                conversation_history=[],
+                require_person_query=True,
+            )
 
     def test_builds_contact_scope_context_message(self, controller):
         state = AgentState(goal="When did I last meet Gio?")

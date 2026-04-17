@@ -1,5 +1,7 @@
 import re
 
+import pytest
+
 import commands.event as event_command
 from commands.event import event_pending_key, handle_pending_event
 from commands.handlers import event as event_handler
@@ -88,6 +90,43 @@ def test_handle_event_sets_pending_key_for_clarification(monkeypatch):
 
     clear_pending_event(pending_key)
     delete_command_data(clarification_id)
+
+
+def test_handle_event_raises_when_llm_is_unavailable(monkeypatch):
+    def fake_extract_event_entities(*_args, **_kwargs):
+        raise event_handler.LLMUnavailableError("LLM service is unavailable")
+
+    def fake_resolve_contacts(*_args, **_kwargs):
+        return (
+            {
+                "contacts": [],
+                "new_entities": {"contacts": [], "places": [], "documents": []},
+                "name_replacements": {},
+            },
+            {"ambiguous_contacts": [], "suggested_relationships": []},
+        )
+
+    monkeypatch.setattr(
+        "commands.handlers.event._extract_event_entities_with_llm",
+        fake_extract_event_entities,
+    )
+    monkeypatch.setattr(
+        "commands.handlers.event._resolve_contacts_with_agent",
+        fake_resolve_contacts,
+    )
+
+    parsed = ParsedCommand(
+        command="event",
+        args="Met with Alex to discuss roadmap",
+        raw_message="/event Met with Alex to discuss roadmap",
+    )
+    context = {
+        "user_email": "user@example.com",
+        "event_pending_key": "user@example.com:thread-123",
+    }
+
+    with pytest.raises(event_handler.LLMUnavailableError):
+        handle_event(parsed, context)
 
 
 def test_replace_generic_terms_handles_none_values():

@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 from typing import TYPE_CHECKING, Any, Callable
 
+from llm_helpers import LLMUnavailableError
 from observability import trace
 from search_normalization import normalize_search_text
 from ui_dsl.clarification import (
@@ -190,6 +191,8 @@ def resolve_contacts_for_text(
         update_state(state, {"text": normalized_text}, resolution)
         return resolution
     except Exception as e:
+        if isinstance(e, LLMUnavailableError):
+            raise
         trace.trace_tool_error(
             "resolve_contacts",
             f"Contact resolution failed: {e}",

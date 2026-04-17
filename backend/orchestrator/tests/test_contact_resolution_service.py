@@ -1,6 +1,7 @@
 """Tests for shared contact resolution service behavior."""
 
 import contact_resolution_service as service
+from llm_helpers import LLMUnavailableError
 
 
 def test_service_builds_need_user_input_for_ambiguity(monkeypatch):
@@ -104,3 +105,22 @@ def test_service_forwards_resolution_mode(monkeypatch):
 
     assert result["status"] == "success"
     assert captured["mode"] == "minimal"
+
+
+def test_service_reraises_llm_unavailable_errors(monkeypatch):
+    def fake_resolve(_text, _user_email, conversation_messages=None, mode="full"):
+        raise LLMUnavailableError("LLM service is unavailable")
+
+    monkeypatch.setattr(service, "resolve_contacts_from_text", fake_resolve)
+
+    try:
+        service.resolve_contacts_request(
+            {
+                "text": "When did I meet Gio?",
+                "user_email": "user@example.com",
+            }
+        )
+    except LLMUnavailableError as exc:
+        assert str(exc) == "LLM service is unavailable"
+    else:
+        raise AssertionError("Expected LLMUnavailableError")

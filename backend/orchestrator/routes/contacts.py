@@ -9,6 +9,7 @@ import contacts as contacts_service
 import immich_client
 import places as places_service
 from auth import get_current_user, require_service_api_key
+from llm_helpers import LLMUnavailableError
 from observability.logger import get_runtime_logger
 from schemas import (
     ContactGroupIn,
@@ -21,6 +22,13 @@ from schemas import (
 )
 
 logger = get_runtime_logger(__name__)
+
+
+def _raise_http_for_llm_unavailable(exc: Exception) -> None:
+    raise HTTPException(
+        status_code=503,
+        detail="The LLM service is currently unavailable. Please try again shortly.",
+    ) from exc
 
 
 def create_contacts_router(
@@ -234,7 +242,10 @@ def create_contacts_router(
             raise HTTPException(status_code=400, detail="Authenticated user email missing")
 
         request_data["user_email"] = user_email
-        return resolve_contacts_request(request_data)
+        try:
+            return resolve_contacts_request(request_data)
+        except LLMUnavailableError as exc:
+            _raise_http_for_llm_unavailable(exc)
 
     @router.post("/webhooks/contacts")
     def receive_contact_webhook(

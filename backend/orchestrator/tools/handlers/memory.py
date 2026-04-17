@@ -360,8 +360,6 @@ def _synthesize_memory_summary(
     documents: list[dict[str, Any]],
     inspected_documents: list[dict[str, Any]],
 ) -> str:
-    from llm_helpers import call_llm
-
     evidence_char_budget = 48_000
     current_chars = 0
     event_lines: list[str] = []
@@ -431,13 +429,27 @@ def _synthesize_memory_summary(
         )
     )
     try:
+        from llm_helpers import LLMUnavailableError, call_llm
+
         return call_llm(
             user_prompt,
             system_prompt=system_prompt,
             timeout=180,
             temperature=0.1,
         ).strip()
-    except Exception:
+    except Exception as exc:
+        if isinstance(exc, LLMUnavailableError):
+            from observability.logger import get_runtime_logger
+
+            get_runtime_logger(__name__).warning(
+                "[memory] LLM unavailable during bounded summary synthesis; using deterministic fallback"
+            )
+            return _build_summary_fallback(
+                focus=focus,
+                events=events,
+                documents=documents,
+                inspected_documents=inspected_documents,
+            )
         return _build_summary_fallback(
             focus=focus,
             events=events,

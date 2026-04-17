@@ -14,6 +14,7 @@ from uuid import uuid4
 import places as places_service
 from commands.parser import ParsedCommand
 from commands.registry import CommandRegistry
+from llm_helpers import LLMUnavailableError
 from location_inference import geocode_place_name, infer_current_place
 from observability.logger import get_runtime_logger
 from search_normalization import normalize_search_text
@@ -859,6 +860,10 @@ Return ONLY valid JSON in this exact format:
         return result
 
     except Exception as e:
+        if isinstance(e, LLMUnavailableError):
+            logger.error("[event_extraction] Critical LLM outage during extraction: %s", e)
+            raise
+
         logger.exception("[event_extraction] LLM extraction failed: %s", e)
 
         # Fallback to basic extraction

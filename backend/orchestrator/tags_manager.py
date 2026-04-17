@@ -267,6 +267,11 @@ def _suggest_tags(
         parsed = _parse_suggested_tags_response(raw_content)
         return parsed[:MAX_SUGGESTED_TAGS]
     except Exception as exc:
+        from llm_helpers import LLMUnavailableError
+
+        if isinstance(exc, LLMUnavailableError):
+            logger.warning("[tags_manager] LLM unavailable while generating tags; skipping tag suggestions")
+            return []
         logger.warning("[tags_manager] Failed to generate tags: %s", exc, exc_info=exc)
         return []
 

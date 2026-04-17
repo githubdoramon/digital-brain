@@ -9,6 +9,7 @@ from agents.contacts.resolver import (
     use_contact_resolution_model,
     use_contact_resolution_timeout,
 )
+from llm_helpers import LLMUnavailableError
 from observability.logger import get_runtime_logger
 from ui_dsl.clarification import (
     build_need_user_input,
@@ -98,6 +99,9 @@ def resolve_contacts_request(data: dict[str, Any]) -> dict[str, Any]:
         result["status"] = status
         return result
     except Exception as e:
+        if isinstance(e, LLMUnavailableError):
+            logger.error("[contact_resolution_service] Critical LLM outage: %s", e)
+            raise
         logger.exception("[contact_resolution_service] Error: %s", e)
         return {"status": "error", "message": f"Internal error: {str(e)}"}
 

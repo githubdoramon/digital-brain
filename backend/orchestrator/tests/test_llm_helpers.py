@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock
 
+import requests
+
 import llm_helpers
 
 
@@ -52,3 +54,31 @@ def test_warm_fast_model_uses_ollama_chat_endpoint(monkeypatch):
         "keep_alive": "24h",
     }
     assert kwargs["timeout"] == 12
+
+
+def test_is_llm_unavailable_error_recognizes_retryable_http_errors():
+    response = MagicMock()
+    response.status_code = 503
+    exc = requests.HTTPError("HTTP 503", response=response)
+
+    assert llm_helpers.is_llm_unavailable_error(exc) is True
+
+
+def test_post_chat_completion_wraps_timeout_as_llm_unavailable(monkeypatch):
+    monkeypatch.setenv("LLM_BASE_URL", "http://localhost:11434/v1")
+    monkeypatch.setattr(llm_helpers, "LLM_MAX_RETRIES", 1)
+    monkeypatch.setattr(
+        llm_helpers.requests,
+        "post",
+        MagicMock(side_effect=requests.Timeout("timed out")),
+    )
+
+    try:
+        llm_helpers._post_chat_completion(
+            {"model": "test-model", "messages": [{"role": "user", "content": "hi"}]},
+            timeout=1,
+        )
+    except llm_helpers.LLMUnavailableError as exc:
+        assert str(exc) == "LLM service is unavailable"
+    else:
+        raise AssertionError("Expected LLMUnavailableError")

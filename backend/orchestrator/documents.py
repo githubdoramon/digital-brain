@@ -651,6 +651,11 @@ def _suggest_document_date(content: str, fallback: str | None) -> datetime | Non
         if candidate:
             return candidate
     except Exception as exc:
+        from llm_helpers import LLMUnavailableError
+
+        if isinstance(exc, LLMUnavailableError):
+            logger.warning("[documents] LLM unavailable while inferring date; using no inferred date")
+            return None
         logger.warning("[documents] Failed to infer date: %s", exc, exc_info=exc)
     return None
 
@@ -805,6 +810,16 @@ def _translate_text_to_english(
         ).strip()
         return candidate or text
     except Exception as exc:
+        from llm_helpers import LLMUnavailableError
+
+        if isinstance(exc, LLMUnavailableError):
+            logger.warning(
+                "[documents] LLM unavailable during translation; keeping original text document_id=%s chunk=%s/%s",
+                document_id or "unknown",
+                "?" if chunk_index is None else chunk_index + 1,
+                "?" if total_chunks is None else total_chunks,
+            )
+            return text
         logger.warning(
             "[documents] translation failed document_id=%s chunk=%s/%s error=%s",
             document_id or "unknown",
@@ -909,6 +924,11 @@ def _translate_tags_to_english(tags: Sequence[str]) -> list[str]:
                         translated.append(cleaned)
             return translated or normalized
     except Exception as exc:
+        from llm_helpers import LLMUnavailableError
+
+        if isinstance(exc, LLMUnavailableError):
+            logger.warning("[documents] LLM unavailable while translating tags; keeping original tags")
+            return normalized
         logger.warning("[documents] Failed to translate tags: %s", exc, exc_info=exc)
     return normalized
 
@@ -931,6 +951,13 @@ def _summarize_description(content: str) -> str | None:
         ).strip()
         return candidate or None
     except Exception as exc:
+        from llm_helpers import LLMUnavailableError
+
+        if isinstance(exc, LLMUnavailableError):
+            logger.warning(
+                "[documents] LLM unavailable while summarizing description; using deterministic fallback"
+            )
+            return None
         logger.warning("[documents] Failed to summarize description: %s", exc, exc_info=exc)
         return None
 
@@ -1676,5 +1703,12 @@ def _suggest_title(content: str, fallback: str | None) -> str | None:
         if candidate:
             return candidate.splitlines()[0].strip()
     except Exception as exc:
+        from llm_helpers import LLMUnavailableError
+
+        if isinstance(exc, LLMUnavailableError):
+            logger.warning(
+                "[documents] LLM unavailable while generating title; falling back to filename-derived title"
+            )
+            return _derive_title_from_filename(fallback)
         logger.warning("[documents] Failed to generate title: %s", exc, exc_info=exc)
     return _derive_title_from_filename(fallback)

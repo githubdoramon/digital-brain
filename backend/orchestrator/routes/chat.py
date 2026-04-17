@@ -19,6 +19,7 @@ from commands.event import (
     handle_pending_event,
 )
 from db import get_conn
+from llm_helpers import LLMUnavailableError
 from observability.logger import get_runtime_logger
 from schemas import (
     AskIn,
@@ -37,6 +38,18 @@ logger = get_runtime_logger(__name__)
 
 ASK_RUNS_TTL_SECONDS = 1800
 _ask_runs: dict[str, dict[str, Any]] = {}
+
+
+def _llm_unavailable_message() -> str:
+    return "The LLM service is currently unavailable. Please try again shortly."
+
+
+def _llm_unavailable_error_payload() -> dict[str, str]:
+    return {"code": "llm_unavailable", "message": _llm_unavailable_message()}
+
+
+def _raise_http_for_llm_unavailable(exc: Exception) -> None:
+    raise HTTPException(status_code=503, detail=_llm_unavailable_message()) from exc
 
 
 def create_chat_router() -> APIRouter:
@@ -120,6 +133,8 @@ def create_chat_router() -> APIRouter:
                     ui_directives=command_ui_directives,
                     pending_event_id=pending_event_id,
                 )
+        except LLMUnavailableError as exc:
+            _raise_http_for_llm_unavailable(exc)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -171,20 +186,23 @@ def create_chat_router() -> APIRouter:
 
             background_tasks.add_task(maybe_extract_facts, **kwargs)
 
-        bundle = await llm.answer_question(
-            ctx.question,
-            search_limit=limit,
-            user_id=user_email,
-            session_id=ctx.session_id,
-            user_email=user_email,
-            client_context=payload.client_context.model_dump(exclude_none=True)
-            if payload.client_context
-            else None,
-            ui_submission=payload.ui_submission.model_dump(exclude_none=True)
-            if payload.ui_submission
-            else None,
-            on_exchange_persisted=_schedule_fact_extraction,
-        )
+        try:
+            bundle = await llm.answer_question(
+                ctx.question,
+                search_limit=limit,
+                user_id=user_email,
+                session_id=ctx.session_id,
+                user_email=user_email,
+                client_context=payload.client_context.model_dump(exclude_none=True)
+                if payload.client_context
+                else None,
+                ui_submission=payload.ui_submission.model_dump(exclude_none=True)
+                if payload.ui_submission
+                else None,
+                on_exchange_persisted=_schedule_fact_extraction,
+            )
+        except LLMUnavailableError as exc:
+            _raise_http_for_llm_unavailable(exc)
         bundle["thread_id"] = ctx.session_id
         bundle["session_id"] = ctx.session_id
         bundle["is_new_session"] = ctx.is_new_session
@@ -315,6 +333,15 @@ def create_chat_router() -> APIRouter:
                             error={"code": "validation_error", "message": str(exc)},
                         )
                         return {"type": "error", "message": str(exc)}
+                    except LLMUnavailableError:
+                        error_payload = _llm_unavailable_error_payload()
+                        _touch_ask_run(
+                            run_id,
+                            status="failed",
+                            status_message=None,
+                            error=error_payload,
+                        )
+                        return {"type": "error", **error_payload}
                     except Exception as exc:
                         logger.exception("[ask/stream] command error user=%s", user_email)
                         _touch_ask_run(
@@ -511,6 +538,17 @@ def create_chat_router() -> APIRouter:
                         if not disconnect_event.is_set():
                             await queue.put(event)
                 except Exception as exc:
+                    if isinstance(exc, LLMUnavailableError):
+                        error_payload = _llm_unavailable_error_payload()
+                        _touch_ask_run(
+                            run_id,
+                            status="failed",
+                            status_message=None,
+                            error=error_payload,
+                        )
+                        if not disconnect_event.is_set():
+                            await queue.put({"type": "error", **error_payload})
+                        return
                     logger.exception("[ask/stream] error session=%s", ctx.session_id)
                     _touch_ask_run(
                         run_id,

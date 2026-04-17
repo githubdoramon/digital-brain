@@ -33,6 +33,10 @@ LLM_MAX_RETRIES = int(os.getenv("LLM_MAX_RETRIES", "3"))
 LLM_RETRY_BASE_DELAY = float(os.getenv("LLM_RETRY_BASE_DELAY", "1.0"))
 
 
+class LLMUnavailableError(RuntimeError):
+    """Raised when the LLM service cannot be reached on a critical path."""
+
+
 def _get_required_setting(name: str, fallback: str | None = None) -> str:
     """Return env setting value, raising only when an actual LLM call needs it."""
     value = os.getenv(name)
@@ -163,6 +167,34 @@ def _raise_for_llm_error(data: dict[str, Any]) -> None:
         raise RuntimeError(f"LLM API error: {error_msg}")
 
 
+def is_llm_unavailable_error(exc: BaseException) -> bool:
+    """Return True when an exception means the LLM service is unavailable."""
+    return isinstance(
+        exc,
+        (
+            LLMUnavailableError,
+            requests.ConnectionError,
+            requests.Timeout,
+            httpx.ConnectError,
+            httpx.ConnectTimeout,
+            httpx.ReadTimeout,
+        ),
+    ) or (
+        isinstance(exc, (requests.HTTPError, httpx.HTTPStatusError))
+        and getattr(getattr(exc, "response", None), "status_code", 0) in {429}
+    ) or (
+        isinstance(exc, (requests.HTTPError, httpx.HTTPStatusError))
+        and int(getattr(getattr(exc, "response", None), "status_code", 0) or 0) >= 500
+    )
+
+
+def _wrap_llm_unavailable(exc: BaseException, *, message: str | None = None) -> LLMUnavailableError:
+    detail = message or "LLM service is unavailable"
+    wrapped = LLMUnavailableError(detail)
+    wrapped.__cause__ = exc
+    return wrapped
+
+
 def _is_retryable_status(status_code: int) -> bool:
     """Return True for HTTP status codes that warrant a retry."""
     return status_code >= 500 or status_code == 429
@@ -238,6 +270,8 @@ def _post_chat_completion(
                 LLM_MAX_RETRIES,
                 _preview_response_text(response),
             )
+            if is_llm_unavailable_error(exc):
+                raise _wrap_llm_unavailable(exc) from exc
             raise
 
         except requests.Timeout as exc:
@@ -264,7 +298,7 @@ def _post_chat_completion(
                     resolved_timeout,
                     message_count,
                 )
-                raise
+                raise _wrap_llm_unavailable(exc) from exc
 
         except requests.ConnectionError as exc:
             last_exception = exc
@@ -280,7 +314,7 @@ def _post_chat_completion(
                 )
                 time.sleep(delay)
             else:
-                raise
+                raise _wrap_llm_unavailable(exc) from exc
 
     if last_exception is None:
         raise RuntimeError("LLM request failed without an exception")
@@ -424,7 +458,11 @@ async def stream_llm_chat(
                 )
                 await asyncio.sleep(delay)
             else:
-                raise
+                raise _wrap_llm_unavailable(exc) from exc
+        except httpx.HTTPStatusError as exc:
+            if is_llm_unavailable_error(exc):
+                raise _wrap_llm_unavailable(exc) from exc
+            raise
 
     if last_exception is None:
         raise RuntimeError("LLM stream request failed without an exception")

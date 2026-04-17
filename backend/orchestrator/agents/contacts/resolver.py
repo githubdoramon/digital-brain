@@ -30,7 +30,7 @@ from typing import Any, Optional
 
 import contact_groups as contact_groups_service
 import contacts as contacts_service
-from llm_helpers import call_llm_json
+from llm_helpers import LLMUnavailableError, call_llm_json
 from observability import trace
 from observability.logger import get_runtime_logger
 from prompts.clarification import append_clarification_guidelines
@@ -3154,6 +3154,12 @@ Return ONLY a valid JSON, nothing more, no other text or explanation:
         }
 
     except Exception as e:
+        if isinstance(e, LLMUnavailableError):
+            logger.error(
+                "[contact_resolver] Critical LLM outage during contact disambiguation: %s",
+                e,
+            )
+            raise
         logger.warning("[contact_resolver] LLM disambiguation failed: %s", e, exc_info=e)
         return {
             "resolved": False,

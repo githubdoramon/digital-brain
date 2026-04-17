@@ -4,6 +4,7 @@ import sys
 import types
 
 from agents.contacts import resolver
+from llm_helpers import LLMUnavailableError
 
 
 def test_llm_disambiguation_requires_context_signal(monkeypatch):
@@ -41,6 +42,30 @@ def test_llm_disambiguation_requires_context_signal(monkeypatch):
     assert new == []
     assert len(ambiguous) == 1
     assert ambiguous[0]["original_text"] == "Gio"
+
+
+def test_llm_disambiguation_reraises_llm_unavailable(monkeypatch):
+    monkeypatch.setattr(
+        resolver,
+        "_call_contact_resolution_llm_json",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            LLMUnavailableError("LLM service is unavailable")
+        ),
+    )
+
+    try:
+        resolver._llm_disambiguate_contact(
+            person_text="Gio",
+            candidates=[
+                {"contact_id": "contact:gio-a", "display_name": "Giovanni Panerai"},
+                {"contact_id": "contact:gio-b", "display_name": "Giovanni Ghelfi"},
+            ],
+            event_context="When did I meet Gio?",
+        )
+    except LLMUnavailableError as exc:
+        assert str(exc) == "LLM service is unavailable"
+    else:
+        raise AssertionError("Expected LLMUnavailableError")
 
 
 def test_llm_disambiguation_accepted_when_context_is_specific(monkeypatch):
