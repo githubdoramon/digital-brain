@@ -33,10 +33,6 @@ const SERVICE_KEY_RULES: ServiceKeyRule[] = [
     prefix: "/api/webhooks/telegram",
     header: "x-telegram-bot-api-secret-token",
   },
-  {
-    prefix: "/api/robot-gateway/",
-    header: "x-service-api-key",
-  },
 ];
 
 const authMiddleware = withAuth({

@@ -4,6 +4,8 @@ import { ProxyFetchInit } from "@/types/proxy";
 const ROBOT_GATEWAY_BASE =
   process.env.ROBOT_GATEWAY_API_BASE ?? "http://localhost:8001";
 
+const SERVICE_API_KEY = process.env.ORCHESTRATOR_API_KEY ?? "";
+
 const ALLOWED_METHODS = ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"];
 
 export async function handler(
@@ -24,6 +26,11 @@ export async function handler(
 
   const headers = new Headers(request.headers);
   headers.delete("host");
+
+  // Inject service API key for backend authentication
+  if (SERVICE_API_KEY) {
+    headers.set("x-service-api-key", SERVICE_API_KEY);
+  }
 
   const init: ProxyFetchInit = {
     method: request.method,
