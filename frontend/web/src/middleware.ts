@@ -33,6 +33,10 @@ const SERVICE_KEY_RULES: ServiceKeyRule[] = [
     prefix: "/api/webhooks/telegram",
     header: "x-telegram-bot-api-secret-token",
   },
+  {
+    prefix: "/api/robot-gateway/",
+    header: "x-service-api-key",
+  },
 ];
 
 const authMiddleware = withAuth({
@@ -78,7 +82,10 @@ export default function middleware(request: NextRequest, event: NextFetchEvent) 
     return NextResponse.next();
   }
 
-  if (pathname.startsWith("/api/mobile")) {
+  if (
+    pathname.startsWith("/api/mobile") ||
+    pathname.startsWith("/api/robot-gateway/mobile/")
+  ) {
     const authHeader = request.headers.get("authorization");
     if (authHeader?.toLowerCase().startsWith("bearer ")) {
       return NextResponse.next();

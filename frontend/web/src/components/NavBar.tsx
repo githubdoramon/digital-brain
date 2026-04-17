@@ -99,6 +99,14 @@ export async function NavBar() {
             >
               Tools
             </Link>
+            <Link
+              href="/robots"
+              style={{
+                color: "#444",
+              }}
+            >
+              Robots
+            </Link>
           </nav>
           
           {session?.user && (

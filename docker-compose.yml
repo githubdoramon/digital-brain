@@ -49,6 +49,50 @@ services:
     ports:
       - "3000:3000"
 
+  mosquitto:
+    image: eclipse-mosquitto:2
+    container_name: mem-mosquitto
+    entrypoint: /mosquitto/config/entrypoint.sh
+    env_file:
+      - ./backend/.env
+    ports:
+      - "1883:1883"
+      - "9001:9001"
+    volumes:
+      - ./backend/robot-gateway/mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+      - ./backend/robot-gateway/mosquitto/entrypoint.sh:/mosquitto/config/entrypoint.sh:ro
+      - mosquitto-data:/mosquitto/data
+      - mosquitto-log:/mosquitto/log
+    healthcheck:
+      test: ["CMD-SHELL", "mosquitto_sub -h localhost -u $$MQTT_USERNAME -P $$MQTT_PASSWORD -t '$$SYS/broker/uptime' -C 1 -W 3 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  robot-gateway:
+    image: appcalipse/digital-brain-robot-gateway
+    build:
+      context: ./backend/robot-gateway
+      dockerfile: Dockerfile
+      platforms:
+        - "linux/amd64"
+    container_name: mem-robot-gateway
+    depends_on:
+      db:
+        condition: service_healthy
+      mosquitto:
+        condition: service_healthy
+    env_file:
+      - ./backend/.env
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    ports:
+      - "8001:8001"
+
 volumes:
   postgres-data:
+    driver: local
+  mosquitto-data:
+    driver: local
+  mosquitto-log:
     driver: local

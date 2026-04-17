@@ -4,8 +4,10 @@ Monorepo containing backend services and frontend client for the Digital Brain p
 
 ## Structure
 
-- `backend/` — FastAPI orchestrator, PostgreSQL artifacts, Docker Compose, env files, and setup tooling
-- `frontend/` — Next.js application for meeting ingestion and future UI work
+- `backend/orchestrator/` — FastAPI orchestrator (memory, agents, tools, LLM) on port 8000
+- `backend/robot-gateway/` — MQTT robot communication gateway on port 8001 (see [README](backend/robot-gateway/README.md))
+- `frontend/web/` — Next.js application (web UI, API proxy layer) on port 3000
+- `docker-compose.yml` — All services: PostgreSQL, orchestrator, frontend, Mosquitto MQTT broker, robot gateway
 
 ## Backend
 
@@ -42,5 +44,6 @@ The Meetings page allows importing events to the backend ingest endpoint.
 
 ## Environment Variables
 
-Refer to `env.template` for shared backend configuration. Frontend variables can be managed through `frontend/web/.env.local`.
-Backend environment files now live in `backend/.env` and `backend/env.template`.
+Refer to `backend/env.template` for shared backend configuration (PostgreSQL, LLM, MQTT, service keys).
+Frontend variables: `frontend/web/env.template` (OAuth, API base URLs).
+Robot gateway-specific variables are documented in `backend/env.template` under the "Robot Gateway" section.
