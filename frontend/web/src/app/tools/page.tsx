@@ -4,7 +4,7 @@ import { useMemo, useState } from "react";
 import type { FormEvent } from "react";
 import { api } from "@/lib/api";
 
-type ToolName = "search_memories" | "lookup_contact" | "resolve_contacts";
+type ToolName = "search_memories" | "lookup_contact" | "resolve_contacts" | "event_creation_flow";
 
 type ToolRunResponse = {
   tool_name: string;
@@ -121,10 +121,50 @@ type ResolveContactsResult = {
   message?: string;
 };
 
+type EventCreationToolResult = {
+  command_result?: {
+    type?: string;
+    message?: string;
+    preview_id?: string;
+    extracted?: {
+      title?: string | null;
+      summary?: string | null;
+      when?: string | null;
+      end_when?: string | null;
+      where?: string | null;
+      who?: string[];
+      tags?: string[];
+      types?: string[];
+    };
+    resolution?: {
+      new_entities?: {
+        contacts?: Array<{ display_name?: string | null }>;
+        places?: Array<{ name?: string | null }>;
+        documents?: Array<{ reference?: string | null }>;
+      };
+    };
+    relationship_suggestions?: Array<{
+      from_display_name?: string | null;
+      to_display_name?: string | null;
+      relationship_type?: string | null;
+    }>;
+    need_user_input?: {
+      prompt?: string;
+    };
+  };
+  ui_directives?: Record<string, unknown> | null;
+  debug_context?: {
+    thread_id?: string;
+    pending_event_key?: string;
+    log_hint?: string;
+  };
+};
+
 const TOOL_OPTIONS: Array<{ value: ToolName; label: string }> = [
   { value: "search_memories", label: "search_memories" },
   { value: "lookup_contact", label: "lookup_contact" },
   { value: "resolve_contacts", label: "resolve_contacts" },
+  { value: "event_creation_flow", label: "event_creation_flow" },
 ];
 
 const baseCardStyle = {
@@ -172,6 +212,10 @@ export default function ToolsPage() {
   const [resolveForm, setResolveForm] = useState({
     text: "",
   });
+  const [eventForm, setEventForm] = useState({
+    prompt: "",
+    threadId: "",
+  });
   const [llmModel, setLlmModel] = useState("");
   const [timeoutSeconds, setTimeoutSeconds] = useState("60");
   const [response, setResponse] = useState<ToolRunResponse | null>(null);
@@ -187,15 +231,19 @@ export default function ToolsPage() {
     if (tool === "resolve_contacts") {
       return Boolean(resolveForm.text.trim());
     }
+    if (tool === "event_creation_flow") {
+      return Boolean(eventForm.prompt.trim());
+    }
     if (lookupAction === "search" || lookupAction === "find_related") {
       return Boolean(lookupForm.query.trim());
     }
     return Boolean(lookupForm.contactId.trim() || lookupForm.query.trim());
-  }, [tool, searchForm.query, lookupAction, lookupForm.query, lookupForm.contactId, resolveForm.text]);
+  }, [tool, searchForm.query, lookupAction, lookupForm.query, lookupForm.contactId, resolveForm.text, eventForm.prompt]);
 
   const memoryResults = (response?.result?.results as MemoryResult[] | undefined) ?? [];
   const lookupResult = response?.result as LookupContactResult | undefined;
   const resolveResult = response?.result as ResolveContactsResult | undefined;
+  const eventResult = response?.result as EventCreationToolResult | undefined;
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -259,8 +307,13 @@ export default function ToolsPage() {
           args.relationship_types = relationshipTypes;
         }
       }
-    } else {
+    } else if (tool === "resolve_contacts") {
       args.text = resolveForm.text.trim();
+    } else {
+      args.prompt = eventForm.prompt.trim();
+      if (eventForm.threadId.trim()) {
+        args.thread_id = eventForm.threadId.trim();
+      }
     }
 
     try {
@@ -583,7 +636,7 @@ export default function ToolsPage() {
               </div>
             )}
           </div>
-        ) : (
+        ) : tool === "resolve_contacts" ? (
           <div style={{ display: "grid", gap: "14px" }}>
             <div style={{ display: "grid", gap: "6px" }}>
               <label htmlFor="resolveText" style={{ fontWeight: 600, fontSize: "0.9rem" }}>
@@ -599,6 +652,42 @@ export default function ToolsPage() {
               />
               <span style={{ fontSize: "0.8rem", color: "#666" }}>
                 Detects people, resolves known contacts, and flags ambiguous mentions.
+              </span>
+            </div>
+          </div>
+        ) : (
+          <div style={{ display: "grid", gap: "14px" }}>
+            <div style={{ display: "grid", gap: "6px" }}>
+              <label htmlFor="eventPrompt" style={{ fontWeight: 600, fontSize: "0.9rem" }}>
+                Event prompt
+              </label>
+              <textarea
+                id="eventPrompt"
+                value={eventForm.prompt}
+                onChange={(event) => setEventForm({ ...eventForm, prompt: event.target.value })}
+                placeholder="Met with Alex at the office yesterday to discuss the roadmap"
+                rows={5}
+                style={{ padding: "10px 12px", borderRadius: "8px", border: "1px solid #d7d7d7" }}
+              />
+              <span style={{ fontSize: "0.8rem", color: "#666" }}>
+                Runs the `/event` extraction and preview flow directly so you can inspect the resulting payloads and backend logs.
+              </span>
+            </div>
+
+            <div style={{ display: "grid", gap: "6px" }}>
+              <label htmlFor="eventThreadId" style={{ fontWeight: 600, fontSize: "0.9rem" }}>
+                Debug thread ID (optional)
+              </label>
+              <input
+                id="eventThreadId"
+                type="text"
+                value={eventForm.threadId}
+                onChange={(event) => setEventForm({ ...eventForm, threadId: event.target.value })}
+                placeholder="tool-event-debug-1"
+                style={{ padding: "10px 12px", borderRadius: "8px", border: "1px solid #d7d7d7" }}
+              />
+              <span style={{ fontSize: "0.8rem", color: "#666" }}>
+                Reuse the same ID when you want stable pending-event state across repeated debug runs.
               </span>
             </div>
           </div>
@@ -995,6 +1084,133 @@ export default function ToolsPage() {
                       )}
                     </div>
                   ))}
+                </div>
+              )}
+            </div>
+          )}
+
+          {tool === "event_creation_flow" && eventResult && (
+            <div style={{ ...baseCardStyle, display: "grid", gap: "12px" }}>
+              <h2 style={{ fontSize: "1.1rem", fontWeight: 600, margin: 0 }}>Event Flow Result</h2>
+
+              <div
+                style={{
+                  border: "1px solid #e5e7eb",
+                  borderRadius: "10px",
+                  padding: "12px",
+                  background: "#f8fafc",
+                  display: "grid",
+                  gap: "8px",
+                }}
+              >
+                <div style={{ display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" }}>
+                  <strong>Result type</strong>
+                  <span
+                    style={{
+                      fontSize: "0.75rem",
+                      fontWeight: 600,
+                      borderRadius: "999px",
+                      padding: "3px 8px",
+                      background:
+                        eventResult.command_result?.type === "event_confirmation"
+                          ? "#dbeafe"
+                          : eventResult.command_result?.type === "need_user_input"
+                            ? "#fef3c7"
+                            : "#e5e7eb",
+                      color:
+                        eventResult.command_result?.type === "event_confirmation"
+                          ? "#1d4ed8"
+                          : eventResult.command_result?.type === "need_user_input"
+                            ? "#92400e"
+                            : "#374151",
+                    }}
+                  >
+                    {eventResult.command_result?.type || "unknown"}
+                  </span>
+                </div>
+                {eventResult.command_result?.message && (
+                  <div style={{ fontSize: "0.9rem", color: "#4b5563" }}>{eventResult.command_result.message}</div>
+                )}
+                {eventResult.command_result?.preview_id && (
+                  <div style={{ fontSize: "0.85rem", color: "#475569" }}>
+                    Preview ID: <code>{eventResult.command_result.preview_id}</code>
+                  </div>
+                )}
+                {eventResult.debug_context?.thread_id && (
+                  <div style={{ fontSize: "0.85rem", color: "#475569" }}>
+                    Debug thread: <code>{eventResult.debug_context.thread_id}</code>
+                  </div>
+                )}
+                {eventResult.debug_context?.pending_event_key && (
+                  <div style={{ fontSize: "0.85rem", color: "#475569" }}>
+                    Pending event key: <code>{eventResult.debug_context.pending_event_key}</code>
+                  </div>
+                )}
+                {eventResult.debug_context?.log_hint && (
+                  <div style={{ fontSize: "0.85rem", color: "#475569" }}>{eventResult.debug_context.log_hint}</div>
+                )}
+              </div>
+
+              {eventResult.command_result?.extracted && (
+                <div style={{ display: "grid", gap: "8px" }}>
+                  <strong style={{ fontSize: "0.95rem" }}>Extracted Event</strong>
+                  <div style={{ border: "1px solid #e5e7eb", borderRadius: "10px", padding: "12px", display: "grid", gap: "6px" }}>
+                    <div><strong>Title:</strong> {eventResult.command_result.extracted.title || "Untitled event"}</div>
+                    <div><strong>Summary:</strong> {eventResult.command_result.extracted.summary || "None"}</div>
+                    <div><strong>When:</strong> {eventResult.command_result.extracted.when || "None"}</div>
+                    <div><strong>Ends:</strong> {eventResult.command_result.extracted.end_when || "None"}</div>
+                    <div><strong>Where:</strong> {eventResult.command_result.extracted.where || "None"}</div>
+                    <div><strong>Who:</strong> {(eventResult.command_result.extracted.who || []).join(", ") || "None"}</div>
+                    <div><strong>Tags:</strong> {(eventResult.command_result.extracted.tags || []).join(", ") || "None"}</div>
+                    <div><strong>Types:</strong> {(eventResult.command_result.extracted.types || []).join(", ") || "None"}</div>
+                  </div>
+                </div>
+              )}
+
+              {eventResult.command_result?.need_user_input?.prompt && (
+                <div style={{ border: "1px solid #fdba74", borderRadius: "10px", padding: "12px", background: "#fff7ed", color: "#9a3412" }}>
+                  <strong>Clarification prompt</strong>
+                  <div style={{ marginTop: "6px" }}>{eventResult.command_result.need_user_input.prompt}</div>
+                </div>
+              )}
+
+              {eventResult.command_result?.relationship_suggestions && eventResult.command_result.relationship_suggestions.length > 0 && (
+                <div style={{ display: "grid", gap: "8px" }}>
+                  <strong style={{ fontSize: "0.95rem" }}>Suggested relationships</strong>
+                  {eventResult.command_result.relationship_suggestions.map((relationship, index) => (
+                    <div key={`${relationship.from_display_name || "rel"}-${index}`} style={{ border: "1px solid #e5e7eb", borderRadius: "10px", padding: "12px" }}>
+                      {(relationship.from_display_name || "Unknown")} - {relationship.relationship_type || "related_to"} - {relationship.to_display_name || "Unknown"}
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {eventResult.command_result?.resolution?.new_entities && (
+                <div style={{ display: "grid", gap: "8px" }}>
+                  <strong style={{ fontSize: "0.95rem" }}>New entities</strong>
+                  <div style={{ border: "1px solid #e5e7eb", borderRadius: "10px", padding: "12px", display: "grid", gap: "6px" }}>
+                    <div>
+                      <strong>Contacts:</strong>{" "}
+                      {(eventResult.command_result.resolution.new_entities.contacts || [])
+                        .map((item) => item.display_name)
+                        .filter(Boolean)
+                        .join(", ") || "None"}
+                    </div>
+                    <div>
+                      <strong>Places:</strong>{" "}
+                      {(eventResult.command_result.resolution.new_entities.places || [])
+                        .map((item) => item.name)
+                        .filter(Boolean)
+                        .join(", ") || "None"}
+                    </div>
+                    <div>
+                      <strong>Documents:</strong>{" "}
+                      {(eventResult.command_result.resolution.new_entities.documents || [])
+                        .map((item) => item.reference)
+                        .filter(Boolean)
+                        .join(", ") || "None"}
+                    </div>
+                  </div>
                 </div>
               )}
             </div>

@@ -11,6 +11,7 @@ from agent.state import AgentState
 from auth import get_current_user, require_service_api_key
 from observability.logger import get_runtime_logger
 from schemas import ToolRunIn, ToolRunOut
+from tools.debug_testing import get_tools_page_only_contract, run_tools_page_only_tool
 from tools.handlers import get_handler
 from tools.registry import get_registry
 from tools.validators.pre_execution import PreExecutionValidator
@@ -82,17 +83,29 @@ def create_automation_router() -> APIRouter:
 
         registry = get_registry()
         contract = registry.get_contract(payload.tool_name)
+        is_tools_page_only_tool = False
+        if not contract:
+            contract = get_tools_page_only_contract(payload.tool_name)
+            is_tools_page_only_tool = contract is not None
         if not contract:
             raise HTTPException(status_code=404, detail=f"Unknown tool: {payload.tool_name}")
 
-        validator = PreExecutionValidator(registry)
-        validation = validator.validate(payload.tool_name, payload.args)
-        if not validation.valid:
-            raise HTTPException(status_code=400, detail=validation.to_message())
+        if is_tools_page_only_tool:
+            is_valid, error_message, suggestions = contract.validate_params(payload.args)
+            if not is_valid:
+                detail = error_message or "Invalid tool parameters"
+                if suggestions:
+                    detail = f"{detail}. {' '.join(suggestions)}"
+                raise HTTPException(status_code=400, detail=detail)
+        else:
+            validator = PreExecutionValidator(registry)
+            validation = validator.validate(payload.tool_name, payload.args)
+            if not validation.valid:
+                raise HTTPException(status_code=400, detail=validation.to_message())
 
         normalized_args = contract.normalize(payload.args)
-        handler = get_handler(payload.tool_name)
-        if handler is None:
+        handler = None if is_tools_page_only_tool else get_handler(payload.tool_name)
+        if not is_tools_page_only_tool and handler is None:
             raise HTTPException(status_code=500, detail=f"Tool handler not found: {payload.tool_name}")
 
         state = AgentState(goal=f"tool_run:{payload.tool_name}")
@@ -111,16 +124,23 @@ def create_automation_router() -> APIRouter:
 
         start = perf_counter()
         try:
-            result = handler(
-                normalized_args,
-                state=state,
-                question="",
-                search_limit=search_limit,
-                user_email=user_email,
-                conversation_history=None,
-                llm_model=llm_model_override,
-                timeout=timeout_seconds,
-            )
+            if is_tools_page_only_tool:
+                result = run_tools_page_only_tool(
+                    payload.tool_name,
+                    normalized_args,
+                    user_email=user_email,
+                )
+            else:
+                result = handler(
+                    normalized_args,
+                    state=state,
+                    question="",
+                    search_limit=search_limit,
+                    user_email=user_email,
+                    conversation_history=None,
+                    llm_model=llm_model_override,
+                    timeout=timeout_seconds,
+                )
         except Exception as exc:
             raise HTTPException(status_code=500, detail=f"Tool execution failed: {exc}") from exc
         duration_ms = (perf_counter() - start) * 1000
