@@ -123,6 +123,7 @@ export function PlaceEditorScreen({ placeId }: { placeId?: string }) {
   const [isDeleting, setIsDeleting] = useState(false);
   const [isLocating, setIsLocating] = useState(false);
   const [isGeocodingAddress, setIsGeocodingAddress] = useState(false);
+  const [isResolvingMapPin, setIsResolvingMapPin] = useState(false);
   const [isLoading, setIsLoading] = useState(!isCreating);
   const [isMapReady, setIsMapReady] = useState(false);
   const [mapKey, setMapKey] = useState(0);
@@ -306,37 +307,64 @@ export function PlaceEditorScreen({ placeId }: { placeId?: string }) {
       const first = results[0];
       const latitude = Number(first.latitude.toFixed(6));
       const longitude = Number(first.longitude.toFixed(6));
-
-      let reverseCity = '';
-      let reverseCountry = '';
-      let reverseAddress = '';
-      try {
-        const reverseResults = await Location.reverseGeocodeAsync({ latitude, longitude });
-        const reverse = reverseResults?.[0];
-        reverseCity = reverse?.city || reverse?.subregion || reverse?.region || '';
-        reverseCountry = reverse?.country || '';
-        reverseAddress = formatReverseAddress(reverse);
-      } catch {
-        // Keep going with geocode coordinates even if reverse details fail.
-      }
-
-      setDraft((current) => {
-        if (!current) return current;
-        return {
-          ...current,
-          latText: String(latitude),
-          lonText: String(longitude),
-          address: reverseAddress || current.address,
-          city: reverseCity || current.city,
-          country: reverseCountry || current.country,
-        };
-      });
+      await applyCoordinateSelection(latitude, longitude, { suppressReverseLookupAlert: true });
     } catch {
       Alert.alert('Search failed', 'Could not resolve this address right now.');
     } finally {
       setIsGeocodingAddress(false);
     }
   };
+
+  const applyCoordinateSelection = useCallback(
+    async (
+      latitude: number,
+      longitude: number,
+      options?: { suppressReverseLookupAlert?: boolean },
+    ) => {
+      const roundedLatitude = Number(latitude.toFixed(6));
+      const roundedLongitude = Number(longitude.toFixed(6));
+
+      setIsResolvingMapPin(true);
+      try {
+        const reverseResults = await Location.reverseGeocodeAsync({
+          latitude: roundedLatitude,
+          longitude: roundedLongitude,
+        });
+        const reverse = reverseResults?.[0];
+        const reverseAddress = formatReverseAddress(reverse);
+        const reverseCity = reverse?.city || reverse?.subregion || reverse?.region || '';
+        const reverseCountry = reverse?.country || '';
+
+        setDraft((current) => {
+          if (!current) return current;
+          return {
+            ...current,
+            latText: String(roundedLatitude),
+            lonText: String(roundedLongitude),
+            address: reverseAddress || current.address,
+            city: reverseCity || current.city,
+            country: reverseCountry || current.country,
+          };
+        });
+      } catch {
+        setDraft((current) => {
+          if (!current) return current;
+          return {
+            ...current,
+            latText: String(roundedLatitude),
+            lonText: String(roundedLongitude),
+          };
+        });
+
+        if (!options?.suppressReverseLookupAlert) {
+          Alert.alert('Address lookup failed', 'Coordinates were updated, but the address could not be refreshed.');
+        }
+      } finally {
+        setIsResolvingMapPin(false);
+      }
+    },
+    [],
+  );
 
   const handleSave = async () => {
     if (!draft) return;
@@ -567,13 +595,21 @@ export function PlaceEditorScreen({ placeId }: { placeId?: string }) {
               placeholderTextColor={theme.colors.mutedInk}
             />
           </View>
-          <Text style={styles.helper}>Drag the marker to adjust precise coordinates.</Text>
+          <Text style={styles.helper}>Tap anywhere on the map or drag the pin to update this place.</Text>
+          {isResolvingMapPin ? <Text style={styles.helper}>Refreshing address details from the map...</Text> : null}
           <View style={styles.mapWrap}>
             <MapView
               key={Platform.OS === 'android' ? `place-map-${mapKey}` : 'place-map'}
               ref={mapRef}
               style={styles.map}
               initialRegion={region}
+              onPress={(event) => {
+                const { action, coordinate } = event.nativeEvent;
+                if (action === 'marker-press') {
+                  return;
+                }
+                void applyCoordinateSelection(coordinate.latitude, coordinate.longitude);
+              }}
               onMapReady={() => {
                 setIsMapReady(true);
                 syncMapToRegion(region, false);
@@ -589,14 +625,7 @@ export function PlaceEditorScreen({ placeId }: { placeId?: string }) {
                   draggable
                   onDragEnd={(event) => {
                     const { latitude, longitude } = event.nativeEvent.coordinate;
-                    setDraft((current) => {
-                      if (!current) return current;
-                      return {
-                        ...current,
-                        latText: String(Number(latitude.toFixed(6))),
-                        lonText: String(Number(longitude.toFixed(6))),
-                      };
-                    });
+                    void applyCoordinateSelection(latitude, longitude);
                   }}
                 />
               ) : null}
