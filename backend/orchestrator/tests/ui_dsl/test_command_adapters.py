@@ -136,3 +136,30 @@ def test_need_user_input_payload_maps_even_without_clarification_type():
     assert block["type"] == "clarification_form"
     assert block["action_id"] == "range_selection_submit"
     assert block["fields"][0]["id"] == "date_range"
+
+
+def test_contact_confirmation_skips_inline_form_when_too_many_fields():
+    command_result = {
+        "type": "contact_confirmation",
+        "preview_id": "contact:preview:abc12345",
+        "message": "Review and confirm.",
+        "summary_lines": ["Create contact: Kelly", "Create contact: Rebecca"],
+        "explicit_change_lines": ["Create contact: Kelly", "Create contact: Rebecca"],
+        "derived_change_lines": ["Infer parent link: Atila -> parent -> Rebecca"],
+        "edit_action_id": "contact_edit_submit:contact:preview:abc12345",
+        "edit_fields": [
+            {"id": f"field_{index}", "kind": "short_text", "label": f"Field {index}"}
+            for index in range(9)
+        ],
+    }
+
+    directive = command_result_to_ui_directives(command_result)
+
+    assert directive is not None
+    block_ids = {block["id"] for block in directive["blocks"]}
+    assert "contact_edit:contact:preview:abc12345" not in block_ids
+    assert "contact_edit_hint:contact:preview:abc12345" in block_ids
+    choice_block = next(block for block in directive["blocks"] if block["type"] == "choice_buttons")
+    option_ids = {option["id"] for option in choice_block["options"]}
+    assert "confirm:contact:preview:abc12345" in option_ids
+    assert "edit:contact:preview:abc12345" in option_ids

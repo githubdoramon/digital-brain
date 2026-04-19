@@ -25,6 +25,7 @@ _CONTACT_CLARIFICATION_ACTION_ID_PREFIX = "contact_clarification_submit"
 _CONTACT_EDIT_ACTION_ID_PREFIX = "contact_edit_submit"
 _CONTACT_ACTION_CONFIRM_PREFIX = "confirm:"
 _CONTACT_ACTION_CANCEL_PREFIX = "cancel:"
+_INLINE_CONTACT_EDIT_FIELD_LIMIT = 8
 
 
 def command_result_to_ui_directives(command_result: dict[str, Any]) -> dict[str, Any] | None:
@@ -258,7 +259,7 @@ def _contact_confirmation_directive(command_result: dict[str, Any]) -> dict[str,
     edit_fields_raw = command_result.get("edit_fields")
     edit_fields = edit_fields_raw if isinstance(edit_fields_raw, list) else []
     edit_action_id = _normalized_text(command_result.get("edit_action_id"))
-    if edit_fields:
+    if edit_fields and len(edit_fields) <= _INLINE_CONTACT_EDIT_FIELD_LIMIT:
         blocks.append(
             {
                 "id": f"contact_edit:{preview_id or 'draft'}",
@@ -268,6 +269,15 @@ def _contact_confirmation_directive(command_result: dict[str, Any]) -> dict[str,
                 "action_id": edit_action_id or _contact_edit_action_id(preview_id),
                 "fields": edit_fields,
                 "submit_label": "Apply edited changes",
+            }
+        )
+    elif edit_fields:
+        blocks.append(
+            {
+                "id": f"contact_edit_hint:{preview_id or 'draft'}",
+                "type": "info_card",
+                "title": "Edit options",
+                "body": "This draft has more edits than fit inline. Use Edit draft to review and adjust everything.",
             }
         )
 
