@@ -10,6 +10,7 @@ class CommandResultType(str, Enum):
 
     COMMAND = "command"
     EVENT_CONFIRMATION = "event_confirmation"
+    CONTACT_CONFIRMATION = "contact_confirmation"
     NEED_USER_INPUT = "need_user_input"
 
     @classmethod

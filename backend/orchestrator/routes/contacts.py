@@ -12,6 +12,8 @@ from auth import get_current_user, require_service_api_key
 from llm_helpers import LLMUnavailableError
 from observability.logger import get_runtime_logger
 from schemas import (
+    ContactCommandConfirmation,
+    ContactCommandResult,
     ContactGroupIn,
     ContactGroupOut,
     ContactIn,
@@ -210,6 +212,19 @@ def create_contacts_router(
             raise HTTPException(status_code=400, detail="from_contact_id must match contact_id")
         contacts_service.upsert_contact_relationship(rel)
         return {"ok": True}
+
+    @router.post("/commands/contact/confirm", response_model=ContactCommandResult)
+    @router.post("/mobile/commands/contact/confirm", response_model=ContactCommandResult)
+    def confirm_contact_command_endpoint(
+        payload: ContactCommandConfirmation,
+        user: dict = Depends(get_current_user),
+    ):
+        from commands.contact import confirm_contact_command
+
+        user_email = user.get("email")
+        if not user_email:
+            raise HTTPException(status_code=400, detail="Authenticated user email missing")
+        return confirm_contact_command(payload, user_email)
 
     @router.delete("/mobile/contacts/{contact_id}/relationships/{relationship_id}")
     def delete_contact_relationship_mobile(

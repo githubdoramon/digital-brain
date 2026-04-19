@@ -12,6 +12,7 @@ export type UiDirectiveField = {
   id: string;
   kind: string;
   label: string;
+  value?: string;
   placeholder?: string;
   required?: boolean;
   options?: UiDirectiveOption[];
@@ -42,4 +43,3 @@ export type UiSubmissionInput = {
   values?: Record<string, unknown>;
   text_fallback?: string;
 };
-

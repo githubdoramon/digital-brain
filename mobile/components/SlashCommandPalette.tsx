@@ -10,6 +10,7 @@ type CommandOption = {
 };
 
 const COMMANDS: CommandOption[] = [
+  { command: 'contact', description: 'Create or update contacts and relationships.' },
   { command: 'event', description: 'Log a new event or memory.' },
   { command: 'new', description: 'Start a fresh session.' },
 ];

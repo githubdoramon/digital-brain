@@ -1,14 +1,14 @@
 import React from 'react';
 import { StyleSheet, View } from 'react-native';
 
-import type { EventResolvedStatus } from '@/chat/threads';
+import type { CommandResolvedStatus } from '@/chat/threads';
 import type { UiDirectiveBlock, UiDirectiveOption } from '@/chat/uiDirectives';
 import { Button } from '@/components/Button';
 
 type Props = {
   block: UiDirectiveBlock;
   isSubmitting: boolean;
-  resolvedStatus?: EventResolvedStatus;
+  resolvedStatus?: CommandResolvedStatus;
   onSelect: (option: UiDirectiveOption) => void;
 };
 

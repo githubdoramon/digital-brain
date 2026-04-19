@@ -20,6 +20,11 @@ _EVENT_CLARIFICATION_ACTION_ID_PREFIX = "event_clarification_submit"
 _EVENT_ACTION_CONFIRM_PREFIX = "confirm:"
 _EVENT_ACTION_EDIT_PREFIX = "edit:"
 _EVENT_ACTION_CANCEL_PREFIX = "cancel:"
+_CONTACT_CONFIRM_ACTION_ID = "contact_confirmation_action"
+_CONTACT_CLARIFICATION_ACTION_ID_PREFIX = "contact_clarification_submit"
+_CONTACT_EDIT_ACTION_ID_PREFIX = "contact_edit_submit"
+_CONTACT_ACTION_CONFIRM_PREFIX = "confirm:"
+_CONTACT_ACTION_CANCEL_PREFIX = "cancel:"
 
 
 def command_result_to_ui_directives(command_result: dict[str, Any]) -> dict[str, Any] | None:
@@ -31,6 +36,8 @@ def command_result_to_ui_directives(command_result: dict[str, Any]) -> dict[str,
     result_type = CommandResultType.from_value(command_result.get("type"))
     if result_type is CommandResultType.EVENT_CONFIRMATION:
         raw_directive = _event_confirmation_directive(command_result)
+    elif result_type is CommandResultType.CONTACT_CONFIRMATION:
+        raw_directive = _contact_confirmation_directive(command_result)
     else:
         need_user_input = extract_need_user_input(
             command_result,
@@ -63,7 +70,11 @@ def _clarification_directive(
 
     action_id = _normalized_text(need_user_input.get("action_id"))
     if not action_id:
-        action_id = _event_clarification_action_id(clarification_id)
+        source = _normalized_text(need_user_input.get("source")).lower()
+        if source.startswith("contact"):
+            action_id = _contact_clarification_action_id(clarification_id)
+        else:
+            action_id = _event_clarification_action_id(clarification_id)
 
     block_id_suffix = clarification_id or "follow_up"
     fields = normalize_clarification_fields(need_user_input.get("fields"))
@@ -206,6 +217,102 @@ def _event_confirmation_directive(command_result: dict[str, Any]) -> dict[str, A
     }
 
 
+def _contact_confirmation_directive(command_result: dict[str, Any]) -> dict[str, Any]:
+    preview_id = _normalized_text(command_result.get("preview_id"))
+
+    blocks: list[dict[str, Any]] = []
+    summary_lines = _string_list(command_result.get("summary_lines"))
+    if summary_lines:
+        blocks.append(
+            {
+                "id": f"contact_preview:{preview_id or 'draft'}",
+                "type": "info_card",
+                "title": "Contact update preview",
+                "description": "Review these graph changes before applying them.",
+                "body": "\n".join(summary_lines),
+            }
+        )
+
+    explicit_lines = _string_list(command_result.get("explicit_change_lines"))
+    if explicit_lines:
+        blocks.append(
+            {
+                "id": f"contact_explicit:{preview_id or 'draft'}",
+                "type": "info_card",
+                "title": "Will apply",
+                "body": "\n".join(explicit_lines),
+            }
+        )
+
+    derived_lines = _string_list(command_result.get("derived_change_lines"))
+    if derived_lines:
+        blocks.append(
+            {
+                "id": f"contact_derived:{preview_id or 'draft'}",
+                "type": "info_card",
+                "title": "Also inferred",
+                "body": "\n".join(derived_lines),
+            }
+        )
+
+    edit_fields_raw = command_result.get("edit_fields")
+    edit_fields = edit_fields_raw if isinstance(edit_fields_raw, list) else []
+    edit_action_id = _normalized_text(command_result.get("edit_action_id"))
+    if edit_fields:
+        blocks.append(
+            {
+                "id": f"contact_edit:{preview_id or 'draft'}",
+                "type": "clarification_form",
+                "title": "Edit before applying",
+                "description": "Adjust the proposed fields and choose which inferred links to keep.",
+                "action_id": edit_action_id or _contact_edit_action_id(preview_id),
+                "fields": edit_fields,
+                "submit_label": "Apply edited changes",
+            }
+        )
+
+    if preview_id:
+        blocks.append(
+            {
+                "id": f"contact_actions:{preview_id}",
+                "type": "choice_buttons",
+                "title": "Apply these contact changes?",
+                "action_id": _CONTACT_CONFIRM_ACTION_ID,
+                "options": [
+                    {
+                        "id": f"{_CONTACT_ACTION_CONFIRM_PREFIX}{preview_id}",
+                        "label": "Apply changes",
+                    },
+                    {
+                        "id": f"edit:{preview_id}",
+                        "label": "Edit draft",
+                    },
+                    {
+                        "id": f"{_CONTACT_ACTION_CANCEL_PREFIX}{preview_id}",
+                        "label": "Cancel",
+                    },
+                ],
+            }
+        )
+
+    fallback_text = _normalized_text(command_result.get("message")) or "Please review and confirm these contact changes."
+    if not blocks:
+        blocks.append(
+            {
+                "id": f"contact_empty:{preview_id or 'draft'}",
+                "type": "info_card",
+                "title": "Contact update preview",
+                "body": fallback_text,
+            }
+        )
+
+    return {
+        "version": "1.0",
+        "fallback_text": fallback_text,
+        "blocks": blocks,
+    }
+
+
 def _format_when(value: Any) -> str:
     raw = _normalized_text(value)
     if not raw:
@@ -226,6 +333,18 @@ def _event_clarification_action_id(clarification_id: str) -> str:
     if not clarification_id:
         return _EVENT_CLARIFICATION_ACTION_ID_PREFIX
     return f"{_EVENT_CLARIFICATION_ACTION_ID_PREFIX}:{clarification_id}"
+
+
+def _contact_clarification_action_id(clarification_id: str) -> str:
+    if not clarification_id:
+        return _CONTACT_CLARIFICATION_ACTION_ID_PREFIX
+    return f"{_CONTACT_CLARIFICATION_ACTION_ID_PREFIX}:{clarification_id}"
+
+
+def _contact_edit_action_id(preview_id: str) -> str:
+    if not preview_id:
+        return _CONTACT_EDIT_ACTION_ID_PREFIX
+    return f"{_CONTACT_EDIT_ACTION_ID_PREFIX}:{preview_id}"
 
 
 def _normalized_text(value: Any) -> str:

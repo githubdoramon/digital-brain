@@ -2,7 +2,7 @@ import React, { useMemo, useState } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
 
-import type { EventResolvedStatus } from '@/chat/threads';
+import type { CommandResolvedMeta } from '@/chat/threads';
 import type {
   UiDirectiveBlock,
   UiDirectiveField,
@@ -22,7 +22,7 @@ import { UiDirectiveInfoBlock } from './UiDirectiveInfoBlock';
 type Props = {
   directives: UiDirectives;
   isSubmitting?: boolean;
-  resolvedStatus?: EventResolvedStatus;
+  resolved?: CommandResolvedMeta;
   onFieldFocus?: () => void;
   onSubmit: (submission: UiSubmissionInput) => void;
 };
@@ -101,11 +101,11 @@ type EventEditAction = {
 export function UiDirectiveCard({
   directives,
   isSubmitting = false,
-  resolvedStatus,
+  resolved,
   onFieldFocus,
   onSubmit,
 }: Props) {
-  const isResolved = Boolean(resolvedStatus);
+  const isResolved = Boolean(resolved);
   const [formValues, setFormValues] = useState<Record<string, string>>({});
   const blocks = useMemo(() => directives.blocks || [], [directives.blocks]);
   const eventEditActionsByPreviewId = useMemo(() => {
@@ -136,7 +136,7 @@ export function UiDirectiveCard({
   };
 
   const getFieldValue = (block: UiDirectiveBlock, field: UiDirectiveField) =>
-    formValues[fieldStateKey(block, field)] ?? '';
+    formValues[fieldStateKey(block, field)] ?? field.value ?? '';
 
   const submitChoice = (block: UiDirectiveBlock, option: UiDirectiveOption) => {
     onSubmit({
@@ -173,27 +173,27 @@ export function UiDirectiveCard({
     <View style={styles.container}>
       {isResolved && (
         <View
-          style={[
-            styles.resolvedBanner,
-            resolvedStatus === 'created'
-              ? styles.resolvedBannerCreated
-              : styles.resolvedBannerCancelled,
-          ]}
+            style={[
+              styles.resolvedBanner,
+              resolved?.status === 'created'
+                ? styles.resolvedBannerCreated
+                : styles.resolvedBannerCancelled,
+            ]}
         >
           <Ionicons
-            name={resolvedStatus === 'created' ? 'checkmark-circle' : 'close-circle'}
+            name={resolved?.status === 'created' ? 'checkmark-circle' : 'close-circle'}
             size={16}
-            color={resolvedStatus === 'created' ? theme.colors.teal : theme.colors.mutedInk}
+            color={resolved?.status === 'created' ? theme.colors.teal : theme.colors.mutedInk}
           />
           <Text
             style={[
               styles.resolvedBannerText,
-              resolvedStatus === 'created'
+              resolved?.status === 'created'
                 ? styles.resolvedTextCreated
                 : styles.resolvedTextCancelled,
             ]}
           >
-            {resolvedStatus === 'created' ? 'Event created' : 'Event cancelled'}
+            {resolved?.label || (resolved?.status === 'created' ? 'Changes applied' : 'Cancelled')}
           </Text>
         </View>
       )}
@@ -266,7 +266,7 @@ export function UiDirectiveCard({
               <UiDirectiveChoiceBlock
                 block={block}
                 isSubmitting={isSubmitting}
-                resolvedStatus={resolvedStatus}
+                resolvedStatus={resolved?.status}
                 onSelect={(option) => submitChoice(block, option)}
               />
             ) : null}

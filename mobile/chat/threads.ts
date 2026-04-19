@@ -30,7 +30,12 @@ export type MainSession = {
   messages: ThreadMessage[];
 };
 
-export type EventResolvedStatus = 'created' | 'cancelled';
+export type CommandResolvedStatus = 'created' | 'cancelled';
+
+export type CommandResolvedMeta = {
+  status: CommandResolvedStatus;
+  label?: string;
+};
 
 export type ChatMessage = {
   id: string;
@@ -40,7 +45,7 @@ export type ChatMessage = {
     command_result?: CommandResult;
     ui_directives?: UiDirectives;
     linked_items?: LinkedItem[];
-    event_resolved?: EventResolvedStatus;
+    command_resolved?: CommandResolvedMeta;
   };
 };
 
@@ -73,7 +78,7 @@ export async function restoreChatHistory(
             linked_items: Array.isArray(meta.linked_items)
               ? (meta.linked_items as LinkedItem[])
               : undefined,
-            event_resolved: meta.event_resolved as EventResolvedStatus | undefined,
+            command_resolved: meta.command_resolved as CommandResolvedMeta | undefined,
           }
         : undefined,
     };

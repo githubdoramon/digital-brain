@@ -866,6 +866,8 @@ def _command_response_text(command_result: dict[str, Any]) -> str:
     result_type = CommandResultType.from_value(command_result.get("type"))
     if result_type is CommandResultType.EVENT_CONFIRMATION:
         return command_result.get("message") or "Event proposal ready."
+    if result_type is CommandResultType.CONTACT_CONFIRMATION:
+        return command_result.get("message") or "Contact proposal ready."
     if result_type is CommandResultType.NEED_USER_INPUT:
         need_user_input = command_result.get("need_user_input")
         if isinstance(need_user_input, dict):

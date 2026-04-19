@@ -89,8 +89,9 @@ def handle_pending_event(
     clear_pending_event(key)
 
     original_message = command_data.get("original_message") or question
+    command_name = str(command_data.get("command_name") or "event").strip().lower() or "event"
     combined_message = (
-        f"/event {original_message}\n\nAdditional details: {question}\n\n"
+        f"/{command_name} {original_message}\n\nAdditional details: {question}\n\n"
         f"[clarification_id:{clarification_id}]"
     )
 
@@ -99,7 +100,11 @@ def handle_pending_event(
         return None
 
     if not command_thread_id:
-        command_thread = conversations.ensure_thread(None, user_email, title="Command: /event")
+        command_thread = conversations.ensure_thread(
+            None,
+            user_email,
+            title=f"Command: /{command_name}",
+        )
         command_thread_id = command_thread["id"]
         store_command_thread(key, command_thread_id)
     else:

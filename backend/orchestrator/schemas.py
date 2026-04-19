@@ -529,6 +529,26 @@ class EventCommandResult(BaseModel):
     error: str | None = None
 
 
+class ContactCommandConfirmation(BaseModel):
+    """Schema for confirming and applying a /contact proposal."""
+
+    preview_id: str
+    confirmed: bool
+    modifications: dict[str, Any] | None = Field(default_factory=dict)
+
+
+class ContactCommandResult(BaseModel):
+    """Result of applying a /contact command proposal."""
+
+    success: bool
+    updated_contact_ids: list[str] = Field(default_factory=list)
+    created_contact_ids: list[str] = Field(default_factory=list)
+    created_place_ids: list[str] = Field(default_factory=list)
+    applied_relationship_ids: list[str] = Field(default_factory=list)
+    applied_contact_place_links: list[dict[str, str]] = Field(default_factory=list)
+    error: str | None = None
+
+
 class NewsTopicIn(BaseModel):
     """Create or update a news topic."""
 

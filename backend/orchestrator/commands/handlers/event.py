@@ -2156,6 +2156,7 @@ def handle_event(parsed: ParsedCommand, context: dict) -> dict[str, Any]:
     store_command_data(
         preview_id,
         {
+            "command_name": "event",
             "extracted": extracted,
             "resolution": resolution,
             "user_email": user_email,

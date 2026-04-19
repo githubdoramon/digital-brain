@@ -110,9 +110,10 @@ def get_command_registry() -> CommandRegistry:
     if _registry is None:
         _registry = CommandRegistry()
         # Import and register commands
-        from .handlers import event, new
+        from .handlers import contact, event, new
 
         new.register(_registry)
         event.register(_registry)
+        contact.register(_registry)
 
     return _registry

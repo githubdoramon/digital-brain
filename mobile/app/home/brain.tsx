@@ -51,8 +51,23 @@ import {
 } from '@/chat/session';
 import { restoreChatHistory } from '@/chat/threads';
 import { routeForLinkedItem, type LinkedItem } from '@/chat/linkedItems';
-import type { CommandResult as ThreadCommandResult, EventResolvedStatus } from '@/chat/threads';
+import type {
+  CommandResolvedMeta,
+  CommandResult as ThreadCommandResult,
+} from '@/chat/threads';
 import type { UiDirectiveBlock, UiDirectives, UiSubmissionInput } from '@/chat/uiDirectives';
+import {
+  applyContactDraftModifications,
+  buildContactDraft,
+  buildContactDraftModifications,
+  contactDraftModificationSummary,
+  extractContactPreviewId,
+} from '@/contact-draft/proposal';
+import {
+  consumeContactDraftEditResult,
+  createContactDraftEditSession,
+} from '@/contact-draft/draftEditorSession';
+import type { ContactDraftModifications } from '@/contact-draft/types';
 import { LinkedItemsRow } from '@/components/chat/LinkedItemsRow';
 import {
   clearEventDraftEditSession,
@@ -72,7 +87,7 @@ type Message = {
     command_result?: CommandResult;
     ui_directives?: UiDirectives;
     linked_items?: LinkedItem[];
-    event_resolved?: EventResolvedStatus;
+    command_resolved?: CommandResolvedMeta;
     request_error?: RequestErrorMetadata;
     progress_chip?: string;
   };
@@ -93,6 +108,11 @@ type SendMessageInput =
     };
 
 type EventAction = {
+  type: 'confirm' | 'cancel' | 'edit';
+  previewId: string;
+};
+
+type ContactAction = {
   type: 'confirm' | 'cancel' | 'edit';
   previewId: string;
 };
@@ -139,6 +159,12 @@ const EVENT_CONFIRM_OPTION_PREFIX = 'confirm:';
 const EVENT_CANCEL_OPTION_PREFIX = 'cancel:';
 const EVENT_EDIT_OPTION_PREFIX = 'edit:';
 const EVENT_PREVIEW_BLOCK_PREFIX = 'event_preview:';
+const CONTACT_CONFIRM_ACTION_ID = 'contact_confirmation_action';
+const CONTACT_CLARIFICATION_ACTION_PREFIX = 'contact_clarification_submit';
+const CONTACT_EDIT_ACTION_PREFIX = 'contact_edit_submit';
+const CONTACT_CONFIRM_OPTION_PREFIX = 'confirm:';
+const CONTACT_CANCEL_OPTION_PREFIX = 'cancel:';
+const CONTACT_EDIT_OPTION_PREFIX = 'edit:';
 const MIN_CHAT_INPUT_HEIGHT = 46;
 const MAX_CHAT_INPUT_HEIGHT = 120;
 const COMPOSER_KEYBOARD_GAP = 20;
@@ -269,6 +295,30 @@ function parseEventAction(optionIdRaw: unknown): EventAction | null {
   }
   if (optionId.startsWith(EVENT_CANCEL_OPTION_PREFIX)) {
     const previewId = optionId.slice(EVENT_CANCEL_OPTION_PREFIX.length).trim();
+    if (previewId) {
+      return { type: 'cancel', previewId };
+    }
+  }
+  return null;
+}
+
+function parseContactAction(optionIdRaw: unknown): ContactAction | null {
+  if (typeof optionIdRaw !== 'string') return null;
+  const optionId = optionIdRaw.trim();
+  if (optionId.startsWith(CONTACT_CONFIRM_OPTION_PREFIX)) {
+    const previewId = optionId.slice(CONTACT_CONFIRM_OPTION_PREFIX.length).trim();
+    if (previewId) {
+      return { type: 'confirm', previewId };
+    }
+  }
+  if (optionId.startsWith(CONTACT_EDIT_OPTION_PREFIX)) {
+    const previewId = optionId.slice(CONTACT_EDIT_OPTION_PREFIX.length).trim();
+    if (previewId) {
+      return { type: 'edit', previewId };
+    }
+  }
+  if (optionId.startsWith(CONTACT_CANCEL_OPTION_PREFIX)) {
+    const previewId = optionId.slice(CONTACT_CANCEL_OPTION_PREFIX.length).trim();
     if (previewId) {
       return { type: 'cancel', previewId };
     }
@@ -707,6 +757,95 @@ function updateEventAuxiliaryCards(
   );
 }
 
+function updateContactDraftCards(
+  directives: UiDirectives,
+  previewId: string,
+  draft: ReturnType<typeof buildContactDraft>,
+): UiDirectives {
+  if (!draft) return directives;
+  const placeNameByReference = new Map(draft.places.map((place) => [place.reference, place.name.trim()]));
+  const contactNameByReference = new Map(
+    draft.contacts.map((contact) => [contact.reference, contact.displayName.trim()]),
+  );
+
+  const explicitLines: string[] = [];
+  for (const contact of draft.contacts) {
+    explicitLines.push(
+      `${contact.operation === 'create' ? 'Create' : 'Update'} contact: ${contact.displayName.trim() || contact.reference}`,
+    );
+  }
+  for (const relationship of draft.relationships.filter((item) => item.kind === 'explicit')) {
+    explicitLines.push(
+      `Relationship: ${relationship.fromDisplayName || relationship.fromReference} -> ${relationship.relationshipType || 'related'} -> ${relationship.toDisplayName || relationship.toReference}`,
+    );
+  }
+  for (const place of draft.places) {
+    explicitLines.push(`Place: ${place.name.trim() || place.reference}`);
+  }
+  for (const link of draft.placeLinks) {
+    const contactName = contactNameByReference.get(link.contactReference) || link.contactDisplayName || link.contactReference;
+    const placeName = placeNameByReference.get(link.placeReference) || link.placeName || link.placeReference;
+    explicitLines.push(`Link: ${contactName} -> ${placeName} as ${link.role || 'related'}`);
+  }
+
+  const derivedLines = draft.relationships
+    .filter((item) => item.kind === 'derived' && item.enabled)
+    .map(
+      (relationship) =>
+        `Infer: ${relationship.fromDisplayName || relationship.fromReference} -> ${relationship.relationshipType || 'related'} -> ${relationship.toDisplayName || relationship.toReference}`,
+    );
+
+  const updatedBlocks = directives.blocks.map((block) => {
+    if (block.id === `contact_preview:${previewId}`) {
+      return {
+        ...block,
+        body: [...explicitLines, ...derivedLines].join('\n'),
+      };
+    }
+    if (block.id === `contact_explicit:${previewId}`) {
+      return { ...block, body: explicitLines.join('\n') };
+    }
+    if (block.id === `contact_derived:${previewId}`) {
+      return { ...block, body: derivedLines.join('\n') };
+    }
+    if (block.id === `contact_edit:${previewId}` && Array.isArray(block.fields)) {
+      const updatedFields = block.fields.map((field) => {
+        const contact = draft.contacts[0];
+        if (field.id === 'main_display_name' && contact) return { ...field, value: contact.displayName };
+        if (field.id === 'birth_date' && contact) return { ...field, value: contact.birthday };
+        if (field.id === 'aliases' && contact) return { ...field, value: contact.aliasesText };
+        if (field.id === 'emails' && contact) return { ...field, value: contact.emailsText };
+        if (field.id === 'phones' && contact) return { ...field, value: contact.phonesText };
+        if (field.id === 'links' && contact) return { ...field, value: contact.linksText };
+        if (field.id === 'tags' && contact) return { ...field, value: contact.tagsText };
+        if (field.id === 'comments' && contact) return { ...field, value: contact.comments };
+        if (field.id === 'relationship_type') {
+          const relationship = draft.relationships.find((item) => item.kind === 'explicit');
+          return relationship ? { ...field, value: relationship.relationshipType } : field;
+        }
+        if (field.id === 'place_name') {
+          const place = draft.places[0];
+          return place ? { ...field, value: place.name } : field;
+        }
+        if (field.id === 'place_role') {
+          const link = draft.placeLinks[0];
+          return link ? { ...field, value: link.role } : field;
+        }
+        if (field.id.startsWith('derived_')) {
+          const proposalId = field.id.slice('derived_'.length);
+          const relationship = draft.relationships.find((item) => item.proposalId === proposalId);
+          return relationship ? { ...field, value: relationship.enabled ? 'yes' : 'no' } : field;
+        }
+        return field;
+      });
+      return { ...block, fields: updatedFields };
+    }
+    return block;
+  });
+
+  return { ...directives, blocks: updatedBlocks };
+}
+
 export default function ChatScreen() {
   const router = useRouter();
   const { token, signOut, email, name, photo, isLoading: isAuthLoading } = useAuth();
@@ -726,6 +865,11 @@ export default function ChatScreen() {
     Record<string, EventDraftModifications>
   >({});
   const [activeDraftEditorSessionId, setActiveDraftEditorSessionId] = useState<string | null>(null);
+  const [contactDraftModificationsByPreview, setContactDraftModificationsByPreview] = useState<
+    Record<string, ContactDraftModifications>
+  >({});
+  const [activeContactDraftEditorSessionId, setActiveContactDraftEditorSessionId] =
+    useState<string | null>(null);
   const [eventEditorContacts, setEventEditorContacts] = useState<EventContactOption[]>([]);
   const [eventEditorPlaces, setEventEditorPlaces] = useState<EventPlaceOption[]>([]);
   const isAtBottomRef = useRef(true);
@@ -1243,6 +1387,29 @@ export default function ChatScreen() {
     [],
   );
 
+  const applyContactDraftEdits = useCallback(
+    (
+      previewId: string,
+      baseDraft: ReturnType<typeof buildContactDraft>,
+      nextDraft: ReturnType<typeof buildContactDraft>,
+    ) => {
+      if (!baseDraft || !nextDraft) return;
+      const modifications = buildContactDraftModifications(baseDraft, nextDraft);
+      const modifiedFields = contactDraftModificationSummary(modifications);
+
+      setContactDraftModificationsByPreview((prev) => {
+        const next = { ...prev };
+        if (modifiedFields) {
+          next[previewId] = modifications;
+        } else {
+          delete next[previewId];
+        }
+        return next;
+      });
+    },
+    [],
+  );
+
   useFocusEffect(
     useCallback(() => {
       if (!activeDraftEditorSessionId) {
@@ -1267,6 +1434,22 @@ export default function ChatScreen() {
     }, [activeDraftEditorSessionId, applyEventDraftEdits]),
   );
 
+  useFocusEffect(
+    useCallback(() => {
+      if (!activeContactDraftEditorSessionId) {
+        return () => undefined;
+      }
+
+      const result = consumeContactDraftEditResult(activeContactDraftEditorSessionId);
+      if (result) {
+        applyContactDraftEdits(result.previewId, result.baseDraft, result.nextDraft);
+        setActiveContactDraftEditorSessionId(null);
+      }
+
+      return () => undefined;
+    }, [activeContactDraftEditorSessionId, applyContactDraftEdits]),
+  );
+
   const handleDirectiveSubmission = useCallback(
     async (
       messageId: string,
@@ -1274,6 +1457,163 @@ export default function ChatScreen() {
       submission: UiSubmissionInput,
       commandResult: CommandResult | undefined,
     ) => {
+      if (submission.action_id === CONTACT_CONFIRM_ACTION_ID) {
+        const action = parseContactAction(submission.values?.['option_id']);
+        if (!action) {
+          return;
+        }
+
+        if (action.type === 'edit') {
+          const loadedContacts = await loadEventEditorContacts();
+          const loadedPlaces = await loadEventEditorPlaces();
+          const baseDraft = buildContactDraft(commandResult, action.previewId);
+          if (!baseDraft) {
+            setMessages((prev) => [
+              ...prev,
+              {
+                id: `${Date.now()}-contact-edit-unavailable`,
+                role: 'assistant',
+                content: 'I could not load that contact draft for editing. Please retry from the latest preview.',
+              },
+            ]);
+            setForceScrollNext(true);
+            return;
+          }
+          const existingModifications = contactDraftModificationsByPreview[action.previewId];
+          const session = createContactDraftEditSession({
+            previewId: action.previewId,
+            baseDraft,
+            initialDraft: applyContactDraftModifications(baseDraft, existingModifications),
+            availableContacts: loadedContacts,
+            availablePlaces: loadedPlaces,
+          });
+          setActiveContactDraftEditorSessionId(session.sessionId);
+          router.push({
+            pathname: '/contacts/proposals/[previewId]',
+            params: {
+              previewId: action.previewId,
+              draftSessionId: session.sessionId,
+            },
+          });
+          return;
+        }
+
+        setIsConfirmingEvent(true);
+        try {
+          await apiFetch('/mobile/commands/contact/confirm', {
+            method: 'POST',
+            body: JSON.stringify({
+              preview_id: action.previewId,
+              confirmed: action.type === 'confirm',
+              modifications: contactDraftModificationsByPreview[action.previewId] || {},
+            }),
+            token,
+          });
+
+          const resolved: CommandResolvedMeta = {
+            status: action.type === 'confirm' ? 'created' : 'cancelled',
+            label: action.type === 'confirm' ? 'Contact changes applied' : 'Contact update cancelled',
+          };
+          setPendingEventId(null);
+          setContactDraftModificationsByPreview((prev) => {
+            if (!prev[action.previewId]) return prev;
+            const next = { ...prev };
+            delete next[action.previewId];
+            return next;
+          });
+          setMessages((prev) =>
+            prev.map((message) =>
+              message.id === messageId
+                ? {
+                    ...message,
+                    metadata: {
+                      ...message.metadata,
+                      command_resolved: resolved,
+                    },
+                  }
+                : message,
+            ),
+          );
+          setForceScrollNext(true);
+          return;
+        } catch (error) {
+          const detail = error instanceof Error ? error.message.toLowerCase() : '';
+          const expired = detail.includes('not found or expired');
+          setMessages((prev) => [
+            ...prev,
+            {
+              id: `${Date.now()}-contact-action-error`,
+              role: 'assistant',
+              content: expired
+                ? 'This contact draft expired. Please run /contact again.'
+                : 'I could not complete that contact action right now.',
+            },
+          ]);
+          setForceScrollNext(true);
+          return;
+        } finally {
+          setIsConfirmingEvent(false);
+        }
+      }
+
+      if (submission.action_id?.startsWith(CONTACT_EDIT_ACTION_PREFIX)) {
+        const previewId = submission.action_id.slice(CONTACT_EDIT_ACTION_PREFIX.length).replace(/^:/, '').trim();
+        if (!previewId) {
+          return;
+        }
+
+        setIsConfirmingEvent(true);
+        try {
+          await apiFetch('/mobile/commands/contact/confirm', {
+            method: 'POST',
+            body: JSON.stringify({
+              preview_id: previewId,
+              confirmed: true,
+              modifications: submission.values || {},
+            }),
+            token,
+          });
+
+          const resolved: CommandResolvedMeta = {
+            status: 'created',
+            label: 'Contact changes applied',
+          };
+          setPendingEventId(null);
+          setMessages((prev) =>
+            prev.map((message) =>
+              message.id === messageId
+                ? {
+                    ...message,
+                    metadata: {
+                      ...message.metadata,
+                      command_resolved: resolved,
+                    },
+                  }
+                : message,
+            ),
+          );
+          setForceScrollNext(true);
+          return;
+        } catch (error) {
+          const detail = error instanceof Error ? error.message.toLowerCase() : '';
+          const expired = detail.includes('not found or expired');
+          setMessages((prev) => [
+            ...prev,
+            {
+              id: `${Date.now()}-contact-edit-error`,
+              role: 'assistant',
+              content: expired
+                ? 'This contact draft expired. Please run /contact again.'
+                : 'I could not apply those contact edits right now.',
+            },
+          ]);
+          setForceScrollNext(true);
+          return;
+        } finally {
+          setIsConfirmingEvent(false);
+        }
+      }
+
       if (submission.action_id === EVENT_CONFIRM_ACTION_ID) {
         const action = parseEventAction(submission.values?.['option_id']);
         if (!action || isConfirmingEvent) {
@@ -1403,8 +1743,7 @@ export default function ChatScreen() {
             delete next[action.previewId];
             return next;
           });
-          const resolvedStatus: EventResolvedStatus =
-            action.type === 'confirm' ? 'created' : 'cancelled';
+          const resolvedStatus = action.type === 'confirm' ? 'created' : 'cancelled';
           setMessages((prev) =>
             prev.map((message) =>
               message.id === messageId
@@ -1412,7 +1751,10 @@ export default function ChatScreen() {
                     ...message,
                     metadata: {
                       ...message.metadata,
-                      event_resolved: resolvedStatus,
+                      command_resolved: {
+                        status: resolvedStatus,
+                        label: resolvedStatus === 'created' ? 'Event created' : 'Event cancelled',
+                      },
                     },
                   }
                 : message,
@@ -1457,6 +1799,21 @@ export default function ChatScreen() {
         return;
       }
 
+      const isContactClarificationSubmission =
+        submission.action_id?.startsWith(CONTACT_CLARIFICATION_ACTION_PREFIX);
+
+      if (isContactClarificationSubmission) {
+        const answer = buildEventClarificationAnswer(submission, directives);
+        if (!answer) {
+          return;
+        }
+        const clarificationId = clarificationIdFromAction(submission.action_id);
+        const clarificationToken = clarificationId ? `\n\n[clarification_id:${clarificationId}]` : '';
+        const combinedMessage = `/contact ${answer}${clarificationToken}`;
+        void sendMessage(combinedMessage);
+        return;
+      }
+
       const fallbackText =
         submission.text_fallback?.trim() ||
         directives?.fallback_text ||
@@ -1467,6 +1824,9 @@ export default function ChatScreen() {
       });
     },
     [
+      applyContactDraftModifications,
+      buildContactDraft,
+      contactDraftModificationsByPreview,
       eventDraftModificationsByPreview,
       isConfirmingEvent,
       loadEventEditorContacts,
@@ -1585,18 +1945,23 @@ export default function ChatScreen() {
             }
 
             const commandResult = item.metadata?.command_result;
-            const previewId = extractEventPreviewId(commandResult);
+            const eventPreviewId = extractEventPreviewId(commandResult);
+            const contactPreviewId = extractContactPreviewId(commandResult);
+            const previewId = eventPreviewId || contactPreviewId;
             const isSupersededEventCard = Boolean(
               previewId && pendingEventId && previewId !== pendingEventId,
             );
-            const previewModifications = previewId
-              ? eventDraftModificationsByPreview[previewId]
+            const eventPreviewModifications = eventPreviewId
+              ? eventDraftModificationsByPreview[eventPreviewId]
+              : undefined;
+            const contactPreviewModifications = contactPreviewId
+              ? contactDraftModificationsByPreview[contactPreviewId]
               : undefined;
             const directives = item.metadata?.ui_directives;
             const linkedItems = item.metadata?.linked_items || [];
             let directivesForCard = directives;
-            if (previewId && directives && previewModifications) {
-              const baseDraft = buildEventDraft(commandResult, previewId);
+            if (eventPreviewId && directives && eventPreviewModifications) {
+              const baseDraft = buildEventDraft(commandResult, eventPreviewId);
               if (baseDraft) {
                 const contactNameById = new Map(
                   eventEditorContacts.map((contact) => [contact.contact_id, contact.display_name]),
@@ -1608,18 +1973,32 @@ export default function ChatScreen() {
                 }
                 const modifiedDraft = applyDraftModifications(
                   baseDraft,
-                  previewModifications,
+                  eventPreviewModifications,
                   contactNameById,
                 );
                 const withUpdatedPreview = updateEventPreviewCard(
                   directives,
-                  previewId,
+                  eventPreviewId,
                   modifiedDraft,
                 );
                 directivesForCard = updateEventAuxiliaryCards(
                   withUpdatedPreview,
                   commandResult,
-                  previewId,
+                  eventPreviewId,
+                  modifiedDraft,
+                );
+              }
+            }
+            if (contactPreviewId && directivesForCard && contactPreviewModifications) {
+              const baseDraft = buildContactDraft(commandResult, contactPreviewId);
+              if (baseDraft) {
+                const modifiedDraft = applyContactDraftModifications(
+                  baseDraft,
+                  contactPreviewModifications,
+                );
+                directivesForCard = updateContactDraftCards(
+                  directivesForCard,
+                  contactPreviewId,
                   modifiedDraft,
                 );
               }
@@ -1647,7 +2026,7 @@ export default function ChatScreen() {
                     <UiDirectiveCard
                       directives={directivesForCard}
                       isSubmitting={isSending || isConfirmingEvent || isSupersededEventCard}
-                      resolvedStatus={item.metadata?.event_resolved}
+                      resolved={item.metadata?.command_resolved}
                       onFieldFocus={() => {
                         setForceScrollNext(true);
                       }}
