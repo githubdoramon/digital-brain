@@ -302,9 +302,11 @@ def _infer_follow_up_target_fields(
     context: dict[str, Any],
 ) -> list[str]:
     from llm_helpers import call_llm_json
-    from prompts.context import get_time_context, get_user_facts_context
+    from prompts.context import get_self_context, get_time_context, get_user_facts_context
 
     user_email = str(context.get("user_email") or "").strip()
+    self_context = get_self_context(user_email) if user_email else None
+    self_context_block = f"\n{self_context}\n" if self_context else ""
     user_facts_ctx = (
         get_user_facts_context(user_email, follow_up_message, scope=RuleScope.EVENT_COMMAND)
         if user_email
@@ -318,7 +320,7 @@ def _infer_follow_up_target_fields(
 
 Current context:
 - Date/time: {time_context}
-- User: {user_email}
+{self_context_block}
 {user_facts_block}
 {extraction_context}
 
@@ -710,14 +712,15 @@ def _extract_event_entities_with_llm(
     """
     from llm_helpers import call_llm_json
     from prompts.clarification import append_clarification_guidelines
-    from prompts.context import get_time_context, get_user_facts_context
+    from prompts.context import get_self_context, get_time_context, get_user_facts_context
     from tags_manager import MAJOR_TAGS
 
     logger.info("[event_extraction] Starting extraction for: '%s'", message)
 
     # Get current time context
     time_context = get_time_context()
-    user_email = context.get("user_email", "")
+    user_email = str(context.get("user_email") or "").strip()
+    self_context = get_self_context(user_email) if user_email else None
 
     # Get user facts for personalization (timezone, preferences, common locations, etc.)
     user_facts_ctx = (
@@ -755,12 +758,13 @@ def _extract_event_entities_with_llm(
         f"Conversation messages (JSON array, most recent last):\n{conversation_json}\n\n"
     )
 
+    self_context_block = f"\n{self_context}\n" if self_context else ""
     user_facts_block = f"\n{user_facts_ctx}\n" if user_facts_ctx else ""
     extraction_prompt = f"""You are extracting structured information from a user's event description to create a memory entry.
 
 Current context:
 - Date/time: {time_context}\n
-- User: {user_email}\n
+{self_context_block}
 {user_facts_block}\n
 Event description: "{message}"\n
 

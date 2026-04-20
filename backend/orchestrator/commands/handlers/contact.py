@@ -124,13 +124,24 @@ def _clarification_fields(field_ids: list[str]) -> list[dict[str, Any]]:
 
 def _llm_extract_contact_changes(message: str, *, user_email: str) -> dict[str, Any]:
     from llm_helpers import call_llm_json
+    from prompts.context import get_self_context, get_user_facts_context
+    from user_fact_rules import RuleScope
 
     need_user_input_guidance = build_need_user_input_prompt_guidance(exclude_people=False)
     need_user_input_template = need_user_input_json_property_template(indent=4)
-    prompt = f"""You extract a structured proposal for the /contact command.
+    self_context = get_self_context(user_email) if user_email else None
+    self_context_block = f"\n{self_context}\n" if self_context else ""
+    user_facts_ctx = (
+        get_user_facts_context(user_email, message, scope=RuleScope.CONTACT_RESOLUTION)
+        if user_email
+        else None
+    )
+    user_facts_block = f"\n{user_facts_ctx}\n" if user_facts_ctx else ""
+    prompt = f"""You need to extract a structured proposal of information about contacts and their relationships.
 
-User: {user_email}
-Message: \"{message}\"
+{self_context_block}
+{user_facts_block}
+Current user message: \"{message}\"
 
 Interpret one or more contact graph updates.
 
@@ -149,13 +160,7 @@ If the statement is ambiguous, missing a required person, or contains an ambiguo
 Return ONLY valid JSON in this exact format:
 {{
 {need_user_input_template}
-    "main_contact_name": "Primary contact name or null",
-    "related_contact_name": "Secondary contact name or null",
-    "relationship_type": "relationship type or null",
-    "birth_date_text": "raw date string or null",
-    "place_text": "place or address text or null",
-    "place_role": "home/work/other or null",
-    "contact_updates": [
+    "contacts": [
         {{
             "contact_name": "name",
             "birthday": "YYYY-MM-DD or null",
@@ -166,6 +171,20 @@ Return ONLY valid JSON in this exact format:
             "phones": ["+351..."],
             "links": ["https://..."],
             "tags": ["tag"]
+        }}
+    ],
+    "relationships": [
+        {{
+            "from_contact_name": "name",
+            "to_contact_name": "name",
+            "relationship_type": "relationship type"
+        }}
+    ],
+    "contact_place_links": [
+        {{
+            "contact_name": "name",
+            "place_text": "place or address",
+            "place_role": "home/work/other or null"
         }}
     ],
     "summary": "one-sentence explanation"
@@ -355,6 +374,61 @@ def _proposal_id(prefix: str) -> str:
     return f"{prefix}:{uuid4().hex[:8]}"
 
 
+def _dict_items(raw_value: Any) -> list[dict[str, Any]]:
+    if not isinstance(raw_value, list):
+        return []
+    return [item for item in raw_value if isinstance(item, dict)]
+
+
+def _contact_reference_value(ref: dict[str, Any] | None) -> str:
+    if not ref:
+        return ""
+    return str(ref.get("contact_id") or ref.get("temp_id") or "").strip()
+
+
+def _ensure_contact_create(proposal: dict[str, Any], ref: dict[str, Any]) -> None:
+    if ref.get("status") != "new":
+        return
+    reference = _contact_reference_value(ref)
+    if not reference:
+        return
+    for item in proposal["contacts"]:
+        if str(item.get("reference") or "") == reference and str(item.get("operation") or "") == "create":
+            return
+    proposal["contacts"].append(
+        {
+            "proposal_id": _proposal_id("contact_create"),
+            "source": "explicit",
+            "operation": "create",
+            "reference": reference,
+            "display_name": ref.get("display_name"),
+        }
+    )
+    _append_unique_change(proposal["explicit_change_lines"], f"Create contact: {ref.get('display_name')}")
+
+
+def _ensure_place_create(proposal: dict[str, Any], ref: dict[str, Any]) -> None:
+    if ref.get("status") != "new":
+        return
+    reference = str(ref.get("temp_id") or "").strip()
+    if not reference:
+        return
+    for item in proposal["places"]:
+        if str(item.get("reference") or "") == reference and str(item.get("operation") or "") == "create":
+            return
+    proposal["places"].append(
+        {
+            "proposal_id": _proposal_id("place_create"),
+            "source": "explicit",
+            "operation": "create",
+            "reference": reference,
+            "name": ref.get("name"),
+            "address": ref.get("address"),
+        }
+    )
+    _append_unique_change(proposal["explicit_change_lines"], f"Create place: {ref.get('name')}")
+
+
 def _ensure_contact_update_entry(proposal: dict[str, Any], reference: str, display_name: str) -> dict[str, Any]:
     for item in proposal["contacts"]:
         if str(item.get("reference") or "") == reference and str(item.get("operation") or "") == "update":
@@ -450,54 +524,126 @@ def _apply_contact_fields_to_proposal(
             )
 
 
+def _append_relationship_to_proposal(
+    proposal: dict[str, Any],
+    *,
+    from_ref: dict[str, Any],
+    to_ref: dict[str, Any],
+    relationship_type: str,
+) -> dict[str, Any]:
+    relationship = {
+        "proposal_id": _proposal_id("relationship"),
+        "source": "explicit",
+        "from_reference": _contact_reference_value(from_ref),
+        "from_display_name": from_ref.get("display_name"),
+        "to_reference": _contact_reference_value(to_ref),
+        "to_display_name": to_ref.get("display_name"),
+        "relationship_type": relationship_type,
+        "reciprocal_type": _reciprocal_relationship_type(relationship_type),
+    }
+    proposal["relationships"].append(relationship)
+    _append_unique_change(
+        proposal["explicit_change_lines"],
+        f"Add relationship: {from_ref.get('display_name')} -> {relationship_type} -> {to_ref.get('display_name')}",
+    )
+    return relationship
+
+
+def _append_parent_derived_relationships(
+    proposal: dict[str, Any],
+    *,
+    parent_ref: dict[str, Any],
+    child_ref: dict[str, Any],
+    relationship_type: str,
+) -> None:
+    if relationship_type not in _PARENT_TYPES or not parent_ref.get("contact_id"):
+        return
+    child_reference = _contact_reference_value(child_ref)
+    child_display_name = str(child_ref.get("display_name") or "").strip()
+    parent_contact = contacts_service.get_contact(str(parent_ref.get("contact_id") or "")) or {}
+    for rel in parent_contact.get("relationships") or []:
+        rel_type = str(rel.get("type") or "").strip().lower()
+        related_contact_id = str(rel.get("contact_id") or "").strip()
+        if related_contact_id and rel_type in _SPOUSE_TYPES:
+            spouse_contact = contacts_service.get_contact(related_contact_id)
+            if spouse_contact:
+                proposal["derived_relationships"].append(
+                    {
+                        "proposal_id": _proposal_id("derived_relationship"),
+                        "source": "derived",
+                        "reason": "co_parent_from_spouse",
+                        "from_reference": spouse_contact.get("contact_id"),
+                        "from_display_name": spouse_contact.get("display_name"),
+                        "to_reference": child_reference,
+                        "to_display_name": child_display_name,
+                        "relationship_type": "parent",
+                        "reciprocal_type": "child",
+                    }
+                )
+                _append_unique_change(
+                    proposal["derived_change_lines"],
+                    f"Infer co-parent link: {spouse_contact.get('display_name')} -> parent -> {child_display_name}",
+                )
+        if related_contact_id and rel_type in _PARENT_TYPES:
+            grandparent_contact = contacts_service.get_contact(related_contact_id)
+            if grandparent_contact:
+                derived_type = _GRANDPARENT_MAP.get(rel_type, "grandparent")
+                proposal["derived_relationships"].append(
+                    {
+                        "proposal_id": _proposal_id("derived_relationship"),
+                        "source": "derived",
+                        "reason": "grandparent_from_parent_graph",
+                        "from_reference": grandparent_contact.get("contact_id"),
+                        "from_display_name": grandparent_contact.get("display_name"),
+                        "to_reference": child_reference,
+                        "to_display_name": child_display_name,
+                        "relationship_type": derived_type,
+                        "reciprocal_type": "grandchild",
+                    }
+                )
+                _append_unique_change(
+                    proposal["derived_change_lines"],
+                    f"Infer grandparent link: {grandparent_contact.get('display_name')} -> {derived_type} -> {child_display_name}",
+                )
+
+
 def _build_proposal(extracted: dict[str, Any], *, original_message: str) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
     main_name = str(extracted.get("main_contact_name") or "").strip()
     related_name = str(extracted.get("related_contact_name") or "").strip()
-    relationship_type = _normalize_relationship_type(extracted.get("relationship_type"))
+    legacy_relationship_type = _normalize_relationship_type(extracted.get("relationship_type"))
     birth_date_text = str(extracted.get("birth_date_text") or "").strip()
-    place_text = str(extracted.get("place_text") or "").strip()
-    place_role = str(extracted.get("place_role") or "").strip().lower() or None
-    raw_contact_updates = extracted.get("contact_updates")
-    contact_updates: list[dict[str, Any]] = [
-        item for item in raw_contact_updates if isinstance(item, dict)
-    ] if isinstance(raw_contact_updates, list) else []
+    legacy_place_text = str(extracted.get("place_text") or "").strip()
+    legacy_place_role = str(extracted.get("place_role") or "").strip().lower() or None
+
+    contact_updates = _dict_items(extracted.get("contacts"))
+    legacy_contact_updates = _dict_items(extracted.get("contact_updates"))
+    if not contact_updates:
+        contact_updates = legacy_contact_updates
+    elif legacy_contact_updates:
+        contact_updates.extend(legacy_contact_updates)
+
+    relationship_specs = _dict_items(extracted.get("relationships"))
+    if not relationship_specs and legacy_relationship_type and main_name and related_name:
+        relationship_specs.append(
+            {
+                "from_contact_name": main_name,
+                "to_contact_name": related_name,
+                "relationship_type": legacy_relationship_type,
+            }
+        )
+
+    place_link_specs = _dict_items(extracted.get("contact_place_links"))
+    if not place_link_specs and legacy_place_text and main_name:
+        place_link_specs.append(
+            {
+                "contact_name": main_name,
+                "place_text": legacy_place_text,
+                "place_role": legacy_place_role,
+            }
+        )
 
     if not main_name and contact_updates:
         main_name = str((contact_updates[0] or {}).get("contact_name") or "").strip()
-
-    if not main_name:
-        return None, build_need_user_input(
-            prompt="Which contact should I update?",
-            questions=["Which contact should I update?"],
-            fields=_clarification_fields(["main_contact_name"]),
-            kind="clarification",
-            source="contact_command",
-            submission_mode="ui_submission",
-        )
-
-    main_ref = _resolve_contact_reference(main_name)
-    if main_ref.get("status") == "ambiguous":
-        return None, build_need_user_input(
-            prompt=f"I found multiple contacts for {main_name}. Which one did you mean?",
-            questions=[f"I found multiple contacts for {main_name}. Which one did you mean?"],
-            fields=_clarification_fields(["main_contact_name"]),
-            kind="disambiguation",
-            source="contact_command",
-            submission_mode="ui_submission",
-        )
-
-    related_ref: dict[str, Any] | None = None
-    if related_name:
-        related_ref = _resolve_contact_reference(related_name)
-        if related_ref.get("status") == "ambiguous":
-            return None, build_need_user_input(
-                prompt=f"I found multiple contacts for {related_name}. Which one did you mean?",
-                questions=[f"I found multiple contacts for {related_name}. Which one did you mean?"],
-                fields=_clarification_fields(["related_contact_name"]),
-                kind="disambiguation",
-                source="contact_command",
-                submission_mode="ui_submission",
-            )
 
     parsed_birth_date, birth_date_error = _parse_birth_date(birth_date_text)
     if birth_date_error:
@@ -522,60 +668,91 @@ def _build_proposal(extracted: dict[str, Any], *, original_message: str) -> tupl
         "original_message": original_message,
         "edit_context": {},
     }
+    refs: dict[str, dict[str, Any]] = {}
+    places_by_text: dict[str, dict[str, Any]] = {}
 
-    refs: dict[str, dict[str, Any]] = {main_name: main_ref}
-    if related_name and related_ref:
-        refs[related_name] = related_ref
-
-    for ref in refs.values():
-        if ref.get("status") == "new":
-            proposal["contacts"].append(
-                {
-                    "proposal_id": _proposal_id("contact_create"),
-                    "source": "explicit",
-                    "operation": "create",
-                    "reference": ref.get("temp_id"),
-                    "display_name": ref.get("display_name"),
-                }
+    def resolve_contact(name: str, field_id: str) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+        normalized_name = str(name or "").strip()
+        if not normalized_name:
+            return None, build_need_user_input(
+                prompt="Which contact should I update?",
+                questions=["Which contact should I update?"],
+                fields=_clarification_fields([field_id]),
+                kind="clarification",
+                source="contact_command",
+                submission_mode="ui_submission",
             )
-            _append_unique_change(proposal["explicit_change_lines"], f"Create contact: {ref.get('display_name')}")
+        key = normalize_search_text(normalized_name)
+        if key in refs:
+            return refs[key], None
+        ref = _resolve_contact_reference(normalized_name)
+        if ref.get("status") == "ambiguous":
+            return None, build_need_user_input(
+                prompt=f"I found multiple contacts for {normalized_name}. Which one did you mean?",
+                questions=[f"I found multiple contacts for {normalized_name}. Which one did you mean?"],
+                fields=_clarification_fields([field_id]),
+                kind="disambiguation",
+                source="contact_command",
+                submission_mode="ui_submission",
+            )
+        refs[key] = ref
+        _ensure_contact_create(proposal, ref)
+        return ref, None
 
-    main_contact_updates: dict[str, Any] = {}
-    if parsed_birth_date:
-        main_contact_updates["birthday"] = parsed_birth_date
+    def resolve_place(place_text: str) -> dict[str, Any] | None:
+        normalized_place = str(place_text or "").strip()
+        if not normalized_place:
+            return None
+        key = normalize_search_text(normalized_place)
+        if key not in places_by_text:
+            place_ref = _resolve_place(normalized_place)
+            if place_ref:
+                places_by_text[key] = place_ref
+                _ensure_place_create(proposal, place_ref)
+        return places_by_text.get(key)
+
+    main_ref: dict[str, Any] | None = None
+    if main_name:
+        main_ref, need_user_input = resolve_contact(main_name, "main_contact_name")
+        if need_user_input:
+            return None, need_user_input
+    related_ref: dict[str, Any] | None = None
+    if related_name:
+        related_ref, need_user_input = resolve_contact(related_name, "related_contact_name")
+        if need_user_input:
+            return None, need_user_input
+
+    applied_update_refs: set[str] = set()
     for raw_update in contact_updates:
-        target_name = str(raw_update.get("contact_name") or main_ref.get("display_name") or "").strip()
-        if not target_name:
-            continue
-        target_ref = refs.get(target_name)
+        target_name = str(
+            raw_update.get("contact_name")
+            or raw_update.get("name")
+            or raw_update.get("display_name")
+            or main_name
+            or ""
+        ).strip()
+        target_ref, need_user_input = resolve_contact(target_name, "main_contact_name")
+        if need_user_input:
+            return None, need_user_input
         if not target_ref:
-            target_ref = _resolve_contact_reference(target_name)
-            if target_ref.get("status") == "ambiguous":
-                return None, build_need_user_input(
-                    prompt=f"I found multiple contacts for {target_name}. Which one did you mean?",
-                    questions=[f"I found multiple contacts for {target_name}. Which one did you mean?"],
-                    fields=_clarification_fields(["main_contact_name"]),
-                    kind="disambiguation",
-                    source="contact_command",
-                    submission_mode="ui_submission",
-                )
-            refs[target_name] = target_ref
-            if target_ref.get("status") == "new":
-                proposal["contacts"].append(
-                    {
-                        "proposal_id": _proposal_id("contact_create"),
-                        "source": "explicit",
-                        "operation": "create",
-                        "reference": target_ref.get("temp_id"),
-                        "display_name": target_ref.get("display_name"),
-                    }
-                )
-                _append_unique_change(
-                    proposal["explicit_change_lines"], f"Create contact: {target_ref.get('display_name')}"
-                )
+            continue
+
+        raw_birthday = raw_update.get("birthday")
+        if raw_birthday is None and main_ref and _contact_reference_value(target_ref) == _contact_reference_value(main_ref):
+            raw_birthday = parsed_birth_date
+        parsed_update_birthday, update_birth_date_error = _parse_birth_date(raw_birthday)
+        if update_birth_date_error:
+            return None, build_need_user_input(
+                prompt=update_birth_date_error,
+                questions=[update_birth_date_error],
+                fields=_clarification_fields(["birth_date"]),
+                kind="clarification",
+                source="contact_command",
+                submission_mode="ui_submission",
+            )
 
         updates = {
-            "birthday": raw_update.get("birthday") or parsed_birth_date,
+            "birthday": parsed_update_birthday,
             "comments": raw_update.get("comments"),
             "profession": raw_update.get("profession"),
             "aliases": raw_update.get("aliases"),
@@ -590,12 +767,10 @@ def _build_proposal(extracted: dict[str, Any], *, original_message: str) -> tupl
             updates=updates,
             label_name=str(target_ref.get("display_name") or target_name),
         )
-        if str(target_ref.get("contact_id") or target_ref.get("temp_id")) == str(
-            main_ref.get("contact_id") or main_ref.get("temp_id")
-        ):
-            main_contact_updates.update({k: v for k, v in updates.items() if v not in (None, [], "")})
+        if any(value not in (None, [], "") for value in updates.values()):
+            applied_update_refs.add(_contact_reference_value(target_ref))
 
-    if parsed_birth_date and not main_contact_updates:
+    if parsed_birth_date and main_ref and _contact_reference_value(main_ref) not in applied_update_refs:
         _apply_contact_fields_to_proposal(
             proposal,
             target_ref=main_ref,
@@ -603,117 +778,77 @@ def _build_proposal(extracted: dict[str, Any], *, original_message: str) -> tupl
             label_name=str(main_ref.get("display_name") or main_name),
         )
 
-    explicit_relationship: dict[str, Any] | None = None
-    if relationship_type and related_ref:
-        explicit_relationship = {
-            "proposal_id": _proposal_id("relationship"),
-            "source": "explicit",
-            "from_reference": main_ref.get("contact_id") or main_ref.get("temp_id"),
-            "from_display_name": main_ref.get("display_name"),
-            "to_reference": related_ref.get("contact_id") or related_ref.get("temp_id"),
-            "to_display_name": related_ref.get("display_name"),
-            "relationship_type": relationship_type,
-            "reciprocal_type": _reciprocal_relationship_type(relationship_type),
-        }
-        proposal["relationships"].append(explicit_relationship)
-        _append_unique_change(
-            proposal["explicit_change_lines"],
-            f"Add relationship: {main_ref.get('display_name')} -> {relationship_type} -> {related_ref.get('display_name')}",
+    first_relationship: dict[str, Any] | None = None
+    for spec in relationship_specs:
+        from_name = str(spec.get("from_contact_name") or spec.get("from_name") or spec.get("source_contact_name") or "").strip()
+        to_name = str(spec.get("to_contact_name") or spec.get("to_name") or spec.get("target_contact_name") or "").strip()
+        relationship_type = _normalize_relationship_type(spec.get("relationship_type") or spec.get("type"))
+        if not relationship_type:
+            return None, build_need_user_input(
+                prompt="What relationship should I add between these contacts?",
+                questions=["What relationship should I add between these contacts?"],
+                fields=_clarification_fields(["relationship_type"]),
+                kind="clarification",
+                source="contact_command",
+                submission_mode="ui_submission",
+            )
+        from_ref, need_user_input = resolve_contact(from_name, "main_contact_name")
+        if need_user_input:
+            return None, need_user_input
+        to_ref, need_user_input = resolve_contact(to_name, "related_contact_name")
+        if need_user_input:
+            return None, need_user_input
+        if not from_ref or not to_ref:
+            continue
+        relationship = _append_relationship_to_proposal(
+            proposal,
+            from_ref=from_ref,
+            to_ref=to_ref,
+            relationship_type=relationship_type,
+        )
+        if first_relationship is None:
+            first_relationship = relationship
+        _append_parent_derived_relationships(
+            proposal,
+            parent_ref=from_ref,
+            child_ref=to_ref,
+            relationship_type=relationship_type,
         )
 
-    place_ref: dict[str, Any] | None = None
-    if place_text:
-        place_ref = _resolve_place(place_text)
-        if place_ref:
-            if place_ref.get("status") == "new":
-                proposal["places"].append(
-                    {
-                        "proposal_id": _proposal_id("place_create"),
-                        "source": "explicit",
-                        "operation": "create",
-                        "reference": place_ref.get("temp_id"),
-                        "name": place_ref.get("name"),
-                        "address": place_ref.get("address"),
-                    }
-                )
-                _append_unique_change(proposal["explicit_change_lines"], f"Create place: {place_ref.get('name')}")
-            link_role = place_role or "home"
-            proposal["contact_place_links"].append(
-                {
-                    "proposal_id": _proposal_id("contact_place_link"),
-                    "source": "explicit",
-                    "contact_reference": main_ref.get("contact_id") or main_ref.get("temp_id"),
-                    "contact_display_name": main_ref.get("display_name"),
-                    "place_reference": place_ref.get("place_id") or place_ref.get("temp_id"),
-                    "place_name": place_ref.get("name"),
-                    "role": link_role,
-                }
-            )
-            _append_unique_change(
-                proposal["explicit_change_lines"],
-                f"Link {main_ref.get('display_name')} to {place_ref.get('name')} as {link_role}",
-            )
-
-    if relationship_type in _PARENT_TYPES and related_ref and main_ref.get("contact_id"):
-        main_contact = contacts_service.get_contact(str(main_ref.get("contact_id") or "")) or {}
-        for rel in main_contact.get("relationships") or []:
-            rel_type = str(rel.get("type") or "").strip().lower()
-            related_contact_id = str(rel.get("contact_id") or "").strip()
-            if related_contact_id and rel_type in _SPOUSE_TYPES:
-                spouse_contact = contacts_service.get_contact(related_contact_id)
-                if spouse_contact:
-                    proposal["derived_relationships"].append(
-                        {
-                            "proposal_id": _proposal_id("derived_relationship"),
-                            "source": "derived",
-                            "reason": "co_parent_from_spouse",
-                            "from_reference": spouse_contact.get("contact_id"),
-                            "from_display_name": spouse_contact.get("display_name"),
-                            "to_reference": related_ref.get("contact_id") or related_ref.get("temp_id"),
-                            "to_display_name": related_ref.get("display_name"),
-                            "relationship_type": "parent",
-                            "reciprocal_type": "child",
-                        }
-                    )
-                    _append_unique_change(
-                        proposal["derived_change_lines"],
-                        f"Infer co-parent link: {spouse_contact.get('display_name')} -> parent -> {related_ref.get('display_name')}",
-                    )
-            if related_contact_id and rel_type in _PARENT_TYPES:
-                grandparent_contact = contacts_service.get_contact(related_contact_id)
-                if grandparent_contact:
-                    derived_type = _GRANDPARENT_MAP.get(rel_type, "grandparent")
-                    related_to_reference = str(
-                        (related_ref.get("contact_id") if related_ref else None)
-                        or (related_ref.get("temp_id") if related_ref else None)
-                        or ""
-                    ).strip()
-                    related_to_display_name = str(
-                        (related_ref.get("display_name") if related_ref else "") or ""
-                    ).strip()
-                    proposal["derived_relationships"].append(
-                        {
-                            "proposal_id": _proposal_id("derived_relationship"),
-                            "source": "derived",
-                            "reason": "grandparent_from_parent_graph",
-                            "from_reference": grandparent_contact.get("contact_id"),
-                            "from_display_name": grandparent_contact.get("display_name"),
-                            "to_reference": related_to_reference,
-                            "to_display_name": related_to_display_name,
-                            "relationship_type": derived_type,
-                            "reciprocal_type": "grandchild",
-                        }
-                    )
-                    _append_unique_change(
-                        proposal["derived_change_lines"],
-                        f"Infer grandparent link: {grandparent_contact.get('display_name')} -> {derived_type} -> {related_to_display_name}",
-                    )
+    first_place_ref: dict[str, Any] | None = None
+    for spec in place_link_specs:
+        contact_name = str(spec.get("contact_name") or spec.get("name") or main_name or "").strip()
+        place_text = str(spec.get("place_text") or spec.get("place_name") or spec.get("address") or "").strip()
+        link_role = str(spec.get("place_role") or spec.get("role") or "home").strip().lower() or "home"
+        contact_ref, need_user_input = resolve_contact(contact_name, "main_contact_name")
+        if need_user_input:
+            return None, need_user_input
+        place_ref = resolve_place(place_text)
+        if not contact_ref or not place_ref:
+            continue
+        if first_place_ref is None:
+            first_place_ref = place_ref
+        proposal["contact_place_links"].append(
+            {
+                "proposal_id": _proposal_id("contact_place_link"),
+                "source": "explicit",
+                "contact_reference": _contact_reference_value(contact_ref),
+                "contact_display_name": contact_ref.get("display_name"),
+                "place_reference": place_ref.get("place_id") or place_ref.get("temp_id"),
+                "place_name": place_ref.get("name"),
+                "role": link_role,
+            }
+        )
+        _append_unique_change(
+            proposal["explicit_change_lines"],
+            f"Link {contact_ref.get('display_name')} to {place_ref.get('name')} as {link_role}",
+        )
 
     proposal["edit_context"] = {
-        "main_contact_reference": main_ref.get("contact_id") or main_ref.get("temp_id"),
-        "related_contact_reference": (related_ref or {}).get("contact_id") or (related_ref or {}).get("temp_id"),
-        "primary_relationship_id": (explicit_relationship or {}).get("proposal_id"),
-        "place_reference": (place_ref or {}).get("place_id") or (place_ref or {}).get("temp_id"),
+        "main_contact_reference": _contact_reference_value(main_ref),
+        "related_contact_reference": _contact_reference_value(related_ref),
+        "primary_relationship_id": (first_relationship or {}).get("proposal_id"),
+        "place_reference": (first_place_ref or {}).get("place_id") or (first_place_ref or {}).get("temp_id"),
     }
 
     for line in proposal["explicit_change_lines"]:

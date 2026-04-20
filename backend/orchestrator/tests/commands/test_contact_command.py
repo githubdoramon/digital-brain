@@ -127,6 +127,108 @@ def test_handle_contact_requests_clarification_for_ambiguous_birth_date(monkeypa
     clear_pending_event(context["event_pending_key"])
 
 
+def test_handle_contact_supports_multiple_contacts_and_place_links(monkeypatch):
+    parsed = ParsedCommand(
+        command="contact",
+        args="Ana and Bruno are lawyers and live at Rua X",
+        raw_message="/contact Ana and Bruno are lawyers and live at Rua X",
+    )
+    context = {
+        "user_email": "user@example.com",
+        "thread_id": "thread-multi-place",
+        "event_pending_key": "user@example.com:thread-multi-place",
+    }
+
+    monkeypatch.setattr(
+        "commands.handlers.contact._llm_extract_contact_changes",
+        lambda *_args, **_kwargs: {
+            "contacts": [
+                {"contact_name": "Ana", "profession": "Lawyer"},
+                {"contact_name": "Bruno", "profession": "Lawyer"},
+            ],
+            "relationships": [],
+            "contact_place_links": [
+                {"contact_name": "Ana", "place_text": "Rua X", "place_role": "home"},
+                {"contact_name": "Bruno", "place_text": "Rua X", "place_role": "home"},
+            ],
+            "need_user_input": None,
+        },
+    )
+    monkeypatch.setattr(
+        "commands.handlers.contact.contacts_service.search_contacts",
+        lambda *_args, **_kwargs: [],
+    )
+    monkeypatch.setattr(
+        "commands.handlers.contact.places_service.find_best_place_match",
+        lambda *_args, **_kwargs: None,
+    )
+
+    result = handle_contact(parsed, context)
+
+    assert result["type"] == "contact_confirmation"
+    proposal = result["proposal"]
+    created_contacts = [item for item in proposal["contacts"] if item.get("operation") == "create"]
+    assert {item["display_name"] for item in created_contacts} == {"Ana", "Bruno"}
+    assert len(proposal["contact_place_links"]) == 2
+    assert len(proposal["places"]) == 1
+    assert any("Add profession for Ana: Lawyer" in line for line in result["explicit_change_lines"])
+    assert any("Link Bruno to Rua X as home" in line for line in result["explicit_change_lines"])
+
+    delete_command_data(result["preview_id"])
+    clear_pending_event(context["event_pending_key"])
+
+
+def test_handle_contact_supports_independent_relationship_pairs(monkeypatch):
+    parsed = ParsedCommand(
+        command="contact",
+        args="Ana is Bruno's sister and Carlos is Diana's father",
+        raw_message="/contact Ana is Bruno's sister and Carlos is Diana's father",
+    )
+    context = {
+        "user_email": "user@example.com",
+        "thread_id": "thread-multi-rel",
+        "event_pending_key": "user@example.com:thread-multi-rel",
+    }
+
+    monkeypatch.setattr(
+        "commands.handlers.contact._llm_extract_contact_changes",
+        lambda *_args, **_kwargs: {
+            "contacts": [],
+            "relationships": [
+                {
+                    "from_contact_name": "Ana",
+                    "to_contact_name": "Bruno",
+                    "relationship_type": "sister",
+                },
+                {
+                    "from_contact_name": "Carlos",
+                    "to_contact_name": "Diana",
+                    "relationship_type": "father",
+                },
+            ],
+            "contact_place_links": [],
+            "need_user_input": None,
+        },
+    )
+    monkeypatch.setattr(
+        "commands.handlers.contact.contacts_service.search_contacts",
+        lambda *_args, **_kwargs: [],
+    )
+
+    result = handle_contact(parsed, context)
+
+    assert result["type"] == "contact_confirmation"
+    relationships = result["proposal"]["relationships"]
+    assert len(relationships) == 2
+    assert {(rel["from_display_name"], rel["relationship_type"], rel["to_display_name"]) for rel in relationships} == {
+        ("Ana", "sister", "Bruno"),
+        ("Carlos", "father", "Diana"),
+    }
+
+    delete_command_data(result["preview_id"])
+    clear_pending_event(context["event_pending_key"])
+
+
 def test_confirm_contact_command_applies_updates(monkeypatch):
     command_data = {
         "proposal": {
