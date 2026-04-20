@@ -1,4 +1,4 @@
-from commands.contact import confirm_contact_command
+from commands.contact import _apply_modifications_to_proposal, confirm_contact_command
 from commands.handlers.contact import handle_contact
 from commands.parser import ParsedCommand
 from commands.storage import clear_pending_event, delete_command_data, get_command_data
@@ -86,6 +86,58 @@ def test_handle_contact_builds_contact_confirmation_and_derives_family_links(mon
 
     delete_command_data(preview_id)
     clear_pending_event(context["event_pending_key"])
+
+
+def test_contact_modifications_can_remove_places_and_related_links():
+    proposal = {
+        "contacts": [
+            {
+                "proposal_id": "contact-1",
+                "operation": "update",
+                "reference": "contact:jose",
+                "display_name": "Jordan",
+                "merged": {"display_name": "Jordan"},
+            }
+        ],
+        "places": [
+            {
+                "proposal_id": "place-1",
+                "operation": "create",
+                "reference": "new_place:pinewood",
+                "name": "Pinewood",
+                "address": "Pinewood",
+            }
+        ],
+        "relationships": [
+            {
+                "proposal_id": "rel-1",
+                "from_reference": "contact:jose",
+                "to_reference": "contact:maria",
+                "relationship_type": "Friend",
+            }
+        ],
+        "derived_relationships": [],
+        "contact_place_links": [
+            {
+                "proposal_id": "link-1",
+                "contact_reference": "contact:jose",
+                "place_reference": "new_place:pinewood",
+                "role": "work",
+            }
+        ],
+    }
+
+    updated = _apply_modifications_to_proposal(
+        proposal,
+        {
+            "places": [{"proposal_id": "place-1", "removed": True}],
+            "relationships": [{"proposal_id": "rel-1", "removed": True}],
+        },
+    )
+
+    assert updated["places"] == []
+    assert updated["contact_place_links"] == []
+    assert updated["relationships"] == []
 
 
 def test_handle_contact_requests_clarification_for_ambiguous_birth_date(monkeypatch):

@@ -48,8 +48,9 @@ export type ContactProposalDraft = {
 };
 
 export type ContactDraftModifications = {
-  contacts?: Array<{
+  contacts?: {
     proposal_id: string;
+    removed?: boolean;
     reference?: string;
     display_name?: string;
     birth_date?: string | null;
@@ -59,28 +60,31 @@ export type ContactDraftModifications = {
     links?: string[];
     tags?: string[];
     comments?: string | null;
-  }>;
-  relationships?: Array<{
+  }[];
+  relationships?: {
     proposal_id: string;
+    removed?: boolean;
     from_reference?: string;
     to_reference?: string;
     relationship_type?: string;
     enabled?: boolean;
     from_display_name?: string;
     to_display_name?: string;
-  }>;
-  places?: Array<{
+  }[];
+  places?: {
     proposal_id: string;
+    removed?: boolean;
     reference?: string;
     name?: string;
     address?: string;
-  }>;
-  contact_place_links?: Array<{
+  }[];
+  contact_place_links?: {
     proposal_id: string;
+    removed?: boolean;
     contact_reference?: string;
     contact_display_name?: string;
     place_reference?: string;
     role?: string;
     place_name?: string;
-  }>;
+  }[];
 };

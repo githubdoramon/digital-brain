@@ -360,10 +360,50 @@ def _apply_modifications_to_proposal(
             for item in updated.get("contacts") or []
             if isinstance(item, dict) and str(item.get("proposal_id") or "").strip()
         }
+        removed_contact_ids = {
+            str(item.get("proposal_id") or "").strip()
+            for item in contact_updates_mods
+            if isinstance(item, dict) and item.get("removed") is True
+        }
+        removed_contact_refs = {
+            str(contacts_by_id[proposal_id].get("reference") or "").strip()
+            for proposal_id in removed_contact_ids
+            if proposal_id in contacts_by_id
+        }
+        if removed_contact_ids:
+            updated["contacts"] = [
+                item
+                for item in updated.get("contacts") or []
+                if str(item.get("proposal_id") or "").strip() not in removed_contact_ids
+            ]
+            updated["relationships"] = [
+                rel
+                for rel in updated.get("relationships") or []
+                if str(rel.get("from_reference") or "").strip() not in removed_contact_refs
+                and str(rel.get("to_reference") or "").strip() not in removed_contact_refs
+            ]
+            updated["derived_relationships"] = [
+                rel
+                for rel in updated.get("derived_relationships") or []
+                if str(rel.get("from_reference") or "").strip() not in removed_contact_refs
+                and str(rel.get("to_reference") or "").strip() not in removed_contact_refs
+            ]
+            updated["contact_place_links"] = [
+                link
+                for link in updated.get("contact_place_links") or []
+                if str(link.get("contact_reference") or "").strip() not in removed_contact_refs
+            ]
+            contacts_by_id = {
+                str(item.get("proposal_id") or "").strip(): item
+                for item in updated.get("contacts") or []
+                if isinstance(item, dict) and str(item.get("proposal_id") or "").strip()
+            }
         for raw_mod in contact_updates_mods:
             if not isinstance(raw_mod, dict):
                 continue
             proposal_id = str(raw_mod.get("proposal_id") or "").strip()
+            if proposal_id in removed_contact_ids:
+                continue
             proposal_contact = contacts_by_id.get(proposal_id)
             if not proposal_contact:
                 continue
@@ -414,11 +454,39 @@ def _apply_modifications_to_proposal(
             for item in updated.get("derived_relationships") or []
             if isinstance(item, dict) and str(item.get("proposal_id") or "").strip()
         }
+        removed_relationship_ids = {
+            str(item.get("proposal_id") or "").strip()
+            for item in relationship_mods
+            if isinstance(item, dict) and item.get("removed") is True
+        }
+        if removed_relationship_ids:
+            updated["relationships"] = [
+                rel
+                for rel in updated.get("relationships") or []
+                if str(rel.get("proposal_id") or "").strip() not in removed_relationship_ids
+            ]
+            updated["derived_relationships"] = [
+                rel
+                for rel in updated.get("derived_relationships") or []
+                if str(rel.get("proposal_id") or "").strip() not in removed_relationship_ids
+            ]
+            explicit_by_id = {
+                str(item.get("proposal_id") or "").strip(): item
+                for item in updated.get("relationships") or []
+                if isinstance(item, dict) and str(item.get("proposal_id") or "").strip()
+            }
+            derived_by_id = {
+                str(item.get("proposal_id") or "").strip(): item
+                for item in updated.get("derived_relationships") or []
+                if isinstance(item, dict) and str(item.get("proposal_id") or "").strip()
+            }
         kept_derived_ids: set[str] = set()
         for raw_mod in relationship_mods:
             if not isinstance(raw_mod, dict):
                 continue
             proposal_id = str(raw_mod.get("proposal_id") or "").strip()
+            if proposal_id in removed_relationship_ids:
+                continue
             relationship = explicit_by_id.get(proposal_id) or derived_by_id.get(proposal_id)
             if not relationship:
                 continue
@@ -457,10 +525,39 @@ def _apply_modifications_to_proposal(
             for item in updated.get("places") or []
             if isinstance(item, dict) and str(item.get("proposal_id") or "").strip()
         }
+        removed_place_ids = {
+            str(item.get("proposal_id") or "").strip()
+            for item in place_mods
+            if isinstance(item, dict) and item.get("removed") is True
+        }
+        removed_place_refs = {
+            str(places_by_id[proposal_id].get("reference") or "").strip()
+            for proposal_id in removed_place_ids
+            if proposal_id in places_by_id
+        }
+        if removed_place_ids:
+            updated["places"] = [
+                place
+                for place in updated.get("places") or []
+                if str(place.get("proposal_id") or "").strip() not in removed_place_ids
+            ]
+            updated["contact_place_links"] = [
+                link
+                for link in updated.get("contact_place_links") or []
+                if str(link.get("place_reference") or "").strip() not in removed_place_refs
+            ]
+            places_by_id = {
+                str(item.get("proposal_id") or "").strip(): item
+                for item in updated.get("places") or []
+                if isinstance(item, dict) and str(item.get("proposal_id") or "").strip()
+            }
         for raw_mod in place_mods:
             if not isinstance(raw_mod, dict):
                 continue
-            place = places_by_id.get(str(raw_mod.get("proposal_id") or "").strip())
+            proposal_id = str(raw_mod.get("proposal_id") or "").strip()
+            if proposal_id in removed_place_ids:
+                continue
+            place = places_by_id.get(proposal_id)
             if not place:
                 continue
             next_reference = str(raw_mod.get("reference") or "").strip()
@@ -482,10 +579,29 @@ def _apply_modifications_to_proposal(
             for item in updated.get("contact_place_links") or []
             if isinstance(item, dict) and str(item.get("proposal_id") or "").strip()
         }
+        removed_link_ids = {
+            str(item.get("proposal_id") or "").strip()
+            for item in link_mods
+            if isinstance(item, dict) and item.get("removed") is True
+        }
+        if removed_link_ids:
+            updated["contact_place_links"] = [
+                link
+                for link in updated.get("contact_place_links") or []
+                if str(link.get("proposal_id") or "").strip() not in removed_link_ids
+            ]
+            links_by_id = {
+                str(item.get("proposal_id") or "").strip(): item
+                for item in updated.get("contact_place_links") or []
+                if isinstance(item, dict) and str(item.get("proposal_id") or "").strip()
+            }
         for raw_mod in link_mods:
             if not isinstance(raw_mod, dict):
                 continue
-            link = links_by_id.get(str(raw_mod.get("proposal_id") or "").strip())
+            proposal_id = str(raw_mod.get("proposal_id") or "").strip()
+            if proposal_id in removed_link_ids:
+                continue
+            link = links_by_id.get(proposal_id)
             if not link:
                 continue
             next_contact_reference = str(raw_mod.get("contact_reference") or "").strip()

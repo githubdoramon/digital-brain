@@ -45,7 +45,11 @@ function optionLabelForField(field: UiDirectiveField | undefined, value: string)
   return match?.label || value;
 }
 
-function fallbackTextForForm(block: UiDirectiveBlock, values: Record<string, unknown>, defaultText: string) {
+function fallbackTextForForm(
+  block: UiDirectiveBlock,
+  values: Record<string, unknown>,
+  defaultText: string,
+) {
   const entries = Object.entries(values)
     .map(([fieldId, rawValue]) => {
       const value = String(rawValue ?? '').trim();
@@ -89,7 +93,9 @@ function toneForBlock(block: UiDirectiveBlock) {
 }
 
 const EVENT_PREVIEW_BLOCK_PREFIX = 'event_preview:';
+const CONTACT_PREVIEW_BLOCK_PREFIX = 'contact_preview:';
 const EVENT_CONFIRM_ACTION_ID = 'event_confirmation_action';
+const CONTACT_CONFIRM_ACTION_ID = 'contact_confirmation_action';
 const EVENT_EDIT_OPTION_PREFIX = 'edit:';
 
 type EventEditAction = {
@@ -112,7 +118,12 @@ export function UiDirectiveCard({
     const mapping = new Map<string, EventEditAction>();
     for (const block of blocks) {
       if (block.type !== 'choice_buttons') continue;
-      if (block.action_id !== EVENT_CONFIRM_ACTION_ID) continue;
+      if (
+        block.action_id !== EVENT_CONFIRM_ACTION_ID &&
+        block.action_id !== CONTACT_CONFIRM_ACTION_ID
+      ) {
+        continue;
+      }
       const actionId = actionIdForBlock(block);
       for (const option of block.options || []) {
         if (!option.id.startsWith(EVENT_EDIT_OPTION_PREFIX)) continue;
@@ -173,12 +184,12 @@ export function UiDirectiveCard({
     <View style={styles.container}>
       {isResolved && (
         <View
-            style={[
-              styles.resolvedBanner,
-              resolved?.status === 'created'
-                ? styles.resolvedBannerCreated
-                : styles.resolvedBannerCancelled,
-            ]}
+          style={[
+            styles.resolvedBanner,
+            resolved?.status === 'created'
+              ? styles.resolvedBannerCreated
+              : styles.resolvedBannerCancelled,
+          ]}
         >
           <Ionicons
             name={resolved?.status === 'created' ? 'checkmark-circle' : 'close-circle'}
@@ -202,7 +213,9 @@ export function UiDirectiveCard({
         const previewId =
           block.type === 'info_card' && block.id.startsWith(EVENT_PREVIEW_BLOCK_PREFIX)
             ? block.id.slice(EVENT_PREVIEW_BLOCK_PREFIX.length).trim()
-            : '';
+            : block.type === 'info_card' && block.id.startsWith(CONTACT_PREVIEW_BLOCK_PREFIX)
+              ? block.id.slice(CONTACT_PREVIEW_BLOCK_PREFIX.length).trim()
+              : '';
         const editAction =
           previewId && block.type === 'info_card'
             ? eventEditActionsByPreviewId.get(previewId)
@@ -211,20 +224,13 @@ export function UiDirectiveCard({
         return (
           <Card key={block.id} variant="elevated" style={styles.blockCard}>
             <View style={styles.headerRow}>
-              <View
-                style={[
-                  styles.badge,
-                  { backgroundColor: tone.backgroundColor },
-                ]}
-              >
-                <Text style={[styles.badgeText, { color: tone.textColor }]}>
-                  {tone.label}
-                </Text>
+              <View style={[styles.badge, { backgroundColor: tone.backgroundColor }]}>
+                <Text style={[styles.badgeText, { color: tone.textColor }]}>{tone.label}</Text>
               </View>
               {editAction && !isResolved ? (
                 <Pressable
                   accessibilityRole="button"
-                  accessibilityLabel="Edit event draft"
+                  accessibilityLabel="Edit draft"
                   disabled={isSubmitting}
                   onPress={() =>
                     onSubmit({

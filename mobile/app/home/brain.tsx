@@ -104,6 +104,7 @@ type SendMessageInput =
   | string
   | {
       text?: string;
+      pendingCommandId?: string | null;
       uiSubmission?: UiSubmissionInput;
     };
 
@@ -568,15 +569,17 @@ function modificationSummary(modifications: EventDraftModifications): string {
   return labels.join(', ');
 }
 
-function clarificationIdFromAction(actionIdRaw: string | undefined): string | null {
+function clarificationIdFromAction(
+  actionIdRaw: string | undefined,
+  actionPrefix: string,
+): string | null {
   if (!actionIdRaw) return null;
   const actionId = actionIdRaw.trim();
-  if (!actionId.startsWith(`${EVENT_CLARIFICATION_ACTION_PREFIX}:`)) {
+  const prefix = `${actionPrefix}:`;
+  if (!actionId.startsWith(prefix)) {
     return null;
   }
-  const clarificationId = actionId
-    .slice(`${EVENT_CLARIFICATION_ACTION_PREFIX}:`.length)
-    .trim();
+  const clarificationId = actionId.slice(prefix.length).trim();
   return clarificationId || null;
 }
 
@@ -795,55 +798,30 @@ function updateContactDraftCards(
         `Infer: ${relationship.fromDisplayName || relationship.fromReference} -> ${relationship.relationshipType || 'related'} -> ${relationship.toDisplayName || relationship.toReference}`,
     );
 
-  const updatedBlocks = directives.blocks.map((block) => {
+  const updatedBlocks = pruneContactPreviewBlocks(directives, previewId).blocks.map((block) => {
     if (block.id === `contact_preview:${previewId}`) {
       return {
         ...block,
         body: [...explicitLines, ...derivedLines].join('\n'),
       };
     }
-    if (block.id === `contact_explicit:${previewId}`) {
-      return { ...block, body: explicitLines.join('\n') };
-    }
-    if (block.id === `contact_derived:${previewId}`) {
-      return { ...block, body: derivedLines.join('\n') };
-    }
-    if (block.id === `contact_edit:${previewId}` && Array.isArray(block.fields)) {
-      const updatedFields = block.fields.map((field) => {
-        const contact = draft.contacts[0];
-        if (field.id === 'main_display_name' && contact) return { ...field, value: contact.displayName };
-        if (field.id === 'birth_date' && contact) return { ...field, value: contact.birthday };
-        if (field.id === 'aliases' && contact) return { ...field, value: contact.aliasesText };
-        if (field.id === 'emails' && contact) return { ...field, value: contact.emailsText };
-        if (field.id === 'phones' && contact) return { ...field, value: contact.phonesText };
-        if (field.id === 'links' && contact) return { ...field, value: contact.linksText };
-        if (field.id === 'tags' && contact) return { ...field, value: contact.tagsText };
-        if (field.id === 'comments' && contact) return { ...field, value: contact.comments };
-        if (field.id === 'relationship_type') {
-          const relationship = draft.relationships.find((item) => item.kind === 'explicit');
-          return relationship ? { ...field, value: relationship.relationshipType } : field;
-        }
-        if (field.id === 'place_name') {
-          const place = draft.places[0];
-          return place ? { ...field, value: place.name } : field;
-        }
-        if (field.id === 'place_role') {
-          const link = draft.placeLinks[0];
-          return link ? { ...field, value: link.role } : field;
-        }
-        if (field.id.startsWith('derived_')) {
-          const proposalId = field.id.slice('derived_'.length);
-          const relationship = draft.relationships.find((item) => item.proposalId === proposalId);
-          return relationship ? { ...field, value: relationship.enabled ? 'yes' : 'no' } : field;
-        }
-        return field;
-      });
-      return { ...block, fields: updatedFields };
-    }
     return block;
   });
 
   return { ...directives, blocks: updatedBlocks };
+}
+
+function pruneContactPreviewBlocks(directives: UiDirectives, previewId: string): UiDirectives {
+  const hiddenIds = new Set([
+    `contact_explicit:${previewId}`,
+    `contact_derived:${previewId}`,
+    `contact_edit:${previewId}`,
+    `contact_edit_hint:${previewId}`,
+  ]);
+  return {
+    ...directives,
+    blocks: directives.blocks.filter((block) => !hiddenIds.has(block.id)),
+  };
 }
 
 export default function ChatScreen() {
@@ -1140,6 +1118,8 @@ export default function ChatScreen() {
 
   const sendMessage = useCallback(async (override?: SendMessageInput) => {
     const overrideText = typeof override === 'string' ? override : override?.text;
+    const overridePendingCommandId =
+      typeof override === 'string' ? undefined : override?.pendingCommandId;
     const uiSubmission = typeof override === 'string' ? undefined : override?.uiSubmission;
 
     const draft = overrideText ?? input;
@@ -1205,7 +1185,8 @@ export default function ChatScreen() {
       const response = await askWithStreaming({
         token,
         question: outboundText,
-        pendingEventId,
+        pendingCommandId:
+          overridePendingCommandId !== undefined ? overridePendingCommandId : pendingEventId,
         uiSubmission,
         callbacks: {
           onSessionInfo: (threadIdFromStream) => {
@@ -1792,10 +1773,15 @@ export default function ChatScreen() {
         if (!answer) {
           return;
         }
-        const clarificationId = clarificationIdFromAction(submission.action_id);
-        const clarificationToken = clarificationId ? `\n\n[clarification_id:${clarificationId}]` : '';
-        const combinedMessage = `/event ${answer}${clarificationToken}`;
-        void sendMessage(combinedMessage);
+        const clarificationId = clarificationIdFromAction(
+          submission.action_id,
+          EVENT_CLARIFICATION_ACTION_PREFIX,
+        );
+        void sendMessage({
+          text: answer,
+          pendingCommandId: clarificationId ?? pendingEventId,
+          uiSubmission: submission,
+        });
         return;
       }
 
@@ -1807,10 +1793,15 @@ export default function ChatScreen() {
         if (!answer) {
           return;
         }
-        const clarificationId = clarificationIdFromAction(submission.action_id);
-        const clarificationToken = clarificationId ? `\n\n[clarification_id:${clarificationId}]` : '';
-        const combinedMessage = `/contact ${answer}${clarificationToken}`;
-        void sendMessage(combinedMessage);
+        const clarificationId = clarificationIdFromAction(
+          submission.action_id,
+          CONTACT_CLARIFICATION_ACTION_PREFIX,
+        );
+        void sendMessage({
+          text: answer,
+          pendingCommandId: clarificationId ?? pendingEventId,
+          uiSubmission: submission,
+        });
         return;
       }
 
@@ -1824,8 +1815,6 @@ export default function ChatScreen() {
       });
     },
     [
-      applyContactDraftModifications,
-      buildContactDraft,
       contactDraftModificationsByPreview,
       eventDraftModificationsByPreview,
       isConfirmingEvent,
@@ -1960,6 +1949,9 @@ export default function ChatScreen() {
             const directives = item.metadata?.ui_directives;
             const linkedItems = item.metadata?.linked_items || [];
             let directivesForCard = directives;
+            if (contactPreviewId && directivesForCard) {
+              directivesForCard = pruneContactPreviewBlocks(directivesForCard, contactPreviewId);
+            }
             if (eventPreviewId && directives && eventPreviewModifications) {
               const baseDraft = buildEventDraft(commandResult, eventPreviewId);
               if (baseDraft) {

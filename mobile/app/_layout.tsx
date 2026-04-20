@@ -311,6 +311,12 @@ function RootLayoutNav({ loaded }: { loaded: boolean }) {
           }}
         />
         <Stack.Screen
+          name="contacts/proposals/[previewId]/index"
+          options={{
+            headerShown: false,
+          }}
+        />
+        <Stack.Screen
           name="documents/[documentId]/index"
           options={{
             headerShown: true,

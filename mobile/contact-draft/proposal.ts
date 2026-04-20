@@ -1,8 +1,5 @@
 import type { CommandResult } from '@/chat/threads';
-import type {
-  ContactDraftModifications,
-  ContactProposalDraft,
-} from '@/contact-draft/types';
+import type { ContactDraftModifications, ContactProposalDraft } from '@/contact-draft/types';
 
 function textValue(value: unknown): string {
   return typeof value === 'string' ? value.trim() : String(value ?? '').trim();
@@ -50,9 +47,14 @@ export function buildContactDraft(
   return {
     contacts: Array.isArray(proposalData.contacts)
       ? proposalData.contacts
-          .filter((item): item is Record<string, unknown> => Boolean(item && typeof item === 'object'))
+          .filter((item): item is Record<string, unknown> =>
+            Boolean(item && typeof item === 'object'),
+          )
           .map((item) => {
-            const merged = item.merged && typeof item.merged === 'object' ? (item.merged as Record<string, unknown>) : {};
+            const merged =
+              item.merged && typeof item.merged === 'object'
+                ? (item.merged as Record<string, unknown>)
+                : {};
             return {
               proposalId: textValue(item.proposal_id),
               reference: textValue(item.reference),
@@ -70,21 +72,26 @@ export function buildContactDraft(
           })
       : [],
     relationships: [
-      ...((Array.isArray(proposalData.relationships) ? proposalData.relationships : []) as Record<string, unknown>[]).map(
-        (item) => ({
-          proposalId: textValue(item.proposal_id),
-          kind: 'explicit' as const,
-          fromReference: textValue(item.from_reference),
-          toReference: textValue(item.to_reference),
-          fromDisplayName: textValue(item.from_display_name),
-          toDisplayName: textValue(item.to_display_name),
-          relationshipType: textValue(item.relationship_type),
-          enabled: true,
-        }),
-      ),
-      ...((Array.isArray(proposalData.derived_relationships)
-        ? proposalData.derived_relationships
-        : []) as Record<string, unknown>[]).map((item) => ({
+      ...(
+        (Array.isArray(proposalData.relationships) ? proposalData.relationships : []) as Record<
+          string,
+          unknown
+        >[]
+      ).map((item) => ({
+        proposalId: textValue(item.proposal_id),
+        kind: 'explicit' as const,
+        fromReference: textValue(item.from_reference),
+        toReference: textValue(item.to_reference),
+        fromDisplayName: textValue(item.from_display_name),
+        toDisplayName: textValue(item.to_display_name),
+        relationshipType: textValue(item.relationship_type),
+        enabled: true,
+      })),
+      ...(
+        (Array.isArray(proposalData.derived_relationships)
+          ? proposalData.derived_relationships
+          : []) as Record<string, unknown>[]
+      ).map((item) => ({
         proposalId: textValue(item.proposal_id),
         kind: 'derived' as const,
         fromReference: textValue(item.from_reference),
@@ -97,7 +104,9 @@ export function buildContactDraft(
     ],
     places: Array.isArray(proposalData.places)
       ? proposalData.places
-          .filter((item): item is Record<string, unknown> => Boolean(item && typeof item === 'object'))
+          .filter((item): item is Record<string, unknown> =>
+            Boolean(item && typeof item === 'object'),
+          )
           .map((item) => ({
             proposalId: textValue(item.proposal_id),
             reference: textValue(item.reference),
@@ -107,7 +116,9 @@ export function buildContactDraft(
       : [],
     placeLinks: Array.isArray(proposalData.contact_place_links)
       ? proposalData.contact_place_links
-          .filter((item): item is Record<string, unknown> => Boolean(item && typeof item === 'object'))
+          .filter((item): item is Record<string, unknown> =>
+            Boolean(item && typeof item === 'object'),
+          )
           .map((item) => ({
             proposalId: textValue(item.proposal_id),
             contactReference: textValue(item.contact_reference),
@@ -132,33 +143,65 @@ export function buildContactDraftModifications(
       if (!baseContact) return null;
       const mod: Record<string, unknown> = { proposal_id: contact.proposalId };
       if (baseContact.reference !== contact.reference) mod.reference = contact.reference;
-      if (baseContact.displayName !== contact.displayName) mod.display_name = contact.displayName.trim();
-      if (baseContact.birthday !== contact.birthday) mod.birth_date = contact.birthday.trim() || null;
+      if (baseContact.displayName !== contact.displayName)
+        mod.display_name = contact.displayName.trim();
+      if (baseContact.birthday !== contact.birthday)
+        mod.birth_date = contact.birthday.trim() || null;
       if (baseContact.comments !== contact.comments) mod.comments = contact.comments.trim() || null;
-      if (!sameStringList(stringArray(baseContact.aliasesText), stringArray(contact.aliasesText))) mod.aliases = stringArray(contact.aliasesText);
-      if (!sameStringList(stringArray(baseContact.emailsText), stringArray(contact.emailsText))) mod.emails = stringArray(contact.emailsText);
-      if (!sameStringList(stringArray(baseContact.phonesText), stringArray(contact.phonesText))) mod.phones = stringArray(contact.phonesText);
-      if (!sameStringList(stringArray(baseContact.linksText), stringArray(contact.linksText))) mod.links = stringArray(contact.linksText);
-      if (!sameStringList(stringArray(baseContact.tagsText), stringArray(contact.tagsText))) mod.tags = stringArray(contact.tagsText);
+      if (!sameStringList(stringArray(baseContact.aliasesText), stringArray(contact.aliasesText)))
+        mod.aliases = stringArray(contact.aliasesText);
+      if (!sameStringList(stringArray(baseContact.emailsText), stringArray(contact.emailsText)))
+        mod.emails = stringArray(contact.emailsText);
+      if (!sameStringList(stringArray(baseContact.phonesText), stringArray(contact.phonesText)))
+        mod.phones = stringArray(contact.phonesText);
+      if (!sameStringList(stringArray(baseContact.linksText), stringArray(contact.linksText)))
+        mod.links = stringArray(contact.linksText);
+      if (!sameStringList(stringArray(baseContact.tagsText), stringArray(contact.tagsText)))
+        mod.tags = stringArray(contact.tagsText);
       return Object.keys(mod).length > 1 ? mod : null;
     })
-    .filter((item): item is ContactDraftModifications['contacts'][number] => Boolean(item));
+    .filter((item): item is NonNullable<ContactDraftModifications['contacts']>[number] =>
+      Boolean(item),
+    );
+  const nextContactIds = new Set(nextDraft.contacts.map((contact) => contact.proposalId));
+  for (const baseContact of baseDraft.contacts) {
+    if (!nextContactIds.has(baseContact.proposalId)) {
+      contactMods.push({ proposal_id: baseContact.proposalId, removed: true });
+    }
+  }
   if (contactMods.length > 0) modifications.contacts = contactMods;
 
   const relationshipMods = nextDraft.relationships
     .map((relationship) => {
-      const baseRelationship = baseDraft.relationships.find((item) => item.proposalId === relationship.proposalId);
+      const baseRelationship = baseDraft.relationships.find(
+        (item) => item.proposalId === relationship.proposalId,
+      );
       if (!baseRelationship) return null;
       const mod: Record<string, unknown> = { proposal_id: relationship.proposalId };
-      if (baseRelationship.fromReference !== relationship.fromReference) mod.from_reference = relationship.fromReference;
-      if (baseRelationship.toReference !== relationship.toReference) mod.to_reference = relationship.toReference;
-      if (baseRelationship.relationshipType !== relationship.relationshipType) mod.relationship_type = relationship.relationshipType.trim();
+      if (baseRelationship.fromReference !== relationship.fromReference)
+        mod.from_reference = relationship.fromReference;
+      if (baseRelationship.toReference !== relationship.toReference)
+        mod.to_reference = relationship.toReference;
+      if (baseRelationship.relationshipType !== relationship.relationshipType)
+        mod.relationship_type = relationship.relationshipType.trim();
       if (baseRelationship.enabled !== relationship.enabled) mod.enabled = relationship.enabled;
-      if (baseRelationship.fromDisplayName !== relationship.fromDisplayName) mod.from_display_name = relationship.fromDisplayName.trim();
-      if (baseRelationship.toDisplayName !== relationship.toDisplayName) mod.to_display_name = relationship.toDisplayName.trim();
+      if (baseRelationship.fromDisplayName !== relationship.fromDisplayName)
+        mod.from_display_name = relationship.fromDisplayName.trim();
+      if (baseRelationship.toDisplayName !== relationship.toDisplayName)
+        mod.to_display_name = relationship.toDisplayName.trim();
       return Object.keys(mod).length > 1 ? mod : null;
     })
-    .filter((item): item is ContactDraftModifications['relationships'][number] => Boolean(item));
+    .filter((item): item is NonNullable<ContactDraftModifications['relationships']>[number] =>
+      Boolean(item),
+    );
+  const nextRelationshipIds = new Set(
+    nextDraft.relationships.map((relationship) => relationship.proposalId),
+  );
+  for (const baseRelationship of baseDraft.relationships) {
+    if (!nextRelationshipIds.has(baseRelationship.proposalId)) {
+      relationshipMods.push({ proposal_id: baseRelationship.proposalId, removed: true });
+    }
+  }
   if (relationshipMods.length > 0) modifications.relationships = relationshipMods;
 
   const placeMods = nextDraft.places
@@ -171,7 +214,15 @@ export function buildContactDraftModifications(
       if (basePlace.address !== place.address) mod.address = place.address.trim();
       return Object.keys(mod).length > 1 ? mod : null;
     })
-    .filter((item): item is ContactDraftModifications['places'][number] => Boolean(item));
+    .filter((item): item is NonNullable<ContactDraftModifications['places']>[number] =>
+      Boolean(item),
+    );
+  const nextPlaceIds = new Set(nextDraft.places.map((place) => place.proposalId));
+  for (const basePlace of baseDraft.places) {
+    if (!nextPlaceIds.has(basePlace.proposalId)) {
+      placeMods.push({ proposal_id: basePlace.proposalId, removed: true });
+    }
+  }
   if (placeMods.length > 0) modifications.places = placeMods;
 
   const linkMods = nextDraft.placeLinks
@@ -179,14 +230,25 @@ export function buildContactDraftModifications(
       const baseLink = baseDraft.placeLinks.find((item) => item.proposalId === link.proposalId);
       if (!baseLink) return null;
       const mod: Record<string, unknown> = { proposal_id: link.proposalId };
-      if (baseLink.contactReference !== link.contactReference) mod.contact_reference = link.contactReference;
-      if (baseLink.contactDisplayName !== link.contactDisplayName) mod.contact_display_name = link.contactDisplayName.trim();
-      if (baseLink.placeReference !== link.placeReference) mod.place_reference = link.placeReference;
+      if (baseLink.contactReference !== link.contactReference)
+        mod.contact_reference = link.contactReference;
+      if (baseLink.contactDisplayName !== link.contactDisplayName)
+        mod.contact_display_name = link.contactDisplayName.trim();
+      if (baseLink.placeReference !== link.placeReference)
+        mod.place_reference = link.placeReference;
       if (baseLink.role !== link.role) mod.role = link.role.trim();
       if (baseLink.placeName !== link.placeName) mod.place_name = link.placeName.trim();
       return Object.keys(mod).length > 1 ? mod : null;
     })
-    .filter((item): item is ContactDraftModifications['contact_place_links'][number] => Boolean(item));
+    .filter((item): item is NonNullable<ContactDraftModifications['contact_place_links']>[number] =>
+      Boolean(item),
+    );
+  const nextLinkIds = new Set(nextDraft.placeLinks.map((link) => link.proposalId));
+  for (const baseLink of baseDraft.placeLinks) {
+    if (!nextLinkIds.has(baseLink.proposalId)) {
+      linkMods.push({ proposal_id: baseLink.proposalId, removed: true });
+    }
+  }
   if (linkMods.length > 0) modifications.contact_place_links = linkMods;
 
   return modifications;
@@ -197,12 +259,47 @@ export function applyContactDraftModifications(
   modifications: ContactDraftModifications | undefined,
 ): ContactProposalDraft {
   if (!modifications) return baseDraft;
-  const contactMods = new Map((modifications.contacts || []).map((item) => [item.proposal_id, item]));
-  const relationshipMods = new Map((modifications.relationships || []).map((item) => [item.proposal_id, item]));
+  const contactMods = new Map(
+    (modifications.contacts || []).map((item) => [item.proposal_id, item]),
+  );
+  const relationshipMods = new Map(
+    (modifications.relationships || []).map((item) => [item.proposal_id, item]),
+  );
   const placeMods = new Map((modifications.places || []).map((item) => [item.proposal_id, item]));
-  const linkMods = new Map((modifications.contact_place_links || []).map((item) => [item.proposal_id, item]));
+  const linkMods = new Map(
+    (modifications.contact_place_links || []).map((item) => [item.proposal_id, item]),
+  );
 
-  const contacts = baseDraft.contacts.map((contact) => {
+  const removedContactIds = new Set(
+    (modifications.contacts || []).filter((item) => item.removed).map((item) => item.proposal_id),
+  );
+  const removedContactReferences = new Set(
+    baseDraft.contacts
+      .filter((contact) => removedContactIds.has(contact.proposalId))
+      .map((contact) => contact.reference),
+  );
+  const removedRelationshipIds = new Set(
+    (modifications.relationships || [])
+      .filter((item) => item.removed)
+      .map((item) => item.proposal_id),
+  );
+  const removedPlaceIds = new Set(
+    (modifications.places || []).filter((item) => item.removed).map((item) => item.proposal_id),
+  );
+  const removedPlaceReferences = new Set(
+    baseDraft.places
+      .filter((place) => removedPlaceIds.has(place.proposalId))
+      .map((place) => place.reference),
+  );
+  const removedLinkIds = new Set(
+    (modifications.contact_place_links || [])
+      .filter((item) => item.removed)
+      .map((item) => item.proposal_id),
+  );
+
+  const contacts = baseDraft.contacts
+    .filter((contact) => !removedContactIds.has(contact.proposalId))
+    .map((contact) => {
       const mod = contactMods.get(contact.proposalId);
       return mod
         ? {
@@ -219,8 +316,12 @@ export function applyContactDraftModifications(
           }
         : contact;
     });
-  const contactNameByReference = new Map(contacts.map((contact) => [contact.reference, contact.displayName]));
-  const places = baseDraft.places.map((place) => {
+  const contactNameByReference = new Map(
+    contacts.map((contact) => [contact.reference, contact.displayName]),
+  );
+  const places = baseDraft.places
+    .filter((place) => !removedPlaceIds.has(place.proposalId))
+    .map((place) => {
       const mod = placeMods.get(place.proposalId);
       return mod
         ? {
@@ -235,57 +336,72 @@ export function applyContactDraftModifications(
 
   return {
     contacts,
-    relationships: baseDraft.relationships.map((relationship) => {
-      const mod = relationshipMods.get(relationship.proposalId);
-      return mod
-        ? {
-            ...relationship,
-            fromReference: textValue(mod.from_reference) || relationship.fromReference,
-            toReference: textValue(mod.to_reference) || relationship.toReference,
-            relationshipType: textValue(mod.relationship_type) || relationship.relationshipType,
-            enabled: mod.enabled === undefined ? relationship.enabled : Boolean(mod.enabled),
-            fromDisplayName:
-              textValue(mod.from_display_name) ||
-              contactNameByReference.get(textValue(mod.from_reference) || relationship.fromReference) ||
-              relationship.fromDisplayName,
-            toDisplayName:
-              textValue(mod.to_display_name) ||
-              contactNameByReference.get(textValue(mod.to_reference) || relationship.toReference) ||
-              relationship.toDisplayName,
-          }
-        : {
-            ...relationship,
-            fromDisplayName:
-              contactNameByReference.get(relationship.fromReference) || relationship.fromDisplayName,
-            toDisplayName:
-              contactNameByReference.get(relationship.toReference) || relationship.toDisplayName,
-          };
-    }),
+    relationships: baseDraft.relationships
+      .filter((relationship) => !removedRelationshipIds.has(relationship.proposalId))
+      .filter((relationship) => !removedContactReferences.has(relationship.fromReference))
+      .filter((relationship) => !removedContactReferences.has(relationship.toReference))
+      .map((relationship) => {
+        const mod = relationshipMods.get(relationship.proposalId);
+        return mod
+          ? {
+              ...relationship,
+              fromReference: textValue(mod.from_reference) || relationship.fromReference,
+              toReference: textValue(mod.to_reference) || relationship.toReference,
+              relationshipType: textValue(mod.relationship_type) || relationship.relationshipType,
+              enabled: mod.enabled === undefined ? relationship.enabled : Boolean(mod.enabled),
+              fromDisplayName:
+                textValue(mod.from_display_name) ||
+                contactNameByReference.get(
+                  textValue(mod.from_reference) || relationship.fromReference,
+                ) ||
+                relationship.fromDisplayName,
+              toDisplayName:
+                textValue(mod.to_display_name) ||
+                contactNameByReference.get(
+                  textValue(mod.to_reference) || relationship.toReference,
+                ) ||
+                relationship.toDisplayName,
+            }
+          : {
+              ...relationship,
+              fromDisplayName:
+                contactNameByReference.get(relationship.fromReference) ||
+                relationship.fromDisplayName,
+              toDisplayName:
+                contactNameByReference.get(relationship.toReference) || relationship.toDisplayName,
+            };
+      }),
     places,
-    placeLinks: baseDraft.placeLinks.map((link) => {
-      const mod = linkMods.get(link.proposalId);
-      return mod
-        ? {
-            ...link,
-            contactReference: textValue(mod.contact_reference) || link.contactReference,
-            role: textValue(mod.role) || link.role,
-            placeReference: textValue(mod.place_reference) || link.placeReference,
-            placeName:
-              textValue(mod.place_name) ||
-              placeNameByReference.get(textValue(mod.place_reference) || link.placeReference) ||
-              link.placeName,
-            contactDisplayName:
-              textValue(mod.contact_display_name) ||
-              contactNameByReference.get(textValue(mod.contact_reference) || link.contactReference) ||
-              link.contactDisplayName,
-          }
-        : {
-            ...link,
-            placeName: placeNameByReference.get(link.placeReference) || link.placeName,
-            contactDisplayName:
-              contactNameByReference.get(link.contactReference) || link.contactDisplayName,
-          };
-    }),
+    placeLinks: baseDraft.placeLinks
+      .filter((link) => !removedLinkIds.has(link.proposalId))
+      .filter((link) => !removedContactReferences.has(link.contactReference))
+      .filter((link) => !removedPlaceReferences.has(link.placeReference))
+      .map((link) => {
+        const mod = linkMods.get(link.proposalId);
+        return mod
+          ? {
+              ...link,
+              contactReference: textValue(mod.contact_reference) || link.contactReference,
+              role: textValue(mod.role) || link.role,
+              placeReference: textValue(mod.place_reference) || link.placeReference,
+              placeName:
+                textValue(mod.place_name) ||
+                placeNameByReference.get(textValue(mod.place_reference) || link.placeReference) ||
+                link.placeName,
+              contactDisplayName:
+                textValue(mod.contact_display_name) ||
+                contactNameByReference.get(
+                  textValue(mod.contact_reference) || link.contactReference,
+                ) ||
+                link.contactDisplayName,
+            }
+          : {
+              ...link,
+              placeName: placeNameByReference.get(link.placeReference) || link.placeName,
+              contactDisplayName:
+                contactNameByReference.get(link.contactReference) || link.contactDisplayName,
+            };
+      }),
   };
 }
 

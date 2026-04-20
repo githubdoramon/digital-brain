@@ -23,10 +23,8 @@ _EVENT_ACTION_EDIT_PREFIX = "edit:"
 _EVENT_ACTION_CANCEL_PREFIX = "cancel:"
 _CONTACT_CONFIRM_ACTION_ID = "contact_confirmation_action"
 _CONTACT_CLARIFICATION_ACTION_ID_PREFIX = "contact_clarification_submit"
-_CONTACT_EDIT_ACTION_ID_PREFIX = "contact_edit_submit"
 _CONTACT_ACTION_CONFIRM_PREFIX = "confirm:"
 _CONTACT_ACTION_CANCEL_PREFIX = "cancel:"
-_INLINE_CONTACT_EDIT_FIELD_LIMIT = 8
 
 logger = get_runtime_logger(__name__)
 
@@ -242,53 +240,6 @@ def _contact_confirmation_directive(command_result: dict[str, Any]) -> dict[str,
             }
         )
 
-    explicit_lines = _string_list(command_result.get("explicit_change_lines"))
-    if explicit_lines:
-        blocks.append(
-            {
-                "id": f"contact_explicit:{preview_id or 'draft'}",
-                "type": "info_card",
-                "title": "Will apply",
-                "body": "\n".join(explicit_lines),
-            }
-        )
-
-    derived_lines = _string_list(command_result.get("derived_change_lines"))
-    if derived_lines:
-        blocks.append(
-            {
-                "id": f"contact_derived:{preview_id or 'draft'}",
-                "type": "info_card",
-                "title": "Also inferred",
-                "body": "\n".join(derived_lines),
-            }
-        )
-
-    edit_fields_raw = command_result.get("edit_fields")
-    edit_fields = edit_fields_raw if isinstance(edit_fields_raw, list) else []
-    edit_action_id = _normalized_text(command_result.get("edit_action_id"))
-    if edit_fields and len(edit_fields) <= _INLINE_CONTACT_EDIT_FIELD_LIMIT:
-        blocks.append(
-            {
-                "id": f"contact_edit:{preview_id or 'draft'}",
-                "type": "clarification_form",
-                "title": "Edit before applying",
-                "description": "Adjust the proposed fields and choose which inferred links to keep.",
-                "action_id": edit_action_id or _contact_edit_action_id(preview_id),
-                "fields": edit_fields,
-                "submit_label": "Apply edited changes",
-            }
-        )
-    elif edit_fields:
-        blocks.append(
-            {
-                "id": f"contact_edit_hint:{preview_id or 'draft'}",
-                "type": "info_card",
-                "title": "Edit options",
-                "body": "This draft has more edits than fit inline. Use Edit draft to review and adjust everything.",
-            }
-        )
-
     if preview_id:
         blocks.append(
             {
@@ -357,12 +308,6 @@ def _contact_clarification_action_id(clarification_id: str) -> str:
     if not clarification_id:
         return _CONTACT_CLARIFICATION_ACTION_ID_PREFIX
     return f"{_CONTACT_CLARIFICATION_ACTION_ID_PREFIX}:{clarification_id}"
-
-
-def _contact_edit_action_id(preview_id: str) -> str:
-    if not preview_id:
-        return _CONTACT_EDIT_ACTION_ID_PREFIX
-    return f"{_CONTACT_EDIT_ACTION_ID_PREFIX}:{preview_id}"
 
 
 def _normalized_text(value: Any) -> str:

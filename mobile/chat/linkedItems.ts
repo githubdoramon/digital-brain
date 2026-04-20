@@ -1,3 +1,5 @@
+import type { Href } from 'expo-router';
+
 export type LinkedItem = {
   entity_type: 'event' | 'document';
   entity_id: string;
@@ -5,15 +7,15 @@ export type LinkedItem = {
   subtitle?: string | null;
 };
 
-export function routeForLinkedItem(item: LinkedItem): string | null {
+export function routeForLinkedItem(item: LinkedItem): Href | null {
   const entityId = item.entity_id.trim();
   if (!entityId) return null;
 
   if (item.entity_type === 'event') {
-    return `/events/${encodeURIComponent(entityId)}`;
+    return { pathname: '/events/[eventId]', params: { eventId: entityId } };
   }
   if (item.entity_type === 'document') {
-    return `/documents/${encodeURIComponent(entityId)}`;
+    return { pathname: '/documents/[documentId]', params: { documentId: entityId } };
   }
   return null;
 }

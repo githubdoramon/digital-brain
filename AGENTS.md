@@ -12,6 +12,8 @@ Personal memory orchestrator with a **bounded agent architecture**. Backend: Fas
 
 **Mobile routing convention**: For dynamic mobile routes, prefer folder-based segments with `index.tsx` (for example `mobile/app/contacts/[contactId]/index.tsx`) so nested subroutes can be added without migrating route structure later.
 
+**Mobile screen convention**: Reuse established full-screen patterns before creating new screen chrome. Screens that own a custom/collapsing header (for example event/contact draft editors) must hide the native Expo Stack header in `mobile/app/_layout.tsx` to avoid double navigation bars.
+
 ## Architecture Documentation
 
 Detailed architecture docs live in `backend/orchestrator/docs/architecture/`:
@@ -186,7 +188,7 @@ User Question → Intent Router → Conversational Profile Dispatch → Tool Vis
 - **LLM observability parity is required**: sync and stream agent paths should emit comparable LLM request/response lifecycle logs so final-decision turns are debuggable in both modes.
 - **Stream completion logs must capture final text and reasoning**: once a streamed LLM turn finishes, log the assembled final text preview and any returned reasoning preview so mis-grounded answers can be debugged after the fact.
 - **Session command hygiene**: strip leading slash commands from user text before agent execution; commands are control signals, not semantic query content.
-- **Slash-command preview flows**: `/contact` mirrors `/event` with controller-validated extraction, preview UI directives, clarification follow-ups, and explicit confirmation before mutating contacts, relationships, or contact-place links. `/contact` extraction should model plural graph operations (`contacts`, `relationships`, `contact_place_links`) rather than assuming a single main contact, preserve clarification conversation history plus prior extraction state across follow-ups, and prefer specific Title Case relationship labels/reciprocals when context supports them.
+- **Slash-command preview flows**: `/contact` mirrors `/event` with controller-validated extraction, preview UI directives, clarification follow-ups, and explicit confirmation before mutating contacts, relationships, or contact-place links. `/contact` extraction should model plural graph operations (`contacts`, `relationships`, `contact_place_links`) rather than assuming a single main contact, preserve clarification conversation history plus prior extraction state across follow-ups, and prefer specific Title Case relationship labels/reciprocals when context supports them. Contact previews should use a single summary card with the event-style edit icon and full-screen draft editor, not inline edit forms.
 - **Chat linked-items metadata**: agent `/ask` responses should include deterministic `linked_items` (for example event/document IDs + labels) derived from inspected tool results so clients can render click-through navigation to the referenced entity screens.
 - **Linked-items protocol ownership**: linked-items behavior is prompt-level guidance in conversational profiles plus controller-side derivation (documented in `backend/orchestrator/docs/architecture/LINKED_ITEMS_DSL.md`); do not add a redundant skill/tool unless model-authored ordering/selection is explicitly required.
 - **All-results limit policy**: when users explicitly ask for "all/everyone/entire" results, query handlers should honor unbounded retrieval semantics instead of silently capping to a fixed maximum.

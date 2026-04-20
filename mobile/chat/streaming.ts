@@ -50,7 +50,7 @@ type AskRunStatus = {
 type StreamAskParams = {
   token?: string | null;
   question: string;
-  pendingEventId?: string | null;
+  pendingCommandId?: string | null;
   uiSubmission?: UiSubmissionInput;
   callbacks?: StreamCallbacks;
 };
@@ -210,13 +210,13 @@ export async function waitForRunCompletion(
 export async function askWithStreaming({
   token,
   question,
-  pendingEventId,
+  pendingCommandId,
   uiSubmission,
   callbacks,
 }: StreamAskParams): Promise<AskResponse> {
   const payload = {
     question,
-    pending_event_id: pendingEventId ?? undefined,
+    pending_event_id: pendingCommandId ?? undefined,
     client_context: getClientContext(),
     ui_submission: uiSubmission ?? undefined,
   };

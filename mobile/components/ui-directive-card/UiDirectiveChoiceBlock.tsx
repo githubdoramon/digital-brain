@@ -13,13 +13,19 @@ type Props = {
 };
 
 const EVENT_CONFIRM_ACTION_ID = 'event_confirmation_action';
+const CONTACT_CONFIRM_ACTION_ID = 'contact_confirmation_action';
 const HIDDEN_EVENT_OPTION_PREFIXES = ['edit:'];
 
 export function UiDirectiveChoiceBlock({ block, isSubmitting, resolvedStatus, onSelect }: Props) {
   const isResolved = Boolean(resolvedStatus);
 
   const options = (block.options || []).filter((option) => {
-    if (block.action_id !== EVENT_CONFIRM_ACTION_ID) return true;
+    if (
+      block.action_id !== EVENT_CONFIRM_ACTION_ID &&
+      block.action_id !== CONTACT_CONFIRM_ACTION_ID
+    ) {
+      return true;
+    }
     return !HIDDEN_EVENT_OPTION_PREFIXES.some((prefix) => option.id.startsWith(prefix));
   });
 

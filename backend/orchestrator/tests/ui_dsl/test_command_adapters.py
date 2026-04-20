@@ -138,7 +138,7 @@ def test_need_user_input_payload_maps_even_without_clarification_type():
     assert block["fields"][0]["id"] == "date_range"
 
 
-def test_contact_confirmation_skips_inline_form_when_too_many_fields():
+def test_contact_confirmation_uses_single_preview_card_and_edit_action():
     command_result = {
         "type": "contact_confirmation",
         "preview_id": "contact:preview:abc12345",
@@ -157,15 +157,18 @@ def test_contact_confirmation_skips_inline_form_when_too_many_fields():
 
     assert directive is not None
     block_ids = {block["id"] for block in directive["blocks"]}
+    assert "contact_preview:contact:preview:abc12345" in block_ids
+    assert "contact_explicit:contact:preview:abc12345" not in block_ids
+    assert "contact_derived:contact:preview:abc12345" not in block_ids
     assert "contact_edit:contact:preview:abc12345" not in block_ids
-    assert "contact_edit_hint:contact:preview:abc12345" in block_ids
+    assert "contact_edit_hint:contact:preview:abc12345" not in block_ids
     choice_block = next(block for block in directive["blocks"] if block["type"] == "choice_buttons")
     option_ids = {option["id"] for option in choice_block["options"]}
     assert "confirm:contact:preview:abc12345" in option_ids
     assert "edit:contact:preview:abc12345" in option_ids
 
 
-def test_contact_confirmation_maps_inline_edit_fields_to_ui_directives():
+def test_contact_confirmation_does_not_render_inline_edit_fields():
     command_result = {
         "type": "contact_confirmation",
         "preview_id": "contact:preview:def67890",
@@ -201,7 +204,7 @@ def test_contact_confirmation_maps_inline_edit_fields_to_ui_directives():
     directive = command_result_to_ui_directives(command_result)
 
     assert directive is not None
-    edit_block = next(block for block in directive["blocks"] if block["id"] == "contact_edit:contact:preview:def67890")
-    assert edit_block["type"] == "clarification_form"
-    assert edit_block["action_id"] == "contact_edit_submit:contact:preview:def67890"
-    assert [field["kind"] for field in edit_block["fields"]] == ["text", "text"]
+    block_ids = {block["id"] for block in directive["blocks"]}
+    assert "contact_edit:contact:preview:def67890" not in block_ids
+    choice_block = next(block for block in directive["blocks"] if block["type"] == "choice_buttons")
+    assert any(option["id"] == "edit:contact:preview:def67890" for option in choice_block["options"])
