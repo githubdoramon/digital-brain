@@ -699,6 +699,7 @@ def _extract_event_entities_with_llm(
     context: dict,
     existing_extraction: dict[str, Any] | None = None,
     clarification_messages: list[dict[str, str]] | None = None,
+    model: str | None = None,
 ) -> dict[str, Any]:
     """
     Use the existing LLM infrastructure to extract event entities.
@@ -806,7 +807,7 @@ Return ONLY valid JSON in this exact format:
 
     try:
         logger.info("[event_extraction] Calling LLM for extraction...")
-        extracted = call_llm_json(extraction_prompt, timeout=60)
+        extracted = call_llm_json(extraction_prompt, timeout=60, model=model)
 
         logger.debug("[event_extraction] Raw LLM response")
         logger.debug("[event_extraction]   - Title: %s", extracted.get("title"))

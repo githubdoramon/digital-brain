@@ -19,6 +19,7 @@ from routes.chat import create_chat_router
 from routes.contacts import create_contacts_router
 from routes.daily_briefing import create_daily_briefing_router
 from routes.documents import create_documents_router
+from routes.evals import create_evals_router
 from routes.events import create_events_router
 from routes.news import create_news_router
 from routes.places import create_places_router
@@ -137,6 +138,7 @@ api.include_router(create_places_router())
 api.include_router(create_todos_router())
 api.include_router(create_events_router())
 api.include_router(create_documents_router())
+api.include_router(create_evals_router())
 api.include_router(create_system_router())
 api.include_router(create_user_router())
 api.include_router(create_automation_router())

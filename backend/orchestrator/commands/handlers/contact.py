@@ -122,7 +122,12 @@ def _clarification_fields(field_ids: list[str]) -> list[dict[str, Any]]:
     return output or [{"id": "details", "kind": "textarea", "label": "Details", "required": True}]
 
 
-def _llm_extract_contact_changes(message: str, *, user_email: str) -> dict[str, Any]:
+def _llm_extract_contact_changes(
+    message: str,
+    *,
+    user_email: str,
+    model: str | None = None,
+) -> dict[str, Any]:
     from llm_helpers import call_llm_json
     from prompts.context import get_self_context, get_user_facts_context
     from user_fact_rules import RuleScope
@@ -190,7 +195,7 @@ Return ONLY valid JSON in this exact format:
     "summary": "one-sentence explanation"
 }}
 """
-    extracted = call_llm_json(prompt, timeout=45)
+    extracted = call_llm_json(prompt, timeout=45, model=model)
     extracted["need_user_input"] = normalize_need_user_input(extracted.get("need_user_input"))
     return extracted
 

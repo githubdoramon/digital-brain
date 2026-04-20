@@ -1,0 +1,448 @@
+from __future__ import annotations
+
+from datetime import date, datetime
+from typing import Any
+
+from agent.router import IntentRouter
+from commands.handlers.contact import _llm_extract_contact_changes
+from commands.handlers.event import _extract_event_entities_with_llm
+from contact_resolution_service import resolve_contacts_request
+from evals.types import EvalCase, EvalFlowDefinition
+from search_normalization import normalize_search_text
+from tags_manager import _suggest_tags
+
+
+def _json_safe(value: Any) -> Any:
+    if isinstance(value, datetime):
+        return value.isoformat()
+    if isinstance(value, date):
+        return value.isoformat()
+    if isinstance(value, dict):
+        return {str(key): _json_safe(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_json_safe(item) for item in value]
+    return value
+
+
+def _normalized_text_set(values: list[str] | None) -> set[str]:
+    normalized: set[str] = set()
+    for value in values or []:
+        candidate = normalize_search_text(value)
+        if candidate:
+            normalized.add(candidate)
+    return normalized
+
+
+def _normalize_optional_text(value: Any) -> str | None:
+    text = normalize_search_text(str(value or ""))
+    return text or None
+
+
+def _normalize_relationship_value(value: Any) -> str:
+    normalized = normalize_search_text(str(value or "").replace("_", " "))
+    alias_map = {
+        "married": "spouse",
+        "married to": "spouse",
+        "wife": "spouse",
+        "husband": "spouse",
+        "partner": "partner",
+    }
+    return alias_map.get(normalized, normalized)
+
+
+async def _execute_router_case(case: EvalCase, llm_model: str | None, user_email: str) -> dict[str, Any]:
+    del user_email
+    router = IntentRouter(llm_model=llm_model, enable_llm_routing=True)
+    result = await router.classify(
+        str(case.input.get("question") or ""),
+        conversation_history=case.input.get("conversation_history"),
+    )
+    return result.to_dict()
+
+
+def _score_router_case(case: EvalCase, output: dict[str, Any]) -> dict[str, Any]:
+    expected_intent = str(case.expected.get("intent") or "")
+    actual_intent = str(output.get("intent") or "")
+    notes: list[str] = []
+    if actual_intent != expected_intent:
+        notes.append(f"Expected intent '{expected_intent}' but got '{actual_intent}'")
+
+    passed = actual_intent == expected_intent
+    expected_pre_resolve = case.expected.get("pre_resolve_contacts")
+    if expected_pre_resolve is not None:
+        actual_pre_resolve = bool(output.get("pre_resolve_contacts"))
+        if actual_pre_resolve != bool(expected_pre_resolve):
+            passed = False
+            notes.append(
+                "Expected pre_resolve_contacts="
+                f"{bool(expected_pre_resolve)} but got {actual_pre_resolve}"
+            )
+
+    return {"passed": passed, "notes": notes}
+
+
+def _summarize_router_output(output: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "intent": output.get("intent"),
+        "pre_resolve_contacts": bool(output.get("pre_resolve_contacts")),
+        "confidence": output.get("confidence"),
+        "route_source": output.get("route_source"),
+    }
+
+
+def _execute_contact_resolution_case(
+    case: EvalCase,
+    llm_model: str | None,
+    user_email: str,
+) -> dict[str, Any]:
+    return _json_safe(
+        resolve_contacts_request(
+            {
+                "text": str(case.input.get("text") or ""),
+                "user_email": user_email,
+                "llm_model": llm_model,
+                "mode": str(case.input.get("mode") or "full"),
+            }
+        )
+    )
+
+
+def _score_contact_resolution_case(case: EvalCase, output: dict[str, Any]) -> dict[str, Any]:
+    notes: list[str] = []
+    expected_status = str(case.expected.get("status") or "")
+    actual_status = str(output.get("status") or "")
+    passed = actual_status == expected_status
+    if actual_status != expected_status:
+        notes.append(f"Expected status '{expected_status}' but got '{actual_status}'")
+
+    expected_mentions = _normalized_text_set(case.expected.get("people_mentioned"))
+    actual_mentions = _normalized_text_set(output.get("people_mentioned"))
+    if expected_mentions and not expected_mentions.issubset(actual_mentions):
+        passed = False
+        notes.append(
+            "Missing expected mentions: "
+            + ", ".join(sorted(expected_mentions.difference(actual_mentions)))
+        )
+
+    return {"passed": passed, "notes": notes}
+
+
+def _summarize_contact_resolution_output(output: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "status": output.get("status"),
+        "people_mentioned": output.get("people_mentioned") or [],
+        "resolved_count": len(output.get("resolved_contacts") or []),
+        "new_count": len(output.get("new_contacts") or []),
+        "ambiguous_count": len(output.get("ambiguous_contacts") or []),
+    }
+
+
+def _execute_event_extraction_case(case: EvalCase, llm_model: str | None, user_email: str) -> dict[str, Any]:
+    result = _extract_event_entities_with_llm(
+        str(case.input.get("message") or ""),
+        {"user_email": user_email},
+        model=llm_model,
+    )
+    return _json_safe(result)
+
+
+def _score_event_extraction_case(case: EvalCase, output: dict[str, Any]) -> dict[str, Any]:
+    notes: list[str] = []
+    passed = True
+
+    expected_when = case.expected.get("when")
+    if expected_when is not None and str(output.get("when") or "") != str(expected_when):
+        passed = False
+        notes.append(f"Expected when '{expected_when}' but got '{output.get('when')}'")
+
+    expected_where = case.expected.get("where")
+    if expected_where is not None:
+        actual_where = _normalize_optional_text(output.get("where"))
+        if actual_where != _normalize_optional_text(expected_where):
+            passed = False
+            notes.append(f"Expected where '{expected_where}' but got '{output.get('where')}'")
+
+    expected_types = _normalized_text_set(case.expected.get("types"))
+    actual_types = _normalized_text_set(output.get("types"))
+    if expected_types and not expected_types.issubset(actual_types):
+        passed = False
+        notes.append(
+            "Missing expected event types: "
+            + ", ".join(sorted(expected_types.difference(actual_types)))
+        )
+
+    expected_need_user_input = case.expected.get("needs_clarification")
+    if expected_need_user_input is not None:
+        actual_need_user_input = bool(output.get("need_user_input"))
+        if actual_need_user_input != bool(expected_need_user_input):
+            passed = False
+            notes.append(
+                f"Expected needs_clarification={bool(expected_need_user_input)} but got {actual_need_user_input}"
+            )
+
+    return {"passed": passed, "notes": notes}
+
+
+def _summarize_event_extraction_output(output: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "title": output.get("title"),
+        "when": output.get("when"),
+        "where": output.get("where"),
+        "types": output.get("types") or [],
+        "needs_clarification": bool(output.get("need_user_input")),
+    }
+
+
+def _execute_contact_update_case(case: EvalCase, llm_model: str | None, user_email: str) -> dict[str, Any]:
+    result = _llm_extract_contact_changes(
+        str(case.input.get("message") or ""),
+        user_email=user_email,
+        model=llm_model,
+    )
+    return _json_safe(result)
+
+
+def _score_contact_update_case(case: EvalCase, output: dict[str, Any]) -> dict[str, Any]:
+    notes: list[str] = []
+    passed = True
+
+    expected_contact_names = _normalized_text_set(case.expected.get("contact_names"))
+    actual_contact_names = {
+        normalize_search_text(contact.get("contact_name") or "")
+        for contact in output.get("contacts") or []
+        if isinstance(contact, dict)
+    }
+    actual_contact_names.discard("")
+    if expected_contact_names and not expected_contact_names.issubset(actual_contact_names):
+        passed = False
+        notes.append(
+            "Missing expected contacts: "
+            + ", ".join(sorted(expected_contact_names.difference(actual_contact_names)))
+        )
+
+    expected_relationships = case.expected.get("relationship_types") or []
+    if expected_relationships:
+        actual_relationships = {
+            _normalize_relationship_value(relationship.get("relationship_type"))
+            for relationship in output.get("relationships") or []
+            if isinstance(relationship, dict)
+        }
+        normalized_expected_relationships = {
+            _normalize_relationship_value(value) for value in expected_relationships
+        }
+        if not normalized_expected_relationships.issubset(actual_relationships):
+            passed = False
+            notes.append(
+                "Missing expected relationship types: "
+                + ", ".join(sorted(normalized_expected_relationships.difference(actual_relationships)))
+            )
+
+    expected_professions = case.expected.get("professions") or {}
+    if expected_professions:
+        actual_professions = {
+            normalize_search_text(contact.get("contact_name") or ""): normalize_search_text(contact.get("profession") or "")
+            for contact in output.get("contacts") or []
+            if isinstance(contact, dict)
+        }
+        for name, profession in expected_professions.items():
+            normalized_name = normalize_search_text(name)
+            normalized_profession = normalize_search_text(profession)
+            if actual_professions.get(normalized_name) != normalized_profession:
+                passed = False
+                notes.append(
+                    f"Expected profession '{profession}' for '{name}' but got '{actual_professions.get(normalized_name) or ''}'"
+                )
+
+    return {"passed": passed, "notes": notes}
+
+
+def _summarize_contact_update_output(output: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "contacts": [
+            {
+                "contact_name": contact.get("contact_name"),
+                "profession": contact.get("profession"),
+                "emails": contact.get("emails") or [],
+            }
+            for contact in output.get("contacts") or []
+            if isinstance(contact, dict)
+        ],
+        "relationships": output.get("relationships") or [],
+        "needs_clarification": bool(output.get("need_user_input")),
+    }
+
+
+def _execute_tag_suggestion_case(case: EvalCase, llm_model: str | None, user_email: str) -> dict[str, Any]:
+    del user_email
+    return {
+        "tags": _suggest_tags(
+            str(case.input.get("content") or ""),
+            case.input.get("existing_tags") or [],
+            str(case.input.get("subject") or "document"),
+            model=llm_model,
+        )
+    }
+
+
+def _score_tag_suggestion_case(case: EvalCase, output: dict[str, Any]) -> dict[str, Any]:
+    notes: list[str] = []
+    expected_tags = _normalized_text_set(case.expected.get("required_tags"))
+    actual_tags = _normalized_text_set(output.get("tags"))
+    passed = expected_tags.issubset(actual_tags)
+    if not passed:
+        notes.append(
+            "Missing expected tags: " + ", ".join(sorted(expected_tags.difference(actual_tags)))
+        )
+    return {"passed": passed, "notes": notes}
+
+
+def _summarize_tag_suggestion_output(output: dict[str, Any]) -> dict[str, Any]:
+    return {"tags": output.get("tags") or []}
+
+
+EVAL_FLOWS: list[EvalFlowDefinition] = [
+    EvalFlowDefinition(
+        flow_id="router",
+        label="Router",
+        description="Runs live intent-routing prompts against the router classifier.",
+        cases=[
+            EvalCase(
+                case_id="router-memory-search",
+                title="Memory search intent",
+                input={"question": "When did I last talk to John about the quarterly plan?"},
+                expected={"intent": "memory_search", "pre_resolve_contacts": True},
+            ),
+            EvalCase(
+                case_id="router-web-search",
+                title="Web search intent",
+                input={"question": "Search the web for the latest Apple WWDC announcements"},
+                expected={"intent": "web_search", "pre_resolve_contacts": False},
+            ),
+            EvalCase(
+                case_id="router-data-query",
+                title="Data query intent",
+                input={"question": "How many todos did I complete this week?"},
+                expected={"intent": "data_query", "pre_resolve_contacts": False},
+            ),
+        ],
+        execute_case=_execute_router_case,
+        score_case=_score_router_case,
+        summarize_output=_summarize_router_output,
+    ),
+    EvalFlowDefinition(
+        flow_id="contact_resolution",
+        label="Contact Resolution",
+        description="Checks live people extraction and resolution behavior on free-form text.",
+        cases=[
+            EvalCase(
+                case_id="contact-resolution-none",
+                title="No people mentioned",
+                input={"text": "Please summarize the weather forecast for tomorrow."},
+                expected={"status": "no_people"},
+            ),
+            EvalCase(
+                case_id="contact-resolution-single",
+                title="Single person mention",
+                input={"text": "Please remember that I met Alyssa Quillstone for coffee yesterday."},
+                expected={"status": "success", "people_mentioned": ["Alyssa Quillstone"]},
+            ),
+            EvalCase(
+                case_id="contact-resolution-multiple",
+                title="Multiple people mention",
+                input={"text": "I had lunch with Mateo Riverbend and Nora Vale today."},
+                expected={"status": "success", "people_mentioned": ["Mateo Riverbend", "Nora Vale"]},
+            ),
+        ],
+        execute_case=_execute_contact_resolution_case,
+        score_case=_score_contact_resolution_case,
+        summarize_output=_summarize_contact_resolution_output,
+    ),
+    EvalFlowDefinition(
+        flow_id="event_extraction",
+        label="Event Extraction",
+        description="Evaluates structured event extraction without persisting preview state.",
+        cases=[
+            EvalCase(
+                case_id="event-extraction-meeting",
+                title="Meeting with absolute datetime",
+                input={
+                    "message": "Project Apollo kickoff on 2026-05-14 14:30 at Porto Office to plan the roadmap.",
+                },
+                expected={
+                    "when": "2026-05-14T14:30:00",
+                    "where": "Porto Office",
+                    "types": ["meeting"],
+                    "needs_clarification": False,
+                },
+            ),
+            EvalCase(
+                case_id="event-extraction-health",
+                title="Health appointment",
+                input={
+                    "message": "Dentist appointment on 2026-06-02 09:00 at Smile Clinic for a routine cleaning.",
+                },
+                expected={
+                    "when": "2026-06-02T09:00:00",
+                    "where": "Smile Clinic",
+                    "types": ["health"],
+                    "needs_clarification": False,
+                },
+            ),
+        ],
+        execute_case=_execute_event_extraction_case,
+        score_case=_score_event_extraction_case,
+        summarize_output=_summarize_event_extraction_output,
+    ),
+    EvalFlowDefinition(
+        flow_id="contact_update_extraction",
+        label="Contact Update Extraction",
+        description="Evaluates contact graph extraction before confirmation and persistence.",
+        cases=[
+            EvalCase(
+                case_id="contact-update-profession",
+                title="Profession extraction",
+                input={"message": "Sage is a lawyer."},
+                expected={"contact_names": ["Sage"], "professions": {"Sage": "lawyer"}},
+            ),
+            EvalCase(
+                case_id="contact-update-relationship",
+                title="Relationship extraction",
+                input={"message": "Dana is married to Sage."},
+                expected={"contact_names": ["Dana", "Sage"], "relationship_types": ["spouse"]},
+            ),
+        ],
+        execute_case=_execute_contact_update_case,
+        score_case=_score_contact_update_case,
+        summarize_output=_summarize_contact_update_output,
+    ),
+    EvalFlowDefinition(
+        flow_id="tag_suggestion",
+        label="Tag Suggestion",
+        description="Runs live tag suggestion prompts and checks for required major tags.",
+        cases=[
+            EvalCase(
+                case_id="tag-suggestion-finance",
+                title="Finance document",
+                input={
+                    "subject": "document",
+                    "existing_tags": [],
+                    "content": "Invoice for quarterly tax preparation and accounting fees from my CPA.",
+                },
+                expected={"required_tags": ["Finance"]},
+            ),
+            EvalCase(
+                case_id="tag-suggestion-health",
+                title="Health document",
+                input={
+                    "subject": "document",
+                    "existing_tags": [],
+                    "content": "Blood test results and follow-up notes from my doctor about cholesterol treatment.",
+                },
+                expected={"required_tags": ["Health"]},
+            ),
+        ],
+        execute_case=_execute_tag_suggestion_case,
+        score_case=_score_tag_suggestion_case,
+        summarize_output=_summarize_tag_suggestion_output,
+    ),
+]

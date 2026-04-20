@@ -229,6 +229,12 @@ class ToolRunOut(BaseModel):
     timeout_seconds: int | None = None
 
 
+class EvalRunIn(BaseModel):
+    flow_id: str
+    llm_model: str | None = None
+    repetitions: int = Field(default=5, ge=1, le=20)
+
+
 class PushNotificationsUpdateIn(BaseModel):
     enabled: bool
 

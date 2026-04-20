@@ -28,6 +28,7 @@ const primaryItems: NavItem[] = [
 
 const secondaryItems: NavItem[] = [
   { href: "/meetings", label: "Meetings" },
+  { href: "/evals", label: "Evals" },
   { href: "/system", label: "System Status" },
   { href: "/tools", label: "Tools" },
   { href: "/robots", label: "Robots" },

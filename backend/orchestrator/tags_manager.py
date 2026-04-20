@@ -142,13 +142,14 @@ def _call_llm_text(
     *,
     system_prompt: str,
     timeout: int,
+    model: str | None = None,
 ) -> str:
     from llm_helpers import call_llm
 
     return call_llm(
         prompt,
         system_prompt=system_prompt,
-        model=get_smart_model(),
+        model=model or get_smart_model(),
         use_fast_model=False,
         timeout=timeout,
     )
@@ -217,6 +218,8 @@ def _suggest_tags(
     content: str,
     tags: Sequence[str],
     subject: Literal["document", "event"],
+    *,
+    model: str | None = None,
 ) -> list[str]:
     cleaned = (content or "").strip()
     if not cleaned:
@@ -261,6 +264,7 @@ def _suggest_tags(
             user_prompt,
             system_prompt=system_prompt,
             timeout=OLLAMA_TIMEOUT,
+            model=model,
         ).strip()
         if not raw_content:
             return []
