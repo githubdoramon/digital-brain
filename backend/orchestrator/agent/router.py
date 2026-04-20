@@ -408,11 +408,21 @@ class IntentRouter:
         """Use LLM to classify the intent."""
         sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
         from llm_helpers import call_llm
+        from observability.logger import get_runtime_logger
+
+        router_logger = get_runtime_logger(__name__)
 
         prompt = self._build_classification_prompt(question, conversation_history)
+        resolved_model = self.llm_model or None
+        router_logger.info(
+            "[router._llm_classify] self.llm_model=%r passing model=%r timeout=%s",
+            self.llm_model,
+            resolved_model,
+            self.llm_timeout,
+        )
 
         try:
-            content = call_llm(prompt, timeout=self.llm_timeout)
+            content = call_llm(prompt, timeout=self.llm_timeout, model=resolved_model)
             return self._parse_llm_response(content)
         except Exception as e:
             trace.trace_router_llm_error(f"LLM call failed: {e}")
