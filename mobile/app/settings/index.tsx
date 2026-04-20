@@ -28,7 +28,9 @@ import {
 } from '@/location/backgroundLocation';
 import {
   getLocationDebugSnapshot,
+  hydrateLocationDebugSnapshot,
   subscribeLocationDebug,
+  type LocationDebugEvent,
   type LocationDebugSnapshot,
 } from '@/location/debugState';
 import { theme } from '@/theme';
@@ -42,6 +44,29 @@ function formatBuildTimestamp(value: string | null | undefined): string {
     return value;
   }
   return parsed.toLocaleString();
+}
+
+function formatDebugPayload(payload: Record<string, unknown> | undefined): string {
+  if (!payload) {
+    return 'none';
+  }
+  try {
+    return JSON.stringify(payload);
+  } catch {
+    return 'unserializable payload';
+  }
+}
+
+function LocationDebugEventRow({ event }: { event: LocationDebugEvent }) {
+  return (
+    <View style={styles.debugEventRow}>
+      <Text style={styles.debugEventTitle}>{event.eventName}</Text>
+      <Text style={styles.debugEventMeta}>{formatBuildTimestamp(event.at)}</Text>
+      <Text style={styles.debugEventMeta}>Message: {event.message ?? 'none'}</Text>
+      <Text style={styles.debugEventMeta}>Error: {event.error ?? 'none'}</Text>
+      <Text style={styles.debugEventPayload}>Payload: {formatDebugPayload(event.payload)}</Text>
+    </View>
+  );
 }
 
 export default function SettingsScreen() {
@@ -65,7 +90,7 @@ export default function SettingsScreen() {
     try {
       const status = await getBackgroundLocationDebugStatus();
       setBackgroundStatus(status);
-      setLocationDebug(getLocationDebugSnapshot());
+      setLocationDebug(await hydrateLocationDebugSnapshot());
     } finally {
       setIsRefreshingLocationDebug(false);
     }
@@ -192,6 +217,7 @@ export default function SettingsScreen() {
           <Text style={styles.versionValue}>Last event at: {formatBuildTimestamp(locationDebug.lastEventAt)}</Text>
           <Text style={styles.versionValue}>Last message: {locationDebug.lastMessage ?? 'none'}</Text>
           <Text style={styles.versionValue}>Last error: {locationDebug.lastError ?? 'none'}</Text>
+          <Text style={styles.versionValue}>Last payload: {formatDebugPayload(locationDebug.lastPayload)}</Text>
           <Button
             label={isRefreshingLocationDebug ? 'Refreshing...' : 'Refresh location debug'}
             onPress={() => {
@@ -200,6 +226,14 @@ export default function SettingsScreen() {
             variant="secondary"
             style={styles.debugRefreshButton}
           />
+          <Text style={styles.versionLabel}>Recent events</Text>
+          {(locationDebug.recentEvents ?? []).length ? (
+            locationDebug.recentEvents?.map((event) => (
+              <LocationDebugEventRow key={`${event.at}-${event.eventName}`} event={event} />
+            ))
+          ) : (
+            <Text style={styles.versionValue}>No stored debug events yet.</Text>
+          )}
         </Card>
 
 
@@ -284,5 +318,25 @@ const styles = StyleSheet.create({
   debugRefreshButton: {
     marginTop: 8,
     alignSelf: 'stretch',
+  },
+  debugEventRow: {
+    marginTop: 10,
+    paddingTop: 10,
+    borderTopWidth: 1,
+    borderTopColor: theme.colors.line,
+    gap: 2,
+  },
+  debugEventTitle: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: theme.colors.ink,
+  },
+  debugEventMeta: {
+    fontSize: 12,
+    color: theme.colors.mutedInk,
+  },
+  debugEventPayload: {
+    fontSize: 12,
+    color: theme.colors.ink,
   },
 });

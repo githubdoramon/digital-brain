@@ -24,10 +24,6 @@ let lastSyncedLocation: ClientLocationContext | null = null;
 
 const LOCATION_SYNC_MIN_DISTANCE_METERS = 20;
 
-function roundCoordinate(value: number): number {
-  return Math.round(value * 1000) / 1000;
-}
-
 function calculateDistanceMeters(
   first: Pick<ClientLocationContext, 'lat' | 'lon'>,
   second: Pick<ClientLocationContext, 'lat' | 'lon'>,
@@ -79,8 +75,8 @@ function requestLocationInBackground(): void {
         accuracy: Location.Accuracy.Balanced,
       });
 
-      const lat = roundCoordinate(Number(position.coords.latitude));
-      const lon = roundCoordinate(Number(position.coords.longitude));
+      const lat = Number(position.coords.latitude);
+      const lon = Number(position.coords.longitude);
       if (!Number.isFinite(lat) || !Number.isFinite(lon)) {
         reportLocationDebugEvent('foreground_location_invalid', {
           message: 'Invalid foreground coordinates',

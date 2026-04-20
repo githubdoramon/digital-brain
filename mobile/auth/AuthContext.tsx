@@ -4,6 +4,7 @@ import * as SecureStore from 'expo-secure-store';
 import { Alert } from 'react-native';
 
 import { apiFetch, setAuthRefreshHandler, setAuthTokenProvider } from '@/api/client';
+import { configureGoogleSignIn } from '@/auth/googleSignin';
 import { AUTH_EMAIL_KEY, AUTH_NAME_KEY, AUTH_PHOTO_KEY, AUTH_TOKEN_KEY } from '@/auth/storageKeys';
 
 type AuthContextValue = {
@@ -31,12 +32,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const tokenRef = useRef<string | null>(null);
   const refreshPromiseRef = useRef<Promise<string | null> | null>(null);
   useEffect(() => {
-    GoogleSignin.configure({
-      webClientId: process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID,
-      iosClientId: process.env.EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID,
-      offlineAccess: true,
-      scopes: ['profile', 'email'],
-    });
+    configureGoogleSignIn();
   }, []);
 
   const refreshToken = useCallback(() => {

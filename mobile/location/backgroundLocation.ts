@@ -1,9 +1,8 @@
 import * as Location from 'expo-location';
-import * as SecureStore from 'expo-secure-store';
 import * as TaskManager from 'expo-task-manager';
 
 import { apiFetch } from '@/api/client';
-import { AUTH_TOKEN_KEY } from '@/auth/storageKeys';
+import { getStoredGoogleIdToken, refreshStoredGoogleIdToken } from '@/auth/backgroundToken';
 import { reportLocationDebugEvent } from '@/location/debugState';
 
 const BACKGROUND_LOCATION_TASK = 'digitalbrain.background-location';
@@ -19,10 +18,6 @@ type BackgroundLocationSample = {
   timestamp?: number;
 };
 
-function roundCoordinate(value: number): number {
-  return Math.round(value * 1000) / 1000;
-}
-
 async function postBackgroundLocation(sample: BackgroundLocationSample): Promise<void> {
   const latitude = Number(sample.coords?.latitude);
   const longitude = Number(sample.coords?.longitude);
@@ -33,7 +28,7 @@ async function postBackgroundLocation(sample: BackgroundLocationSample): Promise
     return;
   }
 
-  const token = await SecureStore.getItemAsync(AUTH_TOKEN_KEY);
+  const token = await getStoredGoogleIdToken();
   if (!token) {
     reportLocationDebugEvent('background_sync_skipped', {
       message: 'Missing auth token in secure store',
@@ -46,8 +41,8 @@ async function postBackgroundLocation(sample: BackgroundLocationSample): Promise
 
   reportLocationDebugEvent('background_sync_attempt', {
     payload: {
-      lat: roundCoordinate(latitude),
-      lon: roundCoordinate(longitude),
+      lat: latitude,
+      lon: longitude,
       captured_at: new Date(sample.timestamp || Date.now()).toISOString(),
     },
   });
@@ -55,9 +50,10 @@ async function postBackgroundLocation(sample: BackgroundLocationSample): Promise
   await apiFetch('/mobile/location', {
     method: 'POST',
     token,
+    onAuthExpired: refreshStoredGoogleIdToken,
     body: JSON.stringify({
-      lat: roundCoordinate(latitude),
-      lon: roundCoordinate(longitude),
+      lat: latitude,
+      lon: longitude,
       accuracy_m: accuracy,
       captured_at: new Date(sample.timestamp || Date.now()).toISOString(),
       source: 'expo_location',
@@ -67,8 +63,8 @@ async function postBackgroundLocation(sample: BackgroundLocationSample): Promise
 
   reportLocationDebugEvent('background_sync_success', {
     payload: {
-      lat: roundCoordinate(latitude),
-      lon: roundCoordinate(longitude),
+      lat: latitude,
+      lon: longitude,
     },
   });
 }
