@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime
-from typing import Any
+from typing import Any, Literal
 
 from agent.router import IntentRouter
 from commands.handlers.contact import _llm_extract_contact_changes
@@ -109,11 +109,14 @@ def _execute_contact_resolution_case(
 
 def _score_contact_resolution_case(case: EvalCase, output: dict[str, Any]) -> dict[str, Any]:
     notes: list[str] = []
+    passed = True
+
     expected_status = str(case.expected.get("status") or "")
     actual_status = str(output.get("status") or "")
-    passed = actual_status == expected_status
-    if actual_status != expected_status:
-        notes.append(f"Expected status '{expected_status}' but got '{actual_status}'")
+    if expected_status:
+        passed = actual_status == expected_status
+        if actual_status != expected_status:
+            notes.append(f"Expected status '{expected_status}' but got '{actual_status}'")
 
     expected_mentions = _normalized_text_set(case.expected.get("people_mentioned"))
     actual_mentions = _normalized_text_set(output.get("people_mentioned"))
@@ -124,6 +127,34 @@ def _score_contact_resolution_case(case: EvalCase, output: dict[str, Any]) -> di
             + ", ".join(sorted(expected_mentions.difference(actual_mentions)))
         )
 
+    expected_selector_values = _normalized_text_set(case.expected.get("selector_values"))
+    actual_selector_values = {
+        normalize_search_text(selector.get("value") or "")
+        for selector in output.get("selector_mentions") or []
+        if isinstance(selector, dict)
+    }
+    actual_selector_values.discard("")
+    if expected_selector_values and not expected_selector_values.issubset(actual_selector_values):
+        passed = False
+        notes.append(
+            "Missing expected selector values: "
+            + ", ".join(sorted(expected_selector_values.difference(actual_selector_values)))
+        )
+
+    expected_selector_kinds = _normalized_text_set(case.expected.get("selector_kinds"))
+    actual_selector_kinds = {
+        normalize_search_text(selector.get("kind") or "")
+        for selector in output.get("selector_mentions") or []
+        if isinstance(selector, dict)
+    }
+    actual_selector_kinds.discard("")
+    if expected_selector_kinds and not expected_selector_kinds.issubset(actual_selector_kinds):
+        passed = False
+        notes.append(
+            "Missing expected selector kinds: "
+            + ", ".join(sorted(expected_selector_kinds.difference(actual_selector_kinds)))
+        )
+
     return {"passed": passed, "notes": notes}
 
 
@@ -131,6 +162,7 @@ def _summarize_contact_resolution_output(output: dict[str, Any]) -> dict[str, An
     return {
         "status": output.get("status"),
         "people_mentioned": output.get("people_mentioned") or [],
+        "selector_mentions": output.get("selector_mentions") or [],
         "resolved_count": len(output.get("resolved_contacts") or []),
         "new_count": len(output.get("new_contacts") or []),
         "ambiguous_count": len(output.get("ambiguous_contacts") or []),
@@ -253,6 +285,23 @@ def _score_contact_update_case(case: EvalCase, output: dict[str, Any]) -> dict[s
                     f"Expected profession '{profession}' for '{name}' but got '{actual_professions.get(normalized_name) or ''}'"
                 )
 
+    expected_comments = case.expected.get("comments") or {}
+    if expected_comments:
+        actual_comments = {
+            normalize_search_text(contact.get("contact_name") or ""): normalize_search_text(contact.get("comments") or "")
+            for contact in output.get("contacts") or []
+            if isinstance(contact, dict)
+        }
+        for name, comment in expected_comments.items():
+            normalized_name = normalize_search_text(name)
+            normalized_comment = normalize_search_text(comment)
+            actual_comment = actual_comments.get(normalized_name) or ""
+            if normalized_comment not in actual_comment:
+                passed = False
+                notes.append(
+                    f"Expected comment for '{name}' to include '{comment}' but got '{actual_comment}'"
+                )
+
     return {"passed": passed, "notes": notes}
 
 
@@ -262,6 +311,7 @@ def _summarize_contact_update_output(output: dict[str, Any]) -> dict[str, Any]:
             {
                 "contact_name": contact.get("contact_name"),
                 "profession": contact.get("profession"),
+                "comments": contact.get("comments"),
                 "emails": contact.get("emails") or [],
             }
             for contact in output.get("contacts") or []
@@ -274,11 +324,15 @@ def _summarize_contact_update_output(output: dict[str, Any]) -> dict[str, Any]:
 
 def _execute_tag_suggestion_case(case: EvalCase, llm_model: str | None, user_email: str) -> dict[str, Any]:
     del user_email
+    subject = str(case.input.get("subject") or "document")
+    normalized_subject: Literal["document", "event"] = (
+        "event" if subject == "event" else "document"
+    )
     return {
         "tags": _suggest_tags(
             str(case.input.get("content") or ""),
             case.input.get("existing_tags") or [],
-            str(case.input.get("subject") or "document"),
+            normalized_subject,
             model=llm_model,
         )
     }
@@ -352,6 +406,18 @@ EVAL_FLOWS: list[EvalFlowDefinition] = [
                 input={"text": "I had lunch with Mateo Riverbend and Nora Vale today."},
                 expected={"status": "success", "people_mentioned": ["Mateo Riverbend", "Nora Vale"]},
             ),
+            EvalCase(
+                case_id="contact-resolution-group-team",
+                title="Group selector from my team",
+                input={"text": "Please remind everyone from my soccer team about dinner on Friday."},
+                expected={"selector_values": ["soccer team"], "selector_kinds": ["group"]},
+            ),
+            EvalCase(
+                case_id="contact-resolution-group-design-team",
+                title="Named team selector",
+                input={"text": "I want to message my product design team about the new mockups."},
+                expected={"selector_values": ["product design team"], "selector_kinds": ["group"]},
+            ),
         ],
         execute_case=_execute_contact_resolution_case,
         score_case=_score_contact_resolution_case,
@@ -410,6 +476,15 @@ EVAL_FLOWS: list[EvalFlowDefinition] = [
                 input={"message": "Dana is married to Sage."},
                 expected={"contact_names": ["Dana", "Sage"], "relationship_types": ["spouse"]},
             ),
+            EvalCase(
+                case_id="contact-update-description",
+                title="Description update extraction",
+                input={"message": "Add a note that Sage loves trail running and cooks amazing pasta."},
+                expected={
+                    "contact_names": ["Sage"],
+                    "comments": {"Sage": "loves trail running and cooks amazing pasta"},
+                },
+            ),
         ],
         execute_case=_execute_contact_update_case,
         score_case=_score_contact_update_case,
@@ -439,6 +514,26 @@ EVAL_FLOWS: list[EvalFlowDefinition] = [
                     "content": "Blood test results and follow-up notes from my doctor about cholesterol treatment.",
                 },
                 expected={"required_tags": ["Health"]},
+            ),
+            EvalCase(
+                case_id="tag-suggestion-event-work",
+                title="Work event",
+                input={
+                    "subject": "event",
+                    "existing_tags": [],
+                    "content": "Weekly engineering planning meeting with the product and backend teams to review milestones and unblock the release.",
+                },
+                expected={"required_tags": ["Work"]},
+            ),
+            EvalCase(
+                case_id="tag-suggestion-event-personal",
+                title="Personal event",
+                input={
+                    "subject": "event",
+                    "existing_tags": [],
+                    "content": "Dinner with friends before a weekend concert downtown to celebrate my birthday.",
+                },
+                expected={"required_tags": ["Personal"]},
             ),
         ],
         execute_case=_execute_tag_suggestion_case,
