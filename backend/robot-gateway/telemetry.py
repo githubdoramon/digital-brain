@@ -18,15 +18,19 @@ logger = get_runtime_logger(__name__)
 async def handle_telemetry(robot_id: str, module_id: str | None, payload: dict[str, Any]) -> None:
     """MQTT handler: persist a telemetry message and update last_seen."""
     if not module_id:
-        logger.warning("[telemetry] Received telemetry without module_id for robot %s", robot_id)
+        logger.warning(
+            "[telemetry] REJECTED robot_id=%s reason=missing_module_id payload=%s",
+            robot_id, json.dumps(payload)[:200],
+        )
         return
 
     try:
         msg = TelemetryPayload(**payload)
-    except Exception:
+    except Exception as exc:
         logger.warning(
-            "[telemetry] Invalid telemetry payload from %s/%s: %s",
-            robot_id, module_id, json.dumps(payload)[:200],
+            "[telemetry] REJECTED robot_id=%s module_id=%s reason=schema_validation "
+            "error=%s payload=%s",
+            robot_id, module_id, str(exc)[:200], json.dumps(payload)[:200],
         )
         return
 
@@ -39,7 +43,6 @@ async def handle_telemetry(robot_id: str, module_id: str | None, payload: dict[s
                 """,
                 (robot_id, module_id, msg.measured_at, json.dumps(msg.data), msg.payload_type),
             )
-            # Update last_seen on robot and module
             cur.execute(
                 "UPDATE robots SET last_seen_at = NOW(), updated_at = NOW() WHERE robot_id = %s",
                 (robot_id,),
@@ -54,18 +57,32 @@ async def handle_telemetry(robot_id: str, module_id: str | None, payload: dict[s
             conn.commit()
     except psycopg.errors.ForeignKeyViolation:
         logger.warning(
-            "[telemetry] Dropped telemetry from unregistered robot/module %s/%s",
+            "[telemetry] REJECTED robot_id=%s module_id=%s reason=unregistered_robot_or_module "
+            "(register the robot+module via POST /robots and POST /robots/{id}/modules)",
+            robot_id, module_id,
+        )
+        return
+    except Exception:
+        logger.exception(
+            "[telemetry] REJECTED robot_id=%s module_id=%s reason=db_error",
             robot_id, module_id,
         )
         return
 
-    logger.debug("[telemetry] Stored %s from %s/%s", msg.payload_type, robot_id, module_id)
+    logger.info(
+        "[telemetry] ACCEPTED robot_id=%s module_id=%s type=%s measured_at=%s",
+        robot_id, module_id, msg.payload_type, msg.measured_at.isoformat(),
+    )
 
 
 async def handle_status(robot_id: str, module_id: str | None, payload: dict[str, Any]) -> None:
     """MQTT handler: update robot or module status."""
     new_status = payload.get("status")
     if not new_status:
+        logger.warning(
+            "[status] REJECTED robot_id=%s module_id=%s reason=missing_status_field payload=%s",
+            robot_id, module_id or "(robot)", json.dumps(payload)[:200],
+        )
         return
 
     with get_conn() as conn, conn.cursor() as cur:
@@ -92,11 +109,14 @@ async def handle_status(robot_id: str, module_id: str | None, payload: dict[str,
 
     if updated == 0:
         logger.warning(
-            "[telemetry] Status update for unregistered %s/%s ignored",
-            robot_id, module_id or "(robot)",
+            "[status] REJECTED robot_id=%s module_id=%s reason=unregistered status=%s",
+            robot_id, module_id or "(robot)", new_status,
         )
     else:
-        logger.info("[telemetry] Status update: %s/%s → %s", robot_id, module_id or "(robot)", new_status)
+        logger.info(
+            "[status] ACCEPTED robot_id=%s module_id=%s status=%s",
+            robot_id, module_id or "(robot)", new_status,
+        )
 
 
 def query_telemetry(

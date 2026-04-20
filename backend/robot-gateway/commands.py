@@ -79,7 +79,10 @@ async def handle_command_ack(robot_id: str, module_id: str | None, payload: dict
     """MQTT handler: process command acknowledgement from robot."""
     command_id = payload.get("command_id")
     if not command_id:
-        logger.warning("[commands] ACK without command_id from %s/%s", robot_id, module_id)
+        logger.warning(
+            "[commands.ack] REJECTED robot_id=%s module_id=%s reason=missing_command_id payload=%s",
+            robot_id, module_id, json.dumps(payload)[:200],
+        )
         return
 
     with get_conn() as conn, conn.cursor() as cur:
@@ -91,9 +94,20 @@ async def handle_command_ack(robot_id: str, module_id: str | None, payload: dict
             """,
             (command_id,),
         )
+        updated = cur.rowcount
         conn.commit()
 
-    logger.info("[commands] Command %s acknowledged by %s/%s", command_id, robot_id, module_id)
+    if updated == 0:
+        logger.warning(
+            "[commands.ack] REJECTED command_id=%s robot_id=%s module_id=%s "
+            "reason=command_not_found_or_not_sent",
+            command_id, robot_id, module_id,
+        )
+    else:
+        logger.info(
+            "[commands.ack] ACCEPTED command_id=%s robot_id=%s module_id=%s",
+            command_id, robot_id, module_id,
+        )
 
 
 def get_command(command_id: str) -> dict[str, Any] | None:

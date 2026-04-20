@@ -91,17 +91,38 @@ class MqttManager:
         logger.info("[mqtt] Subscribed to %d topic(s)", len(topics))
 
     async def _dispatch(self, message: aiomqtt.Message) -> None:
-        parsed = parse_topic(str(message.topic))
+        topic = str(message.topic)
+        raw_bytes = message.payload if isinstance(message.payload, (bytes, bytearray)) else str(message.payload).encode("utf-8")
+        logger.info("[mqtt.recv] topic=%s size=%d bytes", topic, len(raw_bytes))
+
+        parsed = parse_topic(topic)
         if not parsed:
-            logger.debug("[mqtt] Ignoring unrecognized topic: %s", message.topic)
+            logger.warning(
+                "[mqtt.recv] REJECTED topic=%s reason=unrecognized_pattern "
+                "(expected robot/{id}/module/{mod}/{telemetry|status|command/ack} or robot/{id}/status)",
+                topic,
+            )
             return
 
         handler = self._handlers.get(parsed.message_type)
         if not handler:
-            logger.debug("[mqtt] No handler for message type: %s", parsed.message_type)
+            logger.warning(
+                "[mqtt.recv] REJECTED topic=%s reason=no_handler message_type=%s",
+                topic, parsed.message_type,
+            )
             return
 
         payload = self._decode_payload(message.payload)
+        if "raw" in payload and len(payload) == 1:
+            logger.warning(
+                "[mqtt.recv] payload is not valid JSON topic=%s preview=%r",
+                topic, payload["raw"][:200] if isinstance(payload["raw"], str) else payload["raw"],
+            )
+
+        logger.info(
+            "[mqtt.recv] DISPATCH topic=%s robot_id=%s module_id=%s type=%s",
+            topic, parsed.robot_id, parsed.module_id, parsed.message_type,
+        )
         await handler(parsed.robot_id, parsed.module_id, payload)
 
     @staticmethod
