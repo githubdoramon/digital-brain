@@ -17,12 +17,16 @@ logger = get_runtime_logger(__name__)
 # Type alias for message handlers
 MessageHandler = Callable[[str, str | None, dict[str, Any]], Coroutine[Any, Any, None]]
 
-# Wildcard subscriptions the gateway listens to
+# Wildcard subscriptions the gateway listens to.
+# The "robot/#" catch-all is diagnostic — it ensures we log ANY message under
+# the robot namespace, even if it doesn't match our structured patterns. This
+# makes it obvious when firmware publishes to an unexpected topic.
 _SUBSCRIPTIONS = [
     ("robot/+/module/+/telemetry", 0),   # QoS 0 for high-frequency telemetry
     ("robot/+/module/+/status", 1),       # QoS 1 for reliable status
     ("robot/+/module/+/command/ack", 1),  # QoS 1 for reliable ACKs
     ("robot/+/status", 1),                # QoS 1 for robot-level status
+    ("robot/#", 0),                       # Diagnostic: catch all robot/* traffic
 ]
 
 

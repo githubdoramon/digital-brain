@@ -77,8 +77,9 @@ class TestParseTopicRejectsInvalid:
     def test_extra_segments_after_telemetry(self):
         assert parse_topic("robot/r1/module/imu/telemetry/extra") is None
 
-    def test_media_topic_not_yet_handled(self):
-        assert parse_topic("robot/r1/media/cam0/image") is None
+    def test_module_media_topic_not_yet_handled(self):
+        # Planned future topic for binary media under the module path
+        assert parse_topic("robot/r1/module/cam0/media") is None
 
     def test_missing_module_id(self):
         assert parse_topic("robot/r1/module//telemetry") is not None  # empty string is valid ID

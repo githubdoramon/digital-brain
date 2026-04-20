@@ -2,6 +2,8 @@
 
 MQTT-based communication gateway for physical robots. Receives telemetry, dispatches commands, and tracks robot/module state. Runs as its own container alongside a Mosquitto MQTT broker.
 
+> **Firmware developers**: See [MQTT_PROTOCOL.md](MQTT_PROTOCOL.md) for the exact topic hierarchy and JSON payload schemas the gateway expects.
+
 ## Architecture
 
 ```
@@ -24,7 +26,7 @@ Each robot has multiple modules. Each module subscribes as a separate MQTT entit
 | `robot/{robot_id}/module/{module_id}/command` | Gateway → Robot | 1 | Commands to module |
 | `robot/{robot_id}/module/{module_id}/command/ack` | Robot → Gateway | 1 | Command acknowledgement |
 | `robot/{robot_id}/status` | Robot → Gateway | 1 | Robot-level status |
-| `robot/{robot_id}/media/{module_id}/{type}` | Reserved | - | Future: image/audio |
+| `robot/{robot_id}/module/{module_id}/media` | Reserved | - | Future: image/audio binary payloads |
 
 ## HTTP API
 
@@ -149,5 +151,5 @@ The gateway is designed to grow its own intelligence. When LLM processing is nee
 ## Future: Image & Audio
 
 - `robot_modules.module_type` includes `camera` and `microphone`
-- MQTT topic `robot/{id}/media/{module_id}/{media_type}` is reserved
+- MQTT topic `robot/{id}/module/{module_id}/media` is reserved for binary media payloads (cameras/mics are just modules)
 - Transport mechanism TBD (MQTT binary, HTTP upload, pre-signed URLs)
