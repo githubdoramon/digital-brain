@@ -184,12 +184,26 @@ def _format_contact_command_conversation(messages: list[dict[str, str]] | None, 
     return json.dumps(conversation, ensure_ascii=False)
 
 
+def _format_existing_contact_extraction(existing: dict[str, Any] | None) -> str:
+    if not existing:
+        return ""
+    try:
+        serialized = json.dumps(existing, ensure_ascii=False, default=str, indent=2)
+    except TypeError:
+        serialized = str(existing)
+    return (
+        "Existing contact extraction from earlier turns (use as base, update only if new details override):\n"
+        f"{serialized}\n\n"
+    )
+
+
 def _llm_extract_contact_changes(
     message: str,
     *,
     user_email: str,
     model: str | None = None,
     conversation_messages: list[dict[str, str]] | None = None,
+    existing_extraction: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     from llm_helpers import call_llm_json
     from prompts.context import get_self_context, get_user_facts_context
@@ -206,6 +220,7 @@ def _llm_extract_contact_changes(
     )
     user_facts_block = f"\n{user_facts_ctx}\n" if user_facts_ctx else ""
     conversation_json = _format_contact_command_conversation(conversation_messages, message)
+    existing_extraction_context = _format_existing_contact_extraction(existing_extraction)
     prompt = f"""You need to extract a structured proposal of information about contacts and their relationships.
 
 {self_context_block}
@@ -215,6 +230,7 @@ Current user message: \"{message}\"
 Conversation messages (JSON array, most recent last):
 {conversation_json}
 
+{existing_extraction_context}
 Interpret one or more contact graph updates.
 
 Supported updates:
@@ -1107,14 +1123,17 @@ def handle_contact(parsed: ParsedCommand, context: dict[str, Any]) -> dict[str, 
     user_email = str(context.get("user_email") or "")
 
     clarification_context = None
+    previous_extraction: dict[str, Any] | None = None
     if clarification_id:
         from commands.storage import delete_command_data, get_command_data
 
         clarification_context = get_command_data(clarification_id)
         delete_command_data(clarification_id)
+        if isinstance((clarification_context or {}).get("extracted"), dict):
+            previous_extraction = dict((clarification_context or {}).get("extracted") or {})
 
     original_message = str((clarification_context or {}).get("original_message") or raw_message).strip()
-    combined_message = original_message
+    extraction_message = original_message
     conversation_messages = [
         item
         for item in ((clarification_context or {}).get("conversation_messages") or [])
@@ -1125,16 +1144,15 @@ def handle_contact(parsed: ParsedCommand, context: dict[str, Any]) -> dict[str, 
     if clarification_context:
         _, follow_up = _extract_additional_details(raw_message)
         if follow_up:
-            combined_message = f"{original_message}. Additional details: {follow_up}"
             _append_contact_conversation_message(conversation_messages, "user", follow_up)
         elif raw_message and raw_message != original_message:
-            combined_message = f"{original_message}. Additional details: {raw_message}"
             _append_contact_conversation_message(conversation_messages, "user", raw_message)
 
     extracted = _llm_extract_contact_changes(
-        combined_message,
+        extraction_message,
         user_email=user_email,
         conversation_messages=conversation_messages,
+        existing_extraction=previous_extraction,
     )
     explicit_need_user_input = normalize_need_user_input(extracted.get("need_user_input"))
     if explicit_need_user_input:
@@ -1151,6 +1169,7 @@ def handle_contact(parsed: ParsedCommand, context: dict[str, Any]) -> dict[str, 
             clarification_preview_id,
             {
                 "command_name": "contact",
+                "extracted": extracted,
                 "original_message": original_message,
                 "conversation_messages": next_conversation_messages,
                 "thread_id": context.get("thread_id"),
@@ -1187,6 +1206,7 @@ def handle_contact(parsed: ParsedCommand, context: dict[str, Any]) -> dict[str, 
             clarification_preview_id,
             {
                 "command_name": "contact",
+                "extracted": extracted,
                 "original_message": original_message,
                 "conversation_messages": next_conversation_messages,
                 "thread_id": context.get("thread_id"),

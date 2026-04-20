@@ -30,12 +30,24 @@ def test_contact_extraction_uses_self_context_instead_of_raw_user_line(monkeypat
 
     monkeypatch.setattr("llm_helpers.call_llm_json", fake_call_llm_json)
 
-    contact_handler._llm_extract_contact_changes("Sage is a lawyer", user_email="user@example.com")
+    contact_handler._llm_extract_contact_changes(
+        "Sage is a lawyer",
+        user_email="user@example.com",
+        conversation_messages=[
+            {"role": "user", "content": "Sage is a lawyer"},
+            {"role": "assistant", "content": "Which Sage?"},
+            {"role": "user", "content": "Patricia"},
+        ],
+        existing_extraction={"contacts": [{"contact_name": "Sage"}]},
+    )
 
     prompt = captured["prompt"]
     assert "You are assisting Ramon." in prompt
     assert "Contact resolution rules:" in prompt
     assert "Sage means Patricia." in prompt
+    assert "Existing contact extraction from earlier turns" in prompt
+    assert '"content": "Which Sage?"' in prompt
+    assert '"contact_name": "Sage"' in prompt
     assert '"contacts": [' in prompt
     assert '"relationships": [' in prompt
     assert '"reciprocal_type":' in prompt

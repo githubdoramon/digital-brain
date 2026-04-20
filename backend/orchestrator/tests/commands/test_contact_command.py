@@ -137,29 +137,42 @@ def test_contact_clarification_follow_up_passes_conversation_history(monkeypatch
     }
     calls = []
 
-    def fake_extract(message, *, user_email, model=None, conversation_messages=None):
+    first_extraction = {
+        "contacts": [{"contact_name": "Bia"}],
+        "relationships": [],
+        "contact_place_links": [],
+        "need_user_input": {
+            "prompt": "What is Bia's birth date?",
+            "questions": ["What is Bia's birth date?"],
+            "fields": [
+                {
+                    "id": "birth_date",
+                    "kind": "date",
+                    "label": "Birth date",
+                    "required": True,
+                }
+            ],
+            "submission_mode": "ui_submission",
+        },
+    }
+
+    def fake_extract(
+        message,
+        *,
+        user_email,
+        model=None,
+        conversation_messages=None,
+        existing_extraction=None,
+    ):
         calls.append(
             {
                 "message": message,
                 "conversation_messages": list(conversation_messages or []),
+                "existing_extraction": existing_extraction,
             }
         )
         if len(calls) == 1:
-            return {
-                "need_user_input": {
-                    "prompt": "What is Bia's birth date?",
-                    "questions": ["What is Bia's birth date?"],
-                    "fields": [
-                        {
-                            "id": "birth_date",
-                            "kind": "date",
-                            "label": "Birth date",
-                            "required": True,
-                        }
-                    ],
-                    "submission_mode": "ui_submission",
-                }
-            }
+            return first_extraction
         return {
             "contacts": [{"contact_name": "Bia", "birthday": "1994-05-07"}],
             "relationships": [],
@@ -199,7 +212,8 @@ def test_contact_clarification_follow_up_passes_conversation_history(monkeypatch
         {"role": "assistant", "content": "What is Bia's birth date?"},
         {"role": "user", "content": "1994-05-07"},
     ]
-    assert calls[1]["message"] == "Bia has a birthday. Additional details: 1994-05-07"
+    assert calls[1]["message"] == "Bia has a birthday"
+    assert calls[1]["existing_extraction"] == first_extraction
 
     delete_command_data(second["preview_id"])
     clear_pending_event(context["event_pending_key"])
