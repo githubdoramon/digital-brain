@@ -502,9 +502,7 @@ class AgentState:
             return True
         if "rows" in result and len(result.get("rows", [])) == 0:
             return True
-        if "count" in result and result["count"] == 0:
-            return True
-        return False
+        return bool("count" in result and result["count"] == 0)
 
     def to_context_string(self) -> str:
         """

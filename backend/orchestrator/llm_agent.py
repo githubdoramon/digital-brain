@@ -138,7 +138,7 @@ def is_only_thinking(content: str) -> bool:
         return True
 
     # Check for thinking tags
-    if stripped.startswith("<think>") or stripped.startswith("<thinking>"):
+    if stripped.startswith(("<think>", "<thinking>")):
         # Remove thinking tags and check if anything meaningful remains
         cleaned = re.sub(r"</?think(?:ing)?>", "", stripped).strip()
         return len(cleaned) < 10
@@ -200,16 +200,16 @@ def normalize_event_proposal(raw: Any) -> Optional[dict[str, Any]]:
     proposal: dict[str, Any] = {"title": title.strip()}
 
     # Optional fields with type coercion
-    if "description" in raw and raw["description"]:
+    if raw.get("description"):
         proposal["description"] = str(raw["description"]).strip()
 
-    if "start_time" in raw and raw["start_time"]:
+    if raw.get("start_time"):
         proposal["start_time"] = str(raw["start_time"])
 
-    if "end_time" in raw and raw["end_time"]:
+    if raw.get("end_time"):
         proposal["end_time"] = str(raw["end_time"])
 
-    if "location" in raw and raw["location"]:
+    if raw.get("location"):
         proposal["location"] = str(raw["location"]).strip()
 
     if "attendees" in raw and isinstance(raw["attendees"], list):

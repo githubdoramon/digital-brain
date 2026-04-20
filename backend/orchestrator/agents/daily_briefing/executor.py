@@ -1866,10 +1866,7 @@ def _is_low_value_prep_line(text: str) -> bool:
     cleaned = re.sub(r"\s+", " ", str(text or "")).strip()
     if not cleaned:
         return True
-    for pattern in _LOW_VALUE_PREP_PATTERNS:
-        if pattern.search(cleaned):
-            return True
-    return False
+    return any(pattern.search(cleaned) for pattern in _LOW_VALUE_PREP_PATTERNS)
 
 
 def _generate_markdown(

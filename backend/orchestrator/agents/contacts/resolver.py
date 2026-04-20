@@ -369,10 +369,7 @@ def _is_unknown_person_aggregate_question(text: str) -> bool:
         r"\b(meet|met|meeting|meetings|talk|talked|chat|chatted|call|called|see|saw|visit|visited)\b",
         normalized,
     )
-    if not has_interaction_signal:
-        return False
-
-    return True
+    return has_interaction_signal
 
 
 def _format_conversation_for_prompt(conversation_messages: list[dict[str, str]]) -> str:
@@ -479,9 +476,7 @@ def _should_attempt_fast_person_extraction(text: str) -> bool:
         return False
     if _is_unknown_person_aggregate_question(normalized):
         return True
-    if _SHORT_CIRCUIT_BLOCKERS_PATTERN.search(normalized):
-        return False
-    return True
+    return not _SHORT_CIRCUIT_BLOCKERS_PATTERN.search(normalized)
 
 
 def _extract_shared_possessive_relationship_mentions(text: str) -> list[str]:
@@ -567,13 +562,11 @@ def _fast_extract_people_from_text(
         people.append(cleaned)
         return True
 
-    if re.search(r"\b(i|me|my|we|us|our)\b", raw_text, flags=re.IGNORECASE) and re.search(
+    if (re.search(r"\b(i|me|my|we|us|our)\b", raw_text, flags=re.IGNORECASE) and re.search(
         r"\b(meet|met|talk|talked|spoke|speak|chat|chatted|call|called|text|texted|email|emailed|see|saw|visit|visited|had lunch|had dinner|had drinks|went with|met with)\b",
         raw_text,
         flags=re.IGNORECASE,
-    ):
-        inferred_user = _append_person("user") or inferred_user
-    elif re.match(
+    )) or re.match(
         r"^(had\s+(?:lunch|dinner)\s+with|met\s+with|saw\s+[A-Z]|visited\s+[A-Z]|called\s+[A-Z])",
         raw_text,
         flags=re.IGNORECASE,
@@ -862,7 +855,7 @@ def _is_org_title_phrase(value: str) -> bool:
 
     if tokens & org_title_keywords:
         return True
-    return text.startswith("head of ") or text.startswith("vice president")
+    return text.startswith(("head of ", "vice president"))
 
 
 def _detect_split_possessive_title_errors(
@@ -2405,10 +2398,7 @@ def _parse_nested_relationship(text: str) -> Optional[list[str]]:
     text_lower = text.lower().strip()
 
     if "'s " in text_lower or "s' " in text_lower:
-        if "'s " in text_lower:
-            parts = text.split("'s ", 1)
-        else:
-            parts = text.split("s' ", 1)
+        parts = text.split("'s ", 1) if "'s " in text_lower else text.split("s' ", 1)
 
         if len(parts) == 2:
             part1 = parts[0].strip()
@@ -2991,7 +2981,7 @@ def _resolve_via_relationship(
                 rel_map[other_type].append(contact_data)
 
     # Direct match
-    if relationship_type in rel_map and rel_map[relationship_type]:
+    if rel_map.get(relationship_type):
         matches = rel_map[relationship_type]
         logger.debug("[contact_resolver_inner] Direct match found: %s", matches)
 
@@ -3019,7 +3009,7 @@ def _resolve_via_relationship(
     logger.debug("[contact_resolver_inner] Related types: %s", related_types)
 
     for related_type in related_types:
-        if related_type in rel_map and rel_map[related_type]:
+        if rel_map.get(related_type):
             matches = rel_map[related_type]
 
             if len(matches) == 1:
@@ -3420,10 +3410,7 @@ def _relationship_exists_one_way(
         return False
 
     relationships = rels.get("relationships", [])
-    for rel in relationships:
-        if rel.get("contact_id") == to_contact_id:
-            return True
-    return False
+    return any(rel.get("contact_id") == to_contact_id for rel in relationships)
 
 
 def _build_relationship_edge_cache(
@@ -3595,13 +3582,12 @@ def _suggest_missing_relationships(
 
         person_contact_id = person_resolution.get("contact_id")
         anchor_contact_id = anchor_resolution.get("contact_id")
-        if person_contact_id and anchor_contact_id:
-            if _relationship_exists_cached(
-                person_contact_id,
-                anchor_contact_id,
-                relationship_edges=relationship_edges,
-            ):
-                continue
+        if person_contact_id and anchor_contact_id and _relationship_exists_cached(
+            person_contact_id,
+            anchor_contact_id,
+            relationship_edges=relationship_edges,
+        ):
+            continue
 
         person_profession = _profession_for(person_text)
         anchor_profession = _profession_for(anchor_text)

@@ -7,7 +7,14 @@ import psycopg
 from psycopg import sql
 from psycopg.rows import dict_row
 
-from config import POSTGRES_USER, POSTGRES_PASSWORD, POSTGRES_DB, POSTGRES_HOST, POSTGRES_PORT, POSTGRES_SCHEMA
+from config import (
+    POSTGRES_DB,
+    POSTGRES_HOST,
+    POSTGRES_PASSWORD,
+    POSTGRES_PORT,
+    POSTGRES_SCHEMA,
+    POSTGRES_USER,
+)
 from observability.logger import get_runtime_logger
 
 logger = get_runtime_logger(__name__)

@@ -243,10 +243,7 @@ def search_memories(
 
     doc_ids = set(vec_docs) | set(bm_docs)
     if span or normalized_tags:
-        if normalized_query:
-            doc_ids = doc_ids & set(st_docs)
-        else:
-            doc_ids = set(st_docs)
+        doc_ids = doc_ids & set(st_docs) if normalized_query else set(st_docs)
     doc_scores: dict[str, float] = {}
     for doc_id in doc_ids:
         v = vec_docs.get(doc_id, 0.0)
@@ -297,9 +294,7 @@ def search_memories(
 
         materialized_candidates: list[tuple[str, str, float]] = []
         for item_id, kind, score in temporal_candidates:
-            if kind == "event" and item_id in event_lookup_all:
-                materialized_candidates.append((item_id, kind, score))
-            elif kind == "document" and item_id in doc_lookup_all:
+            if (kind == "event" and item_id in event_lookup_all) or (kind == "document" and item_id in doc_lookup_all):
                 materialized_candidates.append((item_id, kind, score))
         if materialized_candidates:
             temporal_candidates = materialized_candidates

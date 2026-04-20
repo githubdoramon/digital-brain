@@ -7,6 +7,7 @@ These functions build context that gets injected into prompts:
 - Self context (user information)
 """
 
+import contextlib
 from datetime import datetime, timezone
 from typing import Any, Optional
 
@@ -158,10 +159,8 @@ def get_location_context(client_context: Optional[dict[str, Any]]) -> Optional[s
 
         accuracy = location.get("accuracy_m")
         if accuracy is not None:
-            try:
+            with contextlib.suppress(TypeError, ValueError):
                 lines.append(f"- Location accuracy: {round(float(accuracy), 1)} meters")
-            except (TypeError, ValueError):
-                pass
 
         captured_at = str(location.get("captured_at") or "").strip()
         if captured_at:

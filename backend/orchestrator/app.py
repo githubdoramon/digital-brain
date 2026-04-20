@@ -102,7 +102,7 @@ def _resolve_session_context(
 
 
 @asynccontextmanager
-async def lifespan(app: FastAPI):
+async def lifespan(_app: FastAPI):
     configure_logging()
     install_stdout_logger()
     try:

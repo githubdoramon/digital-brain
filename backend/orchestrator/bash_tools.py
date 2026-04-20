@@ -110,7 +110,7 @@ def execute_bash(
     try:
         result = subprocess.run(
             command,
-            shell=True,
+            check=False, shell=True,
             capture_output=True,
             text=True,
             timeout=timeout,

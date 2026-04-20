@@ -4,7 +4,7 @@ Pytest configuration and shared fixtures for agent tests.
 
 import os
 import sys
-from typing import Any
+from typing import Any, Optional
 from unittest.mock import MagicMock
 
 import pytest
@@ -33,7 +33,7 @@ def mock_llm_response():
     """Factory fixture for mock LLM responses."""
     def _create_response(
         content: str = "",
-        tool_calls: list[dict[str, Any]] = None,
+        tool_calls: Optional[list[dict[str, Any]]] = None,
     ) -> dict[str, Any]:
         response = {
             "message": {

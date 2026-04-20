@@ -526,7 +526,7 @@ class TestIntentRouterIntegration:
 
     def test_router_tool_groups_match_registry(self, router, registry):
         """Test router tool groups align with registry."""
-        for group_name in TOOL_GROUPS.keys():
+        for group_name in TOOL_GROUPS:
             # Each tool group should be represented in registry
             tools = registry.get_tools_for_groups([group_name])
             tool_names = [t.name for t in tools]

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import os
 import threading
 import time
@@ -148,10 +149,8 @@ def _normalize_location(location: dict[str, Any] | None) -> dict[str, Any] | Non
 
     accuracy = location.get("accuracy_m")
     if accuracy is not None:
-        try:
+        with contextlib.suppress(TypeError, ValueError):
             normalized["accuracy_m"] = round(max(0.0, float(accuracy)), 1)
-        except (TypeError, ValueError):
-            pass
 
     captured_at = str(location.get("captured_at") or "").strip()
     if captured_at:

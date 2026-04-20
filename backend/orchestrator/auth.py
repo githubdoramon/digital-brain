@@ -80,14 +80,14 @@ def verify_google_token(token: str) -> dict:
         # Invalid token
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail=f"Invalid authentication token: {str(e)}",
+            detail=f"Invalid authentication token: {e!s}",
         )
     except Exception as e:
         logger.exception("Authentication failed")
         # Other errors
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail=f"Authentication failed: {str(e)}",
+            detail=f"Authentication failed: {e!s}",
         )
 
 

@@ -695,11 +695,7 @@ class ToolExecutionCoordinator:
         def _walk(value: Any) -> None:
             if isinstance(value, dict):
                 for key, item in value.items():
-                    if isinstance(key, str) and key.endswith("_id") and isinstance(item, str):
-                        text = item.strip()
-                        if text:
-                            collected.append(text)
-                    elif key == "id" and isinstance(item, str):
+                    if (isinstance(key, str) and key.endswith("_id") and isinstance(item, str)) or (key == "id" and isinstance(item, str)):
                         text = item.strip()
                         if text:
                             collected.append(text)
@@ -916,9 +912,7 @@ class ToolExecutionCoordinator:
         if result.get("error"):
             return True
         validation = result.get("_validation")
-        if isinstance(validation, dict) and validation:
-            return True
-        return False
+        return bool(isinstance(validation, dict) and validation)
 
     def _compact_search_memories_result(
         self,
@@ -1122,9 +1116,7 @@ class ToolExecutionCoordinator:
             return True
 
         detail_priority = self._tool_detail_priority(tool_name, args=args, result=result)
-        if detail_priority == "high" and raw_chars <= int(available_chars * 1.15):
-            return True
-        return False
+        return bool(detail_priority == "high" and raw_chars <= int(available_chars * 1.15))
 
     def _tool_payload_exceeds_cap(self, payload: dict[str, Any], cap: int) -> bool:
         return self._serialized_size(payload) > cap

@@ -25,16 +25,50 @@ select = [
     "B",      # flake8-bugbear
     "C4",     # flake8-comprehensions
     "UP",     # pyupgrade
+    "RUF",    # Ruff-specific rules (unused noqa, mutable defaults, etc.)
+    "PIE",    # flake8-pie (dead code, unnecessary patterns)
+    "SIM",    # flake8-simplify
+    "PLW",    # Pylint warnings
+    "ARG",    # flake8-unused-arguments
 ]
 ignore = [
-    "E501",   # line too long (handled by formatter)
-    "B008",   # do not perform function calls in argument defaults
-    "B904",   # raise without from inside except
+    "E501",    # line too long (handled by formatter)
+    "B008",    # function calls in argument defaults
+    "B904",    # raise without from inside except
+    "RUF001",  # ambiguous unicode character (string) — intentional in user-facing text
+    "RUF002",  # ambiguous unicode character (docstring) — intentional in user-facing text
+    "RUF003",  # ambiguous unicode character (comment) — intentional in comments
+    "SIM102",  # nested ifs — often clearer than combined conditions
+    "SIM117",  # multiple with statements — readability preference
+    "PLW0603", # global statement — allowed for module-level state
+    "PLW2901", # redefined loop name — harmless in loop bodies
+    "PLW0108", # unnecessary lambda — indirection often aids readability / handler dispatch
 ]
 
 [tool.ruff.lint.isort]
 known-first-party = ["agent", "tools", "observability", "prompts"]
 
+# ARG rules are enforced globally, but signature-conforming dispatch patterns
+# (handlers, agent profiles, FastAPI routes, test fixtures) are exempt because
+# the unused arguments are required by the dispatcher/framework contract.
+[tool.ruff.lint.per-file-ignores]
+"tools/handlers/**" = ["ARG"]
+"tools/validators/**" = ["ARG"]
+"commands/handlers/**" = ["ARG"]
+"agents/**" = ["ARG"]
+"routes/**" = ["ARG"]
+"tests/**" = ["ARG"]
+
 [tool.ruff.format]
 quote-style = "double"
 indent-style = "space"
+
+# Silence basedpyright/pyright's unused-* warnings — ruff's pyflakes covers the
+# real cases and basedpyright's reportUnusedFunction flags module-private
+# helpers even when they have in-file callers (false positive in Cursor).
+[tool.pyright]
+reportUnusedImport = false
+reportUnusedVariable = false
+reportUnusedFunction = false
+reportUnusedClass = false
+reportUnusedExpression = false

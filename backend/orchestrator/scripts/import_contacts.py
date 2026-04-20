@@ -25,8 +25,8 @@ from uuid import uuid4
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from contacts import get_contact, ingest_contact, list_contacts, normalize_email  # noqa: E402
-from schemas import ContactIn  # noqa: E402
+from contacts import get_contact, ingest_contact, list_contacts, normalize_email
+from schemas import ContactIn
 
 
 @dataclass
@@ -167,7 +167,7 @@ def _fuzzy_match_contact(
                 name_first = name_clean[0].lower()
                 if candidate_first != name_first:
                     continue
-                score = int(round(fuzz.token_sort_ratio(candidate_clean, name_clean)))
+                score = round(fuzz.token_sort_ratio(candidate_clean, name_clean))
                 if score > best_score:
                     best_score = score
                     best_reason = f"name match: {candidate_clean} -> {name_clean}"

@@ -468,7 +468,7 @@ def ingest_event(event: EventIn) -> None:
     normalized_tags = _normalize_strings(event.tags)
     title_text = event.title or ""
     summary_text = event.summary or ""
-    suggested_tags = _suggest_event_tags(title_text, summary_text, normalized_tags, types=types)
+    suggested_tags = _suggest_event_tags(title_text, summary_text, normalized_tags)
     merged_tags = _merge_tag_lists(normalized_tags, suggested_tags)
 
     embedding_payload = {**event.dict(), "tags": merged_tags, "types": types}

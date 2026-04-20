@@ -88,7 +88,7 @@ def test_search_contacts_email_mode_skips_vector_candidates(monkeypatch):
     monkeypatch.setattr(
         contacts, "_load_contacts", lambda *_a, **_k: [_contact("contact-1", "Jane")]
     )
-    monkeypatch.setattr(contacts, "list_contacts", lambda: [])
+    monkeypatch.setattr(contacts, "list_contacts", list)
 
     def fake_vector(*_args, **_kwargs):
         calls["vector_called"] += 1
@@ -123,7 +123,7 @@ def test_search_contacts_any_non_email_query_ignores_email_domain_noise(monkeypa
     monkeypatch.setattr(contacts, "_lexical_candidate_contact_ids", fake_lexical)
     monkeypatch.setattr(contacts, "_vector_candidate_contact_scores", fake_vector)
     monkeypatch.setattr(contacts, "_load_contacts", fake_load)
-    monkeypatch.setattr(contacts, "list_contacts", lambda: [])
+    monkeypatch.setattr(contacts, "list_contacts", list)
 
     results = contacts.search_contacts("acme's ceo", search_by="any", limit=5)
 
@@ -146,7 +146,7 @@ def test_search_contacts_enforces_minimum_confidence_floor(monkeypatch):
         "_load_contacts",
         lambda *_a, **_k: [_contact("contact-1", "John Smith")],
     )
-    monkeypatch.setattr(contacts, "list_contacts", lambda: [])
+    monkeypatch.setattr(contacts, "list_contacts", list)
 
     # Force fuzzy score below 0.6 confidence (score < 60).
     from rapidfuzz import fuzz
@@ -167,7 +167,7 @@ def test_search_contacts_rejects_low_vector_confidence(monkeypatch):
             _contact("c1", "Low Vector", comments="Chief Executive Officer at Acme")
         ],
     )
-    monkeypatch.setattr(contacts, "list_contacts", lambda: [])
+    monkeypatch.setattr(contacts, "list_contacts", list)
 
     results = contacts.search_contacts("CEO at Acme", search_by="name", limit=5)
     assert results == []
@@ -198,7 +198,7 @@ def test_search_contacts_comment_weight_can_beat_email_match(monkeypatch):
             ),
         ],
     )
-    monkeypatch.setattr(contacts, "list_contacts", lambda: [])
+    monkeypatch.setattr(contacts, "list_contacts", list)
 
     # Includes "@" to activate email-intent scoring in "any" mode.
     results = contacts.search_contacts("@acme.example", search_by="any", limit=5)
@@ -241,7 +241,7 @@ def test_search_contacts_prioritizes_all_query_name_parts(monkeypatch):
             _contact("contact:alice-brooks", "Alice Brooks"),
         ],
     )
-    monkeypatch.setattr(contacts, "list_contacts", lambda: [])
+    monkeypatch.setattr(contacts, "list_contacts", list)
 
     results = contacts.search_contacts("Morgan Brooks", search_by="name", limit=5)
 

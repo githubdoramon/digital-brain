@@ -8,13 +8,13 @@ from db import get_conn
 from schemas import TodoIn
 
 __all__ = [
+    "delete_todo",
+    "get_todo",
     "ingest_todo",
-    "list_todos",
     "list_event_todos",
+    "list_todos",
     "list_unlinked_relevant_todos",
     "update_todo_status",
-    "get_todo",
-    "delete_todo",
 ]
 
 TODO_STATUS_PENDING = "pending"

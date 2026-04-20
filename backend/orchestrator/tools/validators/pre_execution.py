@@ -113,10 +113,7 @@ class PreExecutionValidator:
         semantic_error = self._semantic_validate(tool_name, params)
         if semantic_error:
             is_valid = False
-            if error:
-                error = f"{error}; {semantic_error}"
-            else:
-                error = semantic_error
+            error = f"{error}; {semantic_error}" if error else semantic_error
             suggestions = suggestions or []
             suggestions.extend(self._semantic_repair_hints(tool_name, params))
 
@@ -325,9 +322,8 @@ class PreExecutionValidator:
             ):
                 hints.append("Use an object for 'arguments' when calling a Home Assistant MCP tool")
 
-        if tool_name == "search_memories":
-            if not str(params.get("query") or "").strip():
-                hints.append("Provide a focused 'query' describing the topic to retrieve")
+        if tool_name == "search_memories" and not str(params.get("query") or "").strip():
+            hints.append("Provide a focused 'query' describing the topic to retrieve")
 
         if tool_name == "get_events":
             action = GetEventsAction.from_value(params.get("action"))

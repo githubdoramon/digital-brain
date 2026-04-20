@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -56,10 +56,8 @@ async def lifespan(app: FastAPI):
 
     # 4. Shutdown
     mqtt_task.cancel()
-    try:
+    with suppress(asyncio.CancelledError):
         await mqtt_task
-    except asyncio.CancelledError:
-        pass
     logger.info("[app] Shutdown complete")
 
 

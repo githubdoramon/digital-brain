@@ -35,19 +35,19 @@ from mcp.servers.home_assistant import (
 )
 
 __all__ = [
+    "MCPAuthError",
     # Client
     "MCPClient",
-    "MCPTool",
-    "MCPToolResult",
     "MCPClientError",
-    "MCPAuthError",
     "MCPConnectionError",
     # Registry
     "MCPRegistry",
-    "get_registry",
+    "MCPTool",
+    "MCPToolResult",
+    "call_ha_tool",
     # Home Assistant shortcuts
     "get_ha_client",
+    "get_registry",
     "is_ha_configured",
     "list_ha_tools",
-    "call_ha_tool",
 ]

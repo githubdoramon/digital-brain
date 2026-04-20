@@ -12,9 +12,9 @@ from .contracts import ToolContract, ToolParameter
 from .registry import TOOL_GROUPS, ToolRegistry, get_registry
 
 __all__ = [
+    "TOOL_GROUPS",
     "ToolContract",
     "ToolParameter",
     "ToolRegistry",
     "get_registry",
-    "TOOL_GROUPS",
 ]

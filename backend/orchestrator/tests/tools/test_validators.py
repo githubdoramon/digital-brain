@@ -48,7 +48,7 @@ class TestPreExecutionValidation:
 
     def test_validate_valid_params(self, sample_contract):
         """Test validation of valid parameters."""
-        is_valid, error, suggestions = sample_contract.validate_params(
+        is_valid, error, _suggestions = sample_contract.validate_params(
             {
                 "query": "test search",
                 "limit": 20,
@@ -60,7 +60,7 @@ class TestPreExecutionValidation:
 
     def test_validate_missing_required(self, sample_contract):
         """Test validation catches missing required params."""
-        is_valid, error, suggestions = sample_contract.validate_params(
+        is_valid, error, _suggestions = sample_contract.validate_params(
             {
                 "limit": 10,
             }
@@ -72,7 +72,7 @@ class TestPreExecutionValidation:
 
     def test_validate_wrong_type(self, sample_contract):
         """Test validation catches wrong types."""
-        is_valid, error, suggestions = sample_contract.validate_params(
+        is_valid, error, _suggestions = sample_contract.validate_params(
             {
                 "query": "test",
                 "limit": "not_a_number",
@@ -85,7 +85,7 @@ class TestPreExecutionValidation:
 
     def test_validate_out_of_range(self, sample_contract):
         """Test validation catches out of range values."""
-        is_valid, error, suggestions = sample_contract.validate_params(
+        is_valid, error, _suggestions = sample_contract.validate_params(
             {
                 "query": "test",
                 "limit": 200,

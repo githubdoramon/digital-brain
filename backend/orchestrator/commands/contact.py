@@ -785,4 +785,4 @@ def confirm_contact_command(
         raise
     except Exception as exc:
         logger.exception("[contact_confirm] Failed to apply contact changes: %s", exc)
-        raise HTTPException(status_code=500, detail=f"Failed to apply contact changes: {str(exc)}")
+        raise HTTPException(status_code=500, detail=f"Failed to apply contact changes: {exc!s}")

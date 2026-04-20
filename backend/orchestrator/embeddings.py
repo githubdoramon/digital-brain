@@ -32,8 +32,8 @@ def _is_context_length_error(message: str) -> bool:
     return (
         "input length exceeds the context length" in normalized
         or "exceeds the context length" in normalized
-        or "context length" in normalized
-        and "exceeds" in normalized
+        or ("context length" in normalized
+        and "exceeds" in normalized)
     )
 
 

@@ -8,6 +8,7 @@ with support for both synchronous and streaming execution.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import os
 import subprocess
@@ -106,7 +107,7 @@ class SkillScriptRunner:
                 "returncode": -1,
             }
 
-        cmd = interpreter + [str(script_path)]
+        cmd = [*interpreter, str(script_path)]
         input_data = json.dumps(args or {})
 
         # Build environment
@@ -119,6 +120,7 @@ class SkillScriptRunner:
         try:
             result = subprocess.run(
                 cmd,
+                check=False,
                 input=input_data,
                 capture_output=True,
                 text=True,
@@ -195,7 +197,7 @@ class SkillScriptRunner:
                 "returncode": -1,
             }
 
-        cmd = interpreter + [str(script_path)]
+        cmd = [*interpreter, str(script_path)]
 
         # Build environment
         script_env = os.environ.copy()
@@ -260,10 +262,8 @@ class SkillScriptRunner:
                     if on_output_async:
                         await on_output_async(decoded)
                 elif decoded.startswith("RESULT: "):
-                    try:
+                    with contextlib.suppress(json.JSONDecodeError):
                         result_data = json.loads(decoded[8:])
-                    except json.JSONDecodeError:
-                        pass
                 elif on_output:
                     on_output(decoded)
                 elif on_output_async:
@@ -319,7 +319,7 @@ class SkillScriptRunner:
         # Try last non-empty line as JSON
         for line in reversed(lines):
             line = line.strip()
-            if line and (line.startswith("{") or line.startswith("[")):
+            if line and (line.startswith(("{", "["))):
                 try:
                     return json.loads(line)
                 except json.JSONDecodeError:

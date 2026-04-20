@@ -12,7 +12,6 @@ from schemas import (
     TelemetryPayload,
 )
 
-
 # ---------------------------------------------------------------------------
 # TelemetryPayload — the schema robots publish to MQTT
 # ---------------------------------------------------------------------------

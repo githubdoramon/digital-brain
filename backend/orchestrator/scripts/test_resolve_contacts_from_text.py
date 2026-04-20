@@ -85,7 +85,7 @@ def main() -> int:
     os.environ["LLM_CHAT_MODEL_FAST"] = args.llm_chat_model_fast or "mistral"
     os.environ["LLM_CHAT_MODEL_SMART"] = args.llm_chat_model_smart or "mistral"
 
-    from agents.contacts.resolver import resolve_contacts_from_text  # noqa: E402
+    from agents.contacts.resolver import resolve_contacts_from_text
 
     try:
         messages = _load_conversation_messages(args.conversation_file)

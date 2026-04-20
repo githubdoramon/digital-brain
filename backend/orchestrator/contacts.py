@@ -14,31 +14,31 @@ from schemas import ContactIn, ContactRelationshipIn, ExternalPerson
 from search_normalization import normalize_search_text
 
 __all__ = [
-    "ingest_contact",
-    "list_contacts",
+    "delete_contact",
+    "delete_contact_relationship",
+    "ensure_contact_for_email",
+    "find_related_contacts",
+    "find_related_types",
     "get_contact",
     "get_contact_by_email",
     "get_contact_by_external_id",
-    "sync_external_contact",
-    "unlink_external_contact",
-    "merge_contacts",
+    "get_contact_relationships",
+    # Relationship resolution functions
+    "get_relationship_type_mappings",
+    "get_self_contact_id",
+    "ingest_contact",
     "list_contact_merge_candidates",
-    "delete_contact",
-    "upsert_contact_relationship",
-    "delete_contact_relationship",
-    "ensure_contact_for_email",
+    "list_contacts",
+    "merge_contacts",
     "normalize_email",
     # Smart contact lookup functions
     "search_contacts",
-    "search_contacts_by_email_domain",
     "search_contacts_by_company",
+    "search_contacts_by_email_domain",
     "search_contacts_by_group_hint",
-    "get_contact_relationships",
-    "find_related_contacts",
-    "get_self_contact_id",
-    # Relationship resolution functions
-    "get_relationship_type_mappings",
-    "find_related_types",
+    "sync_external_contact",
+    "unlink_external_contact",
+    "upsert_contact_relationship",
 ]
 
 MAX_CONTACT_EMBED_CHARS = 4000
@@ -1012,11 +1012,7 @@ def resolve_query(query: str) -> dict[str, Any]:
         comments = normalize_search_text(contact.get("comments") or "")
 
         # Check if any name appears in the query
-        if display_name and display_name in query_norm:
-            contacts_found.append(contact)
-        elif any(alias in query_norm for alias in aliases):
-            contacts_found.append(contact)
-        elif comments and query_norm in comments:
+        if (display_name and display_name in query_norm) or any(alias in query_norm for alias in aliases) or (comments and query_norm in comments):
             contacts_found.append(contact)
 
     return {
@@ -1194,7 +1190,7 @@ def _score_contacts(
                     continue
 
                 if query_lower == name:
-                    if 100 > best_score:
+                    if best_score < 100:
                         best_score = 100
                         match_reason = f"exact name match: {name}"
                     continue

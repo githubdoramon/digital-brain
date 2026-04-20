@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import inspect
 import os
 import re
@@ -288,10 +289,8 @@ def _parse_pdf_with_markdown_extractor(
         )
         return None
     finally:
-        try:
+        with contextlib.suppress(Exception):
             doc.close()
-        except Exception:
-            pass
 
     pages = _extract_markdown_pages(markdown_output)
     raw_text = "\n\n".join(page for page in pages if page).strip()
@@ -685,9 +684,7 @@ def _looks_like_heading(text: str) -> bool:
     if cleaned.endswith(":") and len(cleaned.split()) <= 10:
         return True
     numbered = re.match(r"^(\d+(?:\.\d+){0,3})\s+[A-Z][^\n]{1,70}$", cleaned)
-    if numbered:
-        return True
-    return False
+    return bool(numbered)
 
 
 def _flush_section(

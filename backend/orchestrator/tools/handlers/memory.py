@@ -36,10 +36,7 @@ def handle_search_memories(
     import retrieval
 
     query = args.get("query", question)
-    if wants_all_results(question):
-        limit = None
-    else:
-        limit = args.get("limit", search_limit)
+    limit = None if wants_all_results(question) else args.get("limit", search_limit)
     time_start = args.get("time_start")
     time_end = args.get("time_end")
     contact_ids = args.get("contact_ids")  # Maps to 'people' parameter
@@ -60,9 +57,8 @@ def handle_search_memories(
     results = search_result.get("results", [])
 
     # Update state if provided
-    if state is not None:
-        if results:
-            state.add_fact(f"Found {len(results)} memories matching '{query}'")
+    if state is not None and results:
+        state.add_fact(f"Found {len(results)} memories matching '{query}'")
 
     return {"results": results, "count": len(results)}
 
@@ -222,9 +218,8 @@ def handle_get_events(
         }
 
     # Update state if provided
-    if state is not None:
-        if events:
-            state.add_fact(f"Retrieved {len(events)} event details")
+    if state is not None and events:
+        state.add_fact(f"Retrieved {len(events)} event details")
 
     return {"events": events, "count": len(events)}
 

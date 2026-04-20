@@ -14,8 +14,8 @@ from mcp.servers.home_assistant import (
 )
 
 __all__ = [
+    "call_ha_tool",
     "get_ha_client",
     "is_ha_configured",
     "list_ha_tools",
-    "call_ha_tool",
 ]

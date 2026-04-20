@@ -32,15 +32,15 @@ from typing import Any, cast
 # Add paret directory to path for imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from db import get_conn  # noqa: E402
+from db import get_conn
 from documents import (
-    MAX_CONTENT_CHARS,  # noqa: E402
-    prepare_document_content_for_storage,  # noqa: E402
-    reprocess_document_content,  # noqa: E402
+    MAX_CONTENT_CHARS,
+    prepare_document_content_for_storage,
+    reprocess_document_content,
 )
-from documents import _generate_document_embeddings as generate_document_embeddings  # noqa: E402
-from documents import _replace_document_chunks as replace_document_chunks  # noqa: E402
-from embeddings import embed_text  # noqa: E402
+from documents import _generate_document_embeddings as generate_document_embeddings
+from documents import _replace_document_chunks as replace_document_chunks
+from embeddings import embed_text
 
 logger = logging.getLogger(__name__)
 
@@ -196,7 +196,7 @@ def generate_contact_embed_text(contact: dict[str, Any]) -> str:
     return combined[:MAX_CONTACT_EMBED_CHARS] or "contact"
 
 
-def count_records(table: str, id_col: str) -> int:
+def count_records(table: str) -> int:
     """Count total records in a table."""
     with get_conn() as conn, conn.cursor() as cur:
         cur.execute(cast(Any, f"SELECT COUNT(*) as cnt FROM {table}"))
@@ -420,7 +420,7 @@ def update_contact_embedding(contact_id: str, embedding: Sequence[float]) -> Non
 
 def reembed_events(batch_size: int, dry_run: bool) -> int:
     """Re-embed all events. Returns count of processed records."""
-    total = count_records("events", "id")
+    total = count_records("events")
     print(f"\n[events] Found {total} events to re-embed")
 
     if total == 0:
@@ -472,7 +472,7 @@ def reembed_documents(
     dry_run: bool,
 ) -> int:
     """Re-embed all documents. Returns count of processed records."""
-    total = count_records("documents", "document_id")
+    total = count_records("documents")
     print(f"\n[documents] Found {total} documents to re-embed")
 
     if total == 0:
@@ -542,7 +542,7 @@ def reembed_documents(
 
 def reembed_contacts(batch_size: int, dry_run: bool) -> int:
     """Re-embed all contacts. Returns count of processed records."""
-    total = count_records("contacts", "contact_id")
+    total = count_records("contacts")
     print(f"\n[contacts] Found {total} contacts to re-embed")
 
     if total == 0:

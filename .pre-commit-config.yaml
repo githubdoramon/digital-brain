@@ -6,6 +6,11 @@ repos:
         entry: bash -lc "cd backend/orchestrator && python3 -m ruff check . --fix && git add -u"
         language: system
         pass_filenames: false
+      - id: ruff-robot-gateway
+        name: ruff (backend/robot-gateway)
+        entry: bash -lc "cd backend/robot-gateway && python3 -m ruff check . --fix && git add -u"
+        language: system
+        pass_filenames: false
       - id: eslint-mobile
         name: eslint (mobile)
         entry: bash -lc "cd mobile && npm run lint -- --fix && git add -u"

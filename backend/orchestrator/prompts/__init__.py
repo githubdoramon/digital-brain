@@ -24,12 +24,12 @@ from .system import (
 )
 
 __all__ = [
-    "get_system_prompt",
-    "get_protocol_prompt",
-    "get_bounded_agent_protocol",
-    "get_time_context",
-    "get_tag_context",
-    "get_self_context",
-    "inject_state_context",
     "build_state_message",
+    "get_bounded_agent_protocol",
+    "get_protocol_prompt",
+    "get_self_context",
+    "get_system_prompt",
+    "get_tag_context",
+    "get_time_context",
+    "inject_state_context",
 ]

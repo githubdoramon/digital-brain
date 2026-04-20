@@ -56,10 +56,10 @@ def inject_state_context(
     state_message = build_state_message(state)
 
     if position == "start":
-        return [state_message] + messages
+        return [state_message, *messages]
 
     if position == "end":
-        return messages + [state_message]
+        return [*messages, state_message]
 
     if position == "before_user":
         # Insert before the last user message
@@ -69,7 +69,7 @@ def inject_state_context(
                 result.insert(i, state_message)
                 return result
         # No user message found, append at end
-        return result + [state_message]
+        return [*result, state_message]
 
     return messages
 
@@ -129,7 +129,7 @@ def build_validation_feedback_message(
 def build_tool_result_message(
     tool_call_id: str,
     result: dict[str, Any],
-    tool_name: str,
+    _tool_name: str,
 ) -> dict[str, Any]:
     """
     Build a tool result message.
@@ -137,7 +137,7 @@ def build_tool_result_message(
     Args:
         tool_call_id: The ID of the tool call
         result: The tool execution result
-        tool_name: Name of the tool (for logging)
+        _tool_name: Unused; retained for API parity.
 
     Returns:
         A tool message dict

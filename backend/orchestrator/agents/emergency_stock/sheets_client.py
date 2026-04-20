@@ -6,6 +6,7 @@ Uses a service account JSON to fetch rows from a spreadsheet.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 from typing import Any
@@ -119,10 +120,8 @@ def update_sheet_values(
             response.raise_for_status()
         except httpx.HTTPStatusError as exc:
             detail = response.text
-            try:
+            with contextlib.suppress(ValueError):
                 detail = response.json()
-            except ValueError:
-                pass
             raise RuntimeError(f"Sheet update failed: {exc.response.status_code} {detail}") from exc
 
     return response.json()

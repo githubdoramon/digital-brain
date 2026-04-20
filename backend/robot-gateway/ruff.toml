@@ -1,0 +1,39 @@
+line-length = 100
+target-version = "py39"
+
+[lint]
+select = [
+    "E",      # pycodestyle errors
+    "W",      # pycodestyle warnings
+    "F",      # Pyflakes
+    "I",      # isort
+    "B",      # flake8-bugbear
+    "C4",     # flake8-comprehensions
+    "UP",     # pyupgrade
+    "RUF",    # Ruff-specific rules (unused noqa, mutable defaults, etc.)
+    "PIE",    # flake8-pie (dead code, unnecessary patterns)
+    "SIM",    # flake8-simplify
+    "PLW",    # Pylint warnings
+    "ARG",    # flake8-unused-arguments
+]
+ignore = [
+    "E501",    # line too long (handled by formatter)
+    "B008",    # function calls in argument defaults
+    "B904",    # raise without from inside except
+    "RUF001",  # ambiguous unicode character (string)
+    "RUF002",  # ambiguous unicode character (docstring)
+    "RUF003",  # ambiguous unicode character (comment)
+    "SIM102",  # nested ifs — often clearer than combined conditions
+    "SIM117",  # multiple with statements — readability preference
+    "PLW0603", # global statement — allowed for module-level state
+    "PLW2901", # redefined loop name — harmless in loop bodies
+    "PLW0108", # unnecessary lambda — indirection often aids readability / handler dispatch
+]
+
+[lint.per-file-ignores]
+"routes/**" = ["ARG"]
+"tests/**" = ["ARG"]
+
+[format]
+quote-style = "double"
+indent-style = "space"

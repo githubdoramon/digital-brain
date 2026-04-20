@@ -32,7 +32,7 @@ class TestDecodePayload:
         assert result["data"]["accel"] == [1, 2, 3]
 
     def test_utf8_content(self):
-        result = MqttManager._decode_payload('{"name": "robot-\u00e9"}'.encode("utf-8"))
+        result = MqttManager._decode_payload('{"name": "robot-\u00e9"}'.encode())
         assert result["name"] == "robot-\u00e9"
 
     def test_malformed_utf8_does_not_crash(self):

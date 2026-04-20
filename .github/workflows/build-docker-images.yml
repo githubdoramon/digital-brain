@@ -20,6 +20,7 @@ jobs:
       orchestrator: ${{ steps.filter.outputs.orchestrator }}
       robot_gateway: ${{ steps.filter.outputs.robot_gateway }}
       frontend: ${{ steps.filter.outputs.frontend }}
+      mobile: ${{ steps.filter.outputs.mobile }}
 
     steps:
       - name: Checkout repository
@@ -39,6 +40,9 @@ jobs:
               - '.github/workflows/build-docker-images.yml'
             frontend:
               - 'frontend/**'
+              - '.github/workflows/build-docker-images.yml'
+            mobile:
+              - 'mobile/**'
               - '.github/workflows/build-docker-images.yml'
 
   test-orchestrator:
@@ -307,9 +311,63 @@ jobs:
             fi
           done
 
+  lint-frontend:
+    name: Lint Frontend
+    needs: detect-changes
+    if: needs.detect-changes.outputs.frontend == 'true'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend/web
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: frontend/web/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run ESLint
+        run: npx eslint .
+
+  lint-mobile:
+    name: Lint Mobile
+    needs: detect-changes
+    if: needs.detect-changes.outputs.mobile == 'true'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: mobile
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: mobile/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run ESLint
+        run: npm run lint
+
   build-frontend:
     name: Build Frontend Image
-    needs: detect-changes
+    needs:
+      - detect-changes
+      - lint-frontend
     if: needs.detect-changes.outputs.frontend == 'true'
     runs-on: ubuntu-latest
     permissions:
@@ -411,7 +469,9 @@ jobs:
       - build-orchestrator
       - test-robot-gateway
       - build-robot-gateway
+      - lint-frontend
       - build-frontend
+      - lint-mobile
     if: always()
     runs-on: ubuntu-latest
 
@@ -423,20 +483,26 @@ jobs:
           ORCHESTRATOR_CHANGED='${{ needs.detect-changes.outputs.orchestrator }}'
           ROBOT_GATEWAY_CHANGED='${{ needs.detect-changes.outputs.robot_gateway }}'
           FRONTEND_CHANGED='${{ needs.detect-changes.outputs.frontend }}'
+          MOBILE_CHANGED='${{ needs.detect-changes.outputs.mobile }}'
           TEST_ORCH_RESULT='${{ needs.test-orchestrator.result }}'
           BUILD_ORCH_RESULT='${{ needs.build-orchestrator.result }}'
           TEST_GW_RESULT='${{ needs.test-robot-gateway.result }}'
           BUILD_GW_RESULT='${{ needs.build-robot-gateway.result }}'
+          LINT_FRONTEND_RESULT='${{ needs.lint-frontend.result }}'
           BUILD_FRONTEND_RESULT='${{ needs.build-frontend.result }}'
+          LINT_MOBILE_RESULT='${{ needs.lint-mobile.result }}'
 
           echo "orchestrator changed: ${ORCHESTRATOR_CHANGED}"
           echo "robot-gateway changed: ${ROBOT_GATEWAY_CHANGED}"
           echo "frontend changed: ${FRONTEND_CHANGED}"
+          echo "mobile changed: ${MOBILE_CHANGED}"
           echo "test-orchestrator: ${TEST_ORCH_RESULT}"
           echo "build-orchestrator: ${BUILD_ORCH_RESULT}"
           echo "test-robot-gateway: ${TEST_GW_RESULT}"
           echo "build-robot-gateway: ${BUILD_GW_RESULT}"
+          echo "lint-frontend: ${LINT_FRONTEND_RESULT}"
           echo "build-frontend: ${BUILD_FRONTEND_RESULT}"
+          echo "lint-mobile: ${LINT_MOBILE_RESULT}"
 
           if [ "${ORCHESTRATOR_CHANGED}" = "true" ]; then
             if [ "${TEST_ORCH_RESULT}" != "success" ]; then
@@ -461,8 +527,19 @@ jobs:
           fi
 
           if [ "${FRONTEND_CHANGED}" = "true" ]; then
+            if [ "${LINT_FRONTEND_RESULT}" != "success" ]; then
+              echo "Frontend lint did not succeed."
+              exit 1
+            fi
             if [ "${BUILD_FRONTEND_RESULT}" != "success" ]; then
               echo "Frontend image build did not succeed."
+              exit 1
+            fi
+          fi
+
+          if [ "${MOBILE_CHANGED}" = "true" ]; then
+            if [ "${LINT_MOBILE_RESULT}" != "success" ]; then
+              echo "Mobile lint did not succeed."
               exit 1
             fi
           fi

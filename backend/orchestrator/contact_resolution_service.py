@@ -103,7 +103,7 @@ def resolve_contacts_request(data: dict[str, Any]) -> dict[str, Any]:
             logger.error("[contact_resolution_service] Critical LLM outage: %s", e)
             raise
         logger.exception("[contact_resolution_service] Error: %s", e)
-        return {"status": "error", "message": f"Internal error: {str(e)}"}
+        return {"status": "error", "message": f"Internal error: {e!s}"}
 
 
 __all__ = ["resolve_contacts_request"]

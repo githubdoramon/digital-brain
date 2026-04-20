@@ -604,11 +604,10 @@ def confirm_event_command(
 
         if where:
             place_id = place_id_map.get(where)
-        if place_id is None:
-            if isinstance(matched_place, dict):
-                matched_place_id = str(matched_place.get("place_id") or "").strip()
-                if matched_place_id:
-                    place_id = matched_place_id
+        if place_id is None and isinstance(matched_place, dict):
+            matched_place_id = str(matched_place.get("place_id") or "").strip()
+            if matched_place_id:
+                place_id = matched_place_id
 
         if "place_id" in normalized_modifications:
             place_id = explicit_place_id or None
@@ -778,4 +777,4 @@ def confirm_event_command(
         raise
     except Exception as exc:
         logger.exception("[event_confirm] Failed to create event: %s", exc)
-        raise HTTPException(status_code=500, detail=f"Failed to create event: {str(exc)}")
+        raise HTTPException(status_code=500, detail=f"Failed to create event: {exc!s}")

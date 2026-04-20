@@ -359,7 +359,7 @@ def _reconcile_fact(
     return "NOOP"
 
 
-def _get_contacts_summary(user_email: str) -> str:
+def _get_contacts_summary(_user_email: str) -> str:
     """Build a lightweight summary of the user's contacts for dedup context."""
     try:
         import contacts

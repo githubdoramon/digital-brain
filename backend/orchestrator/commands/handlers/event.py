@@ -144,10 +144,7 @@ def _should_autofill_inferred_place(inferred_location: dict[str, Any]) -> bool:
         return True
 
     distance_m = _safe_float(inferred_location.get("distance_m"))
-    if distance_m is not None and distance_m <= _INFERRED_PLACE_AUTO_MATCH_MAX_DISTANCE_M:
-        return True
-
-    return False
+    return bool(distance_m is not None and distance_m <= _INFERRED_PLACE_AUTO_MATCH_MAX_DISTANCE_M)
 
 
 def _extract_contact_scoped_place_hint(where_text: str) -> dict[str, str] | None:
@@ -1005,7 +1002,7 @@ def _resolve_generic_terms_with_relationships(
         logger.debug("[generic_resolution]   Cleaned to: '%s'", cleaned)
 
         # Direct match first
-        if cleaned in rel_map and rel_map[cleaned]:
+        if rel_map.get(cleaned):
             contact = rel_map[cleaned][0]
             resolved_name = contact.get("display_name", term)
             resolved[term] = resolved_name
@@ -1026,7 +1023,7 @@ def _resolve_generic_terms_with_relationships(
         )
 
         for rel_type in possible_types:
-            if rel_type in rel_map and rel_map[rel_type]:
+            if rel_map.get(rel_type):
                 contact = rel_map[rel_type][0]
                 resolved_name = contact.get("display_name", term)
                 resolved[term] = resolved_name

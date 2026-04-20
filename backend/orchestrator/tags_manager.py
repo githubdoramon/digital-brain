@@ -290,8 +290,6 @@ def _suggest_event_tags(
     title: str | None,
     summary: str | None,
     tags: Sequence[str],
-    *,
-    types: Sequence[str] | None = None,
 ) -> list[str]:
     if not _needs_additional_tags(tags):
         return []

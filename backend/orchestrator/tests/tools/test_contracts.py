@@ -110,7 +110,7 @@ class TestToolContract:
         """Test validation of valid parameters."""
         params = {"query": "test search", "limit": 5}
 
-        is_valid, error, suggestions = simple_contract.validate_params(params)
+        is_valid, error, _suggestions = simple_contract.validate_params(params)
 
         assert is_valid is True
         assert error is None
@@ -119,7 +119,7 @@ class TestToolContract:
         """Test validation catches missing required params."""
         params = {"limit": 5}  # Missing 'query'
 
-        is_valid, error, suggestions = simple_contract.validate_params(params)
+        is_valid, error, _suggestions = simple_contract.validate_params(params)
 
         assert is_valid is False
         assert error is not None
@@ -129,7 +129,7 @@ class TestToolContract:
         """Test validation catches wrong parameter types."""
         params = {"query": "test", "limit": "not a number"}
 
-        is_valid, error, suggestions = simple_contract.validate_params(params)
+        is_valid, error, _suggestions = simple_contract.validate_params(params)
 
         assert is_valid is False
         assert error is not None
@@ -139,7 +139,7 @@ class TestToolContract:
         """Test validation catches unknown parameters."""
         params = {"query": "test", "unknown_param": "value"}
 
-        is_valid, error, suggestions = simple_contract.validate_params(params)
+        is_valid, error, _suggestions = simple_contract.validate_params(params)
 
         assert is_valid is False
         assert error is not None
@@ -300,11 +300,11 @@ class TestContractWithValidators:
         )
 
         # Safe path passes
-        is_valid, error, _ = contract.validate_params({"path": "/tmp/notes.txt"})
+        is_valid, _error, _ = contract.validate_params({"path": "/tmp/notes.txt"})
         assert is_valid is True
 
         # Dangerous path fails
-        is_valid, error, _ = contract.validate_params({"path": "../../../etc/passwd"})
+        is_valid, _error, _ = contract.validate_params({"path": "../../../etc/passwd"})
         assert is_valid is False
 
 

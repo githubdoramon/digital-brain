@@ -13,6 +13,7 @@ The controller:
 6. Decides when to continue, ask user, or stop
 """
 
+import contextlib
 import json
 import os
 import re
@@ -289,7 +290,6 @@ class AgentController:
         *,
         state: AgentState,
         tools: list[dict[str, Any]],
-        run_id: str,
     ) -> tuple[LimitAction, list[dict[str, Any]], Any | None, str | None]:
         """Run hard/no-progress checks and attempt recovery escalation when possible."""
         hard_violation = self.limit_checker.check(state)
@@ -300,7 +300,6 @@ class AgentController:
         if no_progress_violation:
             if self._should_escalate_tool_visibility(state, no_progress_violation):
                 escalated_tools = self._escalate_tool_visibility(
-                    run_id=run_id,
                     state=state,
                     reason=no_progress_violation.message,
                 )
@@ -392,7 +391,6 @@ class AgentController:
         limit_action, tools, violation, escalation_reason = self._check_limits_and_recovery(
             state=state,
             tools=tools,
-            run_id=run_id,
         )
         if limit_action is not LimitAction.OK:
             return limit_action, tools, violation, escalation_reason
@@ -603,7 +601,6 @@ class AgentController:
 
                     if self._should_escalate_tool_visibility(state):
                         tools = self._escalate_tool_visibility(
-                            run_id=run_id,
                             state=state,
                             reason="Restricted tools produced repeated failures or empty results",
                         )
@@ -950,7 +947,6 @@ class AgentController:
 
                     if self._should_escalate_tool_visibility(state):
                         tools = self._escalate_tool_visibility(
-                            run_id=run_id,
                             state=state,
                             reason="Restricted tools produced repeated failures or empty results",
                         )
@@ -1180,7 +1176,6 @@ class AgentController:
 
     def _escalate_tool_visibility(
         self,
-        run_id: str,
         state: AgentState,
         reason: str,
     ) -> list[dict[str, Any]]:
@@ -1279,10 +1274,8 @@ class AgentController:
 
                     accuracy = location.get("accuracy_m")
                     if accuracy is not None:
-                        try:
+                        with contextlib.suppress(TypeError, ValueError):
                             normalized_location["accuracy_m"] = round(float(str(accuracy)), 1)
-                        except (TypeError, ValueError):
-                            pass
 
                     captured_at = str(location.get("captured_at") or "").strip()
                     if captured_at:

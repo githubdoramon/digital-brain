@@ -762,12 +762,12 @@ def _create_ask_run(user_email: str, thread_id: str | None) -> str:
 
 class _SessionContext:
     __slots__ = (
-        "session_id",
-        "question",
         "is_new_session",
         "is_reset_only",
-        "user_email",
         "original_question",
+        "question",
+        "session_id",
+        "user_email",
     )
 
     def __init__(

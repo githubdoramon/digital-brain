@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import asyncio
 import json
-from typing import Any, Callable, Coroutine
+from collections.abc import Callable, Coroutine
+from typing import Any
 
 import aiomqtt
 
-from config import MQTT_BROKER_HOST, MQTT_BROKER_PORT, MQTT_USERNAME, MQTT_PASSWORD
+from config import MQTT_BROKER_HOST, MQTT_BROKER_PORT, MQTT_PASSWORD, MQTT_USERNAME
 from mqtt_topics import build_command_topic, parse_topic
 from observability.logger import get_runtime_logger
 

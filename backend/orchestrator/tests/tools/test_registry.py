@@ -435,9 +435,9 @@ class TestRegistryValidation:
         contract = registry_with_validated_tool.get_contract("validated_tool")
 
         # Valid
-        is_valid, error, _ = contract.validate_params({"count": 50})
+        is_valid, _error, _ = contract.validate_params({"count": 50})
         assert is_valid is True
 
         # Invalid - out of range
-        is_valid, error, _ = contract.validate_params({"count": 200})
+        is_valid, _error, _ = contract.validate_params({"count": 200})
         assert is_valid is False

@@ -273,7 +273,7 @@ class AgentLogger:
         self._enable_state_snapshots = enable_state_snapshots
         self._verbose = verbose
 
-    def _log(self, message: str, level: str = "INFO") -> None:
+    def _log(self, _message: str, _level: str = "INFO") -> None:
         """No-op runtime emission; tracer helpers own live logging output."""
         return
 

@@ -9,8 +9,8 @@ from .parser import is_command, parse_command
 from .registry import CommandRegistry, get_command_registry
 
 __all__ = [
-    "parse_command",
-    "is_command",
     "CommandRegistry",
     "get_command_registry",
+    "is_command",
+    "parse_command",
 ]

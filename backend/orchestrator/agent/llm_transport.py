@@ -28,7 +28,7 @@ def call_llm_with_tools(
         timeout=timeout,
     )
 
-    if "choices" in data and data["choices"]:
+    if data.get("choices"):
         return {"message": data["choices"][0].get("message", {})}
 
     raise ValueError(

@@ -31,7 +31,7 @@ def test_infer_current_place_prefers_known_place(monkeypatch):
 
 def test_infer_current_place_falls_back_to_geoapify(monkeypatch):
     location_inference._CACHE.clear()
-    monkeypatch.setattr("location_inference._load_places_with_coordinates", lambda: [])
+    monkeypatch.setattr("location_inference._load_places_with_coordinates", list)
     monkeypatch.setenv("GEOAPIFY_API_KEY", "test-key")
 
     mock_response = MagicMock()

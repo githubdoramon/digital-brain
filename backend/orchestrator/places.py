@@ -15,9 +15,9 @@ __all__ = [
     "find_best_place_match",
     "get_place",
     "ingest_place",
+    "list_contact_places",
     "list_place_contacts",
     "list_places",
-    "list_contact_places",
     "resolve_contact_place",
     "search_places",
     "unlink_contact_place",
@@ -592,7 +592,7 @@ def _score_place_match(
             return 98.0, "alias_exact", text
 
         if normalized_query in candidate or candidate in normalized_query:
-            if 92.0 > best_score:
+            if best_score < 92.0:
                 best_score = 92.0
                 best_via = "substring"
                 best_text = text

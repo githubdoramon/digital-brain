@@ -3,13 +3,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Optional
 
 
 @dataclass(frozen=True)
 class ParsedTopic:
     robot_id: str
-    module_id: Optional[str]
+    module_id: str | None
     message_type: str  # "telemetry", "status", "command/ack"
 
 

@@ -2,7 +2,6 @@
 
 from mqtt_topics import ParsedTopic, build_command_topic, parse_topic
 
-
 # ---------------------------------------------------------------------------
 # parse_topic — valid patterns
 # ---------------------------------------------------------------------------

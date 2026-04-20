@@ -5,7 +5,13 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
 from auth import require_service_api_key
-from commands import create_command, get_command, list_commands, mark_command_failed, mark_command_sent
+from commands import (
+    create_command,
+    get_command,
+    list_commands,
+    mark_command_failed,
+    mark_command_sent,
+)
 from observability.logger import get_runtime_logger
 from schemas import CommandIn, CommandOut
 

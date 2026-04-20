@@ -18,7 +18,7 @@ import sys
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
-from typing import Any, Optional
+from typing import Any, ClassVar, Optional
 
 # Add parent directory to path for imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
@@ -222,7 +222,7 @@ class PostExecutionValidator:
                         if top_candidate is None
                         else (
                             f"Got {len(results)} results with a relevant "
-                            f"{str(top_candidate.get('kind') or 'information')} candidate"
+                            f"{top_candidate.get('kind') or 'information'!s} candidate"
                         )
                     ),
                     extracted_facts=facts,
@@ -755,7 +755,7 @@ class GoalCompletionValidator:
     """
 
     # Patterns that indicate an ACTION goal (user wants something done)
-    ACTION_PATTERNS = [
+    ACTION_PATTERNS: ClassVar[list[str]] = [
         # Device/IoT actions
         "turn on",
         "turn off",
@@ -792,7 +792,7 @@ class GoalCompletionValidator:
     ]
 
     # Patterns that indicate a QUERY goal (user wants information)
-    QUERY_PATTERNS = [
+    QUERY_PATTERNS: ClassVar[list[str]] = [
         "what",
         "who",
         "when",
@@ -816,7 +816,7 @@ class GoalCompletionValidator:
 
     # Tool-specific discovery actions that need follow-up execution
     # Format: {tool_name: {discovery_action: execution_action}}
-    DISCOVERY_EXECUTION_PAIRS = {
+    DISCOVERY_EXECUTION_PAIRS: ClassVar[dict[str, dict[str, str]]] = {
         "home_assistant": {
             "list_tools": "call_tool",
         },
@@ -1165,11 +1165,7 @@ class GoalCompletionValidator:
             return True
 
         # Check success with data
-        if result.get("success") and not result.get("error"):
-            # Has some non-error content
-            return True
-
-        return False
+        return bool(result.get("success") and not result.get("error"))
 
     def _find_best_search_candidate(self, tool_calls: list, goal: str) -> dict[str, Any] | None:
         """Find best candidate across search calls, preferring goal-aligned evidence."""

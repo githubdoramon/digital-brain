@@ -52,17 +52,14 @@ class MCPToolResult:
 
 class MCPClientError(Exception):
     """Base exception for MCP client errors."""
-    pass
 
 
 class MCPAuthError(MCPClientError):
     """Authentication failed."""
-    pass
 
 
 class MCPConnectionError(MCPClientError):
     """Connection to MCP server failed."""
-    pass
 
 
 class MCPClient:
