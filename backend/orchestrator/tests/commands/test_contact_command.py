@@ -3,6 +3,7 @@ from commands.handlers.contact import handle_contact
 from commands.parser import ParsedCommand
 from commands.storage import clear_pending_event, delete_command_data, get_command_data
 from schemas import ContactCommandConfirmation
+from ui_dsl.clarification import SUPPORTED_CLARIFICATION_FIELD_KINDS
 
 
 def test_handle_contact_builds_contact_confirmation_and_derives_family_links(monkeypatch):
@@ -75,6 +76,7 @@ def test_handle_contact_builds_contact_confirmation_and_derives_family_links(mon
     assert any("Sage -> parent -> Isa" in line for line in result["derived_change_lines"])
     assert any("Joao -> grandfather -> Isa" in line for line in result["derived_change_lines"])
     assert any(field["id"] == "aliases" for field in result["edit_fields"])
+    assert all(field["kind"] in SUPPORTED_CLARIFICATION_FIELD_KINDS for field in result["edit_fields"])
     assert any(field["id"] == "derived_" + rel["proposal_id"] for field in result["edit_fields"] for rel in result["proposal"]["derived_relationships"])
 
     preview_id = result["preview_id"]

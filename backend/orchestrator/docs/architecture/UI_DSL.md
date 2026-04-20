@@ -63,6 +63,23 @@ response bundle.
 - `choice_buttons`
 - `info_card`
 
+## Supported Field Kinds (v1)
+
+`clarification_form` fields may use:
+
+- `text`
+- `textarea`
+- `number`
+- `date`
+- `time`
+- `datetime`
+- `email`
+- `url`
+- `select`
+
+Do not emit alias kinds such as `short_text`; unsupported field kinds reject the
+entire directive so clients only receive `fallback_text`.
+
 ## Guardrails
 
 - `version` must be `"1.0"`.
@@ -85,4 +102,3 @@ Log at least:
 - rejection reasons
 - number of blocks emitted
 - whether submission arrived as structured action or text fallback
-

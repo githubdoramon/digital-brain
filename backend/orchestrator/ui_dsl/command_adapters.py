@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
+from observability.logger import get_runtime_logger
 from ui_dsl.clarification import (
     default_clarification_details_field,
     derive_clarification_questions_from_fields,
@@ -26,6 +27,8 @@ _CONTACT_EDIT_ACTION_ID_PREFIX = "contact_edit_submit"
 _CONTACT_ACTION_CONFIRM_PREFIX = "confirm:"
 _CONTACT_ACTION_CANCEL_PREFIX = "cancel:"
 _INLINE_CONTACT_EDIT_FIELD_LIMIT = 8
+
+logger = get_runtime_logger(__name__)
 
 
 def command_result_to_ui_directives(command_result: dict[str, Any]) -> dict[str, Any] | None:
@@ -52,6 +55,11 @@ def command_result_to_ui_directives(command_result: dict[str, Any]) -> dict[str,
 
     directive, errors = sanitize_ui_directives_payload(raw_directive)
     if errors:
+        logger.warning(
+            "[ui_dsl] Rejected command UI directives type=%s errors=%s",
+            result_type.value,
+            errors,
+        )
         return None
     return directive
 

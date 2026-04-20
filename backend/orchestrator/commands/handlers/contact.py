@@ -28,10 +28,10 @@ _CONTACT_EDIT_ACTION_PREFIX = "contact_edit_submit"
 
 _FIELD_KIND_MAP = {
     "birth_date": "date",
-    "place_text": "short_text",
-    "main_contact_name": "short_text",
-    "related_contact_name": "short_text",
-    "relationship_type": "short_text",
+    "place_text": "text",
+    "main_contact_name": "text",
+    "related_contact_name": "text",
+    "relationship_type": "text",
     "details": "textarea",
 }
 
@@ -114,7 +114,7 @@ def _clarification_fields(field_ids: list[str]) -> list[dict[str, Any]]:
         output.append(
             {
                 "id": normalized,
-                "kind": _FIELD_KIND_MAP.get(normalized, "short_text"),
+                "kind": _FIELD_KIND_MAP.get(normalized, "text"),
                 "label": normalized.replace("_", " ").strip().title(),
                 "required": True,
             }
@@ -896,7 +896,7 @@ def _build_edit_fields(proposal: dict[str, Any], preview_id: str) -> list[dict[s
         fields.append(
             {
                 "id": "main_display_name",
-                "kind": "short_text",
+                "kind": "text",
                 "label": "Primary contact name",
                 "value": str(main_merged.get("display_name") or ""),
             }
@@ -911,7 +911,7 @@ def _build_edit_fields(proposal: dict[str, Any], preview_id: str) -> list[dict[s
             fields.append(
                 {
                     "id": "related_display_name",
-                    "kind": "short_text",
+                    "kind": "text",
                     "label": "Related contact name",
                     "value": related_name,
                 }
@@ -922,7 +922,7 @@ def _build_edit_fields(proposal: dict[str, Any], preview_id: str) -> list[dict[s
         fields.append(
             {
                 "id": "relationship_type",
-                "kind": "short_text",
+                "kind": "text",
                 "label": "Relationship type",
                 "value": str(first_relationship.get("relationship_type") or ""),
             }
@@ -939,11 +939,11 @@ def _build_edit_fields(proposal: dict[str, Any], preview_id: str) -> list[dict[s
         )
 
     for field_name, label, kind in [
-        ("aliases", "Aliases", "short_text"),
+        ("aliases", "Aliases", "text"),
         ("emails", "Emails", "email"),
-        ("phones", "Phones", "short_text"),
+        ("phones", "Phones", "text"),
         ("links", "Links", "url"),
-        ("tags", "Tags", "short_text"),
+        ("tags", "Tags", "text"),
     ]:
         values = main_merged.get(field_name) or []
         if values:
@@ -971,7 +971,7 @@ def _build_edit_fields(proposal: dict[str, Any], preview_id: str) -> list[dict[s
             fields.append(
                 {
                     "id": "place_name",
-                    "kind": "short_text",
+                    "kind": "text",
                     "label": "Place name",
                     "value": str(first_link.get("place_name") or ""),
                 }
@@ -980,7 +980,7 @@ def _build_edit_fields(proposal: dict[str, Any], preview_id: str) -> list[dict[s
             fields.append(
                 {
                     "id": "place_role",
-                    "kind": "short_text",
+                    "kind": "text",
                     "label": "Place role",
                     "value": str(first_link.get("role") or ""),
                 }

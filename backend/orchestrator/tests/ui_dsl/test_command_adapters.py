@@ -148,7 +148,7 @@ def test_contact_confirmation_skips_inline_form_when_too_many_fields():
         "derived_change_lines": ["Infer parent link: Atila -> parent -> Rebecca"],
         "edit_action_id": "contact_edit_submit:contact:preview:abc12345",
         "edit_fields": [
-            {"id": f"field_{index}", "kind": "short_text", "label": f"Field {index}"}
+            {"id": f"field_{index}", "kind": "text", "label": f"Field {index}"}
             for index in range(9)
         ],
     }
@@ -163,3 +163,45 @@ def test_contact_confirmation_skips_inline_form_when_too_many_fields():
     option_ids = {option["id"] for option in choice_block["options"]}
     assert "confirm:contact:preview:abc12345" in option_ids
     assert "edit:contact:preview:abc12345" in option_ids
+
+
+def test_contact_confirmation_maps_inline_edit_fields_to_ui_directives():
+    command_result = {
+        "type": "contact_confirmation",
+        "preview_id": "contact:preview:def67890",
+        "message": "Review and confirm.",
+        "summary_lines": [
+            "Create contact: Atila",
+            "Create contact: Kelly Kai",
+            "Add relationship: Atila -> spouse -> Kelly Kai",
+        ],
+        "explicit_change_lines": [
+            "Create contact: Atila",
+            "Create contact: Kelly Kai",
+            "Add relationship: Atila -> spouse -> Kelly Kai",
+        ],
+        "derived_change_lines": [],
+        "edit_action_id": "contact_edit_submit:contact:preview:def67890",
+        "edit_fields": [
+            {
+                "id": "main_display_name",
+                "kind": "text",
+                "label": "Primary contact name",
+                "value": "Atila",
+            },
+            {
+                "id": "relationship_type",
+                "kind": "text",
+                "label": "Relationship type",
+                "value": "spouse",
+            },
+        ],
+    }
+
+    directive = command_result_to_ui_directives(command_result)
+
+    assert directive is not None
+    edit_block = next(block for block in directive["blocks"] if block["id"] == "contact_edit:contact:preview:def67890")
+    assert edit_block["type"] == "clarification_form"
+    assert edit_block["action_id"] == "contact_edit_submit:contact:preview:def67890"
+    assert [field["kind"] for field in edit_block["fields"]] == ["text", "text"]
