@@ -38,7 +38,9 @@ def test_contact_extraction_uses_self_context_instead_of_raw_user_line(monkeypat
     assert "Sage means Patricia." in prompt
     assert '"contacts": [' in prompt
     assert '"relationships": [' in prompt
+    assert '"reciprocal_type":' in prompt
     assert '"contact_place_links": [' in prompt
+    assert "Father/Daughter" in prompt
     assert "User: user@example.com" not in prompt
 
 

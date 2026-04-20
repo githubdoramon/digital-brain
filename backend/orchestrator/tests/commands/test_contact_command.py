@@ -72,9 +72,9 @@ def test_handle_contact_builds_contact_confirmation_and_derives_family_links(mon
     result = handle_contact(parsed, context)
 
     assert result["type"] == "contact_confirmation"
-    assert any("Dana -> father -> Isa" in line for line in result["explicit_change_lines"])
-    assert any("Sage -> parent -> Isa" in line for line in result["derived_change_lines"])
-    assert any("Joao -> grandfather -> Isa" in line for line in result["derived_change_lines"])
+    assert any("Dana -> Father -> Isa" in line for line in result["explicit_change_lines"])
+    assert any("Sage -> Parent -> Isa" in line for line in result["derived_change_lines"])
+    assert any("Joao -> Grandfather -> Isa" in line for line in result["derived_change_lines"])
     assert any(field["id"] == "aliases" for field in result["edit_fields"])
     assert all(field["kind"] in SUPPORTED_CLARIFICATION_FIELD_KINDS for field in result["edit_fields"])
     assert any(field["id"] == "derived_" + rel["proposal_id"] for field in result["edit_fields"] for rel in result["proposal"]["derived_relationships"])
@@ -126,6 +126,82 @@ def test_handle_contact_requests_clarification_for_ambiguous_birth_date(monkeypa
 
     clarification_id = result["clarification_id"]
     delete_command_data(clarification_id)
+    clear_pending_event(context["event_pending_key"])
+
+
+def test_contact_clarification_follow_up_passes_conversation_history(monkeypatch):
+    context = {
+        "user_email": "user@example.com",
+        "thread_id": "thread-contact-history",
+        "event_pending_key": "user@example.com:thread-contact-history",
+    }
+    calls = []
+
+    def fake_extract(message, *, user_email, model=None, conversation_messages=None):
+        calls.append(
+            {
+                "message": message,
+                "conversation_messages": list(conversation_messages or []),
+            }
+        )
+        if len(calls) == 1:
+            return {
+                "need_user_input": {
+                    "prompt": "What is Bia's birth date?",
+                    "questions": ["What is Bia's birth date?"],
+                    "fields": [
+                        {
+                            "id": "birth_date",
+                            "kind": "date",
+                            "label": "Birth date",
+                            "required": True,
+                        }
+                    ],
+                    "submission_mode": "ui_submission",
+                }
+            }
+        return {
+            "contacts": [{"contact_name": "Bia", "birthday": "1994-05-07"}],
+            "relationships": [],
+            "contact_place_links": [],
+            "need_user_input": None,
+        }
+
+    monkeypatch.setattr("commands.handlers.contact._llm_extract_contact_changes", fake_extract)
+    monkeypatch.setattr(
+        "commands.handlers.contact.contacts_service.search_contacts",
+        lambda *_args, **_kwargs: [],
+    )
+
+    first = handle_contact(
+        ParsedCommand(
+            command="contact",
+            args="Bia has a birthday",
+            raw_message="/contact Bia has a birthday",
+        ),
+        context,
+    )
+    clarification_id = first["clarification_id"]
+
+    second = handle_contact(
+        ParsedCommand(
+            command="contact",
+            args=f"1994-05-07 [clarification_id:{clarification_id}]",
+            raw_message=f"/contact 1994-05-07 [clarification_id:{clarification_id}]",
+        ),
+        context,
+    )
+
+    assert second["type"] == "contact_confirmation"
+    second_history = calls[1]["conversation_messages"]
+    assert second_history == [
+        {"role": "user", "content": "Bia has a birthday"},
+        {"role": "assistant", "content": "What is Bia's birth date?"},
+        {"role": "user", "content": "1994-05-07"},
+    ]
+    assert calls[1]["message"] == "Bia has a birthday. Additional details: 1994-05-07"
+
+    delete_command_data(second["preview_id"])
     clear_pending_event(context["event_pending_key"])
 
 
@@ -206,6 +282,7 @@ def test_handle_contact_supports_independent_relationship_pairs(monkeypatch):
                     "from_contact_name": "Carlos",
                     "to_contact_name": "Diana",
                     "relationship_type": "father",
+                    "reciprocal_type": "daughter",
                 },
             ],
             "contact_place_links": [],
@@ -222,9 +299,17 @@ def test_handle_contact_supports_independent_relationship_pairs(monkeypatch):
     assert result["type"] == "contact_confirmation"
     relationships = result["proposal"]["relationships"]
     assert len(relationships) == 2
-    assert {(rel["from_display_name"], rel["relationship_type"], rel["to_display_name"]) for rel in relationships} == {
-        ("Ana", "sister", "Bruno"),
-        ("Carlos", "father", "Diana"),
+    assert {
+        (
+            rel["from_display_name"],
+            rel["relationship_type"],
+            rel["reciprocal_type"],
+            rel["to_display_name"],
+        )
+        for rel in relationships
+    } == {
+        ("Ana", "Sister", "Sibling", "Bruno"),
+        ("Carlos", "Father", "Daughter", "Diana"),
     }
 
     delete_command_data(result["preview_id"])
@@ -376,6 +461,8 @@ def test_confirm_contact_command_applies_updates(monkeypatch):
     assert len(ingested_places) == 1
     assert len(relationships) == 1
     assert len(contact_place_links) == 1
+    assert relationships[0].relationship_type == "Father"
+    assert relationships[0].reciprocal_type == "Child"
     assert ingested_contacts[-1].display_name == "Paulo"
     assert ingested_contacts[-1].emails == ["paulo@example.com"]
     assert ingested_contacts[-1].phones == ["+351999"]

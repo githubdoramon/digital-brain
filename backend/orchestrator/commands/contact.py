@@ -27,6 +27,17 @@ logger = get_runtime_logger(__name__)
 _CONTACT_LIST_FIELDS = ("aliases", "emails", "phones", "links", "tags")
 
 
+def _relationship_label(raw_value: Any) -> str:
+    text = str(raw_value or "").strip()
+    if not text:
+        return ""
+    return " ".join(
+        "-".join(segment.capitalize() for segment in part.replace("_", "-").split("-") if segment)
+        for part in text.split()
+        if part
+    )
+
+
 def _persist_contact_resolved(preview_id: str, status: str) -> None:
     try:
         msg_id = conversations.find_message_id_by_metadata_preview(preview_id)
@@ -323,7 +334,7 @@ def _apply_modifications_to_proposal(
                     rel["to_display_name"] = related_display_name
 
     if primary_relationship_id and "relationship_type" in mods:
-        next_type = str(mods.get("relationship_type") or "").strip().lower()
+        next_type = _relationship_label(mods.get("relationship_type"))
         for rel in updated.get("relationships") or []:
             if str(rel.get("proposal_id") or "") == primary_relationship_id and next_type:
                 rel["relationship_type"] = next_type
@@ -422,7 +433,7 @@ def _apply_modifications_to_proposal(
                 if enabled is False:
                     continue
                 kept_derived_ids.add(proposal_id)
-            next_type = str(raw_mod.get("relationship_type") or "").strip().lower()
+            next_type = _relationship_label(raw_mod.get("relationship_type"))
             if next_type:
                 relationship["relationship_type"] = next_type
             from_name = str(raw_mod.get("from_display_name") or "").strip()
@@ -590,7 +601,7 @@ def confirm_contact_command(
         for relationship in proposal_relationships:
             if not isinstance(relationship, dict):
                 continue
-            relationship_type = str(relationship.get("relationship_type") or "").strip().lower()
+            relationship_type = _relationship_label(relationship.get("relationship_type"))
             if not relationship_type:
                 continue
             from_contact_id = _ensure_contact_reference(
@@ -612,7 +623,7 @@ def confirm_contact_command(
                     from_contact_id=from_contact_id,
                     to_contact_id=to_contact_id,
                     relationship_type=relationship_type,
-                    reciprocal_type=str(relationship.get("reciprocal_type") or "").strip() or None,
+                    reciprocal_type=_relationship_label(relationship.get("reciprocal_type")) or None,
                 )
             )
             applied_relationship_ids.append(rel_id)

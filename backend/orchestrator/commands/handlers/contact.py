@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import json
 import re
 from datetime import date
 from typing import Any
@@ -35,29 +36,55 @@ _FIELD_KIND_MAP = {
     "details": "textarea",
 }
 
-_RELATIONSHIP_RECIPROCALS = {
-    "wife": "husband",
-    "husband": "wife",
-    "spouse": "spouse",
-    "partner": "partner",
-    "father": "child",
-    "mother": "child",
-    "parent": "child",
-    "child": "parent",
-    "son": "parent",
-    "daughter": "parent",
-    "brother": "sibling",
-    "sister": "sibling",
-    "sibling": "sibling",
-    "grandfather": "grandchild",
-    "grandmother": "grandchild",
-    "grandparent": "grandchild",
-    "grandchild": "grandparent",
+_RELATIONSHIP_LABELS = {
+    "married": "Spouse",
+    "married to": "Spouse",
+    "wife": "Wife",
+    "husband": "Husband",
+    "spouse": "Spouse",
+    "partner": "Partner",
+    "father": "Father",
+    "mother": "Mother",
+    "parent": "Parent",
+    "child": "Child",
+    "son": "Son",
+    "daughter": "Daughter",
+    "brother": "Brother",
+    "sister": "Sister",
+    "sibling": "Sibling",
+    "grandfather": "Grandfather",
+    "grandmother": "Grandmother",
+    "grandparent": "Grandparent",
+    "grandson": "Grandson",
+    "granddaughter": "Granddaughter",
+    "grandchild": "Grandchild",
 }
 
-_PARENT_TYPES = {"father", "mother", "parent"}
-_SPOUSE_TYPES = {"spouse", "partner", "wife", "husband"}
-_GRANDPARENT_MAP = {"father": "grandfather", "mother": "grandmother", "parent": "grandparent"}
+_RELATIONSHIP_RECIPROCALS = {
+    "wife": "Husband",
+    "husband": "Wife",
+    "spouse": "Spouse",
+    "partner": "Partner",
+    "father": "Child",
+    "mother": "Child",
+    "parent": "Child",
+    "child": "Parent",
+    "son": "Parent",
+    "daughter": "Parent",
+    "brother": "Sibling",
+    "sister": "Sibling",
+    "sibling": "Sibling",
+    "grandfather": "Grandchild",
+    "grandmother": "Grandchild",
+    "grandparent": "Grandchild",
+    "grandson": "Grandparent",
+    "granddaughter": "Grandparent",
+    "grandchild": "Grandparent",
+}
+
+_PARENT_TYPES = {"Father", "Mother", "Parent"}
+_SPOUSE_TYPES = {"Spouse", "Partner", "Wife", "Husband"}
+_GRANDPARENT_MAP = {"Father": "Grandfather", "Mother": "Grandmother", "Parent": "Grandparent"}
 _CONTACT_LIST_FIELDS = ("aliases", "emails", "phones", "links", "tags")
 _YES_NO_OPTIONS = [{"id": "yes", "label": "Yes"}, {"id": "no", "label": "No"}]
 
@@ -86,6 +113,29 @@ def _extract_additional_details(text: str) -> tuple[str, str | None]:
         return text.strip(), None
     base, extra = text.split(marker, 1)
     return base.strip(), extra.strip() or None
+
+
+def _need_user_input_prompt(need_user_input: dict[str, Any] | None) -> str:
+    if not isinstance(need_user_input, dict):
+        return "Please share the missing contact details so I can continue."
+    prompt = str(need_user_input.get("prompt") or "").strip()
+    if prompt:
+        return prompt
+    questions = need_user_input.get("questions")
+    if isinstance(questions, list):
+        return " ".join(str(question).strip() for question in questions if str(question).strip())
+    return "Please share the missing contact details so I can continue."
+
+
+def _append_contact_conversation_message(
+    messages: list[dict[str, str]],
+    role: str,
+    content: str,
+) -> None:
+    normalized_content = str(content or "").strip()
+    if role not in {"user", "assistant"} or not normalized_content:
+        return
+    messages.append({"role": role, "content": normalized_content})
 
 
 def _safe_entity_slug(raw: str) -> str:
@@ -122,11 +172,24 @@ def _clarification_fields(field_ids: list[str]) -> list[dict[str, Any]]:
     return output or [{"id": "details", "kind": "textarea", "label": "Details", "required": True}]
 
 
+def _format_contact_command_conversation(messages: list[dict[str, str]] | None, fallback_message: str) -> str:
+    conversation: list[dict[str, str]] = []
+    for item in messages or []:
+        role = str(item.get("role") or "").strip()
+        content = str(item.get("content") or "").strip()
+        if role in {"user", "assistant"} and content:
+            conversation.append({"role": role, "content": content})
+    if not conversation and str(fallback_message or "").strip():
+        conversation.append({"role": "user", "content": str(fallback_message).strip()})
+    return json.dumps(conversation, ensure_ascii=False)
+
+
 def _llm_extract_contact_changes(
     message: str,
     *,
     user_email: str,
     model: str | None = None,
+    conversation_messages: list[dict[str, str]] | None = None,
 ) -> dict[str, Any]:
     from llm_helpers import call_llm_json
     from prompts.context import get_self_context, get_user_facts_context
@@ -142,11 +205,15 @@ def _llm_extract_contact_changes(
         else None
     )
     user_facts_block = f"\n{user_facts_ctx}\n" if user_facts_ctx else ""
+    conversation_json = _format_contact_command_conversation(conversation_messages, message)
     prompt = f"""You need to extract a structured proposal of information about contacts and their relationships.
 
 {self_context_block}
 {user_facts_block}
 Current user message: \"{message}\"
+
+Conversation messages (JSON array, most recent last):
+{conversation_json}
 
 Interpret one or more contact graph updates.
 
@@ -182,7 +249,8 @@ Return ONLY valid JSON in this exact format:
         {{
             "from_contact_name": "name",
             "to_contact_name": "name",
-            "relationship_type": "relationship type"
+            "relationship_type": "specific Title Case relationship from from_contact_name's perspective",
+            "reciprocal_type": "specific Title Case relationship from to_contact_name's perspective"
         }}
     ],
     "contact_place_links": [
@@ -194,6 +262,11 @@ Return ONLY valid JSON in this exact format:
     ],
     "summary": "one-sentence explanation"
 }}
+
+Relationship type rules:
+- Prefer specific Title Case labels when context supports them: Husband/Wife, Father/Daughter, Father/Son, Mother/Daughter, Mother/Son, Brother/Sister.
+- Avoid generic labels like spouse/spouse or parent/child when the sentence gives enough information for a specific pair.
+- If the reciprocal side is unknown, use a reasonable generic Title Case reciprocal such as Child, Parent, Sibling, Spouse, or Partner.
 """
     extracted = call_llm_json(prompt, timeout=45, model=model)
     extracted["need_user_input"] = normalize_need_user_input(extracted.get("need_user_input"))
@@ -278,28 +351,29 @@ def _normalize_relationship_type(value: str | None) -> str | None:
     normalized = normalize_search_text(value or "")
     if not normalized:
         return None
-    alias_map = {
-        "married": "spouse",
-        "married to": "spouse",
-        "wife": "wife",
-        "husband": "husband",
-        "spouse": "spouse",
-        "partner": "partner",
-        "father": "father",
-        "mother": "mother",
-        "parent": "parent",
-        "son": "son",
-        "daughter": "daughter",
-        "child": "child",
-        "brother": "brother",
-        "sister": "sister",
-        "sibling": "sibling",
-    }
-    return alias_map.get(normalized, normalized)
+    if normalized in _RELATIONSHIP_LABELS:
+        return _RELATIONSHIP_LABELS[normalized]
+    return " ".join(
+        "-".join(segment.capitalize() for segment in part.replace("_", "-").split("-") if segment)
+        for part in normalized.split()
+        if part
+    )
 
 
 def _reciprocal_relationship_type(relationship_type: str) -> str | None:
-    return _RELATIONSHIP_RECIPROCALS.get(relationship_type)
+    normalized = normalize_search_text(relationship_type or "")
+    return _RELATIONSHIP_RECIPROCALS.get(normalized)
+
+
+def _normalize_relationship_pair(
+    relationship_type: Any,
+    reciprocal_type: Any = None,
+) -> tuple[str | None, str | None]:
+    normalized_type = _normalize_relationship_type(str(relationship_type or ""))
+    normalized_reciprocal = _normalize_relationship_type(str(reciprocal_type or ""))
+    if normalized_type and not normalized_reciprocal:
+        normalized_reciprocal = _reciprocal_relationship_type(normalized_type)
+    return normalized_type, normalized_reciprocal
 
 
 def _resolve_place(place_text: str | None) -> dict[str, Any] | None:
@@ -535,6 +609,7 @@ def _append_relationship_to_proposal(
     from_ref: dict[str, Any],
     to_ref: dict[str, Any],
     relationship_type: str,
+    reciprocal_type: str | None = None,
 ) -> dict[str, Any]:
     relationship = {
         "proposal_id": _proposal_id("relationship"),
@@ -544,7 +619,7 @@ def _append_relationship_to_proposal(
         "to_reference": _contact_reference_value(to_ref),
         "to_display_name": to_ref.get("display_name"),
         "relationship_type": relationship_type,
-        "reciprocal_type": _reciprocal_relationship_type(relationship_type),
+        "reciprocal_type": reciprocal_type or _reciprocal_relationship_type(relationship_type),
     }
     proposal["relationships"].append(relationship)
     _append_unique_change(
@@ -567,7 +642,7 @@ def _append_parent_derived_relationships(
     child_display_name = str(child_ref.get("display_name") or "").strip()
     parent_contact = contacts_service.get_contact(str(parent_ref.get("contact_id") or "")) or {}
     for rel in parent_contact.get("relationships") or []:
-        rel_type = str(rel.get("type") or "").strip().lower()
+        rel_type = _normalize_relationship_type(str(rel.get("type") or "").strip())
         related_contact_id = str(rel.get("contact_id") or "").strip()
         if related_contact_id and rel_type in _SPOUSE_TYPES:
             spouse_contact = contacts_service.get_contact(related_contact_id)
@@ -581,13 +656,13 @@ def _append_parent_derived_relationships(
                         "from_display_name": spouse_contact.get("display_name"),
                         "to_reference": child_reference,
                         "to_display_name": child_display_name,
-                        "relationship_type": "parent",
-                        "reciprocal_type": "child",
+                        "relationship_type": "Parent",
+                        "reciprocal_type": "Child",
                     }
                 )
                 _append_unique_change(
                     proposal["derived_change_lines"],
-                    f"Infer co-parent link: {spouse_contact.get('display_name')} -> parent -> {child_display_name}",
+                    f"Infer co-parent link: {spouse_contact.get('display_name')} -> Parent -> {child_display_name}",
                 )
         if related_contact_id and rel_type in _PARENT_TYPES:
             grandparent_contact = contacts_service.get_contact(related_contact_id)
@@ -603,7 +678,7 @@ def _append_parent_derived_relationships(
                         "to_reference": child_reference,
                         "to_display_name": child_display_name,
                         "relationship_type": derived_type,
-                        "reciprocal_type": "grandchild",
+                        "reciprocal_type": "Grandchild",
                     }
                 )
                 _append_unique_change(
@@ -615,7 +690,10 @@ def _append_parent_derived_relationships(
 def _build_proposal(extracted: dict[str, Any], *, original_message: str) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
     main_name = str(extracted.get("main_contact_name") or "").strip()
     related_name = str(extracted.get("related_contact_name") or "").strip()
-    legacy_relationship_type = _normalize_relationship_type(extracted.get("relationship_type"))
+    legacy_relationship_type, legacy_reciprocal_type = _normalize_relationship_pair(
+        extracted.get("relationship_type"),
+        extracted.get("reciprocal_type"),
+    )
     birth_date_text = str(extracted.get("birth_date_text") or "").strip()
     legacy_place_text = str(extracted.get("place_text") or "").strip()
     legacy_place_role = str(extracted.get("place_role") or "").strip().lower() or None
@@ -634,6 +712,7 @@ def _build_proposal(extracted: dict[str, Any], *, original_message: str) -> tupl
                 "from_contact_name": main_name,
                 "to_contact_name": related_name,
                 "relationship_type": legacy_relationship_type,
+                "reciprocal_type": legacy_reciprocal_type,
             }
         )
 
@@ -787,7 +866,10 @@ def _build_proposal(extracted: dict[str, Any], *, original_message: str) -> tupl
     for spec in relationship_specs:
         from_name = str(spec.get("from_contact_name") or spec.get("from_name") or spec.get("source_contact_name") or "").strip()
         to_name = str(spec.get("to_contact_name") or spec.get("to_name") or spec.get("target_contact_name") or "").strip()
-        relationship_type = _normalize_relationship_type(spec.get("relationship_type") or spec.get("type"))
+        relationship_type, reciprocal_type = _normalize_relationship_pair(
+            spec.get("relationship_type") or spec.get("type"),
+            spec.get("reciprocal_type") or spec.get("other_type"),
+        )
         if not relationship_type:
             return None, build_need_user_input(
                 prompt="What relationship should I add between these contacts?",
@@ -810,6 +892,7 @@ def _build_proposal(extracted: dict[str, Any], *, original_message: str) -> tupl
             from_ref=from_ref,
             to_ref=to_ref,
             relationship_type=relationship_type,
+            reciprocal_type=reciprocal_type,
         )
         if first_relationship is None:
             first_relationship = relationship
@@ -1032,24 +1115,44 @@ def handle_contact(parsed: ParsedCommand, context: dict[str, Any]) -> dict[str, 
 
     original_message = str((clarification_context or {}).get("original_message") or raw_message).strip()
     combined_message = original_message
+    conversation_messages = [
+        item
+        for item in ((clarification_context or {}).get("conversation_messages") or [])
+        if isinstance(item, dict)
+    ]
+    if not conversation_messages:
+        _append_contact_conversation_message(conversation_messages, "user", original_message)
     if clarification_context:
         _, follow_up = _extract_additional_details(raw_message)
         if follow_up:
             combined_message = f"{original_message}. Additional details: {follow_up}"
+            _append_contact_conversation_message(conversation_messages, "user", follow_up)
         elif raw_message and raw_message != original_message:
             combined_message = f"{original_message}. Additional details: {raw_message}"
+            _append_contact_conversation_message(conversation_messages, "user", raw_message)
 
-    extracted = _llm_extract_contact_changes(combined_message, user_email=user_email)
+    extracted = _llm_extract_contact_changes(
+        combined_message,
+        user_email=user_email,
+        conversation_messages=conversation_messages,
+    )
     explicit_need_user_input = normalize_need_user_input(extracted.get("need_user_input"))
     if explicit_need_user_input:
         clarification_preview_id = f"contact:clarification:{uuid4().hex[:8]}"
         from commands.storage import store_command_data, store_pending_event
+        next_conversation_messages = list(conversation_messages)
+        _append_contact_conversation_message(
+            next_conversation_messages,
+            "assistant",
+            _need_user_input_prompt(explicit_need_user_input),
+        )
 
         store_command_data(
             clarification_preview_id,
             {
                 "command_name": "contact",
                 "original_message": original_message,
+                "conversation_messages": next_conversation_messages,
                 "thread_id": context.get("thread_id"),
             },
         )
@@ -1073,12 +1176,19 @@ def handle_contact(parsed: ParsedCommand, context: dict[str, Any]) -> dict[str, 
     if proposal_need_user_input:
         clarification_preview_id = f"contact:clarification:{uuid4().hex[:8]}"
         from commands.storage import store_command_data, store_pending_event
+        next_conversation_messages = list(conversation_messages)
+        _append_contact_conversation_message(
+            next_conversation_messages,
+            "assistant",
+            _need_user_input_prompt(proposal_need_user_input),
+        )
 
         store_command_data(
             clarification_preview_id,
             {
                 "command_name": "contact",
                 "original_message": original_message,
+                "conversation_messages": next_conversation_messages,
                 "thread_id": context.get("thread_id"),
             },
         )
