@@ -588,7 +588,9 @@ def update_event(event_id: str, patch: dict[str, Any]) -> dict[str, Any]:
         merged_raw["update_history"] = history
 
     def _value(key: str, fallback: Any) -> Any:
-        return patch[key] if key in patch else fallback
+        # Presence check is required: patch[key] == None must clear the field,
+        # while key missing must preserve existing. patch.get would conflate them.
+        return patch[key] if key in patch else fallback  # noqa: SIM401
 
     event_in = EventIn(
         id=cleaned_event_id,
