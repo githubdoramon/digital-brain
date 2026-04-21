@@ -6,6 +6,7 @@ export type LocationDebugEvent = {
   message?: string;
   error?: string;
   payload?: Record<string, unknown>;
+  successCountSincePreviousFailure?: number;
 };
 
 export type LocationDebugSnapshot = {
@@ -14,13 +15,16 @@ export type LocationDebugSnapshot = {
   lastMessage?: string;
   lastError?: string;
   lastPayload?: Record<string, unknown>;
-  recentEvents?: LocationDebugEvent[];
+  lastSuccessAt?: string;
+  totalSuccessCount?: number;
+  successCountSinceLastFailure?: number;
+  recentFailures?: LocationDebugEvent[];
 };
 
 type Listener = (snapshot: LocationDebugSnapshot) => void;
 
 const LOCATION_DEBUG_SNAPSHOT_KEY = 'digitalbrain.locationDebugSnapshot';
-const MAX_LOCATION_DEBUG_EVENTS = 20;
+const MAX_LOCATION_DEBUG_FAILURES = 100;
 
 let snapshot: LocationDebugSnapshot = {};
 const listeners = new Set<Listener>();
@@ -46,6 +50,7 @@ export async function hydrateLocationDebugSnapshot(): Promise<LocationDebugSnaps
     snapshot = {
       ...snapshot,
       ...parsed,
+      recentFailures: Array.isArray(parsed.recentFailures) ? parsed.recentFailures : [],
     };
     notify();
   } catch (error) {
@@ -53,6 +58,21 @@ export async function hydrateLocationDebugSnapshot(): Promise<LocationDebugSnaps
   }
 
   return getLocationDebugSnapshot();
+}
+
+function isSuccessEvent(eventName: string): boolean {
+  return eventName.endsWith('_success');
+}
+
+function isFailureEvent(eventName: string): boolean {
+  return (
+    eventName.endsWith('_error') ||
+    eventName.endsWith('_blocked') ||
+    eventName.endsWith('_invalid') ||
+    eventName === 'background_sync_skipped' ||
+    eventName === 'foreground_permission_denied' ||
+    eventName === 'background_task_empty'
+  );
 }
 
 export function subscribeLocationDebug(listener: Listener): () => void {
@@ -69,17 +89,20 @@ export function reportLocationDebugEvent(
     message?: string;
     error?: unknown;
     payload?: Record<string, unknown>;
+    recordInHistory?: boolean;
   },
 ): void {
   const eventAt = new Date().toISOString();
   const normalizedError =
     details?.error instanceof Error ? details.error.message : details?.error ? String(details.error) : undefined;
+  const successCountSinceLastFailure = snapshot.successCountSinceLastFailure ?? 0;
   const nextEvent: LocationDebugEvent = {
     at: eventAt,
     eventName,
     message: details?.message,
     error: normalizedError,
     payload: details?.payload,
+    successCountSincePreviousFailure: successCountSinceLastFailure,
   };
 
   console.info('[location-debug]', eventName, {
@@ -94,8 +117,24 @@ export function reportLocationDebugEvent(
     lastMessage: details?.message,
     lastPayload: details?.payload,
     lastError: normalizedError,
-    recentEvents: [nextEvent, ...(snapshot.recentEvents ?? [])].slice(0, MAX_LOCATION_DEBUG_EVENTS),
   };
+
+  if (isSuccessEvent(eventName)) {
+    snapshot = {
+      ...snapshot,
+      lastSuccessAt: eventAt,
+      totalSuccessCount: (snapshot.totalSuccessCount ?? 0) + 1,
+      successCountSinceLastFailure: successCountSinceLastFailure + 1,
+      lastError: undefined,
+    };
+  } else if (details?.recordInHistory ?? isFailureEvent(eventName)) {
+    snapshot = {
+      ...snapshot,
+      successCountSinceLastFailure: 0,
+      recentFailures: [nextEvent, ...(snapshot.recentFailures ?? [])].slice(0, MAX_LOCATION_DEBUG_FAILURES),
+    };
+  }
+
   notify();
   void AsyncStorage.setItem(LOCATION_DEBUG_SNAPSHOT_KEY, JSON.stringify(snapshot)).catch((error) => {
     console.warn('[location-debug] failed to persist snapshot', error);

@@ -62,6 +62,9 @@ function LocationDebugEventRow({ event }: { event: LocationDebugEvent }) {
     <View style={styles.debugEventRow}>
       <Text style={styles.debugEventTitle}>{event.eventName}</Text>
       <Text style={styles.debugEventMeta}>{formatBuildTimestamp(event.at)}</Text>
+      <Text style={styles.debugEventMeta}>
+        Successes before failure: {event.successCountSincePreviousFailure ?? 0}
+      </Text>
       <Text style={styles.debugEventMeta}>Message: {event.message ?? 'none'}</Text>
       <Text style={styles.debugEventMeta}>Error: {event.error ?? 'none'}</Text>
       <Text style={styles.debugEventPayload}>Payload: {formatDebugPayload(event.payload)}</Text>
@@ -218,6 +221,11 @@ export default function SettingsScreen() {
           <Text style={styles.versionValue}>Last message: {locationDebug.lastMessage ?? 'none'}</Text>
           <Text style={styles.versionValue}>Last error: {locationDebug.lastError ?? 'none'}</Text>
           <Text style={styles.versionValue}>Last payload: {formatDebugPayload(locationDebug.lastPayload)}</Text>
+          <Text style={styles.versionValue}>Last success at: {formatBuildTimestamp(locationDebug.lastSuccessAt)}</Text>
+          <Text style={styles.versionValue}>Total successes: {locationDebug.totalSuccessCount ?? 0}</Text>
+          <Text style={styles.versionValue}>
+            Successes since last failure: {locationDebug.successCountSinceLastFailure ?? 0}
+          </Text>
           <Button
             label={isRefreshingLocationDebug ? 'Refreshing...' : 'Refresh location debug'}
             onPress={() => {
@@ -226,13 +234,13 @@ export default function SettingsScreen() {
             variant="secondary"
             style={styles.debugRefreshButton}
           />
-          <Text style={styles.versionLabel}>Recent events</Text>
-          {(locationDebug.recentEvents ?? []).length ? (
-            locationDebug.recentEvents?.map((event) => (
+          <Text style={styles.versionLabel}>Recent failures</Text>
+          {(locationDebug.recentFailures ?? []).length ? (
+            locationDebug.recentFailures?.map((event) => (
               <LocationDebugEventRow key={`${event.at}-${event.eventName}`} event={event} />
             ))
           ) : (
-            <Text style={styles.versionValue}>No stored debug events yet.</Text>
+            <Text style={styles.versionValue}>No stored failures yet.</Text>
           )}
         </Card>
 

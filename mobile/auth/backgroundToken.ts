@@ -39,8 +39,14 @@ export async function refreshStoredGoogleIdToken(): Promise<string | null> {
     reportLocationDebugEvent('background_auth_refresh_success');
     return idToken;
   } catch (error) {
+    const errorWithMeta = error as Error & { status?: number; authExpired?: boolean };
     reportLocationDebugEvent('background_auth_refresh_error', {
+      message: errorWithMeta?.message || 'Background auth refresh failed',
       error,
+      payload: {
+        status: errorWithMeta?.status,
+        auth_expired: errorWithMeta?.authExpired,
+      },
     });
     await clearStoredAuth();
     return null;

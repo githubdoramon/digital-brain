@@ -18,20 +18,105 @@ type BackgroundLocationSample = {
   timestamp?: number;
 };
 
-async function postBackgroundLocation(sample: BackgroundLocationSample): Promise<void> {
+type BackgroundBatchContext = {
+  batchId: string;
+  sampleIndex: number;
+  sampleCount: number;
+};
+
+type PostedBackgroundLocation = {
+  lat: number;
+  lon: number;
+  capturedAtMs: number;
+};
+
+const BACKGROUND_POST_DEDUPE_MIN_DISTANCE_METERS = 15;
+const BACKGROUND_POST_DEDUPE_MIN_SECONDS = 30;
+
+let lastPostedBackgroundLocation: PostedBackgroundLocation | null = null;
+
+function calculateDistanceMeters(
+  first: Pick<PostedBackgroundLocation, 'lat' | 'lon'>,
+  second: Pick<PostedBackgroundLocation, 'lat' | 'lon'>,
+): number {
+  const toRadians = (value: number) => (value * Math.PI) / 180;
+  const earthRadiusMeters = 6371000;
+
+  const latDelta = toRadians(second.lat - first.lat);
+  const lonDelta = toRadians(second.lon - first.lon);
+  const firstLatRadians = toRadians(first.lat);
+  const secondLatRadians = toRadians(second.lat);
+
+  const haversine =
+    Math.sin(latDelta / 2) * Math.sin(latDelta / 2) +
+    Math.cos(firstLatRadians) * Math.cos(secondLatRadians) * Math.sin(lonDelta / 2) * Math.sin(lonDelta / 2);
+  const arc = 2 * Math.atan2(Math.sqrt(haversine), Math.sqrt(1 - haversine));
+  return earthRadiusMeters * arc;
+}
+
+function buildDebugErrorPayload(error: unknown): { message: string; status?: number; authExpired?: boolean } {
+  const errorWithMeta = error as Error & { status?: number; authExpired?: boolean };
+  return {
+    message: errorWithMeta?.message || 'Unknown error',
+    ...(typeof errorWithMeta?.status === 'number' ? { status: errorWithMeta.status } : {}),
+    ...(typeof errorWithMeta?.authExpired === 'boolean'
+      ? { authExpired: errorWithMeta.authExpired }
+      : {}),
+  };
+}
+
+async function postBackgroundLocation(sample: BackgroundLocationSample, context: BackgroundBatchContext): Promise<void> {
   const latitude = Number(sample.coords?.latitude);
   const longitude = Number(sample.coords?.longitude);
+  const capturedAtMs = Number(sample.timestamp || Date.now());
+  const capturedAt = new Date(capturedAtMs).toISOString();
   if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) {
     reportLocationDebugEvent('background_location_invalid', {
       message: 'Invalid background coordinates',
+      payload: {
+        batch_id: context.batchId,
+        sample_index: context.sampleIndex,
+        sample_count: context.sampleCount,
+      },
     });
     return;
+  }
+
+  if (lastPostedBackgroundLocation) {
+    const movedMeters = calculateDistanceMeters(lastPostedBackgroundLocation, {
+      lat: latitude,
+      lon: longitude,
+    });
+    const elapsedSeconds = (capturedAtMs - lastPostedBackgroundLocation.capturedAtMs) / 1000;
+    if (
+      movedMeters < BACKGROUND_POST_DEDUPE_MIN_DISTANCE_METERS &&
+      elapsedSeconds >= 0 &&
+      elapsedSeconds < BACKGROUND_POST_DEDUPE_MIN_SECONDS
+    ) {
+      reportLocationDebugEvent('background_sync_skipped', {
+        message: 'Skipped near-duplicate buffered background sample',
+        recordInHistory: false,
+        payload: {
+          batch_id: context.batchId,
+          sample_index: context.sampleIndex,
+          sample_count: context.sampleCount,
+          moved_meters: Math.round(movedMeters),
+          elapsed_seconds: Math.round(elapsedSeconds),
+        },
+      });
+      return;
+    }
   }
 
   const token = await getStoredGoogleIdToken();
   if (!token) {
     reportLocationDebugEvent('background_sync_skipped', {
       message: 'Missing auth token in secure store',
+      payload: {
+        batch_id: context.batchId,
+        sample_index: context.sampleIndex,
+        sample_count: context.sampleCount,
+      },
     });
     return;
   }
@@ -41,9 +126,12 @@ async function postBackgroundLocation(sample: BackgroundLocationSample): Promise
 
   reportLocationDebugEvent('background_sync_attempt', {
     payload: {
+      batch_id: context.batchId,
+      sample_index: context.sampleIndex,
+      sample_count: context.sampleCount,
       lat: latitude,
       lon: longitude,
-      captured_at: new Date(sample.timestamp || Date.now()).toISOString(),
+      captured_at: capturedAt,
     },
   });
 
@@ -55,14 +143,23 @@ async function postBackgroundLocation(sample: BackgroundLocationSample): Promise
       lat: latitude,
       lon: longitude,
       accuracy_m: accuracy,
-      captured_at: new Date(sample.timestamp || Date.now()).toISOString(),
+      captured_at: capturedAt,
       source: 'expo_location',
       timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || undefined,
     }),
   });
 
+  lastPostedBackgroundLocation = {
+    lat: latitude,
+    lon: longitude,
+    capturedAtMs,
+  };
+
   reportLocationDebugEvent('background_sync_success', {
     payload: {
+      batch_id: context.batchId,
+      sample_index: context.sampleIndex,
+      sample_count: context.sampleCount,
       lat: latitude,
       lon: longitude,
     },
@@ -71,31 +168,60 @@ async function postBackgroundLocation(sample: BackgroundLocationSample): Promise
 
 if (!TaskManager.isTaskDefined(BACKGROUND_LOCATION_TASK)) {
   TaskManager.defineTask(BACKGROUND_LOCATION_TASK, async ({ data, error }) => {
-    if (error) {
-      reportLocationDebugEvent('background_task_error', {
-        error,
-      });
-      return;
-    }
-
     const locations = ((data as { locations?: BackgroundLocationSample[] } | undefined)?.locations ?? []).filter(
       Boolean,
     );
-    const latest = locations[locations.length - 1];
-    if (!latest) {
-      reportLocationDebugEvent('background_task_empty', {
-        message: 'Background task had no location samples',
+    const batchId = `${Date.now()}-${locations.length}`;
+
+    if (error) {
+      reportLocationDebugEvent('background_task_error', {
+        error,
+        payload: {
+          batch_id: batchId,
+          sample_count: locations.length,
+        },
       });
       return;
     }
 
-    try {
-      await postBackgroundLocation(latest);
-    } catch (taskError) {
-      reportLocationDebugEvent('background_sync_error', {
-        error: taskError,
+    reportLocationDebugEvent('background_task_batch_received', {
+      payload: {
+        batch_id: batchId,
+        sample_count: locations.length,
+      },
+    });
+
+    if (!locations.length) {
+      reportLocationDebugEvent('background_task_empty', {
+        message: 'Background task had no location samples',
+        payload: {
+          batch_id: batchId,
+        },
       });
-      // Best effort only.
+      return;
+    }
+
+    for (const [index, location] of locations.entries()) {
+      try {
+        await postBackgroundLocation(location, {
+          batchId,
+          sampleIndex: index + 1,
+          sampleCount: locations.length,
+        });
+      } catch (taskError) {
+        const errorPayload = buildDebugErrorPayload(taskError);
+        reportLocationDebugEvent('background_sync_error', {
+          message: errorPayload.message,
+          error: taskError,
+          payload: {
+            batch_id: batchId,
+            sample_index: index + 1,
+            sample_count: locations.length,
+            status: errorPayload.status,
+            auth_expired: errorPayload.authExpired,
+          },
+        });
+      }
     }
   });
 }
