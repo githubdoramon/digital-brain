@@ -30,7 +30,7 @@ export type MainSession = {
   messages: ThreadMessage[];
 };
 
-export type CommandResolvedStatus = 'created' | 'cancelled';
+export type CommandResolvedStatus = 'created' | 'cancelled' | 'updated';
 
 export type CommandResolvedMeta = {
   status: CommandResolvedStatus;

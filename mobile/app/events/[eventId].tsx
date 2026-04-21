@@ -10,7 +10,7 @@ import {
   EventDetailsForm,
   EventDraftEditorScreen,
 } from '@/components/event-draft/EventDraftEditorScreen';
-import type { EventDraft, EventPlaceOption } from '@/components/event-draft/types';
+import { EMPTY_EVENT_DRAFT, type EventDraft, type EventPlaceOption } from '@/components/event-draft/types';
 import { theme } from '@/theme';
 
 type EventDetail = {
@@ -132,6 +132,9 @@ function toDraft(event: EventDetail, contactMap: Map<string, string>): EventDraf
     tags: Array.isArray(event.tags) ? event.tags.map((tag) => String(tag || '').trim()).filter(Boolean) : [],
     types: Array.isArray(event.types) ? event.types.map((typeValue) => String(typeValue || '').trim()).filter(Boolean) : [],
     participants: normalizeEventPeople(event.people, contactMap),
+    operation: 'create',
+    existingEventId: null,
+    matchedEvent: null,
   };
 }
 
@@ -344,17 +347,7 @@ function EventDetailView({ eventId, editable }: EventDetailViewProps) {
 
   const content = (
     <EventDetailsForm
-      initialDraft={draft || {
-        title: '',
-        summary: '',
-        when: '',
-        endWhen: '',
-        where: '',
-        placeId: null,
-        tags: [],
-        types: [],
-        participants: [],
-      }}
+      initialDraft={draft || EMPTY_EVENT_DRAFT}
       availableContacts={availableContacts}
       availablePlaces={availablePlaces}
       editable={isEditing}

@@ -536,6 +536,77 @@ def ingest_event(event: EventIn) -> None:
         conn.commit()
 
 
+def get_event_by_id(event_id: str | None) -> dict[str, Any] | None:
+    """Public accessor for a single event row, including the raw JSON column."""
+    return _get_event_by_id(event_id)
+
+
+_EVENT_UPDATE_PATCH_KEYS = {
+    "start_date",
+    "end_date",
+    "place_id",
+    "people",
+    "tags",
+    "types",
+    "title",
+    "summary",
+    "raw",
+}
+
+
+def update_event(event_id: str, patch: dict[str, Any]) -> dict[str, Any]:
+    """Apply a patch to an existing event and persist via ingest_event.
+
+    The patch is authoritative for any field that is explicitly present — lists
+    replace existing values, scalars replace (including ``place_id=None`` to
+    clear). Fields not in the patch are preserved from the existing row. The
+    ``raw`` field, if supplied, is appended to an ``update_history`` audit
+    array rather than overwriting the existing audit trail.
+    """
+    cleaned_event_id = str(event_id or "").strip()
+    if not cleaned_event_id:
+        raise ValueError("event_id is required")
+
+    existing = _get_event_by_id(cleaned_event_id)
+    if existing is None:
+        raise ValueError(f"Event not found: {cleaned_event_id}")
+
+    unknown_keys = set(patch.keys()) - _EVENT_UPDATE_PATCH_KEYS
+    if unknown_keys:
+        raise ValueError(f"Unknown event patch fields: {sorted(unknown_keys)}")
+
+    merged_raw = dict(existing.get("raw") or {})
+    incoming_raw = patch.get("raw")
+    if isinstance(incoming_raw, dict) and incoming_raw:
+        history = list(merged_raw.get("update_history") or [])
+        history.append(
+            {
+                "updated_at": datetime.utcnow().isoformat(),
+                **{key: value for key, value in incoming_raw.items() if key != "update_history"},
+            }
+        )
+        merged_raw["update_history"] = history
+
+    def _value(key: str, fallback: Any) -> Any:
+        return patch[key] if key in patch else fallback
+
+    event_in = EventIn(
+        id=cleaned_event_id,
+        startDate=_value("start_date", existing.get("start_date")),
+        endDate=_value("end_date", existing.get("end_date")),
+        placeId=_value("place_id", existing.get("place_id")),
+        people=list(_value("people", existing.get("people") or [])),
+        tags=list(_value("tags", existing.get("tags") or [])),
+        types=list(_value("types", existing.get("types") or ["generic"])),
+        title=_value("title", existing.get("title") or "") or "",
+        summary=_value("summary", existing.get("summary") or "") or "",
+        raw=merged_raw,
+        externalId=existing.get("external_id"),
+    )
+    ingest_event(event_in)
+    return {"event_id": cleaned_event_id}
+
+
 def delete_event(event_id: str) -> bool:
     cleaned_event_id = str(event_id or "").strip()
     if not cleaned_event_id:

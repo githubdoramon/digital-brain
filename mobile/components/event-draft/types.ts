@@ -18,6 +18,24 @@ export type EventPlaceOption = {
   aliases?: string[];
 };
 
+export type EventDraftOperation = 'create' | 'update';
+
+export type EventMatchCandidate = {
+  eventId: string;
+  title: string;
+  summary: string;
+  startDate: string | null;
+  endDate: string | null;
+  place: {
+    placeId: string;
+    name: string;
+    city?: string | null;
+    country?: string | null;
+  } | null;
+  matchScore: number;
+  matchSources: string[];
+};
+
 export type EventDraft = {
   title: string;
   summary: string;
@@ -28,6 +46,9 @@ export type EventDraft = {
   tags: string[];
   types: string[];
   participants: EventDraftParticipant[];
+  operation: EventDraftOperation;
+  existingEventId: string | null;
+  matchedEvent: EventMatchCandidate | null;
 };
 
 export type EventDraftModifications = {
@@ -40,6 +61,8 @@ export type EventDraftModifications = {
   tags?: string[];
   types?: string[];
   contact_ids?: string[];
+  operation?: EventDraftOperation;
+  existing_event_id?: string | null;
 };
 
 export const EMPTY_EVENT_DRAFT: EventDraft = {
@@ -52,4 +75,7 @@ export const EMPTY_EVENT_DRAFT: EventDraft = {
   tags: [],
   types: [],
   participants: [],
+  operation: 'create',
+  existingEventId: null,
+  matchedEvent: null,
 };

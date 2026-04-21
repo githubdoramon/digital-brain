@@ -29,6 +29,7 @@ import {
   EMPTY_EVENT_DRAFT,
   type EventContactOption,
   type EventDraft,
+  type EventMatchCandidate,
   type EventPlaceOption,
 } from '@/components/event-draft/types';
 import {
@@ -43,6 +44,7 @@ type EventDetailsFormProps = {
   initialDraft: EventDraft;
   availableContacts: EventContactOption[];
   availablePlaces: EventPlaceOption[];
+  candidateEvents?: EventMatchCandidate[];
   editable: boolean;
   headerKicker: string;
   headerTitle: string;
@@ -83,6 +85,11 @@ function formatWhen(value: string) {
   });
 }
 
+function formatCandidateWhen(value: string | null): string {
+  if (!value) return 'No date';
+  return formatWhen(value);
+}
+
 function floatingOffset(insetBottom: number, keyboardHeight: number) {
   const keyboardInset =
     Platform.OS === 'ios' ? Math.max(0, keyboardHeight - insetBottom) : keyboardHeight;
@@ -117,6 +124,7 @@ export function EventDetailsForm({
   initialDraft,
   availableContacts,
   availablePlaces,
+  candidateEvents = [],
   editable,
   headerKicker,
   headerTitle,
@@ -148,6 +156,14 @@ export function EventDetailsForm({
   const [selectedParticipantIds, setSelectedParticipantIds] = React.useState<string[]>(
     initialDraft.participants.map((participant) => participant.contactId),
   );
+  const [operation, setOperation] = React.useState(initialDraft.operation);
+  const [existingEventId, setExistingEventId] = React.useState<string | null>(
+    initialDraft.existingEventId,
+  );
+  const [matchedEvent, setMatchedEvent] = React.useState<EventMatchCandidate | null>(
+    initialDraft.matchedEvent,
+  );
+  const [showCandidatePicker, setShowCandidatePicker] = React.useState(false);
 
   React.useEffect(() => {
     setTitle(initialDraft.title);
@@ -160,6 +176,10 @@ export function EventDetailsForm({
     setTypesInput(listToInput(initialDraft.types));
     setSelectedParticipantIds(initialDraft.participants.map((participant) => participant.contactId));
     setParticipantQuery('');
+    setOperation(initialDraft.operation);
+    setExistingEventId(initialDraft.existingEventId);
+    setMatchedEvent(initialDraft.matchedEvent);
+    setShowCandidatePicker(false);
   }, [initialDraft]);
 
   React.useEffect(() => {
@@ -248,9 +268,15 @@ export function EventDetailsForm({
       tags: inputToList(tagsInput),
       types: inputToList(typesInput),
       participants: selectedParticipants,
+      operation: operation === 'update' && existingEventId ? 'update' : 'create',
+      existingEventId: operation === 'update' ? existingEventId : null,
+      matchedEvent: operation === 'update' ? matchedEvent : null,
     }),
     [
       endWhen,
+      existingEventId,
+      matchedEvent,
+      operation,
       selectedParticipants,
       selectedPlaceId,
       summary,
@@ -261,6 +287,35 @@ export function EventDetailsForm({
       where,
     ],
   );
+
+  const availableCandidates = React.useMemo(() => {
+    const seen = new Set<string>();
+    const combined: EventMatchCandidate[] = [];
+    if (matchedEvent) {
+      combined.push(matchedEvent);
+      seen.add(matchedEvent.eventId);
+    }
+    for (const candidate of candidateEvents) {
+      if (seen.has(candidate.eventId)) continue;
+      seen.add(candidate.eventId);
+      combined.push(candidate);
+    }
+    return combined;
+  }, [candidateEvents, matchedEvent]);
+
+  const selectCandidate = React.useCallback((candidate: EventMatchCandidate) => {
+    setOperation('update');
+    setExistingEventId(candidate.eventId);
+    setMatchedEvent(candidate);
+    setShowCandidatePicker(false);
+  }, []);
+
+  const createNewInstead = React.useCallback(() => {
+    setOperation('create');
+    setExistingEventId(null);
+    setMatchedEvent(null);
+    setShowCandidatePicker(false);
+  }, []);
 
   const readOnlyParticipants = selectedParticipants;
   const readOnlyTags = readOnlyList(inputToList(tagsInput), 'None');
@@ -293,6 +348,115 @@ export function EventDetailsForm({
           ]}
         >
           {headerSubtitle ? <Text style={styles.subtitle}>{headerSubtitle}</Text> : null}
+
+          {editable && operation === 'update' && matchedEvent ? (
+            <Card style={[styles.card, styles.matchCard]}>
+              <View style={styles.matchHeaderRow}>
+                <Ionicons name="git-merge-outline" size={16} color={theme.colors.accentDeep} />
+                <Text style={styles.matchKicker}>Updating existing event</Text>
+              </View>
+              <Text style={styles.matchTitle}>{matchedEvent.title || 'Untitled event'}</Text>
+              <Text style={styles.matchMeta}>{formatCandidateWhen(matchedEvent.startDate)}</Text>
+              {matchedEvent.place?.name ? (
+                <Text style={styles.matchMeta}>{matchedEvent.place.name}</Text>
+              ) : null}
+              {matchedEvent.matchScore > 0 ? (
+                <Text style={styles.matchMeta}>
+                  Match confidence: {Math.round(matchedEvent.matchScore)}%
+                </Text>
+              ) : null}
+              <View style={styles.matchActions}>
+                {availableCandidates.length > 1 ? (
+                  <Button
+                    label={showCandidatePicker ? 'Hide alternatives' : 'Pick a different event'}
+                    variant="secondary"
+                    onPress={() => setShowCandidatePicker((prev) => !prev)}
+                  />
+                ) : null}
+                <Button label="Create new instead" variant="secondary" onPress={createNewInstead} />
+              </View>
+              {showCandidatePicker ? (
+                <View style={styles.candidateList}>
+                  {availableCandidates.map((candidate) => {
+                    const isSelected = candidate.eventId === existingEventId;
+                    return (
+                      <Pressable
+                        key={candidate.eventId}
+                        accessibilityRole="button"
+                        accessibilityLabel={`Select ${candidate.title || 'event'}`}
+                        onPress={() => selectCandidate(candidate)}
+                        style={({ pressed }) => [
+                          styles.candidateRow,
+                          isSelected && styles.candidateRowSelected,
+                          pressed && styles.candidateRowPressed,
+                        ]}
+                      >
+                        <View style={styles.candidateBody}>
+                          <Text style={styles.candidateTitle}>
+                            {candidate.title || 'Untitled event'}
+                          </Text>
+                          <Text style={styles.candidateMeta}>
+                            {formatCandidateWhen(candidate.startDate)}
+                          </Text>
+                          {candidate.place?.name ? (
+                            <Text style={styles.candidateMeta}>{candidate.place.name}</Text>
+                          ) : null}
+                        </View>
+                        <Text style={styles.candidateScore}>
+                          {candidate.matchScore > 0
+                            ? `${Math.round(candidate.matchScore)}%`
+                            : ''}
+                        </Text>
+                      </Pressable>
+                    );
+                  })}
+                </View>
+              ) : null}
+            </Card>
+          ) : null}
+
+          {editable && operation === 'create' && availableCandidates.length > 0 ? (
+            <Card style={[styles.card, styles.matchCard]}>
+              <View style={styles.matchHeaderRow}>
+                <Ionicons name="search-outline" size={16} color={theme.colors.accentDeep} />
+                <Text style={styles.matchKicker}>Similar existing events</Text>
+              </View>
+              <Text style={styles.matchMeta}>
+                Tap one to update it instead of creating a new event.
+              </Text>
+              <View style={styles.candidateList}>
+                {availableCandidates.map((candidate) => (
+                  <Pressable
+                    key={candidate.eventId}
+                    accessibilityRole="button"
+                    accessibilityLabel={`Update ${candidate.title || 'event'} instead`}
+                    onPress={() => selectCandidate(candidate)}
+                    style={({ pressed }) => [
+                      styles.candidateRow,
+                      pressed && styles.candidateRowPressed,
+                    ]}
+                  >
+                    <View style={styles.candidateBody}>
+                      <Text style={styles.candidateTitle}>
+                        {candidate.title || 'Untitled event'}
+                      </Text>
+                      <Text style={styles.candidateMeta}>
+                        {formatCandidateWhen(candidate.startDate)}
+                      </Text>
+                      {candidate.place?.name ? (
+                        <Text style={styles.candidateMeta}>{candidate.place.name}</Text>
+                      ) : null}
+                    </View>
+                    <Text style={styles.candidateScore}>
+                      {candidate.matchScore > 0
+                        ? `${Math.round(candidate.matchScore)}%`
+                        : ''}
+                    </Text>
+                  </Pressable>
+                ))}
+              </View>
+            </Card>
+          ) : null}
 
           <Card style={styles.card}>
             <Text style={styles.label}>Title</Text>
@@ -646,6 +810,7 @@ export function EventDraftEditorScreen({ sessionId }: DraftEditorScreenProps) {
       initialDraft={session.initialDraft || EMPTY_EVENT_DRAFT}
       availableContacts={session.availableContacts}
       availablePlaces={session.availablePlaces}
+      candidateEvents={session.candidateEvents}
       editable
       headerKicker="Event proposal"
       headerTitle="Edit draft"
@@ -840,6 +1005,83 @@ const styles = StyleSheet.create({
     fontSize: 13,
     lineHeight: 18,
     color: theme.colors.mutedInk,
+  },
+  matchCard: {
+    borderWidth: 1,
+    borderColor: theme.colors.accent,
+    backgroundColor: '#fffaf2',
+  },
+  matchHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  matchKicker: {
+    fontSize: 11,
+    fontWeight: '700',
+    letterSpacing: 0.4,
+    textTransform: 'uppercase',
+    color: theme.colors.accentDeep,
+  },
+  matchTitle: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: theme.colors.ink,
+  },
+  matchMeta: {
+    fontSize: 13,
+    lineHeight: 18,
+    color: theme.colors.mutedInk,
+  },
+  matchActions: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    marginTop: 4,
+  },
+  candidateList: {
+    borderWidth: 1,
+    borderColor: theme.colors.line,
+    borderRadius: theme.radius.md,
+    overflow: 'hidden',
+    marginTop: 6,
+  },
+  candidateRow: {
+    minHeight: 56,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderBottomWidth: 1,
+    borderBottomColor: theme.colors.line,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: '#fff',
+  },
+  candidateRowSelected: {
+    backgroundColor: '#fdf1df',
+  },
+  candidateRowPressed: {
+    backgroundColor: '#f7f2ec',
+  },
+  candidateBody: {
+    flex: 1,
+    marginRight: 10,
+    gap: 2,
+  },
+  candidateTitle: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: theme.colors.ink,
+  },
+  candidateMeta: {
+    fontSize: 12,
+    lineHeight: 16,
+    color: theme.colors.mutedInk,
+  },
+  candidateScore: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: theme.colors.accentDeep,
   },
   emptyState: {
     flex: 1,

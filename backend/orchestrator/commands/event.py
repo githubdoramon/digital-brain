@@ -205,6 +205,26 @@ def _normalize_event_modifications(raw: Any) -> dict[str, Any]:
     if "contact_ids" in raw:
         normalized["contact_ids"] = _string_list_from_modification(raw.get("contact_ids"))
 
+    if "operation" in raw:
+        operation_raw = raw.get("operation")
+        if operation_raw in (None, ""):
+            normalized["operation"] = None
+        else:
+            operation_text = str(operation_raw).strip().lower()
+            if operation_text not in {"create", "update"}:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Invalid event modification 'operation': {operation_raw}",
+                )
+            normalized["operation"] = operation_text
+
+    if "existing_event_id" in raw:
+        existing_raw = raw.get("existing_event_id")
+        if existing_raw in (None, ""):
+            normalized["existing_event_id"] = None
+        else:
+            normalized["existing_event_id"] = str(existing_raw).strip()
+
     group_confirmations = raw.get("group_confirmations")
     if isinstance(group_confirmations, dict):
         normalized["group_confirmations"] = {
@@ -335,6 +355,31 @@ def confirm_event_command(
         extracted["tags"] = normalized_modifications["tags"]
     if "types" in normalized_modifications:
         extracted["types"] = normalized_modifications["types"]
+
+    # Resolve the final create-vs-update decision. The handler stamps an initial
+    # operation on the preview, but the user can override in the editor (e.g.
+    # "create new instead" or "pick a different candidate").
+    operation = str(command_data.get("operation") or "create").strip().lower()
+    existing_event_id = str(command_data.get("existing_event_id") or "").strip() or None
+    if "operation" in normalized_modifications:
+        override_operation = normalized_modifications.get("operation")
+        if override_operation in ("create", "update"):
+            operation = override_operation
+    if "existing_event_id" in normalized_modifications:
+        existing_event_id = normalized_modifications.get("existing_event_id") or None
+    if operation == "update" and not existing_event_id:
+        raise HTTPException(
+            status_code=400,
+            detail="Event update requested without an existing event id.",
+        )
+    if operation == "update":
+        existing_event = events_service.get_event_by_id(existing_event_id)
+        if not existing_event:
+            raise HTTPException(
+                status_code=404,
+                detail="The event being updated no longer exists.",
+            )
+
     participant_override_enabled = "contact_ids" in normalized_modifications
     participant_override_ids = normalized_modifications.get("contact_ids", [])
     participant_override_id_set: set[str] = set()
@@ -671,7 +716,8 @@ def confirm_event_command(
                     confidence=str(pending_contact_place_link.get("confidence") or "high"),
                 )
 
-        event_id = f"event:{uuid4().hex}"
+        is_update = operation == "update" and existing_event_id
+        event_id = existing_event_id if is_update else f"event:{uuid4().hex}"
         when = extracted.get("when")
         end_when = extracted.get("end_when")
         if when:
@@ -689,29 +735,56 @@ def confirm_event_command(
                 detail="Event end date/time must be after the start date/time.",
             )
 
-        event_in = EventIn(
-            id=event_id,
-            startDate=start_when,
-            endDate=end_when,
-            placeId=place_id,
-            people=all_contact_ids,
-            tags=extracted.get("tags", []),
-            types=extracted.get("types", ["generic"]),
-            title=extracted.get("title", ""),
-            summary=extracted.get("summary", ""),
-            raw={
-                "source": "event_command",
-                "inferred_location": resolution.get("inferred_location"),
-            },
-        )
+        if is_update:
+            logger.info(
+                "[event_confirm] Updating event %s with %d people: %s",
+                event_id,
+                len(all_contact_ids),
+                all_contact_ids[:10],
+            )
+            events_service.update_event(
+                event_id,
+                {
+                    "start_date": start_when,
+                    "end_date": end_when,
+                    "place_id": place_id,
+                    "people": all_contact_ids,
+                    "tags": extracted.get("tags", []),
+                    "types": extracted.get("types", ["generic"]),
+                    "title": extracted.get("title", ""),
+                    "summary": extracted.get("summary", ""),
+                    "raw": {
+                        "source": "event_command",
+                        "operation": "update",
+                        "original_message": command_data.get("original_message"),
+                        "inferred_location": resolution.get("inferred_location"),
+                    },
+                },
+            )
+        else:
+            event_in = EventIn(
+                id=event_id,
+                startDate=start_when,
+                endDate=end_when,
+                placeId=place_id,
+                people=all_contact_ids,
+                tags=extracted.get("tags", []),
+                types=extracted.get("types", ["generic"]),
+                title=extracted.get("title", ""),
+                summary=extracted.get("summary", ""),
+                raw={
+                    "source": "event_command",
+                    "inferred_location": resolution.get("inferred_location"),
+                },
+            )
 
-        logger.info(
-            "[event_confirm] Creating event %s with %d people: %s",
-            event_id,
-            len(all_contact_ids),
-            all_contact_ids[:10],  # Log first 10 to avoid huge log lines
-        )
-        events_service.ingest_event(event_in)
+            logger.info(
+                "[event_confirm] Creating event %s with %d people: %s",
+                event_id,
+                len(all_contact_ids),
+                all_contact_ids[:10],  # Log first 10 to avoid huge log lines
+            )
+            events_service.ingest_event(event_in)
 
         for proposed_group in resolution.get("proposed_contact_groups", []):
             if not isinstance(proposed_group, dict):
@@ -763,7 +836,7 @@ def confirm_event_command(
 
         delete_command_data(payload.preview_id)
         clear_pending_event_by_preview_id(payload.preview_id)
-        _persist_event_resolved(payload.preview_id, "created")
+        _persist_event_resolved(payload.preview_id, "updated" if is_update else "created")
 
         return EventCommandResult(
             success=True,
@@ -771,6 +844,7 @@ def confirm_event_command(
             created_contacts=created_contacts,
             created_places=created_places,
             created_groups=created_groups,
+            operation="update" if is_update else "create",
         )
 
     except HTTPException:

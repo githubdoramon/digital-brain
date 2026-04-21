@@ -51,6 +51,7 @@ function buttonVariant(option: UiDirectiveOption): 'primary' | 'secondary' {
     'confirm',
     'yes',
     'create',
+    'update',
     'save',
     'submit',
     'continue',

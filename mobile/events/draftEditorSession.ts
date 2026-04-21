@@ -1,6 +1,7 @@
 import type {
   EventContactOption,
   EventDraft,
+  EventMatchCandidate,
   EventPlaceOption,
 } from '@/components/event-draft/types';
 
@@ -11,6 +12,7 @@ export type EventDraftEditSession = {
   initialDraft: EventDraft;
   availableContacts: EventContactOption[];
   availablePlaces: EventPlaceOption[];
+  candidateEvents: EventMatchCandidate[];
 };
 
 export type EventDraftEditResult = {

@@ -7,11 +7,12 @@ It extracts entities, checks for existing ones, and asks for confirmation.
 
 import re
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 from uuid import uuid4
 
 import places as places_service
+import retrieval
 from commands.handlers.clarification_utils import (
     build_clarification_result,
     build_clarification_storage_payload,
@@ -98,6 +99,16 @@ _GENERIC_PLACE_ALIAS_TERMS = {
 _INFERRED_PLACE_AUTO_MATCH_MAX_DISTANCE_M = 60.0
 _INFERRED_PLACE_AUTO_MATCH_CONFIDENCE = {"high"}
 _CONTACT_SCOPED_POSSESSIVE_PATTERN = r"(?:'|’|`|´)s"
+
+# Thresholds for deciding whether an /event invocation should update an
+# existing event. Scores come from retrieval.search_memories and are
+# normalized to a 0–100 scale below. Tune these together — raising the
+# auto-update threshold without raising the floor just means more user
+# ambiguity prompts.
+EVENT_MATCH_CANDIDATE_FLOOR = 35.0  # below this, ignore the candidate entirely
+EVENT_MATCH_AUTO_UPDATE_SCORE = 65.0  # at/above this, propose update confidently
+EVENT_MATCH_AMBIGUOUS_GAP = 5.0  # top-2 within this range -> ambiguous
+EVENT_MATCH_MAX_CANDIDATES = 5
 def _extract_client_location(context: dict[str, Any]) -> dict[str, Any] | None:
     client_context = context.get("client_context")
     if not isinstance(client_context, dict):
@@ -1072,6 +1083,149 @@ def _dedupe_preserve_order(items: list[str]) -> list[str]:
         seen.add(key)
         deduped.append(normalized)
     return deduped
+
+
+def _compute_event_match_window(when_value: Any) -> tuple[str | None, str | None]:
+    """Return (time_start, time_end) ISO strings for the match query window.
+
+    Date-only extractions (midnight) open a ±1 day window; time-specific
+    extractions tighten to ±4 hours. When ``when_value`` is not a datetime the
+    window is skipped so the match relies on text + participants alone.
+    """
+    if not isinstance(when_value, datetime):
+        return None, None
+    is_midnight = when_value.hour == 0 and when_value.minute == 0 and when_value.second == 0
+    delta = timedelta(days=1) if is_midnight else timedelta(hours=4)
+    return (when_value - delta).isoformat(), (when_value + delta).isoformat()
+
+
+def _matched_event_preview(candidate: dict[str, Any]) -> dict[str, Any]:
+    """Trim a search_memories event result down to what the UI needs."""
+    place = candidate.get("place") if isinstance(candidate.get("place"), dict) else None
+    return {
+        "event_id": str(candidate.get("id") or "").strip(),
+        "title": str(candidate.get("title") or "").strip(),
+        "summary": str(candidate.get("summary") or "").strip(),
+        "start_date": candidate.get("start_date"),
+        "end_date": candidate.get("end_date"),
+        "place": (
+            {
+                "place_id": str(place.get("place_id") or "").strip(),
+                "name": str(place.get("name") or "").strip(),
+                "city": str(place.get("city") or "").strip() or None,
+                "country": str(place.get("country") or "").strip() or None,
+            }
+            if isinstance(place, dict) and place.get("place_id")
+            else None
+        ),
+        "match_score": round(float(candidate.get("match_score") or 0.0), 2),
+        "match_sources": list(candidate.get("match_sources") or []),
+    }
+
+
+def _find_event_matches(
+    extracted: dict[str, Any],
+    resolution: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Classify the current extraction as create / update / ambiguous.
+
+    Returns a dict with:
+      - ``operation``: "create", "update", or "ambiguous".
+      - ``existing_event_id``: set when operation == "update".
+      - ``matched_event``: trimmed top candidate (update path only).
+      - ``candidates``: up to EVENT_MATCH_MAX_CANDIDATES trimmed alternatives.
+    """
+    title = str(extracted.get("title") or "").strip()
+    summary = str(extracted.get("summary") or "").strip()
+    query_parts = [text for text in (title, summary) if text]
+    query = " ".join(query_parts).strip()
+    if not query:
+        return {"operation": "create", "candidates": []}
+
+    time_start, time_end = _compute_event_match_window(extracted.get("when"))
+    end_when = extracted.get("end_when")
+    if isinstance(end_when, datetime) and time_end:
+        try:
+            parsed_end = datetime.fromisoformat(time_end)
+            if end_when > parsed_end:
+                time_end = end_when.isoformat()
+        except ValueError:
+            pass
+
+    place_id: str | None = None
+    if isinstance(resolution, dict):
+        matched_place = resolution.get("matched_place")
+        if isinstance(matched_place, dict):
+            candidate_place_id = str(matched_place.get("place_id") or "").strip()
+            if candidate_place_id:
+                place_id = candidate_place_id
+
+    people_ids: list[str] = []
+    if isinstance(resolution, dict):
+        for contact in resolution.get("contacts") or []:
+            if not isinstance(contact, dict):
+                continue
+            contact_id = str(contact.get("contact_id") or "").strip()
+            if contact_id:
+                people_ids.append(contact_id)
+
+    try:
+        search_result = retrieval.search_memories(
+            query=query,
+            people=people_ids or None,
+            place_ids=[place_id] if place_id else None,
+            time_start=time_start,
+            time_end=time_end,
+            limit=EVENT_MATCH_MAX_CANDIDATES,
+            sort_order="relevance",
+        )
+    except Exception as exc:  # pragma: no cover - defensive, retrieval shouldn't raise
+        logger.warning("[handle_event] event match search failed: %s", exc)
+        return {"operation": "create", "candidates": []}
+
+    raw_results = [
+        result for result in (search_result.get("results") or []) if result.get("kind") == "event"
+    ]
+    if not raw_results:
+        return {"operation": "create", "candidates": []}
+
+    scored: list[dict[str, Any]] = []
+    for result in raw_results[:EVENT_MATCH_MAX_CANDIDATES]:
+        raw_score = float(result.get("score") or 0.0)
+        normalized_score = max(0.0, min(100.0, raw_score * 100.0))
+        if normalized_score < EVENT_MATCH_CANDIDATE_FLOOR:
+            continue
+        scored.append({**result, "match_score": normalized_score})
+
+    if not scored:
+        return {"operation": "create", "candidates": []}
+
+    candidates = [_matched_event_preview(candidate) for candidate in scored]
+    top = scored[0]
+    top_score = float(top.get("match_score") or 0.0)
+
+    if len(scored) >= 2:
+        second_score = float(scored[1].get("match_score") or 0.0)
+        if top_score < EVENT_MATCH_AUTO_UPDATE_SCORE and (top_score - second_score) <= EVENT_MATCH_AMBIGUOUS_GAP:
+            logger.info(
+                "[handle_event] Event match ambiguous: top=%.2f second=%.2f",
+                top_score,
+                second_score,
+            )
+            return {"operation": "ambiguous", "candidates": candidates}
+
+    logger.info(
+        "[handle_event] Event match found: id=%s score=%.2f (auto_update=%s)",
+        top.get("id"),
+        top_score,
+        top_score >= EVENT_MATCH_AUTO_UPDATE_SCORE,
+    )
+    return {
+        "operation": "update",
+        "existing_event_id": str(top.get("id") or "").strip(),
+        "matched_event": candidates[0],
+        "candidates": candidates,
+    }
 
 
 def _dedupe_contacts(contacts: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -2129,6 +2283,20 @@ def handle_event(parsed: ParsedCommand, context: dict) -> dict[str, Any]:
         ]
     )
 
+    # Look for an existing event we might be updating instead of creating.
+    _emit_progress(context, "Checking for matching events...")
+    event_match = _find_event_matches(extracted, resolution)
+    operation = str(event_match.get("operation") or "create")
+    existing_event_id = str(event_match.get("existing_event_id") or "").strip() or None
+    matched_event = event_match.get("matched_event")
+    candidate_events = list(event_match.get("candidates") or [])
+    if operation == "ambiguous":
+        # Ambiguous reverts to create by default; the user can pick a candidate
+        # in the editor to switch to update. We keep the candidates around so
+        # the UI can surface them.
+        existing_event_id = None
+        matched_event = None
+
     # Generate a preview ID and store the data
     preview_id = f"event:preview:{uuid4().hex[:8]}"
 
@@ -2151,6 +2319,10 @@ def handle_event(parsed: ParsedCommand, context: dict) -> dict[str, Any]:
             "thread_id": context.get("thread_id"),
             "clarification_messages": clarification_messages,
             "requested_field_ids": [],
+            "operation": operation,
+            "existing_event_id": existing_event_id,
+            "matched_event": matched_event,
+            "candidate_events": candidate_events,
         },
     )
 
@@ -2169,6 +2341,25 @@ def handle_event(parsed: ParsedCommand, context: dict) -> dict[str, Any]:
         len(resolution.get("new_entities", {}).get("contacts", [])),
     )
     logger.info("  - Relationship suggestions: %s", len(relationship_suggestions))
+    logger.info(
+        "  - Event match: operation=%s existing_id=%s candidates=%d",
+        operation,
+        existing_event_id,
+        len(candidate_events),
+    )
+
+    if operation == "update":
+        message = (
+            "I found an existing event that looks like a match. Review the update below, "
+            "or edit to pick a different event or create a new one."
+        )
+    elif operation == "ambiguous":
+        message = (
+            "I found a few existing events that could match. Review the details, and "
+            "edit to pick one to update or create a new event."
+        )
+    else:
+        message = "I've extracted the following information from your event. Please review and confirm:"
 
     return {
         "type": "event_confirmation",
@@ -2176,8 +2367,12 @@ def handle_event(parsed: ParsedCommand, context: dict) -> dict[str, Any]:
         "extracted": extracted,
         "resolution": resolution,
         "relationship_suggestions": relationship_suggestions,
+        "operation": operation,
+        "existing_event_id": existing_event_id,
+        "matched_event": matched_event,
+        "candidate_events": candidate_events,
         "requires_confirmation": True,
-        "message": "I've extracted the following information from your event. Please review and confirm:",
+        "message": message,
     }
 
 

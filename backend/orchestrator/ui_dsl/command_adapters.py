@@ -133,6 +133,21 @@ def _event_confirmation_directive(command_result: dict[str, Any]) -> dict[str, A
     new_entities: dict[str, Any] = new_entities_raw if isinstance(new_entities_raw, dict) else {}
     relationships = _dict_list(command_result.get("relationship_suggestions"))
 
+    operation = _normalized_text(command_result.get("operation")).lower() or "create"
+    matched_event_raw = command_result.get("matched_event")
+    matched_event: dict[str, Any] | None = (
+        matched_event_raw if isinstance(matched_event_raw, dict) else None
+    )
+    candidate_events = _dict_list(command_result.get("candidate_events"))
+    is_update = operation == "update" and matched_event is not None
+
+    preview_title = "Event update preview" if is_update else "Event preview"
+    preview_description = (
+        "Review this before updating the event."
+        if is_update
+        else "Review this before creating the event."
+    )
+
     preview_lines = [
         f"Title: {_normalized_text(extracted.get('title')) or 'Untitled event'}",
         f"Summary: {_normalized_text(extracted.get('summary')) or 'No summary provided.'}",
@@ -148,11 +163,50 @@ def _event_confirmation_directive(command_result: dict[str, Any]) -> dict[str, A
         {
             "id": f"event_preview:{preview_id or 'draft'}",
             "type": "info_card",
-            "title": "Event preview",
-            "description": "Review this before creating the event.",
+            "title": preview_title,
+            "description": preview_description,
             "body": "\n".join(preview_lines),
         }
     ]
+
+    if is_update and matched_event:
+        match_lines = [
+            f"Title: {_normalized_text(matched_event.get('title')) or 'Untitled event'}",
+            f"When: {_format_when(matched_event.get('start_date'))}",
+        ]
+        match_place = matched_event.get("place") if isinstance(matched_event.get("place"), dict) else None
+        if match_place and _normalized_text(match_place.get("name")):
+            match_lines.append(f"Where: {_normalized_text(match_place.get('name'))}")
+        score = matched_event.get("match_score")
+        if isinstance(score, (int, float)):
+            match_lines.append(f"Match confidence: {round(float(score))}%")
+        blocks.append(
+            {
+                "id": f"event_matched:{preview_id or 'draft'}",
+                "type": "info_card",
+                "title": "Matches existing event",
+                "description": "Edit to pick a different match or create a new event instead.",
+                "body": "\n".join(match_lines),
+            }
+        )
+    elif not is_update and candidate_events:
+        candidate_lines: list[str] = []
+        for candidate in candidate_events[:3]:
+            if not isinstance(candidate, dict):
+                continue
+            title = _normalized_text(candidate.get("title")) or "Untitled event"
+            when_label = _format_when(candidate.get("start_date"))
+            candidate_lines.append(f"{title} — {when_label}")
+        if candidate_lines:
+            blocks.append(
+                {
+                    "id": f"event_candidates:{preview_id or 'draft'}",
+                    "type": "info_card",
+                    "title": "Similar events",
+                    "description": "Open edit to update one of these instead.",
+                    "body": "\n".join(candidate_lines),
+                }
+            )
 
     new_contacts = _name_list(new_entities.get("contacts"), name_key="display_name")
     new_places = _name_list(new_entities.get("places"), name_key="name")
@@ -202,7 +256,7 @@ def _event_confirmation_directive(command_result: dict[str, Any]) -> dict[str, A
                 "options": [
                     {
                         "id": f"{_EVENT_ACTION_CONFIRM_PREFIX}{preview_id}",
-                        "label": "Create event",
+                        "label": "Update event" if is_update else "Create event",
                     },
                     {
                         "id": f"{_EVENT_ACTION_EDIT_PREFIX}{preview_id}",

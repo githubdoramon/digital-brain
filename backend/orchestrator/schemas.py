@@ -525,10 +525,11 @@ class EventCommandConfirmation(BaseModel):
 
 
 class EventCommandResult(BaseModel):
-    """Result of creating an event via /event command."""
+    """Result of creating or updating an event via /event command."""
 
     success: bool
     event_id: str | None = None
+    operation: str = "create"
     created_contacts: list[dict[str, Any]] = Field(default_factory=list)
     created_places: list[dict[str, Any]] = Field(default_factory=list)
     created_groups: list[dict[str, Any]] = Field(default_factory=list)

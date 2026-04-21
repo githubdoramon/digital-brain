@@ -38,6 +38,8 @@ import type {
   EventContactOption,
   EventDraft,
   EventDraftModifications,
+  EventDraftOperation,
+  EventMatchCandidate,
   EventPlaceOption,
 } from '@/components/event-draft/types';
 import { askWithStreaming, waitForRunCompletion } from '@/chat/streaming';
@@ -118,9 +120,29 @@ type ContactAction = {
   previewId: string;
 };
 
+type EventMatchCandidatePayload = {
+  event_id?: unknown;
+  title?: unknown;
+  summary?: unknown;
+  start_date?: unknown;
+  end_date?: unknown;
+  place?: {
+    place_id?: unknown;
+    name?: unknown;
+    city?: unknown;
+    country?: unknown;
+  } | null;
+  match_score?: unknown;
+  match_sources?: unknown;
+};
+
 type EventCommandResultPayload = {
   type?: string;
   preview_id?: string;
+  operation?: string;
+  existing_event_id?: string | null;
+  matched_event?: EventMatchCandidatePayload | null;
+  candidate_events?: EventMatchCandidatePayload[];
   relationship_suggestions?: {
     from_contact_id?: unknown;
     from_display_name?: unknown;
@@ -417,6 +439,63 @@ function extractEventPreviewId(commandResult: CommandResult | undefined): string
   return previewId || null;
 }
 
+function numberValue(value: unknown): number {
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (typeof value === 'string' && value.trim()) {
+    const parsed = Number(value);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return 0;
+}
+
+function nullableText(value: unknown): string | null {
+  const text = textValue(value);
+  return text || null;
+}
+
+function buildEventMatchCandidate(
+  candidate: EventMatchCandidatePayload | null | undefined,
+): EventMatchCandidate | null {
+  if (!candidate || typeof candidate !== 'object') return null;
+  const eventId = textValue(candidate.event_id);
+  if (!eventId) return null;
+  const placeRaw = candidate.place;
+  const place = placeRaw && typeof placeRaw === 'object'
+    ? {
+        placeId: textValue(placeRaw.place_id),
+        name: textValue(placeRaw.name),
+        city: nullableText(placeRaw.city),
+        country: nullableText(placeRaw.country),
+      }
+    : null;
+  return {
+    eventId,
+    title: textValue(candidate.title),
+    summary: textValue(candidate.summary),
+    startDate: nullableText(candidate.start_date),
+    endDate: nullableText(candidate.end_date),
+    place: place && place.placeId ? place : null,
+    matchScore: numberValue(candidate.match_score),
+    matchSources: stringArrayValue(candidate.match_sources),
+  };
+}
+
+function buildEventCandidateList(
+  candidates: EventMatchCandidatePayload[] | undefined,
+): EventMatchCandidate[] {
+  if (!Array.isArray(candidates)) return [];
+  const out: EventMatchCandidate[] = [];
+  const seen = new Set<string>();
+  for (const entry of candidates) {
+    const built = buildEventMatchCandidate(entry);
+    if (!built) continue;
+    if (seen.has(built.eventId)) continue;
+    seen.add(built.eventId);
+    out.push(built);
+  }
+  return out;
+}
+
 function buildEventDraft(commandResult: CommandResult | undefined, previewId: string): EventDraft | null {
   if (!commandResult || typeof commandResult !== 'object') return null;
   const payload = commandResult as EventCommandResultPayload;
@@ -460,6 +539,10 @@ function buildEventDraft(commandResult: CommandResult | undefined, previewId: st
     });
   }
 
+  const operation: EventDraftOperation = payload.operation === 'update' ? 'update' : 'create';
+  const existingEventId = textValue(payload.existing_event_id) || null;
+  const matchedEvent = operation === 'update' ? buildEventMatchCandidate(payload.matched_event) : null;
+
   return {
     title: textValue(extracted.title),
     summary: textValue(extracted.summary),
@@ -470,6 +553,9 @@ function buildEventDraft(commandResult: CommandResult | undefined, previewId: st
     tags: stringArrayValue(extracted.tags),
     types: stringArrayValue(extracted.types),
     participants,
+    operation: operation === 'update' && existingEventId ? 'update' : 'create',
+    existingEventId: operation === 'update' ? existingEventId : null,
+    matchedEvent,
   };
 }
 
@@ -477,6 +563,7 @@ function applyDraftModifications(
   baseDraft: EventDraft,
   modifications: EventDraftModifications | undefined,
   contactNameById: Map<string, string>,
+  candidateEvents?: EventMatchCandidate[],
 ): EventDraft {
   if (!modifications) return baseDraft;
   const participantIds = modifications.contact_ids;
@@ -487,6 +574,21 @@ function applyDraftModifications(
           contactId,
           displayName: contactNameById.get(contactId) || contactId,
         }));
+
+  const operation: EventDraftOperation =
+    modifications.operation ?? baseDraft.operation;
+  const existingEventId =
+    modifications.existing_event_id === undefined
+      ? baseDraft.existingEventId
+      : modifications.existing_event_id;
+  let matchedEvent = baseDraft.matchedEvent;
+  if (operation === 'create') {
+    matchedEvent = null;
+  } else if (existingEventId && candidateEvents && candidateEvents.length > 0) {
+    matchedEvent =
+      candidateEvents.find((candidate) => candidate.eventId === existingEventId) ??
+      baseDraft.matchedEvent;
+  }
 
   return {
     title: modifications.title ?? baseDraft.title,
@@ -511,6 +613,9 @@ function applyDraftModifications(
     tags: modifications.tags ?? baseDraft.tags,
     types: modifications.types ?? baseDraft.types,
     participants,
+    operation: operation === 'update' && existingEventId ? 'update' : 'create',
+    existingEventId: operation === 'update' ? existingEventId : null,
+    matchedEvent: operation === 'update' ? matchedEvent : null,
   };
 }
 
@@ -550,6 +655,13 @@ function buildDraftModifications(baseDraft: EventDraft, nextDraft: EventDraft): 
   const nextParticipantIds = nextDraft.participants.map((participant) => participant.contactId);
   if (!sameStringList(baseParticipantIds, nextParticipantIds)) {
     modifications.contact_ids = nextParticipantIds;
+  }
+
+  if (baseDraft.operation !== nextDraft.operation) {
+    modifications.operation = nextDraft.operation;
+  }
+  if ((baseDraft.existingEventId || null) !== (nextDraft.existingEventId || null)) {
+    modifications.existing_event_id = nextDraft.existingEventId ?? null;
   }
 
   return modifications;
@@ -1643,6 +1755,9 @@ export default function ChatScreen() {
           }
 
           const existingModifications = eventDraftModificationsByPreview[action.previewId];
+          const candidateEvents = buildEventCandidateList(
+            (commandResult as EventCommandResultPayload | undefined)?.candidate_events,
+          );
           const session = createEventDraftEditSession({
             previewId: action.previewId,
             baseDraft,
@@ -1650,9 +1765,11 @@ export default function ChatScreen() {
               baseDraft,
               existingModifications,
               contactNameById,
+              candidateEvents,
             ),
             availableContacts: loadedContacts,
             availablePlaces: loadedPlaces,
+            candidateEvents,
           });
           setActiveDraftEditorSessionId((previousSessionId) => {
             clearEventDraftEditSession(previousSessionId);
@@ -1724,7 +1841,21 @@ export default function ChatScreen() {
             delete next[action.previewId];
             return next;
           });
-          const resolvedStatus = action.type === 'confirm' ? 'created' : 'cancelled';
+          const confirmedOperation =
+            modifications.operation ??
+            (baseDraftForConfirm ? baseDraftForConfirm.operation : 'create');
+          const resolvedStatus =
+            action.type !== 'confirm'
+              ? 'cancelled'
+              : confirmedOperation === 'update'
+                ? 'updated'
+                : 'created';
+          const resolvedLabel =
+            resolvedStatus === 'created'
+              ? 'Event created'
+              : resolvedStatus === 'updated'
+                ? 'Event updated'
+                : 'Event cancelled';
           setMessages((prev) =>
             prev.map((message) =>
               message.id === messageId
@@ -1734,7 +1865,7 @@ export default function ChatScreen() {
                       ...message.metadata,
                       command_resolved: {
                         status: resolvedStatus,
-                        label: resolvedStatus === 'created' ? 'Event created' : 'Event cancelled',
+                        label: resolvedLabel,
                       },
                     },
                   }
@@ -1963,10 +2094,14 @@ export default function ChatScreen() {
                     contactNameById.set(participant.contactId, participant.displayName);
                   }
                 }
+                const candidateEvents = buildEventCandidateList(
+                  (commandResult as EventCommandResultPayload | undefined)?.candidate_events,
+                );
                 const modifiedDraft = applyDraftModifications(
                   baseDraft,
                   eventPreviewModifications,
                   contactNameById,
+                  candidateEvents,
                 );
                 const withUpdatedPreview = updateEventPreviewCard(
                   directives,
