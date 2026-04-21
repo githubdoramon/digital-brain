@@ -901,6 +901,108 @@ def test_extract_clarification_detail_strips_prefixed_original_message():
     assert detail == "None of these. It is a new contact, named Julia"
 
 
+def test_extract_clarification_detail_strips_structured_field_label():
+    detail = event_handler._extract_clarification_detail(
+        "Additional details: Who did you mean by 'Rita'?: Rita Castro",
+        "today's physiotherapy went well",
+        ["Who did you mean by 'Rita'?"],
+    )
+
+    assert detail == "Rita Castro"
+
+
+def test_event_clarification_follow_up_strips_structured_contact_disambiguation_label(
+    monkeypatch,
+):
+    from commands.storage import delete_command_data, store_command_data
+
+    clarification_id = "event:clarification:rita1234"
+    captured: dict[str, str] = {}
+
+    store_command_data(
+        clarification_id,
+        {
+            "original_message": "today's physiotherapy at 9h went well. Rita was the Phisioterapist",
+            "thread_id": "thread-rita",
+            "extracted": {
+                "title": "Physiotherapy Session with Rita",
+                "summary": "Went well.",
+                "when": "2026-04-21T09:00:00",
+                "end_when": None,
+                "where": None,
+                "documents": [],
+                "tags": ["Health"],
+                "types": ["health"],
+                "need_user_input": None,
+            },
+            "resolution": {},
+            "contact_result": {"ambiguous_contacts": []},
+            "clarification_messages": [
+                {
+                    "role": "user",
+                    "content": "today's physiotherapy at 9h went well. Rita was the Phisioterapist",
+                },
+                {
+                    "role": "assistant",
+                    "content": "I found multiple matching contacts. Please choose who you meant.",
+                },
+            ],
+            "requested_fields": [
+                {
+                    "id": "who_0",
+                    "kind": "select",
+                    "label": "Who did you mean by 'Rita'?",
+                    "required": True,
+                }
+            ],
+        },
+    )
+
+    def fake_extract(*_args, **_kwargs):
+        return {
+            "title": "Physiotherapy Session with Rita Castro",
+            "summary": "Went well.",
+            "when": "2026-04-21T09:00:00",
+            "end_when": None,
+            "where": None,
+            "documents": [],
+            "tags": ["Health"],
+            "types": ["health"],
+            "need_user_input": None,
+        }
+
+    def fake_resolve(contact_message, *_args, **_kwargs):
+        captured["contact_message"] = contact_message
+        return ({"contacts": [], "new_entities": {}, "name_replacements": {}}, {"ambiguous_contacts": []})
+
+    monkeypatch.setattr("commands.handlers.event._extract_event_entities_with_llm", fake_extract)
+    monkeypatch.setattr("commands.handlers.event._resolve_contacts_with_agent", fake_resolve)
+    monkeypatch.setattr("commands.handlers.event.infer_current_place", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr("commands.handlers.event.places_service.find_best_place_match", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr("commands.handlers.event.geocode_place_name", lambda *_args, **_kwargs: None)
+
+    result = handle_event(
+        ParsedCommand(
+            command="event",
+            args=(
+                "today's physiotherapy at 9h went well. Rita was the Phisioterapist\n\n"
+                "Additional details: Who did you mean by 'Rita'?: Rita Castro "
+                f"[clarification_id:{clarification_id}]"
+            ),
+            raw_message="/event follow-up",
+        ),
+        {"user_email": "user@example.com", "thread_id": "thread-rita"},
+    )
+
+    assert result["type"] == "event_confirmation"
+    assert "Rita Castro" in captured["contact_message"]
+    assert "Who did you mean by 'Rita'?" not in captured["contact_message"]
+    assert "- Rita Castro" in captured["contact_message"]
+
+    delete_command_data(result["preview_id"])
+    delete_command_data(clarification_id)
+
+
 def test_build_contact_context_message_formats_chronological_details():
     message = event_handler._build_contact_context_message(
         "met with Alex about the roadmap",

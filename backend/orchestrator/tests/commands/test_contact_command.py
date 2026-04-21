@@ -1,4 +1,5 @@
 from commands.contact import _apply_modifications_to_proposal, confirm_contact_command
+from commands.handlers import contact as contact_handler
 from commands.handlers.contact import handle_contact
 from commands.parser import ParsedCommand
 from commands.storage import clear_pending_event, delete_command_data, get_command_data
@@ -269,6 +270,110 @@ def test_contact_clarification_follow_up_passes_conversation_history(monkeypatch
 
     delete_command_data(second["preview_id"])
     clear_pending_event(context["event_pending_key"])
+
+
+def test_contact_follow_up_strips_structured_field_label(monkeypatch):
+    context = {
+        "user_email": "user@example.com",
+        "thread_id": "thread-contact-rita",
+        "event_pending_key": "user@example.com:thread-contact-rita",
+    }
+    calls = []
+
+    first_extraction = {
+        "contacts": [{"contact_name": "Rita"}],
+        "relationships": [],
+        "contact_place_links": [],
+        "need_user_input": {
+            "prompt": "I found multiple matching contacts. Please choose who you meant.",
+            "questions": ["I found multiple matching contacts. Please choose who you meant."],
+            "fields": [
+                {
+                    "id": "who_0",
+                    "kind": "select",
+                    "label": "Who did you mean by 'Rita'?",
+                    "required": True,
+                }
+            ],
+            "submission_mode": "ui_submission",
+        },
+    }
+
+    def fake_extract(
+        message,
+        *,
+        user_email,
+        model=None,
+        conversation_messages=None,
+        existing_extraction=None,
+    ):
+        calls.append(
+            {
+                "message": message,
+                "conversation_messages": list(conversation_messages or []),
+                "existing_extraction": existing_extraction,
+            }
+        )
+        if len(calls) == 1:
+            return first_extraction
+        return {
+            "contacts": [{"contact_name": "Rita Castro"}],
+            "relationships": [],
+            "contact_place_links": [],
+            "need_user_input": None,
+        }
+
+    monkeypatch.setattr("commands.handlers.contact._llm_extract_contact_changes", fake_extract)
+    monkeypatch.setattr(
+        "commands.handlers.contact.contacts_service.search_contacts",
+        lambda *_args, **_kwargs: [],
+    )
+
+    first = handle_contact(
+        ParsedCommand(
+            command="contact",
+            args="Rita is my physiotherapist",
+            raw_message="/contact Rita is my physiotherapist",
+        ),
+        context,
+    )
+    clarification_id = first["clarification_id"]
+
+    second = handle_contact(
+        ParsedCommand(
+            command="contact",
+            args=(
+                "Rita is my physiotherapist\n\n"
+                "Additional details: Who did you mean by 'Rita'?: Rita Castro "
+                f"[clarification_id:{clarification_id}]"
+            ),
+            raw_message="/contact follow-up",
+        ),
+        context,
+    )
+
+    assert second["type"] == "contact_confirmation"
+    assert calls[1]["message"] == "Rita is my physiotherapist"
+    assert calls[1]["conversation_messages"] == [
+        {"role": "user", "content": "Rita is my physiotherapist"},
+        {
+            "role": "assistant",
+            "content": "I found multiple matching contacts. Please choose who you meant.",
+        },
+        {"role": "user", "content": "Rita Castro"},
+    ]
+
+    delete_command_data(second["preview_id"])
+    clear_pending_event(context["event_pending_key"])
+
+
+def test_contact_strip_clarification_field_labels_helper():
+    detail = contact_handler._strip_clarification_field_labels(
+        "Who did you mean by 'Rita'?: Rita Castro",
+        ["Who did you mean by 'Rita'?"],
+    )
+
+    assert detail == "Rita Castro"
 
 
 def test_handle_contact_supports_multiple_contacts_and_place_links(monkeypatch):

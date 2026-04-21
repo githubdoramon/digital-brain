@@ -11,6 +11,27 @@ from uuid import uuid4
 
 import contacts as contacts_service
 import places as places_service
+from commands.handlers.clarification_utils import (
+    append_conversation_message as _append_contact_conversation_message,
+)
+from commands.handlers.clarification_utils import (
+    build_clarification_result,
+    build_clarification_storage_payload,
+    create_clarification_preview_id,
+    store_clarification_preview,
+)
+from commands.handlers.clarification_utils import (
+    extract_additional_details as _extract_additional_details,
+)
+from commands.handlers.clarification_utils import (
+    extract_clarification_token as _extract_clarification_token,
+)
+from commands.handlers.clarification_utils import (
+    need_user_input_prompt as _shared_need_user_input_prompt,
+)
+from commands.handlers.clarification_utils import (
+    strip_clarification_field_labels as _strip_clarification_field_labels,
+)
 from commands.parser import ParsedCommand
 from commands.registry import CommandRegistry
 from observability.logger import get_runtime_logger
@@ -98,44 +119,11 @@ def _emit_progress(context: dict[str, Any], message: str) -> None:
             logger.debug("[contact_command] progress callback failed", exc_info=True)
 
 
-def _extract_clarification_token(raw_args: str) -> tuple[str, str | None]:
-    text = str(raw_args or "")
-    match = re.search(r"\[clarification_id:([^\]]+)\]\s*$", text)
-    if not match:
-        return text.strip(), None
-    cleaned = text[: match.start()].strip()
-    return cleaned, match.group(1).strip() or None
-
-
-def _extract_additional_details(text: str) -> tuple[str, str | None]:
-    marker = "\n\nAdditional details:"
-    if marker not in text:
-        return text.strip(), None
-    base, extra = text.split(marker, 1)
-    return base.strip(), extra.strip() or None
-
-
 def _need_user_input_prompt(need_user_input: dict[str, Any] | None) -> str:
-    if not isinstance(need_user_input, dict):
-        return "Please share the missing contact details so I can continue."
-    prompt = str(need_user_input.get("prompt") or "").strip()
-    if prompt:
-        return prompt
-    questions = need_user_input.get("questions")
-    if isinstance(questions, list):
-        return " ".join(str(question).strip() for question in questions if str(question).strip())
-    return "Please share the missing contact details so I can continue."
-
-
-def _append_contact_conversation_message(
-    messages: list[dict[str, str]],
-    role: str,
-    content: str,
-) -> None:
-    normalized_content = str(content or "").strip()
-    if role not in {"user", "assistant"} or not normalized_content:
-        return
-    messages.append({"role": role, "content": normalized_content})
+    return _shared_need_user_input_prompt(
+        need_user_input,
+        "Please share the missing contact details so I can continue.",
+    )
 
 
 def _safe_entity_slug(raw: str) -> str:
@@ -1139,14 +1127,32 @@ def handle_contact(parsed: ParsedCommand, context: dict[str, Any]) -> dict[str, 
         for item in ((clarification_context or {}).get("conversation_messages") or [])
         if isinstance(item, dict)
     ]
+    requested_fields = [
+        field
+        for field in ((clarification_context or {}).get("requested_fields") or [])
+        if isinstance(field, dict)
+    ]
+    clarification_field_labels = [
+        str(field.get("label") or "").strip()
+        for field in requested_fields
+        if str(field.get("label") or "").strip()
+    ]
     if not conversation_messages:
         _append_contact_conversation_message(conversation_messages, "user", original_message)
     if clarification_context:
         _, follow_up = _extract_additional_details(raw_message)
         if follow_up:
-            _append_contact_conversation_message(conversation_messages, "user", follow_up)
+            _append_contact_conversation_message(
+                conversation_messages,
+                "user",
+                _strip_clarification_field_labels(follow_up, clarification_field_labels),
+            )
         elif raw_message and raw_message != original_message:
-            _append_contact_conversation_message(conversation_messages, "user", raw_message)
+            _append_contact_conversation_message(
+                conversation_messages,
+                "user",
+                _strip_clarification_field_labels(raw_message, clarification_field_labels),
+            )
 
     extracted = _llm_extract_contact_changes(
         extraction_message,
@@ -1156,32 +1162,25 @@ def handle_contact(parsed: ParsedCommand, context: dict[str, Any]) -> dict[str, 
     )
     explicit_need_user_input = normalize_need_user_input(extracted.get("need_user_input"))
     if explicit_need_user_input:
-        clarification_preview_id = f"contact:clarification:{uuid4().hex[:8]}"
-        from commands.storage import store_command_data, store_pending_event
-        next_conversation_messages = list(conversation_messages)
-        _append_contact_conversation_message(
-            next_conversation_messages,
-            "assistant",
-            _need_user_input_prompt(explicit_need_user_input),
+        clarification_preview_id = create_clarification_preview_id("contact")
+        store_clarification_preview(
+            clarification_preview_id,
+            build_clarification_storage_payload(
+                original_message=original_message,
+                assistant_prompt=_need_user_input_prompt(explicit_need_user_input),
+                existing_messages=conversation_messages,
+                requested_fields=explicit_need_user_input.get("fields") or [],
+                extra_payload={
+                    "command_name": "contact",
+                    "extracted": extracted,
+                    "thread_id": context.get("thread_id"),
+                },
+            ),
+            context.get("event_pending_key"),
         )
-
-        store_command_data(
+        return build_clarification_result(
             clarification_preview_id,
             {
-                "command_name": "contact",
-                "extracted": extracted,
-                "original_message": original_message,
-                "conversation_messages": next_conversation_messages,
-                "thread_id": context.get("thread_id"),
-            },
-        )
-        pending_key = context.get("event_pending_key")
-        if pending_key:
-            store_pending_event(pending_key, clarification_preview_id)
-        return {
-            "type": "need_user_input",
-            "clarification_id": clarification_preview_id,
-            "need_user_input": {
                 **explicit_need_user_input,
                 "source": "contact_command",
                 "action_id": explicit_need_user_input.get("action_id")
@@ -1189,42 +1188,37 @@ def handle_contact(parsed: ParsedCommand, context: dict[str, Any]) -> dict[str, 
                 "submission_mode": "ui_submission",
                 "context": {"clarification_id": clarification_preview_id},
             },
-        }
+        )
 
     proposal, proposal_need_user_input = _build_proposal(extracted, original_message=original_message)
     if proposal_need_user_input:
-        clarification_preview_id = f"contact:clarification:{uuid4().hex[:8]}"
-        from commands.storage import store_command_data, store_pending_event
-        next_conversation_messages = list(conversation_messages)
-        _append_contact_conversation_message(
-            next_conversation_messages,
-            "assistant",
-            _need_user_input_prompt(proposal_need_user_input),
+        clarification_preview_id = create_clarification_preview_id("contact")
+        store_clarification_preview(
+            clarification_preview_id,
+            build_clarification_storage_payload(
+                original_message=original_message,
+                assistant_prompt=_need_user_input_prompt(proposal_need_user_input),
+                existing_messages=conversation_messages,
+                requested_fields=proposal_need_user_input.get("fields") or [],
+                extra_payload={
+                    "command_name": "contact",
+                    "extracted": extracted,
+                    "thread_id": context.get("thread_id"),
+                },
+            ),
+            context.get("event_pending_key"),
         )
-
-        store_command_data(
+        return build_clarification_result(
             clarification_preview_id,
             {
-                "command_name": "contact",
-                "extracted": extracted,
-                "original_message": original_message,
-                "conversation_messages": next_conversation_messages,
-                "thread_id": context.get("thread_id"),
-            },
-        )
-        pending_key = context.get("event_pending_key")
-        if pending_key:
-            store_pending_event(pending_key, clarification_preview_id)
-        return {
-            "type": "need_user_input",
-            "clarification_id": clarification_preview_id,
-            "need_user_input": {
                 **proposal_need_user_input,
+                "source": "contact_command",
+                "submission_mode": "ui_submission",
                 "action_id": proposal_need_user_input.get("action_id")
                 or _clarification_action_id(clarification_preview_id),
                 "context": {"clarification_id": clarification_preview_id},
             },
-        }
+        )
 
     preview_id = f"contact:preview:{uuid4().hex[:8]}"
     if proposal is None:

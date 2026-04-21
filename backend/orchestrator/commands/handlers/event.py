@@ -12,6 +12,18 @@ from typing import Any
 from uuid import uuid4
 
 import places as places_service
+from commands.handlers.clarification_utils import (
+    build_clarification_result,
+    build_clarification_storage_payload,
+    create_clarification_preview_id,
+    store_clarification_preview,
+)
+from commands.handlers.clarification_utils import (
+    extract_clarification_detail as _extract_clarification_detail,
+)
+from commands.handlers.clarification_utils import (
+    extract_clarification_token as _extract_clarification_token,
+)
 from commands.parser import ParsedCommand
 from commands.registry import CommandRegistry
 from llm_helpers import LLMUnavailableError
@@ -510,26 +522,6 @@ def _build_contact_context_message(
     return "\n".join(lines).strip()
 
 
-def _extract_clarification_detail(message: str, original_message: str) -> str:
-    normalized_message = (message or "").strip()
-    if not normalized_message:
-        return ""
-
-    marker_match = re.search(r"additional details:\s*", normalized_message, flags=re.IGNORECASE)
-    if marker_match:
-        detail = normalized_message[marker_match.end() :].strip()
-        if detail:
-            return detail
-
-    normalized_original = (original_message or "").strip()
-    if normalized_original and normalized_message.lower().startswith(normalized_original.lower()):
-        detail = normalized_message[len(normalized_original) :].strip(" \n:-")
-        if detail:
-            return detail
-
-    return normalized_message
-
-
 def _resolve_ambiguous_contacts_from_answer(
     ambiguous_contacts: list[dict[str, Any]],
     answer: str,
@@ -908,16 +900,6 @@ Return ONLY valid JSON in this exact format:
             "tags": [],
             "types": ["generic"],
         }
-
-
-def _extract_clarification_token(message: str) -> tuple[str, str | None]:
-    token_pattern = re.compile(r"\[clarification_id:(?P<id>[\w:-]+)\]", re.IGNORECASE)
-    match = token_pattern.search(message)
-    if not match:
-        return message, None
-
-    cleaned = token_pattern.sub("", message).strip()
-    return cleaned, match.group("id")
 
 
 def _resolve_generic_terms_with_relationships(
@@ -1616,7 +1598,17 @@ def handle_event(parsed: ParsedCommand, context: dict) -> dict[str, Any]:
     if clarification_context:
         clarification_messages = clarification_context.get("clarification_messages")
         original_message = clarification_context.get("original_message") or raw_message
-        clarification_detail = _extract_clarification_detail(raw_message, original_message)
+        requested_fields = clarification_context.get("requested_fields") or []
+        clarification_field_labels = [
+            str(field.get("label") or "").strip()
+            for field in requested_fields
+            if isinstance(field, dict) and str(field.get("label") or "").strip()
+        ]
+        clarification_detail = _extract_clarification_detail(
+            raw_message,
+            original_message,
+            clarification_field_labels,
+        )
         if clarification_detail:
             clarification_messages = list(clarification_messages or [])
             clarification_messages.append({"role": "user", "content": clarification_detail})
@@ -1817,7 +1809,7 @@ def handle_event(parsed: ParsedCommand, context: dict) -> dict[str, Any]:
     if needs_follow_up:
         logger.warning("[handle_event] Clarification needed, returning questions to user")
         _emit_progress(context, "Building clarification request...")
-        clarification_preview_id = f"event:clarification:{uuid4().hex[:8]}"
+        clarification_preview_id = create_clarification_preview_id("event")
         action_id = f"event_clarification_submit:{clarification_preview_id}"
         need_user_input = build_need_user_input(
             kind=(
@@ -1837,46 +1829,38 @@ def handle_event(parsed: ParsedCommand, context: dict) -> dict[str, Any]:
             },
         )
 
-        from commands.storage import store_command_data, store_pending_event
         requested_field_ids = _normalize_event_field_ids(
             [field.get("id") for field in clarification_fields if isinstance(field, dict)]
         )
 
-        if clarification_messages is None:
-            clarification_messages = [
-                {"role": "user", "content": raw_message},
-            ]
-        clarification_messages.append(
-            {
-                "role": "assistant",
-                "content": (need_user_input or {}).get("prompt")
-                or " ".join(clarification_questions),
-            }
-        )
-
-        store_command_data(
+        store_clarification_preview(
             clarification_preview_id,
+            build_clarification_storage_payload(
+                original_message=original_message_to_store,
+                assistant_prompt=(need_user_input or {}).get("prompt")
+                or " ".join(clarification_questions),
+                existing_messages=clarification_messages,
+                requested_fields=clarification_fields,
+                message_key="clarification_messages",
+                extra_payload={
+                    "extracted": extracted,
+                    "resolution": resolution,
+                    "contact_result": contact_result,
+                    "user_email": user_email,
+                    "requested_field_ids": requested_field_ids,
+                    "relationship_suggestions": previous_relationship_suggestions,
+                },
+            ),
+            context.get("event_pending_key"),
+        )
+        return build_clarification_result(
+            clarification_preview_id,
+            need_user_input,
             {
-                "extracted": extracted,
-                "resolution": resolution,
-                "contact_result": contact_result,
-                "user_email": user_email,
-                "original_message": original_message_to_store,
-                "clarification_messages": clarification_messages,
-                "requested_field_ids": requested_field_ids,
-                "relationship_suggestions": previous_relationship_suggestions,
+                "partial_extraction": extracted,
+                "original_message": raw_message,
             },
         )
-        pending_key = context.get("event_pending_key")
-        if pending_key:
-            store_pending_event(pending_key, clarification_preview_id)
-        return {
-            "type": "need_user_input",
-            "need_user_input": need_user_input,
-            "partial_extraction": extracted,
-            "original_message": raw_message,
-            "clarification_id": clarification_preview_id,
-        }
 
     # Resolve existing entities and generic terms
     logger.info("[handle_event] STEP 2: Contact resolution complete")
