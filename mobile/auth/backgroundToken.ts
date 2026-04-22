@@ -16,6 +16,10 @@ async function clearStoredAuth(): Promise<void> {
 }
 
 export async function refreshStoredGoogleIdToken(): Promise<string | null> {
+  const previousTokenDiagnostics = getTokenDiagnostics(await getStoredGoogleIdToken());
+  reportLocationDebugEvent('background_auth_refresh_attempt', {
+    payload: previousTokenDiagnostics,
+  });
   try {
     configureGoogleSignIn();
     const userInfo = await GoogleSignin.signInSilently();
@@ -38,7 +42,12 @@ export async function refreshStoredGoogleIdToken(): Promise<string | null> {
     }
 
     reportLocationDebugEvent('background_auth_refresh_success', {
-      payload: getTokenDiagnostics(idToken),
+      payload: {
+        refresh_attempted: true,
+        refresh_succeeded: true,
+        previous_token_fingerprint: previousTokenDiagnostics.token_fingerprint,
+        ...getTokenDiagnostics(idToken),
+      },
     });
     return idToken;
   } catch (error) {
@@ -47,6 +56,9 @@ export async function refreshStoredGoogleIdToken(): Promise<string | null> {
       message: errorWithMeta?.message || 'Background auth refresh failed',
       error,
       payload: {
+        refresh_attempted: true,
+        refresh_succeeded: false,
+        previous_token_fingerprint: previousTokenDiagnostics.token_fingerprint,
         status: errorWithMeta?.status,
         auth_expired: errorWithMeta?.authExpired,
         ...getTokenDiagnostics(null),

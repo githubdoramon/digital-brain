@@ -19,12 +19,14 @@ export type LocationDebugSnapshot = {
   totalSuccessCount?: number;
   successCountSinceLastFailure?: number;
   recentFailures?: LocationDebugEvent[];
+  eventLog?: LocationDebugEvent[];
 };
 
 type Listener = (snapshot: LocationDebugSnapshot) => void;
 
 const LOCATION_DEBUG_SNAPSHOT_KEY = 'digitalbrain.locationDebugSnapshot';
 const MAX_LOCATION_DEBUG_FAILURES = 100;
+const MAX_LOCATION_DEBUG_LOG_EVENTS = 500;
 
 let snapshot: LocationDebugSnapshot = {};
 const listeners = new Set<Listener>();
@@ -39,6 +41,30 @@ export function getLocationDebugSnapshot(): LocationDebugSnapshot {
   return { ...snapshot };
 }
 
+export function buildLocationDebugLogText(current: LocationDebugSnapshot = snapshot): string {
+  const lines = [
+    'Digital Brain Mobile Location Debug Log',
+    `Generated: ${new Date().toISOString()}`,
+    `Last event: ${current.lastEventName ?? 'none'}`,
+    `Last event at: ${current.lastEventAt ?? 'none'}`,
+    `Last success at: ${current.lastSuccessAt ?? 'none'}`,
+    `Total successes: ${current.totalSuccessCount ?? 0}`,
+    `Successes since last failure: ${current.successCountSinceLastFailure ?? 0}`,
+    '',
+    'Event log:',
+  ];
+
+  for (const event of current.eventLog ?? []) {
+    lines.push(`[${event.at}] ${event.eventName}`);
+    lines.push(`  Message: ${event.message ?? 'none'}`);
+    lines.push(`  Error: ${event.error ?? 'none'}`);
+    lines.push(`  Successes before failure: ${event.successCountSincePreviousFailure ?? 0}`);
+    lines.push(`  Payload: ${event.payload ? JSON.stringify(event.payload) : 'none'}`);
+  }
+
+  return lines.join('\n');
+}
+
 export async function hydrateLocationDebugSnapshot(): Promise<LocationDebugSnapshot> {
   try {
     const stored = await AsyncStorage.getItem(LOCATION_DEBUG_SNAPSHOT_KEY);
@@ -51,6 +77,7 @@ export async function hydrateLocationDebugSnapshot(): Promise<LocationDebugSnaps
       ...snapshot,
       ...parsed,
       recentFailures: Array.isArray(parsed.recentFailures) ? parsed.recentFailures : [],
+      eventLog: Array.isArray(parsed.eventLog) ? parsed.eventLog : [],
     };
     notify();
   } catch (error) {
@@ -117,6 +144,7 @@ export function reportLocationDebugEvent(
     lastMessage: details?.message,
     lastPayload: details?.payload,
     lastError: normalizedError,
+    eventLog: [nextEvent, ...(snapshot.eventLog ?? [])].slice(0, MAX_LOCATION_DEBUG_LOG_EVENTS),
   };
 
   if (isSuccessEvent(eventName)) {

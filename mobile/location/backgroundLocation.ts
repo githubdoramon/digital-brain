@@ -232,6 +232,7 @@ async function postBackgroundLocation(sample: BackgroundLocationSample, context:
       captured_at: capturedAt,
       api_base_url: API_BASE_URL,
       app_state: runtimeState.appState,
+      ...tokenDiagnostics,
     },
   });
 }

@@ -36,6 +36,15 @@ export function setAuthDiagnosticsProvider(
   authDiagnosticsProvider = provider;
 }
 
+export async function getAuthRequestContext(): Promise<{
+  token: string | null;
+  authDiagnostics: Record<string, unknown>;
+}> {
+  const token = authTokenProvider ? await authTokenProvider() : null;
+  const authDiagnostics = authDiagnosticsProvider ? await authDiagnosticsProvider() : {};
+  return { token, authDiagnostics };
+}
+
 export async function apiFetch(path: string, options: FetchOptions = {}) {
   const { token, headers, onAuthExpired, retryOnAuthExpired = true, ...rest } = options;
   const resolvedToken =

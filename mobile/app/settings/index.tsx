@@ -1,11 +1,15 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
 import * as Application from 'expo-application';
 import Constants from 'expo-constants';
+import * as FileSystem from 'expo-file-system/legacy';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
 import React from 'react';
 import {
+  Alert,
   Animated,
+  Platform,
+  Share,
   StyleSheet,
   Text,
   View,
@@ -28,12 +32,15 @@ import {
 } from '@/location/backgroundLocation';
 import {
   getLocationDebugSnapshot,
+  buildLocationDebugLogText,
   hydrateLocationDebugSnapshot,
   subscribeLocationDebug,
   type LocationDebugEvent,
   type LocationDebugSnapshot,
 } from '@/location/debugState';
 import { theme } from '@/theme';
+
+const { StorageAccessFramework } = FileSystem;
 
 function formatBuildTimestamp(value: string | null | undefined): string {
   if (!value) {
@@ -110,6 +117,7 @@ export default function SettingsScreen() {
   );
   const [backgroundStatus, setBackgroundStatus] = React.useState<BackgroundLocationDebugStatus | null>(null);
   const [isRefreshingLocationDebug, setIsRefreshingLocationDebug] = React.useState(false);
+  const [isExportingLocationDebug, setIsExportingLocationDebug] = React.useState(false);
   const appVersion = Application.nativeApplicationVersion ?? Constants.expoConfig?.version ?? 'Unknown';
   const buildNumber = Application.nativeBuildVersion ?? 'Unknown';
   const buildTimestamp = formatBuildTimestamp(
@@ -134,6 +142,53 @@ export default function SettingsScreen() {
     void refreshLocationDebug();
     return unsubscribe;
   }, [refreshLocationDebug]);
+
+  const exportLocationDebug = React.useCallback(async () => {
+    setIsExportingLocationDebug(true);
+    try {
+      const currentSnapshot = await hydrateLocationDebugSnapshot();
+      const logText = buildLocationDebugLogText(currentSnapshot);
+      const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+      const fileName = `digital-brain-location-debug-${timestamp}.txt`;
+      const tempFileUri = `${FileSystem.cacheDirectory ?? FileSystem.documentDirectory}${fileName}`;
+      await FileSystem.writeAsStringAsync(tempFileUri, logText, {
+        encoding: FileSystem.EncodingType.UTF8,
+      });
+
+      if (Platform.OS === 'android') {
+        const initialUri = StorageAccessFramework.getUriForDirectoryInRoot('Download');
+        const permission = await StorageAccessFramework.requestDirectoryPermissionsAsync(initialUri);
+        if (!permission.granted || !permission.directoryUri) {
+          throw new Error('Downloads access not granted.');
+        }
+
+        const targetUri = await StorageAccessFramework.createFileAsync(
+          permission.directoryUri,
+          fileName.replace(/\.txt$/i, ''),
+          'text/plain',
+        );
+        const base64Content = await FileSystem.readAsStringAsync(tempFileUri, {
+          encoding: FileSystem.EncodingType.Base64,
+        });
+        await FileSystem.writeAsStringAsync(targetUri, base64Content, {
+          encoding: FileSystem.EncodingType.Base64,
+        });
+        Alert.alert('Location logs exported', `Saved to Downloads as ${fileName}.`);
+        return;
+      }
+
+      await Share.share({
+        url: tempFileUri,
+        message: logText,
+        title: fileName,
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to export location debug log.';
+      Alert.alert('Export failed', message);
+    } finally {
+      setIsExportingLocationDebug(false);
+    }
+  }, []);
 
   return (
     <LinearGradient
@@ -242,6 +297,14 @@ export default function SettingsScreen() {
             label={isRefreshingLocationDebug ? 'Refreshing...' : 'Refresh location debug'}
             onPress={() => {
               void refreshLocationDebug();
+            }}
+            variant="secondary"
+            style={styles.debugRefreshButton}
+          />
+          <Button
+            label={isExportingLocationDebug ? 'Exporting...' : 'Export mobile logs'}
+            onPress={() => {
+              void exportLocationDebug();
             }}
             variant="secondary"
             style={styles.debugRefreshButton}

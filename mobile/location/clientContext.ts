@@ -1,6 +1,6 @@
 import * as Location from 'expo-location';
 
-import { apiFetch, API_BASE_URL } from '@/api/client';
+import { apiFetch, API_BASE_URL, getAuthRequestContext } from '@/api/client';
 import { reportLocationDebugEvent } from '@/location/debugState';
 import { getLocationRuntimeState } from '@/location/runtimeState';
 
@@ -157,31 +157,54 @@ function syncLocationToBackend(): void {
   }
 
   locationSyncInFlight = true;
-  const runtimeState = getLocationRuntimeState();
-  reportLocationDebugEvent('location_sync_attempt', {
-    payload: {
-      lat: location.lat,
-      lon: location.lon,
-      captured_at: location.captured_at,
-      api_base_url: API_BASE_URL,
-      app_state: runtimeState.appState,
-      last_app_state_change_at: runtimeState.lastAppStateChangeAt,
-    },
-  });
-  void apiFetch('/mobile/location', {
-    method: 'POST',
-    body: JSON.stringify({
-      ...location,
-      timezone: cachedClientContext?.timezone,
-    }),
-  })
-    .then(() => {
+  void (async () => {
+    const runtimeState = getLocationRuntimeState();
+    try {
+      const { token, authDiagnostics } = await getAuthRequestContext();
+      if (!token) {
+        reportLocationDebugEvent('location_sync_skipped', {
+          message: 'Auth token not ready for foreground sync',
+          payload: {
+            api_base_url: API_BASE_URL,
+            app_state: runtimeState.appState,
+            captured_at: location.captured_at,
+            ...authDiagnostics,
+          },
+        });
+        return;
+      }
+
+      reportLocationDebugEvent('location_sync_attempt', {
+        payload: {
+          lat: location.lat,
+          lon: location.lon,
+          captured_at: location.captured_at,
+          api_base_url: API_BASE_URL,
+          app_state: runtimeState.appState,
+          last_app_state_change_at: runtimeState.lastAppStateChangeAt,
+          ...authDiagnostics,
+        },
+      });
+
+      await apiFetch('/mobile/location', {
+        method: 'POST',
+        token,
+        body: JSON.stringify({
+          ...location,
+          timezone: cachedClientContext?.timezone,
+        }),
+      });
+
       lastSyncedLocation = { ...location };
       reportLocationDebugEvent('location_sync_success', {
-        payload: { lat: location.lat, lon: location.lon, captured_at: location.captured_at },
+        payload: {
+          lat: location.lat,
+          lon: location.lon,
+          captured_at: location.captured_at,
+          ...authDiagnostics,
+        },
       });
-    })
-    .catch((error) => {
+    } catch (error) {
       const errorWithMeta = error as Error & {
         status?: number;
         authExpired?: boolean;
@@ -207,11 +230,10 @@ function syncLocationToBackend(): void {
           ...(errorWithMeta.authDiagnostics ?? {}),
         },
       });
-      // Best-effort sync; location context should still be available for ask flows.
-    })
-    .finally(() => {
+    } finally {
       locationSyncInFlight = false;
-    });
+    }
+  })();
 }
 
 export function primeClientContext(): void {

@@ -45,7 +45,15 @@ export async function handler(
       path: `/${targetPath}`,
       method: request.method,
     });
-    headers.delete("authorization");
+    return new Response(
+      JSON.stringify({
+        detail: "Missing authorization header",
+      }),
+      {
+        status: 401,
+        headers: { "content-type": "application/json" },
+      }
+    );
   }
 
   const init: ProxyFetchInit = {

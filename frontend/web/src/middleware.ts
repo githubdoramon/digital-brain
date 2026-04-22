@@ -86,6 +86,14 @@ export default function middleware(request: NextRequest, event: NextFetchEvent) 
     if (authHeader?.toLowerCase().startsWith("bearer ")) {
       return NextResponse.next();
     }
+
+     return NextResponse.json(
+      { detail: "Missing authorization header" },
+      {
+        status: 401,
+        headers: { "content-type": "application/json" },
+      }
+    );
   }
 
   return authMiddleware(request as NextRequestWithAuth, event);
