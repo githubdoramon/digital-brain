@@ -516,12 +516,12 @@ export default function EntitiesScreen() {
       try {
         let result: DocumentCollectionResponse;
         if (query.trim()) {
-          result = (await apiFetch('/documents/search', {
+          result = (await apiFetch('/mobile/documents/search', {
             method: 'POST',
             body: JSON.stringify({ query: query.trim(), limit: 50 }),
           })) as DocumentCollectionResponse;
         } else {
-          result = (await apiFetch('/documents?limit=100')) as DocumentCollectionResponse;
+          result = (await apiFetch('/mobile/documents?limit=100')) as DocumentCollectionResponse;
         }
         if (requestId !== requestVersionRef.current) return;
         setDocuments(result.documents ?? []);

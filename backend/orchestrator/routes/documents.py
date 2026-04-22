@@ -78,6 +78,7 @@ def create_documents_router(
         return DocumentDetailOut(**document)
 
     @router.get("/documents", response_model=DocumentCollection)
+    @router.get("/mobile/documents", response_model=DocumentCollection)
     def list_documents(
         limit: int = Query(200, ge=1, le=200),
         offset: int = Query(0, ge=0),
@@ -119,6 +120,7 @@ def create_documents_router(
         return DocumentDetailOut(**document)
 
     @router.post("/documents/search", response_model=DocumentCollection)
+    @router.post("/mobile/documents/search", response_model=DocumentCollection)
     def search_documents_endpoint(payload: DocumentSearchIn, user: dict = Depends(get_current_user)):
         limit = payload.limit or 20
         docs = documents.search_documents(payload.query, tags=payload.tags, limit=limit)
