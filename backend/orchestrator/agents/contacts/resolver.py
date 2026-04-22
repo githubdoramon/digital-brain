@@ -69,6 +69,28 @@ _SHORT_CIRCUIT_RELATIONSHIP_TERMS = (
     "brother",
     "sister",
 )
+_USER_SCOPED_FAMILY_RELATIONSHIP_TERMS = {
+    "mom",
+    "mother",
+    "dad",
+    "father",
+    "wife",
+    "husband",
+    "partner",
+    "son",
+    "daughter",
+    "brother",
+    "sister",
+}
+_FIRST_PERSON_PARTICIPANT_PATTERN = re.compile(
+    r"\b(i|me|my|we|us|our)\b|^(?:had|met|visited|called|saw|went)\b",
+    re.IGNORECASE,
+)
+_PROFESSION_INFERENCE_SENTINEL = object()
+_PROFESSION_TITLE_CUE_PATTERN = re.compile(
+    r"\b(dr\.?|prof\.?|professor|doctor|dentist|therapist|teacher|coach|trainer|lawyer|attorney|engineer|designer|developer|nurse|physician|surgeon)\b",
+    re.IGNORECASE,
+)
 _SHORT_CIRCUIT_RELATIONSHIP_PATTERN = re.compile(
     r"\b(?:my|our)\s+(?:best\s+)?(?:" + "|".join(_SHORT_CIRCUIT_RELATIONSHIP_TERMS) + r")\b",
     re.IGNORECASE,
@@ -492,6 +514,36 @@ def _extract_shared_possessive_relationship_mentions(text: str) -> list[str]:
                 continue
             mentions.append(f"{prefix} {term}")
     return mentions
+
+
+def _should_scope_bare_family_mentions_to_user(text: str, people: list[str]) -> bool:
+    normalized_people = {normalize_search_text(person) for person in people}
+    if "user" in normalized_people:
+        return True
+    raw_text = str(text or "").strip()
+    if not raw_text:
+        return False
+    return bool(_FIRST_PERSON_PARTICIPANT_PATTERN.search(raw_text))
+
+
+def _normalize_bare_family_mentions_for_user(text: str, people: list[str]) -> list[str]:
+    if not people or not _should_scope_bare_family_mentions_to_user(text, people):
+        return people
+
+    normalized_people: list[str] = []
+    seen: set[str] = set()
+    for person in people:
+        cleaned = str(person or "").strip()
+        lowered = normalize_search_text(cleaned)
+        candidate = cleaned
+        if lowered in _USER_SCOPED_FAMILY_RELATIONSHIP_TERMS:
+            candidate = f"my {lowered}"
+        candidate_key = normalize_search_text(candidate)
+        if not candidate_key or candidate_key in seen:
+            continue
+        seen.add(candidate_key)
+        normalized_people.append(candidate)
+    return normalized_people
 
 
 def _extract_possessive_collective_mentions(text: str) -> list[str]:
@@ -1716,6 +1768,7 @@ def resolve_contacts_from_text(
         else:
             people = extraction_raw if isinstance(extraction_raw, list) else []
             llm_selector_mentions = []
+    people = _normalize_bare_family_mentions_for_user(effective_text, people)
     logger.info("[contact_resolver] Extracted %s people: %s", len(people), people)
 
     selector_mentions = _merge_collective_selectors(selector_mentions, llm_selector_mentions)
@@ -2336,7 +2389,9 @@ def _infer_professions_for_new_contacts(
     profession_by_text: dict[str, Optional[str]] = {}
     for new_contact in new_contacts:
         person_text = new_contact["original_text"]
-        profession = _infer_profession_from_text(person_text, full_text)
+        profession = None
+        if _should_attempt_profession_inference(person_text, full_text):
+            profession = _infer_profession_from_text(person_text, full_text)
         new_contact["inferred_profession"] = profession
         profession_by_text[person_text] = profession
     return profession_by_text
@@ -3209,6 +3264,55 @@ Return ONLY a valid JSON, nothing more, no other text or explanation:
         return None
 
 
+def _should_attempt_profession_inference(
+    person_text: str,
+    full_text: str,
+    *,
+    relationship_hint: str | None = None,
+) -> bool:
+    normalized_person = normalize_search_text(person_text or "")
+    if not normalized_person or normalized_person == "user":
+        return False
+    if normalized_person in _USER_SCOPED_FAMILY_RELATIONSHIP_TERMS:
+        return False
+    if _POSSESSIVE_COLLECTIVE_PATTERN.fullmatch(str(person_text or "").strip()):
+        return False
+
+    normalized_hint = normalize_search_text(relationship_hint or "")
+    if normalized_hint:
+        if normalized_hint in _USER_SCOPED_FAMILY_RELATIONSHIP_TERMS:
+            return False
+        if normalized_hint in {
+            "spouse",
+            "parent",
+            "child",
+            "family",
+            "friend",
+            "coworker",
+            "co worker",
+            "colleague",
+            "partner",
+        }:
+            return False
+        if _PROFESSION_TITLE_CUE_PATTERN.search(normalized_hint):
+            return True
+
+    person_text_raw = str(person_text or "").strip()
+    full_text_raw = str(full_text or "")
+    if not person_text_raw or not full_text_raw:
+        return False
+    if _PROFESSION_TITLE_CUE_PATTERN.search(person_text_raw):
+        return True
+
+    escaped_person = re.escape(person_text_raw)
+    contextual_patterns = (
+        rf"\b(?:dr\.?|prof\.?|professor)\s+{escaped_person}\b",
+        rf"\b{escaped_person}\s*,\s*(?:the\s+)?(?:doctor|dentist|therapist|teacher|coach|trainer|lawyer|attorney|engineer|designer|developer|nurse|physician|surgeon)\b",
+        rf"\b(?:doctor|dentist|therapist|teacher|coach|trainer|lawyer|attorney|engineer|designer|developer|nurse|physician|surgeon)\s+{escaped_person}\b",
+    )
+    return any(re.search(pattern, full_text_raw, flags=re.IGNORECASE) for pattern in contextual_patterns)
+
+
 def _normalize_relationship_type(value: Optional[str]) -> Optional[str]:
     if not value:
         return None
@@ -3513,9 +3617,18 @@ def _suggest_missing_relationships(
         relationship_cache[key] = exists
         return exists
 
-    def _profession_for(text: str) -> Optional[str]:
-        if text not in profession_by_text or profession_by_text[text] is None:
-            profession_by_text[text] = _infer_profession_from_text(text, full_text)
+    def _profession_for(text: str, relationship_hint: str) -> Optional[str]:
+        cached_value = profession_by_text.get(text, _PROFESSION_INFERENCE_SENTINEL)
+        if cached_value is not _PROFESSION_INFERENCE_SENTINEL:
+            return cached_value
+        if not _should_attempt_profession_inference(
+            text,
+            full_text,
+            relationship_hint=relationship_hint,
+        ):
+            profession_by_text[text] = None
+            return None
+        profession_by_text[text] = _infer_profession_from_text(text, full_text)
         return profession_by_text[text]
 
     for pair in pairs:
@@ -3589,8 +3702,8 @@ def _suggest_missing_relationships(
         ):
             continue
 
-        person_profession = _profession_for(person_text)
-        anchor_profession = _profession_for(anchor_text)
+        person_profession = _profession_for(person_text, relationship_hint)
+        anchor_profession = _profession_for(anchor_text, relationship_hint)
         rel_types = _infer_relationship_types(
             person_text,
             anchor_text,

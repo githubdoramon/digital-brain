@@ -1345,3 +1345,155 @@ def test_infer_relationship_types_rejects_generic_event_roles(monkeypatch):
     )
 
     assert result is None
+
+
+def test_normalize_bare_family_mentions_for_user_scopes_mentions():
+    people = ["user", "wife", "daughter", "Dana Lewis", "Dana's whole family"]
+
+    normalized = resolver._normalize_bare_family_mentions_for_user(
+        "had japanese for lunch at 12h with wife, daughter and Dana's whole family at caidan",
+        people,
+    )
+
+    assert normalized == [
+        "user",
+        "my wife",
+        "my daughter",
+        "Dana Lewis",
+        "Dana's whole family",
+    ]
+
+
+def test_resolve_contacts_from_text_resolves_bare_family_mentions_against_user_relationships(monkeypatch):
+    monkeypatch.setattr(
+        resolver,
+        "_fast_extract_people_from_text",
+        lambda *_args, **_kwargs: ([], [], False),
+    )
+    monkeypatch.setattr(
+        resolver,
+        "extract_people_from_text",
+        lambda *_args, **_kwargs: ["user", "wife", "daughter"],
+    )
+    monkeypatch.setattr(
+        resolver.contacts_service,
+        "find_self_contact",
+        lambda *_a, **_k: {"contact_id": "user-1", "display_name": "Alex Carter"},
+    )
+    monkeypatch.setattr(
+        resolver.contacts_service,
+        "get_contact_relationships",
+        lambda *_a, **_k: {
+            "relationships": [
+                {
+                    "contact_id": "contact-wife",
+                    "related_contact": {
+                        "contact_id": "contact-wife",
+                        "display_name": "Robin Tess Lake",
+                    },
+                    "type": "husband",
+                    "other_type": "wife",
+                },
+                {
+                    "contact_id": "contact-daughter",
+                    "related_contact": {
+                        "contact_id": "contact-daughter",
+                        "display_name": "Jamie Quinn Lake",
+                    },
+                    "type": "parent",
+                    "other_type": "daughter",
+                },
+            ]
+        },
+    )
+    monkeypatch.setattr(
+        resolver.contacts_service,
+        "search_contacts",
+        lambda *_a, **_k: [],
+    )
+
+    result = resolver.resolve_contacts_from_text(
+        "had japanese for lunch at 12h with wife and daughter",
+        "user@example.com",
+        mode=resolver.MINIMAL_RESOLUTION_MODE,
+    )
+
+    assert result["people_mentioned"] == ["user", "my wife", "my daughter"]
+    assert result["new_contacts"] == []
+    assert {item["display_name"] for item in result["resolved_contacts"]} == {
+        "Alex Carter",
+        "Robin Tess Lake",
+        "Jamie Quinn Lake",
+    }
+
+
+def test_infer_professions_for_new_contacts_skips_family_terms_without_llm(monkeypatch):
+    calls = []
+
+    def fake_infer(person_text, *_args, **_kwargs):
+        calls.append(person_text)
+        return "doctor" if person_text == "Dr. Brown" else None
+
+    monkeypatch.setattr(resolver, "_infer_profession_from_text", fake_infer)
+
+    new_contacts = [
+        {"original_text": "wife"},
+        {"original_text": "daughter"},
+        {"original_text": "Dr. Brown"},
+    ]
+
+    profession_by_text = resolver._infer_professions_for_new_contacts(
+        new_contacts,
+        "had lunch with wife, daughter, and Dr. Brown",
+    )
+
+    assert calls == ["Dr. Brown"]
+    assert profession_by_text == {
+        "wife": None,
+        "daughter": None,
+        "Dr. Brown": "doctor",
+    }
+
+
+def test_suggest_missing_relationships_caches_null_profession_results(monkeypatch):
+    profession_calls = []
+
+    monkeypatch.setattr(
+        resolver.contacts_service,
+        "find_self_contact",
+        lambda *_a, **_k: None,
+    )
+    monkeypatch.setattr(
+        resolver.contacts_service,
+        "get_contact_relationships",
+        lambda *_a, **_k: {"found": False, "relationships": []},
+    )
+
+    def fake_infer_profession(person_text, *_args, **_kwargs):
+        profession_calls.append(person_text)
+        return None
+
+    monkeypatch.setattr(resolver, "_infer_profession_from_text", fake_infer_profession)
+    monkeypatch.setattr(
+        resolver,
+        "_infer_relationship_types",
+        lambda *_args, **_kwargs: {"type": "doctor", "other_type": "patient"},
+    )
+
+    suggestions = resolver._suggest_missing_relationships(
+        pairs=[
+            {"person_text": "Alice", "anchor_text": "Bob", "relationship_hint": "doctor"},
+            {"person_text": "Alice", "anchor_text": "Cara", "relationship_hint": "doctor"},
+        ],
+        full_text="Alice is Bob's doctor and Cara's doctor",
+        user_email="user@example.com",
+        resolution_cache={
+            "Alice": {"status": "resolved", "contact_id": "contact-1", "display_name": "Alice"},
+            "Bob": {"status": "resolved", "contact_id": "contact-2", "display_name": "Bob"},
+            "Cara": {"status": "resolved", "contact_id": "contact-3", "display_name": "Cara"},
+        },
+        profession_by_text={},
+    )
+
+    assert len(suggestions) == 2
+    assert profession_calls == ["Alice", "Bob", "Cara"]
