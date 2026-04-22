@@ -202,36 +202,6 @@ export default function SettingsScreen() {
         </Pressable>
       </Card>
 
-      <Card style={[styles.card, styles.navCard]}>
-        <Pressable
-          style={styles.navRow}
-          onPress={() => router.push('/settings/places')}
-        >
-          <View style={styles.textBlock}>
-            <Text style={styles.rowTitle}>Places</Text>
-            <Text style={styles.rowSubtitle}>
-              Browse and edit saved places and map coordinates.
-            </Text>
-          </View>
-          <Ionicons name="chevron-forward" size={20} color={theme.colors.mutedInk} />
-        </Pressable>
-      </Card>
-
-      <Card style={[styles.card, styles.navCard]}>
-        <Pressable
-          style={styles.navRow}
-          onPress={() => router.push('/settings/events')}
-        >
-          <View style={styles.textBlock}>
-            <Text style={styles.rowTitle}>Events</Text>
-            <Text style={styles.rowSubtitle}>
-              Search, view, and edit events with linked contacts and places.
-            </Text>
-          </View>
-          <Ionicons name="chevron-forward" size={20} color={theme.colors.mutedInk} />
-        </Pressable>
-      </Card>
-
         <Card style={[styles.card, styles.versionCard]}>
           <Text style={styles.versionLabel}>App version</Text>
           <Text style={styles.versionValue}>{`${appVersion} (${buildNumber})`}</Text>

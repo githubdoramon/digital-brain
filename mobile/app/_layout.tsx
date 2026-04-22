@@ -222,18 +222,6 @@ function RootLayoutNav({ loaded }: { loaded: boolean }) {
         }}
       />
       <Stack.Screen
-        name="settings/places"
-        options={{
-          headerShown: false,
-        }}
-      />
-      <Stack.Screen
-        name="settings/events"
-        options={{
-          headerShown: false,
-        }}
-      />
-      <Stack.Screen
         name="places/new/index"
         options={{
           headerShown: true,

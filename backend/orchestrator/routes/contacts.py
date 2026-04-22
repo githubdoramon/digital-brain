@@ -9,6 +9,7 @@ import contacts as contacts_service
 import immich_client
 import places as places_service
 from auth import get_current_user, require_service_api_key
+from db import get_conn
 from llm_helpers import LLMUnavailableError
 from observability.logger import get_runtime_logger
 from schemas import (
@@ -24,6 +25,117 @@ from schemas import (
 )
 
 logger = get_runtime_logger(__name__)
+
+
+def _clean_id_list(values: list[str] | None) -> list[str] | None:
+    if values is None:
+        return None
+    return [str(value).strip() for value in values if str(value).strip()]
+
+
+def _search_mobile_contacts(
+    *,
+    query: str | None,
+    contact_ids: list[str] | None,
+    place_ids: list[str] | None,
+    event_ids: list[str] | None,
+) -> list[dict[str, Any]]:
+    filters = [
+        """
+        (c.display_name IS NULL OR LOWER(c.display_name) NOT LIKE %s)
+        """
+    ]
+    params: list[Any] = [f"{contacts_service.EXTERNAL_CONTACT_PREFIX}%"]
+    clean_query = str(query or "").strip()
+
+    if clean_query:
+        like = f"%{clean_query}%"
+        filters.append(
+            """
+            (
+                unaccent(COALESCE(c.display_name, '')) ILIKE unaccent(%s)
+                OR EXISTS (
+                    SELECT 1
+                    FROM unnest(COALESCE(c.aliases, ARRAY[]::TEXT[])) AS alias
+                    WHERE unaccent(alias) ILIKE unaccent(%s)
+                )
+                OR EXISTS (
+                    SELECT 1
+                    FROM unnest(COALESCE(c.tags, ARRAY[]::TEXT[])) AS tag
+                    WHERE unaccent(tag) ILIKE unaccent(%s)
+                )
+                OR unaccent(COALESCE(c.comments, '')) ILIKE unaccent(%s)
+                OR EXISTS (
+                    SELECT 1
+                    FROM unnest(COALESCE(c.emails, ARRAY[]::TEXT[])) AS email
+                    WHERE unaccent(email) ILIKE unaccent(%s)
+                )
+                OR EXISTS (
+                    SELECT 1
+                    FROM unnest(COALESCE(c.phones, ARRAY[]::TEXT[])) AS phone
+                    WHERE unaccent(phone) ILIKE unaccent(%s)
+                )
+            )
+            """
+        )
+        params.extend([like, like, like, like, like, like])
+
+    if contact_ids is not None:
+        if not contact_ids:
+            return []
+        filters.append("c.contact_id = ANY(%s)")
+        params.append(contact_ids)
+
+    if place_ids is not None:
+        if not place_ids:
+            return []
+        filters.append(
+            """
+            EXISTS (
+                SELECT 1
+                FROM contact_places cp
+                WHERE cp.contact_id = c.contact_id
+                  AND cp.place_id = ANY(%s)
+            )
+            """
+        )
+        params.append(place_ids)
+
+    if event_ids is not None:
+        if not event_ids:
+            return []
+        filters.append(
+            """
+            EXISTS (
+                SELECT 1
+                FROM event_contacts ec
+                WHERE ec.contact_id = c.contact_id
+                  AND ec.event_id = ANY(%s)
+            )
+            """
+        )
+        params.append(event_ids)
+
+    where_clause = " AND ".join(filters)
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            f"""
+            SELECT c.contact_id
+            FROM contacts c
+            WHERE {where_clause}
+            ORDER BY c.display_name
+            """,
+            tuple(params),
+        )
+        matched_contact_ids = [str(row["contact_id"]) for row in cur.fetchall()]
+
+    if not matched_contact_ids:
+        return []
+
+    contacts = contacts_service._load_contacts(contact_ids=matched_contact_ids)
+    order = {contact_id: index for index, contact_id in enumerate(matched_contact_ids)}
+    contacts.sort(key=lambda item: order.get(str(item.get("contact_id")), len(order)))
+    return contacts
 
 
 def _raise_http_for_llm_unavailable(exc: Exception) -> None:
@@ -45,7 +157,25 @@ def create_contacts_router(
 
     @router.get("/contacts")
     @router.get("/mobile/contacts")
-    def list_contacts(user: dict = Depends(get_current_user)):
+    def list_contacts(
+        user: dict = Depends(get_current_user),
+        query: str | None = Query(default=None),
+        contact_ids: list[str] | None = Query(default=None),
+        place_ids: list[str] | None = Query(default=None),
+        event_ids: list[str] | None = Query(default=None),
+    ):
+        clean_contact_ids = _clean_id_list(contact_ids)
+        clean_place_ids = _clean_id_list(place_ids)
+        clean_event_ids = _clean_id_list(event_ids)
+        if query or clean_contact_ids is not None or clean_place_ids is not None or clean_event_ids is not None:
+            return {
+                "contacts": _search_mobile_contacts(
+                    query=query,
+                    contact_ids=clean_contact_ids,
+                    place_ids=clean_place_ids,
+                    event_ids=clean_event_ids,
+                )
+            }
         return {"contacts": contacts_service.list_contacts()}
 
     @router.get("/contact-groups")

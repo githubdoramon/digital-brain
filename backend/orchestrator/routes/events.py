@@ -21,6 +21,12 @@ from schemas import (
 logger = get_runtime_logger(__name__)
 
 
+def _clean_id_list(values: list[str] | None) -> list[str] | None:
+    if values is None:
+        return None
+    return [str(value).strip() for value in values if str(value).strip()]
+
+
 def create_events_router(
 ) -> APIRouter:
     router = APIRouter()
@@ -59,40 +65,66 @@ def create_events_router(
         query: str | None = Query(default=None),
         limit: int = Query(default=10, ge=1, le=50),
         offset: int = Query(default=0, ge=0),
+        contact_ids: list[str] | None = Query(default=None),
+        place_ids: list[str] | None = Query(default=None),
+        event_ids: list[str] | None = Query(default=None),
     ):
         trimmed = (query or "").strip()
+        clean_contact_ids = _clean_id_list(contact_ids)
+        clean_place_ids = _clean_id_list(place_ids)
+        clean_event_ids = _clean_id_list(event_ids)
+        where_clauses: list[str] = []
+        params: list[Any] = []
+
+        if trimmed:
+            like = f"%{trimmed}%"
+            where_clauses.append(
+                """
+                (
+                    unaccent(COALESCE(e.title, '')) ILIKE unaccent(%s)
+                    OR unaccent(COALESCE(e.summary, '')) ILIKE unaccent(%s)
+                )
+                """
+            )
+            params.extend([like, like])
+
+        if clean_contact_ids:
+            where_clauses.append(
+                """
+                (
+                    SELECT COUNT(DISTINCT ec.contact_id)
+                    FROM event_contacts ec
+                    WHERE ec.event_id = e.id
+                      AND ec.contact_id = ANY(%s)
+                ) = %s
+                """
+            )
+            params.extend([clean_contact_ids, len(clean_contact_ids)])
+
+        if clean_place_ids:
+            where_clauses.append("e.place_id = ANY(%s)")
+            params.append(clean_place_ids)
+
+        if clean_event_ids:
+            where_clauses.append("e.id = ANY(%s)")
+            params.append(clean_event_ids)
+
+        where_sql = f"WHERE {' AND '.join(where_clauses)}" if where_clauses else ""
         with get_conn() as conn, conn.cursor() as cur:
-            if trimmed:
-                like = f"%{trimmed}%"
-                cur.execute(
-                    """
-                    SELECT e.id,
-                           e.title,
-                           e.summary,
-                           e.start_date,
-                           e.end_date
-                    FROM events e
-                    WHERE unaccent(COALESCE(e.title, '')) ILIKE unaccent(%s)
-                       OR unaccent(COALESCE(e.summary, '')) ILIKE unaccent(%s)
-                    ORDER BY e.start_date DESC NULLS LAST, e.id DESC
-                    LIMIT %s OFFSET %s
-                    """,
-                    (like, like, limit + 1, offset),
-                )
-            else:
-                cur.execute(
-                    """
-                    SELECT e.id,
-                           e.title,
-                           e.summary,
-                           e.start_date,
-                           e.end_date
-                    FROM events e
-                    ORDER BY e.start_date DESC NULLS LAST, e.id DESC
-                    LIMIT %s OFFSET %s
-                    """,
-                    (limit + 1, offset),
-                )
+            cur.execute(
+                f"""
+                SELECT e.id,
+                       e.title,
+                       e.summary,
+                       e.start_date,
+                       e.end_date
+                FROM events e
+                {where_sql}
+                ORDER BY e.start_date DESC NULLS LAST, e.id DESC
+                LIMIT %s OFFSET %s
+                """,
+                (*params, limit + 1, offset),
+            )
             fetched_rows: list[dict[str, Any]] = [dict(row) for row in cur.fetchall()]
         has_more = len(fetched_rows) > limit
         rows = fetched_rows[:limit]

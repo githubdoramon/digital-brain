@@ -19,9 +19,9 @@ const leftTabs = [
     icon: 'calendar-outline' as const,
   },
   {
-    name: 'contacts',
-    label: 'Contacts',
-    icon: 'people-outline' as const,
+    name: 'entities',
+    label: 'Entities',
+    icon: 'layers-outline' as const,
   },
 ];
 
@@ -268,7 +268,7 @@ export default function TabLayout() {
       >
         <Tabs.Screen name="index" options={{ title: 'Daily' }} />
         <Tabs.Screen name="brain" options={{ title: 'Chat' }} />
-        <Tabs.Screen name="contacts" options={{ title: 'Contacts' }} />
+        <Tabs.Screen name="entities" options={{ title: 'Entities' }} />
       </Tabs>
     </TopNoticeProvider>
   );

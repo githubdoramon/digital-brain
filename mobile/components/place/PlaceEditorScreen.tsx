@@ -436,7 +436,7 @@ export function PlaceEditorScreen({ placeId }: { placeId?: string }) {
       await apiFetch(`/mobile/places/${encodeURIComponent(normalizedPlaceId)}`, {
         method: 'DELETE',
       });
-      router.replace('/settings/places');
+      router.back();
     } catch (error) {
       console.warn('[places] delete failed', error);
       Alert.alert('Delete failed', 'Unable to delete this place right now.');
