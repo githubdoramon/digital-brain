@@ -189,6 +189,7 @@ function syncLocationToBackend(): void {
         bodyPreview?: string;
         requestUrl?: string;
         tokenPresent?: boolean;
+        authDiagnostics?: Record<string, unknown>;
       };
       reportLocationDebugEvent('location_sync_error', {
         message: errorWithMeta.message,
@@ -203,6 +204,7 @@ function syncLocationToBackend(): void {
           response_preview: errorWithMeta.bodyPreview,
           request_url: errorWithMeta.requestUrl,
           token_present: errorWithMeta.tokenPresent,
+          ...(errorWithMeta.authDiagnostics ?? {}),
         },
       });
       // Best-effort sync; location context should still be available for ask flows.

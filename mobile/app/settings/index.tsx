@@ -67,6 +67,11 @@ function getPayloadNumber(payload: Record<string, unknown> | undefined, key: str
   return typeof value === 'number' ? String(value) : 'none';
 }
 
+function getPayloadBoolean(payload: Record<string, unknown> | undefined, key: string): string {
+  const value = payload?.[key];
+  return typeof value === 'boolean' ? String(value) : 'none';
+}
+
 function LocationDebugEventRow({ event }: { event: LocationDebugEvent }) {
   return (
     <View style={styles.debugEventRow}>
@@ -80,8 +85,14 @@ function LocationDebugEventRow({ event }: { event: LocationDebugEvent }) {
         Batch window: {formatBuildTimestamp(getPayloadString(event.payload, 'batch_first_captured_at'))} - {formatBuildTimestamp(getPayloadString(event.payload, 'batch_last_captured_at'))}
       </Text>
       <Text style={styles.debugEventMeta}>Request URL: {getPayloadString(event.payload, 'request_url')}</Text>
+      <Text style={styles.debugEventMeta}>Status: {getPayloadNumber(event.payload, 'status')}</Text>
       <Text style={styles.debugEventMeta}>Content-Type: {getPayloadString(event.payload, 'content_type')}</Text>
       <Text style={styles.debugEventMeta}>App state: {getPayloadString(event.payload, 'app_state')}</Text>
+      <Text style={styles.debugEventMeta}>Token present: {getPayloadBoolean(event.payload, 'token_present')}</Text>
+      <Text style={styles.debugEventMeta}>Token fingerprint: {getPayloadString(event.payload, 'token_fingerprint')}</Text>
+      <Text style={styles.debugEventMeta}>Token expires at: {formatBuildTimestamp(getPayloadString(event.payload, 'token_expires_at'))}</Text>
+      <Text style={styles.debugEventMeta}>Token expires in: {getPayloadNumber(event.payload, 'token_expires_in_seconds')}</Text>
+      <Text style={styles.debugEventMeta}>Token expired: {getPayloadBoolean(event.payload, 'token_is_expired')}</Text>
       <Text style={styles.debugEventMeta}>Message: {event.message ?? 'none'}</Text>
       <Text style={styles.debugEventMeta}>Error: {event.error ?? 'none'}</Text>
       <Text style={styles.debugEventPayload}>Payload: {formatDebugPayload(event.payload)}</Text>
@@ -242,8 +253,14 @@ export default function SettingsScreen() {
             Last batch window: {formatBuildTimestamp(getPayloadString(locationDebug.lastPayload, 'batch_first_captured_at'))} - {formatBuildTimestamp(getPayloadString(locationDebug.lastPayload, 'batch_last_captured_at'))}
           </Text>
           <Text style={styles.versionValue}>Last request URL: {getPayloadString(locationDebug.lastPayload, 'request_url')}</Text>
+          <Text style={styles.versionValue}>Last status: {getPayloadNumber(locationDebug.lastPayload, 'status')}</Text>
           <Text style={styles.versionValue}>Last content type: {getPayloadString(locationDebug.lastPayload, 'content_type')}</Text>
           <Text style={styles.versionValue}>Last app state: {getPayloadString(locationDebug.lastPayload, 'app_state')}</Text>
+          <Text style={styles.versionValue}>Last token present: {getPayloadBoolean(locationDebug.lastPayload, 'token_present')}</Text>
+          <Text style={styles.versionValue}>Last token fingerprint: {getPayloadString(locationDebug.lastPayload, 'token_fingerprint')}</Text>
+          <Text style={styles.versionValue}>Last token expires at: {formatBuildTimestamp(getPayloadString(locationDebug.lastPayload, 'token_expires_at'))}</Text>
+          <Text style={styles.versionValue}>Last token expires in: {getPayloadNumber(locationDebug.lastPayload, 'token_expires_in_seconds')}</Text>
+          <Text style={styles.versionValue}>Last token expired: {getPayloadBoolean(locationDebug.lastPayload, 'token_is_expired')}</Text>
           <Text style={styles.versionValue}>Last sample count: {getPayloadNumber(locationDebug.lastPayload, 'sample_count')}</Text>
           <Text style={styles.versionValue}>Last payload: {formatDebugPayload(locationDebug.lastPayload)}</Text>
           <Text style={styles.versionValue}>Last success at: {formatBuildTimestamp(locationDebug.lastSuccessAt)}</Text>

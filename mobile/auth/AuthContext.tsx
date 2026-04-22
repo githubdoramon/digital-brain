@@ -3,9 +3,10 @@ import React, { createContext, useCallback, useContext, useEffect, useMemo, useR
 import * as SecureStore from 'expo-secure-store';
 import { Alert } from 'react-native';
 
-import { apiFetch, setAuthRefreshHandler, setAuthTokenProvider } from '@/api/client';
+import { apiFetch, setAuthDiagnosticsProvider, setAuthRefreshHandler, setAuthTokenProvider } from '@/api/client';
 import { configureGoogleSignIn } from '@/auth/googleSignin';
 import { AUTH_EMAIL_KEY, AUTH_NAME_KEY, AUTH_PHOTO_KEY, AUTH_TOKEN_KEY } from '@/auth/storageKeys';
+import { getTokenDiagnostics } from '@/auth/tokenDiagnostics';
 
 type AuthContextValue = {
   token: string | null;
@@ -105,6 +106,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     setAuthTokenProvider(() => tokenRef.current);
     setAuthRefreshHandler(refreshToken);
+    setAuthDiagnosticsProvider(() => getTokenDiagnostics(tokenRef.current));
   }, [refreshToken]);
 
   useEffect(() => {

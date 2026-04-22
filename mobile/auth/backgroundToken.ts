@@ -3,6 +3,7 @@ import * as SecureStore from 'expo-secure-store';
 
 import { AUTH_EMAIL_KEY, AUTH_NAME_KEY, AUTH_PHOTO_KEY, AUTH_TOKEN_KEY } from '@/auth/storageKeys';
 import { configureGoogleSignIn } from '@/auth/googleSignin';
+import { getTokenDiagnostics } from '@/auth/tokenDiagnostics';
 import { reportLocationDebugEvent } from '@/location/debugState';
 
 async function clearStoredAuth(): Promise<void> {
@@ -36,7 +37,9 @@ export async function refreshStoredGoogleIdToken(): Promise<string | null> {
       }
     }
 
-    reportLocationDebugEvent('background_auth_refresh_success');
+    reportLocationDebugEvent('background_auth_refresh_success', {
+      payload: getTokenDiagnostics(idToken),
+    });
     return idToken;
   } catch (error) {
     const errorWithMeta = error as Error & { status?: number; authExpired?: boolean };
@@ -46,6 +49,7 @@ export async function refreshStoredGoogleIdToken(): Promise<string | null> {
       payload: {
         status: errorWithMeta?.status,
         auth_expired: errorWithMeta?.authExpired,
+        ...getTokenDiagnostics(null),
       },
     });
     await clearStoredAuth();
@@ -55,4 +59,8 @@ export async function refreshStoredGoogleIdToken(): Promise<string | null> {
 
 export async function getStoredGoogleIdToken(): Promise<string | null> {
   return SecureStore.getItemAsync(AUTH_TOKEN_KEY);
+}
+
+export async function getStoredGoogleIdTokenDiagnostics(): Promise<Record<string, unknown>> {
+  return getTokenDiagnostics(await getStoredGoogleIdToken());
 }

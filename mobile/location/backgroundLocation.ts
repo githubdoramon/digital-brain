@@ -2,7 +2,11 @@ import * as Location from 'expo-location';
 import * as TaskManager from 'expo-task-manager';
 
 import { apiFetch } from '@/api/client';
-import { getStoredGoogleIdToken, refreshStoredGoogleIdToken } from '@/auth/backgroundToken';
+import {
+  getStoredGoogleIdToken,
+  getStoredGoogleIdTokenDiagnostics,
+  refreshStoredGoogleIdToken,
+} from '@/auth/backgroundToken';
 import { reportLocationDebugEvent } from '@/location/debugState';
 import { API_BASE_URL } from '@/api/client';
 import { getLocationRuntimeState } from '@/location/runtimeState';
@@ -66,6 +70,7 @@ function buildDebugErrorPayload(error: unknown): {
   bodyPreview?: string;
   requestUrl?: string;
   tokenPresent?: boolean;
+  authDiagnostics?: Record<string, unknown>;
 } {
   const errorWithMeta = error as Error & {
     status?: number;
@@ -74,6 +79,7 @@ function buildDebugErrorPayload(error: unknown): {
     bodyPreview?: string;
     requestUrl?: string;
     tokenPresent?: boolean;
+    authDiagnostics?: Record<string, unknown>;
   };
   return {
     message: errorWithMeta?.message || 'Unknown error',
@@ -85,6 +91,7 @@ function buildDebugErrorPayload(error: unknown): {
     ...(typeof errorWithMeta?.bodyPreview === 'string' ? { bodyPreview: errorWithMeta.bodyPreview } : {}),
     ...(typeof errorWithMeta?.requestUrl === 'string' ? { requestUrl: errorWithMeta.requestUrl } : {}),
     ...(typeof errorWithMeta?.tokenPresent === 'boolean' ? { tokenPresent: errorWithMeta.tokenPresent } : {}),
+    ...(errorWithMeta?.authDiagnostics ? { authDiagnostics: errorWithMeta.authDiagnostics } : {}),
   };
 }
 
@@ -144,6 +151,7 @@ async function postBackgroundLocation(sample: BackgroundLocationSample, context:
   }
 
   const token = await getStoredGoogleIdToken();
+  const tokenDiagnostics = await getStoredGoogleIdTokenDiagnostics();
   if (!token) {
     reportLocationDebugEvent('background_sync_skipped', {
       message: 'Missing auth token in secure store',
@@ -156,6 +164,7 @@ async function postBackgroundLocation(sample: BackgroundLocationSample, context:
         batch_last_captured_at: context.batchLastCapturedAt,
         api_base_url: API_BASE_URL,
         app_state: runtimeState.appState,
+        ...tokenDiagnostics,
       },
     });
     return;
@@ -178,6 +187,7 @@ async function postBackgroundLocation(sample: BackgroundLocationSample, context:
       api_base_url: API_BASE_URL,
       app_state: runtimeState.appState,
       last_app_state_change_at: runtimeState.lastAppStateChangeAt,
+      ...tokenDiagnostics,
     },
   });
 
@@ -304,6 +314,7 @@ if (!TaskManager.isTaskDefined(BACKGROUND_LOCATION_TASK)) {
             token_present: errorPayload.tokenPresent,
             api_base_url: API_BASE_URL,
             app_state: getLocationRuntimeState().appState,
+            ...(errorPayload.authDiagnostics ?? {}),
           },
         });
       }

@@ -13,10 +13,12 @@ type ApiFetchError = Error & {
   bodyPreview?: string;
   requestUrl?: string;
   tokenPresent?: boolean;
+  authDiagnostics?: Record<string, unknown>;
 };
 
 let authTokenProvider: (() => string | null | Promise<string | null>) | null = null;
 let authRefreshHandler: (() => Promise<string | null>) | null = null;
+let authDiagnosticsProvider: (() => Record<string, unknown> | Promise<Record<string, unknown>>) | null = null;
 
 export function setAuthTokenProvider(
   provider: (() => string | null | Promise<string | null>) | null,
@@ -28,11 +30,18 @@ export function setAuthRefreshHandler(provider: (() => Promise<string | null>) |
   authRefreshHandler = provider;
 }
 
+export function setAuthDiagnosticsProvider(
+  provider: (() => Record<string, unknown> | Promise<Record<string, unknown>>) | null,
+) {
+  authDiagnosticsProvider = provider;
+}
+
 export async function apiFetch(path: string, options: FetchOptions = {}) {
   const { token, headers, onAuthExpired, retryOnAuthExpired = true, ...rest } = options;
   const resolvedToken =
     token === undefined && authTokenProvider ? await authTokenProvider() : token;
   const resolvedOnAuthExpired = onAuthExpired ?? authRefreshHandler ?? undefined;
+  const authDiagnostics = authDiagnosticsProvider ? await authDiagnosticsProvider() : {};
   const startTime = Date.now();
   const requestUrl = `${API_BASE_URL}${path}`;
   const response = await fetch(requestUrl, {
@@ -71,6 +80,7 @@ export async function apiFetch(path: string, options: FetchOptions = {}) {
     error.bodyPreview = message.slice(0, 200);
     error.requestUrl = requestUrl;
     error.tokenPresent = Boolean(resolvedToken);
+    error.authDiagnostics = authDiagnostics;
     if (isExpired) {
       error.authExpired = true;
     }
@@ -119,6 +129,8 @@ export async function apiFetch(path: string, options: FetchOptions = {}) {
     error.bodyPreview = text.slice(0, 200);
     error.requestUrl = requestUrl;
     error.tokenPresent = Boolean(resolvedToken);
+    error.status = response.status;
+    error.authDiagnostics = authDiagnostics;
     throw error;
   }
 

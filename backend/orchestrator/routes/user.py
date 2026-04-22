@@ -1,11 +1,15 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
+import base64
+import hashlib
+import json
+
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, Response, status
 
 import devices as devices_service
 import user_facts
 import user_locations
-from auth import get_current_user
+from auth import check_user_allowed, get_current_user, verify_google_token
 from notifications.preferences import (
     get_notification_settings,
     get_push_settings,
@@ -27,6 +31,108 @@ from schemas import (
 )
 
 logger = get_runtime_logger(__name__)
+
+
+def _token_fingerprint(token: str | None) -> str:
+    if not token:
+        return "none"
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()[:12]
+
+
+def _decode_unverified_token_payload(token: str | None) -> dict:
+    if not token:
+        return {}
+    parts = token.split(".")
+    if len(parts) < 2:
+        return {}
+    try:
+        payload = parts[1]
+        payload += "=" * (-len(payload) % 4)
+        decoded = base64.urlsafe_b64decode(payload.encode("utf-8")).decode("utf-8")
+        data = json.loads(decoded)
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def _build_mobile_auth_debug_context(request: Request, token: str | None = None) -> dict:
+    payload = _decode_unverified_token_payload(token)
+    return {
+        "debug_request_id": request.headers.get("x-location-debug-request-id") or "none",
+        "batch_id": request.headers.get("x-location-debug-batch-id") or "none",
+        "sample_index": request.headers.get("x-location-debug-sample-index") or "none",
+        "sample_count": request.headers.get("x-location-debug-sample-count") or "none",
+        "app_state": request.headers.get("x-location-debug-app-state") or "unknown",
+        "token_present": bool(token),
+        "token_fingerprint": _token_fingerprint(token),
+        "token_aud": payload.get("aud") or "none",
+        "token_iss": payload.get("iss") or "none",
+        "token_email_hint": payload.get("email") or "none",
+        "token_exp": payload.get("exp") or "none",
+        "token_iat": payload.get("iat") or "none",
+    }
+
+
+async def get_mobile_location_user(
+    request: Request,
+    authorization: str | None = Header(None),
+) -> dict:
+    debug_context = _build_mobile_auth_debug_context(request)
+
+    if not authorization:
+        logger.warning("[mobile/location] Missing authorization header", extra=debug_context)
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Missing authorization header",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    parts = authorization.split()
+    if len(parts) != 2 or parts[0].lower() != "bearer":
+        logger.warning("[mobile/location] Invalid authorization header format", extra=debug_context)
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid authorization header format. Expected: Bearer <token>",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    token = parts[1]
+    debug_context = _build_mobile_auth_debug_context(request, token)
+
+    try:
+        user_info = verify_google_token(token)
+    except HTTPException as exc:
+        logger.warning(
+            "[mobile/location] Token verification failed",
+            extra={**debug_context, "auth_error": exc.detail},
+        )
+        raise
+
+    email = user_info.get("email")
+    if not email:
+        logger.warning("[mobile/location] Token missing email", extra=debug_context)
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Token does not contain email",
+        )
+
+    try:
+        check_user_allowed(email)
+    except HTTPException as exc:
+        logger.warning(
+            "[mobile/location] User not allowed",
+            extra={**debug_context, "email": email, "auth_error": exc.detail},
+        )
+        raise
+
+    logger.info(
+        "[mobile/location] Authenticated request user=%s debug_request_id=%s token_fingerprint=%s token_exp=%s",
+        email,
+        debug_context["debug_request_id"],
+        debug_context["token_fingerprint"],
+        debug_context["token_exp"],
+    )
+    return user_info
 
 
 def create_user_router() -> APIRouter:
@@ -104,7 +210,7 @@ def create_user_router() -> APIRouter:
     def update_mobile_location(
         payload: UserLocationUpdateIn,
         request: Request,
-        user: dict = Depends(get_current_user),
+        user: dict = Depends(get_mobile_location_user),
     ):
         email = user.get("email") or user.get("user_email")
         if not email:
