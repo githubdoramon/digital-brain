@@ -6,6 +6,7 @@ import { useRouter } from 'expo-router';
 import {
   ActivityIndicator,
   Animated,
+  LayoutChangeEvent,
   FlatList,
   ScrollView,
   StyleSheet,
@@ -141,7 +142,6 @@ function PlaceCard({
             <Text style={styles.cardTitle}>{place.name?.trim() || place.place_id}</Text>
             <Text style={styles.cardSubtitle}>{formatPlaceSubtitle(place)}</Text>
           </View>
-          <Ionicons name="chevron-forward" size={18} color={theme.colors.mutedInk} />
         </Pressable>
         <Pressable
           onPress={onToggleFilter}
@@ -184,7 +184,6 @@ function EventCard({
               </Text>
             ) : null}
           </View>
-          <Ionicons name="chevron-forward" size={18} color={theme.colors.mutedInk} />
         </Pressable>
         <Pressable
           onPress={onToggleFilter}
@@ -214,7 +213,6 @@ function DocumentCard({ document, onPress }: { document: DocumentListItem; onPre
             {formatDocumentSubtitle(document)}
           </Text>
         </View>
-        <Ionicons name="chevron-forward" size={18} color={theme.colors.mutedInk} />
       </Pressable>
     </Card>
   );
@@ -226,6 +224,10 @@ export default function EntitiesScreen() {
   const insets = useSafeAreaInsets();
   const tabBarHeight = useBottomTabBarHeight();
   const scrollY = React.useRef(new Animated.Value(0)).current;
+  const chipScrollRef = React.useRef<ScrollView | null>(null);
+  const chipLayoutsRef = React.useRef<Partial<Record<EntityKind, { x: number; width: number }>>>({});
+  const chipScrollXRef = React.useRef(0);
+  const chipViewportWidthRef = React.useRef(0);
   const hasLoadedOnceRef = React.useRef<Record<EntityKind, boolean>>({
     contacts: false,
     places: false,
@@ -583,11 +585,61 @@ export default function EntitiesScreen() {
     toggleFilter(kind, id);
   }, [toggleFilter]);
 
+  const ensureChipVisible = React.useCallback((kind: EntityKind) => {
+    const layout = chipLayoutsRef.current[kind];
+    const viewportWidth = chipViewportWidthRef.current;
+    const currentScrollX = chipScrollXRef.current;
+    if (!layout || !viewportWidth || !chipScrollRef.current) {
+      return;
+    }
+    const chipStart = layout.x;
+    const chipEnd = layout.x + layout.width;
+    const viewportStart = currentScrollX;
+    const viewportEnd = currentScrollX + viewportWidth;
+    const margin = 16;
+
+    if (chipStart >= viewportStart + margin && chipEnd <= viewportEnd - margin) {
+      return;
+    }
+
+    let targetX = currentScrollX;
+    if (chipStart < viewportStart + margin) {
+      targetX = Math.max(0, chipStart - margin);
+    } else if (chipEnd > viewportEnd - margin) {
+      targetX = Math.max(0, chipEnd - viewportWidth + margin);
+    }
+    chipScrollRef.current.scrollTo({ x: targetX, animated: true });
+  }, []);
+
+  const handleChipPress = React.useCallback((kind: EntityKind) => {
+    setSelectedEntity(kind);
+    requestAnimationFrame(() => ensureChipVisible(kind));
+  }, [ensureChipVisible]);
+
+  const handleChipLayout = React.useCallback((kind: EntityKind, event: LayoutChangeEvent) => {
+    const { x, width } = event.nativeEvent.layout;
+    chipLayoutsRef.current[kind] = { x, width };
+  }, []);
+
   const listHeader = (
     <View style={styles.header}>
-      <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.entityChipRow}>
+      <ScrollView
+        ref={chipScrollRef}
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        contentContainerStyle={styles.entityChipRow}
+        onLayout={(event) => {
+          chipViewportWidthRef.current = event.nativeEvent.layout.width;
+        }}
+        onScroll={(event) => {
+          chipScrollXRef.current = event.nativeEvent.contentOffset.x;
+        }}
+        scrollEventThrottle={16}
+      >
         {(['contacts', 'places', 'events', 'documents'] as const).map((kind) => (
-          <EntityChip key={kind} kind={kind} selected={selectedEntity === kind} onPress={() => setSelectedEntity(kind)} />
+          <View key={kind} onLayout={(event) => handleChipLayout(kind, event)}>
+            <EntityChip key={kind} kind={kind} selected={selectedEntity === kind} onPress={() => handleChipPress(kind)} />
+          </View>
         ))}
       </ScrollView>
 
@@ -722,7 +774,7 @@ export default function EntitiesScreen() {
                 document={document}
                 onPress={() =>
                   router.push({
-                    pathname: '/documents/[documentId]/index',
+                    pathname: '/documents/[documentId]/file/index',
                     params: { documentId: document.document_id },
                   })
                 }
