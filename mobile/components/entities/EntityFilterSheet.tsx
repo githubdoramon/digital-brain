@@ -1,55 +1,23 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
 import React from 'react';
-import { ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import { AppPressable as Pressable } from '@/components/AppPressable';
 import { BottomSheet } from '@/components/BottomSheet';
 import { Button } from '@/components/Button';
 import { theme } from '@/theme';
 
-import { filterOptionsBySearch } from './helpers';
-import { ENTITY_META, EMPTY_ENTITY_FILTERS, type EntityFilterOption, type EntityFilters, type EntityKind } from './types';
+import { ENTITY_META, EMPTY_ENTITY_FILTERS, type EntityFilters, type EntityKind } from './types';
 
 type EntityFilterSheetProps = {
   visible: boolean;
-  filters: EntityFilters;
-  options: EntityFilterOption[];
+  chips: { id: string; kind: EntityKind; label: string }[];
   onApply: (filters: EntityFilters) => void;
+  onRemove: (kind: EntityKind, id: string) => void;
   onClose: () => void;
 };
 
-function cloneFilters(filters: EntityFilters): EntityFilters {
-  return {
-    contactIds: [...filters.contactIds],
-    placeIds: [...filters.placeIds],
-    eventIds: [...filters.eventIds],
-  };
-}
-
-export function EntityFilterSheet({ visible, filters, options, onApply, onClose }: EntityFilterSheetProps) {
-  const [draftFilters, setDraftFilters] = React.useState<EntityFilters>(() => cloneFilters(filters));
-  const [query, setQuery] = React.useState('');
-
-  React.useEffect(() => {
-    if (!visible) return;
-    setDraftFilters(cloneFilters(filters));
-    setQuery('');
-  }, [filters, visible]);
-
-  const toggleOption = React.useCallback((kind: EntityKind, id: string) => {
-    setDraftFilters((current) => {
-      const key = kind === 'contacts' ? 'contactIds' : kind === 'places' ? 'placeIds' : 'eventIds';
-      const nextValues = current[key].includes(id)
-        ? current[key].filter((value) => value !== id)
-        : current[key].concat(id);
-      return {
-        ...current,
-        [key]: nextValues,
-      };
-    });
-  }, []);
-
-  const filteredOptions = React.useMemo(() => filterOptionsBySearch(options, query), [options, query]);
+export function EntityFilterSheet({ visible, chips, onApply, onRemove, onClose }: EntityFilterSheetProps) {
 
   return (
     <BottomSheet visible={visible} onClose={onClose}>
@@ -63,59 +31,31 @@ export function EntityFilterSheet({ visible, filters, options, onApply, onClose 
         </Pressable>
       </View>
 
-      <TextInput
-        value={query}
-        onChangeText={setQuery}
-        placeholder="Search filter options"
-        placeholderTextColor={theme.colors.mutedInk}
-        style={styles.searchInput}
-      />
-
       <ScrollView style={styles.optionsScroll} contentContainerStyle={styles.optionsContent}>
         {(['contacts', 'places', 'events'] as const).map((kind) => {
-          const sectionOptions = filteredOptions.filter((option) => option.kind === kind);
-          const selectedIds =
-            kind === 'contacts'
-              ? draftFilters.contactIds
-              : kind === 'places'
-                ? draftFilters.placeIds
-                : draftFilters.eventIds;
+          const sectionChips = chips.filter((chip) => chip.kind === kind);
           return (
             <View key={kind} style={styles.section}>
               <View style={styles.sectionHeader}>
                 <Ionicons name={ENTITY_META[kind].icon} size={16} color={theme.colors.teal} />
                 <Text style={styles.sectionTitle}>{ENTITY_META[kind].label}</Text>
-                {selectedIds.length ? <Text style={styles.sectionCount}>{selectedIds.length}</Text> : null}
+                {sectionChips.length ? <Text style={styles.sectionCount}>{sectionChips.length}</Text> : null}
               </View>
-              {sectionOptions.length ? (
-                sectionOptions.map((option) => {
-                  const selected = selectedIds.includes(option.id);
-                  return (
+              {sectionChips.length ? (
+                <View style={styles.chipWrap}>
+                  {sectionChips.map((chip) => (
                     <Pressable
-                      key={`${option.kind}:${option.id}`}
-                      onPress={() => toggleOption(option.kind, option.id)}
-                      style={({ pressed }) => [
-                        styles.optionRow,
-                        selected && styles.optionRowSelected,
-                        pressed && styles.optionRowPressed,
-                      ]}
+                      key={`${chip.kind}:${chip.id}`}
+                      onPress={() => onRemove(chip.kind, chip.id)}
+                      style={({ pressed }) => [styles.activeFilterChip, pressed && styles.activeFilterChipPressed]}
                     >
-                      <View style={styles.optionTextWrap}>
-                        <Text style={styles.optionTitle}>{option.label}</Text>
-                        {option.description ? (
-                          <Text style={styles.optionDescription} numberOfLines={2}>
-                            {option.description}
-                          </Text>
-                        ) : null}
-                      </View>
-                      <View style={[styles.checkWrap, selected && styles.checkWrapSelected]}>
-                        {selected ? <Ionicons name="checkmark" size={16} color="#fff" /> : null}
-                      </View>
+                      <Text style={styles.activeFilterChipText}>{chip.label}</Text>
+                      <Ionicons name="close" size={14} color={theme.colors.teal} />
                     </Pressable>
-                  );
-                })
+                  ))}
+                </View>
               ) : (
-                <Text style={styles.emptyText}>No {ENTITY_META[kind].label.toLowerCase()} match this search.</Text>
+                <Text style={styles.emptyText}>No selected {ENTITY_META[kind].label.toLowerCase()} yet.</Text>
               )}
             </View>
           );
@@ -126,15 +66,7 @@ export function EntityFilterSheet({ visible, filters, options, onApply, onClose 
         <Button
           label="Clear all"
           variant="secondary"
-          onPress={() => setDraftFilters(cloneFilters(EMPTY_ENTITY_FILTERS))}
-          style={styles.footerButton}
-        />
-        <Button
-          label="Apply filters"
-          onPress={() => {
-            onApply(draftFilters);
-            onClose();
-          }}
+          onPress={() => onApply(EMPTY_ENTITY_FILTERS)}
           style={styles.footerButton}
         />
       </View>
@@ -167,16 +99,6 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     backgroundColor: '#f6efe8',
   },
-  searchInput: {
-    marginTop: 14,
-    borderWidth: 1,
-    borderColor: theme.colors.line,
-    backgroundColor: '#fff',
-    borderRadius: theme.radius.md,
-    paddingHorizontal: 14,
-    paddingVertical: 12,
-    color: theme.colors.ink,
-  },
   optionsScroll: {
     maxHeight: 460,
     marginTop: 14,
@@ -207,50 +129,27 @@ const styles = StyleSheet.create({
     paddingVertical: 3,
     borderRadius: 999,
   },
-  optionRow: {
+  chipWrap: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  activeFilterChip: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 12,
-    borderRadius: theme.radius.md,
-    borderWidth: 1,
-    borderColor: theme.colors.line,
-    backgroundColor: '#fff',
-    paddingHorizontal: 14,
-    paddingVertical: 12,
+    gap: 6,
+    borderRadius: 999,
+    backgroundColor: theme.colors.paleTeal,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
   },
-  optionRowSelected: {
-    borderColor: theme.colors.teal,
-    backgroundColor: '#f4faf9',
-  },
-  optionRowPressed: {
+  activeFilterChipPressed: {
     opacity: 0.86,
   },
-  optionTextWrap: {
-    flex: 1,
-    gap: 4,
-  },
-  optionTitle: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: theme.colors.ink,
-  },
-  optionDescription: {
+  activeFilterChipText: {
     fontSize: 12,
-    color: theme.colors.mutedInk,
-  },
-  checkWrap: {
-    width: 22,
-    height: 22,
-    borderRadius: 11,
-    borderWidth: 1,
-    borderColor: theme.colors.line,
-    backgroundColor: '#fff',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  checkWrapSelected: {
-    borderColor: theme.colors.teal,
-    backgroundColor: theme.colors.teal,
+    fontWeight: '600',
+    color: theme.colors.teal,
   },
   emptyText: {
     fontSize: 13,

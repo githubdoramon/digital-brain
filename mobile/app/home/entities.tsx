@@ -2,7 +2,7 @@ import React from 'react';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { useBottomTabBarHeight } from '@react-navigation/bottom-tabs';
 import { useFocusEffect } from '@react-navigation/native';
-import { useLocalSearchParams, useRouter } from 'expo-router';
+import { useRouter } from 'expo-router';
 import {
   ActivityIndicator,
   Animated,
@@ -74,11 +74,15 @@ function ContactCard({
   contact,
   contactMap,
   token,
+  filterSelected,
+  onToggleFilter,
   onPress,
 }: {
   contact: ContactListItem;
   contactMap: Map<string, string>;
   token: string | null;
+  filterSelected: boolean;
+  onToggleFilter: () => void;
   onPress: () => void;
 }) {
   const subtitle = contact.emails?.[0] || contact.phones?.[0] || 'No primary contact info yet';
@@ -88,47 +92,109 @@ function ContactCard({
 
   return (
     <Card variant="elevated">
-      <Pressable onPress={onPress} style={styles.contactCardTapArea}>
-        <Avatar name={contact.display_name} uri={contact.avatar_url ?? undefined} token={token} />
-        <View style={styles.cardBody}>
-          <Text style={styles.cardTitle}>{contact.display_name}</Text>
-          <Text style={styles.cardSubtitle}>{subtitle}</Text>
-          <RelationshipChips chips={chips} />
-        </View>
-      </Pressable>
+      <View style={styles.rowShell}>
+        <Pressable onPress={onPress} style={styles.contactCardTapArea}>
+          <Avatar name={contact.display_name} uri={contact.avatar_url ?? undefined} token={token} />
+          <View style={styles.cardBody}>
+            <Text style={styles.cardTitle}>{contact.display_name}</Text>
+            <Text style={styles.cardSubtitle}>{subtitle}</Text>
+            <RelationshipChips chips={chips} />
+          </View>
+        </Pressable>
+        <Pressable
+          onPress={onToggleFilter}
+          accessibilityRole="button"
+          accessibilityLabel={filterSelected ? 'Remove contact from filter' : 'Add contact to filter'}
+          style={({ pressed }) => [styles.filterToggleButton, filterSelected && styles.filterToggleButtonActive, pressed && styles.filterToggleButtonPressed]}
+        >
+          <Ionicons
+            name={filterSelected ? 'remove-circle' : 'add-circle-outline'}
+            size={20}
+            color={filterSelected ? theme.colors.teal : theme.colors.mutedInk}
+          />
+        </Pressable>
+      </View>
     </Card>
   );
 }
 
-function PlaceCard({ place, onPress }: { place: PlaceListItem; onPress: () => void }) {
+function PlaceCard({
+  place,
+  filterSelected,
+  onToggleFilter,
+  onPress,
+}: {
+  place: PlaceListItem;
+  filterSelected: boolean;
+  onToggleFilter: () => void;
+  onPress: () => void;
+}) {
   return (
     <Card style={styles.simpleCard}>
-      <Pressable onPress={onPress} style={styles.simpleCardTapArea}>
-        <View style={styles.cardBody}>
-          <Text style={styles.cardTitle}>{place.name?.trim() || place.place_id}</Text>
-          <Text style={styles.cardSubtitle}>{formatPlaceSubtitle(place)}</Text>
-        </View>
-        <Ionicons name="chevron-forward" size={18} color={theme.colors.mutedInk} />
-      </Pressable>
+      <View style={styles.rowShell}>
+        <Pressable onPress={onPress} style={styles.simpleCardTapArea}>
+          <View style={styles.cardBody}>
+            <Text style={styles.cardTitle}>{place.name?.trim() || place.place_id}</Text>
+            <Text style={styles.cardSubtitle}>{formatPlaceSubtitle(place)}</Text>
+          </View>
+          <Ionicons name="chevron-forward" size={18} color={theme.colors.mutedInk} />
+        </Pressable>
+        <Pressable
+          onPress={onToggleFilter}
+          accessibilityRole="button"
+          accessibilityLabel={filterSelected ? 'Remove place from filter' : 'Add place to filter'}
+          style={({ pressed }) => [styles.filterToggleButton, filterSelected && styles.filterToggleButtonActive, pressed && styles.filterToggleButtonPressed]}
+        >
+          <Ionicons
+            name={filterSelected ? 'remove-circle' : 'add-circle-outline'}
+            size={20}
+            color={filterSelected ? theme.colors.teal : theme.colors.mutedInk}
+          />
+        </Pressable>
+      </View>
     </Card>
   );
 }
 
-function EventCard({ event, onPress }: { event: EventListItem; onPress: () => void }) {
+function EventCard({
+  event,
+  filterSelected,
+  onToggleFilter,
+  onPress,
+}: {
+  event: EventListItem;
+  filterSelected: boolean;
+  onToggleFilter: () => void;
+  onPress: () => void;
+}) {
   return (
     <Card style={styles.simpleCard}>
-      <Pressable onPress={onPress} style={styles.simpleCardTapArea}>
-        <View style={styles.cardBody}>
-          <Text style={styles.cardTitle}>{String(event.title || '').trim() || 'Untitled event'}</Text>
-          <Text style={styles.cardSubtitle}>{formatEventDate(event.start_date)}</Text>
-          {event.summary ? (
-            <Text style={styles.cardMeta} numberOfLines={2}>
-              {event.summary}
-            </Text>
-          ) : null}
-        </View>
-        <Ionicons name="chevron-forward" size={18} color={theme.colors.mutedInk} />
-      </Pressable>
+      <View style={styles.rowShell}>
+        <Pressable onPress={onPress} style={styles.simpleCardTapArea}>
+          <View style={styles.cardBody}>
+            <Text style={styles.cardTitle}>{String(event.title || '').trim() || 'Untitled event'}</Text>
+            <Text style={styles.cardSubtitle}>{formatEventDate(event.start_date)}</Text>
+            {event.summary ? (
+              <Text style={styles.cardMeta} numberOfLines={2}>
+                {event.summary}
+              </Text>
+            ) : null}
+          </View>
+          <Ionicons name="chevron-forward" size={18} color={theme.colors.mutedInk} />
+        </Pressable>
+        <Pressable
+          onPress={onToggleFilter}
+          accessibilityRole="button"
+          accessibilityLabel={filterSelected ? 'Remove event from filter' : 'Add event to filter'}
+          style={({ pressed }) => [styles.filterToggleButton, filterSelected && styles.filterToggleButtonActive, pressed && styles.filterToggleButtonPressed]}
+        >
+          <Ionicons
+            name={filterSelected ? 'remove-circle' : 'add-circle-outline'}
+            size={20}
+            color={filterSelected ? theme.colors.teal : theme.colors.mutedInk}
+          />
+        </Pressable>
+      </View>
     </Card>
   );
 }
@@ -136,7 +202,6 @@ function EventCard({ event, onPress }: { event: EventListItem; onPress: () => vo
 export default function EntitiesScreen() {
   const { token, name, email, photo } = useAuth();
   const router = useRouter();
-  const params = useLocalSearchParams<{ entity?: string | string[] }>();
   const insets = useSafeAreaInsets();
   const tabBarHeight = useBottomTabBarHeight();
   const scrollY = React.useRef(new Animated.Value(0)).current;
@@ -163,14 +228,6 @@ export default function EntitiesScreen() {
   const [isLoadingMore, setIsLoadingMore] = React.useState(false);
   const [loadError, setLoadError] = React.useState<string | null>(null);
   const [focusTick, setFocusTick] = React.useState(0);
-
-  const entityParam = Array.isArray(params.entity) ? params.entity[0] : params.entity;
-
-  React.useEffect(() => {
-    if (entityParam === 'contacts' || entityParam === 'places' || entityParam === 'events') {
-      setSelectedEntity(entityParam);
-    }
-  }, [entityParam]);
 
   const filterSignature = React.useMemo(() => JSON.stringify(filters), [filters]);
 
@@ -231,17 +288,45 @@ export default function EntitiesScreen() {
     }
   }, []);
 
+  const isFilterSelected = React.useCallback(
+    (kind: EntityKind, id: string) => {
+      if (kind === 'contacts') return filters.contactIds.includes(id);
+      if (kind === 'places') return filters.placeIds.includes(id);
+      return filters.eventIds.includes(id);
+    },
+    [filters.contactIds, filters.eventIds, filters.placeIds],
+  );
+
+  const toggleFilter = React.useCallback((kind: EntityKind, id: string) => {
+    setFilters((current) => {
+      const key = kind === 'contacts' ? 'contactIds' : kind === 'places' ? 'placeIds' : 'eventIds';
+      const nextValues = current[key].includes(id)
+        ? current[key].filter((value) => value !== id)
+        : current[key].concat(id);
+      return {
+        ...current,
+        [key]: nextValues,
+      };
+    });
+  }, []);
+
   const buildCommonSearchParams = React.useCallback(() => {
     const searchParams = new URLSearchParams();
     const trimmed = query.trim();
     if (trimmed) {
       searchParams.set('query', trimmed);
     }
-    appendIds(searchParams, 'contact_ids', filters.contactIds);
-    appendIds(searchParams, 'place_ids', filters.placeIds);
-    appendIds(searchParams, 'event_ids', filters.eventIds);
+    if (selectedEntity !== 'contacts') {
+      appendIds(searchParams, 'contact_ids', filters.contactIds);
+    }
+    if (selectedEntity !== 'places') {
+      appendIds(searchParams, 'place_ids', filters.placeIds);
+    }
+    if (selectedEntity !== 'events') {
+      appendIds(searchParams, 'event_ids', filters.eventIds);
+    }
     return searchParams;
-  }, [filters.contactIds, filters.eventIds, filters.placeIds, query]);
+  }, [filters.contactIds, filters.eventIds, filters.placeIds, query, selectedEntity]);
 
   const loadContacts = React.useCallback(
     async ({ showInitialLoader = false, showRefreshSpinner = false } = {}) => {
@@ -385,12 +470,8 @@ export default function EntitiesScreen() {
   }, [loadCurrentEntity]);
 
   const handleRemoveActiveFilter = React.useCallback((kind: EntityKind, id: string) => {
-    setFilters((current) => ({
-      contactIds: kind === 'contacts' ? current.contactIds.filter((value) => value !== id) : current.contactIds,
-      placeIds: kind === 'places' ? current.placeIds.filter((value) => value !== id) : current.placeIds,
-      eventIds: kind === 'events' ? current.eventIds.filter((value) => value !== id) : current.eventIds,
-    }));
-  }, []);
+    toggleFilter(kind, id);
+  }, [toggleFilter]);
 
   const listHeader = (
     <View style={styles.header}>
@@ -415,9 +496,9 @@ export default function EntitiesScreen() {
           onPress={() => setShowFilterSheet(true)}
           accessibilityRole="button"
           accessibilityLabel="Open filters"
-          style={({ pressed }) => [styles.filterButton, pressed && styles.filterButtonPressed]}
+          style={({ pressed }) => [styles.filterButton, activeFilterCount > 0 && styles.filterButtonActive, pressed && styles.filterButtonPressed]}
         >
-          <Ionicons name="options-outline" size={20} color={theme.colors.ink} />
+          <Ionicons name="options-outline" size={20} color={activeFilterCount > 0 ? theme.colors.teal : theme.colors.ink} />
           {activeFilterCount ? (
             <View style={styles.filterBadge}>
               <Text style={styles.filterBadgeText}>{activeFilterCount}</Text>
@@ -484,6 +565,8 @@ export default function EntitiesScreen() {
                 contact={contact}
                 contactMap={contactMap}
                 token={token}
+                filterSelected={isFilterSelected('contacts', contact.contact_id)}
+                onToggleFilter={() => toggleFilter('contacts', contact.contact_id)}
                 onPress={() =>
                   router.push({
                     pathname: '/contacts/[contactId]',
@@ -499,6 +582,8 @@ export default function EntitiesScreen() {
             return (
               <PlaceCard
                 place={place}
+                filterSelected={isFilterSelected('places', place.place_id)}
+                onToggleFilter={() => toggleFilter('places', place.place_id)}
                 onPress={() =>
                   router.push({
                     pathname: '/places/[placeId]',
@@ -513,6 +598,8 @@ export default function EntitiesScreen() {
           return (
             <EventCard
               event={event}
+              filterSelected={isFilterSelected('events', event.id)}
+              onToggleFilter={() => toggleFilter('events', event.id)}
               onPress={() =>
                 router.push({
                   pathname: '/events/[eventId]',
@@ -547,9 +634,9 @@ export default function EntitiesScreen() {
 
       <EntityFilterSheet
         visible={showFilterSheet}
-        filters={filters}
-        options={filterOptions}
+        chips={activeFilterChips}
         onApply={setFilters}
+        onRemove={handleRemoveActiveFilter}
         onClose={() => setShowFilterSheet(false)}
       />
     </View>
@@ -632,6 +719,10 @@ const styles = StyleSheet.create({
     borderColor: theme.colors.line,
     backgroundColor: '#fff',
   },
+  filterButtonActive: {
+    borderColor: theme.colors.teal,
+    backgroundColor: '#f4faf9',
+  },
   filterButtonPressed: {
     opacity: 0.84,
   },
@@ -678,10 +769,15 @@ const styles = StyleSheet.create({
     gap: 14,
     padding: 16,
     borderRadius: theme.radius.lg,
+    flex: 1,
   },
   simpleCard: {
     padding: 0,
     overflow: 'hidden',
+  },
+  rowShell: {
+    flexDirection: 'row',
+    alignItems: 'stretch',
   },
   simpleCardTapArea: {
     borderRadius: theme.radius.lg,
@@ -691,6 +787,21 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
     gap: 12,
+    flex: 1,
+  },
+  filterToggleButton: {
+    width: 48,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderLeftWidth: 1,
+    borderLeftColor: theme.colors.line,
+    backgroundColor: 'rgba(255,255,255,0.7)',
+  },
+  filterToggleButtonActive: {
+    backgroundColor: '#f4faf9',
+  },
+  filterToggleButtonPressed: {
+    opacity: 0.82,
   },
   cardBody: {
     flex: 1,

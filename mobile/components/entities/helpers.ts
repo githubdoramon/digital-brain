@@ -1,5 +1,3 @@
-import { normalizeSearch } from '@/utils/text';
-
 import type { EntityFilterOption, EntityFilters, EventListItem, PlaceListItem } from './types';
 
 export function formatEventDate(value?: string | null): string {
@@ -59,15 +57,6 @@ export function buildActiveFilterChips(
     if (option) entries.push({ id: eventId, kind: 'events', label: option.label });
   }
   return entries;
-}
-
-export function filterOptionsBySearch(options: EntityFilterOption[], query: string): EntityFilterOption[] {
-  const needle = normalizeSearch(query.trim());
-  if (!needle) return options;
-  return options.filter((option) => {
-    const haystack = `${option.label} ${option.description || ''}`;
-    return normalizeSearch(haystack).includes(needle);
-  });
 }
 
 export function countActiveFilters(filters: EntityFilters): number {
