@@ -596,24 +596,28 @@ export default function EntitiesScreen() {
     const chipEnd = layout.x + layout.width;
     const viewportStart = currentScrollX;
     const viewportEnd = currentScrollX + viewportWidth;
-    const margin = 16;
 
-    if (chipStart >= viewportStart + margin && chipEnd <= viewportEnd - margin) {
+    if (chipStart >= viewportStart && chipEnd <= viewportEnd) {
       return;
     }
 
     let targetX = currentScrollX;
-    if (chipStart < viewportStart + margin) {
-      targetX = Math.max(0, chipStart - margin);
-    } else if (chipEnd > viewportEnd - margin) {
-      targetX = Math.max(0, chipEnd - viewportWidth + margin);
+    if (chipStart < viewportStart) {
+      targetX = Math.max(0, chipStart);
+    } else if (chipEnd > viewportEnd) {
+      targetX = Math.max(0, chipEnd - viewportWidth);
     }
+
+    if (Math.abs(targetX - currentScrollX) < 2) {
+      return;
+    }
+
     chipScrollRef.current.scrollTo({ x: targetX, animated: true });
   }, []);
 
   const handleChipPress = React.useCallback((kind: EntityKind) => {
     setSelectedEntity(kind);
-    requestAnimationFrame(() => ensureChipVisible(kind));
+    setTimeout(() => ensureChipVisible(kind), 0);
   }, [ensureChipVisible]);
 
   const handleChipLayout = React.useCallback((kind: EntityKind, event: LayoutChangeEvent) => {
@@ -774,7 +778,7 @@ export default function EntitiesScreen() {
                 document={document}
                 onPress={() =>
                   router.push({
-                    pathname: '/documents/[documentId]/file/index',
+                    pathname: '/documents/[documentId]/file',
                     params: { documentId: document.document_id },
                   })
                 }
