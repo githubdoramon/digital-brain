@@ -700,7 +700,6 @@ export default function EntitiesScreen() {
     <View style={styles.container}>
       <FlatList<EntityListRow>
         data={listData}
-        key={selectedEntity}
         keyExtractor={(item) => {
           if ('contact_id' in item) return item.contact_id;
           if ('place_id' in item) return item.place_id;
@@ -778,7 +777,7 @@ export default function EntitiesScreen() {
                 document={document}
                 onPress={() =>
                   router.push({
-                    pathname: '/documents/[documentId]/file',
+                    pathname: '/documents/[documentId]',
                     params: { documentId: document.document_id },
                   })
                 }
