@@ -533,6 +533,21 @@ export default function EntitiesScreen() {
             placeholderTextColor={theme.colors.mutedInk}
             style={styles.searchInput}
           />
+          {query ? (
+            <Pressable
+              onPress={() =>
+                setQueries((current) => ({
+                  ...current,
+                  [selectedEntity]: '',
+                }))
+              }
+              accessibilityRole="button"
+              accessibilityLabel="Clear search"
+              style={({ pressed }) => [styles.clearSearchButton, pressed && styles.clearSearchButtonPressed]}
+            >
+              <Ionicons name="close-circle" size={18} color={theme.colors.mutedInk} />
+            </Pressable>
+          ) : null}
         </View>
         <Pressable
           onPress={() => setShowFilterSheet(true)}
@@ -549,20 +564,6 @@ export default function EntitiesScreen() {
         </Pressable>
       </View>
 
-      {activeFilterChips.length ? (
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.activeFilterRow}>
-          {activeFilterChips.map((chip) => (
-            <Pressable
-              key={`${chip.kind}:${chip.id}`}
-              onPress={() => handleRemoveActiveFilter(chip.kind, chip.id)}
-              style={({ pressed }) => [styles.activeFilterChip, pressed && styles.activeFilterChipPressed]}
-            >
-              <Text style={styles.activeFilterChipText}>{chip.label}</Text>
-              <Ionicons name="close" size={14} color={theme.colors.teal} />
-            </Pressable>
-          ))}
-        </ScrollView>
-      ) : null}
     </View>
   );
 
@@ -751,6 +752,14 @@ const styles = StyleSheet.create({
     paddingVertical: 12,
     color: theme.colors.ink,
   },
+  clearSearchButton: {
+    marginLeft: 4,
+    paddingVertical: 6,
+    paddingLeft: 4,
+  },
+  clearSearchButtonPressed: {
+    opacity: 0.7,
+  },
   filterButton: {
     width: 48,
     height: 48,
@@ -784,27 +793,6 @@ const styles = StyleSheet.create({
     fontSize: 10,
     fontWeight: '700',
     color: '#fff',
-  },
-  activeFilterRow: {
-    gap: 8,
-    paddingRight: 20,
-  },
-  activeFilterChip: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    borderRadius: 999,
-    backgroundColor: theme.colors.paleTeal,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-  },
-  activeFilterChipPressed: {
-    opacity: 0.82,
-  },
-  activeFilterChipText: {
-    fontSize: 12,
-    fontWeight: '600',
-    color: theme.colors.teal,
   },
   contactCardTapArea: {
     flexDirection: 'row',
