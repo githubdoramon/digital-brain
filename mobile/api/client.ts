@@ -6,6 +6,15 @@ type FetchOptions = RequestInit & {
   retryOnAuthExpired?: boolean;
 };
 
+type ApiFetchError = Error & {
+  status?: number;
+  authExpired?: boolean;
+  contentType?: string;
+  bodyPreview?: string;
+  requestUrl?: string;
+  tokenPresent?: boolean;
+};
+
 let authTokenProvider: (() => string | null | Promise<string | null>) | null = null;
 let authRefreshHandler: (() => Promise<string | null>) | null = null;
 
@@ -25,7 +34,8 @@ export async function apiFetch(path: string, options: FetchOptions = {}) {
     token === undefined && authTokenProvider ? await authTokenProvider() : token;
   const resolvedOnAuthExpired = onAuthExpired ?? authRefreshHandler ?? undefined;
   const startTime = Date.now();
-  const response = await fetch(`${API_BASE_URL}${path}`, {
+  const requestUrl = `${API_BASE_URL}${path}`;
+  const response = await fetch(requestUrl, {
     ...rest,
     headers: {
       'Content-Type': 'application/json',
@@ -55,10 +65,14 @@ export async function apiFetch(path: string, options: FetchOptions = {}) {
       }
       console.warn('[apiFetch] refresh handler returned no token', { path });
     }
-    const error = new Error(message || `Request failed with ${response.status}`);
-    (error as Error & { status?: number; authExpired?: boolean }).status = response.status;
+    const error = new Error(message || `Request failed with ${response.status}`) as ApiFetchError;
+    error.status = response.status;
+    error.contentType = contentType;
+    error.bodyPreview = message.slice(0, 200);
+    error.requestUrl = requestUrl;
+    error.tokenPresent = Boolean(resolvedToken);
     if (isExpired) {
-      (error as Error & { authExpired?: boolean }).authExpired = true;
+      error.authExpired = true;
     }
     console.error('[apiFetch] error', {
       path,
@@ -98,9 +112,14 @@ export async function apiFetch(path: string, options: FetchOptions = {}) {
 
   if (!contentType.includes('application/json')) {
     const text = await response.text();
-    throw new Error(
+    const error = new Error(
       `Expected JSON response but got ${contentType || 'unknown content type'}: ${text.slice(0, 200)}`
-    );
+    ) as ApiFetchError;
+    error.contentType = contentType;
+    error.bodyPreview = text.slice(0, 200);
+    error.requestUrl = requestUrl;
+    error.tokenPresent = Boolean(resolvedToken);
+    throw error;
   }
 
   const data = await response.json();

@@ -13,6 +13,7 @@ import * as Notifications from 'expo-notifications';
 
 import { AuthProvider, useAuth } from '@/auth/AuthContext';
 import { syncBackgroundLocationTracking } from '@/location/backgroundLocation';
+import { ensureAppStateTracking } from '@/location/runtimeState';
 import { theme } from '@/theme';
 
 export {
@@ -47,6 +48,10 @@ export default function RootLayout() {
   useEffect(() => {
     if (error) throw error;
   }, [error]);
+
+  useEffect(() => {
+    ensureAppStateTracking();
+  }, []);
 
   if (!loaded) {
     return null;

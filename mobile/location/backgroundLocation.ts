@@ -4,6 +4,8 @@ import * as TaskManager from 'expo-task-manager';
 import { apiFetch } from '@/api/client';
 import { getStoredGoogleIdToken, refreshStoredGoogleIdToken } from '@/auth/backgroundToken';
 import { reportLocationDebugEvent } from '@/location/debugState';
+import { API_BASE_URL } from '@/api/client';
+import { getLocationRuntimeState } from '@/location/runtimeState';
 
 const BACKGROUND_LOCATION_TASK = 'digitalbrain.background-location';
 const BACKGROUND_DISTANCE_INTERVAL_METERS = 50;
@@ -22,6 +24,8 @@ type BackgroundBatchContext = {
   batchId: string;
   sampleIndex: number;
   sampleCount: number;
+  batchFirstCapturedAt: string | null;
+  batchLastCapturedAt: string | null;
 };
 
 type PostedBackgroundLocation = {
@@ -54,14 +58,33 @@ function calculateDistanceMeters(
   return earthRadiusMeters * arc;
 }
 
-function buildDebugErrorPayload(error: unknown): { message: string; status?: number; authExpired?: boolean } {
-  const errorWithMeta = error as Error & { status?: number; authExpired?: boolean };
+function buildDebugErrorPayload(error: unknown): {
+  message: string;
+  status?: number;
+  authExpired?: boolean;
+  contentType?: string;
+  bodyPreview?: string;
+  requestUrl?: string;
+  tokenPresent?: boolean;
+} {
+  const errorWithMeta = error as Error & {
+    status?: number;
+    authExpired?: boolean;
+    contentType?: string;
+    bodyPreview?: string;
+    requestUrl?: string;
+    tokenPresent?: boolean;
+  };
   return {
     message: errorWithMeta?.message || 'Unknown error',
     ...(typeof errorWithMeta?.status === 'number' ? { status: errorWithMeta.status } : {}),
     ...(typeof errorWithMeta?.authExpired === 'boolean'
       ? { authExpired: errorWithMeta.authExpired }
       : {}),
+    ...(typeof errorWithMeta?.contentType === 'string' ? { contentType: errorWithMeta.contentType } : {}),
+    ...(typeof errorWithMeta?.bodyPreview === 'string' ? { bodyPreview: errorWithMeta.bodyPreview } : {}),
+    ...(typeof errorWithMeta?.requestUrl === 'string' ? { requestUrl: errorWithMeta.requestUrl } : {}),
+    ...(typeof errorWithMeta?.tokenPresent === 'boolean' ? { tokenPresent: errorWithMeta.tokenPresent } : {}),
   };
 }
 
@@ -70,13 +93,20 @@ async function postBackgroundLocation(sample: BackgroundLocationSample, context:
   const longitude = Number(sample.coords?.longitude);
   const capturedAtMs = Number(sample.timestamp || Date.now());
   const capturedAt = new Date(capturedAtMs).toISOString();
+  const runtimeState = getLocationRuntimeState();
+  const debugRequestId = `${context.batchId}:${context.sampleIndex}`;
   if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) {
     reportLocationDebugEvent('background_location_invalid', {
       message: 'Invalid background coordinates',
       payload: {
+        debug_request_id: debugRequestId,
         batch_id: context.batchId,
         sample_index: context.sampleIndex,
         sample_count: context.sampleCount,
+        batch_first_captured_at: context.batchFirstCapturedAt,
+        batch_last_captured_at: context.batchLastCapturedAt,
+        api_base_url: API_BASE_URL,
+        app_state: runtimeState.appState,
       },
     });
     return;
@@ -97,11 +127,16 @@ async function postBackgroundLocation(sample: BackgroundLocationSample, context:
         message: 'Skipped near-duplicate buffered background sample',
         recordInHistory: false,
         payload: {
+          debug_request_id: debugRequestId,
           batch_id: context.batchId,
           sample_index: context.sampleIndex,
           sample_count: context.sampleCount,
+          batch_first_captured_at: context.batchFirstCapturedAt,
+          batch_last_captured_at: context.batchLastCapturedAt,
           moved_meters: Math.round(movedMeters),
           elapsed_seconds: Math.round(elapsedSeconds),
+          api_base_url: API_BASE_URL,
+          app_state: runtimeState.appState,
         },
       });
       return;
@@ -113,9 +148,14 @@ async function postBackgroundLocation(sample: BackgroundLocationSample, context:
     reportLocationDebugEvent('background_sync_skipped', {
       message: 'Missing auth token in secure store',
       payload: {
+        debug_request_id: debugRequestId,
         batch_id: context.batchId,
         sample_index: context.sampleIndex,
         sample_count: context.sampleCount,
+        batch_first_captured_at: context.batchFirstCapturedAt,
+        batch_last_captured_at: context.batchLastCapturedAt,
+        api_base_url: API_BASE_URL,
+        app_state: runtimeState.appState,
       },
     });
     return;
@@ -126,12 +166,18 @@ async function postBackgroundLocation(sample: BackgroundLocationSample, context:
 
   reportLocationDebugEvent('background_sync_attempt', {
     payload: {
+      debug_request_id: debugRequestId,
       batch_id: context.batchId,
       sample_index: context.sampleIndex,
       sample_count: context.sampleCount,
+      batch_first_captured_at: context.batchFirstCapturedAt,
+      batch_last_captured_at: context.batchLastCapturedAt,
       lat: latitude,
       lon: longitude,
       captured_at: capturedAt,
+      api_base_url: API_BASE_URL,
+      app_state: runtimeState.appState,
+      last_app_state_change_at: runtimeState.lastAppStateChangeAt,
     },
   });
 
@@ -139,6 +185,14 @@ async function postBackgroundLocation(sample: BackgroundLocationSample, context:
     method: 'POST',
     token,
     onAuthExpired: refreshStoredGoogleIdToken,
+    headers: {
+      'x-location-debug-request-id': debugRequestId,
+      'x-location-debug-batch-id': context.batchId,
+      'x-location-debug-sample-index': String(context.sampleIndex),
+      'x-location-debug-sample-count': String(context.sampleCount),
+      'x-location-debug-captured-at': capturedAt,
+      'x-location-debug-app-state': String(runtimeState.appState),
+    },
     body: JSON.stringify({
       lat: latitude,
       lon: longitude,
@@ -157,11 +211,17 @@ async function postBackgroundLocation(sample: BackgroundLocationSample, context:
 
   reportLocationDebugEvent('background_sync_success', {
     payload: {
+      debug_request_id: debugRequestId,
       batch_id: context.batchId,
       sample_index: context.sampleIndex,
       sample_count: context.sampleCount,
+      batch_first_captured_at: context.batchFirstCapturedAt,
+      batch_last_captured_at: context.batchLastCapturedAt,
       lat: latitude,
       lon: longitude,
+      captured_at: capturedAt,
+      api_base_url: API_BASE_URL,
+      app_state: runtimeState.appState,
     },
   });
 }
@@ -172,6 +232,14 @@ if (!TaskManager.isTaskDefined(BACKGROUND_LOCATION_TASK)) {
       Boolean,
     );
     const batchId = `${Date.now()}-${locations.length}`;
+    const batchTimestamps = locations
+      .map((location) => Number(location.timestamp))
+      .filter((timestamp) => Number.isFinite(timestamp) && timestamp > 0)
+      .sort((first, second) => first - second);
+    const batchFirstCapturedAt = batchTimestamps.length ? new Date(batchTimestamps[0]).toISOString() : null;
+    const batchLastCapturedAt = batchTimestamps.length
+      ? new Date(batchTimestamps[batchTimestamps.length - 1]).toISOString()
+      : null;
 
     if (error) {
       reportLocationDebugEvent('background_task_error', {
@@ -179,6 +247,8 @@ if (!TaskManager.isTaskDefined(BACKGROUND_LOCATION_TASK)) {
         payload: {
           batch_id: batchId,
           sample_count: locations.length,
+          batch_first_captured_at: batchFirstCapturedAt,
+          batch_last_captured_at: batchLastCapturedAt,
         },
       });
       return;
@@ -188,6 +258,8 @@ if (!TaskManager.isTaskDefined(BACKGROUND_LOCATION_TASK)) {
       payload: {
         batch_id: batchId,
         sample_count: locations.length,
+        batch_first_captured_at: batchFirstCapturedAt,
+        batch_last_captured_at: batchLastCapturedAt,
       },
     });
 
@@ -196,6 +268,9 @@ if (!TaskManager.isTaskDefined(BACKGROUND_LOCATION_TASK)) {
         message: 'Background task had no location samples',
         payload: {
           batch_id: batchId,
+          sample_count: locations.length,
+          batch_first_captured_at: batchFirstCapturedAt,
+          batch_last_captured_at: batchLastCapturedAt,
         },
       });
       return;
@@ -207,6 +282,8 @@ if (!TaskManager.isTaskDefined(BACKGROUND_LOCATION_TASK)) {
           batchId,
           sampleIndex: index + 1,
           sampleCount: locations.length,
+          batchFirstCapturedAt,
+          batchLastCapturedAt,
         });
       } catch (taskError) {
         const errorPayload = buildDebugErrorPayload(taskError);
@@ -217,8 +294,16 @@ if (!TaskManager.isTaskDefined(BACKGROUND_LOCATION_TASK)) {
             batch_id: batchId,
             sample_index: index + 1,
             sample_count: locations.length,
+            batch_first_captured_at: batchFirstCapturedAt,
+            batch_last_captured_at: batchLastCapturedAt,
             status: errorPayload.status,
             auth_expired: errorPayload.authExpired,
+            content_type: errorPayload.contentType,
+            response_preview: errorPayload.bodyPreview,
+            request_url: errorPayload.requestUrl,
+            token_present: errorPayload.tokenPresent,
+            api_base_url: API_BASE_URL,
+            app_state: getLocationRuntimeState().appState,
           },
         });
       }

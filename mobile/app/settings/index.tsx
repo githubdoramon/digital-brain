@@ -57,6 +57,16 @@ function formatDebugPayload(payload: Record<string, unknown> | undefined): strin
   }
 }
 
+function getPayloadString(payload: Record<string, unknown> | undefined, key: string): string {
+  const value = payload?.[key];
+  return typeof value === 'string' && value ? value : 'none';
+}
+
+function getPayloadNumber(payload: Record<string, unknown> | undefined, key: string): string {
+  const value = payload?.[key];
+  return typeof value === 'number' ? String(value) : 'none';
+}
+
 function LocationDebugEventRow({ event }: { event: LocationDebugEvent }) {
   return (
     <View style={styles.debugEventRow}>
@@ -65,6 +75,13 @@ function LocationDebugEventRow({ event }: { event: LocationDebugEvent }) {
       <Text style={styles.debugEventMeta}>
         Successes before failure: {event.successCountSincePreviousFailure ?? 0}
       </Text>
+      <Text style={styles.debugEventMeta}>Captured at: {formatBuildTimestamp(getPayloadString(event.payload, 'captured_at'))}</Text>
+      <Text style={styles.debugEventMeta}>
+        Batch window: {formatBuildTimestamp(getPayloadString(event.payload, 'batch_first_captured_at'))} - {formatBuildTimestamp(getPayloadString(event.payload, 'batch_last_captured_at'))}
+      </Text>
+      <Text style={styles.debugEventMeta}>Request URL: {getPayloadString(event.payload, 'request_url')}</Text>
+      <Text style={styles.debugEventMeta}>Content-Type: {getPayloadString(event.payload, 'content_type')}</Text>
+      <Text style={styles.debugEventMeta}>App state: {getPayloadString(event.payload, 'app_state')}</Text>
       <Text style={styles.debugEventMeta}>Message: {event.message ?? 'none'}</Text>
       <Text style={styles.debugEventMeta}>Error: {event.error ?? 'none'}</Text>
       <Text style={styles.debugEventPayload}>Payload: {formatDebugPayload(event.payload)}</Text>
@@ -220,6 +237,14 @@ export default function SettingsScreen() {
           <Text style={styles.versionValue}>Last event at: {formatBuildTimestamp(locationDebug.lastEventAt)}</Text>
           <Text style={styles.versionValue}>Last message: {locationDebug.lastMessage ?? 'none'}</Text>
           <Text style={styles.versionValue}>Last error: {locationDebug.lastError ?? 'none'}</Text>
+          <Text style={styles.versionValue}>Last captured at: {formatBuildTimestamp(getPayloadString(locationDebug.lastPayload, 'captured_at'))}</Text>
+          <Text style={styles.versionValue}>
+            Last batch window: {formatBuildTimestamp(getPayloadString(locationDebug.lastPayload, 'batch_first_captured_at'))} - {formatBuildTimestamp(getPayloadString(locationDebug.lastPayload, 'batch_last_captured_at'))}
+          </Text>
+          <Text style={styles.versionValue}>Last request URL: {getPayloadString(locationDebug.lastPayload, 'request_url')}</Text>
+          <Text style={styles.versionValue}>Last content type: {getPayloadString(locationDebug.lastPayload, 'content_type')}</Text>
+          <Text style={styles.versionValue}>Last app state: {getPayloadString(locationDebug.lastPayload, 'app_state')}</Text>
+          <Text style={styles.versionValue}>Last sample count: {getPayloadNumber(locationDebug.lastPayload, 'sample_count')}</Text>
           <Text style={styles.versionValue}>Last payload: {formatDebugPayload(locationDebug.lastPayload)}</Text>
           <Text style={styles.versionValue}>Last success at: {formatBuildTimestamp(locationDebug.lastSuccessAt)}</Text>
           <Text style={styles.versionValue}>Total successes: {locationDebug.totalSuccessCount ?? 0}</Text>

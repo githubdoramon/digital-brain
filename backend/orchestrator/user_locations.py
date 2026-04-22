@@ -88,16 +88,25 @@ def upsert_user_location(
     place_name: str | None = None,
     city: str | None = None,
     country: str | None = None,
+    debug_context: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     safe_source = (source or "unknown").strip() or "unknown"
     resolved_captured_at = captured_at or datetime.now(timezone.utc)
+    received_at = datetime.now(timezone.utc)
+    debug_context = debug_context or {}
     logger.info(
-        "[user_locations] Record request user=%s lat=%.6f lon=%.6f source=%s captured_at=%s",
+        "[user_locations] Record request user=%s lat=%.6f lon=%.6f source=%s captured_at=%s received_at=%s debug_request_id=%s batch_id=%s sample_index=%s/%s app_state=%s",
         user_email,
         lat,
         lon,
         safe_source,
         resolved_captured_at.isoformat(),
+        received_at.isoformat(),
+        debug_context.get("debug_request_id") or "none",
+        debug_context.get("batch_id") or "none",
+        debug_context.get("sample_index") or "none",
+        debug_context.get("sample_count") or "none",
+        debug_context.get("app_state") or "unknown",
     )
 
     enriched_place_name = (place_name or "").strip() or None
@@ -117,6 +126,12 @@ def upsert_user_location(
         )
         existing = dict(cur.fetchone() or {})
 
+    existing_captured_at = _normalize_timestamp(existing.get("captured_at")) if existing else None
+    moved_meters_from_latest = (
+        _distance_meters(existing, {"lat": lat, "lon": lon}) if existing else None
+    )
+    ingestion_delay_seconds = max(0.0, (received_at - resolved_captured_at).total_seconds())
+
     if _should_skip_location_update(
         existing=existing,
         lat=lat,
@@ -130,10 +145,16 @@ def upsert_user_location(
             captured_at=resolved_captured_at,
         )
         logger.info(
-            "[user_locations] Skipped update for user=%s reason=%s existing_captured_at=%s",
+            "[user_locations] Skipped update for user=%s reason=%s existing_captured_at=%s moved_meters_from_latest=%s ingestion_delay_seconds=%.1f debug_request_id=%s batch_id=%s sample_index=%s/%s",
             user_email,
             skip_reason,
-            (_normalize_timestamp(existing.get("captured_at")) if existing else None),
+            existing_captured_at,
+            f"{moved_meters_from_latest:.1f}" if moved_meters_from_latest is not None else "none",
+            ingestion_delay_seconds,
+            debug_context.get("debug_request_id") or "none",
+            debug_context.get("batch_id") or "none",
+            debug_context.get("sample_index") or "none",
+            debug_context.get("sample_count") or "none",
         )
         return existing
 
@@ -189,11 +210,19 @@ def upsert_user_location(
         conn.commit()
 
     logger.info(
-        "[user_locations] Recorded user location for user=%s lat=%.6f lon=%.6f source=%s",
+        "[user_locations] Recorded user location for user=%s lat=%.6f lon=%.6f source=%s stored_captured_at=%s received_at=%s ingestion_delay_seconds=%.1f moved_meters_from_latest=%s debug_request_id=%s batch_id=%s sample_index=%s/%s",
         user_email,
         lat,
         lon,
         safe_source,
+        resolved_captured_at.isoformat(),
+        received_at.isoformat(),
+        ingestion_delay_seconds,
+        f"{moved_meters_from_latest:.1f}" if moved_meters_from_latest is not None else "none",
+        debug_context.get("debug_request_id") or "none",
+        debug_context.get("batch_id") or "none",
+        debug_context.get("sample_index") or "none",
+        debug_context.get("sample_count") or "none",
     )
     return dict(row or {})
 

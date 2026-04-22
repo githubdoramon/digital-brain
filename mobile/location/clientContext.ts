@@ -1,7 +1,8 @@
 import * as Location from 'expo-location';
 
-import { apiFetch } from '@/api/client';
+import { apiFetch, API_BASE_URL } from '@/api/client';
 import { reportLocationDebugEvent } from '@/location/debugState';
+import { getLocationRuntimeState } from '@/location/runtimeState';
 
 export type ClientLocationContext = {
   lat: number;
@@ -156,8 +157,16 @@ function syncLocationToBackend(): void {
   }
 
   locationSyncInFlight = true;
+  const runtimeState = getLocationRuntimeState();
   reportLocationDebugEvent('location_sync_attempt', {
-    payload: { lat: location.lat, lon: location.lon, captured_at: location.captured_at },
+    payload: {
+      lat: location.lat,
+      lon: location.lon,
+      captured_at: location.captured_at,
+      api_base_url: API_BASE_URL,
+      app_state: runtimeState.appState,
+      last_app_state_change_at: runtimeState.lastAppStateChangeAt,
+    },
   });
   void apiFetch('/mobile/location', {
     method: 'POST',
@@ -173,8 +182,28 @@ function syncLocationToBackend(): void {
       });
     })
     .catch((error) => {
+      const errorWithMeta = error as Error & {
+        status?: number;
+        authExpired?: boolean;
+        contentType?: string;
+        bodyPreview?: string;
+        requestUrl?: string;
+        tokenPresent?: boolean;
+      };
       reportLocationDebugEvent('location_sync_error', {
+        message: errorWithMeta.message,
         error,
+        payload: {
+          api_base_url: API_BASE_URL,
+          app_state: runtimeState.appState,
+          captured_at: location.captured_at,
+          status: errorWithMeta.status,
+          auth_expired: errorWithMeta.authExpired,
+          content_type: errorWithMeta.contentType,
+          response_preview: errorWithMeta.bodyPreview,
+          request_url: errorWithMeta.requestUrl,
+          token_present: errorWithMeta.tokenPresent,
+        },
       });
       // Best-effort sync; location context should still be available for ask flows.
     })

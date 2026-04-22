@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 
 import devices as devices_service
 import user_facts
@@ -101,17 +101,26 @@ def create_user_router() -> APIRouter:
         return {"ok": True}
 
     @router.post("/mobile/location", response_model=UserLocationOut)
-    def update_mobile_location(payload: UserLocationUpdateIn, user: dict = Depends(get_current_user)):
+    def update_mobile_location(
+        payload: UserLocationUpdateIn,
+        request: Request,
+        user: dict = Depends(get_current_user),
+    ):
         email = user.get("email") or user.get("user_email")
         if not email:
             raise HTTPException(status_code=400, detail="User email is missing")
         logger.info(
-            "[mobile/location] Received location update user=%s lat=%.6f lon=%.6f source=%s captured_at=%s",
+            "[mobile/location] Received location update user=%s lat=%.6f lon=%.6f source=%s captured_at=%s debug_request_id=%s batch_id=%s sample_index=%s/%s app_state=%s",
             email,
             payload.lat,
             payload.lon,
             payload.source or "unknown",
             payload.captured_at.isoformat() if payload.captured_at else "none",
+            request.headers.get("x-location-debug-request-id") or "none",
+            request.headers.get("x-location-debug-batch-id") or "none",
+            request.headers.get("x-location-debug-sample-index") or "none",
+            request.headers.get("x-location-debug-sample-count") or "none",
+            request.headers.get("x-location-debug-app-state") or "unknown",
         )
         return user_locations.upsert_user_location(
             user_email=email,
@@ -124,6 +133,14 @@ def create_user_router() -> APIRouter:
             place_name=payload.place_name,
             city=payload.city,
             country=payload.country,
+            debug_context={
+                "debug_request_id": request.headers.get("x-location-debug-request-id"),
+                "batch_id": request.headers.get("x-location-debug-batch-id"),
+                "sample_index": request.headers.get("x-location-debug-sample-index"),
+                "sample_count": request.headers.get("x-location-debug-sample-count"),
+                "client_captured_at": request.headers.get("x-location-debug-captured-at"),
+                "app_state": request.headers.get("x-location-debug-app-state"),
+            },
         )
 
     @router.get("/mobile/location", response_model=UserLocationOut)
