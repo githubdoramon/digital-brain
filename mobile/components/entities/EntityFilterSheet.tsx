@@ -66,7 +66,14 @@ export function EntityFilterSheet({ visible, chips, onApply, onRemove, onClose }
         <Button
           label="Clear all"
           variant="secondary"
-          onPress={() => onApply(EMPTY_ENTITY_FILTERS)}
+          onPress={() => {
+            onApply({
+              contactIds: [...EMPTY_ENTITY_FILTERS.contactIds],
+              placeIds: [...EMPTY_ENTITY_FILTERS.placeIds],
+              eventIds: [...EMPTY_ENTITY_FILTERS.eventIds],
+            });
+            onClose();
+          }}
           style={styles.footerButton}
         />
       </View>

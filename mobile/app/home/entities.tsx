@@ -216,7 +216,11 @@ export default function EntitiesScreen() {
   const eventLoadingMoreRef = React.useRef(false);
 
   const [selectedEntity, setSelectedEntity] = React.useState<EntityKind>('contacts');
-  const [query, setQuery] = React.useState('');
+  const [queries, setQueries] = React.useState<Record<EntityKind, string>>({
+    contacts: '',
+    places: '',
+    events: '',
+  });
   const [filters, setFilters] = React.useState<EntityFilters>(EMPTY_ENTITY_FILTERS);
   const [showFilterSheet, setShowFilterSheet] = React.useState(false);
   const [contacts, setContacts] = React.useState<ContactListItem[]>([]);
@@ -230,6 +234,7 @@ export default function EntitiesScreen() {
   const [focusTick, setFocusTick] = React.useState(0);
 
   const filterSignature = React.useMemo(() => JSON.stringify(filters), [filters]);
+  const query = queries[selectedEntity];
 
   const contactMap = React.useMemo(() => {
     const map = new Map<string, string>();
@@ -237,7 +242,39 @@ export default function EntitiesScreen() {
     return map;
   }, [contacts]);
 
-  const optionMap = React.useMemo(() => buildFilterOptionMaps(filterOptions), [filterOptions]);
+  const combinedFilterOptions = React.useMemo(() => {
+    const optionsByKey = new Map<string, EntityFilterOption>();
+    for (const option of filterOptions) {
+      optionsByKey.set(`${option.kind}:${option.id}`, option);
+    }
+    for (const contact of contacts) {
+      optionsByKey.set(`contacts:${contact.contact_id}`, {
+        id: contact.contact_id,
+        kind: 'contacts',
+        label: contact.display_name,
+        description:
+          contact.emails?.[0] || contact.phones?.[0] || contact.tags?.slice(0, 2).join(' • ') || null,
+      });
+    }
+    for (const place of places) {
+      optionsByKey.set(`places:${place.place_id}`, {
+        id: place.place_id,
+        kind: 'places',
+        label: place.name?.trim() || place.place_id,
+        description: formatPlaceSubtitle(place),
+      });
+    }
+    for (const event of events) {
+      optionsByKey.set(`events:${event.id}`, {
+        id: event.id,
+        kind: 'events',
+        label: String(event.title || '').trim() || 'Untitled event',
+        description: formatEventFilterDescription(event),
+      });
+    }
+    return Array.from(optionsByKey.values());
+  }, [contacts, events, filterOptions, places]);
+  const optionMap = React.useMemo(() => buildFilterOptionMaps(combinedFilterOptions), [combinedFilterOptions]);
   const activeFilterChips = React.useMemo(() => buildActiveFilterChips(filters, optionMap), [filters, optionMap]);
   const activeFilterCount = React.useMemo(() => countActiveFilters(filters), [filters]);
   const listData = React.useMemo<EntityListRow[]>(() => {
@@ -251,7 +288,7 @@ export default function EntitiesScreen() {
       const [contactsResult, placesResult, eventsResult] = await Promise.all([
         apiFetch('/mobile/contacts'),
         apiFetch('/mobile/places?limit=500'),
-        apiFetch('/mobile/events/search?limit=100'),
+        apiFetch('/mobile/events/search?limit=50'),
       ]);
       const nextOptions: EntityFilterOption[] = [];
       const contactItems = ((contactsResult as { contacts?: ContactListItem[] }).contacts || []) as ContactListItem[];
@@ -486,7 +523,12 @@ export default function EntitiesScreen() {
           <Ionicons name="search-outline" size={18} color={theme.colors.mutedInk} />
           <TextInput
             value={query}
-            onChangeText={setQuery}
+            onChangeText={(value) =>
+              setQueries((current) => ({
+                ...current,
+                [selectedEntity]: value,
+              }))
+            }
             placeholder={ENTITY_META[selectedEntity].placeholder}
             placeholderTextColor={theme.colors.mutedInk}
             style={styles.searchInput}
@@ -613,7 +655,7 @@ export default function EntitiesScreen() {
 
       <CollapsingTopBar
         title="Entities"
-        secondaryTitle="Contacts, places, and events in one lane"
+        secondaryTitle="Skim through your entities"
         scrollY={scrollY}
         profileName={name || email || 'You'}
         profilePhoto={photo}
