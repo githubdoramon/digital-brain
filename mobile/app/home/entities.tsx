@@ -31,6 +31,8 @@ import {
   buildActiveFilterChips,
   buildFilterOptionMaps,
   countActiveFilters,
+  formatDocumentDate,
+  formatDocumentSubtitle,
   formatEventDate,
   formatEventFilterDescription,
   formatPlaceSubtitle,
@@ -39,6 +41,8 @@ import {
   ENTITY_META,
   EMPTY_ENTITY_FILTERS,
   type ContactListItem,
+  type DocumentCollectionResponse,
+  type DocumentListItem,
   type EntityFilterOption,
   type EntityFilters,
   type EntityKind,
@@ -50,7 +54,7 @@ import { RelationshipChips } from '@/components/RelationshipChips';
 import { theme } from '@/theme';
 
 const EVENT_PAGE_SIZE = 30;
-type EntityListRow = ContactListItem | PlaceListItem | EventListItem;
+type EntityListRow = ContactListItem | PlaceListItem | EventListItem | DocumentListItem;
 
 function appendIds(searchParams: URLSearchParams, key: string, values: string[]) {
   for (const value of values) {
@@ -199,6 +203,23 @@ function EventCard({
   );
 }
 
+function DocumentCard({ document, onPress }: { document: DocumentListItem; onPress: () => void }) {
+  return (
+    <Card style={styles.simpleCard}>
+      <Pressable onPress={onPress} style={styles.simpleCardTapArea}>
+        <View style={styles.cardBody}>
+          <Text style={styles.cardTitle}>{document.title?.trim() || document.file_name || 'Untitled document'}</Text>
+          <Text style={styles.cardSubtitle}>{formatDocumentDate(document.document_date)}</Text>
+          <Text style={styles.cardMeta} numberOfLines={2}>
+            {formatDocumentSubtitle(document)}
+          </Text>
+        </View>
+        <Ionicons name="chevron-forward" size={18} color={theme.colors.mutedInk} />
+      </Pressable>
+    </Card>
+  );
+}
+
 export default function EntitiesScreen() {
   const { token, name, email, photo } = useAuth();
   const router = useRouter();
@@ -209,6 +230,7 @@ export default function EntitiesScreen() {
     contacts: false,
     places: false,
     events: false,
+    documents: false,
   });
   const requestVersionRef = React.useRef(0);
   const eventNextOffsetRef = React.useRef(0);
@@ -220,12 +242,14 @@ export default function EntitiesScreen() {
     contacts: '',
     places: '',
     events: '',
+    documents: '',
   });
   const [filters, setFilters] = React.useState<EntityFilters>(EMPTY_ENTITY_FILTERS);
   const [showFilterSheet, setShowFilterSheet] = React.useState(false);
   const [contacts, setContacts] = React.useState<ContactListItem[]>([]);
   const [places, setPlaces] = React.useState<PlaceListItem[]>([]);
   const [events, setEvents] = React.useState<EventListItem[]>([]);
+  const [documents, setDocuments] = React.useState<DocumentListItem[]>([]);
   const [filterOptions, setFilterOptions] = React.useState<EntityFilterOption[]>([]);
   const [isLoading, setIsLoading] = React.useState(true);
   const [isRefreshing, setIsRefreshing] = React.useState(false);
@@ -272,16 +296,25 @@ export default function EntitiesScreen() {
         description: formatEventFilterDescription(event),
       });
     }
+    for (const document of documents) {
+      optionsByKey.set(`documents:${document.document_id}`, {
+        id: document.document_id,
+        kind: 'documents',
+        label: document.title?.trim() || document.file_name || 'Untitled document',
+        description: formatDocumentSubtitle(document),
+      });
+    }
     return Array.from(optionsByKey.values());
-  }, [contacts, events, filterOptions, places]);
+  }, [contacts, documents, events, filterOptions, places]);
   const optionMap = React.useMemo(() => buildFilterOptionMaps(combinedFilterOptions), [combinedFilterOptions]);
   const activeFilterChips = React.useMemo(() => buildActiveFilterChips(filters, optionMap), [filters, optionMap]);
   const activeFilterCount = React.useMemo(() => countActiveFilters(filters), [filters]);
   const listData = React.useMemo<EntityListRow[]>(() => {
     if (selectedEntity === 'contacts') return contacts;
     if (selectedEntity === 'places') return places;
+    if (selectedEntity === 'documents') return documents;
     return events;
-  }, [contacts, events, places, selectedEntity]);
+  }, [contacts, documents, events, places, selectedEntity]);
 
   const loadFilterOptions = React.useCallback(async () => {
     try {
@@ -329,6 +362,7 @@ export default function EntitiesScreen() {
     (kind: EntityKind, id: string) => {
       if (kind === 'contacts') return filters.contactIds.includes(id);
       if (kind === 'places') return filters.placeIds.includes(id);
+      if (kind === 'documents') return false;
       return filters.eventIds.includes(id);
     },
     [filters.contactIds, filters.eventIds, filters.placeIds],
@@ -336,6 +370,9 @@ export default function EntitiesScreen() {
 
   const toggleFilter = React.useCallback((kind: EntityKind, id: string) => {
     setFilters((current) => {
+      if (kind === 'documents') {
+        return current;
+      }
       const key = kind === 'contacts' ? 'contactIds' : kind === 'places' ? 'placeIds' : 'eventIds';
       const nextValues = current[key].includes(id)
         ? current[key].filter((value) => value !== id)
@@ -470,6 +507,38 @@ export default function EntitiesScreen() {
     [buildCommonSearchParams],
   );
 
+  const loadDocuments = React.useCallback(
+    async ({ showInitialLoader = false, showRefreshSpinner = false } = {}) => {
+      const requestId = ++requestVersionRef.current;
+      if (showInitialLoader) setIsLoading(true);
+      if (showRefreshSpinner) setIsRefreshing(true);
+      setLoadError(null);
+      try {
+        let result: DocumentCollectionResponse;
+        if (query.trim()) {
+          result = (await apiFetch('/documents/search', {
+            method: 'POST',
+            body: JSON.stringify({ query: query.trim(), limit: 50 }),
+          })) as DocumentCollectionResponse;
+        } else {
+          result = (await apiFetch('/documents?limit=100')) as DocumentCollectionResponse;
+        }
+        if (requestId !== requestVersionRef.current) return;
+        setDocuments(result.documents ?? []);
+      } catch (error) {
+        if (requestId !== requestVersionRef.current) return;
+        console.warn('[entities] documents load failed', error);
+        setLoadError('Unable to load documents. Pull to refresh.');
+      } finally {
+        if (requestId === requestVersionRef.current) {
+          setIsLoading(false);
+          setIsRefreshing(false);
+        }
+      }
+    },
+    [query],
+  );
+
   const loadCurrentEntity = React.useCallback(
     async ({ showInitialLoader = false, showRefreshSpinner = false, append = false } = {}) => {
       if (selectedEntity === 'contacts') {
@@ -480,9 +549,13 @@ export default function EntitiesScreen() {
         await loadPlaces({ showInitialLoader, showRefreshSpinner });
         return;
       }
+      if (selectedEntity === 'documents') {
+        await loadDocuments({ showInitialLoader, showRefreshSpinner });
+        return;
+      }
       await loadEvents({ showInitialLoader, showRefreshSpinner, append });
     },
-    [loadContacts, loadEvents, loadPlaces, selectedEntity],
+    [loadContacts, loadDocuments, loadEvents, loadPlaces, selectedEntity],
   );
 
   useFocusEffect(
@@ -513,7 +586,7 @@ export default function EntitiesScreen() {
   const listHeader = (
     <View style={styles.header}>
       <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.entityChipRow}>
-        {(['contacts', 'places', 'events'] as const).map((kind) => (
+        {(['contacts', 'places', 'events', 'documents'] as const).map((kind) => (
           <EntityChip key={kind} kind={kind} selected={selectedEntity === kind} onPress={() => setSelectedEntity(kind)} />
         ))}
       </ScrollView>
@@ -572,7 +645,12 @@ export default function EntitiesScreen() {
       <FlatList<EntityListRow>
         data={listData}
         key={selectedEntity}
-        keyExtractor={(item) => ('contact_id' in item ? item.contact_id : 'place_id' in item ? item.place_id : item.id)}
+        keyExtractor={(item) => {
+          if ('contact_id' in item) return item.contact_id;
+          if ('place_id' in item) return item.place_id;
+          if ('document_id' in item) return item.document_id;
+          return item.id;
+        }}
         onScroll={Animated.event([{ nativeEvent: { contentOffset: { y: scrollY } } }], { useNativeDriver: false })}
         scrollEventThrottle={16}
         refreshing={isRefreshing}
@@ -631,6 +709,21 @@ export default function EntitiesScreen() {
                   router.push({
                     pathname: '/places/[placeId]',
                     params: { placeId: place.place_id },
+                  })
+                }
+              />
+            );
+          }
+
+          if (selectedEntity === 'documents') {
+            const document = item as DocumentListItem;
+            return (
+              <DocumentCard
+                document={document}
+                onPress={() =>
+                  router.push({
+                    pathname: '/documents/[documentId]/index',
+                    params: { documentId: document.document_id },
                   })
                 }
               />

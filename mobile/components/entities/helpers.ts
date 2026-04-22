@@ -1,4 +1,4 @@
-import type { EntityFilterOption, EntityFilters, EventListItem, PlaceListItem } from './types';
+import type { DocumentListItem, EntityFilterOption, EntityFilters, EventListItem, PlaceListItem } from './types';
 
 export function formatEventDate(value?: string | null): string {
   if (!value) return 'Date TBD';
@@ -33,6 +33,30 @@ export function formatEventFilterDescription(event: EventListItem): string {
     return event.summary.trim();
   }
   return formatEventDate(event.start_date);
+}
+
+export function formatDocumentDate(value?: string | null): string {
+  if (!value) return 'No document date';
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return value;
+  return parsed.toLocaleDateString(undefined, {
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+  });
+}
+
+export function formatDocumentSubtitle(document: DocumentListItem): string {
+  if (document.description?.trim()) {
+    return document.description.trim();
+  }
+  if (document.tags?.length) {
+    return document.tags.slice(0, 3).join(' • ');
+  }
+  if (document.file_name?.trim()) {
+    return document.file_name.trim();
+  }
+  return 'No description yet';
 }
 
 export function buildFilterOptionMaps(options: EntityFilterOption[]): Map<string, EntityFilterOption> {

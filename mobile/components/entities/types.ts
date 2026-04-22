@@ -1,4 +1,4 @@
-export type EntityKind = 'contacts' | 'places' | 'events';
+export type EntityKind = 'contacts' | 'places' | 'events' | 'documents';
 
 export type EntityFilters = {
   contactIds: string[];
@@ -60,6 +60,21 @@ export type EventSearchResponse = {
   next_offset?: number;
 };
 
+export type DocumentListItem = {
+  document_id: string;
+  title: string;
+  tags?: string[];
+  description?: string | null;
+  document_date?: string | null;
+  file_name?: string;
+  file_mime?: string | null;
+  file_size?: number | null;
+};
+
+export type DocumentCollectionResponse = {
+  documents: DocumentListItem[];
+};
+
 export const EMPTY_ENTITY_FILTERS: EntityFilters = {
   contactIds: [],
   placeIds: [],
@@ -68,7 +83,11 @@ export const EMPTY_ENTITY_FILTERS: EntityFilters = {
 
 export const ENTITY_META: Record<
   EntityKind,
-  { label: string; icon: 'people-outline' | 'location-outline' | 'sparkles-outline'; placeholder: string }
+  {
+    label: string;
+    icon: 'people-outline' | 'location-outline' | 'sparkles-outline' | 'document-text-outline';
+    placeholder: string;
+  }
 > = {
   contacts: {
     label: 'Contacts',
@@ -84,5 +103,10 @@ export const ENTITY_META: Record<
     label: 'Events',
     icon: 'sparkles-outline',
     placeholder: 'Search events',
+  },
+  documents: {
+    label: 'Documents',
+    icon: 'document-text-outline',
+    placeholder: 'Search documents',
   },
 };

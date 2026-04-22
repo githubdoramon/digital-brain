@@ -32,7 +32,7 @@ export function EntityFilterSheet({ visible, chips, onApply, onRemove, onClose }
       </View>
 
       <ScrollView style={styles.optionsScroll} contentContainerStyle={styles.optionsContent}>
-        {(['contacts', 'places', 'events'] as const).map((kind) => {
+        {(['contacts', 'places', 'events', 'documents'] as const).map((kind) => {
           const sectionChips = chips.filter((chip) => chip.kind === kind);
           return (
             <View key={kind} style={styles.section}>
