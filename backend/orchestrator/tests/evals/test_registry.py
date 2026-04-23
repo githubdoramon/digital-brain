@@ -39,6 +39,7 @@ async def test_run_eval_flow_aggregates_attempts(monkeypatch):
     )
 
     monkeypatch.setitem(registry._FLOW_MAP, "fake", fake_flow)
+    monkeypatch.setattr(registry, "warm_chat_model", lambda _model: True)
 
     result = await registry.run_eval_flow(
         flow_id="fake",
@@ -49,5 +50,75 @@ async def test_run_eval_flow_aggregates_attempts(monkeypatch):
 
     assert result["flow"]["flow_id"] == "fake"
     assert result["summary"]["total_attempts"] == 3
-    assert result["summary"]["passed_attempts"] == 3
+    assert result["summary"]["measured_attempts"] == 2
+    assert result["summary"]["discarded_attempts"] == 1
+    assert result["summary"]["passed_attempts"] == 2
+    assert result["cases"][0]["metrics"]["attempts"] == 2
+    assert result["cases"][0]["metrics"]["total_attempts"] == 3
+    assert result["cases"][0]["metrics"]["discarded_attempts"] == 1
     assert result["cases"][0]["metrics"]["variant_count"] == 1
+    assert result["cases"][0]["attempts"][0]["discarded"] is True
+    assert result["warmup"]["attempted"] is True
+    assert result["warmup"]["performed"] is True
+    assert result["discard_first_attempt"] is True
+
+
+@pytest.mark.asyncio
+async def test_run_eval_flow_skips_warmup_without_model(monkeypatch):
+    async def execute_case(case, llm_model, user_email):
+        return {"flow": case.case_id, "llm_model": llm_model, "user_email": user_email}
+
+    fake_flow = EvalFlowDefinition(
+        flow_id="fake-no-model",
+        label="Fake No Model",
+        description="Fake flow for tests",
+        cases=[EvalCase(case_id="case-1", title="Case 1", input={}, expected={})],
+        execute_case=execute_case,
+        score_case=lambda case, output: {"passed": True, "notes": []},
+        summarize_output=lambda output: {"llm_model": output["llm_model"]},
+    )
+
+    monkeypatch.setitem(registry._FLOW_MAP, "fake-no-model", fake_flow)
+
+    result = await registry.run_eval_flow(
+        flow_id="fake-no-model",
+        llm_model=None,
+        repetitions=1,
+        user_email="user@example.com",
+    )
+
+    assert result["warmup"]["attempted"] is False
+    assert result["warmup"]["performed"] is False
+    assert result["discard_first_attempt"] is False
+
+
+@pytest.mark.asyncio
+async def test_run_eval_flow_can_keep_first_attempt_when_requested(monkeypatch):
+    async def execute_case(case, llm_model, user_email):
+        return {"flow": case.case_id, "llm_model": llm_model, "user_email": user_email}
+
+    fake_flow = EvalFlowDefinition(
+        flow_id="fake-keep-first",
+        label="Fake Keep First",
+        description="Fake flow for tests",
+        cases=[EvalCase(case_id="case-1", title="Case 1", input={}, expected={})],
+        execute_case=execute_case,
+        score_case=lambda case, output: {"passed": True, "notes": []},
+        summarize_output=lambda output: {"llm_model": output["llm_model"]},
+    )
+
+    monkeypatch.setitem(registry._FLOW_MAP, "fake-keep-first", fake_flow)
+    monkeypatch.setattr(registry, "warm_chat_model", lambda _model: True)
+
+    result = await registry.run_eval_flow(
+        flow_id="fake-keep-first",
+        llm_model="test-model",
+        repetitions=3,
+        user_email="user@example.com",
+        discard_first_attempt=False,
+    )
+
+    assert result["discard_first_attempt"] is False
+    assert result["summary"]["measured_attempts"] == 3
+    assert result["summary"]["discarded_attempts"] == 0
+    assert all(attempt["discarded"] is False for attempt in result["cases"][0]["attempts"])

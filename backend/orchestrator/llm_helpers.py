@@ -31,6 +31,7 @@ LLM_API_KEY = os.getenv("LLM_API_KEY", "")
 LLM_TIMEOUT = int(os.getenv("LLM_TIMEOUT", "120"))
 LLM_MAX_RETRIES = int(os.getenv("LLM_MAX_RETRIES", "3"))
 LLM_RETRY_BASE_DELAY = float(os.getenv("LLM_RETRY_BASE_DELAY", "1.0"))
+LLM_WARM_KEEP_ALIVE = os.getenv("LLM_WARM_KEEP_ALIVE", "15m")
 
 
 class LLMUnavailableError(RuntimeError):
@@ -128,18 +129,26 @@ def build_chat_payload(
     return payload
 
 
-def warm_fast_model(*, timeout: Optional[int] = None) -> bool:
+def warm_chat_model(
+    model: str,
+    *,
+    timeout: Optional[int] = None,
+    keep_alive: str | int | None = None,
+) -> bool:
     base_url = _get_required_setting("LLM_BASE_URL", LLM_BASE_URL)
     if not is_ollama_base_url(base_url):
-        logger.info("[llm_helpers] Skip fast-model warmup for non-Ollama base URL")
+        logger.info("[llm_helpers] Skip model warmup for non-Ollama base URL")
         return False
 
-    model_name = resolve_chat_model(use_fast_model=True)
+    model_name = str(model or "").strip()
+    if not model_name:
+        raise RuntimeError("model is required for warm_chat_model")
+
     payload = {
         "model": model_name,
         "messages": [{"role": "user", "content": "ping"}],
         "stream": False,
-        "keep_alive": get_fast_keep_alive(),
+        "keep_alive": keep_alive if keep_alive is not None else LLM_WARM_KEEP_ALIVE,
     }
     response = requests.post(
         f"{get_ollama_api_base_url(base_url)}/api/chat",
@@ -151,12 +160,20 @@ def warm_fast_model(*, timeout: Optional[int] = None) -> bool:
     data = response.json()
     _raise_for_llm_error(data)
     logger.info(
-        "[llm_helpers] Warmed fast model model=%s keep_alive=%s done_reason=%s",
+        "[llm_helpers] Warmed chat model model=%s keep_alive=%s done_reason=%s",
         model_name,
         payload["keep_alive"],
         data.get("done_reason", ""),
     )
     return True
+
+
+def warm_fast_model(*, timeout: Optional[int] = None) -> bool:
+    return warm_chat_model(
+        resolve_chat_model(use_fast_model=True),
+        timeout=timeout,
+        keep_alive=get_fast_keep_alive(),
+    )
 
 
 def _raise_for_llm_error(data: dict[str, Any]) -> None:
@@ -354,6 +371,7 @@ def _call_llm_raw(
         tool_choice=tool_choice,
     )
 
+    logger.info("[llm_helpers] LLM request model=%s stream=%s", payload.get("model"), False)
     logger.info("[llm_helpers] LLM input: %s", json.dumps(messages, ensure_ascii=False))
     logger.info("[llm_helpers] LLM available tools: %s", json.dumps(tools, ensure_ascii=False))
     logger.info("[llm_helpers] LLM tool choice: %s", json.dumps(tool_choice, ensure_ascii=False))

@@ -39,6 +39,7 @@ def create_evals_router() -> APIRouter:
                 llm_model=normalized_model,
                 repetitions=payload.repetitions,
                 user_email=user_email,
+                discard_first_attempt=payload.discard_first_attempt,
             )
         except ValueError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc

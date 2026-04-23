@@ -233,6 +233,7 @@ class EvalRunIn(BaseModel):
     flow_id: str
     llm_model: str | None = None
     repetitions: int = Field(default=5, ge=1, le=20)
+    discard_first_attempt: bool = True
 
 
 class PushNotificationsUpdateIn(BaseModel):

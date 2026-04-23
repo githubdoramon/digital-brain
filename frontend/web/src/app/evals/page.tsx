@@ -103,6 +103,9 @@ export default function EvalsPage() {
             <p style={{ margin: 0, color: "rgba(226, 232, 240, 0.9)", fontSize: "1rem", lineHeight: 1.6 }}>
               Pick a flow, type a model name, and compare repeated live outputs against lightweight expectations. Results stay on this page only.
             </p>
+            <p style={{ margin: 0, color: "rgba(226, 232, 240, 0.82)", fontSize: "0.95rem", lineHeight: 1.6 }}>
+              By default, the first measured attempt is discarded so model load jitter does not skew benchmark timing.
+            </p>
           </div>
         </section>
 

@@ -41,11 +41,22 @@ export function EvalRunCard({ run, runKey }: EvalRunCardProps) {
             Pass rate {formatPercent(run.summary.pass_rate)}
           </div>
           <div style={{ color: "#526070", fontSize: "0.9rem" }}>
-            {run.summary.passed_attempts}/{run.summary.total_attempts} passing attempts across {run.repetitions} repetitions
+            {run.summary.passed_attempts}/{run.summary.measured_attempts} passing measured attempts across {run.repetitions} repetitions
           </div>
           <div style={{ color: "#526070", fontSize: "0.9rem" }}>
             Avg {formatDuration(run.summary.avg_duration_ms)} - Total {formatDuration(run.summary.total_duration_ms)}
           </div>
+          <div style={{ color: "#526070", fontSize: "0.9rem" }}>
+            {run.discard_first_attempt
+              ? `Discarded first attempt per case (${run.summary.discarded_attempts} total)`
+              : "All attempts counted"}
+          </div>
+          {run.warmup?.attempted ? (
+            <div style={{ color: "#526070", fontSize: "0.9rem" }}>
+              Warm-up {run.warmup.performed ? "completed" : "attempted"}
+              {typeof run.warmup.duration_ms === "number" ? ` in ${formatDuration(run.warmup.duration_ms)}` : ""}
+            </div>
+          ) : null}
         </div>
       </div>
 
@@ -71,6 +82,7 @@ export function EvalRunCard({ run, runKey }: EvalRunCardProps) {
                 <div style={{ display: "flex", gap: 14, flexWrap: "wrap", color: "#526070", fontSize: "0.9rem" }}>
                   <span>{formatPercent(caseResult.metrics.pass_rate)} pass</span>
                   <span>{formatDuration(caseResult.metrics.avg_duration_ms)} avg</span>
+                  <span>{caseResult.metrics.discarded_attempts} discarded</span>
                   <span>{caseResult.metrics.variant_count} variants</span>
                 </div>
               </div>
@@ -105,10 +117,15 @@ export function EvalRunCard({ run, runKey }: EvalRunCardProps) {
                   >
                     <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap", marginBottom: 8 }}>
                       <strong style={{ color: "#10233d" }}>
-                        Attempt {attempt.attempt} - {attempt.passed ? "pass" : "fail"}
+                        Attempt {attempt.attempt} - {attempt.discarded ? "discarded" : attempt.passed ? "pass" : "fail"}
                       </strong>
                       <span style={{ color: "#526070", fontSize: "0.88rem" }}>{formatDuration(attempt.duration_ms)}</span>
                     </div>
+                    {attempt.discarded ? (
+                      <div style={{ color: "#7c3aed", fontSize: "0.85rem", marginBottom: 8 }}>
+                        Excluded from pass rate and latency averages to reduce first-load bias.
+                      </div>
+                    ) : null}
                     {attempt.notes.length > 0 ? (
                       <div style={{ color: "#7f1d1d", fontSize: "0.85rem", marginBottom: 8 }}>{attempt.notes.join(" | ")}</div>
                     ) : null}
