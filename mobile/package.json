@@ -21,6 +21,7 @@
     "@react-navigation/native": "^7.1.8",
     "expo": "^55.0.0",
     "expo-application": "~55.0.10",
+    "expo-background-task": "~55.0.17",
     "expo-constants": "~55.0.8",
     "expo-device": "~55.0.10",
     "expo-file-system": "~55.0.11",

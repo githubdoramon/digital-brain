@@ -269,6 +269,10 @@ export default function SettingsScreen() {
           <Text style={styles.versionValue}>Foreground permission: {backgroundStatus?.foregroundPermission ?? 'unknown'}</Text>
           <Text style={styles.versionValue}>Background permission: {backgroundStatus?.backgroundPermission ?? 'unknown'}</Text>
           <Text style={styles.versionValue}>Background task started: {backgroundStatus?.taskStarted ? 'yes' : 'no'}</Text>
+          <Text style={styles.versionValue}>Fallback drain task registered: {backgroundStatus?.drainTaskRegistered ? 'yes' : 'no'}</Text>
+          <Text style={styles.versionValue}>Queued background locations: {backgroundStatus?.queuedLocationCount ?? 0}</Text>
+          <Text style={styles.versionValue}>Oldest queued capture: {formatBuildTimestamp(backgroundStatus?.oldestQueuedCapturedAt)}</Text>
+          <Text style={styles.versionValue}>Newest queued capture: {formatBuildTimestamp(backgroundStatus?.newestQueuedCapturedAt)}</Text>
           <Text style={styles.versionValue}>Last event: {locationDebug.lastEventName ?? 'none'}</Text>
           <Text style={styles.versionValue}>Last event at: {formatBuildTimestamp(locationDebug.lastEventAt)}</Text>
           <Text style={styles.versionValue}>Last message: {locationDebug.lastMessage ?? 'none'}</Text>

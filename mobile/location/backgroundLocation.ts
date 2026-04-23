@@ -1,19 +1,24 @@
+import * as BackgroundTask from 'expo-background-task';
 import * as Location from 'expo-location';
 import * as TaskManager from 'expo-task-manager';
 
-import { apiFetch } from '@/api/client';
 import {
-  getStoredGoogleIdToken,
   getStoredGoogleIdTokenDiagnostics,
-  refreshStoredGoogleIdToken,
 } from '@/auth/backgroundToken';
+import {
+  drainQueuedBackgroundLocations,
+  enqueueBackgroundLocationEntry,
+  getQueuedBackgroundLocationSummary,
+} from '@/location/backgroundLocationQueue';
 import { reportLocationDebugEvent } from '@/location/debugState';
 import { API_BASE_URL } from '@/api/client';
 import { getLocationRuntimeState } from '@/location/runtimeState';
 
 const BACKGROUND_LOCATION_TASK = 'digitalbrain.background-location';
+const BACKGROUND_LOCATION_DRAIN_TASK = 'digitalbrain.background-location-drain';
 const BACKGROUND_DISTANCE_INTERVAL_METERS = 50;
 const BACKGROUND_TIME_INTERVAL_MS = 5 * 60 * 1000;
+const BACKGROUND_DRAIN_MIN_INTERVAL_MINUTES = 15;
 
 type BackgroundLocationSample = {
   coords?: {
@@ -30,6 +35,7 @@ type BackgroundBatchContext = {
   sampleCount: number;
   batchFirstCapturedAt: string | null;
   batchLastCapturedAt: string | null;
+  executionContext: string;
 };
 
 type PostedBackgroundLocation = {
@@ -40,8 +46,11 @@ type PostedBackgroundLocation = {
 
 const BACKGROUND_POST_DEDUPE_MIN_DISTANCE_METERS = 15;
 const BACKGROUND_POST_DEDUPE_MIN_SECONDS = 30;
+const BACKGROUND_BUFFER_FLUSH_MIN_DISTANCE_METERS = 50;
+const BACKGROUND_BUFFERED_SAMPLE_MIN_AGE_SECONDS = 60;
 
 let lastPostedBackgroundLocation: PostedBackgroundLocation | null = null;
+let lastAcceptedBufferedLocation: PostedBackgroundLocation | null = null;
 
 function calculateDistanceMeters(
   first: Pick<PostedBackgroundLocation, 'lat' | 'lon'>,
@@ -95,13 +104,16 @@ function buildDebugErrorPayload(error: unknown): {
   };
 }
 
-async function postBackgroundLocation(sample: BackgroundLocationSample, context: BackgroundBatchContext): Promise<void> {
+async function queueBackgroundLocation(sample: BackgroundLocationSample, context: BackgroundBatchContext): Promise<void> {
   const latitude = Number(sample.coords?.latitude);
   const longitude = Number(sample.coords?.longitude);
   const capturedAtMs = Number(sample.timestamp || Date.now());
   const capturedAt = new Date(capturedAtMs).toISOString();
   const runtimeState = getLocationRuntimeState();
   const debugRequestId = `${context.batchId}:${context.sampleIndex}`;
+  const sampleAgeSeconds = Math.max(0, Math.round((Date.now() - capturedAtMs) / 1000));
+  const isBufferedFlush =
+    runtimeState.appState === 'active' && sampleAgeSeconds >= BACKGROUND_BUFFERED_SAMPLE_MIN_AGE_SECONDS;
   if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) {
     reportLocationDebugEvent('background_location_invalid', {
       message: 'Invalid background coordinates',
@@ -112,6 +124,9 @@ async function postBackgroundLocation(sample: BackgroundLocationSample, context:
         sample_count: context.sampleCount,
         batch_first_captured_at: context.batchFirstCapturedAt,
         batch_last_captured_at: context.batchLastCapturedAt,
+        execution_context: context.executionContext,
+        sample_age_seconds: sampleAgeSeconds,
+        is_buffered_flush: isBufferedFlush,
         api_base_url: API_BASE_URL,
         app_state: runtimeState.appState,
       },
@@ -150,76 +165,96 @@ async function postBackgroundLocation(sample: BackgroundLocationSample, context:
     }
   }
 
-  const token = await getStoredGoogleIdToken();
-  const tokenDiagnostics = await getStoredGoogleIdTokenDiagnostics();
-  if (!token) {
-    reportLocationDebugEvent('background_sync_skipped', {
-      message: 'Missing auth token in secure store',
-      payload: {
-        debug_request_id: debugRequestId,
-        batch_id: context.batchId,
-        sample_index: context.sampleIndex,
-        sample_count: context.sampleCount,
-        batch_first_captured_at: context.batchFirstCapturedAt,
-        batch_last_captured_at: context.batchLastCapturedAt,
-        api_base_url: API_BASE_URL,
-        app_state: runtimeState.appState,
-        ...tokenDiagnostics,
-      },
+  if (isBufferedFlush && lastAcceptedBufferedLocation) {
+    const movedMetersFromBuffered = calculateDistanceMeters(lastAcceptedBufferedLocation, {
+      lat: latitude,
+      lon: longitude,
     });
-    return;
+    if (capturedAtMs <= lastAcceptedBufferedLocation.capturedAtMs) {
+      reportLocationDebugEvent('background_buffered_sync_skipped', {
+        message: 'Skipped stale buffered sample during active flush',
+        recordInHistory: false,
+        payload: {
+          debug_request_id: debugRequestId,
+          batch_id: context.batchId,
+          sample_index: context.sampleIndex,
+          sample_count: context.sampleCount,
+          batch_first_captured_at: context.batchFirstCapturedAt,
+          batch_last_captured_at: context.batchLastCapturedAt,
+          execution_context: context.executionContext,
+          sample_age_seconds: sampleAgeSeconds,
+          is_buffered_flush: true,
+          last_accepted_captured_at: new Date(lastAcceptedBufferedLocation.capturedAtMs).toISOString(),
+          api_base_url: API_BASE_URL,
+          app_state: runtimeState.appState,
+        },
+      });
+      return;
+    }
+    if (movedMetersFromBuffered < BACKGROUND_BUFFER_FLUSH_MIN_DISTANCE_METERS) {
+      reportLocationDebugEvent('background_buffered_sync_skipped', {
+        message: 'Skipped buffered sample below movement threshold during active flush',
+        recordInHistory: false,
+        payload: {
+          debug_request_id: debugRequestId,
+          batch_id: context.batchId,
+          sample_index: context.sampleIndex,
+          sample_count: context.sampleCount,
+          batch_first_captured_at: context.batchFirstCapturedAt,
+          batch_last_captured_at: context.batchLastCapturedAt,
+          execution_context: context.executionContext,
+          sample_age_seconds: sampleAgeSeconds,
+          is_buffered_flush: true,
+          moved_meters: Math.round(movedMetersFromBuffered),
+          threshold_meters: BACKGROUND_BUFFER_FLUSH_MIN_DISTANCE_METERS,
+          api_base_url: API_BASE_URL,
+          app_state: runtimeState.appState,
+        },
+      });
+      return;
+    }
   }
 
+  const tokenDiagnostics = await getStoredGoogleIdTokenDiagnostics();
   const accuracyRaw = Number(sample.coords?.accuracy);
   const accuracy = Number.isFinite(accuracyRaw) ? Math.round(accuracyRaw * 10) / 10 : undefined;
-
-  reportLocationDebugEvent('background_sync_attempt', {
-    payload: {
-      debug_request_id: debugRequestId,
-      batch_id: context.batchId,
-      sample_index: context.sampleIndex,
-      sample_count: context.sampleCount,
-      batch_first_captured_at: context.batchFirstCapturedAt,
-      batch_last_captured_at: context.batchLastCapturedAt,
-      lat: latitude,
-      lon: longitude,
-      captured_at: capturedAt,
-      api_base_url: API_BASE_URL,
-      app_state: runtimeState.appState,
-      last_app_state_change_at: runtimeState.lastAppStateChangeAt,
-      ...tokenDiagnostics,
-    },
-  });
-
-  await apiFetch('/mobile/location', {
-    method: 'POST',
-    token,
-    onAuthExpired: refreshStoredGoogleIdToken,
-    headers: {
-      'x-location-debug-request-id': debugRequestId,
-      'x-location-debug-batch-id': context.batchId,
-      'x-location-debug-sample-index': String(context.sampleIndex),
-      'x-location-debug-sample-count': String(context.sampleCount),
-      'x-location-debug-captured-at': capturedAt,
-      'x-location-debug-app-state': String(runtimeState.appState),
-    },
-    body: JSON.stringify({
-      lat: latitude,
-      lon: longitude,
-      accuracy_m: accuracy,
-      captured_at: capturedAt,
-      source: 'expo_location',
-      timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || undefined,
-    }),
-  });
 
   lastPostedBackgroundLocation = {
     lat: latitude,
     lon: longitude,
     capturedAtMs,
   };
+  if (isBufferedFlush) {
+    lastAcceptedBufferedLocation = {
+      lat: latitude,
+      lon: longitude,
+      capturedAtMs,
+    };
+  }
 
-  reportLocationDebugEvent('background_sync_success', {
+  await enqueueBackgroundLocationEntry({
+    id: `${capturedAtMs}:${latitude.toFixed(6)}:${longitude.toFixed(6)}`,
+    lat: latitude,
+    lon: longitude,
+    accuracyM: accuracy,
+    capturedAt,
+    capturedAtMs,
+    source: 'expo_location',
+    timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || undefined,
+    debugRequestId,
+    batchId: context.batchId,
+    sampleIndex: context.sampleIndex,
+    sampleCount: context.sampleCount,
+    batchFirstCapturedAt: context.batchFirstCapturedAt,
+    batchLastCapturedAt: context.batchLastCapturedAt,
+    executionContext: context.executionContext,
+    sampleAgeSeconds,
+    isBufferedFlush,
+    enqueuedAt: new Date().toISOString(),
+    attemptCount: 0,
+  });
+
+  reportLocationDebugEvent('background_queue_ready_for_drain', {
     payload: {
       debug_request_id: debugRequestId,
       batch_id: context.batchId,
@@ -227,6 +262,9 @@ async function postBackgroundLocation(sample: BackgroundLocationSample, context:
       sample_count: context.sampleCount,
       batch_first_captured_at: context.batchFirstCapturedAt,
       batch_last_captured_at: context.batchLastCapturedAt,
+      execution_context: context.executionContext,
+      sample_age_seconds: sampleAgeSeconds,
+      is_buffered_flush: isBufferedFlush,
       lat: latitude,
       lon: longitude,
       captured_at: capturedAt,
@@ -234,11 +272,48 @@ async function postBackgroundLocation(sample: BackgroundLocationSample, context:
       app_state: runtimeState.appState,
       ...tokenDiagnostics,
     },
+    recordInHistory: false,
+  });
+
+  await drainQueuedBackgroundLocations('location_task');
+}
+
+if (!TaskManager.isTaskDefined(BACKGROUND_LOCATION_DRAIN_TASK)) {
+  TaskManager.defineTask(BACKGROUND_LOCATION_DRAIN_TASK, async () => {
+    try {
+      await drainQueuedBackgroundLocations('background_task_worker');
+      return BackgroundTask.BackgroundTaskResult.Success;
+    } catch (error) {
+      reportLocationDebugEvent('background_queue_drain_task_error', {
+        error,
+      });
+      return BackgroundTask.BackgroundTaskResult.Failed;
+    }
+  });
+}
+
+async function ensureBackgroundDrainTaskRegistered(): Promise<void> {
+  const isRegistered = await TaskManager.isTaskRegisteredAsync(BACKGROUND_LOCATION_DRAIN_TASK);
+  if (isRegistered) {
+    reportLocationDebugEvent('background_drain_task_already_registered', {
+      recordInHistory: false,
+    });
+    return;
+  }
+
+  await BackgroundTask.registerTaskAsync(BACKGROUND_LOCATION_DRAIN_TASK, {
+    minimumInterval: BACKGROUND_DRAIN_MIN_INTERVAL_MINUTES,
+  });
+  reportLocationDebugEvent('background_drain_task_registered', {
+    payload: {
+      minimum_interval_minutes: BACKGROUND_DRAIN_MIN_INTERVAL_MINUTES,
+    },
+    recordInHistory: false,
   });
 }
 
 if (!TaskManager.isTaskDefined(BACKGROUND_LOCATION_TASK)) {
-  TaskManager.defineTask(BACKGROUND_LOCATION_TASK, async ({ data, error }) => {
+  TaskManager.defineTask(BACKGROUND_LOCATION_TASK, async ({ data, error, executionInfo }) => {
     const locations = ((data as { locations?: BackgroundLocationSample[] } | undefined)?.locations ?? []).filter(
       Boolean,
     );
@@ -251,6 +326,10 @@ if (!TaskManager.isTaskDefined(BACKGROUND_LOCATION_TASK)) {
     const batchLastCapturedAt = batchTimestamps.length
       ? new Date(batchTimestamps[batchTimestamps.length - 1]).toISOString()
       : null;
+    const oldestSampleAgeSeconds = batchTimestamps.length
+      ? Math.max(0, Math.round((Date.now() - batchTimestamps[0]) / 1000))
+      : 0;
+    const executionContext = executionInfo?.appState ?? getLocationRuntimeState().appState ?? 'unknown';
 
     if (error) {
       reportLocationDebugEvent('background_task_error', {
@@ -260,6 +339,8 @@ if (!TaskManager.isTaskDefined(BACKGROUND_LOCATION_TASK)) {
           sample_count: locations.length,
           batch_first_captured_at: batchFirstCapturedAt,
           batch_last_captured_at: batchLastCapturedAt,
+          execution_context: executionContext,
+          oldest_sample_age_seconds: oldestSampleAgeSeconds,
         },
       });
       return;
@@ -271,8 +352,26 @@ if (!TaskManager.isTaskDefined(BACKGROUND_LOCATION_TASK)) {
         sample_count: locations.length,
         batch_first_captured_at: batchFirstCapturedAt,
         batch_last_captured_at: batchLastCapturedAt,
+        execution_context: executionContext,
+        oldest_sample_age_seconds: oldestSampleAgeSeconds,
+        will_flush_buffered_samples:
+          executionContext === 'active' && oldestSampleAgeSeconds >= BACKGROUND_BUFFERED_SAMPLE_MIN_AGE_SECONDS,
       },
     });
+
+    if (executionContext === 'active' && oldestSampleAgeSeconds >= BACKGROUND_BUFFERED_SAMPLE_MIN_AGE_SECONDS) {
+      reportLocationDebugEvent('background_buffered_flush_detected', {
+        payload: {
+          batch_id: batchId,
+          sample_count: locations.length,
+          batch_first_captured_at: batchFirstCapturedAt,
+          batch_last_captured_at: batchLastCapturedAt,
+          execution_context: executionContext,
+          oldest_sample_age_seconds: oldestSampleAgeSeconds,
+        },
+        recordInHistory: false,
+      });
+    }
 
     if (!locations.length) {
       reportLocationDebugEvent('background_task_empty', {
@@ -282,6 +381,8 @@ if (!TaskManager.isTaskDefined(BACKGROUND_LOCATION_TASK)) {
           sample_count: locations.length,
           batch_first_captured_at: batchFirstCapturedAt,
           batch_last_captured_at: batchLastCapturedAt,
+          execution_context: executionContext,
+          oldest_sample_age_seconds: oldestSampleAgeSeconds,
         },
       });
       return;
@@ -289,12 +390,13 @@ if (!TaskManager.isTaskDefined(BACKGROUND_LOCATION_TASK)) {
 
     for (const [index, location] of locations.entries()) {
       try {
-        await postBackgroundLocation(location, {
+        await queueBackgroundLocation(location, {
           batchId,
           sampleIndex: index + 1,
           sampleCount: locations.length,
           batchFirstCapturedAt,
           batchLastCapturedAt,
+          executionContext,
         });
       } catch (taskError) {
         const errorPayload = buildDebugErrorPayload(taskError);
@@ -307,6 +409,8 @@ if (!TaskManager.isTaskDefined(BACKGROUND_LOCATION_TASK)) {
             sample_count: locations.length,
             batch_first_captured_at: batchFirstCapturedAt,
             batch_last_captured_at: batchLastCapturedAt,
+            execution_context: executionContext,
+            oldest_sample_age_seconds: oldestSampleAgeSeconds,
             status: errorPayload.status,
             auth_expired: errorPayload.authExpired,
             content_type: errorPayload.contentType,
@@ -327,19 +431,29 @@ export type BackgroundLocationDebugStatus = {
   foregroundPermission: string;
   backgroundPermission: string;
   taskStarted: boolean;
+  drainTaskRegistered: boolean;
+  queuedLocationCount: number;
+  oldestQueuedCapturedAt: string | null;
+  newestQueuedCapturedAt: string | null;
 };
 
 export async function getBackgroundLocationDebugStatus(): Promise<BackgroundLocationDebugStatus> {
-  const [foregroundPermission, backgroundPermission, taskStarted] = await Promise.all([
+  const [foregroundPermission, backgroundPermission, taskStarted, drainTaskRegistered, queueSummary] = await Promise.all([
     Location.getForegroundPermissionsAsync(),
     Location.getBackgroundPermissionsAsync(),
     Location.hasStartedLocationUpdatesAsync(BACKGROUND_LOCATION_TASK),
+    TaskManager.isTaskRegisteredAsync(BACKGROUND_LOCATION_DRAIN_TASK),
+    getQueuedBackgroundLocationSummary(),
   ]);
 
   return {
     foregroundPermission: foregroundPermission.status,
     backgroundPermission: backgroundPermission.status,
     taskStarted,
+    drainTaskRegistered,
+    queuedLocationCount: queueSummary.queueSize,
+    oldestQueuedCapturedAt: queueSummary.oldestCapturedAt,
+    newestQueuedCapturedAt: queueSummary.newestCapturedAt,
   };
 }
 
@@ -354,6 +468,7 @@ export async function syncBackgroundLocationTracking(enabled: boolean): Promise<
       await Location.stopLocationUpdatesAsync(BACKGROUND_LOCATION_TASK);
       reportLocationDebugEvent('background_tracking_stopped');
     }
+    await BackgroundTask.unregisterTaskAsync(BACKGROUND_LOCATION_DRAIN_TASK).catch(() => undefined);
     return;
   }
 
@@ -384,6 +499,11 @@ export async function syncBackgroundLocationTracking(enabled: boolean): Promise<
   }
 
   if (alreadyStarted) {
+    await ensureBackgroundDrainTaskRegistered().catch((error) => {
+      reportLocationDebugEvent('background_drain_task_register_error', {
+        error,
+      });
+    });
     reportLocationDebugEvent('background_tracking_already_started');
     return;
   }
@@ -400,6 +520,11 @@ export async function syncBackgroundLocationTracking(enabled: boolean): Promise<
       notificationTitle: 'Digital Brain location updates',
       notificationBody: 'Location updates are used to keep your context accurate.',
     },
+  });
+  await ensureBackgroundDrainTaskRegistered().catch((error) => {
+    reportLocationDebugEvent('background_drain_task_register_error', {
+      error,
+    });
   });
   reportLocationDebugEvent('background_tracking_started');
 }

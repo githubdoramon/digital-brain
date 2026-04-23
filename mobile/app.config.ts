@@ -109,11 +109,13 @@ export default ({ config }: ConfigContext): ExpoConfig => {
     },
   };
 
+  const pluginsWithMaps = withPlugin(merged.plugins, 'react-native-maps', {
+    ...(googleMapsApiKey ? { androidGoogleMapsApiKey: googleMapsApiKey } : {}),
+    ...(googleMapsApiKey ? { iosGoogleMapsApiKey: googleMapsApiKey } : {}),
+  });
+
   return withSystemDebugKeystore({
     ...merged,
-    plugins: withPlugin(merged.plugins, 'react-native-maps', {
-      ...(googleMapsApiKey ? { androidGoogleMapsApiKey: googleMapsApiKey } : {}),
-      ...(googleMapsApiKey ? { iosGoogleMapsApiKey: googleMapsApiKey } : {}),
-    }),
+    plugins: withPlugin(pluginsWithMaps, 'expo-background-task'),
   });
 };
