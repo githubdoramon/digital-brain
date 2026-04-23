@@ -94,6 +94,7 @@ def upsert_user_location(
     resolved_captured_at = captured_at or datetime.now(timezone.utc)
     received_at = datetime.now(timezone.utc)
     debug_context = debug_context or {}
+    debug_request_id = str(debug_context.get("debug_request_id") or "").strip() or None
     logger.info(
         "[user_locations] Record request user=%s lat=%.6f lon=%.6f source=%s captured_at=%s received_at=%s debug_request_id=%s batch_id=%s sample_index=%s/%s app_state=%s",
         user_email,
@@ -102,7 +103,7 @@ def upsert_user_location(
         safe_source,
         resolved_captured_at.isoformat(),
         received_at.isoformat(),
-        debug_context.get("debug_request_id") or "none",
+        debug_request_id or "none",
         debug_context.get("batch_id") or "none",
         debug_context.get("sample_index") or "none",
         debug_context.get("sample_count") or "none",
@@ -125,6 +126,30 @@ def upsert_user_location(
             (user_email,),
         )
         existing = dict(cur.fetchone() or {})
+
+    if debug_request_id:
+        with get_conn() as conn, conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO mobile_location_request_dedupe (debug_request_id, user_email, captured_at)
+                VALUES (%s, %s, %s)
+                ON CONFLICT (debug_request_id) DO NOTHING
+                RETURNING debug_request_id
+                """,
+                (debug_request_id, user_email, resolved_captured_at),
+            )
+            dedupe_row = cur.fetchone()
+            conn.commit()
+        if not dedupe_row:
+            logger.info(
+                "[user_locations] Ignored duplicate mobile location request user=%s debug_request_id=%s batch_id=%s sample_index=%s/%s",
+                user_email,
+                debug_request_id,
+                debug_context.get("batch_id") or "none",
+                debug_context.get("sample_index") or "none",
+                debug_context.get("sample_count") or "none",
+            )
+            return existing if existing else {}
 
     existing_captured_at = _normalize_timestamp(existing.get("captured_at")) if existing else None
     moved_meters_from_latest = (
@@ -151,7 +176,7 @@ def upsert_user_location(
             existing_captured_at,
             f"{moved_meters_from_latest:.1f}" if moved_meters_from_latest is not None else "none",
             ingestion_delay_seconds,
-            debug_context.get("debug_request_id") or "none",
+            debug_request_id or "none",
             debug_context.get("batch_id") or "none",
             debug_context.get("sample_index") or "none",
             debug_context.get("sample_count") or "none",
@@ -219,7 +244,7 @@ def upsert_user_location(
         received_at.isoformat(),
         ingestion_delay_seconds,
         f"{moved_meters_from_latest:.1f}" if moved_meters_from_latest is not None else "none",
-        debug_context.get("debug_request_id") or "none",
+        debug_request_id or "none",
         debug_context.get("batch_id") or "none",
         debug_context.get("sample_index") or "none",
         debug_context.get("sample_count") or "none",

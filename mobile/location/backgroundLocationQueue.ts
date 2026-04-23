@@ -12,6 +12,13 @@ import { getLocationRuntimeState } from '@/location/runtimeState';
 const BACKGROUND_LOCATION_QUEUE_KEY = 'digitalbrain.backgroundLocationQueue';
 const MAX_QUEUED_BACKGROUND_LOCATIONS = 200;
 
+let drainInFlight: Promise<{
+  initialQueueSize: number;
+  drainedCount: number;
+  remainingQueueSize: number;
+}> | null = null;
+let drainRerunRequested = false;
+
 export type QueuedBackgroundLocationEntry = {
   id: string;
   lat: number;
@@ -95,7 +102,7 @@ export async function enqueueBackgroundLocationEntry(entry: QueuedBackgroundLoca
   });
 }
 
-export async function drainQueuedBackgroundLocations(trigger: DrainTrigger): Promise<{
+async function drainQueuedBackgroundLocationsInner(trigger: DrainTrigger): Promise<{
   initialQueueSize: number;
   drainedCount: number;
   remainingQueueSize: number;
@@ -272,6 +279,38 @@ export async function drainQueuedBackgroundLocations(trigger: DrainTrigger): Pro
     drainedCount,
     remainingQueueSize: queue.length,
   };
+}
+
+export async function drainQueuedBackgroundLocations(trigger: DrainTrigger): Promise<{
+  initialQueueSize: number;
+  drainedCount: number;
+  remainingQueueSize: number;
+}> {
+  if (drainInFlight) {
+    drainRerunRequested = true;
+    reportLocationDebugEvent('background_queue_drain_coalesced', {
+      payload: {
+        trigger,
+      },
+      recordInHistory: false,
+    });
+    return drainInFlight;
+  }
+
+  drainInFlight = (async () => {
+    let lastResult = await drainQueuedBackgroundLocationsInner(trigger);
+    while (drainRerunRequested) {
+      drainRerunRequested = false;
+      lastResult = await drainQueuedBackgroundLocationsInner('location_task');
+    }
+    return lastResult;
+  })();
+
+  try {
+    return await drainInFlight;
+  } finally {
+    drainInFlight = null;
+  }
 }
 
 export async function getQueuedBackgroundLocationSummary(): Promise<{

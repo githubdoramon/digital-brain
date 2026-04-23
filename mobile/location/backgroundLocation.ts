@@ -293,9 +293,18 @@ if (!TaskManager.isTaskDefined(BACKGROUND_LOCATION_DRAIN_TASK)) {
 }
 
 async function ensureBackgroundDrainTaskRegistered(): Promise<void> {
+  const backgroundTaskStatus = await BackgroundTask.getStatusAsync();
+  const resolvedBackgroundTaskStatus =
+    typeof backgroundTaskStatus === 'number'
+      ? BackgroundTask.BackgroundTaskStatus[backgroundTaskStatus] ?? String(backgroundTaskStatus)
+      : 'unknown';
+
   const isRegistered = await TaskManager.isTaskRegisteredAsync(BACKGROUND_LOCATION_DRAIN_TASK);
   if (isRegistered) {
     reportLocationDebugEvent('background_drain_task_already_registered', {
+      payload: {
+        background_task_status: resolvedBackgroundTaskStatus,
+      },
       recordInHistory: false,
     });
     return;
@@ -307,6 +316,7 @@ async function ensureBackgroundDrainTaskRegistered(): Promise<void> {
   reportLocationDebugEvent('background_drain_task_registered', {
     payload: {
       minimum_interval_minutes: BACKGROUND_DRAIN_MIN_INTERVAL_MINUTES,
+      background_task_status: resolvedBackgroundTaskStatus,
     },
     recordInHistory: false,
   });
@@ -432,25 +442,45 @@ export type BackgroundLocationDebugStatus = {
   backgroundPermission: string;
   taskStarted: boolean;
   drainTaskRegistered: boolean;
+  backgroundTaskStatus: string;
   queuedLocationCount: number;
   oldestQueuedCapturedAt: string | null;
   newestQueuedCapturedAt: string | null;
 };
 
 export async function getBackgroundLocationDebugStatus(): Promise<BackgroundLocationDebugStatus> {
-  const [foregroundPermission, backgroundPermission, taskStarted, drainTaskRegistered, queueSummary] = await Promise.all([
+  const [foregroundPermission, backgroundPermission, taskStarted, drainTaskRegistered, backgroundTaskStatus, queueSummary] = await Promise.all([
     Location.getForegroundPermissionsAsync(),
     Location.getBackgroundPermissionsAsync(),
     Location.hasStartedLocationUpdatesAsync(BACKGROUND_LOCATION_TASK),
     TaskManager.isTaskRegisteredAsync(BACKGROUND_LOCATION_DRAIN_TASK),
+    BackgroundTask.getStatusAsync(),
     getQueuedBackgroundLocationSummary(),
   ]);
+
+  const resolvedBackgroundTaskStatus =
+    typeof backgroundTaskStatus === 'number'
+      ? BackgroundTask.BackgroundTaskStatus[backgroundTaskStatus] ?? String(backgroundTaskStatus)
+      : 'unknown';
+
+  reportLocationDebugEvent('background_worker_status_snapshot', {
+    payload: {
+      location_task_started: taskStarted,
+      drain_task_registered: drainTaskRegistered,
+      background_task_status: resolvedBackgroundTaskStatus,
+      queued_location_count: queueSummary.queueSize,
+      oldest_queued_captured_at: queueSummary.oldestCapturedAt,
+      newest_queued_captured_at: queueSummary.newestCapturedAt,
+    },
+    recordInHistory: false,
+  });
 
   return {
     foregroundPermission: foregroundPermission.status,
     backgroundPermission: backgroundPermission.status,
     taskStarted,
     drainTaskRegistered,
+    backgroundTaskStatus: resolvedBackgroundTaskStatus,
     queuedLocationCount: queueSummary.queueSize,
     oldestQueuedCapturedAt: queueSummary.oldestCapturedAt,
     newestQueuedCapturedAt: queueSummary.newestCapturedAt,
