@@ -1088,14 +1088,18 @@ def _dedupe_preserve_order(items: list[str]) -> list[str]:
 def _compute_event_match_window(when_value: Any) -> tuple[str | None, str | None]:
     """Return (time_start, time_end) ISO strings for the match query window.
 
-    Date-only extractions (midnight) open a ±1 day window; time-specific
-    extractions tighten to ±4 hours. When ``when_value`` is not a datetime the
-    window is skipped so the match relies on text + participants alone.
+    Wide by design: the LLM often mis-dates natural-language references like
+    "last Thursday" (sometimes pointing at the wrong Thursday by a week), and
+    humans describe events fuzzily. A tight window turns a recoverable
+    near-miss into a hard miss because ``search_memories`` treats the span as
+    a hard constraint. Date-only extractions open a ±7 day window; time-
+    specific extractions use ±1 day. Post-ranking in ``_find_event_matches``
+    still rewards temporal proximity so good matches rise to the top.
     """
     if not isinstance(when_value, datetime):
         return None, None
     is_midnight = when_value.hour == 0 and when_value.minute == 0 and when_value.second == 0
-    delta = timedelta(days=1) if is_midnight else timedelta(hours=4)
+    delta = timedelta(days=7) if is_midnight else timedelta(days=1)
     return (when_value - delta).isoformat(), (when_value + delta).isoformat()
 
 
@@ -1123,17 +1127,48 @@ def _matched_event_preview(candidate: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _search_event_candidates(
+    query: str,
+    time_start: str | None,
+    time_end: str | None,
+    limit: int,
+) -> list[dict[str, Any]]:
+    """Run search_memories and return only event rows.
+
+    Intentionally does NOT pass people/place filters: ``search_memories``
+    turns any structured filter into a hard AND constraint, which wipes out
+    near-miss candidates that would otherwise be ideal update targets. We
+    apply people/place as soft post-rank boosts below instead.
+    """
+    try:
+        search_result = retrieval.search_memories(
+            query=query,
+            time_start=time_start,
+            time_end=time_end,
+            limit=limit,
+            sort_order="relevance",
+        )
+    except Exception as exc:  # pragma: no cover - defensive, retrieval shouldn't raise
+        logger.warning("[handle_event] event match search failed: %s", exc)
+        return []
+    return [
+        result for result in (search_result.get("results") or []) if result.get("kind") == "event"
+    ]
+
+
 def _find_event_matches(
     extracted: dict[str, Any],
     resolution: dict[str, Any] | None,
 ) -> dict[str, Any]:
     """Classify the current extraction as create / update / ambiguous.
 
-    Returns a dict with:
-      - ``operation``: "create", "update", or "ambiguous".
-      - ``existing_event_id``: set when operation == "update".
-      - ``matched_event``: trimmed top candidate (update path only).
-      - ``candidates``: up to EVENT_MATCH_MAX_CANDIDATES trimmed alternatives.
+    Matching is intentionally forgiving: LLM date extraction is noisy and
+    natural-language references ("last Thursday") are ambiguous. The
+    ``search_memories`` call uses a wide time window with no people/place
+    filters so that near-match candidates survive; we then post-rank with
+    time-proximity, participant-overlap and place-match boosts. If the
+    time-windowed pass returns nothing we retry without a time filter so a
+    badly mis-dated extraction can still surface the right event.
     """
     title = str(extracted.get("title") or "").strip()
     summary = str(extracted.get("summary") or "").strip()
@@ -1169,30 +1204,56 @@ def _find_event_matches(
             if contact_id:
                 people_ids.append(contact_id)
 
-    try:
-        search_result = retrieval.search_memories(
-            query=query,
-            people=people_ids or None,
-            place_ids=[place_id] if place_id else None,
-            time_start=time_start,
-            time_end=time_end,
-            limit=EVENT_MATCH_MAX_CANDIDATES,
-            sort_order="relevance",
-        )
-    except Exception as exc:  # pragma: no cover - defensive, retrieval shouldn't raise
-        logger.warning("[handle_event] event match search failed: %s", exc)
-        return {"operation": "create", "candidates": []}
+    extracted_when = extracted.get("when") if isinstance(extracted.get("when"), datetime) else None
+    people_id_set = set(people_ids)
 
-    raw_results = [
-        result for result in (search_result.get("results") or []) if result.get("kind") == "event"
-    ]
+    raw_results = _search_event_candidates(query, time_start, time_end, EVENT_MATCH_MAX_CANDIDATES)
+    if not raw_results and (time_start or time_end):
+        logger.info(
+            "[handle_event] Event match: no hits in time window, retrying text-only"
+        )
+        raw_results = _search_event_candidates(query, None, None, EVENT_MATCH_MAX_CANDIDATES)
     if not raw_results:
         return {"operation": "create", "candidates": []}
 
     scored: list[dict[str, Any]] = []
-    for result in raw_results[:EVENT_MATCH_MAX_CANDIDATES]:
+    for result in raw_results:
         raw_score = float(result.get("score") or 0.0)
         normalized_score = max(0.0, min(100.0, raw_score * 100.0))
+
+        if extracted_when and result.get("start_date"):
+            try:
+                result_when = datetime.fromisoformat(str(result["start_date"]))
+                if result_when.tzinfo and not extracted_when.tzinfo:
+                    result_when = result_when.replace(tzinfo=None)
+                elif extracted_when.tzinfo and not result_when.tzinfo:
+                    result_when = result_when.replace(tzinfo=extracted_when.tzinfo)
+                days_apart = abs((result_when - extracted_when).total_seconds()) / 86400.0
+                if days_apart < 0.5:
+                    normalized_score += 15.0
+                elif days_apart < 2:
+                    normalized_score += 8.0
+                elif days_apart < 7:
+                    normalized_score += 3.0
+            except (TypeError, ValueError):
+                pass
+
+        if people_id_set:
+            result_people = {str(cid) for cid in (result.get("people") or []) if cid}
+            overlap = len(result_people & people_id_set)
+            if overlap:
+                normalized_score += min(15.0, 5.0 * overlap)
+
+        if place_id:
+            result_place = (
+                str(result.get("place", {}).get("place_id") or "").strip()
+                if isinstance(result.get("place"), dict)
+                else ""
+            )
+            if result_place and result_place == place_id:
+                normalized_score += 10.0
+
+        normalized_score = max(0.0, min(100.0, normalized_score))
         if normalized_score < EVENT_MATCH_CANDIDATE_FLOOR:
             continue
         scored.append({**result, "match_score": normalized_score})
@@ -1200,13 +1261,18 @@ def _find_event_matches(
     if not scored:
         return {"operation": "create", "candidates": []}
 
+    scored.sort(key=lambda r: -float(r.get("match_score") or 0.0))
+    scored = scored[:EVENT_MATCH_MAX_CANDIDATES]
     candidates = [_matched_event_preview(candidate) for candidate in scored]
     top = scored[0]
     top_score = float(top.get("match_score") or 0.0)
 
     if len(scored) >= 2:
         second_score = float(scored[1].get("match_score") or 0.0)
-        if top_score < EVENT_MATCH_AUTO_UPDATE_SCORE and (top_score - second_score) <= EVENT_MATCH_AMBIGUOUS_GAP:
+        if (
+            top_score < EVENT_MATCH_AUTO_UPDATE_SCORE
+            and (top_score - second_score) <= EVENT_MATCH_AMBIGUOUS_GAP
+        ):
             logger.info(
                 "[handle_event] Event match ambiguous: top=%.2f second=%.2f",
                 top_score,
