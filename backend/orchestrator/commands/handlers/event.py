@@ -1354,6 +1354,13 @@ def _find_event_matches(
         raw_score = float(result.get("score") or 0.0)
         normalized_score = max(0.0, min(100.0, raw_score * 100.0))
 
+        # Date is the dominant signal when the user supplied one. If two
+        # candidates have similar text scores but different dates, the
+        # correctly-dated one must win unambiguously — otherwise "last
+        # Thursday" (23rd) can snap onto "last Tuesday" (21st) just because
+        # participants and place overlap. Weights chosen to exceed the
+        # ambiguous-gap threshold (5pt) so a clean date match can't be
+        # cancelled by a slightly more similar summary on another day.
         if extracted_when and result.get("start_date"):
             try:
                 result_when = datetime.fromisoformat(str(result["start_date"]))
@@ -1363,11 +1370,14 @@ def _find_event_matches(
                     result_when = result_when.replace(tzinfo=extracted_when.tzinfo)
                 days_apart = abs((result_when - extracted_when).total_seconds()) / 86400.0
                 if days_apart < 0.5:
-                    normalized_score += 15.0
+                    normalized_score += 45.0
                 elif days_apart < 2:
                     normalized_score += 8.0
-                elif days_apart < 7:
-                    normalized_score += 3.0
+                elif days_apart >= 7:
+                    # User explicitly dated the event; a week+ off is almost
+                    # certainly not the one they meant. Penalize hard so text
+                    # similarity alone can't resurrect it.
+                    normalized_score -= 25.0
             except (TypeError, ValueError):
                 pass
 
