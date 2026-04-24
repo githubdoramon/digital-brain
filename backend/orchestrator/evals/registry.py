@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import inspect
 import json
+import os
 from collections.abc import Awaitable, Callable
 from statistics import mean
 from time import perf_counter
@@ -9,10 +10,11 @@ from typing import Any
 
 from evals.flows import EVAL_FLOWS, EVAL_LLM_TIMEOUT
 from evals.types import EvalFlowDefinition
-from llm_helpers import warm_chat_model
+from llm_helpers import use_llm_keep_alive, warm_chat_model
 from observability.logger import get_runtime_logger
 
 logger = get_runtime_logger(__name__)
+EVAL_LLM_KEEP_ALIVE = os.getenv("EVAL_LLM_KEEP_ALIVE", "180s")
 
 _FLOW_MAP: dict[str, EvalFlowDefinition] = {flow.flow_id: flow for flow in EVAL_FLOWS}
 
@@ -78,13 +80,14 @@ async def run_eval_flow(
         "attempted": False,
         "performed": False,
         "model": llm_model,
+        "keep_alive": EVAL_LLM_KEEP_ALIVE if llm_model else None,
     }
 
     if llm_model:
         warmup["attempted"] = True
         warm_start = perf_counter()
         try:
-            warmup["performed"] = warm_chat_model(llm_model)
+            warmup["performed"] = warm_chat_model(llm_model, keep_alive=EVAL_LLM_KEEP_ALIVE)
         except Exception as exc:
             warmup["error"] = str(exc)
             logger.warning(
@@ -104,80 +107,81 @@ async def run_eval_flow(
     measured_attempts = 0
     discarded_attempts = 0
 
-    for case in flow.cases:
-        attempts: list[dict[str, Any]] = []
-        case_durations: list[float] = []
-        case_passed_attempts = 0
-        summary_variants: set[str] = set()
+    with use_llm_keep_alive(EVAL_LLM_KEEP_ALIVE if llm_model else None):
+        for case in flow.cases:
+            attempts: list[dict[str, Any]] = []
+            case_durations: list[float] = []
+            case_passed_attempts = 0
+            summary_variants: set[str] = set()
 
-        for attempt_index in range(1, normalized_repetitions + 1):
-            await _emit_progress(
-                progress_callback,
+            for attempt_index in range(1, normalized_repetitions + 1):
+                await _emit_progress(
+                    progress_callback,
+                    {
+                        "current_case": len(case_results) + 1,
+                        "total_cases": len(flow.cases),
+                        "current_attempt": total_attempts + 1,
+                        "total_attempts": len(flow.cases) * normalized_repetitions,
+                        "current_case_id": case.case_id,
+                        "current_case_title": case.title,
+                        "attempt_in_case": attempt_index,
+                        "repetitions": normalized_repetitions,
+                        "status": "running",
+                    },
+                )
+                started = perf_counter()
+                output = await _execute_case(flow, case, llm_model, user_email)
+                duration_ms = (perf_counter() - started) * 1000
+                score = flow.score_case(case, output)
+                summary = flow.summarize_output(output)
+                discarded = bool(effective_discard_first_attempt and attempt_index == 1)
+                if not discarded:
+                    summary_variants.add(json.dumps(summary, sort_keys=True, default=str))
+
+                attempt = {
+                    "attempt": attempt_index,
+                    "duration_ms": duration_ms,
+                    "passed": bool(score.get("passed")),
+                    "notes": score.get("notes") or [],
+                    "summary": summary,
+                    "output": output,
+                    "discarded": discarded,
+                }
+                attempts.append(attempt)
+                total_attempts += 1
+                if discarded:
+                    discarded_attempts += 1
+                    continue
+
+                measured_attempts += 1
+                case_durations.append(duration_ms)
+                durations.append(duration_ms)
+                if attempt["passed"]:
+                    case_passed_attempts += 1
+                    passed_attempts += 1
+
+            measured_case_attempts = len(case_durations)
+            case_results.append(
                 {
-                    "current_case": len(case_results) + 1,
-                    "total_cases": len(flow.cases),
-                    "current_attempt": total_attempts + 1,
-                    "total_attempts": len(flow.cases) * normalized_repetitions,
-                    "current_case_id": case.case_id,
-                    "current_case_title": case.title,
-                    "attempt_in_case": attempt_index,
-                    "repetitions": normalized_repetitions,
-                    "status": "running",
-                },
+                    "case_id": case.case_id,
+                    "title": case.title,
+                    "description": case.description,
+                    "input": case.input,
+                    "expected": case.expected,
+                    "metrics": {
+                        "attempts": measured_case_attempts,
+                        "total_attempts": normalized_repetitions,
+                        "discarded_attempts": normalized_repetitions - measured_case_attempts,
+                        "passed_attempts": case_passed_attempts,
+                        "pass_rate": (case_passed_attempts / measured_case_attempts)
+                        if measured_case_attempts
+                        else 0.0,
+                        "avg_duration_ms": mean(case_durations) if case_durations else 0.0,
+                        "variant_count": len(summary_variants),
+                    },
+                    "attempts": attempts,
+                }
             )
-            started = perf_counter()
-            output = await _execute_case(flow, case, llm_model, user_email)
-            duration_ms = (perf_counter() - started) * 1000
-            score = flow.score_case(case, output)
-            summary = flow.summarize_output(output)
-            discarded = bool(effective_discard_first_attempt and attempt_index == 1)
-            if not discarded:
-                summary_variants.add(json.dumps(summary, sort_keys=True, default=str))
-
-            attempt = {
-                "attempt": attempt_index,
-                "duration_ms": duration_ms,
-                "passed": bool(score.get("passed")),
-                "notes": score.get("notes") or [],
-                "summary": summary,
-                "output": output,
-                "discarded": discarded,
-            }
-            attempts.append(attempt)
-            total_attempts += 1
-            if discarded:
-                discarded_attempts += 1
-                continue
-
-            measured_attempts += 1
-            case_durations.append(duration_ms)
-            durations.append(duration_ms)
-            if attempt["passed"]:
-                case_passed_attempts += 1
-                passed_attempts += 1
-
-        measured_case_attempts = len(case_durations)
-        case_results.append(
-            {
-                "case_id": case.case_id,
-                "title": case.title,
-                "description": case.description,
-                "input": case.input,
-                "expected": case.expected,
-                "metrics": {
-                    "attempts": measured_case_attempts,
-                    "total_attempts": normalized_repetitions,
-                    "discarded_attempts": normalized_repetitions - measured_case_attempts,
-                    "passed_attempts": case_passed_attempts,
-                    "pass_rate": (case_passed_attempts / measured_case_attempts)
-                    if measured_case_attempts
-                    else 0.0,
-                    "avg_duration_ms": mean(case_durations) if case_durations else 0.0,
-                    "variant_count": len(summary_variants),
-                },
-                "attempts": attempts,
-            }
-        )
 
     total_duration_ms = (perf_counter() - run_started) * 1000
     await _emit_progress(
@@ -201,6 +205,7 @@ async def run_eval_flow(
         },
         "llm_model": llm_model,
         "timeout_seconds": EVAL_LLM_TIMEOUT,
+        "keep_alive": EVAL_LLM_KEEP_ALIVE if llm_model else None,
         "repetitions": normalized_repetitions,
         "discard_first_attempt": effective_discard_first_attempt,
         "warmup": warmup,

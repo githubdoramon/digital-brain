@@ -62,18 +62,22 @@ export default function EvalsPage() {
         if (updatedJob.status === "completed") {
           const result = updatedJob.result;
           if (result) {
-            setRuns((current) => [
-              { id: `${updatedJob.job_id}-result`, result },
-              ...current,
-            ]);
+            setRuns((current) => {
+              const runId = `${updatedJob.job_id}-result`;
+              if (current.some((run) => run.id === runId)) {
+                return current;
+              }
+              return [{ id: runId, result }, ...current];
+            });
           }
           setIsLoading(false);
-          setActiveJob(updatedJob);
+          setActiveJob(null);
         }
 
         if (updatedJob.status === "failed") {
           setError(updatedJob.error || "Eval run failed");
           setIsLoading(false);
+          setActiveJob(null);
         }
       } catch (pollError) {
         setError(pollError instanceof Error ? pollError.message : "Failed to poll eval job");

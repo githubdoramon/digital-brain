@@ -51,6 +51,11 @@ export function EvalRunCard({ run, runKey }: EvalRunCardProps) {
               Eval timeout {run.timeout_seconds}s per LLM call
             </div>
           ) : null}
+          {run.keep_alive != null ? (
+            <div style={{ color: "#526070", fontSize: "0.9rem" }}>
+              Keep-alive {String(run.keep_alive)} for requested model
+            </div>
+          ) : null}
           <div style={{ color: "#526070", fontSize: "0.9rem" }}>
             {run.discard_first_attempt
               ? `Discarded first attempt per case (${run.summary.discarded_attempts} total)`

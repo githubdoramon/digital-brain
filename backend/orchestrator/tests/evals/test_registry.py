@@ -39,7 +39,13 @@ async def test_run_eval_flow_aggregates_attempts(monkeypatch):
     )
 
     monkeypatch.setitem(registry._FLOW_MAP, "fake", fake_flow)
-    monkeypatch.setattr(registry, "warm_chat_model", lambda _model: True)
+    warm_calls: list[tuple[str | None, str | int | None]] = []
+
+    def fake_warm_chat_model(model, keep_alive=None):
+        warm_calls.append((model, keep_alive))
+        return True
+
+    monkeypatch.setattr(registry, "warm_chat_model", fake_warm_chat_model)
 
     result = await registry.run_eval_flow(
         flow_id="fake",
@@ -60,7 +66,10 @@ async def test_run_eval_flow_aggregates_attempts(monkeypatch):
     assert result["cases"][0]["attempts"][0]["discarded"] is True
     assert result["warmup"]["attempted"] is True
     assert result["warmup"]["performed"] is True
+    assert result["warmup"]["keep_alive"] == registry.EVAL_LLM_KEEP_ALIVE
     assert result["discard_first_attempt"] is True
+    assert result["keep_alive"] == registry.EVAL_LLM_KEEP_ALIVE
+    assert warm_calls == [("test-model", registry.EVAL_LLM_KEEP_ALIVE)]
 
 
 @pytest.mark.asyncio
@@ -108,7 +117,7 @@ async def test_run_eval_flow_can_keep_first_attempt_when_requested(monkeypatch):
     )
 
     monkeypatch.setitem(registry._FLOW_MAP, "fake-keep-first", fake_flow)
-    monkeypatch.setattr(registry, "warm_chat_model", lambda _model: True)
+    monkeypatch.setattr(registry, "warm_chat_model", lambda _model, keep_alive=None: True)
 
     result = await registry.run_eval_flow(
         flow_id="fake-keep-first",

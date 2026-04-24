@@ -28,6 +28,21 @@ def test_build_chat_payload_attaches_keep_alive_only_for_fast_model(monkeypatch)
     assert "keep_alive" not in smart_payload
 
 
+def test_build_chat_payload_uses_keep_alive_override_for_any_model(monkeypatch):
+    monkeypatch.setenv("LLM_BASE_URL", "http://localhost:11434/v1")
+    monkeypatch.setenv("LLM_CHAT_MODEL_FAST", "fast-model")
+    monkeypatch.setenv("LLM_CHAT_MODEL_SMART", "smart-model")
+
+    with llm_helpers.use_llm_keep_alive("180s"):
+        payload = llm_helpers.build_chat_payload(
+            [{"role": "user", "content": "hi"}],
+            model="custom-model",
+        )
+
+    assert payload["model"] == "custom-model"
+    assert payload["keep_alive"] == "180s"
+
+
 def test_warm_fast_model_uses_ollama_chat_endpoint(monkeypatch):
     monkeypatch.setenv("LLM_BASE_URL", "http://localhost:11434/v1")
     monkeypatch.setenv("LLM_CHAT_MODEL_FAST", "fast-model")

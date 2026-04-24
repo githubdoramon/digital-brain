@@ -10,6 +10,8 @@ import json
 import os
 import time
 from collections.abc import AsyncGenerator
+from contextlib import contextmanager
+from contextvars import ContextVar
 from typing import Any, Optional
 
 import httpx
@@ -32,6 +34,18 @@ LLM_TIMEOUT = int(os.getenv("LLM_TIMEOUT", "120"))
 LLM_MAX_RETRIES = int(os.getenv("LLM_MAX_RETRIES", "3"))
 LLM_RETRY_BASE_DELAY = float(os.getenv("LLM_RETRY_BASE_DELAY", "1.0"))
 LLM_WARM_KEEP_ALIVE = os.getenv("LLM_WARM_KEEP_ALIVE", "15m")
+_LLM_KEEP_ALIVE_OVERRIDE: ContextVar[str | int | None] = ContextVar(
+    "llm_keep_alive_override", default=None
+)
+
+
+@contextmanager
+def use_llm_keep_alive(keep_alive: str | int | None):
+    token = _LLM_KEEP_ALIVE_OVERRIDE.set(keep_alive)
+    try:
+        yield
+    finally:
+        _LLM_KEEP_ALIVE_OVERRIDE.reset(token)
 
 
 class LLMUnavailableError(RuntimeError):
@@ -71,9 +85,14 @@ def get_llm_headers() -> dict[str, str]:
     return headers
 
 
-def _maybe_attach_fast_model_keep_alive(payload: dict[str, Any]) -> None:
+def _maybe_attach_keep_alive(payload: dict[str, Any]) -> None:
     base_url = _get_required_setting("LLM_BASE_URL", LLM_BASE_URL)
     if not is_ollama_base_url(base_url):
+        return
+
+    keep_alive_override = _LLM_KEEP_ALIVE_OVERRIDE.get()
+    if keep_alive_override is not None:
+        payload["keep_alive"] = keep_alive_override
         return
 
     model_name = str(payload.get("model") or "").strip()
@@ -124,7 +143,7 @@ def build_chat_payload(
         if tool_choice is not None:
             payload["tool_choice"] = tool_choice
 
-    _maybe_attach_fast_model_keep_alive(payload)
+    _maybe_attach_keep_alive(payload)
 
     return payload
 

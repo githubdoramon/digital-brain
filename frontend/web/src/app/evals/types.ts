@@ -19,6 +19,7 @@ export type EvalRunResult = {
   };
   llm_model?: string | null;
   timeout_seconds?: number | null;
+  keep_alive?: string | number | null;
   repetitions: number;
   discard_first_attempt: boolean;
   warmup?: {
