@@ -220,6 +220,7 @@ def _suggest_tags(
     subject: Literal["document", "event"],
     *,
     model: str | None = None,
+    timeout: int | None = None,
 ) -> list[str]:
     cleaned = (content or "").strip()
     if not cleaned:
@@ -263,7 +264,7 @@ def _suggest_tags(
         raw_content = _call_llm_text(
             user_prompt,
             system_prompt=system_prompt,
-            timeout=OLLAMA_TIMEOUT,
+            timeout=timeout or OLLAMA_TIMEOUT,
             model=model,
         ).strip()
         if not raw_content:

@@ -46,6 +46,11 @@ export function EvalRunCard({ run, runKey }: EvalRunCardProps) {
           <div style={{ color: "#526070", fontSize: "0.9rem" }}>
             Avg {formatDuration(run.summary.avg_duration_ms)} - Total {formatDuration(run.summary.total_duration_ms)}
           </div>
+          {typeof run.timeout_seconds === "number" ? (
+            <div style={{ color: "#526070", fontSize: "0.9rem" }}>
+              Eval timeout {run.timeout_seconds}s per LLM call
+            </div>
+          ) : null}
           <div style={{ color: "#526070", fontSize: "0.9rem" }}>
             {run.discard_first_attempt
               ? `Discarded first attempt per case (${run.summary.discarded_attempts} total)`

@@ -228,6 +228,25 @@ def _post_chat_completion(
     model_name = str(payload.get("model") or "").strip() or "(unset)"
     messages = payload.get("messages")
     message_count = len(messages) if isinstance(messages, list) else 0
+    request_url = f"{base_url}/chat/completions"
+
+    logger.info(
+        "[llm_helpers] LLM outbound request: %s",
+        json.dumps(
+            {
+                "url": request_url,
+                "method": "POST",
+                "timeout_seconds": resolved_timeout,
+                "headers": {
+                    "content-type": "application/json",
+                    "authorization_present": bool(get_llm_headers().get("Authorization")),
+                },
+                "payload": payload,
+            },
+            ensure_ascii=False,
+            default=str,
+        ),
+    )
 
     def _preview_response_text(response: requests.Response | None) -> str:
         if response is None:
@@ -239,7 +258,7 @@ def _post_chat_completion(
         started_at = time.perf_counter()
         try:
             response = requests.post(
-                f"{base_url}/chat/completions",
+                request_url,
                 headers=get_llm_headers(),
                 json=payload,
                 timeout=resolved_timeout,
@@ -371,7 +390,12 @@ def _call_llm_raw(
         tool_choice=tool_choice,
     )
 
-    logger.info("[llm_helpers] LLM request model=%s stream=%s", payload.get("model"), False)
+    logger.info(
+        "[llm_helpers] LLM request model=%s stream=%s timeout=%s",
+        payload.get("model"),
+        False,
+        timeout,
+    )
     logger.info("[llm_helpers] LLM input: %s", json.dumps(messages, ensure_ascii=False))
     logger.info("[llm_helpers] LLM available tools: %s", json.dumps(tools, ensure_ascii=False))
     logger.info("[llm_helpers] LLM tool choice: %s", json.dumps(tool_choice, ensure_ascii=False))

@@ -7,7 +7,7 @@ from statistics import mean
 from time import perf_counter
 from typing import Any
 
-from evals.flows import EVAL_FLOWS
+from evals.flows import EVAL_FLOWS, EVAL_LLM_TIMEOUT
 from evals.types import EvalFlowDefinition
 from llm_helpers import warm_chat_model
 from observability.logger import get_runtime_logger
@@ -200,6 +200,7 @@ async def run_eval_flow(
             "case_count": len(flow.cases),
         },
         "llm_model": llm_model,
+        "timeout_seconds": EVAL_LLM_TIMEOUT,
         "repetitions": normalized_repetitions,
         "discard_first_attempt": effective_discard_first_attempt,
         "warmup": warmup,

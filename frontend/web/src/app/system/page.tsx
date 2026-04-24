@@ -340,12 +340,68 @@ function JsonTreeNode({ name, value }: { name?: string; value: unknown }) {
   );
 }
 
+type LlmOutboundRequest = {
+  url: string;
+  method?: string;
+  timeout_seconds?: number;
+  headers?: Record<string, unknown>;
+  payload?: Record<string, unknown>;
+};
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === "object" && !Array.isArray(value);
+}
+
+function getLlmOutboundRequest(value: unknown): LlmOutboundRequest | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+  const url = value.url;
+  const payload = value.payload;
+  if (typeof url !== "string" || !isRecord(payload)) {
+    return null;
+  }
+  return {
+    url,
+    method: typeof value.method === "string" ? value.method : "POST",
+    timeout_seconds: typeof value.timeout_seconds === "number" ? value.timeout_seconds : undefined,
+    headers: isRecord(value.headers) ? value.headers : undefined,
+    payload,
+  };
+}
+
+function shellEscapeSingleQuoted(value: string): string {
+  return value.replace(/'/g, `'"'"'`);
+}
+
+function buildCurlCommand(request: LlmOutboundRequest): string {
+  const headerLines = Object.entries(request.headers ?? {})
+    .filter(([, value]) => value !== undefined)
+    .map(([key, value]) => `  -H '${shellEscapeSingleQuoted(`${key}: ${String(value)}`)}'`);
+  const payloadText = JSON.stringify(request.payload ?? {}, null, 2);
+  const timeoutPart = request.timeout_seconds ? `  --max-time ${request.timeout_seconds}` : null;
+  return [
+    `curl -X ${request.method ?? "POST"} '${shellEscapeSingleQuoted(request.url)}' \\`,
+    ...headerLines.map((line) => `${line} \\`),
+    ...(timeoutPart ? [`${timeoutPart} \\`] : []),
+    `  --data-raw '${shellEscapeSingleQuoted(payloadText)}'`,
+  ].join("\n");
+}
+
 function LogMessageContent({ entry, searchQuery }: { entry: LogRow; searchQuery: string }) {
   const segments = getLogSegments(entry);
 
   const copyJson = async (value: unknown) => {
     try {
       await navigator.clipboard.writeText(JSON.stringify(value, null, 2));
+    } catch {
+      // noop
+    }
+  };
+
+  const copyText = async (value: string) => {
+    try {
+      await navigator.clipboard.writeText(value);
     } catch {
       // noop
     }
@@ -364,6 +420,8 @@ function LogMessageContent({ entry, searchQuery }: { entry: LogRow; searchQuery:
 
         const searchIndex = buildJsonSearchIndex(segment.value);
         const hasJsonMatch = matchesSearch(searchIndex, searchQuery) || matchesSearch(segment.content, searchQuery);
+        const outboundRequest = getLlmOutboundRequest(segment.value);
+        const curlCommand = outboundRequest ? buildCurlCommand(outboundRequest) : null;
 
         return (
           <div key={`json-${index}`} style={{ border: "1px solid #334155", borderRadius: "8px", padding: "8px", position: "relative" }}>
@@ -415,6 +473,46 @@ function LogMessageContent({ entry, searchQuery }: { entry: LogRow; searchQuery:
               </span>
             ) : null}
             <JsonTreeNode value={segment.value} />
+            {curlCommand ? (
+              <div style={{ marginTop: "10px", borderTop: "1px solid #334155", paddingTop: "10px", display: "grid", gap: "8px" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", gap: "12px", alignItems: "center", flexWrap: "wrap" }}>
+                  <div style={{ color: "#cbd5e1", fontSize: "0.82rem", fontWeight: 600 }}>
+                    Repro command
+                    {typeof outboundRequest?.timeout_seconds === "number" ? ` - timeout ${outboundRequest.timeout_seconds}s` : ""}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => copyText(curlCommand)}
+                    style={{
+                      border: "1px solid #475569",
+                      borderRadius: "6px",
+                      background: "#0b1220",
+                      color: "#cbd5e1",
+                      padding: "4px 8px",
+                      cursor: "pointer",
+                      fontSize: "0.75rem",
+                    }}
+                  >
+                    Copy curl
+                  </button>
+                </div>
+                <pre
+                  style={{
+                    margin: 0,
+                    whiteSpace: "pre-wrap",
+                    wordBreak: "break-word",
+                    color: "#e2e8f0",
+                    background: "#020617",
+                    borderRadius: "8px",
+                    padding: "10px",
+                    overflowX: "auto",
+                    fontSize: "0.78rem",
+                  }}
+                >
+                  {curlCommand}
+                </pre>
+              </div>
+            ) : null}
           </div>
         );
       })}
