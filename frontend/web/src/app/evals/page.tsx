@@ -60,9 +60,10 @@ export default function EvalsPage() {
         setActiveJob(updatedJob);
 
         if (updatedJob.status === "completed") {
-          if (updatedJob.result) {
+          const result = updatedJob.result;
+          if (result) {
             setRuns((current) => [
-              { id: `${updatedJob.job_id}-result`, result: updatedJob.result },
+              { id: `${updatedJob.job_id}-result`, result },
               ...current,
             ]);
           }
