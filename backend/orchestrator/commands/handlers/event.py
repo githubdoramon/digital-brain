@@ -11,6 +11,8 @@ from datetime import datetime, timedelta
 from typing import Any
 from uuid import uuid4
 
+import contacts as contacts_service
+import events as events_service
 import places as places_service
 import retrieval
 from commands.handlers.clarification_utils import (
@@ -1127,6 +1129,113 @@ def _matched_event_preview(candidate: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _merge_existing_event_into_extraction(
+    matched_event_id: str,
+    extracted: dict[str, Any],
+    resolution: dict[str, Any],
+) -> None:
+    """Rebase the preview on the matched event so update doesn't overwrite.
+
+    When we decide this /event run is updating an existing event, we should
+    treat that event as the baseline. The user is almost always adding
+    details, not renaming or re-dating the event — so we preserve existing
+    scalars (title, when, where) and only merge in additive fields
+    (summary, tags, types, participants). The user can still override any
+    field explicitly in the editor; on confirm, modifications carry only
+    the diff. This prevents the classic failure where the LLM picks the
+    wrong Thursday and wipes out the correct stored date.
+    """
+    existing = events_service.get_event_by_id(matched_event_id)
+    if not existing:
+        return
+
+    existing_title = str(existing.get("title") or "").strip()
+    if existing_title:
+        extracted["title"] = existing_title
+    if existing.get("start_date"):
+        extracted["when"] = existing["start_date"]
+    if existing.get("end_date") is not None:
+        extracted["end_when"] = existing["end_date"]
+
+    existing_place_id = str(existing.get("place_id") or "").strip()
+    if existing_place_id:
+        place_row = places_service.get_place(existing_place_id)
+        place_name = str((place_row or {}).get("name") or "").strip()
+        if place_name:
+            extracted["where"] = place_name
+        resolution["matched_place"] = {
+            "place_id": existing_place_id,
+            "name": place_name or str(extracted.get("where") or "").strip(),
+            "confidence": "high",
+            "matched_via": "existing_event",
+        }
+        new_entities = resolution.setdefault(
+            "new_entities", {"contacts": [], "places": [], "documents": []}
+        )
+        new_entities["places"] = []
+
+    existing_summary = str(existing.get("summary") or "").strip()
+    new_summary = str(extracted.get("summary") or "").strip()
+    if existing_summary and new_summary and existing_summary != new_summary:
+        if new_summary in existing_summary:
+            extracted["summary"] = existing_summary
+        elif existing_summary in new_summary:
+            extracted["summary"] = new_summary
+        else:
+            extracted["summary"] = f"{existing_summary}\n\n{new_summary}"
+    elif existing_summary and not new_summary:
+        extracted["summary"] = existing_summary
+
+    def _union_preserve(existing_list: Any, new_list: Any) -> list[str]:
+        seen: set[str] = set()
+        out: list[str] = []
+        for item in list(existing_list or []) + list(new_list or []):
+            text = str(item or "").strip()
+            if not text:
+                continue
+            key = text.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append(text)
+        return out
+
+    extracted["tags"] = _union_preserve(existing.get("tags"), extracted.get("tags"))
+    merged_types = _union_preserve(existing.get("types") or [], extracted.get("types") or [])
+    extracted["types"] = merged_types or ["generic"]
+
+    existing_people_ids = [
+        str(cid).strip() for cid in (existing.get("people") or []) if str(cid or "").strip()
+    ]
+    if existing_people_ids:
+        current_contacts = resolution.setdefault("contacts", [])
+        existing_ids_in_resolution = {
+            str(entry.get("contact_id") or "").strip()
+            for entry in current_contacts
+            if isinstance(entry, dict)
+        }
+        for contact_id in existing_people_ids:
+            if contact_id in existing_ids_in_resolution:
+                continue
+            try:
+                contact_row = contacts_service.get_contact(contact_id)
+            except Exception as exc:  # pragma: no cover - defensive
+                logger.warning(
+                    "[handle_event] Failed to fetch existing contact %s: %s", contact_id, exc
+                )
+                contact_row = None
+            display_name = str((contact_row or {}).get("display_name") or "").strip() or contact_id
+            current_contacts.append(
+                {
+                    "contact_id": contact_id,
+                    "display_name": display_name,
+                    "query": display_name,
+                    "confidence": "high",
+                    "match_source": "existing_event",
+                }
+            )
+
+
 def _search_event_candidates(
     query: str,
     time_start: str | None,
@@ -1156,7 +1265,34 @@ def _search_event_candidates(
     ]
 
 
+_EVENT_MATCH_QUERY_CHAR_LIMIT = 240
+
+
+def _build_event_match_query(
+    raw_message: str | None,
+    extracted: dict[str, Any],
+) -> str:
+    """Pick a short, stable query for finding a matching event.
+
+    We prefer the user's own words (``raw_message``) because they tend to
+    reuse the same short phrases when referring to the same event ("physio
+    at Monserrate"), and because the LLM-generated summary describes the
+    *new* details being added — which by definition won't appear on the
+    stored event yet. Fall back to the title, then to the first sentence
+    of the summary. Always cap to avoid blowing up the vector/BM25 query.
+    """
+    for candidate in (raw_message, extracted.get("title"), extracted.get("summary")):
+        text = str(candidate or "").strip()
+        if not text:
+            continue
+        if len(text) > _EVENT_MATCH_QUERY_CHAR_LIMIT:
+            text = text[:_EVENT_MATCH_QUERY_CHAR_LIMIT].rsplit(" ", 1)[0]
+        return text
+    return ""
+
+
 def _find_event_matches(
+    raw_message: str | None,
     extracted: dict[str, Any],
     resolution: dict[str, Any] | None,
 ) -> dict[str, Any]:
@@ -1170,10 +1306,7 @@ def _find_event_matches(
     time-windowed pass returns nothing we retry without a time filter so a
     badly mis-dated extraction can still surface the right event.
     """
-    title = str(extracted.get("title") or "").strip()
-    summary = str(extracted.get("summary") or "").strip()
-    query_parts = [text for text in (title, summary) if text]
-    query = " ".join(query_parts).strip()
+    query = _build_event_match_query(raw_message, extracted)
     if not query:
         return {"operation": "create", "candidates": []}
 
@@ -2351,7 +2484,7 @@ def handle_event(parsed: ParsedCommand, context: dict) -> dict[str, Any]:
 
     # Look for an existing event we might be updating instead of creating.
     _emit_progress(context, "Checking for matching events...")
-    event_match = _find_event_matches(extracted, resolution)
+    event_match = _find_event_matches(raw_message, extracted, resolution)
     operation = str(event_match.get("operation") or "create")
     existing_event_id = str(event_match.get("existing_event_id") or "").strip() or None
     matched_event = event_match.get("matched_event")
@@ -2362,6 +2495,23 @@ def handle_event(parsed: ParsedCommand, context: dict) -> dict[str, Any]:
         # the UI can surface them.
         existing_event_id = None
         matched_event = None
+    elif operation == "update" and existing_event_id:
+        # Rebase preview on the matched event so confirm doesn't overwrite
+        # stored scalars the user didn't mean to change.
+        _merge_existing_event_into_extraction(existing_event_id, extracted, resolution)
+        # Refresh "who" to reflect any participants we added from the existing event.
+        extracted["who"] = _dedupe_preserve_order(
+            [
+                contact["display_name"]
+                for contact in resolution.get("contacts", [])
+                if contact.get("display_name")
+            ]
+            + [
+                contact["display_name"]
+                for contact in resolution.get("new_entities", {}).get("contacts", [])
+                if contact.get("display_name")
+            ]
+        )
 
     # Generate a preview ID and store the data
     preview_id = f"event:preview:{uuid4().hex[:8]}"
