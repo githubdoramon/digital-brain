@@ -62,3 +62,29 @@ export type EvalRunResult = {
     }>;
   }>;
 };
+
+export type EvalRunJob = {
+  job_id: string;
+  status: "queued" | "running" | "completed" | "failed";
+  flow_id: string;
+  flow_label?: string | null;
+  llm_model?: string | null;
+  repetitions: number;
+  discard_first_attempt: boolean;
+  created_at?: string | null;
+  started_at?: string | null;
+  finished_at?: string | null;
+  error?: string | null;
+  progress?: {
+    current_case?: number;
+    total_cases?: number;
+    current_attempt?: number;
+    total_attempts?: number;
+    current_case_id?: string | null;
+    current_case_title?: string | null;
+    attempt_in_case?: number;
+    repetitions?: number;
+    status?: string;
+  } | null;
+  result?: EvalRunResult | null;
+};

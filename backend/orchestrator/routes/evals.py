@@ -3,7 +3,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException
 
 from auth import get_current_user
-from evals import list_eval_flows, run_eval_flow
+from evals import create_eval_job, get_eval_job, list_eval_flows
 from observability.logger import get_runtime_logger
 from schemas import EvalRunIn
 
@@ -34,7 +34,7 @@ def create_evals_router() -> APIRouter:
         )
 
         try:
-            return await run_eval_flow(
+            return await create_eval_job(
                 flow_id=payload.flow_id,
                 llm_model=normalized_model,
                 repetitions=payload.repetitions,
@@ -43,5 +43,13 @@ def create_evals_router() -> APIRouter:
             )
         except ValueError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @router.get("/evals/runs/{job_id}")
+    async def read_eval_run(job_id: str, user: dict = Depends(get_current_user)):
+        del user
+        job = await get_eval_job(job_id)
+        if job is None:
+            raise HTTPException(status_code=404, detail=f"Unknown eval job: {job_id}")
+        return job
 
     return router

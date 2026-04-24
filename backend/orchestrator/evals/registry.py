@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import inspect
 import json
+from collections.abc import Awaitable, Callable
 from statistics import mean
 from time import perf_counter
 from typing import Any
@@ -47,6 +48,17 @@ async def _execute_case(flow: EvalFlowDefinition, case: Any, llm_model: str | No
     return result
 
 
+async def _emit_progress(
+    callback: Callable[[dict[str, Any]], Any | Awaitable[Any]] | None,
+    payload: dict[str, Any],
+) -> None:
+    if callback is None:
+        return
+    result = callback(payload)
+    if inspect.isawaitable(result):
+        await result
+
+
 async def run_eval_flow(
     *,
     flow_id: str,
@@ -54,6 +66,7 @@ async def run_eval_flow(
     repetitions: int,
     user_email: str,
     discard_first_attempt: bool = True,
+    progress_callback: Callable[[dict[str, Any]], Any | Awaitable[Any]] | None = None,
 ) -> dict[str, Any]:
     flow = get_eval_flow(flow_id)
     if flow is None:
@@ -98,6 +111,20 @@ async def run_eval_flow(
         summary_variants: set[str] = set()
 
         for attempt_index in range(1, normalized_repetitions + 1):
+            await _emit_progress(
+                progress_callback,
+                {
+                    "current_case": len(case_results) + 1,
+                    "total_cases": len(flow.cases),
+                    "current_attempt": total_attempts + 1,
+                    "total_attempts": len(flow.cases) * normalized_repetitions,
+                    "current_case_id": case.case_id,
+                    "current_case_title": case.title,
+                    "attempt_in_case": attempt_index,
+                    "repetitions": normalized_repetitions,
+                    "status": "running",
+                },
+            )
             started = perf_counter()
             output = await _execute_case(flow, case, llm_model, user_email)
             duration_ms = (perf_counter() - started) * 1000
@@ -153,6 +180,18 @@ async def run_eval_flow(
         )
 
     total_duration_ms = (perf_counter() - run_started) * 1000
+    await _emit_progress(
+        progress_callback,
+        {
+            "current_case": len(flow.cases),
+            "total_cases": len(flow.cases),
+            "current_attempt": total_attempts,
+            "total_attempts": len(flow.cases) * normalized_repetitions,
+            "current_case_id": case_results[-1]["case_id"] if case_results else None,
+            "current_case_title": case_results[-1]["title"] if case_results else None,
+            "status": "completed",
+        },
+    )
     return {
         "flow": {
             "flow_id": flow.flow_id,

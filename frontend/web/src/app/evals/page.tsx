@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { api } from "@/lib/api";
 import { EvalRunCard } from "./EvalRunCard";
-import { EvalFlowMeta, EvalRunResult } from "./types";
+import { EvalFlowMeta, EvalRunJob, EvalRunResult } from "./types";
 
 type EvalFlowsResponse = {
   flows: EvalFlowMeta[];
@@ -19,6 +19,7 @@ export default function EvalsPage() {
   const [llmModel, setLlmModel] = useState("");
   const [repetitions, setRepetitions] = useState("5");
   const [runs, setRuns] = useState<Array<{ id: string; result: EvalRunResult }>>([]);
+  const [activeJob, setActiveJob] = useState<EvalRunJob | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [isBootstrapping, setIsBootstrapping] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -48,6 +49,40 @@ export default function EvalsPage() {
     };
   }, []);
 
+  useEffect(() => {
+    if (!activeJob || activeJob.status === "completed" || activeJob.status === "failed") {
+      return undefined;
+    }
+
+    const intervalId = window.setInterval(async () => {
+      try {
+        const updatedJob = await api.get<EvalRunJob>(`/evals/runs/${activeJob.job_id}`);
+        setActiveJob(updatedJob);
+
+        if (updatedJob.status === "completed") {
+          if (updatedJob.result) {
+            setRuns((current) => [
+              { id: `${updatedJob.job_id}-result`, result: updatedJob.result },
+              ...current,
+            ]);
+          }
+          setIsLoading(false);
+          setActiveJob(updatedJob);
+        }
+
+        if (updatedJob.status === "failed") {
+          setError(updatedJob.error || "Eval run failed");
+          setIsLoading(false);
+        }
+      } catch (pollError) {
+        setError(pollError instanceof Error ? pollError.message : "Failed to poll eval job");
+        setIsLoading(false);
+      }
+    }, 1200);
+
+    return () => window.clearInterval(intervalId);
+  }, [activeJob]);
+
   const selectedFlow = useMemo(
     () => flows.find((flow) => flow.flow_id === selectedFlowId) ?? null,
     [flows, selectedFlowId]
@@ -57,22 +92,17 @@ export default function EvalsPage() {
     if (!selectedFlowId) return;
     setIsLoading(true);
     setError(null);
+    setActiveJob(null);
     try {
-      const result = await api.post<EvalRunResult>("/evals/run", {
+      const job = await api.post<EvalRunJob>("/evals/run", {
         flow_id: selectedFlowId,
         llm_model: llmModel.trim() || undefined,
         repetitions: Number(repetitions) || 5,
+        discard_first_attempt: true,
       });
-      setRuns((current) => [
-        {
-          id: `${selectedFlowId}-${Date.now()}`,
-          result,
-        },
-        ...current,
-      ]);
+      setActiveJob(job);
     } catch (runError) {
       setError(runError instanceof Error ? runError.message : "Eval run failed");
-    } finally {
       setIsLoading(false);
     }
   }
@@ -120,7 +150,7 @@ export default function EvalsPage() {
             <div>
               <h2 style={{ margin: 0, color: "#10233d", fontSize: "1.1rem" }}>Runner</h2>
               <p style={{ margin: "6px 0 0", color: "#526070", lineHeight: 1.5 }}>
-                Keep it simple: choose one flow, one Ollama model, and 1-20 repetitions.
+                Keep it simple: choose one flow, one Ollama model, and 1-20 repetitions. Each run starts as a background job so the browser avoids long request timeouts.
               </p>
             </div>
 
@@ -183,6 +213,21 @@ export default function EvalsPage() {
             >
               {isLoading ? "Running eval..." : "Run flow"}
             </button>
+
+            {activeJob && isLoading ? (
+              <div style={{ borderRadius: 12, background: "#f7f9fc", padding: 12, color: "#334155", fontSize: "0.92rem", lineHeight: 1.5 }}>
+                <div style={{ fontWeight: 700, color: "#10233d", marginBottom: 4 }}>
+                  {activeJob.status === "queued" ? "Queued" : "Running"} eval job
+                </div>
+                <div>
+                  Case {activeJob.progress?.current_case ?? 0}/{activeJob.progress?.total_cases ?? 0}
+                  {activeJob.progress?.current_case_title ? ` - ${activeJob.progress.current_case_title}` : ""}
+                </div>
+                <div>
+                  Attempt {activeJob.progress?.current_attempt ?? 0}/{activeJob.progress?.total_attempts ?? 0}
+                </div>
+              </div>
+            ) : null}
 
             {error ? <div style={{ color: "#b91c1c", fontSize: "0.92rem" }}>{error}</div> : null}
           </div>
