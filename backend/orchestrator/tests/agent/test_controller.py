@@ -1588,7 +1588,7 @@ class TestLinkedItemsSelection:
         state = AgentState(goal=question)
         state.resolution["active_contact_scope"] = [
             {
-                "mention_text": "Dana",
+                "mention_text": "Dana Lewis",
                 "display_name": "Dana Lewis",
                 "contact_id": "contact:dana-acme-example",
                 "confidence": 1.0,
@@ -1685,3 +1685,92 @@ class TestLinkedItemsSelection:
             for item in linked_items
         )
         assert all(item["entity_id"] != "event:other" for item in linked_items)
+
+
+    def test_linked_items_promote_place_from_selected_event_for_where_query(self):
+        controller = _build_controller()
+        question = "When and where did I last meet Dana outside of work?"
+        state = AgentState(goal=question)
+        state.resolution["active_contact_scope"] = [
+            {
+                "mention_text": "Dana Lewis",
+                "display_name": "Dana Lewis",
+                "contact_id": "contact:dana-acme-example",
+                "confidence": 1.0,
+                "matched_via": "direct_match",
+            }
+        ]
+        state.resolution["active_contact_scope_ids"] = ["contact:dana-acme-example"]
+        state.remember_information_candidate(
+            kind="place",
+            candidate_id="place-the-crest-mlwdm9qq",
+            label="The Crest",
+            source_tool="get_events",
+            metadata={"name": "The Crest", "city": "Riverside", "country": "Westoria"},
+            role_hints=["context_anchor"],
+        )
+        state.record_tool_call(
+            ToolCallRecord(
+                tool_name="get_events",
+                arguments={
+                    "action": "by_time_span",
+                    "contact_ids": ["contact:dana-acme-example"],
+                    "sort_order": "newest",
+                    "time_end": "2026-04-25T23:59:59Z",
+                },
+                result={
+                    "events": [
+                        {
+                            "id": "event:dana-house-visit",
+                            "title": "Home visit to Dana's house",
+                            "start_date": "2026-04-19T19:00:00+01:00",
+                            "end_date": "2026-04-19T21:00:00+01:00",
+                            "summary": "Went to Dana's house to hang around outside work.",
+                            "people": [
+                                {"contact_id": "contact:alex-carter", "display_name": "Alex Carter"},
+                                {"contact_id": "contact:dana-acme-example", "display_name": "Dana Lewis"},
+                            ],
+                            "tags": ["Family", "visit"],
+                            "types": ["personal"],
+                            "place": {
+                                "place_id": "place-the-crest-mlwdm9qq",
+                                "name": "The Crest",
+                                "city": "Riverside",
+                                "country": "Westoria",
+                            },
+                        }
+                    ],
+                    "count": 1,
+                },
+                duration_ms=15,
+                success=True,
+            )
+        )
+        state.remember_information_candidate(
+            kind="event",
+            candidate_id="event:dana-house-visit",
+            label="Home visit to Dana's house",
+            score=1.3,
+            query=question,
+            source_tool="get_events",
+            inspected=True,
+            metadata={
+                "start_date": "2026-04-19T19:00:00+01:00",
+                "place_id": "place-the-crest-mlwdm9qq",
+            },
+            role_hints=["primary_answer_anchor", "evidence_anchor"],
+        )
+
+        linked_items = controller._build_linked_items(
+            state,
+            answer="You last met Dana Lewis on 19 April 2026 at The Crest in Riverside.",
+        )
+
+        assert any(
+            item["entity_type"] == "contact" and item["entity_id"] == "contact:dana-acme-example"
+            for item in linked_items
+        )
+        assert any(
+            item["entity_type"] == "place" and item["entity_id"] == "place-the-crest-mlwdm9qq"
+            for item in linked_items
+        )

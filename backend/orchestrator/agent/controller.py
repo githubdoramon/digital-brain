@@ -2220,11 +2220,13 @@ class AgentController:
             return []
 
         selected: list[dict[str, Any]] = []
+        selected_candidates: list[dict[str, Any]] = []
         selected_keys: set[tuple[str, str]] = set()
         role_order = ["primary_answer_anchor", "subject_entity", "context_anchor", "evidence_anchor"]
         question_text = str(state.goal or "")
         narrow_question = self._linked_item_is_narrow_question(question_text)
         needs_context_role = self._linked_item_needs_context_role(question_text)
+        query_signals = self._linked_item_query_signals(normalize_search_text(question_text))
 
         for role in role_order:
             role_candidates = [
@@ -2238,6 +2240,7 @@ class AgentController:
                 continue
             picked = role_candidates[0]
             selected.append(self._linked_item_payload(picked))
+            selected_candidates.append(picked)
             selected_keys.add((picked["entity_type"], picked["entity_id"]))
             if len(selected) >= max_items:
                 return selected
@@ -2252,6 +2255,19 @@ class AgentController:
         if narrow_question and not needs_context_role and len(selected) >= 2:
             return selected
 
+        if query_signals["where"]:
+            promoted_place = self._linked_item_place_for_selected_event(
+                selected_candidates=selected_candidates,
+                candidates=candidates,
+                selected_keys=selected_keys,
+            )
+            if promoted_place is not None:
+                selected.append(self._linked_item_payload(promoted_place))
+                selected_candidates.append(promoted_place)
+                selected_keys.add((promoted_place["entity_type"], promoted_place["entity_id"]))
+                if len(selected) >= max_items:
+                    return selected
+
         for candidate in candidates:
             dedupe_key = (candidate["entity_type"], candidate["entity_id"])
             if dedupe_key in selected_keys:
@@ -2263,6 +2279,7 @@ class AgentController:
             if candidate.get("selected_role") == "evidence_anchor" and candidate.get("entity_type") == "event":
                 continue
             selected.append(self._linked_item_payload(candidate))
+            selected_candidates.append(candidate)
             selected_keys.add(dedupe_key)
             if len(selected) >= max_items:
                 break
@@ -2350,6 +2367,40 @@ class AgentController:
         )
         return ranked
 
+    def _linked_item_place_for_selected_event(
+        self,
+        *,
+        selected_candidates: list[dict[str, Any]],
+        candidates: list[dict[str, Any]],
+        selected_keys: set[tuple[str, str]],
+    ) -> dict[str, Any] | None:
+        primary_event = next(
+            (
+                candidate
+                for candidate in selected_candidates
+                if str(candidate.get("entity_type") or "") == "event"
+            ),
+            None,
+        )
+        if primary_event is None:
+            return None
+        metadata = primary_event.get("metadata") if isinstance(primary_event.get("metadata"), dict) else {}
+        place_id = str(metadata.get("place_id") or "").strip()
+        if not place_id:
+            return None
+        for candidate in candidates:
+            if (
+                str(candidate.get("entity_type") or "") == "place"
+                and str(candidate.get("entity_id") or "") == place_id
+                and ("place", place_id) not in selected_keys
+            ):
+                boosted = dict(candidate)
+                boosted["selected_role"] = "context_anchor"
+                boosted["role_score"] = max(float(candidate.get("role_score", 0.0) or 0.0), 1.35)
+                boosted["overall_score"] = max(float(candidate.get("overall_score", 0.0) or 0.0), boosted["role_score"])
+                return boosted
+        return None
+
     def _linked_item_resolution_candidates(
         self,
         state: AgentState,
@@ -2361,7 +2412,6 @@ class AgentController:
             return []
 
         synthetic: list[dict[str, Any]] = []
-        normalized_question = normalize_search_text(question_text)
         seen_contact_ids: set[str] = set()
         for item in active_scope:
             if not isinstance(item, dict):
@@ -2372,10 +2422,6 @@ class AgentController:
             mention_text = str(item.get("mention_text") or "").strip()
             display_name = str(item.get("display_name") or "").strip() or mention_text or contact_id
             if mention_text.strip().lower() == "user":
-                continue
-            mention_normalized = normalize_search_text(mention_text or display_name)
-            display_normalized = normalize_search_text(display_name)
-            if mention_normalized and mention_normalized not in normalized_question and display_normalized not in normalized_question:
                 continue
             seen_contact_ids.add(contact_id)
             synthetic.append(
