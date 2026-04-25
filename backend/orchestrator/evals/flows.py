@@ -224,7 +224,13 @@ def _execute_event_extraction_case(case: EvalCase, run_config: EvalRunConfig) ->
     )
     result = _extract_event_entities_with_llm(
         str(case.input.get("message") or ""),
-        {"user_email": run_config.user_email},
+        {
+            "user_email": run_config.user_email,
+            "event_target_fields": case.input.get("event_target_fields"),
+            "event_lock_existing_fields": bool(case.input.get("event_lock_existing_fields")),
+        },
+        existing_extraction=case.input.get("existing_extraction"),
+        clarification_messages=case.input.get("clarification_messages"),
         model=run_config.llm_model,
         timeout=run_config.timeout_seconds,
         llm_request_options=_build_llm_request_options(case, run_config),
@@ -241,12 +247,26 @@ def _score_event_extraction_case(case: EvalCase, output: dict[str, Any]) -> dict
         passed = False
         notes.append(f"Expected when '{expected_when}' but got '{output.get('when')}'")
 
+    expected_end_when = case.expected.get("end_when")
+    if expected_end_when is not None and str(output.get("end_when") or "") != str(expected_end_when):
+        passed = False
+        notes.append(
+            f"Expected end_when '{expected_end_when}' but got '{output.get('end_when')}'"
+        )
+
     expected_where = case.expected.get("where")
     if expected_where is not None:
         actual_where = _normalize_optional_text(output.get("where"))
         if actual_where != _normalize_optional_text(expected_where):
             passed = False
             notes.append(f"Expected where '{expected_where}' but got '{output.get('where')}'")
+
+    expected_title = case.expected.get("title")
+    if expected_title is not None:
+        actual_title = _normalize_optional_text(output.get("title"))
+        if actual_title != _normalize_optional_text(expected_title):
+            passed = False
+            notes.append(f"Expected title '{expected_title}' but got '{output.get('title')}'")
 
     expected_types = _normalized_text_set(case.expected.get("types"))
     actual_types = _normalized_text_set(output.get("types"))
@@ -255,6 +275,14 @@ def _score_event_extraction_case(case: EvalCase, output: dict[str, Any]) -> dict
         notes.append(
             "Missing expected event types: "
             + ", ".join(sorted(expected_types.difference(actual_types)))
+        )
+
+    expected_tags = _normalized_text_set(case.expected.get("tags"))
+    actual_tags = _normalized_text_set(output.get("tags"))
+    if expected_tags and not expected_tags.issubset(actual_tags):
+        passed = False
+        notes.append(
+            "Missing expected tags: " + ", ".join(sorted(expected_tags.difference(actual_tags)))
         )
 
     expected_need_user_input = case.expected.get("needs_clarification")
@@ -436,9 +464,21 @@ EVAL_FLOWS: list[EvalFlowDefinition] = [
                 expected={"intent": "memory_search", "pre_resolve_contacts": True},
             ),
             EvalCase(
+                case_id="router-memory-search-first-meeting",
+                title="Memory search earliest interaction",
+                input={"question": "When was the first time I met Robin?"},
+                expected={"intent": "memory_search", "pre_resolve_contacts": True},
+            ),
+            EvalCase(
                 case_id="router-web-search",
                 title="Web search intent",
                 input={"question": "Search the web for the latest Apple WWDC announcements"},
+                expected={"intent": "web_search", "pre_resolve_contacts": False},
+            ),
+            EvalCase(
+                case_id="router-web-search-llm",
+                title="Web search requiring LLM interpretation",
+                input={"question": "Can you check online whether Apple announced anything new at WWDC this week?"},
                 expected={"intent": "web_search", "pre_resolve_contacts": False},
             ),
             EvalCase(
@@ -446,6 +486,36 @@ EVAL_FLOWS: list[EvalFlowDefinition] = [
                 title="Data query intent",
                 input={"question": "How many todos did I complete this week?"},
                 expected={"intent": "data_query", "pre_resolve_contacts": False},
+            ),
+            EvalCase(
+                case_id="router-data-query-list",
+                title="Data query list intent",
+                input={"question": "List all meetings I had last month."},
+                expected={"intent": "data_query", "pre_resolve_contacts": False},
+            ),
+            EvalCase(
+                case_id="router-contact-lookup",
+                title="Contact lookup intent",
+                input={"question": "Who is Sage and what is her relationship to Dana?"},
+                expected={"intent": "contact_lookup", "pre_resolve_contacts": True},
+            ),
+            EvalCase(
+                case_id="router-home-control",
+                title="Home control intent",
+                input={"question": "Turn off the living room lights and set the thermostat to 20 degrees."},
+                expected={"intent": "home_control", "pre_resolve_contacts": False},
+            ),
+            EvalCase(
+                case_id="router-system-command",
+                title="System command intent",
+                input={"question": "Run this bash command and show me the output: ls -la"},
+                expected={"intent": "system_command", "pre_resolve_contacts": False},
+            ),
+            EvalCase(
+                case_id="router-conversational",
+                title="Conversational intent",
+                input={"question": "Hey, what can you do for me?"},
+                expected={"intent": "conversational", "pre_resolve_contacts": False},
             ),
         ],
         execute_case=_execute_router_case,
@@ -520,6 +590,125 @@ EVAL_FLOWS: list[EvalFlowDefinition] = [
                     "when": "2026-06-02T09:00:00",
                     "where": "Smile Clinic",
                     "types": ["health"],
+                    "needs_clarification": False,
+                },
+            ),
+            EvalCase(
+                case_id="event-extraction-travel",
+                title="Travel booking detail",
+                input={
+                    "message": "Flight to Madrid on 2026-07-01 06:15 from Aurora Airport for a product offsite.",
+                },
+                expected={
+                    "when": "2026-07-01T06:15:00",
+                    "where": "Aurora Airport",
+                    "types": ["travel"],
+                    "needs_clarification": False,
+                },
+            ),
+            EvalCase(
+                case_id="event-extraction-celebration",
+                title="Celebration dinner",
+                input={
+                    "message": "Birthday dinner on 2026-08-12 20:00 at Taberna do Bairro with friends to celebrate my 43rd birthday.",
+                },
+                expected={
+                    "when": "2026-08-12T20:00:00",
+                    "where": "Taberna do Bairro",
+                    "types": ["celebration"],
+                    "needs_clarification": False,
+                },
+            ),
+            EvalCase(
+                case_id="event-extraction-clarification",
+                title="Insufficient timing information",
+                input={
+                    "message": "Coffee with Bruno at Baoba to talk about the move.",
+                },
+                expected={
+                    "needs_clarification": True,
+                },
+            ),
+        ],
+        execute_case=_execute_event_extraction_case,
+        score_case=_score_event_extraction_case,
+        summarize_output=_summarize_event_extraction_output,
+    ),
+    EvalFlowDefinition(
+        flow_id="event_update_extraction",
+        label="Event Update Extraction",
+        description="Evaluates updating an existing event draft with new corrections or follow-up details.",
+        cases=[
+            EvalCase(
+                case_id="event-update-location",
+                title="Add a missing location",
+                input={
+                    "message": "Actually it was at Ribeira Market, not the office.",
+                    "existing_extraction": {
+                        "title": "Team lunch",
+                        "summary": "Team lunch after the milestone review.",
+                        "when": "2026-05-14T12:30:00",
+                        "end_when": None,
+                        "where": None,
+                        "documents": [],
+                        "tags": ["Work"],
+                        "types": ["meeting"],
+                    },
+                },
+                expected={
+                    "where": "Ribeira Market",
+                    "when": "2026-05-14T12:30:00",
+                    "types": ["meeting"],
+                    "needs_clarification": False,
+                },
+            ),
+            EvalCase(
+                case_id="event-update-end-time",
+                title="Add an end time",
+                input={
+                    "message": "It finished at 18:30.",
+                    "existing_extraction": {
+                        "title": "Project sync",
+                        "summary": "Project sync with design and backend.",
+                        "when": "2026-06-04T17:00:00",
+                        "end_when": None,
+                        "where": "Porto Office",
+                        "documents": [],
+                        "tags": ["Work"],
+                        "types": ["meeting"],
+                    },
+                    "event_target_fields": ["end_when"],
+                    "event_lock_existing_fields": True,
+                },
+                expected={
+                    "when": "2026-06-04T17:00:00",
+                    "end_when": "2026-06-04T18:30:00",
+                    "where": "Porto Office",
+                    "types": ["meeting"],
+                    "needs_clarification": False,
+                },
+            ),
+            EvalCase(
+                case_id="event-update-reclassification",
+                title="Reclassify a generic draft as celebration",
+                input={
+                    "message": "This was really a birthday celebration at home, not just a generic dinner.",
+                    "existing_extraction": {
+                        "title": "Dinner at home",
+                        "summary": "Dinner with family at home.",
+                        "when": "2026-08-12T20:00:00",
+                        "end_when": None,
+                        "where": "Home",
+                        "documents": [],
+                        "tags": ["Personal"],
+                        "types": ["generic"],
+                    },
+                },
+                expected={
+                    "where": "Home",
+                    "when": "2026-08-12T20:00:00",
+                    "types": ["celebration"],
+                    "tags": ["Personal"],
                     "needs_clarification": False,
                 },
             ),

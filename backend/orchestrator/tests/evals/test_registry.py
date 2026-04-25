@@ -13,6 +13,7 @@ def test_list_eval_flows_includes_expected_flows():
     assert "router" in flow_ids
     assert "contact_resolution" in flow_ids
     assert "event_extraction" in flow_ids
+    assert "event_update_extraction" in flow_ids
     assert "contact_update_extraction" in flow_ids
     assert "tag_suggestion" in flow_ids
 
