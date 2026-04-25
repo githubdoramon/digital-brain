@@ -30,7 +30,6 @@ def _job_snapshot(job: dict[str, Any]) -> dict[str, Any]:
         "flow_label": job.get("flow_label"),
         "llm_model": job.get("llm_model"),
         "request_options": job.get("request_options") or {},
-        "case_json_schemas": job.get("case_json_schemas") or {},
         "repetitions": job.get("repetitions"),
         "discard_first_attempt": job.get("discard_first_attempt"),
         "created_at": job.get("created_at"),
@@ -77,7 +76,6 @@ async def create_eval_job(
     user_email: str,
     discard_first_attempt: bool,
     request_options: EvalLlmRequestOptions | None = None,
-    case_json_schemas: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     flow = get_eval_flow(flow_id)
     if flow is None:
@@ -95,11 +93,8 @@ async def create_eval_job(
             "stream": bool(request_options.stream) if request_options else False,
             "temperature": request_options.temperature if request_options else None,
             "max_tokens": request_options.max_tokens if request_options else None,
-            "top_p": request_options.top_p if request_options else None,
             "reasoning_effort": request_options.reasoning_effort if request_options else None,
-            "extra_body": dict(request_options.extra_body) if request_options else {},
         },
-        "case_json_schemas": dict(case_json_schemas or {}),
         "repetitions": repetitions,
         "discard_first_attempt": discard_first_attempt,
         "created_at": created_at,
@@ -140,7 +135,6 @@ async def create_eval_job(
                 user_email=user_email,
                 discard_first_attempt=discard_first_attempt,
                 request_options=request_options,
-                case_json_schemas=case_json_schemas,
                 progress_callback=lambda progress: _set_job_state(job_id, progress=progress),
             )
             await _set_job_state(

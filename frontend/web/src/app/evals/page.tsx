@@ -18,9 +18,7 @@ const PAYLOAD_PRESETS = [
       stream: false,
       temperature: "0",
       maxTokens: "128",
-      topP: "",
       reasoningEffort: "",
-      extraBody: "",
     },
   },
   {
@@ -31,9 +29,7 @@ const PAYLOAD_PRESETS = [
       stream: false,
       temperature: "0",
       maxTokens: "128",
-      topP: "",
       reasoningEffort: "none",
-      extraBody: "",
     },
   },
   {
@@ -44,9 +40,7 @@ const PAYLOAD_PRESETS = [
       stream: false,
       temperature: "0",
       maxTokens: "128",
-      topP: "",
       reasoningEffort: "",
-      extraBody: "",
     },
   },
 ] as const;
@@ -63,10 +57,7 @@ export default function EvalsPage() {
   const [stream, setStream] = useState(false);
   const [temperature, setTemperature] = useState("0");
   const [maxTokens, setMaxTokens] = useState("128");
-  const [topP, setTopP] = useState("");
   const [reasoningEffort, setReasoningEffort] = useState("none");
-  const [extraBody, setExtraBody] = useState("");
-  const [caseSchemaTexts, setCaseSchemaTexts] = useState<Record<string, string>>({});
   const [runs, setRuns] = useState<Array<{ id: string; result: EvalRunResult }>>([]);
   const [activeJob, setActiveJob] = useState<EvalRunJob | null>(null);
   const [isLoading, setIsLoading] = useState(false);
@@ -143,35 +134,13 @@ export default function EvalsPage() {
   );
 
   const effectivePayloadPreview = useMemo(() => {
-    let parsedExtraBody: Record<string, unknown> = {};
-    if (extraBody.trim()) {
-      try {
-        parsedExtraBody = JSON.parse(extraBody) as Record<string, unknown>;
-      } catch {
-        parsedExtraBody = { _invalid_json: true };
-      }
-    }
     return {
       stream,
       temperature: temperature.trim() === "" ? undefined : Number(temperature),
       max_tokens: maxTokens.trim() === "" ? undefined : Number(maxTokens),
-      top_p: topP.trim() === "" ? undefined : Number(topP),
       reasoning_effort: reasoningEffort || undefined,
-      ...(Object.keys(parsedExtraBody).length > 0 ? parsedExtraBody : {}),
     };
-  }, [extraBody, maxTokens, reasoningEffort, stream, temperature, topP]);
-
-  useEffect(() => {
-    if (!selectedFlow) return;
-    setCaseSchemaTexts(
-      Object.fromEntries(
-        selectedFlow.cases.map((flowCase) => [
-          flowCase.case_id,
-          flowCase.response_json_schema ? JSON.stringify(flowCase.response_json_schema, null, 2) : "",
-        ])
-      )
-    );
-  }, [selectedFlow]);
+  }, [maxTokens, reasoningEffort, stream, temperature]);
 
   async function handleRun() {
     if (!selectedFlowId) return;
@@ -179,16 +148,6 @@ export default function EvalsPage() {
     setError(null);
     setActiveJob(null);
     try {
-      let parsedExtraBody: Record<string, unknown> = {};
-      if (extraBody.trim()) {
-        parsedExtraBody = JSON.parse(extraBody) as Record<string, unknown>;
-      }
-      const parsedCaseSchemas = Object.fromEntries(
-        Object.entries(caseSchemaTexts)
-          .map(([caseId, raw]) => [caseId, raw.trim()])
-          .filter(([, raw]) => raw.length > 0)
-          .map(([caseId, raw]) => [caseId, JSON.parse(raw) as Record<string, unknown>])
-      );
       const job = await api.post<EvalRunJob>("/evals/run", {
         flow_id: selectedFlowId,
         llm_model: llmModel.trim() || undefined,
@@ -197,10 +156,7 @@ export default function EvalsPage() {
         stream,
         temperature: temperature.trim() === "" ? undefined : Number(temperature),
         max_tokens: maxTokens.trim() === "" ? undefined : Number(maxTokens),
-        top_p: topP.trim() === "" ? undefined : Number(topP),
         reasoning_effort: reasoningEffort || undefined,
-        extra_body: parsedExtraBody,
-        case_json_schemas: parsedCaseSchemas,
       });
       setActiveJob(job);
     } catch (runError) {
@@ -215,9 +171,7 @@ export default function EvalsPage() {
     setStream(preset.values.stream);
     setTemperature(preset.values.temperature);
     setMaxTokens(preset.values.maxTokens);
-    setTopP(preset.values.topP);
     setReasoningEffort(preset.values.reasoningEffort);
-    setExtraBody(preset.values.extraBody);
   }
 
   return (
@@ -351,10 +305,6 @@ export default function EvalsPage() {
                 <span style={{ fontWeight: 600, color: "#10233d" }}>Max tokens</span>
                 <input value={maxTokens} onChange={(event) => setMaxTokens(event.target.value)} disabled={isLoading} style={{ borderRadius: 12, border: "1px solid #d8dee8", padding: "12px 14px", fontSize: "0.95rem" }} />
               </label>
-              <label style={{ display: "grid", gap: 6 }}>
-                <span style={{ fontWeight: 600, color: "#10233d" }}>Top p</span>
-                <input value={topP} onChange={(event) => setTopP(event.target.value)} disabled={isLoading} placeholder="optional" style={{ borderRadius: 12, border: "1px solid #d8dee8", padding: "12px 14px", fontSize: "0.95rem" }} />
-              </label>
             </div>
 
             <label style={{ display: "grid", gap: 6 }}>
@@ -366,18 +316,6 @@ export default function EvalsPage() {
                 <option value="medium">medium</option>
                 <option value="high">high</option>
               </select>
-            </label>
-
-            <label style={{ display: "grid", gap: 6 }}>
-              <span style={{ fontWeight: 600, color: "#10233d" }}>Extra payload JSON</span>
-              <textarea
-                value={extraBody}
-                onChange={(event) => setExtraBody(event.target.value)}
-                disabled={isLoading}
-                placeholder='{"seed": 7}'
-                rows={5}
-                style={{ borderRadius: 12, border: "1px solid #d8dee8", padding: "12px 14px", fontSize: "0.9rem", fontFamily: "monospace", resize: "vertical" }}
-              />
             </label>
 
             <div style={{ display: "grid", gap: 6 }}>
@@ -461,17 +399,25 @@ export default function EvalsPage() {
                         <div style={{ marginTop: 6, color: "#526070", fontSize: "0.9rem" }}>{flowCase.description}</div>
                       ) : null}
                       <label style={{ display: "grid", gap: 6, marginTop: 12 }}>
-                        <span style={{ color: "#10233d", fontWeight: 600, fontSize: "0.9rem" }}>Response JSON schema override</span>
-                        <textarea
-                          value={caseSchemaTexts[flowCase.case_id] ?? ""}
-                          onChange={(event) =>
-                            setCaseSchemaTexts((current) => ({ ...current, [flowCase.case_id]: event.target.value }))
-                          }
-                          disabled={isLoading}
-                          rows={8}
-                          placeholder='{"type":"object","properties":{"intent":{"type":"string"}},"required":["intent"]}'
-                          style={{ borderRadius: 12, border: "1px solid #d8dee8", padding: "12px 14px", fontSize: "0.82rem", fontFamily: "monospace", resize: "vertical" }}
-                        />
+                        <span style={{ color: "#10233d", fontWeight: 600, fontSize: "0.9rem" }}>Defined response JSON schema</span>
+                        <pre
+                          style={{
+                            margin: 0,
+                            borderRadius: 12,
+                            border: "1px solid #d8dee8",
+                            padding: "12px 14px",
+                            fontSize: "0.82rem",
+                            fontFamily: "monospace",
+                            color: "#334155",
+                            background: "#f7f9fc",
+                            whiteSpace: "pre-wrap",
+                            wordBreak: "break-word",
+                          }}
+                        >
+                          {flowCase.response_json_schema
+                            ? JSON.stringify(flowCase.response_json_schema, null, 2)
+                            : "No schema defined for this case."}
+                        </pre>
                       </label>
                     </div>
                   ))}

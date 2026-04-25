@@ -237,10 +237,7 @@ class EvalRunIn(BaseModel):
     stream: bool = False
     temperature: float | None = None
     max_tokens: int | None = Field(default=None, ge=1)
-    top_p: float | None = None
     reasoning_effort: str | None = None
-    extra_body: dict[str, Any] = Field(default_factory=dict)
-    case_json_schemas: dict[str, dict[str, Any]] = Field(default_factory=dict)
 
 
 class PushNotificationsUpdateIn(BaseModel):

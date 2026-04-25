@@ -25,11 +25,8 @@ export type EvalRunResult = {
     stream?: boolean;
     temperature?: number | null;
     max_tokens?: number | null;
-    top_p?: number | null;
     reasoning_effort?: string | null;
-    extra_body?: Record<string, unknown>;
   };
-  case_json_schemas?: Record<string, Record<string, unknown>>;
   repetitions: number;
   discard_first_attempt: boolean;
   warmup?: {
@@ -52,6 +49,7 @@ export type EvalRunResult = {
     case_id: string;
     title: string;
     description?: string | null;
+    response_json_schema?: Record<string, unknown> | null;
     input: Record<string, unknown>;
     expected: Record<string, unknown>;
     metrics: {
@@ -85,11 +83,8 @@ export type EvalRunJob = {
     stream?: boolean;
     temperature?: number | null;
     max_tokens?: number | null;
-    top_p?: number | null;
     reasoning_effort?: string | null;
-    extra_body?: Record<string, unknown>;
   };
-  case_json_schemas?: Record<string, Record<string, unknown>>;
   repetitions: number;
   discard_first_attempt: boolean;
   created_at?: string | null;

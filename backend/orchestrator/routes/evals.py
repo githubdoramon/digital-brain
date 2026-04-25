@@ -48,11 +48,8 @@ def create_evals_router() -> APIRouter:
                     stream=payload.stream,
                     temperature=payload.temperature,
                     max_tokens=payload.max_tokens,
-                    top_p=payload.top_p,
                     reasoning_effort=payload.reasoning_effort,
-                    extra_body=payload.extra_body,
                 ),
-                case_json_schemas=payload.case_json_schemas,
             )
         except ValueError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc

@@ -20,9 +20,7 @@ class EvalLlmRequestOptions:
     stream: bool = False
     temperature: float | None = None
     max_tokens: int | None = None
-    top_p: float | None = None
     reasoning_effort: str | None = None
-    extra_body: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -31,7 +29,6 @@ class EvalRunConfig:
     user_email: str
     timeout_seconds: int
     request_options: EvalLlmRequestOptions = field(default_factory=EvalLlmRequestOptions)
-    case_json_schemas: dict[str, dict[str, Any]] = field(default_factory=dict)
 
 
 EvalExecutor = Callable[[EvalCase, EvalRunConfig], dict[str, Any] | Awaitable[dict[str, Any]]]

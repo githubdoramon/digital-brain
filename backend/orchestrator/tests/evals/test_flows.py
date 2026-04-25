@@ -29,7 +29,6 @@ def test_contact_resolution_eval_forwards_request_options(monkeypatch):
             temperature=0,
             max_tokens=96,
             reasoning_effort="none",
-            extra_body={"seed": 7},
         ),
     )
 
@@ -43,11 +42,9 @@ def test_contact_resolution_eval_forwards_request_options(monkeypatch):
         "stream": True,
         "temperature": 0,
         "max_tokens": 96,
-        "top_p": None,
         "reasoning_effort": "none",
         "response_format": {
             "type": "json_schema",
             "json_schema": {"type": "object", "properties": {"status": {"type": "string"}}},
         },
-        "extra_body": {"seed": 7},
     }

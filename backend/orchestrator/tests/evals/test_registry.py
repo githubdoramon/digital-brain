@@ -153,14 +153,22 @@ async def test_run_eval_flow_includes_request_options_and_case_schemas(monkeypat
         return {
             "stream": run_config.request_options.stream,
             "reasoning_effort": run_config.request_options.reasoning_effort,
-            "case_schema": run_config.case_json_schemas.get(case.case_id),
+            "case_schema": case.response_json_schema,
         }
 
     fake_flow = EvalFlowDefinition(
         flow_id="fake-request-options",
         label="Fake Request Options",
         description="Fake flow for tests",
-        cases=[EvalCase(case_id="case-1", title="Case 1", input={}, expected={})],
+        cases=[
+            EvalCase(
+                case_id="case-1",
+                title="Case 1",
+                input={},
+                expected={},
+                response_json_schema={"type": "object"},
+            )
+        ],
         execute_case=execute_case,
         score_case=lambda case, output: {"passed": True, "notes": []},
         summarize_output=lambda output: output,
@@ -179,13 +187,10 @@ async def test_run_eval_flow_includes_request_options_and_case_schemas(monkeypat
             temperature=0,
             max_tokens=96,
             reasoning_effort="none",
-            extra_body={"seed": 7},
         ),
-        case_json_schemas={"case-1": {"type": "object"}},
     )
 
     assert result["request_options"]["stream"] is True
     assert result["request_options"]["max_tokens"] == 96
     assert result["request_options"]["reasoning_effort"] == "none"
-    assert result["request_options"]["extra_body"] == {"seed": 7}
-    assert result["case_json_schemas"] == {"case-1": {"type": "object"}}
+    assert result["cases"][0]["response_json_schema"] == {"type": "object"}

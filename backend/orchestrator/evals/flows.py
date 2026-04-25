@@ -17,6 +17,69 @@ from tags_manager import _suggest_tags
 logger = get_runtime_logger(__name__)
 EVAL_LLM_TIMEOUT = int(os.getenv("EVAL_LLM_TIMEOUT", str(LLM_TIMEOUT)))
 
+ROUTER_RESPONSE_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "intent": {"type": "string"},
+        "confidence": {"type": "number"},
+        "constraints": {"type": "array", "items": {"type": "string"}},
+        "pre_resolve_contacts": {"type": "boolean"},
+        "reasoning": {"type": "string"},
+    },
+    "required": ["intent", "confidence", "constraints", "pre_resolve_contacts", "reasoning"],
+    "additionalProperties": True,
+}
+
+CONTACT_RESOLUTION_RESPONSE_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "status": {"type": "string"},
+        "people_mentioned": {"type": "array", "items": {"type": "string"}},
+        "selector_mentions": {"type": "array", "items": {"type": "object"}},
+        "resolved_contacts": {"type": "array", "items": {"type": "object"}},
+        "ambiguous_contacts": {"type": "array", "items": {"type": "object"}},
+        "new_contacts": {"type": "array", "items": {"type": "object"}},
+    },
+    "required": ["status"],
+    "additionalProperties": True,
+}
+
+EVENT_EXTRACTION_RESPONSE_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "title": {"type": ["string", "null"]},
+        "summary": {"type": ["string", "null"]},
+        "when": {"type": ["string", "null"]},
+        "end_when": {"type": ["string", "null"]},
+        "where": {"type": ["string", "null"]},
+        "tags": {"type": "array", "items": {"type": "string"}},
+        "types": {"type": "array", "items": {"type": "string"}},
+        "need_user_input": {"type": ["object", "null"]},
+    },
+    "required": ["title", "summary", "when", "end_when", "where", "tags", "types"],
+    "additionalProperties": True,
+}
+
+CONTACT_UPDATE_RESPONSE_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "contacts": {"type": "array", "items": {"type": "object"}},
+        "relationships": {"type": "array", "items": {"type": "object"}},
+        "need_user_input": {"type": ["object", "null"]},
+    },
+    "required": ["contacts", "relationships"],
+    "additionalProperties": True,
+}
+
+TAG_SUGGESTION_RESPONSE_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "tags": {"type": "array", "items": {"type": "string"}},
+    },
+    "required": ["tags"],
+    "additionalProperties": True,
+}
+
 
 def _json_safe(value: Any) -> Any:
     if isinstance(value, datetime):
@@ -58,7 +121,7 @@ def _normalize_relationship_value(value: Any) -> str:
 
 def _build_llm_request_options(case: EvalCase, run_config: EvalRunConfig) -> dict[str, Any]:
     request_options = run_config.request_options
-    response_json_schema = run_config.case_json_schemas.get(case.case_id) or case.response_json_schema
+    response_json_schema = case.response_json_schema
     response_format = None
     if response_json_schema:
         response_format = {
@@ -69,10 +132,8 @@ def _build_llm_request_options(case: EvalCase, run_config: EvalRunConfig) -> dic
         "stream": request_options.stream,
         "temperature": request_options.temperature,
         "max_tokens": request_options.max_tokens,
-        "top_p": request_options.top_p,
         "reasoning_effort": request_options.reasoning_effort,
         "response_format": response_format,
-        "extra_body": request_options.extra_body,
     }
 
 
@@ -454,68 +515,78 @@ def _summarize_tag_suggestion_output(output: dict[str, Any]) -> dict[str, Any]:
 EVAL_FLOWS: list[EvalFlowDefinition] = [
     EvalFlowDefinition(
         flow_id="router",
-        label="Router",
-        description="Runs live intent-routing prompts against the router classifier.",
+        label="Router (LLM Only)",
+        description="Runs live intent-routing prompts that should bypass rule-based classification and require LLM intent resolution.",
         cases=[
             EvalCase(
-                case_id="router-memory-search",
-                title="Memory search intent",
-                input={"question": "When did I last talk to John about the quarterly plan?"},
+                case_id="router-memory-search-notes",
+                title="Memory search from narrative notes request",
+                input={"question": "Pull up my notes about the time John and I reviewed the quarterly plan."},
                 expected={"intent": "memory_search", "pre_resolve_contacts": True},
+                response_json_schema=ROUTER_RESPONSE_SCHEMA,
             ),
             EvalCase(
-                case_id="router-memory-search-first-meeting",
-                title="Memory search earliest interaction",
-                input={"question": "When was the first time I met Robin?"},
+                case_id="router-memory-search-relationship-history",
+                title="Memory search relationship history",
+                input={"question": "Pull together the history of interactions I have had with Robin."},
                 expected={"intent": "memory_search", "pre_resolve_contacts": True},
-            ),
-            EvalCase(
-                case_id="router-web-search",
-                title="Web search intent",
-                input={"question": "Search the web for the latest Apple WWDC announcements"},
-                expected={"intent": "web_search", "pre_resolve_contacts": False},
+                response_json_schema=ROUTER_RESPONSE_SCHEMA,
             ),
             EvalCase(
                 case_id="router-web-search-llm",
                 title="Web search requiring LLM interpretation",
                 input={"question": "Can you check online whether Apple announced anything new at WWDC this week?"},
                 expected={"intent": "web_search", "pre_resolve_contacts": False},
+                response_json_schema=ROUTER_RESPONSE_SCHEMA,
             ),
             EvalCase(
-                case_id="router-data-query",
-                title="Data query intent",
-                input={"question": "How many todos did I complete this week?"},
+                case_id="router-data-query-finished-tasks",
+                title="Data query count without explicit count keywords",
+                input={"question": "Give me the number of todos I finished this week."},
                 expected={"intent": "data_query", "pre_resolve_contacts": False},
+                response_json_schema=ROUTER_RESPONSE_SCHEMA,
             ),
             EvalCase(
-                case_id="router-data-query-list",
-                title="Data query list intent",
-                input={"question": "List all meetings I had last month."},
+                case_id="router-data-query-roster",
+                title="Data query roster without list all shortcut",
+                input={"question": "Give me the roster of meetings I had last month."},
                 expected={"intent": "data_query", "pre_resolve_contacts": False},
+                response_json_schema=ROUTER_RESPONSE_SCHEMA,
             ),
             EvalCase(
-                case_id="router-contact-lookup",
-                title="Contact lookup intent",
-                input={"question": "Who is Sage and what is her relationship to Dana?"},
+                case_id="router-contact-lookup-profile",
+                title="Contact lookup profile without who-is rule",
+                input={"question": "Tell me more about Sage and how she connects to Dana."},
                 expected={"intent": "contact_lookup", "pre_resolve_contacts": True},
+                response_json_schema=ROUTER_RESPONSE_SCHEMA,
             ),
             EvalCase(
-                case_id="router-home-control",
-                title="Home control intent",
-                input={"question": "Turn off the living room lights and set the thermostat to 20 degrees."},
+                case_id="router-home-control-scene",
+                title="Home control without obvious trigger keywords",
+                input={"question": "Make the living room dark and cooler before the movie starts."},
                 expected={"intent": "home_control", "pre_resolve_contacts": False},
+                response_json_schema=ROUTER_RESPONSE_SCHEMA,
             ),
             EvalCase(
-                case_id="router-system-command",
-                title="System command intent",
-                input={"question": "Run this bash command and show me the output: ls -la"},
+                case_id="router-system-command-files",
+                title="System command from shell-style request",
+                input={"question": "Use ls -la to inspect the files in the current directory."},
                 expected={"intent": "system_command", "pre_resolve_contacts": False},
+                response_json_schema=ROUTER_RESPONSE_SCHEMA,
             ),
             EvalCase(
-                case_id="router-conversational",
-                title="Conversational intent",
-                input={"question": "Hey, what can you do for me?"},
+                case_id="router-conversational-guidance",
+                title="Conversational guidance without greeting shortcut",
+                input={"question": "I am not sure where to start with this assistant yet."},
                 expected={"intent": "conversational", "pre_resolve_contacts": False},
+                response_json_schema=ROUTER_RESPONSE_SCHEMA,
+            ),
+            EvalCase(
+                case_id="router-complex-mixed",
+                title="Complex mixed request",
+                input={"question": "Check what I discussed with John about hiring, then look online for current salary benchmarks in Aurora."},
+                expected={"intent": "complex", "pre_resolve_contacts": True},
+                response_json_schema=ROUTER_RESPONSE_SCHEMA,
             ),
         ],
         execute_case=_execute_router_case,
@@ -532,30 +603,35 @@ EVAL_FLOWS: list[EvalFlowDefinition] = [
                 title="No people mentioned",
                 input={"text": "Please summarize the weather forecast for tomorrow."},
                 expected={"status": "no_people"},
+                response_json_schema=CONTACT_RESOLUTION_RESPONSE_SCHEMA,
             ),
             EvalCase(
                 case_id="contact-resolution-single",
                 title="Single person mention",
                 input={"text": "Please remember that I met Alyssa Quillstone for coffee yesterday."},
                 expected={"status": "success", "people_mentioned": ["Alyssa Quillstone"]},
+                response_json_schema=CONTACT_RESOLUTION_RESPONSE_SCHEMA,
             ),
             EvalCase(
                 case_id="contact-resolution-multiple",
                 title="Multiple people mention",
                 input={"text": "I had lunch with Mateo Riverbend and Nora Vale today."},
                 expected={"status": "success", "people_mentioned": ["Mateo Riverbend", "Nora Vale"]},
+                response_json_schema=CONTACT_RESOLUTION_RESPONSE_SCHEMA,
             ),
             EvalCase(
                 case_id="contact-resolution-group-team",
                 title="Group selector from my team",
                 input={"text": "Please remind everyone from my soccer team about dinner on Friday."},
                 expected={"selector_values": ["soccer team"], "selector_kinds": ["group"]},
+                response_json_schema=CONTACT_RESOLUTION_RESPONSE_SCHEMA,
             ),
             EvalCase(
                 case_id="contact-resolution-group-design-team",
                 title="Named team selector",
                 input={"text": "I want to message my product design team about the new mockups."},
                 expected={"selector_values": ["product design team"], "selector_kinds": ["group"]},
+                response_json_schema=CONTACT_RESOLUTION_RESPONSE_SCHEMA,
             ),
         ],
         execute_case=_execute_contact_resolution_case,
@@ -579,6 +655,7 @@ EVAL_FLOWS: list[EvalFlowDefinition] = [
                     "types": ["meeting"],
                     "needs_clarification": False,
                 },
+                response_json_schema=EVENT_EXTRACTION_RESPONSE_SCHEMA,
             ),
             EvalCase(
                 case_id="event-extraction-health",
@@ -592,6 +669,7 @@ EVAL_FLOWS: list[EvalFlowDefinition] = [
                     "types": ["health"],
                     "needs_clarification": False,
                 },
+                response_json_schema=EVENT_EXTRACTION_RESPONSE_SCHEMA,
             ),
             EvalCase(
                 case_id="event-extraction-travel",
@@ -605,6 +683,7 @@ EVAL_FLOWS: list[EvalFlowDefinition] = [
                     "types": ["travel"],
                     "needs_clarification": False,
                 },
+                response_json_schema=EVENT_EXTRACTION_RESPONSE_SCHEMA,
             ),
             EvalCase(
                 case_id="event-extraction-celebration",
@@ -618,6 +697,7 @@ EVAL_FLOWS: list[EvalFlowDefinition] = [
                     "types": ["celebration"],
                     "needs_clarification": False,
                 },
+                response_json_schema=EVENT_EXTRACTION_RESPONSE_SCHEMA,
             ),
             EvalCase(
                 case_id="event-extraction-clarification",
@@ -628,6 +708,7 @@ EVAL_FLOWS: list[EvalFlowDefinition] = [
                 expected={
                     "needs_clarification": True,
                 },
+                response_json_schema=EVENT_EXTRACTION_RESPONSE_SCHEMA,
             ),
         ],
         execute_case=_execute_event_extraction_case,
@@ -661,6 +742,7 @@ EVAL_FLOWS: list[EvalFlowDefinition] = [
                     "types": ["meeting"],
                     "needs_clarification": False,
                 },
+                response_json_schema=EVENT_EXTRACTION_RESPONSE_SCHEMA,
             ),
             EvalCase(
                 case_id="event-update-end-time",
@@ -687,6 +769,7 @@ EVAL_FLOWS: list[EvalFlowDefinition] = [
                     "types": ["meeting"],
                     "needs_clarification": False,
                 },
+                response_json_schema=EVENT_EXTRACTION_RESPONSE_SCHEMA,
             ),
             EvalCase(
                 case_id="event-update-reclassification",
@@ -711,6 +794,7 @@ EVAL_FLOWS: list[EvalFlowDefinition] = [
                     "tags": ["Personal"],
                     "needs_clarification": False,
                 },
+                response_json_schema=EVENT_EXTRACTION_RESPONSE_SCHEMA,
             ),
         ],
         execute_case=_execute_event_extraction_case,
@@ -727,12 +811,14 @@ EVAL_FLOWS: list[EvalFlowDefinition] = [
                 title="Profession extraction",
                 input={"message": "Sage is a lawyer."},
                 expected={"contact_names": ["Sage"], "professions": {"Sage": "lawyer"}},
+                response_json_schema=CONTACT_UPDATE_RESPONSE_SCHEMA,
             ),
             EvalCase(
                 case_id="contact-update-relationship",
                 title="Relationship extraction",
                 input={"message": "Dana is married to Sage."},
                 expected={"contact_names": ["Dana", "Sage"], "relationship_types": ["spouse"]},
+                response_json_schema=CONTACT_UPDATE_RESPONSE_SCHEMA,
             ),
             EvalCase(
                 case_id="contact-update-description",
@@ -742,6 +828,7 @@ EVAL_FLOWS: list[EvalFlowDefinition] = [
                     "contact_names": ["Sage"],
                     "comments": {"Sage": "loves trail running and cooks amazing pasta"},
                 },
+                response_json_schema=CONTACT_UPDATE_RESPONSE_SCHEMA,
             ),
         ],
         execute_case=_execute_contact_update_case,
@@ -762,6 +849,7 @@ EVAL_FLOWS: list[EvalFlowDefinition] = [
                     "content": "Invoice for quarterly tax preparation and accounting fees from my CPA.",
                 },
                 expected={"required_tags": ["Finance"]},
+                response_json_schema=TAG_SUGGESTION_RESPONSE_SCHEMA,
             ),
             EvalCase(
                 case_id="tag-suggestion-health",
@@ -772,6 +860,7 @@ EVAL_FLOWS: list[EvalFlowDefinition] = [
                     "content": "Blood test results and follow-up notes from my doctor about cholesterol treatment.",
                 },
                 expected={"required_tags": ["Health"]},
+                response_json_schema=TAG_SUGGESTION_RESPONSE_SCHEMA,
             ),
             EvalCase(
                 case_id="tag-suggestion-event-work",
@@ -782,6 +871,7 @@ EVAL_FLOWS: list[EvalFlowDefinition] = [
                     "content": "Weekly engineering planning meeting with the product and backend teams to review milestones and unblock the release.",
                 },
                 expected={"required_tags": ["Work"]},
+                response_json_schema=TAG_SUGGESTION_RESPONSE_SCHEMA,
             ),
             EvalCase(
                 case_id="tag-suggestion-event-personal",
@@ -792,6 +882,7 @@ EVAL_FLOWS: list[EvalFlowDefinition] = [
                     "content": "Dinner with friends before a weekend concert downtown to celebrate my birthday.",
                 },
                 expected={"required_tags": ["Personal"]},
+                response_json_schema=TAG_SUGGESTION_RESPONSE_SCHEMA,
             ),
         ],
         execute_case=_execute_tag_suggestion_case,

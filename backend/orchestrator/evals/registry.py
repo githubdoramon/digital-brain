@@ -74,7 +74,6 @@ async def run_eval_flow(
     user_email: str,
     discard_first_attempt: bool = True,
     request_options: EvalLlmRequestOptions | None = None,
-    case_json_schemas: dict[str, dict[str, Any]] | None = None,
     progress_callback: Callable[[dict[str, Any]], Any | Awaitable[Any]] | None = None,
 ) -> dict[str, Any]:
     flow = get_eval_flow(flow_id)
@@ -84,17 +83,11 @@ async def run_eval_flow(
     normalized_repetitions = max(1, min(int(repetitions), 20))
     effective_discard_first_attempt = bool(discard_first_attempt and normalized_repetitions > 1)
     normalized_request_options = request_options or EvalLlmRequestOptions()
-    normalized_case_json_schemas = {
-        str(case_id): schema
-        for case_id, schema in (case_json_schemas or {}).items()
-        if str(case_id).strip() and isinstance(schema, dict)
-    }
     run_config = EvalRunConfig(
         llm_model=llm_model,
         user_email=user_email,
         timeout_seconds=EVAL_LLM_TIMEOUT,
         request_options=normalized_request_options,
-        case_json_schemas=normalized_case_json_schemas,
     )
     warmup: dict[str, Any] = {
         "attempted": False,
@@ -186,6 +179,7 @@ async def run_eval_flow(
                     "case_id": case.case_id,
                     "title": case.title,
                     "description": case.description,
+                    "response_json_schema": case.response_json_schema,
                     "input": case.input,
                     "expected": case.expected,
                     "metrics": {
@@ -230,11 +224,8 @@ async def run_eval_flow(
             "stream": normalized_request_options.stream,
             "temperature": normalized_request_options.temperature,
             "max_tokens": normalized_request_options.max_tokens,
-            "top_p": normalized_request_options.top_p,
             "reasoning_effort": normalized_request_options.reasoning_effort,
-            "extra_body": normalized_request_options.extra_body,
         },
-        "case_json_schemas": normalized_case_json_schemas,
         "repetitions": normalized_repetitions,
         "discard_first_attempt": effective_discard_first_attempt,
         "warmup": warmup,

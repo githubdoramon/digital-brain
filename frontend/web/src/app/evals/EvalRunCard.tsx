@@ -62,12 +62,6 @@ export function EvalRunCard({ run, runKey }: EvalRunCardProps) {
               {run.request_options.temperature != null ? ` - temp ${run.request_options.temperature}` : ""}
               {run.request_options.max_tokens != null ? ` - max ${run.request_options.max_tokens}` : ""}
               {run.request_options.reasoning_effort ? ` - reasoning ${run.request_options.reasoning_effort}` : ""}
-              {run.request_options.top_p != null ? ` - top_p ${run.request_options.top_p}` : ""}
-            </div>
-          ) : null}
-          {run.case_json_schemas && Object.keys(run.case_json_schemas).length > 0 ? (
-            <div style={{ color: "#526070", fontSize: "0.9rem" }}>
-              Case schemas enabled for {Object.keys(run.case_json_schemas).length} case(s)
             </div>
           ) : null}
           <div style={{ color: "#526070", fontSize: "0.9rem" }}>
@@ -132,7 +126,7 @@ export function EvalRunCard({ run, runKey }: EvalRunCardProps) {
                     {JSON.stringify(
                       {
                         request_options: run.request_options ?? {},
-                        case_json_schema: run.case_json_schemas?.[caseResult.case_id] ?? null,
+                        case_json_schema: caseResult.response_json_schema ?? null,
                       },
                       null,
                       2

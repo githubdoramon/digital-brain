@@ -36,7 +36,6 @@ async def test_create_eval_job_runs_in_background(monkeypatch):
         user_email="user@example.com",
         discard_first_attempt=True,
         request_options=None,
-        case_json_schemas=None,
     )
 
     assert job["status"] == "queued"
