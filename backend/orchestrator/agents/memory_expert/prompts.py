@@ -76,5 +76,5 @@ def get_memory_expert_protocol_prompt() -> str:
         "  * Use markdown tables only when the content is genuinely tabular and a table materially improves scanning.\n"
         "  * Every markdown table row MUST be on its own line, including the header row and the separator row. Never flatten a table into a single paragraph.\n"
         "  * If a table would be wide, dense, or fragile on mobile, prefer a short heading plus bullets instead of a table.\n"
-        "- If inspected events/documents materially support the answer, reference those findings explicitly; relevant inspected items may be surfaced as linked_items metadata for client deep links.\n"
+        "- If retrieved entities materially support the answer, reference those findings explicitly; the controller may surface relevant events, documents, contacts, or places as linked_items metadata for client deep links.\n"
     )

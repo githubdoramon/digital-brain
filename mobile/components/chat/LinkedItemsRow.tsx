@@ -2,8 +2,8 @@ import Ionicons from '@expo/vector-icons/Ionicons';
 import React from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 
-import type { LinkedItem } from '@/chat/linkedItems';
 import { AppPressable as Pressable } from '@/components/AppPressable';
+import { isLinkedItemNavigable, type LinkedItem } from '@/chat/linkedItems';
 import { theme } from '@/theme';
 
 type LinkedItemsRowProps = {
@@ -14,17 +14,21 @@ type LinkedItemsRowProps = {
 
 function iconForItem(item: LinkedItem): keyof typeof Ionicons.glyphMap {
   if (item.entity_type === 'event') return 'calendar-outline';
-  return 'document-text-outline';
+  if (item.entity_type === 'document') return 'document-text-outline';
+  if (item.entity_type === 'contact') return 'person-outline';
+  if (item.entity_type === 'place') return 'location-outline';
+  throw new Error(`Unsupported linked item type: ${item.entity_type}`);
 }
 
 export function LinkedItemsRow({ items, onPressItem, disabled = false }: LinkedItemsRowProps) {
-  if (!items.length) return null;
+  const navigableItems = items.filter(isLinkedItemNavigable);
+  if (!navigableItems.length) return null;
 
   return (
     <View style={styles.wrapper}>
       <Text style={styles.label}>Related items</Text>
       <View style={styles.row}>
-        {items.map((item) => (
+        {navigableItems.map((item) => (
           <Pressable
             key={`${item.entity_type}:${item.entity_id}`}
             onPress={() => onPressItem(item)}

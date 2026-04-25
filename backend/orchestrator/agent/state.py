@@ -332,6 +332,8 @@ class AgentState:
         query: str = "",
         source_tool: str = "",
         inspected: bool = False,
+        metadata: Optional[dict[str, Any]] = None,
+        role_hints: Optional[list[str]] = None,
     ) -> None:
         """Persist and update a high-signal candidate discovered during execution."""
         normalized_kind = str(kind or "").strip().lower() or "unknown"
@@ -342,6 +344,10 @@ class AgentState:
         normalized_label = str(label or "").strip()
         normalized_query = str(query or "").strip()
         normalized_source_tool = str(source_tool or "").strip()
+        normalized_metadata = dict(metadata) if isinstance(metadata, dict) else {}
+        normalized_role_hints = [
+            str(role).strip().lower() for role in (role_hints or []) if str(role).strip()
+        ]
 
         parsed_score: float | None = None
         if score is not None:
@@ -371,6 +377,32 @@ class AgentState:
                 current_best = existing.get("best_score")
                 if current_best is None or parsed_score > float(current_best):
                     existing["best_score"] = parsed_score
+            if normalized_role_hints:
+                merged_roles = list(existing.get("role_hints") or [])
+                for role in normalized_role_hints:
+                    if role not in merged_roles:
+                        merged_roles.append(role)
+                existing["role_hints"] = merged_roles
+            if normalized_metadata:
+                existing_metadata = existing.get("metadata")
+                merged_metadata = dict(existing_metadata) if isinstance(existing_metadata, dict) else {}
+                for key, value in normalized_metadata.items():
+                    if value is None:
+                        continue
+                    if key not in merged_metadata or merged_metadata.get(key) in (None, "", [], {}):
+                        merged_metadata[key] = value
+                        continue
+                    if isinstance(value, list) and isinstance(merged_metadata.get(key), list):
+                        merged_metadata[key] = list(
+                            dict.fromkeys(
+                                [
+                                    *merged_metadata.get(key, []),
+                                    *[item for item in value if item is not None],
+                                ]
+                            )
+                        )
+                if merged_metadata:
+                    existing["metadata"] = merged_metadata
             self._trim_information_candidates()
             return
 
@@ -386,6 +418,8 @@ class AgentState:
                 "last_seen_step": self.step_count,
                 "inspected": inspected,
                 "inspected_step": self.step_count if inspected else None,
+                "role_hints": normalized_role_hints,
+                "metadata": normalized_metadata,
             }
         )
         self._trim_information_candidates()
@@ -403,6 +437,26 @@ class AgentState:
             label=label,
             inspected=True,
         )
+
+    def get_information_candidate(
+        self,
+        kind: str,
+        candidate_id: str,
+    ) -> Optional[dict[str, Any]]:
+        """Return a remembered candidate by kind/id if present."""
+        normalized_kind = str(kind or "").strip().lower()
+        normalized_id = str(candidate_id or "").strip()
+        if not normalized_id:
+            return None
+        for candidate in self.information_candidates:
+            if not isinstance(candidate, dict):
+                continue
+            if (
+                str(candidate.get("kind") or "").strip().lower() == normalized_kind
+                and str(candidate.get("candidate_id") or "").strip() == normalized_id
+            ):
+                return candidate
+        return None
 
     def get_best_information_candidate(
         self,

@@ -358,6 +358,7 @@ class ToolExecutionCoordinator:
 
         if tool_name == "resolve_contacts":
             self.controller._update_contact_resolution_state(state, args, result)
+            self._track_resolved_contact_candidates(state, args, result)
         elif tool_name == "search_memories":
             self._track_information_candidates_from_search(state, args, result)
         elif tool_name == "get_document":
@@ -366,6 +367,12 @@ class ToolExecutionCoordinator:
             self._mark_event_candidates_inspected(state, result)
         elif tool_name == "lookup_contact":
             self._track_contact_candidates(state, result)
+        elif tool_name == "lookup_places":
+            self._track_place_candidates(state, result)
+        elif tool_name == "lookup_contact_places":
+            self._track_contact_place_candidates(state, result)
+        elif tool_name == "lookup_place_contacts":
+            self._track_place_contact_candidates(state, result)
 
         success = "error" not in result and result.get("success") is not False
         result_summary = self._summarize_result(result, success=success)
@@ -1245,7 +1252,7 @@ class ToolExecutionCoordinator:
             key=lambda item: self._safe_score(item.get("score")),
             reverse=True,
         )
-        for row in ranked_rows[:5]:
+        for rank, row in enumerate(ranked_rows[:5], start=1):
             candidate_id = str(row.get("id") or "").strip()
             if not candidate_id:
                 continue
@@ -1256,6 +1263,24 @@ class ToolExecutionCoordinator:
                 or self._truncate_text(row.get("snippet"), 80)
                 or candidate_id
             )
+            metadata = {
+                "rank": rank,
+                "search_query": query,
+                "title": str(row.get("title") or "").strip() or None,
+                "start_date": row.get("start_date"),
+                "end_date": row.get("end_date"),
+                "document_date": row.get("document_date"),
+                "snippet": row.get("snippet"),
+                "tags": row.get("tags") if isinstance(row.get("tags"), list) else [],
+                "types": row.get("types") if isinstance(row.get("types"), list) else [],
+            }
+            role_hints = ["evidence_anchor"]
+            if rank == 1:
+                role_hints.append("primary_answer_anchor")
+            if kind == "event":
+                place = row.get("place") if isinstance(row.get("place"), dict) else None
+                metadata["place_id"] = str((place or {}).get("place_id") or "").strip() or None
+                metadata["related_contact_ids"] = self._extract_related_contact_ids(row.get("people"))
             state.remember_information_candidate(
                 kind=kind,
                 candidate_id=candidate_id,
@@ -1263,6 +1288,34 @@ class ToolExecutionCoordinator:
                 score=row.get("score"),
                 query=query,
                 source_tool="search_memories",
+                metadata=metadata,
+                role_hints=role_hints,
+            )
+
+    def _track_resolved_contact_candidates(
+        self,
+        state: AgentState,
+        args: dict[str, Any],
+        result: dict[str, Any],
+    ) -> None:
+        query = str(args.get("text") or "").strip()
+        resolved_contacts = result.get("resolved_contacts", [])
+        if not isinstance(resolved_contacts, list):
+            return
+        for index, contact in enumerate(resolved_contacts[:5], start=1):
+            if not isinstance(contact, dict):
+                continue
+            self._remember_contact_candidate(
+                state,
+                contact,
+                query=query,
+                source_tool="resolve_contacts",
+                score=max(0.0, 1.0 - (index * 0.05)),
+                role_hints=["subject_entity", "context_anchor"],
+                metadata={
+                    "resolution_text": str(contact.get("original_text") or "").strip() or None,
+                    "aliases": contact.get("aliases") if isinstance(contact.get("aliases"), list) else [],
+                },
             )
 
     def _mark_document_candidate_inspected(
@@ -1284,10 +1337,20 @@ class ToolExecutionCoordinator:
             return
 
         label = str(document.get("title") or "").strip() or document_id
-        state.mark_information_candidate_inspected(
+        state.remember_information_candidate(
             kind="document",
             candidate_id=document_id,
             label=label,
+            inspected=True,
+            source_tool="get_document",
+            metadata={
+                "title": label,
+                "document_date": document.get("document_date"),
+                "file_name": document.get("file_name"),
+                "tags": document.get("tags") if isinstance(document.get("tags"), list) else [],
+                "snippet": document.get("snippet"),
+            },
+            role_hints=["evidence_anchor"],
         )
 
     def _mark_event_candidates_inspected(
@@ -1299,18 +1362,51 @@ class ToolExecutionCoordinator:
         events = result.get("events", [])
         if not isinstance(events, list):
             return
-        for event in events:
+        for index, event in enumerate(events, start=1):
             if not isinstance(event, dict):
                 continue
             event_id = str(event.get("id") or event.get("event_id") or "").strip()
             if not event_id:
                 continue
             title = str(event.get("title") or "").strip() or event_id
-            state.mark_information_candidate_inspected(
+            place = event.get("place") if isinstance(event.get("place"), dict) else None
+            state.remember_information_candidate(
                 kind="event",
                 candidate_id=event_id,
                 label=title,
+                inspected=True,
+                source_tool="get_events",
+                metadata={
+                    "title": title,
+                    "start_date": event.get("start_date"),
+                    "end_date": event.get("end_date"),
+                    "tags": event.get("tags") if isinstance(event.get("tags"), list) else [],
+                    "types": event.get("types") if isinstance(event.get("types"), list) else [],
+                    "place_id": str((place or {}).get("place_id") or "").strip() or None,
+                    "related_contact_ids": self._extract_related_contact_ids(event.get("people")),
+                },
+                role_hints=["evidence_anchor", *(["primary_answer_anchor"] if index == 1 else [])],
             )
+            if place:
+                self._remember_place_candidate(
+                    state,
+                    place,
+                    query="",
+                    source_tool="get_events",
+                    role_hints=["context_anchor"],
+                    metadata={"via_event_id": event_id},
+                )
+            for person in event.get("people") or []:
+                if not isinstance(person, dict):
+                    continue
+                self._remember_contact_candidate(
+                    state,
+                    person,
+                    query="",
+                    source_tool="get_events",
+                    role_hints=["context_anchor"],
+                    metadata={"via_event_id": event_id},
+                )
 
     def _track_contact_candidates(
         self,
@@ -1319,21 +1415,203 @@ class ToolExecutionCoordinator:
     ) -> None:
         """Track surfaced contacts from lookup contact style tools."""
         contacts = result.get("contacts", [])
+        if isinstance(contacts, list):
+            for index, contact in enumerate(contacts[:5], start=1):
+                if not isinstance(contact, dict):
+                    continue
+                self._remember_contact_candidate(
+                    state,
+                    contact,
+                    query=str(result.get("query") or "").strip(),
+                    source_tool="lookup_contact",
+                    score=max(0.0, 1.0 - (index * 0.05)),
+                    role_hints=["subject_entity", *(["primary_answer_anchor"] if index == 1 else [])],
+                )
+        primary_contact = result.get("primary_contact")
+        if isinstance(primary_contact, dict):
+            self._remember_contact_candidate(
+                state,
+                primary_contact,
+                query=str(result.get("query") or "").strip(),
+                source_tool="lookup_contact",
+                score=1.2,
+                role_hints=["subject_entity", "primary_answer_anchor"],
+            )
+
+    def _track_place_candidates(
+        self,
+        state: AgentState,
+        result: dict[str, Any],
+    ) -> None:
+        places = result.get("places", [])
+        if not isinstance(places, list):
+            return
+        query = str(result.get("query") or "").strip()
+        for index, place in enumerate(places[:5], start=1):
+            if not isinstance(place, dict):
+                continue
+            self._remember_place_candidate(
+                state,
+                place,
+                query=query,
+                source_tool="lookup_places",
+                score=max(0.0, 1.0 - (index * 0.05)),
+                role_hints=["context_anchor", *(["primary_answer_anchor"] if index == 1 else [])],
+            )
+
+    def _track_contact_place_candidates(
+        self,
+        state: AgentState,
+        result: dict[str, Any],
+    ) -> None:
+        contact = result.get("contact")
+        if isinstance(contact, dict):
+            self._remember_contact_candidate(
+                state,
+                contact,
+                query=str(result.get("contact_query") or "").strip(),
+                source_tool="lookup_contact_places",
+                role_hints=["subject_entity"],
+            )
+        suggested = result.get("suggested_place")
+        if isinstance(suggested, dict):
+            self._remember_place_candidate(
+                state,
+                suggested,
+                query=str(result.get("contact_query") or result.get("group_query") or "").strip(),
+                source_tool="lookup_contact_places",
+                score=1.1,
+                role_hints=["context_anchor", "primary_answer_anchor"],
+            )
+        places = result.get("contact_places", [])
+        if isinstance(places, list):
+            for index, place in enumerate(places[:5], start=1):
+                if not isinstance(place, dict):
+                    continue
+                self._remember_place_candidate(
+                    state,
+                    place,
+                    query=str(result.get("contact_query") or result.get("group_query") or "").strip(),
+                    source_tool="lookup_contact_places",
+                    score=max(0.0, 1.0 - (index * 0.05)),
+                    role_hints=["context_anchor", *(["primary_answer_anchor"] if index == 1 else [])],
+                )
+
+    def _track_place_contact_candidates(
+        self,
+        state: AgentState,
+        result: dict[str, Any],
+    ) -> None:
+        place = result.get("place")
+        if isinstance(place, dict):
+            self._remember_place_candidate(
+                state,
+                place,
+                query=str(result.get("place_query") or "").strip(),
+                source_tool="lookup_place_contacts",
+                score=1.1,
+                role_hints=["context_anchor", "primary_answer_anchor"],
+            )
+        contacts = result.get("contacts", [])
         if not isinstance(contacts, list):
             return
-        for contact in contacts[:5]:
+        for index, contact in enumerate(contacts[:5], start=1):
             if not isinstance(contact, dict):
                 continue
-            contact_id = str(contact.get("contact_id") or "").strip()
-            if not contact_id:
-                continue
-            label = str(contact.get("display_name") or "").strip() or contact_id
-            state.remember_information_candidate(
-                kind="contact",
-                candidate_id=contact_id,
-                label=label,
-                source_tool="lookup_contact",
+            self._remember_contact_candidate(
+                state,
+                contact,
+                query=str(result.get("place_query") or "").strip(),
+                source_tool="lookup_place_contacts",
+                score=max(0.0, 1.0 - (index * 0.05)),
+                role_hints=["subject_entity", *(["primary_answer_anchor"] if index == 1 else [])],
             )
+
+    def _remember_contact_candidate(
+        self,
+        state: AgentState,
+        contact: dict[str, Any],
+        *,
+        query: str,
+        source_tool: str,
+        score: Any = None,
+        role_hints: list[str] | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> None:
+        contact_id = self._extract_contact_candidate_id(contact)
+        if not contact_id:
+            return
+        label = self._extract_contact_label(contact, contact_id)
+        candidate_metadata = {
+            "display_name": str(contact.get("display_name") or contact.get("name") or "").strip() or None,
+            "aliases": contact.get("aliases") if isinstance(contact.get("aliases"), list) else [],
+            "emails": contact.get("emails") if isinstance(contact.get("emails"), list) else [],
+        }
+        if metadata:
+            candidate_metadata.update({k: v for k, v in metadata.items() if v is not None})
+        state.remember_information_candidate(
+            kind="contact",
+            candidate_id=contact_id,
+            label=label,
+            score=score,
+            query=query,
+            source_tool=source_tool,
+            metadata=candidate_metadata,
+            role_hints=role_hints,
+        )
+
+    def _remember_place_candidate(
+        self,
+        state: AgentState,
+        place: dict[str, Any],
+        *,
+        query: str,
+        source_tool: str,
+        score: Any = None,
+        role_hints: list[str] | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> None:
+        place_id = str(place.get("place_id") or "").strip()
+        if not place_id:
+            return
+        label = str(place.get("name") or place.get("label") or "").strip() or place_id
+        candidate_metadata = {
+            "name": str(place.get("name") or "").strip() or None,
+            "city": str(place.get("city") or "").strip() or None,
+            "country": str(place.get("country") or "").strip() or None,
+            "address": str(place.get("address") or "").strip() or None,
+            "roles": place.get("roles") if isinstance(place.get("roles"), list) else [],
+        }
+        if metadata:
+            candidate_metadata.update({k: v for k, v in metadata.items() if v is not None})
+        state.remember_information_candidate(
+            kind="place",
+            candidate_id=place_id,
+            label=label,
+            score=score,
+            query=query,
+            source_tool=source_tool,
+            metadata=candidate_metadata,
+            role_hints=role_hints,
+        )
+
+    def _extract_contact_candidate_id(self, contact: dict[str, Any]) -> str:
+        return str(contact.get("contact_id") or contact.get("id") or "").strip()
+
+    def _extract_contact_label(self, contact: dict[str, Any], fallback_id: str) -> str:
+        return str(contact.get("display_name") or contact.get("name") or "").strip() or fallback_id
+
+    def _extract_related_contact_ids(self, people: Any) -> list[str]:
+        if not isinstance(people, list):
+            return []
+        collected: list[str] = []
+        for person in people:
+            if not isinstance(person, dict):
+                continue
+            contact_id = self._extract_contact_candidate_id(person)
+            if contact_id:
+                collected.append(contact_id)
+        return list(dict.fromkeys(collected))
 
     def _infer_candidate_kind(self, row: dict[str, Any], candidate_id: str) -> str:
         kind = str(row.get("kind") or "").strip().lower()

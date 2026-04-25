@@ -35,6 +35,7 @@ from llm_config import get_fast_model
 from location_inference import infer_current_place
 from observability import trace
 from observability.logger import get_runtime_logger
+from search_normalization import normalize_search_text
 from tools.action_enums import GetEventsAction
 
 from .contact_resolution import should_pre_resolve_contacts
@@ -2072,7 +2073,7 @@ class AgentController:
             "search_results": self._latest_search_results(state),
             "events_results": self._collected_events_results(state),
             "document_results": self._collected_document_results(state),
-            "linked_items": self._build_linked_items(state),
+            "linked_items": self._build_linked_items(state, answer=""),
             "ui_directives": state.ui_directives,
             "limit_hit": violation.limit_type.value,
             "profile": self.runtime_profile.name,
@@ -2157,7 +2158,7 @@ class AgentController:
             "search_results": self._latest_search_results(state),
             "events_results": self._collected_events_results(state),
             "document_results": self._collected_document_results(state),
-            "linked_items": self._build_linked_items(state),
+            "linked_items": self._build_linked_items(state, answer=answer),
             "ui_directives": state.ui_directives,
             # Completion metadata (clawdbot-inspired)
             "_meta": {
@@ -2207,60 +2208,340 @@ class AgentController:
         cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
         return cleaned.strip()
 
-    def _build_linked_items(self, state: AgentState, max_items: int = 5) -> list[dict[str, Any]]:
-        """Build bounded, deterministic deep-link candidates from inspected tool results."""
-        items: list[dict[str, Any]] = []
-        seen: set[tuple[str, str]] = set()
+    def _build_linked_items(
+        self,
+        state: AgentState,
+        answer: str = "",
+        max_items: int = 5,
+    ) -> list[dict[str, Any]]:
+        """Build ranked deep links from answer-aligned entity candidates."""
+        candidates = self._build_linked_item_candidates(state, answer=answer)
+        if not candidates:
+            return []
 
-        for event in self._collected_events_results(state):
-            if not isinstance(event, dict):
-                continue
-            event_id = str(event.get("id") or event.get("event_id") or "").strip()
-            if not event_id:
-                continue
-            dedupe_key = ("event", event_id)
-            if dedupe_key in seen:
-                continue
-            seen.add(dedupe_key)
+        selected: list[dict[str, Any]] = []
+        selected_keys: set[tuple[str, str]] = set()
+        role_order = ["primary_answer_anchor", "subject_entity", "context_anchor", "evidence_anchor"]
 
-            title = str(event.get("title") or "").strip() or f"Event {event_id}"
-            subtitle = str(event.get("start_date") or event.get("end_date") or "").strip() or None
-            items.append(
-                {
-                    "entity_type": "event",
-                    "entity_id": event_id,
-                    "title": title,
-                    "subtitle": subtitle,
-                }
-            )
-            if len(items) >= max_items:
-                return items
+        for role in role_order:
+            role_candidates = [
+                candidate
+                for candidate in candidates
+                if candidate.get("selected_role") == role
+                and candidate.get("role_score", 0.0) >= 1.05
+                and (candidate["entity_type"], candidate["entity_id"]) not in selected_keys
+            ]
+            if not role_candidates:
+                continue
+            picked = role_candidates[0]
+            selected.append(self._linked_item_payload(picked))
+            selected_keys.add((picked["entity_type"], picked["entity_id"]))
+            if len(selected) >= max_items:
+                return selected
 
-        for document in self._collected_document_results(state):
-            if not isinstance(document, dict):
+        for candidate in candidates:
+            dedupe_key = (candidate["entity_type"], candidate["entity_id"])
+            if dedupe_key in selected_keys:
                 continue
-            document_id = str(document.get("document_id") or "").strip()
-            if not document_id:
+            if candidate.get("overall_score", 0.0) < 0.8 or candidate.get("support_score", 0.0) < 0.3:
                 continue
-            dedupe_key = ("document", document_id)
-            if dedupe_key in seen:
-                continue
-            seen.add(dedupe_key)
-
-            title = str(document.get("title") or "").strip() or f"Document {document_id}"
-            subtitle = str(document.get("file_name") or "").strip() or None
-            items.append(
-                {
-                    "entity_type": "document",
-                    "entity_id": document_id,
-                    "title": title,
-                    "subtitle": subtitle,
-                }
-            )
-            if len(items) >= max_items:
+            selected.append(self._linked_item_payload(candidate))
+            selected_keys.add(dedupe_key)
+            if len(selected) >= max_items:
                 break
 
-        return items
+        return selected
+
+    def _build_linked_item_candidates(
+        self,
+        state: AgentState,
+        *,
+        answer: str,
+    ) -> list[dict[str, Any]]:
+        question_text = str(state.goal or "").strip()
+        normalized_question = normalize_search_text(question_text)
+        normalized_answer = normalize_search_text(answer or "")
+        question_tokens = self._linked_item_tokens(normalized_question)
+        answer_tokens = self._linked_item_tokens(normalized_answer)
+        query_signals = self._linked_item_query_signals(normalized_question)
+        event_map = {
+            str(event.get("id") or event.get("event_id") or "").strip(): event
+            for event in self._collected_events_results(state)
+            if isinstance(event, dict) and str(event.get("id") or event.get("event_id") or "").strip()
+        }
+        document_map = {
+            str(document.get("document_id") or "").strip(): document
+            for document in self._collected_document_results(state)
+            if isinstance(document, dict) and str(document.get("document_id") or "").strip()
+        }
+
+        ranked: list[dict[str, Any]] = []
+        for candidate in state.information_candidates:
+            if not isinstance(candidate, dict):
+                continue
+            entity_type = str(candidate.get("kind") or "").strip().lower()
+            entity_id = str(candidate.get("candidate_id") or "").strip()
+            if entity_type not in {"event", "document", "contact", "place"} or not entity_id:
+                continue
+
+            payload = self._linked_item_entity_payload(
+                entity_type=entity_type,
+                entity_id=entity_id,
+                candidate=candidate,
+                event_map=event_map,
+                document_map=document_map,
+            )
+            if payload is None:
+                continue
+
+            scores, support_score = self._score_linked_item_candidate(
+                payload,
+                candidate,
+                normalized_question=normalized_question,
+                normalized_answer=normalized_answer,
+                question_tokens=question_tokens,
+                answer_tokens=answer_tokens,
+                query_signals=query_signals,
+            )
+            selected_role, role_score = max(scores.items(), key=lambda item: item[1])
+            ranked.append(
+                {
+                    **payload,
+                    "scores": scores,
+                    "selected_role": selected_role,
+                    "role_score": role_score,
+                    "overall_score": max(scores.values()),
+                    "candidate": candidate,
+                    "support_score": support_score,
+                }
+            )
+
+        ranked.sort(
+            key=lambda item: (
+                float(item.get("overall_score", 0.0) or 0.0),
+                float(item.get("role_score", 0.0) or 0.0),
+                float(item.get("support_score", 0.0) or 0.0),
+                1 if item.get("selected_role") == "primary_answer_anchor" else 0,
+                1 if item.get("inspected") else 0,
+                int(item.get("times_seen", 0) or 0),
+            ),
+            reverse=True,
+        )
+        return ranked
+
+    def _linked_item_entity_payload(
+        self,
+        *,
+        entity_type: str,
+        entity_id: str,
+        candidate: dict[str, Any],
+        event_map: dict[str, dict[str, Any]],
+        document_map: dict[str, dict[str, Any]],
+    ) -> dict[str, Any] | None:
+        metadata = candidate.get("metadata") if isinstance(candidate.get("metadata"), dict) else {}
+        label = str(candidate.get("label") or "").strip() or entity_id
+        base_payload: dict[str, Any] = {
+            "entity_type": entity_type,
+            "entity_id": entity_id,
+            "title": label,
+            "subtitle": None,
+            "inspected": bool(candidate.get("inspected")),
+            "times_seen": int(candidate.get("times_seen", 0) or 0),
+            "source_tool": str(candidate.get("last_source_tool") or "").strip(),
+            "role_hints": list(candidate.get("role_hints") or []),
+            "metadata": metadata,
+            "best_score": candidate.get("best_score"),
+        }
+
+        if entity_type == "event":
+            event = event_map.get(entity_id, {})
+            title = str(event.get("title") or label).strip() or label
+            subtitle = str(event.get("start_date") or event.get("end_date") or metadata.get("start_date") or "").strip() or None
+            searchable_parts = [title, subtitle or "", str(event.get("summary") or ""), " ".join(event.get("tags") or []), " ".join(event.get("types") or [])]
+            place = event.get("place") if isinstance(event.get("place"), dict) else None
+            if place:
+                searchable_parts.extend([str(place.get("name") or ""), str(place.get("city") or "")])
+            return {
+                **base_payload,
+                "title": title,
+                "subtitle": subtitle,
+                "searchable_text": " ".join(part for part in searchable_parts if part),
+            }
+
+        if entity_type == "document":
+            document = document_map.get(entity_id, {})
+            title = str(document.get("title") or label).strip() or label
+            subtitle = str(document.get("file_name") or metadata.get("file_name") or "").strip() or None
+            searchable_parts = [title, subtitle or "", str(document.get("snippet") or metadata.get("snippet") or "")]
+            searchable_parts.extend(document.get("tags") or metadata.get("tags") or [])
+            return {
+                **base_payload,
+                "title": title,
+                "subtitle": subtitle,
+                "searchable_text": " ".join(str(part) for part in searchable_parts if part),
+            }
+
+        if entity_type == "contact":
+            title = str(metadata.get("display_name") or label).strip() or label
+            subtitle = None
+            email_values = metadata.get("emails") if isinstance(metadata.get("emails"), list) else []
+            if email_values:
+                subtitle = str(email_values[0]).strip() or None
+            searchable_parts = [title, subtitle or ""]
+            searchable_parts.extend(metadata.get("aliases") if isinstance(metadata.get("aliases"), list) else [])
+            return {
+                **base_payload,
+                "title": title,
+                "subtitle": subtitle,
+                "searchable_text": " ".join(str(part) for part in searchable_parts if part),
+            }
+
+        if entity_type == "place":
+            title = str(metadata.get("name") or label).strip() or label
+            subtitle_parts = [
+                str(metadata.get("city") or "").strip(),
+                str(metadata.get("country") or "").strip(),
+            ]
+            subtitle = ", ".join(part for part in subtitle_parts if part) or None
+            searchable_parts = [title, subtitle or "", str(metadata.get("address") or "")]
+            searchable_parts.extend(metadata.get("roles") if isinstance(metadata.get("roles"), list) else [])
+            return {
+                **base_payload,
+                "title": title,
+                "subtitle": subtitle,
+                "searchable_text": " ".join(str(part) for part in searchable_parts if part),
+            }
+
+        return None
+
+    def _score_linked_item_candidate(
+        self,
+        payload: dict[str, Any],
+        candidate: dict[str, Any],
+        *,
+        normalized_question: str,
+        normalized_answer: str,
+        question_tokens: set[str],
+        answer_tokens: set[str],
+        query_signals: dict[str, bool],
+    ) -> tuple[dict[str, float], float]:
+        searchable_text = normalize_search_text(str(payload.get("searchable_text") or payload.get("title") or ""))
+        metadata = payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {}
+        label = normalize_search_text(str(payload.get("title") or ""))
+        role_hints = {str(role).strip().lower() for role in (payload.get("role_hints") or []) if str(role).strip()}
+        source_tool = str(payload.get("source_tool") or "").strip().lower()
+        inspected = bool(payload.get("inspected"))
+
+        overlap = self._linked_item_overlap_score(question_tokens, searchable_text)
+        answer_overlap = self._linked_item_overlap_score(answer_tokens, searchable_text)
+        label_in_question = 1.0 if label and label in normalized_question else 0.0
+        label_in_answer = 1.0 if label and label in normalized_answer else 0.0
+        query_match = 0.0
+        last_query = normalize_search_text(str(candidate.get("last_query") or ""))
+        if last_query:
+            if last_query == normalized_question:
+                query_match = 1.0
+            elif last_query in normalized_question or normalized_question in last_query:
+                query_match = 0.7
+
+        try:
+            best_score = max(0.0, float(payload.get("best_score"))) if payload.get("best_score") is not None else 0.0
+        except (TypeError, ValueError):
+            best_score = 0.0
+        retrieval_score = min(1.2, best_score)
+        inspection_score = 0.25 if inspected else 0.0
+        direct_lookup_score = 0.0
+        if source_tool in {"lookup_contact", "lookup_places", "lookup_contact_places", "lookup_place_contacts", "resolve_contacts"}:
+            direct_lookup_score = 0.2
+        elif source_tool in {"get_events", "get_document"}:
+            direct_lookup_score = 0.12
+
+        primary = overlap + (answer_overlap * 0.35) + (label_in_answer * 0.65) + query_match + retrieval_score + inspection_score + direct_lookup_score
+        subject = overlap + (label_in_question * 0.75) + (query_match * 0.8) + (0.6 if "subject_entity" in role_hints else 0.0) + (0.4 if source_tool in {"resolve_contacts", "lookup_contact", "lookup_place_contacts"} else 0.0)
+        context = (overlap * 0.8) + (label_in_question * 0.35) + (0.55 if "context_anchor" in role_hints else 0.0) + (0.3 if source_tool in {"lookup_places", "lookup_contact_places", "lookup_place_contacts"} else 0.0)
+        evidence = (overlap * 0.45) + (answer_overlap * 0.55) + (label_in_answer * 0.45) + (0.25 if "evidence_anchor" in role_hints else 0.0) + (0.25 if inspected else 0.0)
+
+        entity_type = str(payload.get("entity_type") or "")
+        if entity_type == "event":
+            if query_signals["temporal"] or query_signals["interaction"]:
+                primary += 0.55
+            if query_signals["where"]:
+                primary += 0.2
+            if metadata.get("place_id") and query_signals["where"]:
+                context += 0.15
+        elif entity_type == "document":
+            if query_signals["document_like"]:
+                primary += 0.55
+            if query_signals["what"]:
+                evidence += 0.15
+        elif entity_type == "contact":
+            if query_signals["who"] or query_signals["person_like"]:
+                primary += 0.35
+                subject += 0.45
+            if metadata.get("resolution_text"):
+                subject += 0.25
+        elif entity_type == "place":
+            if query_signals["where"] or query_signals["place_like"]:
+                primary += 0.45
+                context += 0.35
+
+        if label_in_answer:
+            primary += 0.35
+            subject += 0.15
+            context += 0.15
+        if label_in_question:
+            subject += 0.2
+            context += 0.1
+
+        support_score = max(overlap, answer_overlap, label_in_question, label_in_answer, query_match)
+        return ({
+            "primary_answer_anchor": round(primary, 4),
+            "subject_entity": round(subject, 4),
+            "context_anchor": round(context, 4),
+            "evidence_anchor": round(evidence, 4),
+        }, round(support_score, 4))
+
+    def _linked_item_payload(self, candidate: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "entity_type": candidate.get("entity_type"),
+            "entity_id": candidate.get("entity_id"),
+            "title": candidate.get("title"),
+            "subtitle": candidate.get("subtitle"),
+            "role": candidate.get("selected_role"),
+        }
+
+    def _linked_item_tokens(self, text: str) -> set[str]:
+        stop_words = {
+            "the", "and", "with", "from", "that", "this", "what", "when", "where", "which", "were", "have", "about", "into", "your", "their", "them", "they", "been", "last",
+        }
+        tokens: set[str] = set()
+        for token in str(text or "").replace("/", " ").replace("-", " ").split():
+            cleaned = "".join(ch for ch in token if ch.isalnum())
+            if len(cleaned) < 3 or cleaned in stop_words:
+                continue
+            tokens.add(cleaned)
+        return tokens
+
+    def _linked_item_overlap_score(self, tokens: set[str], searchable_text: str) -> float:
+        if not tokens or not searchable_text:
+            return 0.0
+        matched = sum(1 for token in tokens if token in searchable_text)
+        return min(1.25, matched * 0.28)
+
+    def _linked_item_query_signals(self, normalized_question: str) -> dict[str, bool]:
+        text = normalized_question or ""
+        tokens = set(text.split())
+        return {
+            "where": any(phrase in text for phrase in ["where ", "where did", "where was", "where is", "where are"]),
+            "when": any(phrase in text for phrase in ["when ", "when did", "when was", "when is"]),
+            "who": any(phrase in text for phrase in ["who ", "who did", "who is", "who was"]),
+            "what": any(phrase in text for phrase in ["what ", "what is", "what was", "which "]),
+            "temporal": bool({"last", "latest", "recent", "newest", "oldest", "first"} & tokens),
+            "interaction": bool({"meet", "met", "meeting", "talk", "talked", "spoke", "call", "called", "conversation", "visit", "visited"} & tokens),
+            "document_like": bool({"document", "documents", "doc", "report", "file", "files", "note", "notes", "lab", "result", "results"} & tokens),
+            "person_like": bool({"person", "people", "owner", "friend", "wife", "husband", "daughter", "son", "boss", "manager", "doctor"} & tokens),
+            "place_like": bool({"place", "home", "house", "office", "school", "address", "there", "here", "location"} & tokens),
+        }
 
     def _latest_search_results(self, state: AgentState) -> list[dict[str, Any]]:
         """Return the latest successful search_memories result rows."""

@@ -407,10 +407,11 @@ class UiDirectivesOut(BaseModel):
 
 
 class LinkedItemOut(BaseModel):
-    entity_type: Literal["event", "document"]
+    entity_type: Literal["event", "document", "contact", "place"]
     entity_id: str
     title: str
     subtitle: str | None = None
+    role: str | None = None
 
 
 class AskIn(BaseModel):

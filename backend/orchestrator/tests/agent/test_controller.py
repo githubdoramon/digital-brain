@@ -1426,3 +1426,158 @@ class TestClientContextNormalization:
 
         assert called["value"] is False
         assert "inferred_location" not in state.request_context
+
+
+class TestLinkedItemsSelection:
+    """Tests for role-based linked item ranking."""
+
+    def test_linked_items_cover_primary_subject_and_context_roles(self):
+        controller = _build_controller()
+        question = "Where did I last meet the owner of my daughter's school?"
+        state = AgentState(goal=question)
+
+        state.remember_information_candidate(
+            kind="contact",
+            candidate_id="contact:paula-costa",
+            label="Paula Costa",
+            query=question,
+            source_tool="resolve_contacts",
+            metadata={
+                "display_name": "Paula Costa",
+                "aliases": ["owner"],
+                "resolution_text": "owner",
+            },
+            role_hints=["subject_entity"],
+        )
+        state.remember_information_candidate(
+            kind="place",
+            candidate_id="place:little-explorers-school",
+            label="Little Explorers School",
+            query=question,
+            source_tool="lookup_places",
+            metadata={"name": "Little Explorers School", "city": "Aurora"},
+            role_hints=["context_anchor"],
+        )
+        state.record_tool_call(
+            ToolCallRecord(
+                tool_name="get_events",
+                arguments={"action": "by_ids", "event_ids": ["event:meet-owner"]},
+                result={
+                    "events": [
+                        {
+                            "id": "event:meet-owner",
+                            "title": "Coffee with Paula Costa",
+                            "start_date": "2026-04-20T10:00:00Z",
+                            "summary": "Met Paula Costa at Cafe Magnolia to discuss Little Explorers School.",
+                            "people": [{"contact_id": "contact:paula-costa", "display_name": "Paula Costa"}],
+                            "place": {"place_id": "place:cafe-magnolia", "name": "Cafe Magnolia", "city": "Aurora"},
+                            "tags": ["school"],
+                            "types": ["meeting"],
+                        }
+                    ],
+                    "count": 1,
+                },
+                duration_ms=15,
+                success=True,
+            )
+        )
+        state.remember_information_candidate(
+            kind="event",
+            candidate_id="event:meet-owner",
+            label="Coffee with Paula Costa",
+            score=1.25,
+            query=question,
+            source_tool="get_events",
+            inspected=True,
+            metadata={"start_date": "2026-04-20T10:00:00Z", "place_id": "place:cafe-magnolia"},
+            role_hints=["primary_answer_anchor", "evidence_anchor"],
+        )
+
+        linked_items = controller._build_linked_items(
+            state,
+            answer="You last met Paula Costa at Cafe Magnolia after a school meeting about Little Explorers School.",
+        )
+
+        assert linked_items[0]["entity_type"] == "event"
+        assert linked_items[0]["entity_id"] == "event:meet-owner"
+        assert any(
+            item["entity_type"] == "contact" and item["entity_id"] == "contact:paula-costa"
+            for item in linked_items
+        )
+        assert any(
+            item["entity_type"] == "place" and item["entity_id"] == "place:little-explorers-school"
+            for item in linked_items
+        )
+
+    def test_linked_items_exclude_irrelevant_inspected_documents(self):
+        controller = _build_controller()
+        question = "When did I last meet Gio?"
+        state = AgentState(goal=question)
+
+        state.record_tool_call(
+            ToolCallRecord(
+                tool_name="get_events",
+                arguments={"action": "by_ids", "event_ids": ["event:last-gio"]},
+                result={
+                    "events": [
+                        {
+                            "id": "event:last-gio",
+                            "title": "1:1 with Gio",
+                            "start_date": "2026-04-14T09:00:00Z",
+                            "summary": "Catch-up with Gio.",
+                            "people": [{"contact_id": "contact:gio", "display_name": "Gio"}],
+                            "tags": ["meeting"],
+                            "types": ["meeting"],
+                        }
+                    ],
+                    "count": 1,
+                },
+                duration_ms=12,
+                success=True,
+            )
+        )
+        state.remember_information_candidate(
+            kind="event",
+            candidate_id="event:last-gio",
+            label="1:1 with Gio",
+            score=1.1,
+            query=question,
+            source_tool="get_events",
+            inspected=True,
+            metadata={"start_date": "2026-04-14T09:00:00Z"},
+            role_hints=["primary_answer_anchor", "evidence_anchor"],
+        )
+        state.record_tool_call(
+            ToolCallRecord(
+                tool_name="get_document",
+                arguments={"document_id": "doc:annual-plan"},
+                result={
+                    "document": {
+                        "document_id": "doc:annual-plan",
+                        "title": "Annual Planning Notes",
+                        "file_name": "annual-plan.md",
+                        "snippet": "Planning notes for Q3.",
+                    }
+                },
+                duration_ms=9,
+                success=True,
+            )
+        )
+        state.remember_information_candidate(
+            kind="document",
+            candidate_id="doc:annual-plan",
+            label="Annual Planning Notes",
+            source_tool="get_document",
+            inspected=True,
+            metadata={"file_name": "annual-plan.md", "snippet": "Planning notes for Q3."},
+            role_hints=["evidence_anchor"],
+        )
+
+        linked_items = controller._build_linked_items(
+            state,
+            answer="You last met Gio on 2026-04-14 during your 1:1.",
+        )
+
+        assert linked_items[0]["entity_type"] == "event"
+        assert linked_items[0]["entity_id"] == "event:last-gio"
+        assert all(item["entity_type"] != "document" for item in linked_items)
