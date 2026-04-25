@@ -9,6 +9,48 @@ type EvalFlowsResponse = {
   flows: EvalFlowMeta[];
 };
 
+const PAYLOAD_PRESETS = [
+  {
+    id: "baseline",
+    label: "Baseline",
+    description: "Simple deterministic baseline with no extra reasoning controls.",
+    values: {
+      stream: false,
+      temperature: "0",
+      maxTokens: "128",
+      topP: "",
+      reasoningEffort: "",
+      extraBody: "",
+    },
+  },
+  {
+    id: "reasoning-none",
+    label: "Reasoning None",
+    description: "Fast controller-style payload with reasoning disabled via effort controls.",
+    values: {
+      stream: false,
+      temperature: "0",
+      maxTokens: "128",
+      topP: "",
+      reasoningEffort: "none",
+      extraBody: "",
+    },
+  },
+  {
+    id: "strict-schema",
+    label: "Strict Schema",
+    description: "Structured-output mode for models that behave best with per-case JSON schema.",
+    values: {
+      stream: false,
+      temperature: "0",
+      maxTokens: "128",
+      topP: "",
+      reasoningEffort: "",
+      extraBody: "",
+    },
+  },
+] as const;
+
 function formatPercent(value: number): string {
   return `${(value * 100).toFixed(1)}%`;
 }
@@ -18,6 +60,13 @@ export default function EvalsPage() {
   const [selectedFlowId, setSelectedFlowId] = useState("");
   const [llmModel, setLlmModel] = useState("");
   const [repetitions, setRepetitions] = useState("5");
+  const [stream, setStream] = useState(false);
+  const [temperature, setTemperature] = useState("0");
+  const [maxTokens, setMaxTokens] = useState("128");
+  const [topP, setTopP] = useState("");
+  const [reasoningEffort, setReasoningEffort] = useState("none");
+  const [extraBody, setExtraBody] = useState("");
+  const [caseSchemaTexts, setCaseSchemaTexts] = useState<Record<string, string>>({});
   const [runs, setRuns] = useState<Array<{ id: string; result: EvalRunResult }>>([]);
   const [activeJob, setActiveJob] = useState<EvalRunJob | null>(null);
   const [isLoading, setIsLoading] = useState(false);
@@ -93,23 +142,82 @@ export default function EvalsPage() {
     [flows, selectedFlowId]
   );
 
+  const effectivePayloadPreview = useMemo(() => {
+    let parsedExtraBody: Record<string, unknown> = {};
+    if (extraBody.trim()) {
+      try {
+        parsedExtraBody = JSON.parse(extraBody) as Record<string, unknown>;
+      } catch {
+        parsedExtraBody = { _invalid_json: true };
+      }
+    }
+    return {
+      stream,
+      temperature: temperature.trim() === "" ? undefined : Number(temperature),
+      max_tokens: maxTokens.trim() === "" ? undefined : Number(maxTokens),
+      top_p: topP.trim() === "" ? undefined : Number(topP),
+      reasoning_effort: reasoningEffort || undefined,
+      ...(Object.keys(parsedExtraBody).length > 0 ? parsedExtraBody : {}),
+    };
+  }, [extraBody, maxTokens, reasoningEffort, stream, temperature, topP]);
+
+  useEffect(() => {
+    if (!selectedFlow) return;
+    setCaseSchemaTexts(
+      Object.fromEntries(
+        selectedFlow.cases.map((flowCase) => [
+          flowCase.case_id,
+          flowCase.response_json_schema ? JSON.stringify(flowCase.response_json_schema, null, 2) : "",
+        ])
+      )
+    );
+  }, [selectedFlow]);
+
   async function handleRun() {
     if (!selectedFlowId) return;
     setIsLoading(true);
     setError(null);
     setActiveJob(null);
     try {
+      let parsedExtraBody: Record<string, unknown> = {};
+      if (extraBody.trim()) {
+        parsedExtraBody = JSON.parse(extraBody) as Record<string, unknown>;
+      }
+      const parsedCaseSchemas = Object.fromEntries(
+        Object.entries(caseSchemaTexts)
+          .map(([caseId, raw]) => [caseId, raw.trim()])
+          .filter(([, raw]) => raw.length > 0)
+          .map(([caseId, raw]) => [caseId, JSON.parse(raw) as Record<string, unknown>])
+      );
       const job = await api.post<EvalRunJob>("/evals/run", {
         flow_id: selectedFlowId,
         llm_model: llmModel.trim() || undefined,
         repetitions: Number(repetitions) || 5,
         discard_first_attempt: true,
+        stream,
+        temperature: temperature.trim() === "" ? undefined : Number(temperature),
+        max_tokens: maxTokens.trim() === "" ? undefined : Number(maxTokens),
+        top_p: topP.trim() === "" ? undefined : Number(topP),
+        reasoning_effort: reasoningEffort || undefined,
+        extra_body: parsedExtraBody,
+        case_json_schemas: parsedCaseSchemas,
       });
       setActiveJob(job);
     } catch (runError) {
       setError(runError instanceof Error ? runError.message : "Eval run failed");
       setIsLoading(false);
     }
+  }
+
+  function applyPreset(presetId: (typeof PAYLOAD_PRESETS)[number]["id"]) {
+    const preset = PAYLOAD_PRESETS.find((item) => item.id === presetId);
+    if (!preset) return;
+    setStream(preset.values.stream);
+    setTemperature(preset.values.temperature);
+    setMaxTokens(preset.values.maxTokens);
+    setTopP(preset.values.topP);
+    setReasoningEffort(preset.values.reasoningEffort);
+    setExtraBody(preset.values.extraBody);
   }
 
   return (
@@ -159,6 +267,33 @@ export default function EvalsPage() {
               </p>
             </div>
 
+            <div style={{ display: "grid", gap: 8 }}>
+              <div style={{ fontWeight: 600, color: "#10233d" }}>Presets</div>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+                {PAYLOAD_PRESETS.map((preset) => (
+                  <button
+                    key={preset.id}
+                    type="button"
+                    onClick={() => applyPreset(preset.id)}
+                    disabled={isLoading}
+                    style={{
+                      borderRadius: 999,
+                      border: "1px solid #d8dee8",
+                      background: "#f7f9fc",
+                      color: "#10233d",
+                      padding: "8px 12px",
+                      fontSize: "0.85rem",
+                      fontWeight: 600,
+                      cursor: isLoading ? "not-allowed" : "pointer",
+                    }}
+                    title={preset.description}
+                  >
+                    {preset.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
             <label style={{ display: "grid", gap: 6 }}>
               <span style={{ fontWeight: 600, color: "#10233d" }}>Flow</span>
               <select
@@ -201,6 +336,69 @@ export default function EvalsPage() {
                 ))}
               </select>
             </label>
+
+            <label style={{ display: "flex", gap: 10, alignItems: "center", color: "#10233d", fontWeight: 600 }}>
+              <input type="checkbox" checked={stream} onChange={(event) => setStream(event.target.checked)} disabled={isLoading} />
+              Stream response
+            </label>
+
+            <div style={{ display: "grid", gap: 12, gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))" }}>
+              <label style={{ display: "grid", gap: 6 }}>
+                <span style={{ fontWeight: 600, color: "#10233d" }}>Temperature</span>
+                <input value={temperature} onChange={(event) => setTemperature(event.target.value)} disabled={isLoading} style={{ borderRadius: 12, border: "1px solid #d8dee8", padding: "12px 14px", fontSize: "0.95rem" }} />
+              </label>
+              <label style={{ display: "grid", gap: 6 }}>
+                <span style={{ fontWeight: 600, color: "#10233d" }}>Max tokens</span>
+                <input value={maxTokens} onChange={(event) => setMaxTokens(event.target.value)} disabled={isLoading} style={{ borderRadius: 12, border: "1px solid #d8dee8", padding: "12px 14px", fontSize: "0.95rem" }} />
+              </label>
+              <label style={{ display: "grid", gap: 6 }}>
+                <span style={{ fontWeight: 600, color: "#10233d" }}>Top p</span>
+                <input value={topP} onChange={(event) => setTopP(event.target.value)} disabled={isLoading} placeholder="optional" style={{ borderRadius: 12, border: "1px solid #d8dee8", padding: "12px 14px", fontSize: "0.95rem" }} />
+              </label>
+            </div>
+
+            <label style={{ display: "grid", gap: 6 }}>
+              <span style={{ fontWeight: 600, color: "#10233d" }}>Reasoning effort</span>
+              <select value={reasoningEffort} onChange={(event) => setReasoningEffort(event.target.value)} disabled={isLoading} style={{ borderRadius: 12, border: "1px solid #d8dee8", padding: "12px 14px", fontSize: "0.95rem", background: "#fff" }}>
+                <option value="">Default</option>
+                <option value="none">none</option>
+                <option value="low">low</option>
+                <option value="medium">medium</option>
+                <option value="high">high</option>
+              </select>
+            </label>
+
+            <label style={{ display: "grid", gap: 6 }}>
+              <span style={{ fontWeight: 600, color: "#10233d" }}>Extra payload JSON</span>
+              <textarea
+                value={extraBody}
+                onChange={(event) => setExtraBody(event.target.value)}
+                disabled={isLoading}
+                placeholder='{"seed": 7}'
+                rows={5}
+                style={{ borderRadius: 12, border: "1px solid #d8dee8", padding: "12px 14px", fontSize: "0.9rem", fontFamily: "monospace", resize: "vertical" }}
+              />
+            </label>
+
+            <div style={{ display: "grid", gap: 6 }}>
+              <span style={{ fontWeight: 600, color: "#10233d" }}>Effective payload preview</span>
+              <pre
+                style={{
+                  margin: 0,
+                  borderRadius: 12,
+                  border: "1px solid #d8dee8",
+                  padding: "12px 14px",
+                  fontSize: "0.8rem",
+                  fontFamily: "monospace",
+                  color: "#334155",
+                  background: "#f7f9fc",
+                  whiteSpace: "pre-wrap",
+                  wordBreak: "break-word",
+                }}
+              >
+                {JSON.stringify(effectivePayloadPreview, null, 2)}
+              </pre>
+            </div>
 
             <button
               type="button"
@@ -262,6 +460,19 @@ export default function EvalsPage() {
                       {flowCase.description ? (
                         <div style={{ marginTop: 6, color: "#526070", fontSize: "0.9rem" }}>{flowCase.description}</div>
                       ) : null}
+                      <label style={{ display: "grid", gap: 6, marginTop: 12 }}>
+                        <span style={{ color: "#10233d", fontWeight: 600, fontSize: "0.9rem" }}>Response JSON schema override</span>
+                        <textarea
+                          value={caseSchemaTexts[flowCase.case_id] ?? ""}
+                          onChange={(event) =>
+                            setCaseSchemaTexts((current) => ({ ...current, [flowCase.case_id]: event.target.value }))
+                          }
+                          disabled={isLoading}
+                          rows={8}
+                          placeholder='{"type":"object","properties":{"intent":{"type":"string"}},"required":["intent"]}'
+                          style={{ borderRadius: 12, border: "1px solid #d8dee8", padding: "12px 14px", fontSize: "0.82rem", fontFamily: "monospace", resize: "vertical" }}
+                        />
+                      </label>
                     </div>
                   ))}
                 </div>

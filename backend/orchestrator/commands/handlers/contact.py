@@ -193,6 +193,7 @@ def _llm_extract_contact_changes(
     timeout: int | None = None,
     conversation_messages: list[dict[str, str]] | None = None,
     existing_extraction: dict[str, Any] | None = None,
+    llm_request_options: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     from llm_helpers import call_llm_json
     from prompts.context import get_self_context, get_user_facts_context
@@ -273,7 +274,12 @@ Relationship type rules:
 - Avoid generic labels like spouse/spouse or parent/child when the sentence gives enough information for a specific pair.
 - If the reciprocal side is unknown, use a reasonable generic Title Case reciprocal such as Child, Parent, Sibling, Spouse, or Partner.
 """
-    extracted = call_llm_json(prompt, timeout=timeout or 45, model=model)
+    extracted = call_llm_json(
+        prompt,
+        timeout=timeout or 45,
+        model=model,
+        **dict(llm_request_options or {}),
+    )
     extracted["need_user_input"] = normalize_need_user_input(extracted.get("need_user_input"))
     return extracted
 

@@ -7,6 +7,7 @@ from typing import Any
 from agents.contacts.resolver import (
     resolve_contacts_from_text,
     use_contact_resolution_model,
+    use_contact_resolution_request_options,
     use_contact_resolution_timeout,
 )
 from llm_helpers import LLMUnavailableError
@@ -71,12 +72,13 @@ def resolve_contacts_request(data: dict[str, Any]) -> dict[str, Any]:
     try:
         with use_contact_resolution_model(data.get("llm_model")):
             with use_contact_resolution_timeout(data.get("timeout")):
-                result = resolve_contacts_from_text(
-                    str(text),
-                    str(user_email),
-                    conversation_messages=data.get("conversation_messages"),
-                    mode=str(data.get("mode") or "full").strip().lower() or "full",
-                )
+                with use_contact_resolution_request_options(data.get("llm_request_options")):
+                    result = resolve_contacts_from_text(
+                        str(text),
+                        str(user_email),
+                        conversation_messages=data.get("conversation_messages"),
+                        mode=str(data.get("mode") or "full").strip().lower() or "full",
+                    )
 
         if not isinstance(result, dict):
             return {"status": "error", "message": "Invalid contact resolution response"}

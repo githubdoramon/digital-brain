@@ -35,10 +35,13 @@ async def test_create_eval_job_runs_in_background(monkeypatch):
         repetitions=2,
         user_email="user@example.com",
         discard_first_attempt=True,
+        request_options=None,
+        case_json_schemas=None,
     )
 
     assert job["status"] == "queued"
 
+    snapshot = None
     for _ in range(20):
         snapshot = await jobs.get_eval_job(job["job_id"])
         assert snapshot is not None
@@ -50,3 +53,4 @@ async def test_create_eval_job_runs_in_background(monkeypatch):
     assert snapshot["status"] == "completed"
     assert snapshot["result"] == {"summary": {"pass_rate": 1.0}, "cases": []}
     assert snapshot["progress"]["current_case_id"] == "case-1"
+    assert snapshot["request_options"]["stream"] is False

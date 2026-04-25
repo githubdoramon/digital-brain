@@ -8,7 +8,7 @@ from agent.router import IntentRouter
 from commands.handlers.contact import _llm_extract_contact_changes
 from commands.handlers.event import _extract_event_entities_with_llm
 from contact_resolution_service import resolve_contacts_request
-from evals.types import EvalCase, EvalFlowDefinition
+from evals.types import EvalCase, EvalFlowDefinition, EvalRunConfig
 from llm_helpers import LLM_TIMEOUT
 from observability.logger import get_runtime_logger
 from search_normalization import normalize_search_text
@@ -56,18 +56,38 @@ def _normalize_relationship_value(value: Any) -> str:
     return alias_map.get(normalized, normalized)
 
 
-async def _execute_router_case(case: EvalCase, llm_model: str | None, user_email: str) -> dict[str, Any]:
-    del user_email
+def _build_llm_request_options(case: EvalCase, run_config: EvalRunConfig) -> dict[str, Any]:
+    request_options = run_config.request_options
+    response_json_schema = run_config.case_json_schemas.get(case.case_id) or case.response_json_schema
+    response_format = None
+    if response_json_schema:
+        response_format = {
+            "type": "json_schema",
+            "json_schema": response_json_schema,
+        }
+    return {
+        "stream": request_options.stream,
+        "temperature": request_options.temperature,
+        "max_tokens": request_options.max_tokens,
+        "top_p": request_options.top_p,
+        "reasoning_effort": request_options.reasoning_effort,
+        "response_format": response_format,
+        "extra_body": request_options.extra_body,
+    }
+
+
+async def _execute_router_case(case: EvalCase, run_config: EvalRunConfig) -> dict[str, Any]:
     logger.info(
         "[evals.router] case=%s llm_model=%r timeout=%ss",
         case.case_id,
-        llm_model,
-        EVAL_LLM_TIMEOUT,
+        run_config.llm_model,
+        run_config.timeout_seconds,
     )
     router = IntentRouter(
-        llm_model=llm_model,
-        llm_timeout=EVAL_LLM_TIMEOUT,
+        llm_model=run_config.llm_model,
+        llm_timeout=run_config.timeout_seconds,
         enable_llm_routing=True,
+        llm_request_options=_build_llm_request_options(case, run_config),
     )
     logger.info(
         "[evals.router] case=%s router.llm_model=%r router.llm_timeout=%s",
@@ -112,24 +132,21 @@ def _summarize_router_output(output: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _execute_contact_resolution_case(
-    case: EvalCase,
-    llm_model: str | None,
-    user_email: str,
-) -> dict[str, Any]:
+def _execute_contact_resolution_case(case: EvalCase, run_config: EvalRunConfig) -> dict[str, Any]:
     logger.info(
         "[evals.contact_resolution] case=%s llm_model=%r timeout=%ss",
         case.case_id,
-        llm_model,
-        EVAL_LLM_TIMEOUT,
+        run_config.llm_model,
+        run_config.timeout_seconds,
     )
     return _json_safe(
         resolve_contacts_request(
             {
                 "text": str(case.input.get("text") or ""),
-                "user_email": user_email,
-                "llm_model": llm_model,
-                "timeout": EVAL_LLM_TIMEOUT,
+                "user_email": run_config.user_email,
+                "llm_model": run_config.llm_model,
+                "timeout": run_config.timeout_seconds,
+                "llm_request_options": _build_llm_request_options(case, run_config),
                 "mode": str(case.input.get("mode") or "full"),
             }
         )
@@ -198,18 +215,19 @@ def _summarize_contact_resolution_output(output: dict[str, Any]) -> dict[str, An
     }
 
 
-def _execute_event_extraction_case(case: EvalCase, llm_model: str | None, user_email: str) -> dict[str, Any]:
+def _execute_event_extraction_case(case: EvalCase, run_config: EvalRunConfig) -> dict[str, Any]:
     logger.info(
         "[evals.event_extraction] case=%s llm_model=%r timeout=%ss",
         case.case_id,
-        llm_model,
-        EVAL_LLM_TIMEOUT,
+        run_config.llm_model,
+        run_config.timeout_seconds,
     )
     result = _extract_event_entities_with_llm(
         str(case.input.get("message") or ""),
-        {"user_email": user_email},
-        model=llm_model,
-        timeout=EVAL_LLM_TIMEOUT,
+        {"user_email": run_config.user_email},
+        model=run_config.llm_model,
+        timeout=run_config.timeout_seconds,
+        llm_request_options=_build_llm_request_options(case, run_config),
     )
     return _json_safe(result)
 
@@ -261,18 +279,19 @@ def _summarize_event_extraction_output(output: dict[str, Any]) -> dict[str, Any]
     }
 
 
-def _execute_contact_update_case(case: EvalCase, llm_model: str | None, user_email: str) -> dict[str, Any]:
+def _execute_contact_update_case(case: EvalCase, run_config: EvalRunConfig) -> dict[str, Any]:
     logger.info(
         "[evals.contact_update] case=%s llm_model=%r timeout=%ss",
         case.case_id,
-        llm_model,
-        EVAL_LLM_TIMEOUT,
+        run_config.llm_model,
+        run_config.timeout_seconds,
     )
     result = _llm_extract_contact_changes(
         str(case.input.get("message") or ""),
-        user_email=user_email,
-        model=llm_model,
-        timeout=EVAL_LLM_TIMEOUT,
+        user_email=run_config.user_email,
+        model=run_config.llm_model,
+        timeout=run_config.timeout_seconds,
+        llm_request_options=_build_llm_request_options(case, run_config),
     )
     return _json_safe(result)
 
@@ -365,13 +384,12 @@ def _summarize_contact_update_output(output: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _execute_tag_suggestion_case(case: EvalCase, llm_model: str | None, user_email: str) -> dict[str, Any]:
-    del user_email
+def _execute_tag_suggestion_case(case: EvalCase, run_config: EvalRunConfig) -> dict[str, Any]:
     logger.info(
         "[evals.tag_suggestion] case=%s llm_model=%r timeout=%ss",
         case.case_id,
-        llm_model,
-        EVAL_LLM_TIMEOUT,
+        run_config.llm_model,
+        run_config.timeout_seconds,
     )
     subject = str(case.input.get("subject") or "document")
     normalized_subject: Literal["document", "event"] = (
@@ -382,8 +400,9 @@ def _execute_tag_suggestion_case(case: EvalCase, llm_model: str | None, user_ema
             str(case.input.get("content") or ""),
             case.input.get("existing_tags") or [],
             normalized_subject,
-            model=llm_model,
-            timeout=EVAL_LLM_TIMEOUT,
+            model=run_config.llm_model,
+            timeout=run_config.timeout_seconds,
+            llm_request_options=_build_llm_request_options(case, run_config),
         )
     }
 

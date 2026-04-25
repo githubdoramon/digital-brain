@@ -56,6 +56,20 @@ export function EvalRunCard({ run, runKey }: EvalRunCardProps) {
               Keep-alive {String(run.keep_alive)} for requested model
             </div>
           ) : null}
+          {run.request_options ? (
+            <div style={{ color: "#526070", fontSize: "0.9rem" }}>
+              Payload tweaks: stream {run.request_options.stream ? "on" : "off"}
+              {run.request_options.temperature != null ? ` - temp ${run.request_options.temperature}` : ""}
+              {run.request_options.max_tokens != null ? ` - max ${run.request_options.max_tokens}` : ""}
+              {run.request_options.reasoning_effort ? ` - reasoning ${run.request_options.reasoning_effort}` : ""}
+              {run.request_options.top_p != null ? ` - top_p ${run.request_options.top_p}` : ""}
+            </div>
+          ) : null}
+          {run.case_json_schemas && Object.keys(run.case_json_schemas).length > 0 ? (
+            <div style={{ color: "#526070", fontSize: "0.9rem" }}>
+              Case schemas enabled for {Object.keys(run.case_json_schemas).length} case(s)
+            </div>
+          ) : null}
           <div style={{ color: "#526070", fontSize: "0.9rem" }}>
             {run.discard_first_attempt
               ? `Discarded first attempt per case (${run.summary.discarded_attempts} total)`
@@ -110,6 +124,19 @@ export function EvalRunCard({ run, runKey }: EvalRunCardProps) {
                   <div style={{ fontWeight: 600, marginBottom: 8, color: "#10233d" }}>Expected</div>
                   <pre style={{ margin: 0, whiteSpace: "pre-wrap", wordBreak: "break-word", fontSize: "0.82rem", color: "#334155" }}>
                     {JSON.stringify(caseResult.expected, null, 2)}
+                  </pre>
+                </div>
+                <div style={{ background: "#f7f9fc", borderRadius: 12, padding: 12 }}>
+                  <div style={{ fontWeight: 600, marginBottom: 8, color: "#10233d" }}>Effective payload</div>
+                  <pre style={{ margin: 0, whiteSpace: "pre-wrap", wordBreak: "break-word", fontSize: "0.82rem", color: "#334155" }}>
+                    {JSON.stringify(
+                      {
+                        request_options: run.request_options ?? {},
+                        case_json_schema: run.case_json_schemas?.[caseResult.case_id] ?? null,
+                      },
+                      null,
+                      2
+                    )}
                   </pre>
                 </div>
               </div>

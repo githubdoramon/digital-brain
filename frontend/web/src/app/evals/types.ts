@@ -7,6 +7,7 @@ export type EvalFlowMeta = {
     case_id: string;
     title: string;
     description?: string | null;
+    response_json_schema?: Record<string, unknown> | null;
   }>;
 };
 
@@ -20,6 +21,15 @@ export type EvalRunResult = {
   llm_model?: string | null;
   timeout_seconds?: number | null;
   keep_alive?: string | number | null;
+  request_options?: {
+    stream?: boolean;
+    temperature?: number | null;
+    max_tokens?: number | null;
+    top_p?: number | null;
+    reasoning_effort?: string | null;
+    extra_body?: Record<string, unknown>;
+  };
+  case_json_schemas?: Record<string, Record<string, unknown>>;
   repetitions: number;
   discard_first_attempt: boolean;
   warmup?: {
@@ -71,6 +81,15 @@ export type EvalRunJob = {
   flow_id: string;
   flow_label?: string | null;
   llm_model?: string | null;
+  request_options?: {
+    stream?: boolean;
+    temperature?: number | null;
+    max_tokens?: number | null;
+    top_p?: number | null;
+    reasoning_effort?: string | null;
+    extra_body?: Record<string, unknown>;
+  };
+  case_json_schemas?: Record<string, Record<string, unknown>>;
   repetitions: number;
   discard_first_attempt: boolean;
   created_at?: string | null;

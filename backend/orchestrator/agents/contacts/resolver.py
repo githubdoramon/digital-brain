@@ -152,6 +152,9 @@ _CONTACT_RESOLUTION_MODEL_OVERRIDE: ContextVar[str | None] = ContextVar(
 _CONTACT_RESOLUTION_TIMEOUT_OVERRIDE: ContextVar[int | None] = ContextVar(
     "contact_resolution_timeout_override", default=None
 )
+_CONTACT_RESOLUTION_REQUEST_OPTIONS_OVERRIDE: ContextVar[dict[str, Any] | None] = ContextVar(
+    "contact_resolution_request_options_override", default=None
+)
 
 
 @contextmanager
@@ -174,13 +177,26 @@ def use_contact_resolution_timeout(timeout_seconds: int | None):
         _CONTACT_RESOLUTION_TIMEOUT_OVERRIDE.reset(token)
 
 
+@contextmanager
+def use_contact_resolution_request_options(options: dict[str, Any] | None):
+    normalized = dict(options or {}) or None
+    token = _CONTACT_RESOLUTION_REQUEST_OPTIONS_OVERRIDE.set(normalized)
+    try:
+        yield
+    finally:
+        _CONTACT_RESOLUTION_REQUEST_OPTIONS_OVERRIDE.reset(token)
+
+
 def _call_contact_resolution_llm_json(prompt: str, **kwargs: Any) -> dict[str, Any]:
     model_override = _CONTACT_RESOLUTION_MODEL_OVERRIDE.get()
     timeout_override = _CONTACT_RESOLUTION_TIMEOUT_OVERRIDE.get()
+    request_options_override = _CONTACT_RESOLUTION_REQUEST_OPTIONS_OVERRIDE.get()
     if model_override and "model" not in kwargs:
         kwargs["model"] = model_override
     if timeout_override:
         kwargs["timeout"] = timeout_override
+    if request_options_override:
+        kwargs.update({key: value for key, value in request_options_override.items() if key not in kwargs})
     if model_override:
         logger.debug(
             "[contact_resolver] Using model override for LLM call: %s",

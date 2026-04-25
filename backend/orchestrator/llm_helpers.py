@@ -119,6 +119,9 @@ def build_chat_payload(
     max_tokens: Optional[int] = None,
     temperature: Optional[float] = None,
     top_p: Optional[float] = None,
+    reasoning_effort: Optional[str] = None,
+    response_format: Optional[dict[str, Any]] = None,
+    extra_body: Optional[dict[str, Any]] = None,
     tools: Optional[list[dict[str, Any]]] = None,
     tool_choice: Optional[str | dict[str, Any]] = None,
 ) -> dict[str, Any]:
@@ -138,10 +141,21 @@ def build_chat_payload(
     if top_p is not None:
         payload["top_p"] = top_p
 
+    normalized_reasoning_effort = str(reasoning_effort or "").strip().lower()
+    if normalized_reasoning_effort:
+        payload["reasoning_effort"] = normalized_reasoning_effort
+        payload["reasoning"] = {"effort": normalized_reasoning_effort}
+
+    if response_format:
+        payload["response_format"] = response_format
+
     if tools:
         payload["tools"] = tools
         if tool_choice is not None:
             payload["tool_choice"] = tool_choice
+
+    if extra_body:
+        payload.update(extra_body)
 
     _maybe_attach_keep_alive(payload)
 
@@ -377,6 +391,105 @@ def _post_chat_completion(
     raise last_exception
 
 
+def _post_chat_completion_stream(
+    payload: dict[str, Any],
+    *,
+    timeout: Optional[int] = None,
+) -> dict[str, Any]:
+    base_url = _get_required_setting("LLM_BASE_URL", LLM_BASE_URL)
+    resolved_timeout = timeout or LLM_TIMEOUT
+    request_url = f"{base_url}/chat/completions"
+    accumulated_content = ""
+    accumulated_reasoning = ""
+    accumulated_tool_calls: dict[int, dict[str, Any]] = {}
+
+    logger.info(
+        "[llm_helpers] LLM outbound request (stream): %s",
+        json.dumps(
+            {
+                "url": request_url,
+                "method": "POST",
+                "timeout_seconds": resolved_timeout,
+                "headers": {
+                    "content-type": "application/json",
+                    "authorization_present": bool(get_llm_headers().get("Authorization")),
+                },
+                "payload": payload,
+            },
+            ensure_ascii=False,
+            default=str,
+        ),
+    )
+
+    response = requests.post(
+        request_url,
+        headers=get_llm_headers(),
+        json=payload,
+        timeout=resolved_timeout,
+        stream=True,
+    )
+    response.raise_for_status()
+
+    for raw_line in response.iter_lines(decode_unicode=True):
+        line = str(raw_line or "").strip()
+        if not line or line == "data: [DONE]":
+            continue
+        if line.startswith("data: "):
+            line = line[6:]
+        try:
+            chunk = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+
+        delta = chunk.get("choices", [{}])[0].get("delta", {})
+        accumulated_content += str(delta.get("content", "") or "")
+
+        reasoning_delta = delta.get("reasoning") or delta.get("reasoning_content")
+        if isinstance(reasoning_delta, list):
+            for item in reasoning_delta:
+                if isinstance(item, dict):
+                    accumulated_reasoning += str(item.get("text") or item.get("content") or "")
+        elif reasoning_delta:
+            accumulated_reasoning += str(reasoning_delta)
+
+        for tool_call in delta.get("tool_calls") or []:
+            if not isinstance(tool_call, dict):
+                continue
+            idx = int(tool_call.get("index", 0) or 0)
+            bucket = accumulated_tool_calls.setdefault(
+                idx,
+                {
+                    "id": tool_call.get("id", ""),
+                    "type": "function",
+                    "function": {"name": "", "arguments": ""},
+                },
+            )
+            if tool_call.get("id"):
+                bucket["id"] = tool_call["id"]
+            function = tool_call.get("function") or {}
+            if function.get("name"):
+                bucket["function"]["name"] = function["name"]
+            if function.get("arguments"):
+                bucket["function"]["arguments"] += str(function.get("arguments") or "")
+
+    content = {
+        "choices": [
+            {
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": accumulated_content,
+                    **({"reasoning": accumulated_reasoning} if accumulated_reasoning else {}),
+                    **({"tool_calls": list(accumulated_tool_calls.values())} if accumulated_tool_calls else {}),
+                },
+                "finish_reason": "tool_calls" if accumulated_tool_calls else "stop",
+            }
+        ]
+    }
+    logger.info("[llm_helpers] LLM response (stream final sync): %s", json.dumps(content, ensure_ascii=False))
+    return content
+
+
 def _build_messages(prompt: str, system_prompt: Optional[str] = None) -> list[dict[str, str]]:
     messages: list[dict[str, str]] = []
     if system_prompt:
@@ -391,9 +504,13 @@ def _call_llm_raw(
     model: Optional[str] = None,
     use_fast_model: Optional[bool] = None,
     timeout: Optional[int] = None,
+    stream: bool = False,
     max_tokens: Optional[int] = None,
     temperature: Optional[float] = None,
     top_p: Optional[float] = None,
+    reasoning_effort: Optional[str] = None,
+    response_format: Optional[dict[str, Any]] = None,
+    extra_body: Optional[dict[str, Any]] = None,
     tools: Optional[list[dict[str, Any]]] = None,
     tool_choice: Optional[str | dict[str, Any]] = None,
 ) -> dict[str, Any]:
@@ -401,10 +518,13 @@ def _call_llm_raw(
         messages,
         model=model,
         use_fast_model=use_fast_model,
-        stream=False,
+        stream=stream,
         max_tokens=max_tokens,
         temperature=temperature,
         top_p=top_p,
+        reasoning_effort=reasoning_effort,
+        response_format=response_format,
+        extra_body=extra_body,
         tools=tools,
         tool_choice=tool_choice,
     )
@@ -412,14 +532,18 @@ def _call_llm_raw(
     logger.info(
         "[llm_helpers] LLM request model=%s stream=%s timeout=%s",
         payload.get("model"),
-        False,
+        stream,
         timeout,
     )
     logger.info("[llm_helpers] LLM input: %s", json.dumps(messages, ensure_ascii=False))
     logger.info("[llm_helpers] LLM available tools: %s", json.dumps(tools, ensure_ascii=False))
     logger.info("[llm_helpers] LLM tool choice: %s", json.dumps(tool_choice, ensure_ascii=False))
 
-    content = _post_chat_completion(payload, timeout=timeout)
+    content = (
+        _post_chat_completion_stream(payload, timeout=timeout)
+        if stream
+        else _post_chat_completion(payload, timeout=timeout)
+    )
 
     logger.info("[llm_helpers] LLM response: %s", json.dumps(content, ensure_ascii=False))
 
@@ -434,12 +558,26 @@ def call_llm_chat(
     model: Optional[str] = None,
     use_fast_model: Optional[bool] = None,
     timeout: Optional[int] = None,
+    stream: bool = False,
+    max_tokens: Optional[int] = None,
+    temperature: Optional[float] = None,
+    top_p: Optional[float] = None,
+    reasoning_effort: Optional[str] = None,
+    response_format: Optional[dict[str, Any]] = None,
+    extra_body: Optional[dict[str, Any]] = None,
 ) -> dict[str, Any]:
     data = _call_llm_raw(
         messages,
         model=model,
         use_fast_model=use_fast_model,
         timeout=timeout,
+        stream=stream,
+        max_tokens=max_tokens,
+        temperature=temperature,
+        top_p=top_p,
+        reasoning_effort=reasoning_effort,
+        response_format=response_format,
+        extra_body=extra_body,
         tools=tools,
         tool_choice=tool_choice,
     )
@@ -455,6 +593,12 @@ async def stream_llm_chat(
     model: Optional[str] = None,
     use_fast_model: Optional[bool] = None,
     timeout: Optional[int] = None,
+    max_tokens: Optional[int] = None,
+    temperature: Optional[float] = None,
+    top_p: Optional[float] = None,
+    reasoning_effort: Optional[str] = None,
+    response_format: Optional[dict[str, Any]] = None,
+    extra_body: Optional[dict[str, Any]] = None,
 ) -> AsyncGenerator[str, None]:
     base_url = _get_required_setting("LLM_BASE_URL", LLM_BASE_URL)
     payload = build_chat_payload(
@@ -462,6 +606,12 @@ async def stream_llm_chat(
         model=model,
         use_fast_model=use_fast_model,
         stream=True,
+        max_tokens=max_tokens,
+        temperature=temperature,
+        top_p=top_p,
+        reasoning_effort=reasoning_effort,
+        response_format=response_format,
+        extra_body=extra_body,
         tools=tools,
         tool_choice=tool_choice,
     )
@@ -538,9 +688,13 @@ def call_llm(
     model: Optional[str] = None,
     use_fast_model: Optional[bool] = None,
     timeout: Optional[int] = None,
+    stream: bool = False,
     max_tokens: Optional[int] = None,
     temperature: Optional[float] = None,
     top_p: Optional[float] = None,
+    reasoning_effort: Optional[str] = None,
+    response_format: Optional[dict[str, Any]] = None,
+    extra_body: Optional[dict[str, Any]] = None,
 ) -> str:
     """
     Make a synchronous chat request to the LLM.
@@ -568,9 +722,13 @@ def call_llm(
         model=model,
         use_fast_model=use_fast_model,
         timeout=timeout,
+        stream=stream,
         max_tokens=max_tokens,
         temperature=temperature,
         top_p=top_p,
+        reasoning_effort=reasoning_effort,
+        response_format=response_format,
+        extra_body=extra_body,
     )
     content = data.get("choices", [{}])[0].get("message", {}).get("content", "")
 
@@ -598,9 +756,13 @@ def call_llm_json(
     model: Optional[str] = None,
     use_fast_model: Optional[bool] = None,
     timeout: Optional[int] = None,
+    stream: bool = False,
     max_tokens: Optional[int] = None,
     temperature: Optional[float] = None,
     top_p: Optional[float] = None,
+    reasoning_effort: Optional[str] = None,
+    response_format: Optional[dict[str, Any]] = None,
+    extra_body: Optional[dict[str, Any]] = None,
 ) -> dict[str, Any]:
     """
     Make an LLM request and parse the response as JSON.
@@ -630,9 +792,13 @@ def call_llm_json(
         model=model,
         use_fast_model=use_fast_model,
         timeout=timeout,
+        stream=stream,
         max_tokens=max_tokens,
         temperature=temperature,
         top_p=top_p,
+        reasoning_effort=reasoning_effort,
+        response_format=response_format,
+        extra_body=extra_body,
     )
 
     return json.loads(_extract_json_content(content))

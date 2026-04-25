@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import os
 from collections.abc import Iterable, Sequence
-from typing import Literal
+from typing import Any, Literal
 
 from llm_config import get_smart_model
 from observability.logger import get_runtime_logger
@@ -143,6 +143,7 @@ def _call_llm_text(
     system_prompt: str,
     timeout: int,
     model: str | None = None,
+    llm_request_options: dict[str, Any] | None = None,
 ) -> str:
     from llm_helpers import call_llm
 
@@ -152,6 +153,7 @@ def _call_llm_text(
         model=model or get_smart_model(),
         use_fast_model=False,
         timeout=timeout,
+        **dict(llm_request_options or {}),
     )
 
 
@@ -221,6 +223,7 @@ def _suggest_tags(
     *,
     model: str | None = None,
     timeout: int | None = None,
+    llm_request_options: dict[str, Any] | None = None,
 ) -> list[str]:
     cleaned = (content or "").strip()
     if not cleaned:
@@ -266,6 +269,7 @@ def _suggest_tags(
             system_prompt=system_prompt,
             timeout=timeout or OLLAMA_TIMEOUT,
             model=model,
+            llm_request_options=llm_request_options,
         ).strip()
         if not raw_content:
             return []

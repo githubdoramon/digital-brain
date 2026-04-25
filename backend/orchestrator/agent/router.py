@@ -123,6 +123,7 @@ class IntentRouter:
         llm_api_key: Optional[str] = None,
         llm_timeout: int = 20,
         enable_llm_routing: bool = True,
+        llm_request_options: Optional[dict[str, Any]] = None,
     ):
         """
         Initialize the intent router.
@@ -145,6 +146,7 @@ class IntentRouter:
         )
         self.llm_timeout = int(os.getenv("INTENT_ROUTER_TIMEOUT", str(llm_timeout)))
         self.enable_llm_routing = enable_llm_routing
+        self.llm_request_options = dict(llm_request_options or {})
         self.rule_high_confidence_threshold = float(
             os.getenv("INTENT_ROUTER_RULE_HIGH_CONFIDENCE", "0.85")
         )
@@ -422,7 +424,12 @@ class IntentRouter:
         )
 
         try:
-            content = call_llm(prompt, timeout=self.llm_timeout, model=resolved_model)
+            content = call_llm(
+                prompt,
+                timeout=self.llm_timeout,
+                model=resolved_model,
+                **self.llm_request_options,
+            )
             return self._parse_llm_response(content)
         except Exception as e:
             trace.trace_router_llm_error(f"LLM call failed: {e}")

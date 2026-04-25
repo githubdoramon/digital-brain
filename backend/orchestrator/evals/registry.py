@@ -9,7 +9,7 @@ from time import perf_counter
 from typing import Any
 
 from evals.flows import EVAL_FLOWS, EVAL_LLM_TIMEOUT
-from evals.types import EvalFlowDefinition
+from evals.types import EvalFlowDefinition, EvalLlmRequestOptions, EvalRunConfig
 from llm_helpers import use_llm_keep_alive, warm_chat_model
 from observability.logger import get_runtime_logger
 
@@ -35,6 +35,7 @@ def list_eval_flows() -> list[dict[str, Any]]:
                     "case_id": case.case_id,
                     "title": case.title,
                     "description": case.description,
+                    "response_json_schema": case.response_json_schema,
                 }
                 for case in flow.cases
             ],
@@ -43,8 +44,12 @@ def list_eval_flows() -> list[dict[str, Any]]:
     ]
 
 
-async def _execute_case(flow: EvalFlowDefinition, case: Any, llm_model: str | None, user_email: str) -> dict[str, Any]:
-    result = flow.execute_case(case, llm_model, user_email)
+async def _execute_case(
+    flow: EvalFlowDefinition,
+    case: Any,
+    run_config: EvalRunConfig,
+) -> dict[str, Any]:
+    result = flow.execute_case(case, run_config)
     if inspect.isawaitable(result):
         result = await result
     return result
@@ -68,6 +73,8 @@ async def run_eval_flow(
     repetitions: int,
     user_email: str,
     discard_first_attempt: bool = True,
+    request_options: EvalLlmRequestOptions | None = None,
+    case_json_schemas: dict[str, dict[str, Any]] | None = None,
     progress_callback: Callable[[dict[str, Any]], Any | Awaitable[Any]] | None = None,
 ) -> dict[str, Any]:
     flow = get_eval_flow(flow_id)
@@ -76,6 +83,19 @@ async def run_eval_flow(
 
     normalized_repetitions = max(1, min(int(repetitions), 20))
     effective_discard_first_attempt = bool(discard_first_attempt and normalized_repetitions > 1)
+    normalized_request_options = request_options or EvalLlmRequestOptions()
+    normalized_case_json_schemas = {
+        str(case_id): schema
+        for case_id, schema in (case_json_schemas or {}).items()
+        if str(case_id).strip() and isinstance(schema, dict)
+    }
+    run_config = EvalRunConfig(
+        llm_model=llm_model,
+        user_email=user_email,
+        timeout_seconds=EVAL_LLM_TIMEOUT,
+        request_options=normalized_request_options,
+        case_json_schemas=normalized_case_json_schemas,
+    )
     warmup: dict[str, Any] = {
         "attempted": False,
         "performed": False,
@@ -130,7 +150,7 @@ async def run_eval_flow(
                     },
                 )
                 started = perf_counter()
-                output = await _execute_case(flow, case, llm_model, user_email)
+                output = await _execute_case(flow, case, run_config)
                 duration_ms = (perf_counter() - started) * 1000
                 score = flow.score_case(case, output)
                 summary = flow.summarize_output(output)
@@ -206,6 +226,15 @@ async def run_eval_flow(
         "llm_model": llm_model,
         "timeout_seconds": EVAL_LLM_TIMEOUT,
         "keep_alive": EVAL_LLM_KEEP_ALIVE if llm_model else None,
+        "request_options": {
+            "stream": normalized_request_options.stream,
+            "temperature": normalized_request_options.temperature,
+            "max_tokens": normalized_request_options.max_tokens,
+            "top_p": normalized_request_options.top_p,
+            "reasoning_effort": normalized_request_options.reasoning_effort,
+            "extra_body": normalized_request_options.extra_body,
+        },
+        "case_json_schemas": normalized_case_json_schemas,
         "repetitions": normalized_repetitions,
         "discard_first_attempt": effective_discard_first_attempt,
         "warmup": warmup,

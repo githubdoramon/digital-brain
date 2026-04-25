@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 
 from evals import registry
-from evals.types import EvalCase, EvalFlowDefinition
+from evals.types import EvalCase, EvalFlowDefinition, EvalLlmRequestOptions, EvalRunConfig
 
 
 def test_list_eval_flows_includes_expected_flows():
@@ -19,8 +19,12 @@ def test_list_eval_flows_includes_expected_flows():
 
 @pytest.mark.asyncio
 async def test_run_eval_flow_aggregates_attempts(monkeypatch):
-    async def execute_case(case, llm_model, user_email):
-        return {"flow": case.case_id, "llm_model": llm_model, "user_email": user_email}
+    async def execute_case(case, run_config: EvalRunConfig):
+        return {
+            "flow": case.case_id,
+            "llm_model": run_config.llm_model,
+            "user_email": run_config.user_email,
+        }
 
     def score_case(case, output):
         return {"passed": output["llm_model"] == "test-model", "notes": []}
@@ -69,13 +73,18 @@ async def test_run_eval_flow_aggregates_attempts(monkeypatch):
     assert result["warmup"]["keep_alive"] == registry.EVAL_LLM_KEEP_ALIVE
     assert result["discard_first_attempt"] is True
     assert result["keep_alive"] == registry.EVAL_LLM_KEEP_ALIVE
+    assert result["request_options"]["stream"] is False
     assert warm_calls == [("test-model", registry.EVAL_LLM_KEEP_ALIVE)]
 
 
 @pytest.mark.asyncio
 async def test_run_eval_flow_skips_warmup_without_model(monkeypatch):
-    async def execute_case(case, llm_model, user_email):
-        return {"flow": case.case_id, "llm_model": llm_model, "user_email": user_email}
+    async def execute_case(case, run_config: EvalRunConfig):
+        return {
+            "flow": case.case_id,
+            "llm_model": run_config.llm_model,
+            "user_email": run_config.user_email,
+        }
 
     fake_flow = EvalFlowDefinition(
         flow_id="fake-no-model",
@@ -103,8 +112,12 @@ async def test_run_eval_flow_skips_warmup_without_model(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_run_eval_flow_can_keep_first_attempt_when_requested(monkeypatch):
-    async def execute_case(case, llm_model, user_email):
-        return {"flow": case.case_id, "llm_model": llm_model, "user_email": user_email}
+    async def execute_case(case, run_config: EvalRunConfig):
+        return {
+            "flow": case.case_id,
+            "llm_model": run_config.llm_model,
+            "user_email": run_config.user_email,
+        }
 
     fake_flow = EvalFlowDefinition(
         flow_id="fake-keep-first",
@@ -131,3 +144,47 @@ async def test_run_eval_flow_can_keep_first_attempt_when_requested(monkeypatch):
     assert result["summary"]["measured_attempts"] == 3
     assert result["summary"]["discarded_attempts"] == 0
     assert all(attempt["discarded"] is False for attempt in result["cases"][0]["attempts"])
+
+
+@pytest.mark.asyncio
+async def test_run_eval_flow_includes_request_options_and_case_schemas(monkeypatch):
+    async def execute_case(case, run_config: EvalRunConfig):
+        return {
+            "stream": run_config.request_options.stream,
+            "reasoning_effort": run_config.request_options.reasoning_effort,
+            "case_schema": run_config.case_json_schemas.get(case.case_id),
+        }
+
+    fake_flow = EvalFlowDefinition(
+        flow_id="fake-request-options",
+        label="Fake Request Options",
+        description="Fake flow for tests",
+        cases=[EvalCase(case_id="case-1", title="Case 1", input={}, expected={})],
+        execute_case=execute_case,
+        score_case=lambda case, output: {"passed": True, "notes": []},
+        summarize_output=lambda output: output,
+    )
+
+    monkeypatch.setitem(registry._FLOW_MAP, "fake-request-options", fake_flow)
+    monkeypatch.setattr(registry, "warm_chat_model", lambda _model, keep_alive=None: True)
+
+    result = await registry.run_eval_flow(
+        flow_id="fake-request-options",
+        llm_model="test-model",
+        repetitions=1,
+        user_email="user@example.com",
+        request_options=EvalLlmRequestOptions(
+            stream=True,
+            temperature=0,
+            max_tokens=96,
+            reasoning_effort="none",
+            extra_body={"seed": 7},
+        ),
+        case_json_schemas={"case-1": {"type": "object"}},
+    )
+
+    assert result["request_options"]["stream"] is True
+    assert result["request_options"]["max_tokens"] == 96
+    assert result["request_options"]["reasoning_effort"] == "none"
+    assert result["request_options"]["extra_body"] == {"seed": 7}
+    assert result["case_json_schemas"] == {"case-1": {"type": "object"}}
