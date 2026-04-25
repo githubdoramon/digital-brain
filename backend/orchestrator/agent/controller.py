@@ -2222,6 +2222,9 @@ class AgentController:
         selected: list[dict[str, Any]] = []
         selected_keys: set[tuple[str, str]] = set()
         role_order = ["primary_answer_anchor", "subject_entity", "context_anchor", "evidence_anchor"]
+        question_text = str(state.goal or "")
+        narrow_question = self._linked_item_is_narrow_question(question_text)
+        needs_context_role = self._linked_item_needs_context_role(question_text)
 
         for role in role_order:
             role_candidates = [
@@ -2238,12 +2241,26 @@ class AgentController:
             selected_keys.add((picked["entity_type"], picked["entity_id"]))
             if len(selected) >= max_items:
                 return selected
+            if narrow_question and not needs_context_role:
+                selected_roles = {str(item.get("role") or "") for item in selected}
+                selected_types = {str(item.get("entity_type") or "") for item in selected}
+                if (
+                    "primary_answer_anchor" in selected_roles and "subject_entity" in selected_roles
+                ) or ("event" in selected_types and "contact" in selected_types):
+                    return selected
+
+        if narrow_question and not needs_context_role and len(selected) >= 2:
+            return selected
 
         for candidate in candidates:
             dedupe_key = (candidate["entity_type"], candidate["entity_id"])
             if dedupe_key in selected_keys:
                 continue
-            if candidate.get("overall_score", 0.0) < 0.8 or candidate.get("support_score", 0.0) < 0.3:
+            if candidate.get("role_score", 0.0) < 1.05:
+                continue
+            if candidate.get("overall_score", 0.0) < 0.9 or candidate.get("support_score", 0.0) < 0.55:
+                continue
+            if candidate.get("selected_role") == "evidence_anchor" and candidate.get("entity_type") == "event":
                 continue
             selected.append(self._linked_item_payload(candidate))
             selected_keys.add(dedupe_key)
@@ -2276,7 +2293,11 @@ class AgentController:
         }
 
         ranked: list[dict[str, Any]] = []
-        for candidate in state.information_candidates:
+        candidate_pool = [
+            *self._linked_item_resolution_candidates(state, question_text=question_text),
+            *state.information_candidates,
+        ]
+        for candidate in candidate_pool:
             if not isinstance(candidate, dict):
                 continue
             entity_type = str(candidate.get("kind") or "").strip().lower()
@@ -2328,6 +2349,58 @@ class AgentController:
             reverse=True,
         )
         return ranked
+
+    def _linked_item_resolution_candidates(
+        self,
+        state: AgentState,
+        *,
+        question_text: str,
+    ) -> list[dict[str, Any]]:
+        active_scope = state.resolution.get("active_contact_scope") or []
+        if not isinstance(active_scope, list):
+            return []
+
+        synthetic: list[dict[str, Any]] = []
+        normalized_question = normalize_search_text(question_text)
+        seen_contact_ids: set[str] = set()
+        for item in active_scope:
+            if not isinstance(item, dict):
+                continue
+            contact_id = str(item.get("contact_id") or "").strip()
+            if not contact_id or contact_id in seen_contact_ids:
+                continue
+            mention_text = str(item.get("mention_text") or "").strip()
+            display_name = str(item.get("display_name") or "").strip() or mention_text or contact_id
+            if mention_text.strip().lower() == "user":
+                continue
+            mention_normalized = normalize_search_text(mention_text or display_name)
+            display_normalized = normalize_search_text(display_name)
+            if mention_normalized and mention_normalized not in normalized_question and display_normalized not in normalized_question:
+                continue
+            seen_contact_ids.add(contact_id)
+            synthetic.append(
+                {
+                    "kind": "contact",
+                    "candidate_id": contact_id,
+                    "label": display_name,
+                    "best_score": 1.4,
+                    "times_seen": 1,
+                    "last_query": question_text,
+                    "last_source_tool": "pre_resolved_contacts",
+                    "last_seen_step": state.step_count,
+                    "inspected": False,
+                    "inspected_step": None,
+                    "role_hints": ["subject_entity", "context_anchor"],
+                    "metadata": {
+                        "display_name": display_name,
+                        "resolution_text": mention_text or display_name,
+                        "matched_via": item.get("matched_via"),
+                        "confidence": item.get("confidence"),
+                        "controller_scope": True,
+                    },
+                }
+            )
+        return synthetic
 
     def _linked_item_entity_payload(
         self,
@@ -2451,7 +2524,7 @@ class AgentController:
         retrieval_score = min(1.2, best_score)
         inspection_score = 0.25 if inspected else 0.0
         direct_lookup_score = 0.0
-        if source_tool in {"lookup_contact", "lookup_places", "lookup_contact_places", "lookup_place_contacts", "resolve_contacts"}:
+        if source_tool in {"lookup_contact", "lookup_places", "lookup_contact_places", "lookup_place_contacts", "resolve_contacts", "pre_resolved_contacts"}:
             direct_lookup_score = 0.2
         elif source_tool in {"get_events", "get_document"}:
             direct_lookup_score = 0.12
@@ -2475,11 +2548,13 @@ class AgentController:
             if query_signals["what"]:
                 evidence += 0.15
         elif entity_type == "contact":
-            if query_signals["who"] or query_signals["person_like"]:
-                primary += 0.35
-                subject += 0.45
+            if query_signals["who"] or query_signals["person_like"] or query_signals["interaction"]:
+                primary += 0.2
+                subject += 0.75
             if metadata.get("resolution_text"):
                 subject += 0.25
+            if metadata.get("controller_scope"):
+                subject += 1.35
         elif entity_type == "place":
             if query_signals["where"] or query_signals["place_like"]:
                 primary += 0.45
@@ -2527,6 +2602,21 @@ class AgentController:
             return 0.0
         matched = sum(1 for token in tokens if token in searchable_text)
         return min(1.25, matched * 0.28)
+
+    def _linked_item_is_narrow_question(self, question_text: str) -> bool:
+        normalized = normalize_search_text(question_text)
+        if not normalized:
+            return False
+        tokens = set(normalized.split())
+        if {"all", "every", "list", "show", "summarize", "summary", "recap", "report"} & tokens:
+            return False
+        return bool({"when", "where", "who", "last", "latest", "first"} & tokens)
+
+    def _linked_item_needs_context_role(self, question_text: str) -> bool:
+        normalized = normalize_search_text(question_text)
+        if not normalized:
+            return False
+        return any(marker in normalized for marker in [" of ", " at ", " from ", " my ", " your ", " their "])
 
     def _linked_item_query_signals(self, normalized_question: str) -> dict[str, bool]:
         text = normalized_question or ""

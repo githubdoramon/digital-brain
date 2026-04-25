@@ -1581,3 +1581,107 @@ class TestLinkedItemsSelection:
         assert linked_items[0]["entity_type"] == "event"
         assert linked_items[0]["entity_id"] == "event:last-gio"
         assert all(item["entity_type"] != "document" for item in linked_items)
+
+    def test_linked_items_include_pre_resolved_contact_for_named_person_query(self):
+        controller = _build_controller()
+        question = "When did I last meet Dana?"
+        state = AgentState(goal=question)
+        state.resolution["active_contact_scope"] = [
+            {
+                "mention_text": "Dana",
+                "display_name": "Dana Lewis",
+                "contact_id": "contact:dana-acme-example",
+                "confidence": 1.0,
+                "matched_via": "direct_match",
+            },
+            {
+                "mention_text": "user",
+                "display_name": "Alex Carter",
+                "contact_id": "contact:alex-carter",
+                "confidence": 1.0,
+                "matched_via": "user_email",
+            },
+        ]
+        state.resolution["active_contact_scope_ids"] = [
+            "contact:dana-acme-example",
+            "contact:alex-carter",
+        ]
+        state.record_tool_call(
+            ToolCallRecord(
+                tool_name="get_events",
+                arguments={
+                    "action": "by_time_span",
+                    "contact_ids": ["contact:dana-acme-example"],
+                    "sort_order": "newest",
+                    "time_end": "2026-04-25T23:59:59Z",
+                },
+                result={
+                    "events": [
+                        {
+                            "id": "event:beacon-standup",
+                            "title": "Beacon stand-up",
+                            "start_date": "2026-04-22T16:00:00+01:00",
+                            "end_date": "2026-04-22T16:30:00+01:00",
+                            "summary": "Dana Lewis joined the Beacon team sync.",
+                            "people": [
+                                {"contact_id": "contact:alex-carter", "display_name": "Alex Carter"},
+                                {"contact_id": "contact:dana-acme-example", "display_name": "Dana Lewis"},
+                            ],
+                            "tags": ["Work", "Meeting"],
+                            "types": ["meeting"],
+                        },
+                        {
+                            "id": "event:other",
+                            "title": "Engineering Weekly",
+                            "start_date": "2026-04-17T16:30:00+01:00",
+                            "end_date": "2026-04-17T17:00:00+01:00",
+                            "summary": "Broad team weekly.",
+                            "people": [
+                                {"contact_id": "contact:alex-carter", "display_name": "Alex Carter"},
+                                {"contact_id": "contact:dana-acme-example", "display_name": "Dana Lewis"},
+                            ],
+                            "tags": ["Work"],
+                            "types": ["meeting"],
+                        },
+                    ],
+                    "count": 2,
+                },
+                duration_ms=18,
+                success=True,
+            )
+        )
+        state.remember_information_candidate(
+            kind="event",
+            candidate_id="event:beacon-standup",
+            label="Beacon stand-up",
+            score=1.2,
+            query=question,
+            source_tool="get_events",
+            inspected=True,
+            metadata={"start_date": "2026-04-22T16:00:00+01:00"},
+            role_hints=["primary_answer_anchor", "evidence_anchor"],
+        )
+        state.remember_information_candidate(
+            kind="event",
+            candidate_id="event:other",
+            label="Engineering Weekly",
+            score=0.9,
+            query=question,
+            source_tool="get_events",
+            inspected=True,
+            metadata={"start_date": "2026-04-17T16:30:00+01:00"},
+            role_hints=["evidence_anchor"],
+        )
+
+        linked_items = controller._build_linked_items(
+            state,
+            answer="You last met Dana Lewis on 22 April 2026 during the Beacon stand-up.",
+        )
+
+        assert linked_items[0]["entity_type"] == "event"
+        assert linked_items[0]["entity_id"] == "event:beacon-standup"
+        assert any(
+            item["entity_type"] == "contact" and item["entity_id"] == "contact:dana-acme-example"
+            for item in linked_items
+        )
+        assert all(item["entity_id"] != "event:other" for item in linked_items)
