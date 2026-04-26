@@ -27,13 +27,14 @@ def create_evals_router() -> APIRouter:
 
         normalized_model = str(payload.llm_model or "").strip() or None
         logger.info(
-            "[evals.run] flow_id=%s llm_model=%r repetitions=%s stream=%s max_tokens=%r reasoning_effort=%r user=%s",
+            "[evals.run] flow_id=%s llm_model=%r repetitions=%s stream=%s max_tokens=%r reasoning_effort=%r strict_json_schema=%s user=%s",
             payload.flow_id,
             normalized_model,
             payload.repetitions,
             payload.stream,
             payload.max_tokens,
             payload.reasoning_effort,
+            payload.strict_json_schema,
             user_email,
         )
 
@@ -49,6 +50,7 @@ def create_evals_router() -> APIRouter:
                     temperature=payload.temperature,
                     max_tokens=payload.max_tokens,
                     reasoning_effort=payload.reasoning_effort,
+                    strict_json_schema=payload.strict_json_schema,
                 ),
             )
         except ValueError as exc:

@@ -493,15 +493,10 @@ Respond with JSON only:
 
     def _parse_llm_response(self, response: str) -> IntentClassification:
         """Parse LLM response into IntentClassification."""
-        try:
-            # Clean up response
-            response = response.strip()
-            if response.startswith("```"):
-                response = response.split("```")[1]
-                if response.startswith("json"):
-                    response = response[4:]
+        from llm_helpers import parse_llm_json_content
 
-            data = json.loads(response)
+        try:
+            data = parse_llm_json_content(response)
 
             intent_str = data.get("intent", "unknown")
             try:

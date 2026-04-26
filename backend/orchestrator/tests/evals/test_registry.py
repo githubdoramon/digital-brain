@@ -75,6 +75,7 @@ async def test_run_eval_flow_aggregates_attempts(monkeypatch):
     assert result["discard_first_attempt"] is True
     assert result["keep_alive"] == registry.EVAL_LLM_KEEP_ALIVE
     assert result["request_options"]["stream"] is False
+    assert result["request_options"]["strict_json_schema"] is True
     assert warm_calls == [("test-model", registry.EVAL_LLM_KEEP_ALIVE)]
 
 
@@ -187,10 +188,12 @@ async def test_run_eval_flow_includes_request_options_and_case_schemas(monkeypat
             temperature=0,
             max_tokens=96,
             reasoning_effort="none",
+            strict_json_schema=False,
         ),
     )
 
     assert result["request_options"]["stream"] is True
     assert result["request_options"]["max_tokens"] == 96
     assert result["request_options"]["reasoning_effort"] == "none"
+    assert result["request_options"]["strict_json_schema"] is False
     assert result["cases"][0]["response_json_schema"] == {"type": "object"}

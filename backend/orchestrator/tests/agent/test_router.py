@@ -226,6 +226,23 @@ class TestRuleBasedClassification:
             assert result is not None
             assert result.intent == IntentType.SYSTEM_COMMAND
 
+
+class TestLlmResponseParsing:
+    @pytest.fixture
+    def router(self):
+        return IntentRouter(enable_llm_routing=False)
+
+    def test_parse_llm_response_repairs_trailing_comma(self):
+        router = IntentRouter(enable_llm_routing=True)
+
+        result = router._parse_llm_response(
+            '{\n  "intent": "contact_lookup",\n  "confidence": 0.85,\n  "constraints": [],\n  "pre_resolve_contacts": true,\n  "reasoning": "brief explanation",\n}'
+        )
+
+        assert result.intent == IntentType.CONTACT_LOOKUP
+        assert result.pre_resolve_contacts is True
+        assert result.route_source.value == "llm"
+
     def test_unknown_for_ambiguous(self, router):
         """Test unknown intent for ambiguous questions."""
         result = router._rule_based_classify("xyzabc random string")

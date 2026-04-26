@@ -238,6 +238,7 @@ class EvalRunIn(BaseModel):
     temperature: float | None = None
     max_tokens: int | None = Field(default=None, ge=1)
     reasoning_effort: str | None = None
+    strict_json_schema: bool = True
 
 
 class PushNotificationsUpdateIn(BaseModel):

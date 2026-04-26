@@ -749,6 +749,91 @@ def _extract_json_content(raw_content: str) -> str:
     return content
 
 
+def _extract_balanced_json_fragment(content: str) -> str:
+    start_index = -1
+    opening_char = ""
+    for index, char in enumerate(content):
+        if char in "[{":
+            start_index = index
+            opening_char = char
+            break
+
+    if start_index < 0:
+        return content
+
+    closing_char = "}" if opening_char == "{" else "]"
+    depth = 0
+    in_string = False
+    escape = False
+
+    for index in range(start_index, len(content)):
+        char = content[index]
+        if escape:
+            escape = False
+            continue
+        if char == "\\":
+            escape = True
+            continue
+        if char == '"':
+            in_string = not in_string
+            continue
+        if in_string:
+            continue
+        if char == opening_char:
+            depth += 1
+        elif char == closing_char:
+            depth -= 1
+            if depth == 0:
+                return content[start_index : index + 1]
+
+    return content[start_index:]
+
+
+def _strip_trailing_commas(content: str) -> str:
+    chars: list[str] = []
+    in_string = False
+    escape = False
+
+    for index, char in enumerate(content):
+        if escape:
+            chars.append(char)
+            escape = False
+            continue
+        if char == "\\":
+            chars.append(char)
+            escape = True
+            continue
+        if char == '"':
+            chars.append(char)
+            in_string = not in_string
+            continue
+        if in_string:
+            chars.append(char)
+            continue
+        if char == ",":
+            next_non_whitespace = ""
+            for future_char in content[index + 1 :]:
+                if not future_char.isspace():
+                    next_non_whitespace = future_char
+                    break
+            if next_non_whitespace in {"]", "}"}:
+                continue
+        chars.append(char)
+
+    return "".join(chars)
+
+
+def parse_llm_json_content(raw_content: str) -> dict[str, Any]:
+    content = _extract_json_content(raw_content)
+    try:
+        return json.loads(content)
+    except json.JSONDecodeError:
+        repaired_content = _strip_trailing_commas(_extract_balanced_json_fragment(content))
+        if repaired_content != content:
+            logger.info("[llm_helpers] Repaired malformed JSON response before parsing")
+        return json.loads(repaired_content)
+
+
 def call_llm_json(
     prompt: str,
     *,
@@ -801,7 +886,7 @@ def call_llm_json(
         extra_body=extra_body,
     )
 
-    return json.loads(_extract_json_content(content))
+    return parse_llm_json_content(content)
 
 
 def call_llm_with_tools(

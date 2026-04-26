@@ -225,6 +225,7 @@ async def run_eval_flow(
             "temperature": normalized_request_options.temperature,
             "max_tokens": normalized_request_options.max_tokens,
             "reasoning_effort": normalized_request_options.reasoning_effort,
+            "strict_json_schema": normalized_request_options.strict_json_schema,
         },
         "repetitions": normalized_repetitions,
         "discard_first_attempt": effective_discard_first_attempt,

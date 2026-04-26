@@ -123,7 +123,7 @@ def _build_llm_request_options(case: EvalCase, run_config: EvalRunConfig) -> dic
     request_options = run_config.request_options
     response_json_schema = case.response_json_schema
     response_format = None
-    if response_json_schema:
+    if request_options.strict_json_schema and response_json_schema:
         response_format = {
             "type": "json_schema",
             "json_schema": response_json_schema,
@@ -133,6 +133,7 @@ def _build_llm_request_options(case: EvalCase, run_config: EvalRunConfig) -> dic
         "temperature": request_options.temperature,
         "max_tokens": request_options.max_tokens,
         "reasoning_effort": request_options.reasoning_effort,
+        "strict_json_schema": request_options.strict_json_schema,
         "response_format": response_format,
     }
 

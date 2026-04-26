@@ -11,6 +11,14 @@ export type EvalFlowMeta = {
   }>;
 };
 
+export type EvalRequestOptions = {
+  stream?: boolean;
+  temperature?: number | null;
+  max_tokens?: number | null;
+  reasoning_effort?: string | null;
+  strict_json_schema?: boolean;
+};
+
 export type EvalRunResult = {
   flow: {
     flow_id: string;
@@ -21,12 +29,7 @@ export type EvalRunResult = {
   llm_model?: string | null;
   timeout_seconds?: number | null;
   keep_alive?: string | number | null;
-  request_options?: {
-    stream?: boolean;
-    temperature?: number | null;
-    max_tokens?: number | null;
-    reasoning_effort?: string | null;
-  };
+  request_options?: EvalRequestOptions;
   repetitions: number;
   discard_first_attempt: boolean;
   warmup?: {
@@ -79,12 +82,7 @@ export type EvalRunJob = {
   flow_id: string;
   flow_label?: string | null;
   llm_model?: string | null;
-  request_options?: {
-    stream?: boolean;
-    temperature?: number | null;
-    max_tokens?: number | null;
-    reasoning_effort?: string | null;
-  };
+  request_options?: EvalRequestOptions;
   repetitions: number;
   discard_first_attempt: boolean;
   created_at?: string | null;

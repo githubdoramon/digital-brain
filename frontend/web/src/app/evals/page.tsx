@@ -9,40 +9,16 @@ type EvalFlowsResponse = {
   flows: EvalFlowMeta[];
 };
 
-const PAYLOAD_PRESETS = [
-  {
-    id: "baseline",
-    label: "Baseline",
-    description: "Simple deterministic baseline with no extra reasoning controls.",
-    values: {
-      stream: false,
-      temperature: "0",
-      maxTokens: "128",
-      reasoningEffort: "",
-    },
-  },
-  {
-    id: "reasoning-none",
-    label: "Reasoning None",
-    description: "Fast controller-style payload with reasoning disabled via effort controls.",
-    values: {
-      stream: false,
-      temperature: "0",
-      maxTokens: "128",
-      reasoningEffort: "none",
-    },
-  },
-  {
-    id: "strict-schema",
-    label: "Strict Schema",
-    description: "Structured-output mode for models that behave best with per-case JSON schema.",
-    values: {
-      stream: false,
-      temperature: "0",
-      maxTokens: "128",
-      reasoningEffort: "",
-    },
-  },
+const DEFAULT_MODELS = [
+  "gemma4:26b",
+  "qwen3.5:27b",
+  "qwen3.5:0.8b",
+  "gemma4:e2b",
+  "gemma4:e4b",
+  "qwen3.5:9b",
+  "qwen3.5:4b",
+  "qwen3.5:2b",
+  "gpt-oss:20b",
 ] as const;
 
 function formatPercent(value: number): string {
@@ -52,12 +28,15 @@ function formatPercent(value: number): string {
 export default function EvalsPage() {
   const [flows, setFlows] = useState<EvalFlowMeta[]>([]);
   const [selectedFlowId, setSelectedFlowId] = useState("");
-  const [llmModel, setLlmModel] = useState("");
+  const [selectedModel, setSelectedModel] = useState<(typeof DEFAULT_MODELS)[number]>(DEFAULT_MODELS[0]);
+  const [useCustomModel, setUseCustomModel] = useState(false);
+  const [customModel, setCustomModel] = useState("");
   const [repetitions, setRepetitions] = useState("5");
   const [stream, setStream] = useState(false);
   const [temperature, setTemperature] = useState("0");
   const [maxTokens, setMaxTokens] = useState("128");
   const [reasoningEffort, setReasoningEffort] = useState("none");
+  const [strictJsonSchema, setStrictJsonSchema] = useState(true);
   const [runs, setRuns] = useState<Array<{ id: string; result: EvalRunResult }>>([]);
   const [activeJob, setActiveJob] = useState<EvalRunJob | null>(null);
   const [isLoading, setIsLoading] = useState(false);
@@ -133,14 +112,20 @@ export default function EvalsPage() {
     [flows, selectedFlowId]
   );
 
+  const llmModel = useMemo(() => {
+    return useCustomModel ? customModel.trim() : selectedModel;
+  }, [customModel, selectedModel, useCustomModel]);
+
   const effectivePayloadPreview = useMemo(() => {
     return {
+      model: llmModel || undefined,
       stream,
       temperature: temperature.trim() === "" ? undefined : Number(temperature),
       max_tokens: maxTokens.trim() === "" ? undefined : Number(maxTokens),
       reasoning_effort: reasoningEffort || undefined,
+      strict_json_schema: strictJsonSchema,
     };
-  }, [maxTokens, reasoningEffort, stream, temperature]);
+  }, [llmModel, maxTokens, reasoningEffort, stream, strictJsonSchema, temperature]);
 
   async function handleRun() {
     if (!selectedFlowId) return;
@@ -148,30 +133,22 @@ export default function EvalsPage() {
     setError(null);
     setActiveJob(null);
     try {
-      const job = await api.post<EvalRunJob>("/evals/run", {
-        flow_id: selectedFlowId,
-        llm_model: llmModel.trim() || undefined,
-        repetitions: Number(repetitions) || 5,
-        discard_first_attempt: true,
-        stream,
-        temperature: temperature.trim() === "" ? undefined : Number(temperature),
-        max_tokens: maxTokens.trim() === "" ? undefined : Number(maxTokens),
-        reasoning_effort: reasoningEffort || undefined,
-      });
-      setActiveJob(job);
+        const job = await api.post<EvalRunJob>("/evals/run", {
+          flow_id: selectedFlowId,
+          llm_model: llmModel || undefined,
+          repetitions: Number(repetitions) || 5,
+          discard_first_attempt: true,
+          stream,
+          temperature: temperature.trim() === "" ? undefined : Number(temperature),
+          max_tokens: maxTokens.trim() === "" ? undefined : Number(maxTokens),
+          reasoning_effort: reasoningEffort || undefined,
+          strict_json_schema: strictJsonSchema,
+        });
+        setActiveJob(job);
     } catch (runError) {
       setError(runError instanceof Error ? runError.message : "Eval run failed");
       setIsLoading(false);
     }
-  }
-
-  function applyPreset(presetId: (typeof PAYLOAD_PRESETS)[number]["id"]) {
-    const preset = PAYLOAD_PRESETS.find((item) => item.id === presetId);
-    if (!preset) return;
-    setStream(preset.values.stream);
-    setTemperature(preset.values.temperature);
-    setMaxTokens(preset.values.maxTokens);
-    setReasoningEffort(preset.values.reasoningEffort);
   }
 
   return (
@@ -211,41 +188,15 @@ export default function EvalsPage() {
             display: "grid",
             gap: 18,
             gridTemplateColumns: "minmax(280px, 360px) minmax(0, 1fr)",
+            alignItems: "stretch",
           }}
         >
-          <div style={{ borderRadius: 20, background: "#fff", padding: 20, boxShadow: "0 16px 36px rgba(16, 35, 61, 0.08)", display: "grid", gap: 16 }}>
+          <div style={{ borderRadius: 20, background: "#fff", padding: 20, boxShadow: "0 16px 36px rgba(16, 35, 61, 0.08)", display: "flex", flexDirection: "column", gap: 16, height: "100%", alignSelf: "stretch" }}>
             <div>
               <h2 style={{ margin: 0, color: "#10233d", fontSize: "1.1rem" }}>Runner</h2>
               <p style={{ margin: "6px 0 0", color: "#526070", lineHeight: 1.5 }}>
                 Keep it simple: choose one flow, one Ollama model, and 1-20 repetitions. Each run starts as a background job so the browser avoids long request timeouts.
               </p>
-            </div>
-
-            <div style={{ display: "grid", gap: 8 }}>
-              <div style={{ fontWeight: 600, color: "#10233d" }}>Presets</div>
-              <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
-                {PAYLOAD_PRESETS.map((preset) => (
-                  <button
-                    key={preset.id}
-                    type="button"
-                    onClick={() => applyPreset(preset.id)}
-                    disabled={isLoading}
-                    style={{
-                      borderRadius: 999,
-                      border: "1px solid #d8dee8",
-                      background: "#f7f9fc",
-                      color: "#10233d",
-                      padding: "8px 12px",
-                      fontSize: "0.85rem",
-                      fontWeight: 600,
-                      cursor: isLoading ? "not-allowed" : "pointer",
-                    }}
-                    title={preset.description}
-                  >
-                    {preset.label}
-                  </button>
-                ))}
-              </div>
             </div>
 
             <label style={{ display: "grid", gap: 6 }}>
@@ -264,16 +215,41 @@ export default function EvalsPage() {
               </select>
             </label>
 
-            <label style={{ display: "grid", gap: 6 }}>
-              <span style={{ fontWeight: 600, color: "#10233d" }}>Ollama model name</span>
-              <input
-                value={llmModel}
-                onChange={(event) => setLlmModel(event.target.value)}
-                disabled={isLoading}
-                placeholder="llama3.1:8b, qwen3:14b, mistral-small..."
-                style={{ borderRadius: 12, border: "1px solid #d8dee8", padding: "12px 14px", fontSize: "0.95rem" }}
-              />
-            </label>
+            <div style={{ display: "grid", gap: 12 }}>
+              <label style={{ display: "grid", gap: 6 }}>
+                <span style={{ fontWeight: 600, color: "#10233d" }}>Default model picker</span>
+                <select
+                  value={selectedModel}
+                  onChange={(event) => setSelectedModel(event.target.value as (typeof DEFAULT_MODELS)[number])}
+                  disabled={isLoading || useCustomModel}
+                  style={{ borderRadius: 12, border: "1px solid #d8dee8", padding: "12px 14px", fontSize: "0.95rem", background: useCustomModel ? "#f8fafc" : "#fff" }}
+                >
+                  {DEFAULT_MODELS.map((model) => (
+                    <option key={model} value={model}>
+                      {model}
+                    </option>
+                  ))}
+                </select>
+              </label>
+
+              <label style={{ display: "flex", gap: 10, alignItems: "center", color: "#10233d", fontWeight: 600 }}>
+                <input type="checkbox" checked={useCustomModel} onChange={(event) => setUseCustomModel(event.target.checked)} disabled={isLoading} />
+                Use custom model
+              </label>
+
+              {useCustomModel ? (
+                <label style={{ display: "grid", gap: 6 }}>
+                  <span style={{ fontWeight: 600, color: "#10233d" }}>Custom model name</span>
+                  <input
+                    value={customModel}
+                    onChange={(event) => setCustomModel(event.target.value)}
+                    disabled={isLoading}
+                    placeholder="type any Ollama model tag"
+                    style={{ borderRadius: 12, border: "1px solid #d8dee8", padding: "12px 14px", fontSize: "0.95rem" }}
+                  />
+                </label>
+              ) : null}
+            </div>
 
             <label style={{ display: "grid", gap: 6 }}>
               <span style={{ fontWeight: 600, color: "#10233d" }}>Repetitions</span>
@@ -294,6 +270,11 @@ export default function EvalsPage() {
             <label style={{ display: "flex", gap: 10, alignItems: "center", color: "#10233d", fontWeight: 600 }}>
               <input type="checkbox" checked={stream} onChange={(event) => setStream(event.target.checked)} disabled={isLoading} />
               Stream response
+            </label>
+
+            <label style={{ display: "flex", gap: 10, alignItems: "center", color: "#10233d", fontWeight: 600 }}>
+              <input type="checkbox" checked={strictJsonSchema} onChange={(event) => setStrictJsonSchema(event.target.checked)} disabled={isLoading} />
+              Strict JSON schema response
             </label>
 
             <div style={{ display: "grid", gap: 12, gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))" }}>
@@ -341,7 +322,7 @@ export default function EvalsPage() {
             <button
               type="button"
               onClick={handleRun}
-              disabled={isBootstrapping || isLoading || !selectedFlowId}
+              disabled={isBootstrapping || isLoading || !selectedFlowId || !llmModel}
               style={{
                 border: 0,
                 borderRadius: 14,
@@ -373,7 +354,7 @@ export default function EvalsPage() {
             {error ? <div style={{ color: "#b91c1c", fontSize: "0.92rem" }}>{error}</div> : null}
           </div>
 
-          <div style={{ borderRadius: 20, background: "rgba(255,255,255,0.88)", padding: 20, boxShadow: "0 16px 36px rgba(16, 35, 61, 0.08)", display: "grid", gap: 16 }}>
+          <div style={{ borderRadius: 20, background: "rgba(255,255,255,0.88)", padding: 20, boxShadow: "0 16px 36px rgba(16, 35, 61, 0.08)", display: "grid", gap: 16, height: "100%", alignSelf: "stretch" }}>
             <div>
               <h2 style={{ margin: 0, color: "#10233d", fontSize: "1.1rem" }}>Selected flow</h2>
               <p style={{ margin: "6px 0 0", color: "#526070", lineHeight: 1.5 }}>
@@ -393,11 +374,20 @@ export default function EvalsPage() {
                 </div>
                 <div style={{ display: "grid", gap: 10 }}>
                   {selectedFlow.cases.map((flowCase) => (
-                    <div key={flowCase.case_id} style={{ borderRadius: 14, padding: 14, background: "#fff", border: "1px solid rgba(16, 35, 61, 0.08)" }}>
-                      <div style={{ fontWeight: 700, color: "#10233d" }}>{flowCase.title}</div>
-                      {flowCase.description ? (
-                        <div style={{ marginTop: 6, color: "#526070", fontSize: "0.9rem" }}>{flowCase.description}</div>
-                      ) : null}
+                    <details key={flowCase.case_id} style={{ borderRadius: 14, padding: 14, background: "#fff", border: "1px solid rgba(16, 35, 61, 0.08)" }}>
+                      <summary style={{ cursor: "pointer", listStyle: "none" }}>
+                        <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center" }}>
+                          <div>
+                            <div style={{ fontWeight: 700, color: "#10233d" }}>{flowCase.title}</div>
+                            {flowCase.description ? (
+                              <div style={{ marginTop: 6, color: "#526070", fontSize: "0.9rem" }}>{flowCase.description}</div>
+                            ) : null}
+                          </div>
+                          <div style={{ color: "#526070", fontSize: "0.82rem", fontWeight: 600 }}>
+                            {flowCase.response_json_schema ? "Schema" : "No schema"}
+                          </div>
+                        </div>
+                      </summary>
                       <label style={{ display: "grid", gap: 6, marginTop: 12 }}>
                         <span style={{ color: "#10233d", fontWeight: 600, fontSize: "0.9rem" }}>Defined response JSON schema</span>
                         <pre
@@ -419,7 +409,7 @@ export default function EvalsPage() {
                             : "No schema defined for this case."}
                         </pre>
                       </label>
-                    </div>
+                    </details>
                   ))}
                 </div>
               </>

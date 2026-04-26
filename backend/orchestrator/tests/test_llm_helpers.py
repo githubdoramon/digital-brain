@@ -120,3 +120,20 @@ def test_post_chat_completion_wraps_timeout_as_llm_unavailable(monkeypatch):
         assert str(exc) == "LLM service is unavailable"
     else:
         raise AssertionError("Expected LLMUnavailableError")
+
+
+def test_parse_llm_json_content_repairs_trailing_comma():
+    parsed = llm_helpers.parse_llm_json_content(
+        '{\n  "intent": "contact_lookup",\n  "confidence": 0.85,\n  "constraints": [],\n  "pre_resolve_contacts": true,\n  "reasoning": "test",\n}'
+    )
+
+    assert parsed["intent"] == "contact_lookup"
+    assert parsed["pre_resolve_contacts"] is True
+
+
+def test_parse_llm_json_content_extracts_balanced_object_from_extra_text():
+    parsed = llm_helpers.parse_llm_json_content(
+        'Here is the result:\n```json\n{"intent":"data_query","confidence":0.9,"constraints":[],"pre_resolve_contacts":false,"reasoning":"ok"}\n```\nThanks!'
+    )
+
+    assert parsed["intent"] == "data_query"

@@ -43,8 +43,40 @@ def test_contact_resolution_eval_forwards_request_options(monkeypatch):
         "temperature": 0,
         "max_tokens": 96,
         "reasoning_effort": "none",
+        "strict_json_schema": True,
         "response_format": {
             "type": "json_schema",
             "json_schema": {"type": "object", "properties": {"status": {"type": "string"}}},
         },
     }
+
+
+def test_contact_resolution_eval_can_disable_strict_json_schema(monkeypatch):
+    captured: dict[str, object] = {}
+
+    def fake_resolve_contacts_request(data):
+        captured.update(data)
+        return {"status": "success", "people_mentioned": ["Dana Lewis"]}
+
+    monkeypatch.setattr(flows, "resolve_contacts_request", fake_resolve_contacts_request)
+
+    case = EvalCase(
+        case_id="contact-case-no-schema",
+        title="Contact case no schema",
+        input={"text": "When did I last meet Dana?"},
+        expected={},
+        response_json_schema={"type": "object", "properties": {"status": {"type": "string"}}},
+    )
+    run_config = EvalRunConfig(
+        llm_model="qwen3.5:0.8b",
+        user_email="user@example.com",
+        timeout_seconds=33,
+        request_options=EvalLlmRequestOptions(strict_json_schema=False),
+    )
+
+    flows._execute_contact_resolution_case(case, run_config)
+
+    llm_request_options = captured["llm_request_options"]
+    assert isinstance(llm_request_options, dict)
+    assert llm_request_options["strict_json_schema"] is False
+    assert llm_request_options["response_format"] is None

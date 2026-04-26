@@ -94,6 +94,7 @@ async def create_eval_job(
             "temperature": request_options.temperature if request_options else None,
             "max_tokens": request_options.max_tokens if request_options else None,
             "reasoning_effort": request_options.reasoning_effort if request_options else None,
+            "strict_json_schema": request_options.strict_json_schema if request_options else True,
         },
         "repetitions": repetitions,
         "discard_first_attempt": discard_first_attempt,

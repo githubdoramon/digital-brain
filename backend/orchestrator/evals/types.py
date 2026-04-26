@@ -21,6 +21,7 @@ class EvalLlmRequestOptions:
     temperature: float | None = None
     max_tokens: int | None = None
     reasoning_effort: str | None = None
+    strict_json_schema: bool = True
 
 
 @dataclass(frozen=True)
