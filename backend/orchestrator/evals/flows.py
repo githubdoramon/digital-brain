@@ -133,7 +133,6 @@ def _build_llm_request_options(case: EvalCase, run_config: EvalRunConfig) -> dic
         "temperature": request_options.temperature,
         "max_tokens": request_options.max_tokens,
         "reasoning_effort": request_options.reasoning_effort,
-        "strict_json_schema": request_options.strict_json_schema,
         "response_format": response_format,
     }
 

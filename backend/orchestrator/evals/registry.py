@@ -100,7 +100,11 @@ async def run_eval_flow(
         warmup["attempted"] = True
         warm_start = perf_counter()
         try:
-            warmup["performed"] = warm_chat_model(llm_model, keep_alive=EVAL_LLM_KEEP_ALIVE)
+            warmup["performed"] = warm_chat_model(
+                llm_model,
+                timeout=EVAL_LLM_TIMEOUT,
+                keep_alive=EVAL_LLM_KEEP_ALIVE,
+            )
         except Exception as exc:
             warmup["error"] = str(exc)
             logger.warning(

@@ -43,7 +43,6 @@ def test_contact_resolution_eval_forwards_request_options(monkeypatch):
         "temperature": 0,
         "max_tokens": 96,
         "reasoning_effort": "none",
-        "strict_json_schema": True,
         "response_format": {
             "type": "json_schema",
             "json_schema": {"type": "object", "properties": {"status": {"type": "string"}}},
@@ -78,5 +77,4 @@ def test_contact_resolution_eval_can_disable_strict_json_schema(monkeypatch):
 
     llm_request_options = captured["llm_request_options"]
     assert isinstance(llm_request_options, dict)
-    assert llm_request_options["strict_json_schema"] is False
     assert llm_request_options["response_format"] is None
