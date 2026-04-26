@@ -5,6 +5,7 @@ Each handler module contains functions that execute specific tools.
 These are extracted from the original llm_tools.py for better organization.
 """
 
+from .graph import handle_query_graph
 from .homeassistant import handle_home_assistant
 from .memory import (
     handle_get_document,
@@ -31,6 +32,7 @@ HANDLERS = {
     "get_events": handle_get_events,
     "get_document": handle_get_document,
     "summarize_memories": handle_summarize_memories,
+    "query_graph": handle_query_graph,
     "resolve_contacts": handle_resolve_contacts,
     "lookup_contact": handle_lookup_contact,
     "select_contacts": handle_select_contacts,
@@ -64,6 +66,7 @@ __all__ = [
     "handle_lookup_contact_places",
     "handle_lookup_place_contacts",
     "handle_lookup_places",
+    "handle_query_graph",
     "handle_resolve_contacts",
     "handle_run_skill_script",
     "handle_search_memories",

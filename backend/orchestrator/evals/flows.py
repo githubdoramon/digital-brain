@@ -581,13 +581,6 @@ EVAL_FLOWS: list[EvalFlowDefinition] = [
                 expected={"intent": "conversational", "pre_resolve_contacts": False},
                 response_json_schema=ROUTER_RESPONSE_SCHEMA,
             ),
-            EvalCase(
-                case_id="router-complex-mixed",
-                title="Complex mixed request",
-                input={"question": "Check what I discussed with John about hiring, then look online for current salary benchmarks in Aurora."},
-                expected={"intent": "complex", "pre_resolve_contacts": True},
-                response_json_schema=ROUTER_RESPONSE_SCHEMA,
-            ),
         ],
         execute_case=_execute_router_case,
         score_case=_score_router_case,

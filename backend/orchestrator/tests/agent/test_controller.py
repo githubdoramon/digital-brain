@@ -537,7 +537,7 @@ class TestToolExposurePolicy:
         )
 
     @pytest.mark.asyncio
-    async def test_run_keeps_contact_presolve_for_memory_intent(self, monkeypatch):
+    async def test_run_runs_contact_presolve_when_llm_hints_true(self, monkeypatch):
         from agent.router import IntentClassification, IntentType
 
         controller = AgentController(
@@ -552,12 +552,15 @@ class TestToolExposurePolicy:
         observed = {"called": False}
 
         async def fake_run_intent_router(*_args, **_kwargs):
+            # MEMORY_SEARCH no longer auto-forces pre-resolve; the LLM router is
+            # expected to set this when the question names a person.
             return IntentClassification(
                 intent=IntentType.MEMORY_SEARCH,
                 confidence=0.9,
                 allowed_tool_groups=["memory", "resolution"],
                 constraints=[],
-                reasoning="memory intent",
+                pre_resolve_contacts=True,
+                reasoning="memory intent with named person",
             )
 
         monkeypatch.setattr(controller, "_run_intent_router", fake_run_intent_router)

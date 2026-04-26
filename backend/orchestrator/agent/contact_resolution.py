@@ -22,10 +22,7 @@ if TYPE_CHECKING:
 
 
 PRE_RESOLVE_CONTACT_INTENTS = {
-    "memory_search",
-    "data_query",
     "contact_lookup",
-    "complex",
 }
 
 

@@ -28,15 +28,14 @@ from tools.registry import TOOL_GROUPS as REGISTRY_TOOL_GROUPS
 class IntentType(str, Enum):
     """Classified intent types."""
 
-    MEMORY_SEARCH = "memory_search"  # Searching memories, events, documents
-    DATA_QUERY = "data_query"  # Structured retrieval/counting (non-SQL)
+    MEMORY_SEARCH = "memory_search"  # Semantic recall over memories, events, documents
+    DATA_QUERY = "data_query"  # Structured counting/aggregation over the memory graph
     CONTACT_LOOKUP = "contact_lookup"  # People, relationships
     WEB_SEARCH = "web_search"  # External information
     HOME_CONTROL = "home_control"  # Home Assistant actions
     SKILL_EXECUTION = "skill_execution"  # Running skill scripts
     SYSTEM_COMMAND = "system_command"  # Bash commands
     CONVERSATIONAL = "conversational"  # General chat, no tools needed
-    COMPLEX = "complex"  # Multi-step task requiring multiple tool groups
     UNKNOWN = "unknown"  # Fallback
 
 
@@ -82,28 +81,30 @@ TOOL_GROUPS = dict(REGISTRY_TOOL_GROUPS)
 # Intent to tool group mappings
 INTENT_TOOL_MAP = {
     IntentType.MEMORY_SEARCH: ["memory", "resolution"],
-    IntentType.DATA_QUERY: ["memory", "resolution"],
+    IntentType.DATA_QUERY: ["graph", "memory", "resolution"],
     IntentType.CONTACT_LOOKUP: ["resolution", "memory"],
     IntentType.WEB_SEARCH: ["web"],
     IntentType.HOME_CONTROL: ["home"],
     IntentType.SKILL_EXECUTION: ["skills", "memory"],
     IntentType.SYSTEM_COMMAND: ["system"],
     IntentType.CONVERSATIONAL: ["web", "ui"],  # Web search + UI follow-up directives
-    IntentType.COMPLEX: list(TOOL_GROUPS.keys()),  # All tools
     IntentType.UNKNOWN: list(TOOL_GROUPS.keys()),  # All tools
 }
 
-# Intent-level fallback policy for contact pre-resolution.
+# Intent-level fallback policy for contact pre-resolution. The LLM router is
+# expected to decide per-query (see prompt below); these defaults only apply
+# when the LLM omits the field or rule-based classification short-circuits.
+# Conservative defaults: only pre-resolve when the intent itself is about a
+# named person.
 INTENT_PRE_RESOLVE_CONTACTS = {
-    IntentType.MEMORY_SEARCH: True,
-    IntentType.DATA_QUERY: True,
+    IntentType.MEMORY_SEARCH: False,
+    IntentType.DATA_QUERY: False,
     IntentType.CONTACT_LOOKUP: True,
     IntentType.WEB_SEARCH: False,
     IntentType.HOME_CONTROL: False,
     IntentType.SKILL_EXECUTION: False,
     IntentType.SYSTEM_COMMAND: False,
     IntentType.CONVERSATIONAL: False,
-    IntentType.COMPLEX: True,
     IntentType.UNKNOWN: False,
 }
 
@@ -460,15 +461,14 @@ class IntentRouter:
 QUESTION: {question}
 {context}
 INTENT TYPES:
-- memory_search: Searching memories, events, documents, and the connections between them
-- data_query: Counting, aggregation, structured retrieval of anything in the memory graph. Less about qualitative analysis and more about quantitative analysis.
+- memory_search: Qualitative recall over memories, events, documents, and the connections between them. Pick this when the user wants the *content* of past interactions ("what did we discuss", "find the meeting where").
+- data_query: Quantitative questions over the memory graph — counts, distinct counts, time-bucketed breakdowns ("how many meetings last month", "how many people did I meet this week", "events grouped by type"). Pick this whenever the answer is a number or ranked breakdown rather than a description.
 - contact_lookup: Finding people, relationships, professions
 - web_search: External information from the internet not related to user's personal graph of contacts, events, places, and documents
 - home_control: Smart home/Home Assistant actions
 - skill_execution: Running skill scripts
 - system_command: Bash/shell commands
 - conversational: General chat, no tools needed
-- complex: Multi-step task needing multiple tool groups
 
 Also decide whether the controller should pre-resolve contacts before the tool loop:
 - Set `pre_resolve_contacts` to true ONLY when the query references a specific person by name,

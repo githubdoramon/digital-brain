@@ -25,6 +25,7 @@ logger = get_runtime_logger(__name__)
 # Tool group definitions - maps group names to tool names
 TOOL_GROUPS = {
     "memory": ["search_memories", "get_events", "get_document", "summarize_memories"],
+    "graph": ["query_graph"],
     "resolution": [
         "resolve_contacts",
         "lookup_contact",
@@ -484,6 +485,197 @@ def _register_all_tools(registry: ToolRegistry) -> None:
                     default=40,
                     minimum=1,
                     validator=validate_positive_int,
+                ),
+            ],
+            constraints=["read_only"],
+        )
+    )
+
+    # query_graph
+    registry.register(
+        ToolContract(
+            name="query_graph",
+            description=(
+                "Deterministic structured queries over the personal memory graph. "
+                "Use this for quantitative questions that need exact numbers — counts, distinct counts, "
+                "and grouped breakdowns. "
+                "Pick `entity` to choose what to query: `events` (meetings/interactions), "
+                "`contacts` (people in the directory), `places` (locations), `documents` (uploaded notes/files), "
+                "or `todos` (tasks). "
+                "Filters and group-by dimensions are interpreted relative to the chosen entity; unsupported "
+                "filters are silently ignored. "
+                "Examples: 'how many meetings did I have last month' → entity=events, count; "
+                "'how many people did I meet this week' → entity=events, count, distinct=contacts; "
+                "'breakdown of contacts by tag' → entity=contacts, group_by=tag; "
+                "'how many places do I know in Aurora' → entity=places (filter by city via group_by); "
+                "'how many docs about Apollo' → entity=documents, count, tags=['apollo']; "
+                "'how many todos did I finish this week' → entity=todos, count, status='completed', "
+                "time_field='updated', time_start=<week_start>. "
+                "Do NOT use this for qualitative recall, content discovery, or detail retrieval — use `search_memories`, "
+                "`get_events`, or `lookup_contact` instead."
+            ),
+            parameters=[
+                ToolParameter(
+                    name="entity",
+                    type="string",
+                    description=(
+                        "What to query: `events` (default), `contacts`, `places`, `documents`, or `todos`. "
+                        "Determines which filters and group-by dimensions are valid."
+                    ),
+                    required=False,
+                    default="events",
+                    enum=["events", "contacts", "places", "documents", "todos"],
+                ),
+                ToolParameter(
+                    name="operation",
+                    type="string",
+                    description=(
+                        "`count` returns a single number; `group_by` returns ranked buckets with counts."
+                    ),
+                    required=True,
+                    enum=["count", "group_by"],
+                ),
+                ToolParameter(
+                    name="time_start",
+                    type="string",
+                    description=(
+                        "ISO 8601 lower bound (inclusive). Applied to event start_date for entity=`events`, "
+                        "document_date for entity=`documents`, and the column chosen by `time_field` for "
+                        "entity=`todos`. Ignored for entity=`contacts`/`places`."
+                    ),
+                    required=False,
+                ),
+                ToolParameter(
+                    name="time_end",
+                    type="string",
+                    description=(
+                        "ISO 8601 upper bound (inclusive). Same column rules as `time_start`."
+                    ),
+                    required=False,
+                ),
+                ToolParameter(
+                    name="time_field",
+                    type="string",
+                    description=(
+                        "Only for entity=`todos`. Selects which timestamp `time_start`/`time_end` (and "
+                        "month/week/day group_by) apply to: `due` (due_date, default), `updated` (updated_at "
+                        "— use this for 'finished/completed this week'), or `created` (created_at). "
+                        "Ignored for other entities."
+                    ),
+                    required=False,
+                    default="due",
+                    enum=["due", "updated", "created"],
+                ),
+                ToolParameter(
+                    name="status",
+                    type="string",
+                    description=(
+                        "Only for entity=`todos`. Filter by todo status (legacy values are normalized): "
+                        "`pending` for open todos, `completed` for finished. Omit to include all."
+                    ),
+                    required=False,
+                    enum=["pending", "completed"],
+                ),
+                ToolParameter(
+                    name="contact_ids",
+                    type="array",
+                    description=(
+                        "Optional contact IDs. For entity=`events`: scope to events involving these people. "
+                        "For entity=`contacts`: scope to these specific contacts. "
+                        "For entity=`places`: scope to places linked to these contacts via contact_places. "
+                        "For entity=`todos`: scope to todos linked to these contacts via todo_contacts. "
+                        "Ignored for entity=`documents`."
+                    ),
+                    required=False,
+                    items_type="string",
+                ),
+                ToolParameter(
+                    name="event_ids",
+                    type="array",
+                    description=(
+                        "Optional event IDs. Only for entity=`todos`: scope to todos linked to these events "
+                        "via todo_events. Ignored for other entities."
+                    ),
+                    required=False,
+                    items_type="string",
+                ),
+                ToolParameter(
+                    name="place_ids",
+                    type="array",
+                    description=(
+                        "Optional place IDs. For entity=`events`: scope to events at these locations. "
+                        "For entity=`contacts`: scope to contacts linked to these places. "
+                        "For entity=`places`: scope to these specific places. "
+                        "For entity=`todos`: scope to todos linked to these places via todo_places. "
+                        "Ignored for entity=`documents`."
+                    ),
+                    required=False,
+                    items_type="string",
+                ),
+                ToolParameter(
+                    name="tags",
+                    type="array",
+                    description=(
+                        "Optional tag filter (OR semantics, case-insensitive). Applies to event/contact/document tags. "
+                        "Ignored for entity=`places`/`todos` (no tags column)."
+                    ),
+                    required=False,
+                    items_type="string",
+                ),
+                ToolParameter(
+                    name="types",
+                    type="array",
+                    description=(
+                        "Optional event-type filter (OR semantics, case-insensitive). "
+                        "Only applies to entity=`events`."
+                    ),
+                    required=False,
+                    items_type="string",
+                ),
+                ToolParameter(
+                    name="distinct",
+                    type="string",
+                    description=(
+                        "For operation=`count`: what to count distinctly. Defaults to the entity itself. "
+                        "Per entity: events → events|contacts|places; contacts → contacts|places; "
+                        "places → places|events|contacts; documents → documents; todos → todos."
+                    ),
+                    required=False,
+                    enum=["events", "contacts", "places", "documents", "todos"],
+                ),
+                ToolParameter(
+                    name="group_by",
+                    type="string",
+                    description=(
+                        "For operation=`group_by`: dimension to bucket by (required when operation is `group_by`). "
+                        "Per entity: events → type|month|week|day|place|tag|contact; "
+                        "contacts → tag|place; places → city|country; "
+                        "documents → tag|month|week|day|file_mime; "
+                        "todos → status|month|week|day|contact (month/week/day use the column chosen by `time_field`)."
+                    ),
+                    required=False,
+                    enum=[
+                        "type",
+                        "month",
+                        "week",
+                        "day",
+                        "place",
+                        "tag",
+                        "contact",
+                        "city",
+                        "country",
+                        "file_mime",
+                        "status",
+                    ],
+                ),
+                ToolParameter(
+                    name="limit",
+                    type="integer",
+                    description="For operation=`group_by`: cap on returned buckets (default 50, max 200).",
+                    required=False,
+                    default=50,
+                    minimum=1,
+                    maximum=200,
                 ),
             ],
             constraints=["read_only"],

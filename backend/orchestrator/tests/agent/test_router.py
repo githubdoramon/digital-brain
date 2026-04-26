@@ -27,7 +27,6 @@ class TestIntentType:
             "skill_execution",
             "system_command",
             "conversational",
-            "complex",
             "unknown",
         ]
 
@@ -81,6 +80,7 @@ class TestToolGroups:
         """Test all expected tool groups exist."""
         expected_groups = [
             "memory",
+            "graph",
             "resolution",
             "web",
             "home",
@@ -107,15 +107,23 @@ class TestIntentToolMap:
         groups = INTENT_TOOL_MAP[IntentType.MEMORY_SEARCH]
         assert "memory" in groups
         assert "resolution" in groups
+        assert "graph" not in groups
+
+    def test_data_query_routes_to_graph(self):
+        """DATA_QUERY should prefer the structured graph tool."""
+        groups = INTENT_TOOL_MAP[IntentType.DATA_QUERY]
+        assert "graph" in groups
+        # memory remains as a semantic fallback for hybrid quantitative + qualitative queries
+        assert "memory" in groups
 
     def test_conversational_has_web_and_ui_tools(self):
         """Test CONVERSATIONAL intent has web search and UI tools for follow-ups."""
         groups = INTENT_TOOL_MAP[IntentType.CONVERSATIONAL]
         assert groups == ["web", "ui"]
 
-    def test_complex_all_tools(self):
-        """Test COMPLEX intent has all tool groups."""
-        groups = INTENT_TOOL_MAP[IntentType.COMPLEX]
+    def test_unknown_has_all_tools(self):
+        """UNKNOWN remains the catch-all that exposes every tool group."""
+        groups = INTENT_TOOL_MAP[IntentType.UNKNOWN]
         assert set(groups) == set(TOOL_GROUPS.keys())
 
 
@@ -333,7 +341,9 @@ class TestLLMClassification:
         assert result.intent == IntentType.MEMORY_SEARCH
         assert result.confidence == 0.92
         assert result.constraints == ["read_only"]
-        assert result.pre_resolve_contacts is True
+        # MEMORY_SEARCH no longer forces pre-resolve when the LLM omits the field;
+        # the conservative default is False and the LLM is expected to opt-in.
+        assert result.pre_resolve_contacts is False
 
     def test_parse_llm_response_with_markdown(self, router_with_llm):
         """Test parsing LLM response wrapped in markdown."""
