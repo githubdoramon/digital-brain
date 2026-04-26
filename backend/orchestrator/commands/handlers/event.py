@@ -111,6 +111,87 @@ EVENT_MATCH_CANDIDATE_FLOOR = 35.0  # below this, ignore the candidate entirely
 EVENT_MATCH_AUTO_UPDATE_SCORE = 65.0  # at/above this, propose update confidently
 EVENT_MATCH_AMBIGUOUS_GAP = 5.0  # top-2 within this range -> ambiguous
 EVENT_MATCH_MAX_CANDIDATES = 5
+
+_EVENT_MATCH_STOPWORDS = {
+    "a",
+    "an",
+    "and",
+    "around",
+    "at",
+    "be",
+    "did",
+    "dinner",
+    "for",
+    "from",
+    "go",
+    "had",
+    "have",
+    "i",
+    "in",
+    "is",
+    "it",
+    "last",
+    "me",
+    "met",
+    "my",
+    "of",
+    "on",
+    "our",
+    "the",
+    "their",
+    "them",
+    "there",
+    "this",
+    "to",
+    "today",
+    "tonight",
+    "us",
+    "was",
+    "we",
+    "went",
+    "were",
+    "with",
+    "yesterday",
+    "wife",
+    "husband",
+    "daughter",
+    "son",
+    "kids",
+    "family",
+    "nothing",
+    "special",
+    "okay",
+    "ok",
+    "okish",
+    "okayish",
+    "well",
+}
+
+_EVENT_MATCH_QUERY_OVERLAP_FLOOR = 0.18
+_EVENT_MATCH_TITLE_OVERLAP_FLOOR = 0.34
+_EVENT_MATCH_PLACE_OVERLAP_FLOOR = 0.6
+
+
+def _event_match_tokens(value: Any) -> set[str]:
+    normalized = normalize_search_text(str(value or ""))
+    if not normalized:
+        return set()
+    tokens: set[str] = set()
+    for token in re.findall(r"[a-z0-9']+", normalized):
+        if token in _EVENT_MATCH_STOPWORDS:
+            continue
+        if len(token) < 2 and not token.isdigit():
+            continue
+        tokens.add(token)
+    return tokens
+
+
+def _token_overlap_ratio(left: set[str], right: set[str]) -> float:
+    if not left or not right:
+        return 0.0
+    return len(left & right) / float(min(len(left), len(right)))
+
+
 def _extract_client_location(context: dict[str, Any]) -> dict[str, Any] | None:
     client_context = context.get("client_context")
     if not isinstance(client_context, dict):
@@ -1346,6 +1427,9 @@ def _find_event_matches(
 
     extracted_when = extracted.get("when") if isinstance(extracted.get("when"), datetime) else None
     people_id_set = set(people_ids)
+    query_tokens = _event_match_tokens(query)
+    title_tokens = _event_match_tokens(extracted.get("title"))
+    where_tokens = _event_match_tokens(extracted.get("where"))
 
     raw_results = _search_event_candidates(query, time_start, time_end, EVENT_MATCH_MAX_CANDIDATES)
     if not raw_results and (time_start or time_end):
@@ -1360,6 +1444,54 @@ def _find_event_matches(
     for result in raw_results:
         raw_score = float(result.get("score") or 0.0)
         normalized_score = max(0.0, min(100.0, raw_score * 100.0))
+        result_place = (
+            str(result.get("place", {}).get("place_id") or "").strip()
+            if isinstance(result.get("place"), dict)
+            else ""
+        )
+        result_place_name = (
+            str(result.get("place", {}).get("name") or "").strip()
+            if isinstance(result.get("place"), dict)
+            else ""
+        )
+        candidate_title_tokens = _event_match_tokens(result.get("title"))
+        candidate_place_tokens = _event_match_tokens(result_place_name)
+        candidate_text_tokens = _event_match_tokens(
+            " ".join(
+                part
+                for part in (
+                    result.get("title"),
+                    result.get("summary"),
+                    result_place_name,
+                )
+                if str(part or "").strip()
+            )
+        )
+        query_overlap = _token_overlap_ratio(query_tokens, candidate_text_tokens)
+        title_overlap = _token_overlap_ratio(
+            title_tokens,
+            candidate_title_tokens or candidate_text_tokens,
+        )
+        place_overlap = _token_overlap_ratio(where_tokens, candidate_place_tokens)
+        place_match = bool(place_id and result_place and result_place == place_id)
+        has_content_anchor = (
+            query_overlap >= _EVENT_MATCH_QUERY_OVERLAP_FLOOR
+            or title_overlap >= _EVENT_MATCH_TITLE_OVERLAP_FLOOR
+            or place_overlap >= _EVENT_MATCH_PLACE_OVERLAP_FLOOR
+            or place_match
+        )
+        if not has_content_anchor:
+            continue
+        match_sources: list[str] = []
+        if query_overlap >= _EVENT_MATCH_QUERY_OVERLAP_FLOOR:
+            normalized_score += min(18.0, query_overlap * 25.0)
+            match_sources.append("query_overlap")
+        if title_overlap >= _EVENT_MATCH_TITLE_OVERLAP_FLOOR:
+            normalized_score += min(15.0, title_overlap * 20.0)
+            match_sources.append("title_overlap")
+        if place_overlap >= _EVENT_MATCH_PLACE_OVERLAP_FLOOR and not place_match:
+            normalized_score += min(8.0, place_overlap * 10.0)
+            match_sources.append("place_overlap")
 
         # Date is the dominant signal when the user supplied one. If two
         # candidates have similar text scores but different dates, the
@@ -1378,13 +1510,17 @@ def _find_event_matches(
                 days_apart = abs((result_when - extracted_when).total_seconds()) / 86400.0
                 if days_apart < 0.5:
                     normalized_score += 45.0
+                    match_sources.append("same_day")
                 elif days_apart < 2:
                     normalized_score += 8.0
+                    match_sources.append("near_day")
                 elif days_apart >= 7:
                     # User explicitly dated the event; a week+ off is almost
                     # certainly not the one they meant. Penalize hard so text
                     # similarity alone can't resurrect it.
                     normalized_score -= 25.0
+                    if not (place_match or query_overlap >= 0.45 or title_overlap >= 0.6):
+                        continue
             except (TypeError, ValueError):
                 pass
 
@@ -1393,20 +1529,23 @@ def _find_event_matches(
             overlap = len(result_people & people_id_set)
             if overlap:
                 normalized_score += min(15.0, 5.0 * overlap)
+                match_sources.append("people_overlap")
 
         if place_id:
-            result_place = (
-                str(result.get("place", {}).get("place_id") or "").strip()
-                if isinstance(result.get("place"), dict)
-                else ""
-            )
-            if result_place and result_place == place_id:
+            if place_match:
                 normalized_score += 10.0
+                match_sources.append("place_match")
 
         normalized_score = max(0.0, min(100.0, normalized_score))
         if normalized_score < EVENT_MATCH_CANDIDATE_FLOOR:
             continue
-        scored.append({**result, "match_score": normalized_score})
+        scored.append(
+            {
+                **result,
+                "match_score": normalized_score,
+                "match_sources": _dedupe_preserve_order(match_sources),
+            }
+        )
 
     if not scored:
         return {"operation": "create", "candidates": []}
@@ -1429,6 +1568,14 @@ def _find_event_matches(
                 second_score,
             )
             return {"operation": "ambiguous", "candidates": candidates}
+
+    if top_score < EVENT_MATCH_AUTO_UPDATE_SCORE:
+        logger.info(
+            "[handle_event] Event match below auto-update threshold: id=%s score=%.2f",
+            top.get("id"),
+            top_score,
+        )
+        return {"operation": "create", "candidates": []}
 
     logger.info(
         "[handle_event] Event match found: id=%s score=%.2f (auto_update=%s)",

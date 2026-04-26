@@ -1182,3 +1182,77 @@ def test_follow_up_without_prior_clarification_infers_target_fields(monkeypatch)
     if preview_id:
         delete_command_data(preview_id)
     clear_pending_event("user@example.com:thread-123")
+
+
+def test_find_event_matches_rejects_same_family_but_unrelated_content(monkeypatch):
+    extracted = {
+        "title": "Family Burger Dinner",
+        "summary": "Went with wife and daughter to eat burgers at Bueda Fome.",
+        "when": event_handler.datetime(2026, 4, 25, 18, 15),
+        "where": "Bueda Fome",
+    }
+    resolution = {
+        "contacts": [
+            {"contact_id": "contact:wife"},
+            {"contact_id": "contact:daughter"},
+        ],
+        "matched_place": None,
+    }
+
+    monkeypatch.setattr(
+        event_handler,
+        "_search_event_candidates",
+        lambda *_args, **_kwargs: [
+            {
+                "id": "event:movie",
+                "title": "Family Movie Night: Super Mario Galaxy",
+                "summary": "Went with family to the cinema and watched Super Mario Galaxy.",
+                "score": 0.42,
+                "start_date": "2026-04-25T18:00:00",
+                "people": ["contact:wife", "contact:daughter"],
+                "place": {"place_id": "place:cinema", "name": "Nos Cinemas"},
+            }
+        ],
+    )
+
+    match = event_handler._find_event_matches(
+        "yesterday at 18h15 I went with wife and daughter eat some burgers at Bueda Fome.",
+        extracted,
+        resolution,
+    )
+
+    assert match == {"operation": "create", "candidates": []}
+
+
+def test_find_event_matches_requires_auto_update_threshold(monkeypatch):
+    extracted = {
+        "title": "Morning coffee",
+        "summary": "Had coffee and caught up.",
+        "when": event_handler.datetime(2026, 4, 22, 9, 0),
+        "where": None,
+    }
+    resolution = {"contacts": [], "matched_place": None}
+
+    monkeypatch.setattr(
+        event_handler,
+        "_search_event_candidates",
+        lambda *_args, **_kwargs: [
+            {
+                "id": "event:coffee",
+                "title": "Coffee catch-up with Alex",
+                "summary": "Met Alex for coffee.",
+                "score": 0.2,
+                "start_date": "2026-04-23T09:00:00",
+                "people": [],
+                "place": None,
+            }
+        ],
+    )
+
+    match = event_handler._find_event_matches(
+        "coffee meetup",
+        extracted,
+        resolution,
+    )
+
+    assert match == {"operation": "create", "candidates": []}
