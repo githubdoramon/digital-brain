@@ -704,7 +704,7 @@ class TestFormatContextNews:
             _make_news_article(
                 title="OpenAI releases GPT-5",
                 url="https://example.com/gpt5",
-                source="tavily",
+                source="langsearch",
                 topic_matches=["AI"],
             ),
         ]

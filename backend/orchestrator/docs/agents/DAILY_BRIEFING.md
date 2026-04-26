@@ -19,7 +19,7 @@ This document captures behavior and quality rules for the daily briefing profile
    - If there are no prior occurrences, fallback matching uses the same attendees. If history is still empty, a final freeform prep synthesis may use current context plus targeted research.
    - Per-event prep has a single responsibility: produce one structured prep payload (`key_points`, `action_items`, `suggested_reading`, `prep_focus`). Research runs only in the no-history fallback path.
 3. Gather birthdays and unlinked pending todos.
-4. Aggregate news via `news_feeds.fetch_news()` (Tavily + NewsData + RSS), then story-cluster and persist mention history.
+4. Aggregate news via `news_feeds.fetch_news()` (LangSearch + NewsData + RSS), then story-cluster and persist mention history.
 5. Generate final markdown in focused passes:
    - Build event-critical sections (`Day Overview`, `Schedule`, `Event Prep`) deterministically from the structured per-event prep payloads (no second event-summary rewrite pass).
    - Build deterministic sections in code for birthdays and outstanding todos.

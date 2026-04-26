@@ -52,7 +52,7 @@ def handle_fetch_web_page(
     """
     Execute fetch_web_page tool.
 
-    Retrieves web page content via the Tavily extract API.
+    Retrieves web page content via direct HTTP fetch and extraction.
     """
     import web_tools
 

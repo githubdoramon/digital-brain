@@ -54,10 +54,9 @@ All endpoints require `Authorization: Bearer <google-id-token>` header.
 - `POST /ask` - Ask questions about memories
 
 The LLM agent uses a collection of function tools (memory search, SQL access, etc.).
-If you provide a Tavily API key (`TAVILY_API_KEY`), the agent can also run live
-internet searches to enrich its answers. With the same credentials it can now
-fetch the full contents of specific web pages for deeper context via Tavily's
-extract API. Configure optional overrides using the environment variables
+If you provide a LangSearch API key (`LANGSEARCH_API_KEY`), the agent can also run live
+internet searches to enrich its answers. It can also fetch the full contents of
+specific web pages directly for deeper context. Configure optional overrides using the environment variables
 documented in `backend/env.template`.
 
 ## Development
@@ -77,4 +76,3 @@ uvicorn app:api --reload
 ## Deployment
 
 Make sure to set `GOOGLE_CLIENT_ID` and `ALLOWED_USERS` in your deployment environment.
-
