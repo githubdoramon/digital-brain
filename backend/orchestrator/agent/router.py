@@ -460,10 +460,10 @@ class IntentRouter:
 QUESTION: {question}
 {context}
 INTENT TYPES:
-- memory_search: Searching memories, events, documents
-- data_query: Counting, aggregation, structured retrieval (no SQL tool)
-- contact_lookup: Finding people, relationships
-- web_search: External information from the internet
+- memory_search: Searching memories, events, documents, and the connections between them
+- data_query: Counting, aggregation, structured retrieval of anything in the memory graph. Less about qualitative analysis and more about quantitative analysis.
+- contact_lookup: Finding people, relationships, professions
+- web_search: External information from the internet not related to user's personal graph of contacts, events, places, and documents
 - home_control: Smart home/Home Assistant actions
 - skill_execution: Running skill scripts
 - system_command: Bash/shell commands
