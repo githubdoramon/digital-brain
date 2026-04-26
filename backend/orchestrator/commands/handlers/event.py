@@ -170,6 +170,12 @@ _EVENT_MATCH_STOPWORDS = {
 _EVENT_MATCH_QUERY_OVERLAP_FLOOR = 0.18
 _EVENT_MATCH_TITLE_OVERLAP_FLOOR = 0.34
 _EVENT_MATCH_PLACE_OVERLAP_FLOOR = 0.6
+_EVENT_MATCH_EXPLICIT_NEW_EVENT_PATTERNS = (
+    "not the same event",
+    "different event",
+    "another event",
+    "new event",
+)
 
 
 def _event_match_tokens(value: Any) -> set[str]:
@@ -190,6 +196,17 @@ def _token_overlap_ratio(left: set[str], right: set[str]) -> float:
     if not left or not right:
         return 0.0
     return len(left & right) / float(min(len(left), len(right)))
+
+
+def _normalized_event_match_text(value: Any) -> str:
+    return normalize_search_text(str(value or ""))
+
+
+def _user_explicitly_rejected_same_event(raw_message: str | None) -> bool:
+    normalized = _normalized_event_match_text(raw_message)
+    if not normalized:
+        return False
+    return any(pattern in normalized for pattern in _EVENT_MATCH_EXPLICIT_NEW_EVENT_PATTERNS)
 
 
 def _extract_client_location(context: dict[str, Any]) -> dict[str, Any] | None:
@@ -1398,6 +1415,10 @@ def _find_event_matches(
     if not query:
         return {"operation": "create", "candidates": []}
 
+    if _user_explicitly_rejected_same_event(raw_message):
+        logger.info("[handle_event] Event match skipped: user explicitly said this is a new event")
+        return {"operation": "create", "candidates": []}
+
     time_start, time_end = _compute_event_match_window(extracted.get("when"))
     end_when = extracted.get("end_when")
     if isinstance(end_when, datetime) and time_end:
@@ -1507,6 +1528,14 @@ def _find_event_matches(
                     result_when = result_when.replace(tzinfo=None)
                 elif extracted_when.tzinfo and not result_when.tzinfo:
                     result_when = result_when.replace(tzinfo=extracted_when.tzinfo)
+                if result_when.date() != extracted_when.date():
+                    logger.info(
+                        "[handle_event] Rejecting candidate %s due to calendar-date mismatch: %s vs %s",
+                        result.get("id"),
+                        result_when.date(),
+                        extracted_when.date(),
+                    )
+                    continue
                 days_apart = abs((result_when - extracted_when).total_seconds()) / 86400.0
                 if days_apart < 0.5:
                     normalized_score += 45.0

@@ -1256,3 +1256,71 @@ def test_find_event_matches_requires_auto_update_threshold(monkeypatch):
     )
 
     assert match == {"operation": "create", "candidates": []}
+
+
+def test_find_event_matches_rejects_calendar_day_mismatch(monkeypatch):
+    extracted = {
+        "title": "Lunch at Dragao with Family",
+        "summary": "Returned from lunch at Dragao with family.",
+        "when": event_handler.datetime.fromisoformat("2026-04-26T12:30:00+01:00"),
+        "where": "Dragao",
+    }
+    resolution = {"contacts": [], "matched_place": None}
+
+    monkeypatch.setattr(
+        event_handler,
+        "_search_event_candidates",
+        lambda *_args, **_kwargs: [
+            {
+                "id": "event:yesterday-lunch",
+                "title": "Family Burger Meal at Bueda Fome",
+                "summary": "Went with family to eat burgers.",
+                "score": 0.7,
+                "start_date": "2026-04-25T19:15:00+01:00",
+                "people": [],
+                "place": {"place_id": "place:bueda", "name": "Bueda Fome"},
+            }
+        ],
+    )
+
+    match = event_handler._find_event_matches(
+        "just came back from lunch at dragao with wife and daughter. Additional details: Date and time of the event: 2026-04-26T12:30",
+        extracted,
+        resolution,
+    )
+
+    assert match == {"operation": "create", "candidates": []}
+
+
+def test_find_event_matches_honors_explicit_new_event_correction(monkeypatch):
+    extracted = {
+        "title": "Lunch at Dragao with Family",
+        "summary": "Returned from lunch at Dragao with family.",
+        "when": event_handler.datetime.fromisoformat("2026-04-26T12:30:00+01:00"),
+        "where": "Dragao",
+    }
+    resolution = {"contacts": [], "matched_place": None}
+
+    monkeypatch.setattr(
+        event_handler,
+        "_search_event_candidates",
+        lambda *_args, **_kwargs: [
+            {
+                "id": "event:yesterday-lunch",
+                "title": "Lunch at Dragao with Family",
+                "summary": "Returned from lunch at Dragao with family.",
+                "score": 0.95,
+                "start_date": "2026-04-26T12:30:00+01:00",
+                "people": [],
+                "place": {"place_id": "place:dragao", "name": "Dragao"},
+            }
+        ],
+    )
+
+    match = event_handler._find_event_matches(
+        "This is not the same event. One was yesterday, the other one is today.",
+        extracted,
+        resolution,
+    )
+
+    assert match == {"operation": "create", "candidates": []}
