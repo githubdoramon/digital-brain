@@ -1057,7 +1057,8 @@ def _build_people_extraction_prompt(
 
 Text: \"{text}\"
 
-{conversation_block}{user_facts_block}IMPORTANT CONTEXT USAGE:
+{conversation_block}{user_facts_block}\n
+IMPORTANT CONTEXT USAGE:
 - Focus on the current Text above.
 - Use Conversation messages only to resolve references inside this Text.
 - Do NOT include people that appear only in conversation history.
@@ -1067,7 +1068,7 @@ Extract ONLY people references including:
 - Proper names (e.g., \"John Smith\")
 - Relational terms (e.g., \"my daughter\", \"the doctor\")
 - Nested relationships when clear (e.g., \"my daughter's doctor\")
-- The current user as \"user\" only if they are a participant in the event
+- The current user as \"user\" IF THEY are an active participant in the event (referred to, for example, as "I", "me", "my", "mine", "myself", "we", "us", "our", "ours")
 
 Normalization rules:
 - If text has \"X's <corporate/professional title>\" where X is an organization/company/team, output ONE person mention formatted as \"<title> at X\".

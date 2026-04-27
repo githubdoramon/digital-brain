@@ -262,7 +262,7 @@ def _count_query_events(filters: list[str], distinct: str) -> tuple[str, list[st
             f"{_where_clause(filters)}"
         ), filters
     # places
-    place_filters = filters + ["e.place_id IS NOT NULL"]
+    place_filters = [*filters, "e.place_id IS NOT NULL"]
     return (
         f"SELECT COUNT(DISTINCT e.place_id) AS total FROM events e {_where_clause(place_filters)}"
     ), place_filters
@@ -591,10 +591,7 @@ def handle_query_graph(
             "entity": entity,
         }
 
-    if operation == "count":
-        result = _run_count(entity, args)
-    else:
-        result = _run_group_by(entity, args)
+    result = _run_count(entity, args) if operation == "count" else _run_group_by(entity, args)
 
     if state is not None and not result.get("error"):
         if operation == "count":
