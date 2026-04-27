@@ -6,8 +6,8 @@ daily-briefing pipeline (or any other consumer) to produce a pre-digested
 news context that an LLM can later rank/summarize.
 
 Sources:
-    1. **LangSearch** – keyword search with ``freshness="oneDay"``
-       (requires LANGSEARCH_API_KEY).
+    1. **Tavily** – keyword search with ``topic="news"`` + ``time_range="day"``
+       (requires TAVILY_API_KEY).
     2. **Hacker News** – top stories via hnrss.org RSS (free, no key).
     3. **TechCrunch** – latest articles via RSS (free, no key).
     4. **Google News Portugal** – Portuguese-language headlines via RSS (free).
@@ -19,6 +19,7 @@ from __future__ import annotations
 import hashlib
 import os
 import re
+import time
 from collections import Counter
 from datetime import datetime, timezone
 from time import perf_counter
@@ -30,7 +31,6 @@ import feedparser
 import requests
 
 from db import get_conn
-from langsearch_client import search_web
 from observability.logger import get_runtime_logger
 from search_normalization import normalize_search_text
 
@@ -43,11 +43,36 @@ def _ms_since(start: float) -> float:
     return (perf_counter() - start) * 1000
 
 
+def _coerce_int(value: str | None, fallback: int) -> int:
+    if value is None:
+        return fallback
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return fallback
+
+
+def _coerce_float(value: str | None, fallback: float) -> float:
+    if value is None:
+        return fallback
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return fallback
+
+
+def _preview_response_text(response: requests.Response | None) -> str:
+    if response is None:
+        return ""
+    text = (response.text or "").strip().replace("\n", " ")
+    return text[:400]
+
+
 # ---------------------------------------------------------------------------
 # Constants / feed registry
 # ---------------------------------------------------------------------------
 
-DEFAULT_LANGSEARCH_NEWS_RESULTS = 5
+DEFAULT_TAVILY_NEWS_RESULTS = 5
 DEFAULT_NEWSDATA_RESULTS = 10
 
 NEWSDATA_API_URL = os.getenv("NEWSDATA_API_URL", "https://newsdata.io/api/1/news")
@@ -114,7 +139,7 @@ NewsArticle = dict[str, Any]
 
 def fetch_news(
     *,
-    max_langsearch_per_topic: int = DEFAULT_LANGSEARCH_NEWS_RESULTS,
+    max_tavily_per_topic: int = DEFAULT_TAVILY_NEWS_RESULTS,
     max_newsdata_per_query: int = NEWSDATA_RESULTS_PER_QUERY,
     feed_limit_per_source: int = 10,
 ) -> list[NewsArticle]:
@@ -126,7 +151,7 @@ def fetch_news(
             "title": str,
             "url": str,
             "summary": str,
-            "source": str,          # e.g. "langsearch", "hacker_news", "bbc_world"
+            "source": str,          # e.g. "tavily", "hacker_news", "bbc_world"
             "published_at": str | None,   # ISO-8601 or None
             "topic_matches": list[str],   # topic labels that matched (may be empty for RSS)
         }
@@ -168,21 +193,21 @@ def fetch_news(
         _ms_since(newsdata_start),
     )
 
-    # -- 2. LangSearch topic searches (one search per topic) -----------------
-    langsearch_start = perf_counter()
-    langsearch_total = 0
+    # -- 2. Tavily topic searches (one search per topic) ---------------------
+    tavily_start = perf_counter()
+    tavily_total = 0
     for topic in topics:
         for kw in topic["keywords"]:
-            results = _search_langsearch_news(kw, max_results=max_langsearch_per_topic)
+            results = _search_tavily_news(kw, max_results=max_tavily_per_topic)
             for r in results:
                 r["topic_matches"] = [topic["label"]]
-            langsearch_total += len(results)
+            tavily_total += len(results)
             articles.extend(results)
     logger.info(
-        "[news] LangSearch: %d article(s) from %d keyword search(es) (%.0fms)",
-        langsearch_total,
+        "[news] Tavily: %d article(s) from %d keyword search(es) (%.0fms)",
+        tavily_total,
         len(all_keywords),
-        _ms_since(langsearch_start),
+        _ms_since(tavily_start),
     )
 
     # -- 3. RSS feeds --------------------------------------------------------
@@ -457,62 +482,146 @@ def _search_newsdata_news(
 
 
 # ---------------------------------------------------------------------------
-# LangSearch news search
+# Tavily news search
 # ---------------------------------------------------------------------------
 
 
-def _search_langsearch_news(
+def _search_tavily_news(
     query: str,
     *,
-    max_results: int = DEFAULT_LANGSEARCH_NEWS_RESULTS,
+    max_results: int = DEFAULT_TAVILY_NEWS_RESULTS,
 ) -> list[NewsArticle]:
-    """Search LangSearch with a 24-hour freshness window."""
-    timeout = int(os.getenv("LANGSEARCH_TIMEOUT", "30"))
-
-    t0 = perf_counter()
-    search_response = search_web(
-        query=query,
-        count=max_results,
-        freshness="oneDay",
-        summary=True,
-        timeout_seconds=timeout,
-        request_label="daily_briefing:news_search",
-    )
-    if search_response.get("error"):
-        error = search_response.get("error") or {}
-        logger.warning(
-            "[news.langsearch] Search failed for %r code=%s status=%s retry_after=%s",
-            query,
-            error.get("code"),
-            error.get("status_code"),
-            error.get("retry_after_seconds"),
-        )
+    """Search Tavily with a daily news filter."""
+    api_key = os.getenv("TAVILY_API_KEY")
+    if not api_key:
+        logger.debug("TAVILY_API_KEY not set, skipping Tavily news search")
         return []
 
-    data = search_response.get("data") or {}
-    web_pages = ((data or {}).get("data") or {}).get("webPages") or {}
-    values = web_pages.get("value") or []
-    logger.debug(
-        "[news.langsearch] Search '%s': %d result(s) (%.0fms)",
-        query,
-        len(values),
-        _ms_since(t0),
-    )
+    api_url = os.getenv("TAVILY_API_URL", "https://api.tavily.com/search")
+    timeout = int(os.getenv("TAVILY_TIMEOUT", "30"))
+    max_retries = max(1, _coerce_int(os.getenv("TAVILY_NEWS_MAX_RETRIES"), fallback=3))
+    base_delay = max(0.0, _coerce_float(os.getenv("TAVILY_NEWS_RETRY_BASE_DELAY_SECONDS"), fallback=1.0))
+
+    payload = {
+        "api_key": api_key,
+        "query": query,
+        "topic": "news",
+        "time_range": "day",
+        "max_results": max(1, min(max_results, 10)),
+        "search_depth": "basic",
+        "include_answer": False,
+        "include_raw_content": False,
+    }
+
+    data: dict[str, Any] | None = None
+    for attempt in range(1, max_retries + 1):
+        t0 = perf_counter()
+        try:
+            response = requests.post(api_url, json=payload, timeout=timeout)
+            elapsed_ms = _ms_since(t0)
+            if response.status_code == 429 or response.status_code >= 500:
+                preview = _preview_response_text(response)
+                if attempt < max_retries:
+                    delay = base_delay * (2 ** (attempt - 1))
+                    logger.warning(
+                        "[news.tavily] Retryable HTTP status=%s query=%r elapsed=%.0fms attempt=%d/%d retry_in=%.1fs response=%s",
+                        response.status_code,
+                        query,
+                        elapsed_ms,
+                        attempt,
+                        max_retries,
+                        delay,
+                        preview,
+                    )
+                    time.sleep(delay)
+                    continue
+                logger.error(
+                    "[news.tavily] Search failed after retries status=%s query=%r elapsed=%.0fms response=%s",
+                    response.status_code,
+                    query,
+                    elapsed_ms,
+                    preview,
+                )
+                return []
+            response.raise_for_status()
+            data = response.json()
+            response_payload: dict[str, Any] = data if isinstance(data, dict) else {}
+            result_count = len(response_payload.get("results") or [])
+            logger.debug(
+                "[news.tavily] Search '%s': %d result(s) (%.0fms)",
+                query,
+                result_count,
+                elapsed_ms,
+            )
+            break
+        except requests.Timeout:
+            elapsed_ms = _ms_since(t0)
+            if attempt < max_retries:
+                delay = base_delay * (2 ** (attempt - 1))
+                logger.warning(
+                    "[news.tavily] Timeout query=%r elapsed=%.0fms attempt=%d/%d retry_in=%.1fs",
+                    query,
+                    elapsed_ms,
+                    attempt,
+                    max_retries,
+                    delay,
+                )
+                time.sleep(delay)
+                continue
+            logger.error(
+                "[news.tavily] Timeout after retries query=%r elapsed=%.0fms attempts=%d",
+                query,
+                elapsed_ms,
+                attempt,
+            )
+            return []
+        except requests.RequestException as exc:
+            elapsed_ms = _ms_since(t0)
+            if attempt < max_retries:
+                delay = base_delay * (2 ** (attempt - 1))
+                logger.warning(
+                    "[news.tavily] Network error type=%s query=%r elapsed=%.0fms attempt=%d/%d retry_in=%.1fs error=%s",
+                    type(exc).__name__,
+                    query,
+                    elapsed_ms,
+                    attempt,
+                    max_retries,
+                    delay,
+                    exc,
+                )
+                time.sleep(delay)
+                continue
+            logger.error(
+                "[news.tavily] Search failed after retries type=%s query=%r elapsed=%.0fms error=%s",
+                type(exc).__name__,
+                query,
+                elapsed_ms,
+                exc,
+            )
+            return []
+        except ValueError:
+            logger.error("[news.tavily] Invalid JSON response query=%r", query)
+            return []
+
+    if not isinstance(data, dict):
+        return []
+
+    results = data.get("results") or []
 
     articles: list[NewsArticle] = []
-    for item in values:
+    for item in results:
         url = str(item.get("url") or "").strip()
-        source = _extract_source_domain(url)
+        source = str(item.get("source") or item.get("source_name") or "").strip()
         if not source:
-            source = "unknown"
+            source = _extract_source_domain(url) or "unknown"
         articles.append(
             {
-                "title": str(item.get("name") or "").strip(),
+                "title": str(item.get("title") or "").strip(),
                 "url": url,
-                "summary": str(item.get("summary") or item.get("snippet") or "").strip(),
+                "summary": str(item.get("content") or item.get("snippet") or "").strip(),
                 "source": source,
-                "provider": "langsearch",
-                "published_at": item.get("datePublished"),
+                "provider": "tavily",
+                "published_at": item.get("published_date"),
                 "topic_matches": [],
             }
         )

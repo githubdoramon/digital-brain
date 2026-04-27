@@ -2,7 +2,7 @@ Digital Brain – Quick Context
 
 ## Overview
 
-Personal memory orchestrator with a **bounded agent architecture**. Backend: FastAPI (`backend/orchestrator`) + PostgreSQL/pgvector. Frontend: Next.js App Router (`frontend/web`) with NextAuth Google OAuth. Mobile app: React Native/Expo (`mobile`). Supports OpenAI-compatible LLM APIs (local Ollama or cloud). Optional LangSearch web search and Home Assistant integration.
+Personal memory orchestrator with a **bounded agent architecture**. Backend: FastAPI (`backend/orchestrator`) + PostgreSQL/pgvector. Frontend: Next.js App Router (`frontend/web`) with NextAuth Google OAuth. Mobile app: React Native/Expo (`mobile`). Supports OpenAI-compatible LLM APIs (local Ollama or cloud). Optional LangSearch web search, Tavily news search, and Home Assistant integration.
 
 **Core principle**: "The model proposes. The controller validates, executes, and decides."
 
@@ -353,6 +353,7 @@ HA_TOKEN=long_lived_access_token
 
 # Optional: Web Search
 LANGSEARCH_API_KEY=xxx
+TAVILY_API_KEY=xxx
 ```
 
 ### Frontend Environment

@@ -1,10 +1,12 @@
-"""Tests for news_feeds module – RSS parsing, LangSearch search, dedup & helpers."""
+"""Tests for news_feeds module – RSS parsing, Tavily search, dedup & helpers."""
 
 from __future__ import annotations
 
 import time
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
+
+import requests
 
 from news_feeds import (
     RSS_FEEDS,
@@ -15,7 +17,7 @@ from news_feeds import (
     _deduplicate,
     _fetch_rss_feed,
     _match_topics,
-    _search_langsearch_news,
+    _search_tavily_news,
     _sort_key,
     fetch_news,
 )
@@ -271,48 +273,58 @@ class TestDeduplicateByCluster:
 
 
 # ---------------------------------------------------------------------------
-# _search_langsearch_news
+# _search_tavily_news
 # ---------------------------------------------------------------------------
 
 
-class TestSearchLangSearchNews:
-    @patch.dict("os.environ", {"LANGSEARCH_API_KEY": ""}, clear=False)
+class TestSearchTavilyNews:
+    @patch.dict("os.environ", {"TAVILY_API_KEY": ""}, clear=False)
     def test_returns_empty_without_api_key(self):
-        assert _search_langsearch_news("ai") == []
+        assert _search_tavily_news("ai") == []
 
-    @patch("news_feeds.search_web")
-    @patch.dict("os.environ", {"LANGSEARCH_API_KEY": "test-key"}, clear=False)
-    def test_returns_normalized_articles(self, mock_search_web):
-        mock_search_web.return_value = {
-            "data": {
-                "data": {
-                    "webPages": {
-                        "value": [
-                            {
-                                "name": "AI News",
-                                "url": "https://example.com/ai",
-                                "summary": "Big AI news today",
-                                "datePublished": "2026-02-15",
-                            }
-                        ]
-                    }
+    @patch("news_feeds.requests.post")
+    @patch.dict("os.environ", {"TAVILY_API_KEY": "test-key"}, clear=False)
+    def test_returns_normalized_articles(self, mock_post):
+        response = MagicMock(status_code=200, headers={}, text='{"results": []}')
+        response.json.return_value = {
+            "results": [
+                {
+                    "title": "AI News",
+                    "url": "https://example.com/ai",
+                    "content": "Big AI news today",
+                    "published_date": "2026-02-15",
                 }
-            },
-            "meta": {"attempt": 1},
+            ]
         }
-        results = _search_langsearch_news("ai", max_results=3)
+        response.raise_for_status = MagicMock()
+        mock_post.return_value = response
+        results = _search_tavily_news("ai", max_results=3)
         assert len(results) == 1
         assert results[0]["title"] == "AI News"
         assert results[0]["source"] == "example.com"
-        assert results[0]["provider"] == "langsearch"
-        assert mock_search_web.call_args.kwargs["freshness"] == "oneDay"
-        assert mock_search_web.call_args.kwargs["summary"] is True
-        assert mock_search_web.call_args.kwargs["count"] == 3
+        assert results[0]["provider"] == "tavily"
+        call_payload = mock_post.call_args.kwargs["json"]
+        assert call_payload["topic"] == "news"
+        assert call_payload["time_range"] == "day"
+        assert call_payload["max_results"] == 3
 
-    @patch("news_feeds.search_web", return_value={"error": {"code": "rate_limited", "status_code": 429}})
-    @patch.dict("os.environ", {"LANGSEARCH_API_KEY": "test-key"}, clear=False)
-    def test_graceful_failure(self, mock_search_web):
-        assert _search_langsearch_news("ai") == []
+    @patch("news_feeds.time.sleep")
+    @patch("news_feeds.requests.post")
+    @patch.dict("os.environ", {"TAVILY_API_KEY": "test-key", "TAVILY_NEWS_MAX_RETRIES": "2"}, clear=False)
+    def test_retries_rate_limit_then_succeeds(self, mock_post, mock_sleep):
+        first = MagicMock(status_code=429, headers={}, text="rate limited")
+        second = MagicMock(status_code=200, headers={}, text='{"results": []}')
+        second.json.return_value = {"results": []}
+        second.raise_for_status = MagicMock()
+        mock_post.side_effect = [first, second]
+
+        assert _search_tavily_news("ai") == []
+        assert mock_sleep.call_count == 1
+
+    @patch("news_feeds.requests.post", side_effect=requests.RequestException("network error"))
+    @patch.dict("os.environ", {"TAVILY_API_KEY": "test-key", "TAVILY_NEWS_MAX_RETRIES": "1"}, clear=False)
+    def test_graceful_failure(self, mock_post):
+        assert _search_tavily_news("ai") == []
 
 
 # ---------------------------------------------------------------------------
@@ -376,16 +388,16 @@ class TestFetchRssFeed:
 
 class TestFetchNews:
     @patch("news_feeds._fetch_rss_feed")
-    @patch("news_feeds._search_langsearch_news")
+    @patch("news_feeds._search_tavily_news")
     @patch("news_feeds.list_topics")
-    def test_combines_langsearch_and_rss(self, mock_topics, mock_langsearch, mock_rss):
+    def test_combines_tavily_and_rss(self, mock_topics, mock_tavily, mock_rss):
         mock_topics.return_value = [_topic("AI", ["ai"])]
-        mock_langsearch.return_value = [
+        mock_tavily.return_value = [
             _article(
-                title="LangSearch AI result",
-                url="https://langsearch.com/1",
-                source="langsearch.com",
-                provider="langsearch",
+                title="Tavily AI result",
+                url="https://tavily.com/1",
+                source="tavily.com",
+                provider="tavily",
             )
         ]
         mock_rss.return_value = [
@@ -393,31 +405,31 @@ class TestFetchNews:
         ]
 
         results = fetch_news()
-        assert len(results) >= 2  # at least 1 LangSearch + 1 per RSS feed call
+        assert len(results) >= 2  # at least 1 Tavily + 1 per RSS feed call
         providers = {r.get("provider") for r in results}
-        assert "langsearch" in providers
+        assert "tavily" in providers
 
     @patch("news_feeds._fetch_rss_feed", return_value=[])
-    @patch("news_feeds._search_langsearch_news", return_value=[])
+    @patch("news_feeds._search_tavily_news", return_value=[])
     @patch("news_feeds.list_topics", return_value=[])
-    def test_returns_empty_with_no_topics_and_empty_feeds(self, mock_topics, mock_langsearch, mock_rss):
+    def test_returns_empty_with_no_topics_and_empty_feeds(self, mock_topics, mock_tavily, mock_rss):
         results = fetch_news()
         # Even with no topics, RSS feeds are still fetched
         assert isinstance(results, list)
 
     @patch("news_feeds._fetch_rss_feed")
-    @patch("news_feeds._search_langsearch_news")
+    @patch("news_feeds._search_tavily_news")
     @patch("news_feeds.list_topics")
-    def test_deduplicates_across_sources(self, mock_topics, mock_langsearch, mock_rss):
+    def test_deduplicates_across_sources(self, mock_topics, mock_tavily, mock_rss):
         mock_topics.return_value = [_topic("AI", ["ai"])]
-        # Same URL from both LangSearch and RSS
+        # Same URL from both Tavily and RSS
         shared = _article(
             title="Shared Article",
             url="https://shared.com/1",
-            source="langsearch",
+            source="tavily",
             topic_matches=["AI"],
         )
-        mock_langsearch.return_value = [shared]
+        mock_tavily.return_value = [shared]
         mock_rss.return_value = [
             _article(
                 title="Shared Article",
@@ -430,9 +442,9 @@ class TestFetchNews:
         assert urls.count("https://shared.com/1") == 1
 
     @patch("news_feeds._fetch_rss_feed")
-    @patch("news_feeds._search_langsearch_news", return_value=[])
+    @patch("news_feeds._search_tavily_news", return_value=[])
     @patch("news_feeds.list_topics")
-    def test_topic_matched_articles_sorted_first(self, mock_topics, mock_langsearch, mock_rss):
+    def test_topic_matched_articles_sorted_first(self, mock_topics, mock_tavily, mock_rss):
         mock_topics.return_value = [_topic("AI", ["ai"])]
         mock_rss.return_value = [
             _article(title="Unrelated sports news", url="https://a.com", summary="football"),
