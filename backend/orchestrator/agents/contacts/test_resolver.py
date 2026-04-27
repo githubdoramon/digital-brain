@@ -133,6 +133,7 @@ resolver_module.call_llm_json = mock_call_llm_json
 from agents.contacts.resolver import (  # noqa: E402
     _detect_relational_term,
     _extract_collective_selectors,
+    _fast_extract_people_from_text,
     _parse_nested_relationship,
     _strip_generic_markers,
     extract_people_from_text,
@@ -245,6 +246,42 @@ def test_extract_collective_selectors():
     kinds = {selector["kind"] for selector in selectors}
     assert "email_domain" in kinds
     assert "company" in kinds
+
+
+def test_fast_extract_people_from_text_handles_bare_family_mentions_in_with_list():
+    people, selectors, applied = _fast_extract_people_from_text(
+        "Last Friday I went to the movies at 18h00 with daughter and wife."
+    )
+
+    assert applied is True
+    assert selectors == []
+    assert "user" in people
+    assert "daughter" in people
+    assert "wife" in people
+
+
+def test_resolve_contacts_from_text_merges_llm_people_when_fast_path_is_incomplete():
+    with (
+        patch(
+            "agents.contacts.resolver._fast_extract_people_from_text",
+            return_value=(["user"], [], True),
+        ),
+        patch(
+            "agents.contacts.resolver.extract_people_from_text",
+            return_value=["my wife", "my daughter"],
+        ),
+        patch(
+            "agents.contacts.resolver._resolve_people_mentions",
+            return_value=([], [], [], {}),
+        ),
+    ):
+        result = resolve_contacts_from_text(
+            "Last Friday I went to the movies at 18h00 with daughter and wife.",
+            "user@example.com",
+            mode=resolver_module.MINIMAL_RESOLUTION_MODE,
+        )
+
+    assert result["people_mentioned"] == ["user", "my wife", "my daughter"]
 
 
 def test_resolve_contacts_from_text_uses_llm_collective_selectors():

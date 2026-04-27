@@ -1036,6 +1036,21 @@ def trace_contact_resolution_outcome(
                     _emit(LogLevel.INFO, f"[contact_resolution]   {key}: {value}")
 
 
+def trace_contact_resolution_phase(
+    phase: str,
+    details: Optional[dict[str, Any]] = None,
+) -> None:
+    """Log contact-resolution phase details without affecting counters."""
+    if not _should_log(LogLevel.INFO):
+        return
+
+    _emit(LogLevel.INFO, f"[contact_resolution.phase] phase={phase}")
+    if details:
+        for key, value in details.items():
+            if value is not None and value != "":
+                _emit(LogLevel.INFO, f"[contact_resolution.phase]   {key}: {value}")
+
+
 def trace_tool_lifecycle_start(tool_name: str, call_id: str, args: dict[str, Any]) -> None:
     """Log tool execution lifecycle start."""
     if _should_log(LogLevel.INFO):
