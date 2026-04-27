@@ -9,9 +9,10 @@ This module provides:
 """
 
 from .contracts import ToolContract, ToolParameter
-from .registry import TOOL_GROUPS, ToolRegistry, get_registry
+from .registry import ALWAYS_AVAILABLE_GROUPS, TOOL_GROUPS, ToolRegistry, get_registry
 
 __all__ = [
+    "ALWAYS_AVAILABLE_GROUPS",
     "TOOL_GROUPS",
     "ToolContract",
     "ToolParameter",

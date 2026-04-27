@@ -30,7 +30,12 @@ class ToolParameter:
     min_length: Optional[int] = None
     max_length: Optional[int] = None
     items_type: Optional[str] = None  # For arrays
-    validator: Optional[Callable[[Any], bool]] = None  # Custom runtime validator
+    # Custom runtime validator. May return:
+    #   - bool                       (valid / invalid, no extra context)
+    #   - tuple[bool, list[str]]     (valid flag + per-issue error strings)
+    # The tuple form is preferred for structured payloads so the model gets
+    # actionable repair feedback instead of a generic "failed validation".
+    validator: Optional[Callable[[Any], Any]] = None
 
     def to_json_schema(self) -> dict[str, Any]:
         """Convert to JSON Schema format."""
@@ -230,13 +235,20 @@ class ToolContract:
                 f"Parameter '{param.name}' must be one of: {param.enum}"
             )
 
-        # Custom validator
+        # Custom validator: accepts bool or (valid, errors) tuple.
         if param.validator:
             try:
-                if not param.validator(value):
-                    errors.append(f"Parameter '{param.name}' failed validation")
+                outcome = param.validator(value)
             except Exception as e:
                 errors.append(f"Validation error for '{param.name}': {e}")
+            else:
+                is_valid, validator_errors = _interpret_validator_outcome(outcome)
+                if not is_valid:
+                    if validator_errors:
+                        for detail in validator_errors:
+                            errors.append(f"Parameter '{param.name}': {detail}")
+                    else:
+                        errors.append(f"Parameter '{param.name}' failed validation")
 
         return errors
 
@@ -290,6 +302,20 @@ class ToolContract:
             f"ToolContract({self.name}, "
             f"required={required}, optional={optional})"
         )
+
+
+def _interpret_validator_outcome(outcome: Any) -> tuple[bool, list[str]]:
+    """Normalize a custom validator's return value into (valid, errors)."""
+    if isinstance(outcome, tuple) and len(outcome) == 2:
+        is_valid, raw_errors = outcome
+        if isinstance(raw_errors, str):
+            details = [raw_errors] if raw_errors else []
+        elif isinstance(raw_errors, (list, tuple)):
+            details = [str(item) for item in raw_errors if str(item)]
+        else:
+            details = []
+        return bool(is_valid), details
+    return bool(outcome), []
 
 
 # Common validators for reuse

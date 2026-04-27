@@ -41,6 +41,12 @@ TOOL_GROUPS = {
     "system": ["bash"],
 }
 
+# Groups whose tools are exposed regardless of intent-based filtering. UI
+# directives are conversational primitives (clarification forms, choice
+# buttons, info cards) and any flow may need them to ask the user for
+# disambiguation or to surface follow-ups.
+ALWAYS_AVAILABLE_GROUPS: frozenset[str] = frozenset({"ui"})
+
 # Reverse mapping: tool name -> groups
 TOOL_TO_GROUPS: dict[str, list[str]] = {}
 for group, tools in TOOL_GROUPS.items():
@@ -96,22 +102,32 @@ class ToolRegistry:
         """Get all registered tool contracts."""
         return list(self._contracts.values())
 
+    def _expand_groups(self, groups: list[str]) -> list[str]:
+        """Union the requested groups with always-available ones."""
+        # Preserve caller order, then append always-on groups not already present.
+        seen = list(dict.fromkeys(groups))
+        for group in ALWAYS_AVAILABLE_GROUPS:
+            if group in self._groups and group not in seen:
+                seen.append(group)
+        return seen
+
     def get_tools_for_groups(self, groups: list[str]) -> list[ToolContract]:
         """
         Get all tool contracts for the specified groups.
 
-        Used by router/metadata workflows and tests; optional at runtime.
+        Always-available groups (see `ALWAYS_AVAILABLE_GROUPS`) are unioned in
+        so high-level primitives like UI directives are exposed to every flow.
         """
         tool_names = set()
-        for group in groups:
+        for group in self._expand_groups(groups):
             tool_names.update(self._groups.get(group, []))
 
         return [self._contracts[name] for name in tool_names if name in self._contracts]
 
     def get_tool_names_for_groups(self, groups: list[str]) -> list[str]:
-        """Get tool names for the specified groups."""
+        """Get tool names for the specified groups (plus always-available)."""
         tool_names = set()
-        for group in groups:
+        for group in self._expand_groups(groups):
             tool_names.update(self._groups.get(group, []))
         return list(tool_names)
 
@@ -830,8 +846,19 @@ def _register_all_tools(registry: ToolRegistry) -> None:
                     name="directive",
                     type="object",
                     description=(
-                        "UI directive payload with version, fallback_text, and blocks. "
-                        "Supported block types: clarification_form, choice_buttons, info_card."
+                        "UI directive payload. Required shape: "
+                        '{"version": "1.0", "fallback_text": "<plain-text fallback>", '
+                        '"blocks": [<block>, ...]}. '
+                        "Each block is one of: "
+                        '(1) clarification_form: {"id", "type": "clarification_form", '
+                        '"title"?, "fields": [{"id", "kind": "text|textarea|select|datetime|time|number", '
+                        '"label", "placeholder"?, "required"?, "options"? (for select)}], "submit_label"?, "action_id"?}; '
+                        '(2) choice_buttons: {"id", "type": "choice_buttons", "title"?, '
+                        '"options": [{"id", "label"}, ...], "action_id"?}; '
+                        '(3) info_card: {"id", "type": "info_card", "title"?, "body"?, '
+                        '"links"?: [{"label", "url" (https only)}]} (title or body required). '
+                        "Do NOT use top-level keys named `form`, `type`, `prompt`, or `name`; "
+                        "those go inside the `blocks[]` entries with the names above."
                     ),
                     required=True,
                     validator=validate_ui_directive_tool_param,

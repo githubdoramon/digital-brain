@@ -28,7 +28,28 @@ def test_accepts_valid_choice_buttons_directive():
     assert errors == []
     assert sanitized is not None
     assert sanitized["version"] == "1.0"
-    assert validate_ui_directive_tool_param(payload) is True
+    valid, validator_errors = validate_ui_directive_tool_param(payload)
+    assert valid is True
+    assert validator_errors == []
+
+
+def test_validate_ui_directive_tool_param_returns_detailed_errors():
+    """Repair feedback hinges on the validator surfacing concrete error paths."""
+    payload = {
+        "fallback_text": "...",
+        "form": [{"name": "clarification", "type": "textarea"}],
+        "type": "clarification_form",
+    }
+    valid, validator_errors = validate_ui_directive_tool_param(payload)
+    assert valid is False
+    assert any("blocks" in err for err in validator_errors)
+
+
+def test_validate_ui_directive_tool_param_rejects_non_dict():
+    """Top-level type errors come back as detailed messages, not booleans."""
+    valid, validator_errors = validate_ui_directive_tool_param("clarification_form")
+    assert valid is False
+    assert any("must be an object" in err for err in validator_errors)
 
 
 def test_rejects_non_https_link():

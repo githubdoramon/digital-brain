@@ -41,6 +41,30 @@ def test_resolve_tool_visibility_medium_adds_resolution():
     assert "resolve_contacts" in tool_names
 
 
+def test_resolve_tool_visibility_always_includes_ui_directive():
+    """Restricted intents (e.g. web_search) still expose emit_ui_directive."""
+    registry = get_registry()
+    classification = IntentClassification(
+        intent=IntentType.WEB_SEARCH,
+        confidence=0.85,
+        allowed_tool_groups=["web"],
+        constraints=[],
+    )
+    tools, mode, groups = resolve_tool_visibility(
+        tool_registry=registry,
+        classification=classification,
+        restriction_mode="conservative",
+        high_threshold=0.8,
+        medium_threshold=0.6,
+    )
+    tool_names = {t.get("function", {}).get("name") for t in tools}
+    assert mode is ToolVisibilityMode.RESTRICTED
+    assert "web" in groups
+    assert "ui" in groups
+    assert "web_search" in tool_names
+    assert "emit_ui_directive" in tool_names
+
+
 def test_should_escalate_on_no_progress_violation():
     state = AgentState(goal="test", tool_visibility_mode="restricted")
     violation = LimitViolation(

@@ -27,10 +27,15 @@ _MAX_SHORT_TEXT_LENGTH = 400
 _MAX_FALLBACK_TEXT_LENGTH = 1200
 
 
-def validate_ui_directive_tool_param(value: Any) -> bool:
-    """Contract validator hook for `emit_ui_directive.directive`."""
+def validate_ui_directive_tool_param(value: Any) -> tuple[bool, list[str]]:
+    """Contract validator hook for `emit_ui_directive.directive`.
+
+    Returns a `(valid, errors)` tuple so the contract layer can surface the
+    detailed sanitize errors (e.g. "blocks[0].type must be one of [...]") to
+    the model during the repair loop instead of a generic failure.
+    """
     _, errors = sanitize_ui_directives_payload(value)
-    return len(errors) == 0
+    return (len(errors) == 0), list(errors)
 
 
 def sanitize_ui_directives_payload(payload: Any) -> tuple[dict[str, Any] | None, list[str]]:

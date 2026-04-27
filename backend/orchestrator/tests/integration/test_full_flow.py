@@ -353,11 +353,15 @@ class TestAgentControllerIntegration:
         controller._logger = StubLogger()
 
         async def fake_run_intent_router(*_args, **_kwargs):
+            # The LLM router sets pre_resolve_contacts=True for person-referential
+            # queries regardless of the structural intent; mirror that here so the
+            # controller takes the pre-resolution short-circuit instead of looping.
             return IntentClassification(
                 intent=IntentType.MEMORY_SEARCH,
                 confidence=0.9,
                 allowed_tool_groups=["memory", "resolution"],
                 constraints=[],
+                pre_resolve_contacts=True,
                 reasoning="memory intent",
             )
 

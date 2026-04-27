@@ -207,6 +207,26 @@ class TestPreExecutionSemanticValidation:
         assert result.valid is False
         assert "place_id" in "; ".join(result.errors)
 
+    def test_emit_ui_directive_surfaces_detailed_errors(self, validator):
+        """Repair feedback must include the concrete sanitize errors, not 'failed validation'."""
+        # The shape the LLM kept guessing in the orchestrator logs: top-level
+        # `type`/`form`/`fallback_text` instead of nested `blocks[]` entries.
+        result = validator.validate(
+            "emit_ui_directive",
+            {
+                "directive": {
+                    "fallback_text": "...",
+                    "form": [{"name": "clarification", "type": "textarea"}],
+                    "type": "clarification_form",
+                }
+            },
+        )
+        assert result.valid is False
+        joined = "; ".join(result.errors)
+        assert "blocks" in joined
+        # Generic fallback message must not be the only signal anymore.
+        assert "failed validation" not in joined or "blocks" in joined
+
 
 class TestValidationFlow:
     """Tests for the overall validation flow."""

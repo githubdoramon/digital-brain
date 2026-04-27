@@ -395,6 +395,20 @@ class TestPreregisteredTools:
         assert contract is not None
         assert "emit_ui_directive" in TOOL_GROUPS["ui"]
 
+    def test_emit_ui_directive_exposed_by_any_group_filter(self, populated_registry):
+        """UI directives are always-on: any group request still exposes them."""
+        for groups in (["memory"], ["web"], ["home"], ["graph"], []):
+            tool_names = populated_registry.get_tool_names_for_groups(groups)
+            assert "emit_ui_directive" in tool_names, (
+                f"emit_ui_directive missing for groups={groups}"
+            )
+
+            tool_defs = populated_registry.get_tool_definitions_for_groups(groups)
+            def_names = {d["function"]["name"] for d in tool_defs}
+            assert "emit_ui_directive" in def_names, (
+                f"emit_ui_directive missing from definitions for groups={groups}"
+            )
+
     def test_all_memory_tools_available(self, populated_registry):
         """Test all memory group tools are available."""
         tool_names = populated_registry.get_tool_names_for_groups(["memory"])
