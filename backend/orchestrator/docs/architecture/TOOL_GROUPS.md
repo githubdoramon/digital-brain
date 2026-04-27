@@ -52,7 +52,7 @@ flowchart LR
 - `SKILL_EXECUTION`: `skills`, `memory`
 - `SYSTEM_COMMAND`: `system`
 - `CONVERSATIONAL`: none
-- `COMPLEX` / `UNKNOWN`: all groups
+- `UNKNOWN`: all groups
 
 ## Policy Summary
 

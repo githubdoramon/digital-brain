@@ -456,22 +456,22 @@ class IntentRouter:
             context = "\n".join(f"{msg['role']}: {msg['content'][:200]}" for msg in recent)
             context = f"\nRECENT CONTEXT:\n{context}\n"
 
-        return f"""Classify the user's intent to determine which tools are needed.
+        return f"""Classify the user's intent based on their question and context.
 
 QUESTION: {question}
 {context}
 INTENT TYPES:
 - memory_search: Qualitative recall over memories, events, documents, and the connections between them. Pick this when the user wants the *content* of past interactions ("what did we discuss", "find the meeting where").
 - data_query: Quantitative questions over the memory graph — counts, distinct counts, time-bucketed breakdowns ("how many meetings last month", "how many people did I meet this week", "events grouped by type"). Pick this whenever the answer is a number or ranked breakdown rather than a description.
-- contact_lookup: Finding people, relationships, professions
+- contact_lookup: Finding people, relationships, and professions and their information, like phone, email, description, and more.
 - web_search: External information from the internet not related to user's personal graph of contacts, events, places, and documents
-- home_control: Smart home/Home Assistant actions
+- home_control: Smart home/Home Assistant actions and management
 - skill_execution: Running skill scripts
-- system_command: Bash/shell commands
-- conversational: General chat, no tools needed
+- system_command: Bash/shell commands and system management on a server
+- conversational: General chat and conversation between the user and a supporting agent that doesn't fir any of the previous intents
 
-Also decide whether the controller should pre-resolve contacts before the tool loop:
-- Set `pre_resolve_contacts` to true ONLY when the query references a specific person by name,
+Also decide whether pre-resolving contacts is beneficial when creating a answer for the user in upcoming steps:
+- Set `pre_resolve_contacts` to true ONLY when the query references specific people by name,
   pronoun, or relationship term (e.g. "my mom", "him", "John") AND early identification would help.
 - Set `pre_resolve_contacts` to false for:
   - Discovery/ranking queries that ask "who" without naming anyone

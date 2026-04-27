@@ -223,12 +223,9 @@ This means:
 
 **Solution**: Add spaces or use word boundaries for short keywords.
 
-### 6. COMPLEX and UNKNOWN Intents
+### 6. UNKNOWN Intents
 
-- `COMPLEX`: Multi-step tasks, gets ALL tool groups
-- `UNKNOWN`: Fallback when classification fails, also gets ALL tool groups
-
-Don't remove these - they're safety nets.
+- `UNKNOWN`: Fallback when classification fails, gets ALL tool groups
 
 ### 7. Intent Router Model
 

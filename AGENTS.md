@@ -135,7 +135,6 @@ User Question → Intent Router → Conversational Profile Dispatch → Tool Vis
 | `SKILL_EXECUTION` | skills | Run skill scripts |
 | `SYSTEM_COMMAND` | system | Bash/shell commands |
 | `CONVERSATIONAL` | (none) | General chat |
-| `COMPLEX` | (multiple) | Multi-step tasks |
 
 ### Tool Groups
 
