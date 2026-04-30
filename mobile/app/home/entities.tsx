@@ -262,12 +262,6 @@ export default function EntitiesScreen() {
   const filterSignature = React.useMemo(() => JSON.stringify(filters), [filters]);
   const query = queries[selectedEntity];
 
-  const contactMap = React.useMemo(() => {
-    const map = new Map<string, string>();
-    contacts.forEach((contact) => map.set(contact.contact_id, contact.display_name));
-    return map;
-  }, [contacts]);
-
   const combinedFilterOptions = React.useMemo(() => {
     const optionsByKey = new Map<string, EntityFilterOption>();
     for (const option of filterOptions) {
@@ -308,6 +302,15 @@ export default function EntitiesScreen() {
     }
     return Array.from(optionsByKey.values());
   }, [contacts, documents, events, filterOptions, places]);
+  const contactMap = React.useMemo(() => {
+    const map = new Map<string, string>();
+    combinedFilterOptions.forEach((option) => {
+      if (option.kind === 'contacts') {
+        map.set(option.id, option.label);
+      }
+    });
+    return map;
+  }, [combinedFilterOptions]);
   const optionMap = React.useMemo(() => buildFilterOptionMaps(combinedFilterOptions), [combinedFilterOptions]);
   const activeFilterChips = React.useMemo(() => buildActiveFilterChips(filters, optionMap), [filters, optionMap]);
   const activeFilterCount = React.useMemo(() => countActiveFilters(filters), [filters]);
