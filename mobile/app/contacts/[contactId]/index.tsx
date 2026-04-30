@@ -120,6 +120,10 @@ export default function ContactDetailScreen() {
   const [contact, setContact] = useState<Contact | null>(null);
   const [draft, setDraft] = useState<Contact | null>(null);
   const [aliasesText, setAliasesText] = useState('');
+  const [emailsText, setEmailsText] = useState('');
+  const [phonesText, setPhonesText] = useState('');
+  const [linksText, setLinksText] = useState('');
+  const [tagsText, setTagsText] = useState('');
   const [isSaving, setIsSaving] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
@@ -140,6 +144,10 @@ export default function ContactDetailScreen() {
     setContact(emptyContact);
     setDraft(emptyContact);
     setAliasesText(listToText(emptyContact.aliases));
+    setEmailsText(listToText(emptyContact.emails));
+    setPhonesText(listToText(emptyContact.phones));
+    setLinksText(listToText(emptyContact.links));
+    setTagsText(listToText(emptyContact.tags));
   }, [contactParam, isCreating]);
 
   useEffect(() => {
@@ -158,6 +166,10 @@ export default function ContactDetailScreen() {
           setContact(result);
           setDraft(result);
           setAliasesText(listToText(result.aliases ?? []));
+          setEmailsText(listToText(result.emails ?? []));
+          setPhonesText(listToText(result.phones ?? []));
+          setLinksText(listToText(result.links ?? []));
+          setTagsText(listToText(result.tags ?? []));
         }
       } catch (error) {
         console.warn('[contacts] detail load failed', error);
@@ -235,14 +247,18 @@ export default function ContactDetailScreen() {
   const isDirty = useMemo(() => {
     if (!draft) return false;
     const parsedAliases = textToList(aliasesText);
+    const parsedEmails = textToList(emailsText);
+    const parsedPhones = textToList(phonesText);
+    const parsedLinks = textToList(linksText);
+    const parsedTags = textToList(tagsText);
     if (isCreating) {
       return Boolean(
         draft.display_name.trim() ||
           parsedAliases.length ||
-          draft.emails.length ||
-          draft.phones.length ||
-          draft.links.length ||
-          draft.tags.length ||
+          parsedEmails.length ||
+          parsedPhones.length ||
+          parsedLinks.length ||
+          parsedTags.length ||
           draft.comments.trim() ||
           draft.birthday,
       );
@@ -261,15 +277,15 @@ export default function ContactDetailScreen() {
     const current = {
       display_name: draft.display_name,
       aliases: parsedAliases,
-      emails: draft.emails,
-      phones: draft.phones,
-      links: draft.links,
-      tags: draft.tags,
+      emails: parsedEmails,
+      phones: parsedPhones,
+      links: parsedLinks,
+      tags: parsedTags,
       comments: draft.comments,
       birthday: draft.birthday,
     };
     return JSON.stringify(base) !== JSON.stringify(current);
-  }, [contact, draft, isCreating, aliasesText]);
+  }, [aliasesText, contact, draft, emailsText, isCreating, linksText, phonesText, tagsText]);
 
   const handleSave = async () => {
     if (!draft) return;
@@ -291,10 +307,10 @@ export default function ContactDetailScreen() {
           display_name: normalizedName || (isCreating ? 'New contact' : draft.display_name),
           aliases: textToList(aliasesText),
           birthday: draft.birthday ? draft.birthday : null,
-          emails: draft.emails,
-          phones: draft.phones,
-          links: draft.links,
-          tags: draft.tags,
+          emails: textToList(emailsText),
+          phones: textToList(phonesText),
+          links: textToList(linksText),
+          tags: textToList(tagsText),
           comments: draft.comments,
           external_id: contact?.external_id ?? null,
         }),
@@ -305,6 +321,10 @@ export default function ContactDetailScreen() {
       setContact(refreshed);
       setDraft(refreshed);
       setAliasesText(listToText(refreshed.aliases ?? []));
+      setEmailsText(listToText(refreshed.emails ?? []));
+      setPhonesText(listToText(refreshed.phones ?? []));
+      setLinksText(listToText(refreshed.links ?? []));
+      setTagsText(listToText(refreshed.tags ?? []));
       if (isCreating) {
         router.replace(`/contacts/${encodeURIComponent(targetContactId)}`);
       }
@@ -446,10 +466,12 @@ export default function ContactDetailScreen() {
           <Text style={styles.sectionTitle}>Emails</Text>
           <TextInput
             style={styles.input}
-            value={listToText(draft.emails)}
-            onChangeText={(value) => setDraft({ ...draft, emails: textToList(value) })}
+            value={emailsText}
+            onChangeText={setEmailsText}
             placeholder="add emails, comma separated"
             placeholderTextColor={theme.colors.mutedInk}
+            autoCapitalize="none"
+            autoCorrect={false}
           />
         </Card>
 
@@ -457,8 +479,8 @@ export default function ContactDetailScreen() {
           <Text style={styles.sectionTitle}>Phones</Text>
           <TextInput
             style={styles.input}
-            value={listToText(draft.phones)}
-            onChangeText={(value) => setDraft({ ...draft, phones: textToList(value) })}
+            value={phonesText}
+            onChangeText={setPhonesText}
             placeholder="add phone numbers"
             placeholderTextColor={theme.colors.mutedInk}
           />
@@ -486,8 +508,8 @@ export default function ContactDetailScreen() {
           <Text style={styles.sectionTitle}>Links</Text>
           <TextInput
             style={styles.input}
-            value={listToText(draft.links)}
-            onChangeText={(value) => setDraft({ ...draft, links: textToList(value) })}
+            value={linksText}
+            onChangeText={setLinksText}
             placeholder="websites, social, etc"
             placeholderTextColor={theme.colors.mutedInk}
           />
@@ -497,8 +519,8 @@ export default function ContactDetailScreen() {
           <Text style={styles.sectionTitle}>Tags</Text>
           <TextInput
             style={styles.input}
-            value={listToText(draft.tags)}
-            onChangeText={(value) => setDraft({ ...draft, tags: textToList(value) })}
+            value={tagsText}
+            onChangeText={setTagsText}
             placeholder="tags"
             placeholderTextColor={theme.colors.mutedInk}
           />

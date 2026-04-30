@@ -586,7 +586,8 @@ export function ContactDraftEditorScreen({ sessionId }: Props) {
                 }
                 placeholder="Emails, comma separated"
                 placeholderTextColor={theme.colors.mutedInk}
-                keyboardType="email-address"
+                autoCapitalize="none"
+                autoCorrect={false}
                 style={styles.input}
               />
               <TextInput
