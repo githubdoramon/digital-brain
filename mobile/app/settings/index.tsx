@@ -6,7 +6,6 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
 import React from 'react';
 import {
-  Alert,
   Animated,
   Platform,
   Share,
@@ -38,6 +37,7 @@ import {
   type LocationDebugEvent,
   type LocationDebugSnapshot,
 } from '@/location/debugState';
+import { useAppNotice } from '@/hooks/useAppNotice';
 import { theme } from '@/theme';
 
 const { StorageAccessFramework } = FileSystem;
@@ -110,6 +110,7 @@ function LocationDebugEventRow({ event }: { event: LocationDebugEvent }) {
 export default function SettingsScreen() {
   const router = useRouter();
   const { signOut } = useAuth();
+  const { showSuccess, showError } = useAppNotice();
   const insets = useSafeAreaInsets();
   const scrollY = React.useRef(new Animated.Value(0)).current;
   const [locationDebug, setLocationDebug] = React.useState<LocationDebugSnapshot>(() =>
@@ -173,7 +174,7 @@ export default function SettingsScreen() {
         await FileSystem.writeAsStringAsync(targetUri, base64Content, {
           encoding: FileSystem.EncodingType.Base64,
         });
-        Alert.alert('Location logs exported', `Saved to Downloads as ${fileName}.`);
+        showSuccess(`Saved to Downloads as ${fileName}.`);
         return;
       }
 
@@ -184,11 +185,11 @@ export default function SettingsScreen() {
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Failed to export location debug log.';
-      Alert.alert('Export failed', message);
+      showError(message);
     } finally {
       setIsExportingLocationDebug(false);
     }
-  }, []);
+  }, [showError, showSuccess]);
 
   return (
     <LinearGradient

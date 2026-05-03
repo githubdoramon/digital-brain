@@ -28,6 +28,7 @@ import {
   COLLAPSING_TOP_BAR_HEIGHT,
   CollapsingTopBar,
 } from '@/components/CollapsingTopBar';
+import { useAppNotice } from '@/hooks/useAppNotice';
 import { theme } from '@/theme';
 
 // ---------------------------------------------------------------------------
@@ -62,6 +63,7 @@ const CATEGORY_OPTIONS = Object.keys(CATEGORY_LABELS);
 export default function AboutMeScreen() {
   const router = useRouter();
   const { token } = useAuth();
+  const { showSuccess, showError } = useAppNotice();
   const insets = useSafeAreaInsets();
   const scrollY = React.useRef(new Animated.Value(0)).current;
 
@@ -75,11 +77,11 @@ export default function AboutMeScreen() {
       const res = (await apiFetch('/mobile/user/facts', { token })) as UserFact[];
       setFacts(res ?? []);
     } catch {
-      Alert.alert('Error', 'Could not load your facts.');
+      showError('Could not load your facts.');
     } finally {
       setIsLoading(false);
     }
-  }, [token]);
+  }, [showError, token]);
 
   useEffect(() => {
     loadFacts();
@@ -99,14 +101,15 @@ export default function AboutMeScreen() {
                 token,
               });
               await loadFacts();
+              showSuccess('Fact deleted.');
             } catch {
-              Alert.alert('Error', 'Could not delete fact.');
+              showError('Could not delete fact.');
             }
           },
         },
       ]);
     },
-    [token, loadFacts],
+    [loadFacts, showError, showSuccess, token],
   );
 
   const saveFact = useCallback(
@@ -120,11 +123,12 @@ export default function AboutMeScreen() {
         setShowForm(false);
         setEditingFact(null);
         await loadFacts();
+        showSuccess('Fact updated.');
       } catch {
-        Alert.alert('Error', 'Could not update fact.');
+        showError('Could not update fact.');
       }
     },
-    [token, loadFacts],
+    [loadFacts, showError, showSuccess, token],
   );
 
   const openEdit = (fact: UserFact) => {

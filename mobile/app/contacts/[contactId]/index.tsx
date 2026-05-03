@@ -18,6 +18,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { apiFetch } from '@/api/client';
 import { useAuth } from '@/auth/AuthContext';
+import { useAppNotice } from '@/hooks/useAppNotice';
 import { AppPressable as Pressable } from '@/components/AppPressable';
 import { Avatar } from '@/components/Avatar';
 import { BottomSheet } from '@/components/BottomSheet';
@@ -115,6 +116,7 @@ export default function ContactDetailScreen() {
   const contactParam = normalizeRouteParam(contactParamRaw);
   const isCreating = !contactParam || contactParam === 'new';
   const { token } = useAuth();
+  const { showSuccess, showError } = useAppNotice();
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const [contact, setContact] = useState<Contact | null>(null);
@@ -325,12 +327,13 @@ export default function ContactDetailScreen() {
       setPhonesText(listToText(refreshed.phones ?? []));
       setLinksText(listToText(refreshed.links ?? []));
       setTagsText(listToText(refreshed.tags ?? []));
+      showSuccess(isCreating ? 'Contact created.' : 'Contact updated.');
       if (isCreating) {
         router.replace(`/contacts/${encodeURIComponent(targetContactId)}`);
       }
     } catch (error) {
       console.warn('[contacts] save failed', error);
-      Alert.alert('Save failed', 'Unable to save this contact. Please try again.');
+      showError('Unable to save this contact. Please try again.');
     } finally {
       setIsSaving(false);
     }
@@ -369,10 +372,11 @@ export default function ContactDetailScreen() {
               await apiFetch(`/mobile/contacts/${encodeURIComponent(contact.contact_id)}`, {
                 method: 'DELETE',
               });
+              showSuccess('Contact deleted.');
               router.back();
             } catch (error) {
               console.warn('[contacts] delete failed', error);
-              Alert.alert('Error', 'Unable to delete this contact. Please try again.');
+              showError('Unable to delete this contact. Please try again.');
             } finally {
               setIsDeleting(false);
             }

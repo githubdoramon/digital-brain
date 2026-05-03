@@ -7,6 +7,7 @@ import { Alert, StyleSheet, Text, TextInput, View } from 'react-native';
 import { apiFetch } from '@/api/client';
 import { AppPressable as Pressable } from '@/components/AppPressable';
 import { Card } from '@/components/Card';
+import { useAppNotice } from '@/hooks/useAppNotice';
 import { theme } from '@/theme';
 import type { Place } from '@/types/place';
 import { openNativeMapForPlace } from '@/utils/maps';
@@ -24,6 +25,7 @@ function placeLabel(place: Place): string {
 
 export function LinkedPlacesCard({ contactId }: { contactId: string }) {
   const router = useRouter();
+  const { showSuccess, showError } = useAppNotice();
   const [linkedPlaces, setLinkedPlaces] = useState<Place[]>([]);
   const [allPlaces, setAllPlaces] = useState<Place[]>([]);
   const [search, setSearch] = useState('');
@@ -84,9 +86,10 @@ export function LinkedPlacesCard({ contactId }: { contactId: string }) {
       setSearch('');
       setRole('');
       await load();
+      showSuccess('Place linked to contact.');
     } catch (error) {
       console.warn('[contact-places] add failed', error);
-      Alert.alert('Failed to link place', 'Unable to add this place link. Please try again.');
+      showError('Unable to add this place link. Please try again.');
     } finally {
       setIsSaving(false);
     }
@@ -102,9 +105,10 @@ export function LinkedPlacesCard({ contactId }: { contactId: string }) {
         },
       );
       await load();
+      showSuccess('Place link removed.');
     } catch (error) {
       console.warn('[contact-places] remove failed', error);
-      Alert.alert('Failed to remove place', 'Unable to remove this place link. Please try again.');
+      showError('Unable to remove this place link. Please try again.');
     } finally {
       setIsSaving(false);
     }

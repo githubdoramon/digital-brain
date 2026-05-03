@@ -23,6 +23,7 @@ import { Button } from '@/components/Button';
 import { Card } from '@/components/Card';
 import { FloatingSaveButton } from '@/components/FloatingSaveButton';
 import { LinkedContactsCard } from '@/components/place/LinkedContactsCard';
+import { useAppNotice } from '@/hooks/useAppNotice';
 import { theme } from '@/theme';
 import type { Place } from '@/types/place';
 import { openNativeMapForPlace } from '@/utils/maps';
@@ -114,6 +115,7 @@ function floatingOffset(insetBottom: number, keyboardHeight: number) {
 export function PlaceEditorScreen({ placeId }: { placeId?: string }) {
   const router = useRouter();
   const insets = useSafeAreaInsets();
+  const { showSuccess, showError, showWarning } = useAppNotice();
   const normalizedPlaceId = normalizeRouteParam(placeId);
   const isCreating = !normalizedPlaceId;
   const mapRef = useRef<MapView | null>(null);
@@ -293,7 +295,7 @@ export function PlaceEditorScreen({ placeId }: { placeId?: string }) {
     if (!draft) return;
     const addressQuery = draft.address.trim();
     if (!addressQuery) {
-      Alert.alert('Address required', 'Type an address first.');
+      showWarning('Type an address first.');
       return;
     }
 
@@ -301,7 +303,7 @@ export function PlaceEditorScreen({ placeId }: { placeId?: string }) {
     try {
       const results = await Location.geocodeAsync(addressQuery);
       if (!results || results.length === 0) {
-        Alert.alert('No coordinates found', 'Try a more specific address.');
+        showWarning('No coordinates found. Try a more specific address.');
         return;
       }
       const first = results[0];
@@ -309,7 +311,7 @@ export function PlaceEditorScreen({ placeId }: { placeId?: string }) {
       const longitude = Number(first.longitude.toFixed(6));
       await applyCoordinateSelection(latitude, longitude, { suppressReverseLookupAlert: true });
     } catch {
-      Alert.alert('Search failed', 'Could not resolve this address right now.');
+      showError('Could not resolve this address right now.');
     } finally {
       setIsGeocodingAddress(false);
     }
@@ -357,13 +359,13 @@ export function PlaceEditorScreen({ placeId }: { placeId?: string }) {
         });
 
         if (!options?.suppressReverseLookupAlert) {
-          Alert.alert('Address lookup failed', 'Coordinates were updated, but the address could not be refreshed.');
+          showWarning('Coordinates were updated, but the address could not be refreshed.');
         }
       } finally {
         setIsResolvingMapPin(false);
       }
     },
-    [],
+    [showWarning],
   );
 
   const handleSave = async () => {
@@ -389,6 +391,7 @@ export function PlaceEditorScreen({ placeId }: { placeId?: string }) {
       });
 
       if (isCreating) {
+        showSuccess('Place created.');
         router.replace({
           pathname: '/places/[placeId]',
           params: { placeId: place_id },
@@ -400,9 +403,10 @@ export function PlaceEditorScreen({ placeId }: { placeId?: string }) {
       const normalized = draftFromPlace(refreshed);
       setInitial(normalized);
       setDraft(normalized);
+      showSuccess('Place updated.');
     } catch (error) {
       console.warn('[places] save failed', error);
-      Alert.alert('Save failed', 'Unable to save this place. Please try again.');
+      showError('Unable to save this place. Please try again.');
     } finally {
       setIsSaving(false);
     }
@@ -436,10 +440,11 @@ export function PlaceEditorScreen({ placeId }: { placeId?: string }) {
       await apiFetch(`/mobile/places/${encodeURIComponent(normalizedPlaceId)}`, {
         method: 'DELETE',
       });
+      showSuccess('Place deleted.');
       router.back();
     } catch (error) {
       console.warn('[places] delete failed', error);
-      Alert.alert('Delete failed', 'Unable to delete this place right now.');
+      showError('Unable to delete this place right now.');
     } finally {
       setIsDeleting(false);
     }

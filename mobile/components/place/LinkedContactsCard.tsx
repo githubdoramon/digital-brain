@@ -2,11 +2,12 @@ import Ionicons from '@expo/vector-icons/Ionicons';
 import { useFocusEffect } from '@react-navigation/native';
 import { useRouter } from 'expo-router';
 import React, { useState } from 'react';
-import { Alert, StyleSheet, Text, View } from 'react-native';
+import { StyleSheet, Text, View } from 'react-native';
 
 import { apiFetch } from '@/api/client';
 import { AppPressable as Pressable } from '@/components/AppPressable';
 import { Card } from '@/components/Card';
+import { useAppNotice } from '@/hooks/useAppNotice';
 import { theme } from '@/theme';
 
 type LinkedContact = {
@@ -17,6 +18,7 @@ type LinkedContact = {
 
 export function LinkedContactsCard({ placeId }: { placeId: string }) {
   const router = useRouter();
+  const { showSuccess, showError } = useAppNotice();
   const [contacts, setContacts] = useState<LinkedContact[]>([]);
   const [isSaving, setIsSaving] = useState(false);
 
@@ -48,9 +50,10 @@ export function LinkedContactsCard({ placeId }: { placeId: string }) {
         },
       );
       await load();
+      showSuccess('Contact unlinked from place.');
     } catch (error) {
       console.warn('[place-contacts] remove failed', error);
-      Alert.alert('Failed to unlink contact', 'Could not remove this contact from the place.');
+      showError('Could not remove this contact from the place.');
     } finally {
       setIsSaving(false);
     }

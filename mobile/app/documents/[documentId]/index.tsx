@@ -1,7 +1,8 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { useFocusEffect } from '@react-navigation/native';
 import * as FileSystem from 'expo-file-system/legacy';
-import { Stack, useLocalSearchParams } from 'expo-router';
+import { router, Stack, useLocalSearchParams } from 'expo-router';
 import React from 'react';
 import {
   ActivityIndicator,
@@ -10,7 +11,6 @@ import {
   Platform,
   StyleSheet,
   Text,
-  ToastAndroid,
   View,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -20,7 +20,9 @@ import { API_BASE_URL, apiFetch } from '@/api/client';
 import { useAuth } from '@/auth/AuthContext';
 import { AppPressable as Pressable } from '@/components/AppPressable';
 import { Card } from '@/components/Card';
+import { FloatingSaveButton } from '@/components/FloatingSaveButton';
 import { ScrollHeaderBackdrop } from '@/components/ScrollHeaderBackdrop';
+import { useAppNotice } from '@/hooks/useAppNotice';
 import { theme } from '@/theme';
 
 type RouteParams = {
@@ -70,6 +72,7 @@ function formatFileSize(bytes?: number | null): string {
 export default function DocumentDetailScreen() {
   const insets = useSafeAreaInsets();
   const { token, refreshToken } = useAuth();
+  const { showSuccess, showError, showWarning } = useAppNotice();
   const params = useLocalSearchParams<RouteParams>();
   const documentId = Array.isArray(params.documentId) ? params.documentId[0] : params.documentId;
   const scrollY = React.useRef(new Animated.Value(0)).current;
@@ -78,12 +81,6 @@ export default function DocumentDetailScreen() {
   const [isLoading, setIsLoading] = React.useState(true);
   const [error, setError] = React.useState<string | null>(null);
   const [isDownloading, setIsDownloading] = React.useState(false);
-
-  const showTransientMessage = React.useCallback((message: string) => {
-    if (Platform.OS === 'android') {
-      ToastAndroid.show(message, ToastAndroid.SHORT);
-    }
-  }, []);
 
   const ensureNotificationPermission = React.useCallback(async (): Promise<boolean> => {
     const current = await Notifications.getPermissionsAsync();
@@ -99,7 +96,7 @@ export default function DocumentDetailScreen() {
     async (name: string, fileUri: string, mimeType?: string | null) => {
     const allowed = await ensureNotificationPermission();
     if (!allowed) {
-      showTransientMessage(`Downloaded ${name}`);
+      showSuccess(`Downloaded ${name}`);
       return;
     }
 
@@ -119,16 +116,16 @@ export default function DocumentDetailScreen() {
         trigger: null,
       });
     } catch {
-      showTransientMessage(`Downloaded ${name}`);
+      showSuccess(`Downloaded ${name}`);
     }
     },
-    [ensureNotificationPermission, showTransientMessage],
+    [ensureNotificationPermission, showSuccess],
   );
 
   const notifyDownloadFailed = React.useCallback(async (message: string) => {
     const allowed = await ensureNotificationPermission();
     if (!allowed) {
-      showTransientMessage(message);
+      showError(message);
       return;
     }
 
@@ -142,9 +139,9 @@ export default function DocumentDetailScreen() {
         trigger: null,
       });
     } catch {
-      showTransientMessage(message);
+      showError(message);
     }
-  }, [ensureNotificationPermission, showTransientMessage]);
+  }, [ensureNotificationPermission, showError]);
 
   const ensureAndroidDownloadsDirectoryUri = React.useCallback(
     async (forcePrompt: boolean = false): Promise<string> => {
@@ -232,37 +229,34 @@ export default function DocumentDetailScreen() {
     [refreshToken],
   );
 
-  React.useEffect(() => {
-    let mounted = true;
+  const loadDocument = React.useCallback(async () => {
     if (!documentId) {
       setError('Missing document id.');
       setIsLoading(false);
-      return () => undefined;
+      return;
     }
-
-    (async () => {
-      try {
-        const result = (await apiFetch(
-          `/mobile/documents/${encodeURIComponent(documentId)}`,
-        )) as DocumentDetail;
-        if (!mounted) return;
-        setDocument(result);
-      } catch (fetchError) {
-        if (!mounted) return;
-        const message =
-          fetchError instanceof Error ? fetchError.message : 'Failed to load document details.';
-        setError(message || 'Failed to load document details.');
-      } finally {
-        if (mounted) {
-          setIsLoading(false);
-        }
-      }
-    })();
-
-    return () => {
-      mounted = false;
-    };
+    setIsLoading(true);
+    setError(null);
+    try {
+      const result = (await apiFetch(
+        `/mobile/documents/${encodeURIComponent(documentId)}`,
+      )) as DocumentDetail;
+      setDocument(result);
+    } catch (fetchError) {
+      const message =
+        fetchError instanceof Error ? fetchError.message : 'Failed to load document details.';
+      setError(message || 'Failed to load document details.');
+    } finally {
+      setIsLoading(false);
+    }
   }, [documentId]);
+
+  useFocusEffect(
+    React.useCallback(() => {
+      void loadDocument();
+      return undefined;
+    }, [loadDocument]),
+  );
 
   const headerOverlayOpacity = React.useMemo(
     () =>
@@ -279,7 +273,7 @@ export default function DocumentDetailScreen() {
       return;
     }
     if (!token) {
-      showTransientMessage('Session expired. Sign in again.');
+      showError('Session expired. Sign in again.');
       return;
     }
 
@@ -287,7 +281,7 @@ export default function DocumentDetailScreen() {
     const safeName = (document.file_name || `${documentId}.bin`).replace(/[\\/:*?"<>|]/g, '_');
     const documentDirectory = FileSystem.documentDirectory;
     if (!documentDirectory) {
-      showTransientMessage('Download failed: storage unavailable.');
+      showError('Download failed: storage unavailable.');
       return;
     }
     const appTargetPath = `${documentDirectory}${safeName}`;
@@ -314,7 +308,7 @@ export default function DocumentDetailScreen() {
             exportError instanceof Error
               ? exportError.message
               : 'Could not save to Downloads. File kept in app storage.';
-          showTransientMessage(message);
+          showWarning(message);
           completionLabel = `${safeName} (saved in app storage)`;
           openUri = await FileSystem.getContentUriAsync(result.uri).catch(() => result.uri);
         }
@@ -327,7 +321,6 @@ export default function DocumentDetailScreen() {
     } catch (downloadError) {
       const message =
         downloadError instanceof Error ? downloadError.message : 'Failed to download this file.';
-      showTransientMessage(message);
       void notifyDownloadFailed(message);
     } finally {
       setIsDownloading(false);
@@ -340,7 +333,8 @@ export default function DocumentDetailScreen() {
     notifyDownloadFailed,
     exportToAndroidDownloads,
     performDownload,
-    showTransientMessage,
+    showError,
+    showWarning,
     token,
   ]);
 
@@ -350,43 +344,27 @@ export default function DocumentDetailScreen() {
         options={{
           headerTitle: 'Document',
           headerRight: () => (
-            <View style={styles.headerActions}>
-              {documentId ? (
-                <Pressable
-                  onPress={() =>
-                    router.push({
-                      pathname: '/documents/[documentId]/edit',
-                      params: { documentId },
-                    })
-                  }
-                  style={({ pressed }) => [styles.headerAction, pressed && styles.headerActionPressed]}
-                  hitSlop={10}
-                >
-                  <Ionicons name="create-outline" size={20} color={theme.colors.ink} />
-                </Pressable>
-              ) : null}
-              <Pressable
-                onPress={() => {
-                  void handleDownload();
-                }}
-                disabled={isDownloading}
-                style={({ pressed }) => [styles.headerAction, pressed && styles.headerActionPressed]}
-                hitSlop={10}
-              >
-                <Ionicons
-                  name={isDownloading ? 'hourglass-outline' : 'download-outline'}
-                  size={20}
-                  color={theme.colors.ink}
-                />
-              </Pressable>
-            </View>
+            <Pressable
+              onPress={() => {
+                void handleDownload();
+              }}
+              disabled={isDownloading}
+              style={({ pressed }) => [styles.headerAction, pressed && styles.headerActionPressed]}
+              hitSlop={10}
+            >
+              <Ionicons
+                name={isDownloading ? 'hourglass-outline' : 'download-outline'}
+                size={20}
+                color={theme.colors.ink}
+              />
+            </Pressable>
           ),
         }}
       />
       <Animated.ScrollView
         contentContainerStyle={[
           styles.content,
-          { paddingTop: insets.top + 56, paddingBottom: insets.bottom + 24 },
+          { paddingTop: insets.top + 56, paddingBottom: insets.bottom + 96 },
         ]}
         onScroll={Animated.event([{ nativeEvent: { contentOffset: { y: scrollY } } }], {
           useNativeDriver: false,
@@ -447,6 +425,20 @@ export default function DocumentDetailScreen() {
         topAlpha={1}
         bottomAlpha={0.9}
       />
+
+      {documentId && document && !isLoading && !error ? (
+        <FloatingSaveButton
+          visible
+          label="Edit document"
+          onPress={() =>
+            router.push({
+              pathname: '/documents/[documentId]/edit',
+              params: { documentId },
+            })
+          }
+          bottomOffset={insets.bottom + 20}
+        />
+      ) : null}
     </View>
   );
 }
@@ -467,11 +459,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: '#f4eee5',
-  },
-  headerActions: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
   },
   headerActionPressed: {
     opacity: 0.75,

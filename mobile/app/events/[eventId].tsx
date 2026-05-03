@@ -11,6 +11,7 @@ import {
   EventDraftEditorScreen,
 } from '@/components/event-draft/EventDraftEditorScreen';
 import { EMPTY_EVENT_DRAFT, type EventDraft, type EventPlaceOption } from '@/components/event-draft/types';
+import { useAppNotice } from '@/hooks/useAppNotice';
 import { theme } from '@/theme';
 
 type EventDetail = {
@@ -169,6 +170,7 @@ type EventDetailViewProps = {
 function EventDetailView({ eventId, editable }: EventDetailViewProps) {
   const router = useRouter();
   const insets = useSafeAreaInsets();
+  const { showSuccess, showError } = useAppNotice();
   const [event, setEvent] = React.useState<EventDetail | null>(null);
   const [contactMap, setContactMap] = React.useState<Map<string, string>>(new Map());
   const [availableContacts, setAvailableContacts] = React.useState<Contact[]>([]);
@@ -305,14 +307,15 @@ function EventDetailView({ eventId, editable }: EventDetailViewProps) {
         const refreshed = (await apiFetch(`/mobile/events/${encodeURIComponent(eventId)}`)) as EventDetail;
         setEvent(refreshed);
         setIsEditing(false);
+        showSuccess('Event updated.');
       } catch (error) {
         console.warn('[events] save failed', error);
-        Alert.alert('Save failed', 'Unable to save this event right now.');
+        showError('Unable to save this event right now.');
       } finally {
         setIsSaving(false);
       }
     },
-    [event, eventId],
+    [event, eventId, showError, showSuccess],
   );
 
   const performDelete = React.useCallback(async () => {
@@ -322,14 +325,15 @@ function EventDetailView({ eventId, editable }: EventDetailViewProps) {
       await apiFetch(`/mobile/events/${encodeURIComponent(eventId)}`, {
         method: 'DELETE',
       });
+      showSuccess('Event deleted.');
       router.back();
     } catch (error) {
       console.warn('[events] delete failed', error);
-      Alert.alert('Delete failed', 'Unable to delete this event right now.');
+      showError('Unable to delete this event right now.');
     } finally {
       setIsDeleting(false);
     }
-  }, [eventId, isDeleting, router]);
+  }, [eventId, isDeleting, router, showError, showSuccess]);
 
   const handleDeletePress = React.useCallback(() => {
     if (!eventId || isDeleting) return;

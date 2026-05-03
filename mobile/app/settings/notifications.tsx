@@ -31,6 +31,7 @@ import {
   getDeviceRegistrationIfGranted,
   registerForPushNotifications,
 } from '@/notifications/register';
+import { useAppNotice } from '@/hooks/useAppNotice';
 import { theme } from '@/theme';
 
 type NotificationChannel = 'push' | 'email';
@@ -59,6 +60,7 @@ export default function NotificationSettingsScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const { token, signOut } = useAuth();
+  const { showSuccess, showError, showWarning } = useAppNotice();
   const scrollY = React.useRef(new Animated.Value(0)).current;
 
   const [isLoading, setIsLoading] = useState(true);
@@ -90,11 +92,11 @@ export default function NotificationSettingsScreen() {
         Alert.alert('Session expired', 'Please sign in again.');
         return;
       }
-      Alert.alert('Could not load settings', 'Please try again.');
+      showError('Could not load settings. Please try again.');
     } finally {
       setIsLoading(false);
     }
-  }, [signOut, token]);
+  }, [showError, signOut, token]);
 
   useFocusEffect(
     useCallback(() => {
@@ -159,8 +161,13 @@ export default function NotificationSettingsScreen() {
       if (!pushStillEnabled) {
         await unregisterDevice();
       }
+      showSuccess(
+        normalizedChannels.length
+          ? 'Notification settings updated.'
+          : 'Notifications disabled for this type.',
+      );
     },
-    [settings, token, unregisterDevice],
+    [settings, showSuccess, token, unregisterDevice],
   );
 
   const handleToggle = useCallback(
@@ -178,7 +185,7 @@ export default function NotificationSettingsScreen() {
             Alert.alert('Session expired', 'Please sign in again.');
             return;
           }
-          Alert.alert('Update failed', 'We could not save notification settings.');
+          showError('We could not save notification settings.');
         } finally {
           setIsSaving(false);
           setSavingTypeId(null);
@@ -190,7 +197,7 @@ export default function NotificationSettingsScreen() {
       setDraftChannels(new Set(item.channels));
       setSheetOpen(true);
     },
-    [isSaving, persistChannels, signOut],
+    [isSaving, persistChannels, showError, signOut],
   );
 
   const openTypeSheet = useCallback(
@@ -218,7 +225,7 @@ export default function NotificationSettingsScreen() {
     try {
       await persistChannels(activeSetting.notificationType, selectedChannels);
       if (!selectedChannels.length) {
-        Alert.alert('Notifications disabled', 'Pick at least one channel to enable this notification type.');
+        showWarning('Pick at least one channel to enable this notification type.');
       }
     } catch (error) {
       const authExpired = (error as Error & { authExpired?: boolean }).authExpired;
@@ -227,12 +234,12 @@ export default function NotificationSettingsScreen() {
         Alert.alert('Session expired', 'Please sign in again.');
         return;
       }
-      Alert.alert('Update failed', 'We could not save notification settings.');
+      showError('We could not save notification settings.');
     } finally {
       setIsSaving(false);
       setSavingTypeId(null);
     }
-  }, [activeSetting, closeTypeSheet, draftChannels, isSaving, persistChannels, signOut]);
+  }, [activeSetting, closeTypeSheet, draftChannels, isSaving, persistChannels, showError, showWarning, signOut]);
 
   const toggleDraftChannel = useCallback((channel: NotificationChannel) => {
     setDraftChannels((prev) => {

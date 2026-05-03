@@ -12,6 +12,7 @@ import { SafeAreaProvider } from 'react-native-safe-area-context';
 import * as Notifications from 'expo-notifications';
 
 import { AuthProvider, useAuth } from '@/auth/AuthContext';
+import { TopNoticeProvider } from '@/components/top-notice';
 import { syncBackgroundLocationTracking } from '@/location/backgroundLocation';
 import { ensureAppStateTracking } from '@/location/runtimeState';
 import { theme } from '@/theme';
@@ -60,7 +61,9 @@ export default function RootLayout() {
   return (
     <AuthProvider>
       <SafeAreaProvider>
-        <RootLayoutNav loaded={loaded} />
+        <TopNoticeProvider>
+          <RootLayoutNav loaded={loaded} />
+        </TopNoticeProvider>
       </SafeAreaProvider>
     </AuthProvider>
   );

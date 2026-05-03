@@ -29,6 +29,7 @@ import {
   COLLAPSING_TOP_BAR_HEIGHT,
   CollapsingTopBar,
 } from '@/components/CollapsingTopBar';
+import { useAppNotice } from '@/hooks/useAppNotice';
 import { theme } from '@/theme';
 
 // ---------------------------------------------------------------------------
@@ -58,6 +59,7 @@ type NewsArticle = {
 export default function NewsTopicsScreen() {
   const router = useRouter();
   const { token } = useAuth();
+  const { showSuccess, showError } = useAppNotice();
   const insets = useSafeAreaInsets();
   const scrollY = React.useRef(new Animated.Value(0)).current;
 
@@ -79,11 +81,11 @@ export default function NewsTopicsScreen() {
       };
       setTopics(res?.topics ?? []);
     } catch {
-      Alert.alert('Error', 'Could not load topics.');
+      showError('Could not load topics.');
     } finally {
       setIsLoadingTopics(false);
     }
-  }, [token]);
+  }, [showError, token]);
 
   useEffect(() => {
     loadTopics();
@@ -101,11 +103,12 @@ export default function NewsTopicsScreen() {
         setShowForm(false);
         setEditingTopic(null);
         await loadTopics();
+        showSuccess(editingTopic ? 'Topic updated.' : 'Topic created.');
       } catch {
-        Alert.alert('Error', 'Could not save topic.');
+        showError('Could not save topic.');
       }
     },
-    [token, loadTopics],
+    [editingTopic, loadTopics, showError, showSuccess, token],
   );
 
   // -- Delete topic --
@@ -123,14 +126,15 @@ export default function NewsTopicsScreen() {
                 token,
               });
               await loadTopics();
+              showSuccess('Topic deleted.');
             } catch {
-              Alert.alert('Error', 'Could not delete topic.');
+              showError('Could not delete topic.');
             }
           },
         },
       ]);
     },
-    [token, loadTopics],
+    [loadTopics, showError, showSuccess, token],
   );
 
   // -- News preview --
@@ -142,12 +146,13 @@ export default function NewsTopicsScreen() {
         articles: NewsArticle[];
       };
       setArticles(res?.articles ?? []);
+      showSuccess(`Fetched ${res?.articles?.length ?? 0} preview articles.`);
     } catch {
-      Alert.alert('Error', 'Could not fetch news preview.');
+      showError('Could not fetch news preview.');
     } finally {
       setIsFetchingNews(false);
     }
-  }, [token]);
+  }, [showError, showSuccess, token]);
 
   // -- Handlers --
   const openCreate = () => {

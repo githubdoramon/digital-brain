@@ -19,6 +19,7 @@ import { apiFetch } from '@/api/client';
 import { AppPressable as Pressable } from '@/components/AppPressable';
 import { Card } from '@/components/Card';
 import { FloatingSaveButton } from '@/components/FloatingSaveButton';
+import { useAppNotice } from '@/hooks/useAppNotice';
 import { theme } from '@/theme';
 import { matchesContactSearch } from '@/utils/contactSearch';
 
@@ -68,6 +69,7 @@ export default function RelationshipManagementScreen() {
   const contactParam = normalizeRouteParam(contactParamRaw);
   const router = useRouter();
   const insets = useSafeAreaInsets();
+  const { showSuccess, showError } = useAppNotice();
   const [contact, setContact] = useState<Contact | null>(null);
   const [relationships, setRelationships] = useState<Relationship[]>([]);
   const [allContacts, setAllContacts] = useState<Contact[]>([]);
@@ -245,10 +247,11 @@ export default function RelationshipManagementScreen() {
         new Set((refreshed.relationships || []).map((rel) => rel.relationship_id)),
       );
       setDeletedRelationshipIds([]);
+      showSuccess('Relationships updated.');
       router.back();
     } catch (error) {
       console.warn('[relationships] save failed', error);
-      Alert.alert('Save failed', 'Unable to save relationships. Please try again.');
+      showError('Unable to save relationships. Please try again.');
     } finally {
       setIsSaving(false);
     }

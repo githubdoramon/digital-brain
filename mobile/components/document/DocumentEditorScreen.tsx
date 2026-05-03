@@ -20,6 +20,7 @@ import { AppPressable as Pressable } from '@/components/AppPressable';
 import { Button } from '@/components/Button';
 import { Card } from '@/components/Card';
 import { FloatingSaveButton } from '@/components/FloatingSaveButton';
+import { useAppNotice } from '@/hooks/useAppNotice';
 import { theme } from '@/theme';
 import { matchesContactSearch } from '@/utils/contactSearch';
 
@@ -43,6 +44,7 @@ type DocumentDetail = {
   file_name: string;
   file_mime?: string | null;
   file_size?: number | null;
+  content_preview?: string | null;
   linked_contacts?: LinkedContact[];
 };
 
@@ -55,6 +57,14 @@ type PickedFile = {
   uri: string;
   name: string;
   mimeType: string;
+};
+
+type DocumentEditorSnapshot = {
+  title: string;
+  description: string;
+  tagsText: string;
+  documentDateText: string;
+  contactIds: string[];
 };
 
 function listToComma(values: string[] | undefined): string {
@@ -92,6 +102,40 @@ function inferMimeTypeFromName(name: string): string {
   if (lower.endsWith('.heic')) return 'image/heic';
   if (lower.endsWith('.docx')) return 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
   return 'application/octet-stream';
+}
+
+function formatFileSize(bytes?: number | null): string {
+  if (!bytes || bytes <= 0) return 'Unknown size';
+  const units = ['B', 'KB', 'MB', 'GB'];
+  let size = bytes;
+  let unitIndex = 0;
+  while (size >= 1024 && unitIndex < units.length - 1) {
+    size /= 1024;
+    unitIndex += 1;
+  }
+  return `${size.toFixed(size >= 10 || unitIndex === 0 ? 0 : 1)} ${units[unitIndex]}`;
+}
+
+function buildSnapshot({
+  title,
+  description,
+  tagsText,
+  documentDateText,
+  selectedContacts,
+}: {
+  title: string;
+  description: string;
+  tagsText: string;
+  documentDateText: string;
+  selectedContacts: LinkedContact[];
+}): DocumentEditorSnapshot {
+  return {
+    title: title.trim(),
+    description: description.trim(),
+    tagsText: tagsText.trim(),
+    documentDateText: documentDateText.trim(),
+    contactIds: selectedContacts.map((contact) => contact.contact_id).sort(),
+  };
 }
 
 function ContactSuggestions({
@@ -142,6 +186,7 @@ function ContactSuggestions({
 export function DocumentEditorScreen({ mode, documentId }: Props) {
   const insets = useSafeAreaInsets();
   const { token } = useAuth();
+  const { showSuccess, showError } = useAppNotice();
   const isCreate = mode === 'create';
 
   const [isLoading, setIsLoading] = React.useState(!isCreate);
@@ -154,7 +199,15 @@ export function DocumentEditorScreen({ mode, documentId }: Props) {
   const [contactQuery, setContactQuery] = React.useState('');
   const [contacts, setContacts] = React.useState<ContactOption[]>([]);
   const [selectedFile, setSelectedFile] = React.useState<PickedFile | null>(null);
+  const [existingDocument, setExistingDocument] = React.useState<DocumentDetail | null>(null);
   const [error, setError] = React.useState<string | null>(null);
+  const [initialSnapshot, setInitialSnapshot] = React.useState<DocumentEditorSnapshot>({
+    title: '',
+    description: '',
+    tagsText: '',
+    documentDateText: '',
+    contactIds: [],
+  });
 
   React.useEffect(() => {
     let active = true;
@@ -177,6 +230,13 @@ export function DocumentEditorScreen({ mode, documentId }: Props) {
 
   React.useEffect(() => {
     if (isCreate || !documentId) {
+      setInitialSnapshot({
+        title: '',
+        description: '',
+        tagsText: '',
+        documentDateText: '',
+        contactIds: [],
+      });
       setIsLoading(false);
       return;
     }
@@ -187,11 +247,22 @@ export function DocumentEditorScreen({ mode, documentId }: Props) {
           token,
         })) as DocumentDetail;
         if (!active) return;
+        setExistingDocument(response);
         setTitle(response.title || '');
         setDescription(response.description || '');
         setTagsText(listToComma(response.tags));
         setDocumentDateText(response.document_date || '');
-        setSelectedContacts(response.linked_contacts || []);
+        const nextContacts = response.linked_contacts || [];
+        setSelectedContacts(nextContacts);
+        setInitialSnapshot(
+          buildSnapshot({
+            title: response.title || '',
+            description: response.description || '',
+            tagsText: listToComma(response.tags),
+            documentDateText: response.document_date || '',
+            selectedContacts: nextContacts,
+          }),
+        );
       } catch (loadError) {
         if (!active) return;
         const message = loadError instanceof Error ? loadError.message : 'Unable to load document.';
@@ -223,8 +294,31 @@ export function DocumentEditorScreen({ mode, documentId }: Props) {
           selectedContacts.length,
       );
     }
-    return true;
-  }, [description, documentDateText, isCreate, selectedContacts.length, selectedFile, tagsText, title]);
+    if (error) {
+      return false;
+    }
+    return (
+      JSON.stringify(
+        buildSnapshot({
+          title,
+          description,
+          tagsText,
+          documentDateText,
+          selectedContacts,
+        }),
+      ) !== JSON.stringify(initialSnapshot)
+    );
+  }, [
+    description,
+    documentDateText,
+    error,
+    initialSnapshot,
+    isCreate,
+    selectedContacts,
+    selectedFile,
+    tagsText,
+    title,
+  ]);
 
   const handlePickFile = React.useCallback(async () => {
     try {
@@ -257,6 +351,11 @@ export function DocumentEditorScreen({ mode, documentId }: Props) {
 
   const handleRemoveContact = React.useCallback((contactId: string) => {
     setSelectedContacts((current) => current.filter((contact) => contact.contact_id !== contactId));
+  }, []);
+
+  const handleClearContacts = React.useCallback(() => {
+    setSelectedContacts([]);
+    setContactQuery('');
   }, []);
 
   const handleSave = React.useCallback(async () => {
@@ -297,6 +396,8 @@ export function DocumentEditorScreen({ mode, documentId }: Props) {
           token,
         })) as DocumentDetail;
 
+        showSuccess('Document uploaded.');
+
         router.replace({
           pathname: '/documents/[documentId]',
           params: { documentId: created.document_id },
@@ -318,20 +419,30 @@ export function DocumentEditorScreen({ mode, documentId }: Props) {
         }),
       });
 
-      router.replace({
-        pathname: '/documents/[documentId]',
-        params: { documentId },
-      });
+      showSuccess('Document updated.');
+
+      router.back();
     } catch (saveError) {
       console.warn('[document-editor] save failed', saveError);
-      Alert.alert(
-        isCreate ? 'Upload failed' : 'Save failed',
+      showError(
         isCreate ? 'Unable to upload this document right now.' : 'Unable to save document metadata right now.',
       );
     } finally {
       setIsSaving(false);
     }
-  }, [description, documentDateText, documentId, isCreate, selectedContacts, selectedFile, tagsText, title, token]);
+  }, [
+    description,
+    documentDateText,
+    documentId,
+    isCreate,
+    selectedContacts,
+    selectedFile,
+    showError,
+    showSuccess,
+    tagsText,
+    title,
+    token,
+  ]);
 
   if (isLoading) {
     return (
@@ -365,10 +476,23 @@ export function DocumentEditorScreen({ mode, documentId }: Props) {
           {isCreate ? (
             <>
               <Button label={selectedFile ? 'Choose another file' : 'Choose file'} variant="secondary" onPress={() => void handlePickFile()} />
-              {selectedFile ? <Text style={styles.fileMeta}>{selectedFile.name}</Text> : <Text style={styles.helperText}>Pick the file you want to upload.</Text>}
+              {selectedFile ? (
+                <View style={styles.fileInfoBlock}>
+                  <Text style={styles.fileMetaStrong}>{selectedFile.name}</Text>
+                  <Text style={styles.fileMeta}>{selectedFile.mimeType}</Text>
+                </View>
+              ) : (
+                <Text style={styles.helperText}>Pick the file you want to upload.</Text>
+              )}
             </>
           ) : (
-            <Text style={styles.fileMeta}>Update the metadata and linked contacts for this document.</Text>
+            <View style={styles.fileInfoBlock}>
+              <Text style={styles.fileMetaStrong}>{existingDocument?.file_name || 'Document file'}</Text>
+              <Text style={styles.fileMeta}>
+                {[existingDocument?.file_mime || null, formatFileSize(existingDocument?.file_size)].filter(Boolean).join(' - ')}
+              </Text>
+              <Text style={styles.helperText}>Update the metadata and linked contacts for this document.</Text>
+            </View>
           )}
         </Card>
 
@@ -400,6 +524,9 @@ export function DocumentEditorScreen({ mode, documentId }: Props) {
           ) : (
             <Text style={styles.helperText}>No linked contacts yet.</Text>
           )}
+          {selectedContacts.length > 0 ? (
+            <Button label="Clear contacts" variant="clear" onPress={handleClearContacts} />
+          ) : null}
           <TextInput value={contactQuery} onChangeText={setContactQuery} placeholder="Search contacts to link" placeholderTextColor={theme.colors.mutedInk} style={styles.input} />
           <ContactSuggestions contacts={contacts} query={contactQuery} selectedIds={selectedContactIds} onSelect={handleAddContact} />
           {!isCreate && selectedContacts.length > 0 ? (
@@ -473,6 +600,15 @@ const styles = StyleSheet.create({
     color: theme.colors.ink,
     fontSize: 14,
     lineHeight: 20,
+  },
+  fileMetaStrong: {
+    color: theme.colors.ink,
+    fontSize: 15,
+    lineHeight: 22,
+    fontWeight: '700',
+  },
+  fileInfoBlock: {
+    gap: 4,
   },
   helperText: {
     color: theme.colors.mutedInk,
