@@ -17,7 +17,7 @@ _ENTITY_DISTINCT: dict[str, set[str]] = {
     "events": {"events", "contacts", "places"},
     "contacts": {"contacts", "places"},
     "places": {"places", "events", "contacts"},
-    "documents": {"documents"},
+    "documents": {"documents", "contacts"},
     "todos": {"todos"},
 }
 
@@ -25,7 +25,7 @@ _ENTITY_GROUP_BY: dict[str, set[str]] = {
     "events": {"type", "month", "week", "day", "place", "tag", "contact"},
     "contacts": {"tag", "place"},
     "places": {"city", "country"},
-    "documents": {"tag", "month", "week", "day", "file_mime"},
+    "documents": {"tag", "month", "week", "day", "file_mime", "contact"},
     "todos": {"status", "month", "week", "day", "contact"},
 }
 
@@ -158,6 +158,7 @@ def _build_document_filters(args: dict[str, Any]) -> tuple[list[str], list[Any],
 
     time_start = str(args.get("time_start") or "").strip()
     time_end = str(args.get("time_end") or "").strip()
+    contact_ids = _normalize_str_list(args.get("contact_ids"))
     tags = [t.lower() for t in _normalize_str_list(args.get("tags"))]
 
     if time_start:
@@ -168,6 +169,12 @@ def _build_document_filters(args: dict[str, Any]) -> tuple[list[str], list[Any],
         filters.append("d.document_date <= %s")
         params.append(time_end)
         applied["time_end"] = time_end
+    if contact_ids:
+        filters.append(
+            "EXISTS (SELECT 1 FROM document_contacts dc WHERE dc.document_id = d.document_id AND dc.contact_id = ANY(%s))"
+        )
+        params.append(contact_ids)
+        applied["contact_ids"] = contact_ids
     if tags:
         filters.append(
             "EXISTS (SELECT 1 FROM unnest(COALESCE(d.tags, ARRAY[]::text[])) AS tag WHERE lower(tag) = ANY(%s))"
@@ -303,6 +310,13 @@ def _count_query_places(filters: list[str], distinct: str) -> tuple[str, list[st
 
 
 def _count_query_documents(filters: list[str], _distinct: str) -> tuple[str, list[str]]:
+    if _distinct == "contacts":
+        return (
+            "SELECT COUNT(DISTINCT dc.contact_id) AS total "
+            "FROM documents d JOIN document_contacts dc ON dc.document_id = d.document_id "
+            f"{_where_clause(filters)}",
+            filters,
+        )
     return (
         f"SELECT COUNT(DISTINCT d.document_id) AS total FROM documents d {_where_clause(filters)}",
         filters,
@@ -428,6 +442,12 @@ _GROUP_BY_SQL: dict[str, dict[str, tuple[str, str, str, Optional[str]]]] = {
             None,
         ),
         "file_mime": ("FROM documents d", "d.file_mime", "d.document_id", None),
+        "contact": (
+            "FROM documents d JOIN document_contacts dc ON dc.document_id = d.document_id",
+            "dc.contact_id",
+            "d.document_id",
+            None,
+        ),
     },
 }
 

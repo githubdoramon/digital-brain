@@ -47,6 +47,7 @@ export async function getAuthRequestContext(): Promise<{
 
 export async function apiFetch(path: string, options: FetchOptions = {}) {
   const { token, headers, onAuthExpired, retryOnAuthExpired = true, ...rest } = options;
+  const isFormDataBody = typeof FormData !== 'undefined' && rest.body instanceof FormData;
   const resolvedToken =
     token === undefined && authTokenProvider ? await authTokenProvider() : token;
   const resolvedOnAuthExpired = onAuthExpired ?? authRefreshHandler ?? undefined;
@@ -56,7 +57,7 @@ export async function apiFetch(path: string, options: FetchOptions = {}) {
   const response = await fetch(requestUrl, {
     ...rest,
     headers: {
-      'Content-Type': 'application/json',
+      ...(isFormDataBody ? {} : { 'Content-Type': 'application/json' }),
       ...(headers ?? {}),
       ...(resolvedToken ? { Authorization: `Bearer ${resolvedToken}` } : {}),
     },

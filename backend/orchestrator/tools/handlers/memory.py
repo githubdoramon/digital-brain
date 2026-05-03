@@ -14,6 +14,7 @@ trace module. Handlers focus purely on execution logic.
 from collections import Counter
 from typing import TYPE_CHECKING, Any, Optional
 
+from memory_graph_terms import contains_personal_document_term
 from tools.limit_policy import wants_all_results
 
 if TYPE_CHECKING:
@@ -39,10 +40,31 @@ def handle_search_memories(
     limit = None if wants_all_results(question) else args.get("limit", search_limit)
     time_start = args.get("time_start")
     time_end = args.get("time_end")
-    contact_ids = args.get("contact_ids")  # Maps to 'people' parameter
+    raw_contact_ids = args.get("contact_ids") or []
+    contact_ids = [str(contact_id).strip() for contact_id in raw_contact_ids if str(contact_id).strip()]
     sort_order = args.get("sort_order", "relevance")
     tags = args.get("tags")
     salience_hints = state.get_episodic_hints() if state is not None else []
+
+    if contact_ids and contains_personal_document_term(query):
+        runtime_email = str(kwargs.get("user_email") or "").strip()
+        if runtime_email:
+            try:
+                from contacts import get_self_contact_id
+
+                self_contact_id = get_self_contact_id(runtime_email)
+            except Exception:
+                self_contact_id = None
+            if self_contact_id:
+                filtered_contact_ids = [
+                    contact_id for contact_id in contact_ids if contact_id != self_contact_id
+                ]
+                if filtered_contact_ids != contact_ids:
+                    contact_ids = filtered_contact_ids
+                    if state is not None:
+                        state.add_fact(
+                            "Removed self contact from document-oriented search scope to avoid over-constraining legacy documents"
+                        )
 
     search_result = retrieval.search_memories(
         query,

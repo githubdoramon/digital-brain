@@ -99,6 +99,36 @@ def test_search_memories_all_query_uses_unbounded_limit(monkeypatch):
     assert calls["limit"] is None
 
 
+def test_search_memories_strips_self_contact_for_document_queries(monkeypatch):
+    calls: dict[str, object] = {}
+
+    def fake_search_memories(query, **kwargs):
+        calls["query"] = query
+        calls["people"] = kwargs.get("people")
+        return {"results": []}
+
+    monkeypatch.setitem(
+        sys.modules, "retrieval", SimpleNamespace(search_memories=fake_search_memories)
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "contacts",
+        SimpleNamespace(get_self_contact_id=lambda _email: "contact:self"),
+    )
+
+    handle_search_memories(
+        {
+            "query": "my prescription document",
+            "contact_ids": ["contact:self", "contact:daughter"],
+        },
+        question="my prescription document",
+        user_email="user@example.com",
+    )
+
+    assert calls["query"] == "my prescription document"
+    assert calls["people"] == ["contact:daughter"]
+
+
 def test_get_events_all_query_uses_unbounded_sql(monkeypatch):
     executed: list[tuple[str, tuple[object, ...]]] = []
 

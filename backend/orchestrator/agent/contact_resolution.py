@@ -25,6 +25,12 @@ PRE_RESOLVE_CONTACT_INTENTS = {
     "contact_lookup",
 }
 
+FAMILY_RELATIONSHIP_PATTERN = re.compile(
+    r"\b(my|our)\s+(mom|mother|dad|father|wife|husband|partner|son|daughter|child|kids|kid|friend|colleague|coworker|boss|manager|doctor|therapist|teacher|coach|brother|sister|parent)\b"
+)
+
+THIRD_PARTY_REFERENCE_PATTERN = re.compile(r"\b(him|her|their|his|hers|them|he|she|they)\b")
+
 
 def should_pre_resolve_contacts(
     intent: str | None,
@@ -61,11 +67,8 @@ def is_contact_referential_memory_query(query_text: str, goal_text: str) -> bool
     if not interaction_verbs:
         return False
 
-    relation_terms = re.search(
-        r"\b(my|our)\s+(mom|mother|dad|father|wife|husband|partner|son|daughter|friend|colleague|coworker|boss|manager|doctor|therapist|teacher|coach|brother|sister)\b",
-        lower,
-    )
-    pronoun_target = re.search(r"\b(him|her|them|he|she|they)\b", lower)
+    relation_terms = FAMILY_RELATIONSHIP_PATTERN.search(lower)
+    pronoun_target = THIRD_PARTY_REFERENCE_PATTERN.search(lower)
     explicit_name = re.search(r"\b[A-Z][a-z]+(?:\s+[A-Z][a-z]+)?\b", combined)
     directional = re.search(r"\b(with|to|from)\b", lower)
 

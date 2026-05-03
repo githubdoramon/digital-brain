@@ -146,9 +146,11 @@ def ingest_document(
     *,
     title: str | None,
     tags: Sequence[str] | None,
+    contact_ids: Sequence[str] | None,
     description: str | None,
     upload: UploadFile,
     document_date: datetime | None = None,
+    user_email: str | None = None,
 ) -> dict[str, Any]:
     """Persist a new document, extracting text, embeddings, and tags."""
     provided_title = (title or "").strip()
@@ -199,10 +201,22 @@ def ingest_document(
         raw_metadata=base_raw_metadata,
     )
 
+    merged_contact_ids = _merge_document_contact_ids(
+        contact_ids,
+        _infer_document_contact_ids(
+            user_email=user_email,
+            title=prepared.title,
+            description=prepared.description,
+            file_name=stored.file_name,
+            content=content_text,
+        ),
+    )
+
     row = _upsert_document(
         document_id=document_id,
         title=prepared.title,
         tags=prepared.tags,
+        contact_ids=merged_contact_ids,
         description=prepared.description,
         stored=stored,
         content=content_text,
@@ -210,16 +224,30 @@ def ingest_document(
         chunk_embeddings=prepared.chunk_embeddings,
         document_date=prepared.document_date,
         raw_metadata=prepared.raw_metadata,
+        replace_contact_links=True,
     )
     return _row_to_document(row, include_metadata=True, include_content=True)
 
 
-def list_documents(limit: int = 200, offset: int = 0) -> list[dict[str, Any]]:
+def list_documents(
+    limit: int = 200,
+    offset: int = 0,
+    contact_ids: Sequence[str] | None = None,
+) -> list[dict[str, Any]]:
     limit = max(1, min(limit, 200))
     offset = max(0, offset)
+    normalized_contact_ids = _normalize_contact_ids(contact_ids)
     with get_conn() as conn, conn.cursor() as cur:
+        filters: list[str] = []
+        params: list[Any] = []
+        if normalized_contact_ids:
+            filters.append(
+                "EXISTS (SELECT 1 FROM document_contacts dc WHERE dc.document_id = documents.document_id AND dc.contact_id = ANY(%s))"
+            )
+            params.append(normalized_contact_ids)
+        where_clause = f"WHERE {' AND '.join(filters)}" if filters else ""
         cur.execute(
-            """
+            f"""
             SELECT
                 document_id,
                 title,
@@ -233,12 +261,14 @@ def list_documents(limit: int = 200, offset: int = 0) -> list[dict[str, Any]]:
                 updated_at,
                 content
             FROM documents
+            {where_clause}
             ORDER BY created_at DESC
             LIMIT %s OFFSET %s
             """,
-            (limit, offset),
+            (*params, limit, offset),
         )
         rows = cur.fetchall()
+        _attach_linked_contacts(cur, rows)
     return [_row_to_document(row) for row in rows]
 
 
@@ -267,6 +297,8 @@ def get_document(document_id: str) -> dict[str, Any] | None:
             (document_id,),
         )
         row = cur.fetchone()
+        if row:
+            _attach_linked_contacts(cur, [row])
     if not row:
         return None
     return _row_to_document(row, include_metadata=True, include_content=True)
@@ -277,6 +309,7 @@ def update_document_metadata(
     *,
     title: str | None = None,
     tags: Sequence[str] | None = None,
+    contact_ids: Sequence[str] | None = None,
     description: str | None = None,
     document_date: datetime | None = None,
 ) -> dict[str, Any] | None:
@@ -388,6 +421,7 @@ def update_document_metadata(
         document_id=document_id,
         title=prepared.title,
         tags=prepared.tags,
+        contact_ids=contact_ids,
         description=prepared.description,
         stored=stored,
         content=content_text,
@@ -395,6 +429,7 @@ def update_document_metadata(
         chunk_embeddings=prepared.chunk_embeddings,
         document_date=prepared.document_date,
         raw_metadata=prepared.raw_metadata,
+        replace_contact_links=contact_ids is not None,
     )
     return _row_to_document(row, include_metadata=True, include_content=True)
 
@@ -403,10 +438,12 @@ def search_documents(
     query: str,
     *,
     tags: Sequence[str] | None = None,
+    contact_ids: Sequence[str] | None = None,
     limit: int = 20,
 ) -> list[dict[str, Any]]:
     search_query = normalize_search_text(query)
     normalized_tags = normalize_search_list(tags)
+    normalized_contact_ids = _normalize_contact_ids(contact_ids)
 
     scores: dict[str, float] = {}
     if search_query:
@@ -428,6 +465,15 @@ def search_documents(
                     scores[doc_id] += tag_scores[doc_id]
         else:
             scores = tag_scores
+
+    if normalized_contact_ids:
+        contact_scoped_ids = _search_document_ids_by_contacts(normalized_contact_ids)
+        if scores:
+            scores = {
+                doc_id: score for doc_id, score in scores.items() if doc_id in contact_scoped_ids
+            }
+        else:
+            scores = dict.fromkeys(contact_scoped_ids, 1.0)
 
     if not scores:
         return []
@@ -489,6 +535,155 @@ def get_document_file(document_id: str) -> dict[str, Any] | None:
         "file_name": row.get("file_name"),
         "file_mime": row.get("file_mime"),
     }
+
+
+def _normalize_contact_ids(contact_ids: Sequence[str] | None) -> list[str]:
+    return [str(contact_id).strip() for contact_id in (contact_ids or []) if str(contact_id).strip()]
+
+
+def _search_document_ids_by_contacts(contact_ids: Sequence[str] | None) -> set[str]:
+    normalized_contact_ids = _normalize_contact_ids(contact_ids)
+    if not normalized_contact_ids:
+        return set()
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT DISTINCT document_id
+            FROM document_contacts
+            WHERE contact_id = ANY(%s)
+            """,
+            (normalized_contact_ids,),
+        )
+        return {str(row["document_id"]) for row in cur.fetchall()}
+
+
+def _merge_document_contact_ids(*contact_groups: Sequence[str] | None) -> list[str]:
+    merged: list[str] = []
+    seen: set[str] = set()
+    for group in contact_groups:
+        for contact_id in _normalize_contact_ids(group):
+            if contact_id in seen:
+                continue
+            seen.add(contact_id)
+            merged.append(contact_id)
+    return merged
+
+
+def _infer_document_contact_ids(
+    *,
+    user_email: str | None,
+    title: str,
+    description: str | None,
+    file_name: str | None,
+    content: str,
+) -> list[str]:
+    runtime_email = str(user_email or "").strip()
+    if not runtime_email:
+        return []
+
+    inference_parts = [
+        str(title or "").strip(),
+        str(description or "").strip(),
+        str(file_name or "").strip(),
+        str(content or "").strip()[:2500],
+    ]
+    inference_text = "\n".join(part for part in inference_parts if part).strip()
+    if not inference_text:
+        return []
+
+    try:
+        from contact_resolution_service import resolve_contacts_request
+
+        resolution = resolve_contacts_request(
+            {
+                "text": inference_text,
+                "user_email": runtime_email,
+                "mode": "minimal",
+            }
+        )
+    except Exception as exc:
+        logger.warning("[documents] contact inference failed: %s", exc, exc_info=exc)
+        return []
+
+    resolved = resolution.get("resolved_contacts") or []
+    inferred_ids = [
+        str(item.get("contact_id") or "").strip()
+        for item in resolved
+        if isinstance(item, dict) and str(item.get("contact_id") or "").strip()
+    ]
+    if not inferred_ids:
+        return []
+
+    logger.info(
+        "[documents] inferred contact links count=%s title=%r",
+        len(inferred_ids),
+        title,
+    )
+    return list(dict.fromkeys(inferred_ids))
+
+
+def _set_document_contacts(
+    cur,
+    *,
+    document_id: str,
+    contact_ids: Sequence[str] | None,
+) -> None:
+    normalized_contact_ids = list(dict.fromkeys(_normalize_contact_ids(contact_ids)))
+    cur.execute("DELETE FROM document_contacts WHERE document_id = %s", (document_id,))
+    if not normalized_contact_ids:
+        return
+    cur.executemany(
+        """
+        INSERT INTO document_contacts (document_id, contact_id)
+        VALUES (%s, %s)
+        ON CONFLICT (document_id, contact_id) DO UPDATE SET updated_at = NOW()
+        """,
+        [(document_id, contact_id) for contact_id in normalized_contact_ids],
+    )
+
+
+def _fetch_document_contacts_map(cur, document_ids: Sequence[str]) -> dict[str, list[dict[str, Any]]]:
+    if not document_ids:
+        return {}
+    cur.execute(
+        """
+        SELECT
+            dc.document_id,
+            dc.contact_id,
+            dc.role,
+            dc.source,
+            dc.confidence,
+            c.display_name
+        FROM document_contacts dc
+        LEFT JOIN contacts c ON c.contact_id = dc.contact_id
+        WHERE dc.document_id = ANY(%s)
+        ORDER BY dc.document_id ASC, c.display_name ASC NULLS LAST, dc.contact_id ASC
+        """,
+        (list(document_ids),),
+    )
+    contacts_map: dict[str, list[dict[str, Any]]] = {}
+    for row in cur.fetchall():
+        contacts_map.setdefault(str(row["document_id"]), []).append(
+            {
+                "contact_id": str(row["contact_id"]),
+                "display_name": str(row.get("display_name") or row["contact_id"]),
+                "role": row.get("role"),
+                "source": row.get("source"),
+                "confidence": row.get("confidence"),
+            }
+        )
+    return contacts_map
+
+
+def _attach_linked_contacts(cur, rows: Sequence[dict[str, Any]]) -> None:
+    if not rows:
+        return
+    contacts_map = _fetch_document_contacts_map(
+        cur,
+        [str(row["document_id"]) for row in rows if row.get("document_id")],
+    )
+    for row in rows:
+        row["linked_contacts"] = contacts_map.get(str(row["document_id"]), [])
 
 
 # ---------------------------------------------------------------------------
@@ -967,6 +1162,7 @@ def _upsert_document(
     document_id: str,
     title: str,
     tags: Sequence[str],
+    contact_ids: Sequence[str] | None,
     description: str | None,
     stored: StoredFileInfo,
     content: str,
@@ -974,6 +1170,7 @@ def _upsert_document(
     chunk_embeddings: Sequence[DocumentChunkEmbedding],
     document_date: datetime | None,
     raw_metadata: dict[str, Any],
+    replace_contact_links: bool,
 ) -> dict[str, Any]:
     with get_conn() as conn, conn.cursor() as cur:
         cur.execute(
@@ -1039,6 +1236,10 @@ def _upsert_document(
         )
         row = cur.fetchone()
         _replace_document_chunks(cur, document_id=document_id, chunk_embeddings=chunk_embeddings)
+        if replace_contact_links:
+            _set_document_contacts(cur, document_id=document_id, contact_ids=contact_ids)
+        if row:
+            _attach_linked_contacts(cur, [row])
         conn.commit()
     return row
 
@@ -1370,7 +1571,9 @@ def _fetch_documents(document_ids: Sequence[str]) -> list[dict[str, Any]]:
             """,
             (list(document_ids),),
         )
-        return cur.fetchall()
+        rows = cur.fetchall()
+        _attach_linked_contacts(cur, rows)
+        return rows
 
 
 def _row_to_document(
@@ -1393,6 +1596,7 @@ def _row_to_document(
         "created_at": row.get("created_at"),
         "updated_at": row.get("updated_at"),
         "snippet": _make_snippet(snippet_source),
+        "linked_contacts": row.get("linked_contacts") or [],
     }
     if include_metadata:
         raw_metadata = row.get("raw_metadata")

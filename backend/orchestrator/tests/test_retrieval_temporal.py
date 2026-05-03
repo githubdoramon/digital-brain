@@ -41,6 +41,7 @@ def test_temporal_structured_newest_is_deterministic_and_event_only(monkeypatch)
         "structured_candidates",
         lambda *_args, **_kwargs: {"evt-a": 1.0, "evt-b": 1.0, "evt-c": 1.0},
     )
+    monkeypatch.setattr(retrieval, "structured_document_candidates", lambda *_args, **_kwargs: {})
     monkeypatch.setattr(
         retrieval,
         "fetch_events",
@@ -83,6 +84,7 @@ def test_temporal_structured_oldest_is_deterministic_and_event_only(monkeypatch)
         "structured_candidates",
         lambda *_args, **_kwargs: {"evt-a": 1.0, "evt-b": 1.0, "evt-c": 1.0},
     )
+    monkeypatch.setattr(retrieval, "structured_document_candidates", lambda *_args, **_kwargs: {})
     monkeypatch.setattr(
         retrieval,
         "fetch_events",
@@ -300,6 +302,11 @@ def test_structured_filters_do_not_force_event_first_ordering(monkeypatch):
     )
     monkeypatch.setattr(
         retrieval,
+        "structured_document_candidates",
+        lambda *_args, **_kwargs: {"doc-a": 1.0},
+    )
+    monkeypatch.setattr(
+        retrieval,
         "fetch_events",
         lambda *_args, **_kwargs: [_event_row("evt-a", datetime(2026, 1, 1, 10, 0, 0))],
     )
@@ -357,7 +364,8 @@ def test_tag_filter_constrains_event_and_document_candidates(monkeypatch):
         assert tags == ["health"]
         return {"evt-a": 1.0}
 
-    def _structured_docs(_timespan, tags, _limit):
+    def _structured_docs(_timespan, contact_ids, tags, _limit):
+        assert contact_ids == []
         assert tags == ["health"]
         return {"doc-a": 1.0}
 
@@ -441,6 +449,62 @@ def test_tag_filter_without_query_uses_structured_candidates(monkeypatch):
 
     ids = [item["id"] for item in result["results"]]
     assert set(ids) == {"evt-tag", "doc-tag"}
+
+
+def test_contact_filter_constrains_documents_via_document_links(monkeypatch):
+    monkeypatch.setattr(retrieval, "vector_search", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr(retrieval, "bm25_search", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr(retrieval, "structured_candidates", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr(
+        retrieval,
+        "vector_search_documents",
+        lambda *_args, **_kwargs: {"doc-match": 0.9, "doc-other": 0.95},
+    )
+    monkeypatch.setattr(
+        retrieval,
+        "bm25_search_documents",
+        lambda *_args, **_kwargs: {"doc-match": 0.9, "doc-other": 0.95},
+    )
+
+    def _structured_docs(_timespan, contact_ids, tags, _limit):
+        assert contact_ids == ["contact:daughter"]
+        assert tags == []
+        return {"doc-match": 1.0}
+
+    monkeypatch.setattr(retrieval, "structured_document_candidates", _structured_docs)
+    monkeypatch.setattr(retrieval, "fetch_events", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(
+        retrieval,
+        "fetch_document_summaries",
+        lambda *_args, **_kwargs: {
+            "doc-match": {
+                "document_id": "doc-match",
+                "title": "Glasses Prescription",
+                "description": "Prescription details",
+                "tags": ["health"],
+                "document_date": datetime(2026, 1, 2, 10, 0, 0),
+                "created_at": datetime(2026, 1, 2, 10, 0, 0),
+                "updated_at": datetime(2026, 1, 2, 10, 0, 0),
+                "download_url": "/documents/doc-match/download",
+                "file_name": "doc-match.txt",
+                "file_mime": "text/plain",
+                "file_size": 123,
+                "snippet": "Prescription details",
+                "linked_contacts": [
+                    {"contact_id": "contact:daughter", "display_name": "Daughter"}
+                ],
+            }
+        },
+    )
+
+    result = retrieval.search_memories(
+        query="glasses specs",
+        people=["contact:daughter"],
+        limit=5,
+    )
+
+    assert [item["id"] for item in result["results"]] == ["doc-match"]
+    assert result["results"][0]["linked_contacts"][0]["contact_id"] == "contact:daughter"
 
 
 def test_temporal_latest_uses_relevance_gate_before_recency(monkeypatch):

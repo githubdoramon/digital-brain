@@ -57,6 +57,7 @@ def get_memory_expert_protocol_prompt() -> str:
         "  * For 'who lives/works at X', call lookup_place_contacts with place_id when already known from prior step/turn; otherwise use place_query and role_hint before memory search.\n"
         "  * Use search_memories/get_events only when place-lookup tools cannot resolve the answer.\n"
         "- Document retrieval guidelines:\n"
+        "  * For person-scoped document questions (for example 'my daughter's prescription', 'my wife's lab report', 'her glasses specs'), resolve the contact first, then search/inspect linked documents before asking the user to paste anything.\n"
         "  * Prioritize the top matching document from search_memories and call get_document before re-searching with different terms.\n"
         "  * Keep track of already-inspected documents; do not discard them after broader follow-up searches.\n"
         "  * If extraction is noisy (OCR/PDF ordering), align label + nearest value + unit + reference range.\n"

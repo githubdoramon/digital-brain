@@ -119,7 +119,7 @@ class TestIntentToolMap:
     def test_conversational_has_web_and_ui_tools(self):
         """Test CONVERSATIONAL intent has web search and UI tools for follow-ups."""
         groups = INTENT_TOOL_MAP[IntentType.CONVERSATIONAL]
-        assert groups == ["web", "ui"]
+        assert groups == ["memory", "resolution", "web", "ui"]
 
     def test_unknown_has_all_tools(self):
         """UNKNOWN remains the catch-all that exposes every tool group."""
@@ -188,12 +188,32 @@ class TestRuleBasedClassification:
             "Search memories for project planning notes",
             "Find in memories my latest doctor visit",
             "When did I last talk to John?",
+            "What are the glasses specs for my daughter?",
         ]
 
         for question in questions:
             result = router._rule_based_classify(question)
             assert result is not None
             assert result.intent == IntentType.MEMORY_SEARCH
+
+    def test_follow_up_doc_statement_reuses_memory_graph_context(self, router):
+        classification = IntentClassification(
+            intent=IntentType.CONVERSATIONAL,
+            confidence=0.9,
+            allowed_tool_groups=INTENT_TOOL_MAP[IntentType.CONVERSATIONAL],
+            pre_resolve_contacts=False,
+        )
+
+        result = router._apply_query_heuristics(
+            classification,
+            "We have a doc with her glasses specs",
+            conversation_history=[
+                {"role": "user", "content": "What are the glasses specification for my daughter?"}
+            ],
+        )
+
+        assert result.intent == IntentType.MEMORY_SEARCH
+        assert result.pre_resolve_contacts is True
 
     def test_data_query_keywords(self, router):
         """Test data query intent detection via rule-based."""

@@ -21,6 +21,8 @@ from typing import Any, Optional
 # Add parent directory to path for imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from agent.contact_resolution import FAMILY_RELATIONSHIP_PATTERN, THIRD_PARTY_REFERENCE_PATTERN
+from memory_graph_terms import contains_personal_document_term
 from observability import trace
 from tools.registry import TOOL_GROUPS as REGISTRY_TOOL_GROUPS
 
@@ -87,7 +89,7 @@ INTENT_TOOL_MAP = {
     IntentType.HOME_CONTROL: ["home"],
     IntentType.SKILL_EXECUTION: ["skills", "memory"],
     IntentType.SYSTEM_COMMAND: ["system"],
-    IntentType.CONVERSATIONAL: ["web", "ui"],  # Web search + UI follow-up directives
+    IntentType.CONVERSATIONAL: ["memory", "resolution", "web", "ui"],
     IntentType.UNKNOWN: list(TOOL_GROUPS.keys()),  # All tools
 }
 
@@ -287,6 +289,19 @@ class IntentRouter:
                 route_source=RouteSource.RULE,
             )
 
+        if self._looks_like_personal_document_memory_query(question):
+            return IntentClassification(
+                intent=IntentType.MEMORY_SEARCH,
+                confidence=0.93,
+                allowed_tool_groups=INTENT_TOOL_MAP[IntentType.MEMORY_SEARCH],
+                pre_resolve_contacts=True,
+                reasoning=(
+                    "Personal document/memory query detected; likely needs memory graph "
+                    "document retrieval with contact resolution"
+                ),
+                route_source=RouteSource.RULE,
+            )
+
         # Contact/people patterns (high precision only)
         contact_patterns = [
             r"\bphone number\b",
@@ -431,7 +446,8 @@ class IntentRouter:
                 model=resolved_model,
                 **self.llm_request_options,
             )
-            return self._parse_llm_response(content)
+            parsed = self._parse_llm_response(content)
+            return self._apply_query_heuristics(parsed, question, conversation_history)
         except Exception as e:
             trace.trace_router_llm_error(f"LLM call failed: {e}")
             # Fall back to unknown classification
@@ -461,18 +477,20 @@ class IntentRouter:
 QUESTION: {question}
 {context}
 INTENT TYPES:
-- memory_search: Qualitative recall over memories, events, documents, and the connections between them. Pick this when the user wants the *content* of past interactions ("what did we discuss", "find the meeting where").
+- memory_search: Qualitative recall over the personal memory graph: events, contacts, documents (personal or related to contacts), places, todos, notes, and the links/connections between them. Pick this when the user wants content that could already exist in their stored graph.
 - data_query: Quantitative questions over the memory graph — counts, distinct counts, time-bucketed breakdowns ("how many meetings last month", "how many people did I meet this week", "events grouped by type"). Pick this whenever the answer is a number or ranked breakdown rather than a description.
 - contact_lookup: Finding people, relationships, and professions and their information, like phone, email, description, and more.
-- web_search: External information from the internet not related to user's personal graph of contacts, events, places, and documents
+- web_search: External information from the internet that is NOT expected to live in the user's personal memory graph. Do NOT pick this for personal or contact related documents or information. This is a personal graph, so questions are usually related to it (but not always).
 - home_control: Smart home/Home Assistant actions and management
 - skill_execution: Running skill scripts
 - system_command: Bash/shell commands and system management on a server
 - conversational: General chat and conversation between the user and a supporting agent that doesn't fir any of the previous intents
+- unknown: If you are uncertain about the intent, pick this.
 
 Also decide whether pre-resolving contacts is beneficial when creating a answer for the user in upcoming steps:
-- Set `pre_resolve_contacts` to true ONLY when the query references specific people by name,
-  pronoun, or relationship term (e.g. "my mom", "him", "John") AND early identification would help.
+- Set `pre_resolve_contacts` to true when the query references a specific person by name,
+  pronoun, or relationship term (e.g. "my mom", "him", "John") and the answer may depend on that person's events, documents, places, or other graph links.
+- Strongly prefer `pre_resolve_contacts=true` for contact-document queries such as "my daughter's prescription", or "my wife's lab results"
 - Set `pre_resolve_contacts` to false for:
   - Discovery/ranking queries that ask "who" without naming anyone
     (e.g. "who did I meet most this week?", "who do I talk to the most?",
@@ -537,6 +555,96 @@ Respond with JSON only:
                 reasoning="LLM response parsing failed",
                 route_source=RouteSource.LLM_PARSE_ERROR,
             )
+
+    def _apply_query_heuristics(
+        self,
+        classification: IntentClassification,
+        question: str,
+        conversation_history: Optional[list[dict[str, str]]] = None,
+    ) -> IntentClassification:
+        """Correct known routing blind spots with deterministic graph-aware heuristics."""
+        if self._looks_like_personal_document_memory_query(question, conversation_history):
+            return IntentClassification(
+                intent=IntentType.MEMORY_SEARCH,
+                confidence=max(classification.confidence, 0.94),
+                allowed_tool_groups=INTENT_TOOL_MAP[IntentType.MEMORY_SEARCH],
+                constraints=classification.constraints,
+                pre_resolve_contacts=True,
+                reasoning=(
+                    "Graph-aware routing override: the request looks like a personal-document "
+                    "lookup in the memory graph, so use memory search with contact pre-resolution."
+                ),
+                route_source=classification.route_source,
+            )
+
+        if (
+            classification.intent is IntentType.MEMORY_SEARCH
+            and classification.pre_resolve_contacts is not True
+            and self._has_person_scoped_memory_reference(question, conversation_history)
+        ):
+            classification.pre_resolve_contacts = True
+            if classification.reasoning:
+                classification.reasoning = (
+                    f"{classification.reasoning} Contact pre-resolution enabled for person-scoped memory lookup."
+                )
+            else:
+                classification.reasoning = "Contact pre-resolution enabled for person-scoped memory lookup."
+        return classification
+
+    def _looks_like_personal_document_memory_query(
+        self,
+        question: str,
+        conversation_history: Optional[list[dict[str, str]]] = None,
+    ) -> bool:
+        current = (question or "").strip().lower()
+        if not current:
+            return False
+
+        history_text = " ".join(
+            str(message.get("content") or "") for message in (conversation_history or [])[-4:]
+        ).lower()
+        combined = f"{history_text} {current}".strip()
+
+        has_doc_term = contains_personal_document_term(combined)
+        if not has_doc_term:
+            return False
+
+        has_family_reference = bool(FAMILY_RELATIONSHIP_PATTERN.search(combined))
+        has_third_party_reference = bool(THIRD_PARTY_REFERENCE_PATTERN.search(current))
+        has_possessive_reference = bool(re.search(r"\b(my|our)\b", current))
+        has_memory_artifact_hint = any(
+            phrase in current
+            for phrase in (
+                "we have a doc",
+                "we have a document",
+                "in my docs",
+                "in my documents",
+                "find the doc",
+                "find the document",
+            )
+        )
+
+        return bool(
+            has_family_reference
+            or (has_third_party_reference and history_text)
+            or has_possessive_reference
+            or has_memory_artifact_hint
+        )
+
+    def _has_person_scoped_memory_reference(
+        self,
+        question: str,
+        conversation_history: Optional[list[dict[str, str]]] = None,
+    ) -> bool:
+        current = (question or "").strip().lower()
+        history_text = " ".join(
+            str(message.get("content") or "") for message in (conversation_history or [])[-4:]
+        ).lower()
+        combined = f"{history_text} {current}".strip()
+        return bool(
+            FAMILY_RELATIONSHIP_PATTERN.search(combined)
+            or THIRD_PARTY_REFERENCE_PATTERN.search(current)
+        )
 
     def get_allowed_tools(self, classification: IntentClassification) -> list[str]:
         """Get flat list of allowed tool names from classification."""

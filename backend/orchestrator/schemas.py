@@ -188,6 +188,7 @@ class DocumentOut(BaseModel):
     created_at: datetime
     updated_at: datetime
     snippet: str | None = None
+    linked_contacts: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class DocumentCollection(BaseModel):
@@ -204,11 +205,13 @@ class DocumentUpdateIn(BaseModel):
     tags: list[str] | None = Field(default=None)
     description: str | None = None
     document_date: datetime | None = None
+    contact_ids: list[str] | None = Field(default=None)
 
 
 class DocumentSearchIn(BaseModel):
     query: str
     tags: list[str] | None = Field(default_factory=list)
+    contact_ids: list[str] | None = Field(default=None)
     limit: int | None = 20
 
 

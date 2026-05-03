@@ -324,6 +324,34 @@ function RootLayoutNav({ loaded }: { loaded: boolean }) {
           }}
         />
         <Stack.Screen
+          name="documents/new/index"
+          options={{
+            headerShown: true,
+            headerTransparent: true,
+            headerTitle: 'Upload document',
+            headerBackTitle: ' ',
+            headerBackTitleStyle: { fontSize: 0 },
+            headerBackButtonMenuEnabled: false,
+            headerShadowVisible: false,
+            headerTintColor: theme.colors.ink,
+            headerStyle: { backgroundColor: 'transparent' },
+          }}
+        />
+        <Stack.Screen
+          name="documents/[documentId]/edit/index"
+          options={{
+            headerShown: true,
+            headerTransparent: true,
+            headerTitle: 'Edit document',
+            headerBackTitle: ' ',
+            headerBackTitleStyle: { fontSize: 0 },
+            headerBackButtonMenuEnabled: false,
+            headerShadowVisible: false,
+            headerTintColor: theme.colors.ink,
+            headerStyle: { backgroundColor: 'transparent' },
+          }}
+        />
+        <Stack.Screen
           name="documents/[documentId]/file/index"
           options={{
             headerShown: false,

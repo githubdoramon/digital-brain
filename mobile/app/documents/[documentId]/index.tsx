@@ -39,6 +39,10 @@ type DocumentDetail = {
   content_preview?: string | null;
   created_at?: string;
   updated_at?: string;
+  linked_contacts?: {
+    contact_id: string;
+    display_name: string;
+  }[];
 };
 
 const DOWNLOADS_DIRECTORY_URI_KEY = 'downloads_directory_uri';
@@ -346,20 +350,36 @@ export default function DocumentDetailScreen() {
         options={{
           headerTitle: 'Document',
           headerRight: () => (
-            <Pressable
-              onPress={() => {
-                void handleDownload();
-              }}
-              disabled={isDownloading}
-              style={({ pressed }) => [styles.headerAction, pressed && styles.headerActionPressed]}
-              hitSlop={10}
-            >
-              <Ionicons
-                name={isDownloading ? 'hourglass-outline' : 'download-outline'}
-                size={20}
-                color={theme.colors.ink}
-              />
-            </Pressable>
+            <View style={styles.headerActions}>
+              {documentId ? (
+                <Pressable
+                  onPress={() =>
+                    router.push({
+                      pathname: '/documents/[documentId]/edit',
+                      params: { documentId },
+                    })
+                  }
+                  style={({ pressed }) => [styles.headerAction, pressed && styles.headerActionPressed]}
+                  hitSlop={10}
+                >
+                  <Ionicons name="create-outline" size={20} color={theme.colors.ink} />
+                </Pressable>
+              ) : null}
+              <Pressable
+                onPress={() => {
+                  void handleDownload();
+                }}
+                disabled={isDownloading}
+                style={({ pressed }) => [styles.headerAction, pressed && styles.headerActionPressed]}
+                hitSlop={10}
+              >
+                <Ionicons
+                  name={isDownloading ? 'hourglass-outline' : 'download-outline'}
+                  size={20}
+                  color={theme.colors.ink}
+                />
+              </Pressable>
+            </View>
           ),
         }}
       />
@@ -400,6 +420,11 @@ export default function DocumentDetailScreen() {
               <Text style={styles.bodyText}>Updated: {formatDate(document.updated_at)}</Text>
               {document.tags && document.tags.length > 0 ? (
                 <Text style={styles.bodyText}>Tags: {document.tags.join(', ')}</Text>
+              ) : null}
+              {document.linked_contacts && document.linked_contacts.length > 0 ? (
+                <Text style={styles.bodyText}>
+                  Contacts: {document.linked_contacts.map((contact) => contact.display_name).join(', ')}
+                </Text>
               ) : null}
               {document.description ? <Text style={styles.bodyText}>{document.description}</Text> : null}
             </Card>
@@ -442,6 +467,11 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: '#f4eee5',
+  },
+  headerActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
   },
   headerActionPressed: {
     opacity: 0.75,

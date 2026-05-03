@@ -200,7 +200,7 @@ def _register_all_tools(registry: ToolRegistry) -> None:
                 "Can find both formal calendar meetings and informal interactions captured in personal event summaries/snippets. "
                 "Do NOT use this for time-window enumeration, counting, or ranking queries (e.g. 'who did I meet most this week') — "
                 "use `get_events(action=by_time_span)` instead, which returns all events in a window without semantic filtering. "
-                "Use `contact_ids` only when the user named specific people and identity is resolved."
+                "Use `contact_ids` only when the user named specific people and identity is resolved; this also scopes linked documents for person-specific paperwork like prescriptions or reports."
             ),
             parameters=[
                 ToolParameter(
@@ -246,7 +246,8 @@ def _register_all_tools(registry: ToolRegistry) -> None:
                     type="array",
                     description=(
                         "Optional contact scope filter by resolved contact IDs. Use when the user explicitly asks about named people. "
-                        "Do not add broad/self filters for 'who did I meet/talk to most' style discovery queries."
+                        "Do not add broad/self filters for 'who did I meet/talk to most' style discovery queries. "
+                        "When present, linked personal documents for those contacts are also preferred."
                     ),
                     required=False,
                     items_type="string",
@@ -600,7 +601,7 @@ def _register_all_tools(registry: ToolRegistry) -> None:
                         "For entity=`contacts`: scope to these specific contacts. "
                         "For entity=`places`: scope to places linked to these contacts via contact_places. "
                         "For entity=`todos`: scope to todos linked to these contacts via todo_contacts. "
-                        "Ignored for entity=`documents`."
+                        "For entity=`documents`: scope to documents linked to these contacts via document_contacts."
                     ),
                     required=False,
                     items_type="string",
@@ -654,7 +655,7 @@ def _register_all_tools(registry: ToolRegistry) -> None:
                     description=(
                         "For operation=`count`: what to count distinctly. Defaults to the entity itself. "
                         "Per entity: events → events|contacts|places; contacts → contacts|places; "
-                        "places → places|events|contacts; documents → documents; todos → todos."
+                        "places → places|events|contacts; documents → documents|contacts; todos → todos."
                     ),
                     required=False,
                     enum=["events", "contacts", "places", "documents", "todos"],
@@ -666,7 +667,7 @@ def _register_all_tools(registry: ToolRegistry) -> None:
                         "For operation=`group_by`: dimension to bucket by (required when operation is `group_by`). "
                         "Per entity: events → type|month|week|day|place|tag|contact; "
                         "contacts → tag|place; places → city|country; "
-                        "documents → tag|month|week|day|file_mime; "
+                        "documents → tag|month|week|day|file_mime|contact; "
                         "todos → status|month|week|day|contact (month/week/day use the column chosen by `time_field`)."
                     ),
                     required=False,

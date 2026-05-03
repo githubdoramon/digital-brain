@@ -11,6 +11,7 @@ import events as events_service
 from db import fetch_events, get_conn
 from documents import _vector_search_documents as vector_search_documents
 from embeddings import embed_text
+from memory_graph_terms import PERSONAL_DOCUMENT_TERMS, contains_personal_document_term
 from observability.logger import get_runtime_logger
 from search_normalization import normalize_search_text
 
@@ -199,8 +200,8 @@ def search_memories(
         for doc_id, fallback_score in token_fallback_docs.items():
             bm_docs[doc_id] = max(bm_docs.get(doc_id, 0.0), fallback_score * 1.5)
     st_docs = (
-        structured_document_candidates(span, normalized_tags, 200)
-        if (span or normalized_tags)
+        structured_document_candidates(span, list(people or []), normalized_tags, 200)
+        if (span or people or normalized_tags)
         else {}
     )
 
@@ -242,7 +243,7 @@ def search_memories(
         event_scores[event_id] = score
 
     doc_ids = set(vec_docs) | set(bm_docs)
-    if span or normalized_tags:
+    if span or people or normalized_tags:
         doc_ids = doc_ids & set(st_docs) if normalized_query else set(st_docs)
     doc_scores: dict[str, float] = {}
     for doc_id in doc_ids:
@@ -468,6 +469,7 @@ def search_memories(
                     "file_name": doc.get("file_name"),
                     "file_mime": doc.get("file_mime"),
                     "file_size": doc.get("file_size"),
+                    "linked_contacts": doc.get("linked_contacts", []),
                     "snippet": doc.get("snippet", ""),
                 }
             )
@@ -488,20 +490,9 @@ def _infer_source_bias_weights(normalized_query: str) -> tuple[float, float]:
         return (1.0, 1.0)
 
     tokens = set(normalized_query.split())
-    artifact_tokens = {
-        "record",
-        "records",
-        "document",
-        "documents",
-        "doc",
-        "report",
-        "reports",
-        "file",
-        "files",
+    artifact_tokens = PERSONAL_DOCUMENT_TERMS | {
         "note",
         "notes",
-        "result",
-        "results",
         "reading",
         "value",
         "level",
@@ -528,6 +519,9 @@ def _infer_source_bias_weights(normalized_query: str) -> tuple[float, float]:
 
     artifact_hits = len(tokens & artifact_tokens)
     interaction_hits = len(tokens & interaction_tokens)
+
+    if contains_personal_document_term(normalized_query):
+        artifact_hits += 1
 
     if (
         "what is" in normalized_query
@@ -813,16 +807,22 @@ def structured_candidates(
 
 def structured_document_candidates(
     timespan,
+    contact_ids: Sequence[str] | None = None,
     tags: Sequence[str] | None = None,
     k: int = 200,
 ) -> dict[str, float]:
-    if not timespan and not tags:
+    if not timespan and not contact_ids and not tags:
         return {}
     start = end = None
     if timespan:
         start, end = timespan
     clauses = []
     params: list[Any] = []
+    normalized_contact_ids = [
+        str(contact_id).strip()
+        for contact_id in (contact_ids or [])
+        if str(contact_id).strip()
+    ]
     if start and end:
         clauses.append("COALESCE(document_date, created_at) BETWEEN %s AND %s")
         params += [start, end]
@@ -832,6 +832,11 @@ def structured_document_candidates(
     elif end:
         clauses.append("COALESCE(document_date, created_at) <= %s")
         params.append(end)
+    if normalized_contact_ids:
+        clauses.append(
+            "EXISTS (SELECT 1 FROM document_contacts dc WHERE dc.document_id = documents.document_id AND dc.contact_id = ANY(%s))"
+        )
+        params.append(normalized_contact_ids)
     if tags:
         clauses.append(
             "EXISTS (SELECT 1 FROM unnest(COALESCE(tags, ARRAY[]::text[])) AS tag WHERE lower(tag) = ANY(%s))"
@@ -883,6 +888,35 @@ def fetch_document_summaries(document_ids: Sequence[str]) -> dict[str, dict[str,
             (list(document_ids),),
         )
         rows = cur.fetchall()
+        cur.execute(
+            """
+            SELECT
+                dc.document_id,
+                dc.contact_id,
+                dc.role,
+                dc.source,
+                dc.confidence,
+                c.display_name
+            FROM document_contacts dc
+            LEFT JOIN contacts c ON c.contact_id = dc.contact_id
+            WHERE dc.document_id = ANY(%s)
+            ORDER BY dc.document_id ASC, c.display_name ASC NULLS LAST, dc.contact_id ASC
+            """,
+            (list(document_ids),),
+        )
+        contact_rows = cur.fetchall()
+
+    linked_contacts_map: dict[str, list[dict[str, Any]]] = {}
+    for row in contact_rows:
+        linked_contacts_map.setdefault(row["document_id"], []).append(
+            {
+                "contact_id": row["contact_id"],
+                "display_name": row.get("display_name") or row["contact_id"],
+                "role": row.get("role"),
+                "source": row.get("source"),
+                "confidence": row.get("confidence"),
+            }
+        )
 
     summaries: dict[str, dict[str, Any]] = {}
     for row in rows:
@@ -898,6 +932,7 @@ def fetch_document_summaries(document_ids: Sequence[str]) -> dict[str, dict[str,
             "file_size": row.get("file_size"),
             "created_at": row.get("created_at"),
             "updated_at": row.get("updated_at"),
+            "linked_contacts": linked_contacts_map.get(row["document_id"], []),
             "snippet": make_snippet(snippet_source, length=200),
             "download_url": f"/documents/{row['document_id']}/download",
         }

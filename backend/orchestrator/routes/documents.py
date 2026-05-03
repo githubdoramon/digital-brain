@@ -23,6 +23,7 @@ def create_documents_router(
     async def upload_document(
         title: str | None = Form(None),
         tags: str | None = Form(None),
+        contact_ids: str | None = Form(None),
         description: str | None = Form(None),
         document_date: str | None = Form(None),
         file: UploadFile = File(...),
@@ -30,6 +31,7 @@ def create_documents_router(
     ):
         try:
             parsed_tags = _parse_tags_payload(tags)
+            parsed_contact_ids = _parse_id_list_payload(contact_ids, field_name="contact_ids")
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -44,9 +46,11 @@ def create_documents_router(
             document = documents.ingest_document(
                 title=title,
                 tags=parsed_tags,
+                contact_ids=parsed_contact_ids,
                 description=description,
                 upload=file,
                 document_date=parsed_date,
+                user_email=str(user.get('email') or '').strip() or None,
             )
         except documents.DocumentProcessingError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -65,9 +69,11 @@ def create_documents_router(
             document = documents.ingest_document(
                 title=None,
                 tags=None,
+                contact_ids=None,
                 description=None,
                 upload=file,
                 document_date=None,
+                user_email=None,
             )
         except documents.DocumentProcessingError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -82,9 +88,10 @@ def create_documents_router(
     def list_documents(
         limit: int = Query(200, ge=1, le=200),
         offset: int = Query(0, ge=0),
+        contact_ids: list[str] | None = Query(default=None),
         user: dict = Depends(get_current_user),
     ):
-        docs = documents.list_documents(limit=limit, offset=offset)
+        docs = documents.list_documents(limit=limit, offset=offset, contact_ids=contact_ids)
         return DocumentCollection(documents=docs)
 
     @router.get("/documents/{document_id}", response_model=DocumentDetailOut)
@@ -106,6 +113,7 @@ def create_documents_router(
                 document_id,
                 title=payload.title,
                 tags=payload.tags,
+                contact_ids=payload.contact_ids,
                 description=payload.description,
                 document_date=payload.document_date,
             )
@@ -123,7 +131,12 @@ def create_documents_router(
     @router.post("/mobile/documents/search", response_model=DocumentCollection)
     def search_documents_endpoint(payload: DocumentSearchIn, user: dict = Depends(get_current_user)):
         limit = payload.limit or 20
-        docs = documents.search_documents(payload.query, tags=payload.tags, limit=limit)
+        docs = documents.search_documents(
+            payload.query,
+            tags=payload.tags,
+            contact_ids=payload.contact_ids,
+            limit=limit,
+        )
         return DocumentCollection(documents=docs)
 
     @router.delete("/documents/{document_id}")
@@ -150,6 +163,10 @@ def create_documents_router(
 
 
 def _parse_tags_payload(raw: str | None) -> list[str]:
+    return _parse_id_list_payload(raw, field_name="tags")
+
+
+def _parse_id_list_payload(raw: str | None, *, field_name: str) -> list[str]:
     if not raw:
         return []
     try:
@@ -157,15 +174,15 @@ def _parse_tags_payload(raw: str | None) -> list[str]:
     except json.JSONDecodeError:
         parsed = [part.strip() for part in raw.split(",")]
     if not isinstance(parsed, list):
-        raise ValueError("tags must be an array")
-    tags: list[str] = []
+        raise ValueError(f"{field_name} must be an array")
+    values: list[str] = []
     for item in parsed:
         if item is None:
             continue
         candidate = str(item).strip()
         if candidate:
-            tags.append(candidate)
-    return tags
+            values.append(candidate)
+    return values
 
 
 def _parse_iso_datetime(value: str | None) -> datetime | None:

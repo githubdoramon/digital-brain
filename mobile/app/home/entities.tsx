@@ -523,10 +523,18 @@ export default function EntitiesScreen() {
         if (query.trim()) {
           result = (await apiFetch('/mobile/documents/search', {
             method: 'POST',
-            body: JSON.stringify({ query: query.trim(), limit: 50 }),
+            body: JSON.stringify({
+              query: query.trim(),
+              contact_ids: filters.contactIds,
+              limit: 50,
+            }),
           })) as DocumentCollectionResponse;
         } else {
-          result = (await apiFetch('/mobile/documents?limit=100')) as DocumentCollectionResponse;
+          const searchParams = new URLSearchParams({ limit: '100' });
+          appendIds(searchParams, 'contact_ids', filters.contactIds);
+          result = (await apiFetch(
+            `/mobile/documents?${searchParams.toString()}`,
+          )) as DocumentCollectionResponse;
         }
         if (requestId !== requestVersionRef.current) return;
         setDocuments(result.documents ?? []);
@@ -541,7 +549,7 @@ export default function EntitiesScreen() {
         }
       }
     },
-    [query],
+    [filters.contactIds, query],
   );
 
   const loadCurrentEntity = React.useCallback(
@@ -815,11 +823,11 @@ export default function EntitiesScreen() {
         onPressProfile={() => router.push('/settings')}
       />
 
-      {selectedEntity === 'places' ? (
+      {selectedEntity === 'places' || selectedEntity === 'documents' ? (
         <Pressable
-          onPress={() => router.push('/places/new')}
+          onPress={() => router.push(selectedEntity === 'documents' ? '/documents/new' : '/places/new')}
           accessibilityRole="button"
-          accessibilityLabel="Create place"
+          accessibilityLabel={selectedEntity === 'documents' ? 'Upload document' : 'Create place'}
           style={({ pressed }) => [styles.fab, { bottom: insets.bottom + tabBarHeight + 24 }, pressed && styles.fabPressed]}
         >
           <Ionicons name="add" size={24} color="#fff" />

@@ -614,6 +614,25 @@ def test_documents_count_filters_by_document_date_window(monkeypatch):
     assert ["apollo"] in params
 
 
+def test_documents_count_can_scope_to_linked_contacts(monkeypatch):
+    cursor = _Cursor(results=[{"total": 2}])
+    _install_fake_db(monkeypatch, cursor)
+
+    result = handle_query_graph(
+        {
+            "entity": "documents",
+            "operation": "count",
+            "contact_ids": ["contact:daughter"],
+        }
+    )
+
+    assert result["count"] == 2
+    assert result["filters"]["contact_ids"] == ["contact:daughter"]
+    query, params = cursor.executed[0]
+    assert "document_contacts dc" in query
+    assert ["contact:daughter"] in params
+
+
 def test_documents_rejects_non_document_distinct(monkeypatch):
     cursor = _Cursor()
     _install_fake_db(monkeypatch, cursor)
@@ -624,6 +643,20 @@ def test_documents_rejects_non_document_distinct(monkeypatch):
 
     assert "error" in result
     assert cursor.executed == []
+
+
+def test_documents_can_count_distinct_contacts(monkeypatch):
+    cursor = _Cursor(results=[{"total": 3}])
+    _install_fake_db(monkeypatch, cursor)
+
+    result = handle_query_graph(
+        {"entity": "documents", "operation": "count", "distinct": "contacts"}
+    )
+
+    assert result["count"] == 3
+    assert result["distinct"] == "contacts"
+    query, _ = cursor.executed[0]
+    assert "JOIN document_contacts dc" in query
 
 
 def test_documents_group_by_month_uses_document_date(monkeypatch):
@@ -673,6 +706,23 @@ def test_documents_group_by_tag_unnests(monkeypatch):
 
     query, _ = cursor.executed[0]
     assert "FROM documents d, unnest(COALESCE(d.tags" in query
+
+
+def test_documents_group_by_contact(monkeypatch):
+    cursor = _Cursor(results=[[{"bucket_key": "contact:1", "bucket_count": 4}]])
+    _install_fake_db(
+        monkeypatch,
+        cursor,
+        resolve_contact_names=lambda _cur, _ids: {"contact:1": "Alice"},
+    )
+
+    result = handle_query_graph(
+        {"entity": "documents", "operation": "group_by", "group_by": "contact"}
+    )
+
+    assert result["groups"] == [{"key": "Alice", "contact_id": "contact:1", "count": 4}]
+    query, _ = cursor.executed[0]
+    assert "JOIN document_contacts dc" in query
 
 
 def test_documents_rejects_event_only_group_by(monkeypatch):
