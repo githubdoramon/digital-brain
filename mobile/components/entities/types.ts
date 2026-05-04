@@ -69,6 +69,10 @@ export type DocumentListItem = {
   file_name?: string;
   file_mime?: string | null;
   file_size?: number | null;
+  linked_contacts?: {
+    contact_id: string;
+    display_name: string;
+  }[];
 };
 
 export type DocumentCollectionResponse = {

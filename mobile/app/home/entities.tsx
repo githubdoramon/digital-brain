@@ -202,18 +202,56 @@ function EventCard({
   );
 }
 
-function DocumentCard({ document, onPress }: { document: DocumentListItem; onPress: () => void }) {
+function DocumentCard({
+  document,
+  filterSelected,
+  onToggleFilter,
+  onPress,
+}: {
+  document: DocumentListItem;
+  filterSelected: boolean;
+  onToggleFilter: () => void;
+  onPress: () => void;
+}) {
+  const linkedCount = document.linked_contacts?.length ?? 0;
   return (
     <Card style={styles.simpleCard}>
-      <Pressable onPress={onPress} style={styles.simpleCardTapArea}>
-        <View style={styles.cardBody}>
-          <Text style={styles.cardTitle}>{document.title?.trim() || document.file_name || 'Untitled document'}</Text>
-          <Text style={styles.cardSubtitle}>{formatDocumentDate(document.document_date)}</Text>
-          <Text style={styles.cardMeta} numberOfLines={2}>
-            {formatDocumentSubtitle(document)}
-          </Text>
-        </View>
-      </Pressable>
+      <View style={styles.rowShell}>
+        <Pressable onPress={onPress} style={styles.simpleCardTapArea}>
+          <View style={styles.cardBody}>
+            <Text style={styles.cardTitle}>{document.title?.trim() || document.file_name || 'Untitled document'}</Text>
+            <Text style={styles.cardSubtitle}>{formatDocumentDate(document.document_date)}</Text>
+            <Text style={styles.cardMeta} numberOfLines={2}>
+              {formatDocumentSubtitle(document)}
+            </Text>
+            {linkedCount > 0 ? (
+              <Text style={styles.cardMeta}>{linkedCount} linked contact{linkedCount === 1 ? '' : 's'}</Text>
+            ) : null}
+          </View>
+        </Pressable>
+        <Pressable
+          onPress={onToggleFilter}
+          disabled={linkedCount === 0}
+          accessibilityRole="button"
+          accessibilityLabel={
+            filterSelected
+              ? 'Remove linked document contacts from filter'
+              : 'Add linked document contacts to filter'
+          }
+          style={({ pressed }) => [
+            styles.filterToggleButton,
+            filterSelected && styles.filterToggleButtonActive,
+            linkedCount === 0 && styles.filterToggleButtonDisabled,
+            pressed && styles.filterToggleButtonPressed,
+          ]}
+        >
+          <Ionicons
+            name={filterSelected ? 'remove-circle' : 'add-circle-outline'}
+            size={20}
+            color={filterSelected ? theme.colors.teal : linkedCount === 0 ? theme.colors.line : theme.colors.mutedInk}
+          />
+        </Pressable>
+      </View>
     </Card>
   );
 }
@@ -367,16 +405,34 @@ export default function EntitiesScreen() {
     (kind: EntityKind, id: string) => {
       if (kind === 'contacts') return filters.contactIds.includes(id);
       if (kind === 'places') return filters.placeIds.includes(id);
-      if (kind === 'documents') return false;
+      if (kind === 'documents') {
+        const document = documents.find((item) => item.document_id === id);
+        const linkedContactIds = (document?.linked_contacts || []).map((contact) => contact.contact_id);
+        return linkedContactIds.length > 0 && linkedContactIds.every((contactId) => filters.contactIds.includes(contactId));
+      }
       return filters.eventIds.includes(id);
     },
-    [filters.contactIds, filters.eventIds, filters.placeIds],
+    [documents, filters.contactIds, filters.eventIds, filters.placeIds],
   );
 
   const toggleFilter = React.useCallback((kind: EntityKind, id: string) => {
     setFilters((current) => {
       if (kind === 'documents') {
-        return current;
+        const document = documents.find((item) => item.document_id === id);
+        const linkedContactIds = (document?.linked_contacts || [])
+          .map((contact) => contact.contact_id)
+          .filter(Boolean);
+        if (linkedContactIds.length === 0) {
+          return current;
+        }
+        const allSelected = linkedContactIds.every((contactId) => current.contactIds.includes(contactId));
+        const nextContactIds = allSelected
+          ? current.contactIds.filter((contactId) => !linkedContactIds.includes(contactId))
+          : Array.from(new Set([...current.contactIds, ...linkedContactIds]));
+        return {
+          ...current,
+          contactIds: nextContactIds,
+        };
       }
       const key = kind === 'contacts' ? 'contactIds' : kind === 'places' ? 'placeIds' : 'eventIds';
       const nextValues = current[key].includes(id)
@@ -387,7 +443,7 @@ export default function EntitiesScreen() {
         [key]: nextValues,
       };
     });
-  }, []);
+  }, [documents]);
 
   const buildCommonSearchParams = React.useCallback(() => {
     const searchParams = new URLSearchParams();
@@ -786,6 +842,8 @@ export default function EntitiesScreen() {
             return (
               <DocumentCard
                 document={document}
+                filterSelected={isFilterSelected('documents', document.document_id)}
+                onToggleFilter={() => toggleFilter('documents', document.document_id)}
                 onPress={() =>
                   router.push({
                     pathname: '/documents/[documentId]',
@@ -988,6 +1046,9 @@ const styles = StyleSheet.create({
   },
   filterToggleButtonActive: {
     backgroundColor: '#f4faf9',
+  },
+  filterToggleButtonDisabled: {
+    opacity: 0.45,
   },
   filterToggleButtonPressed: {
     opacity: 0.82,

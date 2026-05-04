@@ -6,6 +6,7 @@ import { router, Stack, useLocalSearchParams } from 'expo-router';
 import React from 'react';
 import {
   ActivityIndicator,
+  Alert,
   Animated,
   Linking,
   Platform,
@@ -19,6 +20,7 @@ import * as Notifications from 'expo-notifications';
 import { API_BASE_URL, apiFetch } from '@/api/client';
 import { useAuth } from '@/auth/AuthContext';
 import { AppPressable as Pressable } from '@/components/AppPressable';
+import { Button } from '@/components/Button';
 import { Card } from '@/components/Card';
 import { FloatingSaveButton } from '@/components/FloatingSaveButton';
 import { ScrollHeaderBackdrop } from '@/components/ScrollHeaderBackdrop';
@@ -81,6 +83,7 @@ export default function DocumentDetailScreen() {
   const [isLoading, setIsLoading] = React.useState(true);
   const [error, setError] = React.useState<string | null>(null);
   const [isDownloading, setIsDownloading] = React.useState(false);
+  const [isDeleting, setIsDeleting] = React.useState(false);
 
   const ensureNotificationPermission = React.useCallback(async (): Promise<boolean> => {
     const current = await Notifications.getPermissionsAsync();
@@ -338,6 +341,46 @@ export default function DocumentDetailScreen() {
     token,
   ]);
 
+  const handleDelete = React.useCallback(async () => {
+    if (!documentId || isDeleting) {
+      return;
+    }
+    setIsDeleting(true);
+    try {
+      await apiFetch(`/mobile/documents/${encodeURIComponent(documentId)}`, {
+        method: 'DELETE',
+        token,
+      });
+      showSuccess('Document deleted.');
+      router.back();
+    } catch (deleteError) {
+      console.warn('[documents] delete failed', deleteError);
+      showError('Unable to delete this document right now.');
+    } finally {
+      setIsDeleting(false);
+    }
+  }, [documentId, isDeleting, showError, showSuccess, token]);
+
+  const handleConfirmDelete = React.useCallback(() => {
+    if (!document || !documentId || isDeleting) {
+      return;
+    }
+    Alert.alert(
+      'Delete document?',
+      `Delete ${document.title?.trim() || document.file_name || 'this document'}? This action cannot be undone.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete',
+          style: 'destructive',
+          onPress: () => {
+            void handleDelete();
+          },
+        },
+      ],
+    );
+  }, [document, documentId, handleDelete, isDeleting]);
+
   return (
     <View style={styles.container}>
       <Stack.Screen
@@ -415,6 +458,13 @@ export default function DocumentDetailScreen() {
                 </Text>
               </Card>
             ) : null}
+
+            <Button
+              label={isDeleting ? 'Deleting...' : 'Delete document'}
+              variant="danger"
+              onPress={handleConfirmDelete}
+              disabled={isDeleting}
+            />
           </>
         ) : null}
       </Animated.ScrollView>
