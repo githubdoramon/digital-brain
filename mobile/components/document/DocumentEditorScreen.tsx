@@ -5,6 +5,8 @@ import React from 'react';
 import {
   ActivityIndicator,
   Alert,
+  Keyboard,
+  KeyboardAvoidingView,
   Platform,
   ScrollView,
   StyleSheet,
@@ -188,6 +190,7 @@ export function DocumentEditorScreen({ mode, documentId }: Props) {
   const { token } = useAuth();
   const { showSuccess, showError } = useAppNotice();
   const isCreate = mode === 'create';
+  const [keyboardHeight, setKeyboardHeight] = React.useState(0);
 
   const [isLoading, setIsLoading] = React.useState(!isCreate);
   const [isSaving, setIsSaving] = React.useState(false);
@@ -208,6 +211,23 @@ export function DocumentEditorScreen({ mode, documentId }: Props) {
     documentDateText: '',
     contactIds: [],
   });
+
+  React.useEffect(() => {
+    const showEvent = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
+    const hideEvent = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
+
+    const showSubscription = Keyboard.addListener(showEvent, (event) => {
+      setKeyboardHeight(event.endCoordinates.height);
+    });
+    const hideSubscription = Keyboard.addListener(hideEvent, () => {
+      setKeyboardHeight(0);
+    });
+
+    return () => {
+      showSubscription.remove();
+      hideSubscription.remove();
+    };
+  }, []);
 
   React.useEffect(() => {
     let active = true;
@@ -454,12 +474,16 @@ export function DocumentEditorScreen({ mode, documentId }: Props) {
   }
 
   return (
-    <View style={styles.container}>
+    <KeyboardAvoidingView
+      style={styles.container}
+      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+      keyboardVerticalOffset={Platform.OS === 'ios' ? insets.top + 24 : 0}
+    >
       <ScrollView
         contentContainerStyle={{
           paddingTop: insets.top + 76,
           paddingHorizontal: 16,
-          paddingBottom: insets.bottom + 108,
+          paddingBottom: insets.bottom + keyboardHeight + 128,
           gap: 14,
         }}
         keyboardShouldPersistTaps="handled"
@@ -540,9 +564,9 @@ export function DocumentEditorScreen({ mode, documentId }: Props) {
         onPress={() => void handleSave()}
         loading={isSaving}
         disabled={isSaving || (isCreate && !selectedFile)}
-        bottomOffset={insets.bottom + 20}
+        bottomOffset={insets.bottom + keyboardHeight + 20}
       />
-    </View>
+    </KeyboardAvoidingView>
   );
 }
 

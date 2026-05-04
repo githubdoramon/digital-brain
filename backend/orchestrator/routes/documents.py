@@ -20,6 +20,7 @@ def create_documents_router(
     router = APIRouter()
 
     @router.post("/ingest/document", response_model=DocumentDetailOut)
+    @router.post("/mobile/ingest/document", response_model=DocumentDetailOut)
     async def upload_document(
         title: str | None = Form(None),
         tags: str | None = Form(None),
@@ -103,6 +104,7 @@ def create_documents_router(
         return DocumentDetailOut(**document)
 
     @router.patch("/documents/{document_id}", response_model=DocumentDetailOut)
+    @router.patch("/mobile/documents/{document_id}", response_model=DocumentDetailOut)
     def update_document(
         document_id: str,
         payload: DocumentUpdateIn,
@@ -140,6 +142,7 @@ def create_documents_router(
         return DocumentCollection(documents=docs)
 
     @router.delete("/documents/{document_id}")
+    @router.delete("/mobile/documents/{document_id}")
     def delete_document(document_id: str, user: dict = Depends(get_current_user)):
         deleted = documents.delete_document(document_id)
         if not deleted:

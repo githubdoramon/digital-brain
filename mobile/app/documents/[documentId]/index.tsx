@@ -430,6 +430,7 @@ export default function DocumentDetailScreen() {
         <FloatingSaveButton
           visible
           label="Edit document"
+          iconName="create-outline"
           onPress={() =>
             router.push({
               pathname: '/documents/[documentId]/edit',

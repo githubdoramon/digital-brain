@@ -8,6 +8,7 @@ import { theme } from '@/theme';
 type FloatingSaveButtonProps = {
   visible: boolean;
   label?: string;
+  iconName?: React.ComponentProps<typeof Ionicons>['name'];
   onPress: () => void;
   disabled?: boolean;
   loading?: boolean;
@@ -17,6 +18,7 @@ type FloatingSaveButtonProps = {
 export function FloatingSaveButton({
   visible,
   label = 'Save changes',
+  iconName = 'checkmark',
   onPress,
   disabled,
   loading = false,
@@ -58,7 +60,7 @@ export function FloatingSaveButton({
         {loading ? (
           <ActivityIndicator color="#fff" />
         ) : (
-          <Ionicons name="checkmark" size={26} color="#fff" />
+          <Ionicons name={iconName} size={24} color="#fff" />
         )}
       </Pressable>
     </Animated.View>
