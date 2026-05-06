@@ -133,5 +133,34 @@ class HealthOut(BaseModel):
     subscribed_topics: list[str] = Field(default_factory=list)
 
 
+class CaptureStreamRequest(BaseModel):
+    robot_id: str
+    module_id: str
+    video: bool = True
+    audio: bool = True
+    requested_by_user_id: str | None = None
+
+
+class CaptureStreamOut(BaseModel):
+    session_id: str
+    robot_id: str
+    module_id: str
+    created_at: datetime
+    expires_at: datetime
+    upstream_connected: bool
+    viewer_count: int
+    video_enabled: bool
+    audio_enabled: bool
+    last_video_frame_at: datetime | None = None
+    last_audio_chunk_at: datetime | None = None
+    last_upstream_activity_at: datetime | None = None
+    requested_by_user_id: str | None = None
+    last_error: str | None = None
+    status: str
+    video_meta: dict[str, Any] | None = None
+    audio_meta: dict[str, Any] | None = None
+    viewer_paths: dict[str, str] = Field(default_factory=dict)
+
+
 # Forward reference resolution
 RobotOut.model_rebuild()

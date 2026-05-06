@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 
 // ---------------------------------------------------------------------------
@@ -250,26 +251,43 @@ export default function RobotsPage() {
         <h1 style={{ fontSize: "1.5rem", fontWeight: 700, margin: 0 }}>
           Robot Gateway
         </h1>
-        <button
-          onClick={() => {
-            fetchHealth();
-            fetchRobots();
-            if (selectedRobotId && tab === "telemetry")
-              fetchTelemetry(selectedRobotId);
-            if (selectedRobotId && tab === "commands")
-              fetchCommands(selectedRobotId);
-          }}
-          style={{
-            padding: "6px 14px",
-            border: "1px solid #d0d0d0",
-            borderRadius: 6,
-            background: "#fff",
-            cursor: "pointer",
-            fontSize: "0.85rem",
-          }}
-        >
-          Refresh
-        </button>
+        <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+          <Link
+            href="/robots/stream-test"
+            style={{
+              padding: "6px 14px",
+              border: "1px solid #99f6e4",
+              borderRadius: 999,
+              background: "#f0fdfa",
+              color: "#0f766e",
+              textDecoration: "none",
+              fontSize: "0.85rem",
+              fontWeight: 600,
+            }}
+          >
+            Stream test
+          </Link>
+          <button
+            onClick={() => {
+              fetchHealth();
+              fetchRobots();
+              if (selectedRobotId && tab === "telemetry")
+                fetchTelemetry(selectedRobotId);
+              if (selectedRobotId && tab === "commands")
+                fetchCommands(selectedRobotId);
+            }}
+            style={{
+              padding: "6px 14px",
+              border: "1px solid #d0d0d0",
+              borderRadius: 6,
+              background: "#fff",
+              cursor: "pointer",
+              fontSize: "0.85rem",
+            }}
+          >
+            Refresh
+          </button>
+        </div>
       </div>
 
       {/* Health bar */}

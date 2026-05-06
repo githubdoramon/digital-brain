@@ -55,6 +55,13 @@ Query params: `since`, `until`, `payload_type`, `limit` (max 1000), `offset`
 - `GET /robots/{robot_id}/commands` — List commands
 - `GET /commands/{command_id}` — Command status
 
+### Capture Relay
+- `POST /api/capture/streams` — Create or reuse a relay session for one module
+- `GET /api/capture/streams/{session_id}/status` — Read relay state and viewer paths
+- `GET /api/capture/streams/{session_id}/camera.mjpg` — Viewer MJPEG stream
+- `WS /api/capture/streams/{session_id}/audio.pcm` — Viewer PCM audio stream
+- `WS /api/capture/relay/connect` — Device upstream relay socket using a short-lived Bearer token
+
 ### Health
 - `GET /health` — MQTT connection + DB reachability
 
@@ -115,6 +122,15 @@ MQTT_PASSWORD=change-me-mqtt
 
 # HTTP port
 ROBOT_GATEWAY_PORT=8001
+
+# Capture relay
+CAPTURE_RELAY_PUBLIC_BASE_URL=https://brain.example.com
+CAPTURE_RELAY_TOKEN_SECRET=change-me-relay-secret
+# CAPTURE_RELAY_TOKEN_TTL_SECONDS=300
+# CAPTURE_RELAY_SESSION_TTL_SECONDS=300
+# CAPTURE_RELAY_IDLE_TIMEOUT_SECONDS=30
+# CAPTURE_RELAY_HEARTBEAT_TIMEOUT_SECONDS=20
+# CAPTURE_RELAY_AUDIO_BUFFER_CHUNKS=32
 
 # Migrations (default: true)
 # ROBOT_GATEWAY_AUTO_MIGRATE=true

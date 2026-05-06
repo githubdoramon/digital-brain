@@ -1,4 +1,6 @@
 import { NextRequest } from "next/server";
+import { getServerSession } from "next-auth";
+import { authOptions } from "../../auth/[...nextauth]/route";
 import { ProxyFetchInit } from "@/types/proxy";
 
 const ROBOT_GATEWAY_BASE =
@@ -7,6 +9,17 @@ const ROBOT_GATEWAY_BASE =
 const SERVICE_API_KEY = process.env.ORCHESTRATOR_API_KEY ?? "";
 
 const ALLOWED_METHODS = ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"];
+
+async function buildAuthorizationHeader(request: NextRequest): Promise<string | undefined> {
+  const existing = request.headers.get("authorization");
+  if (existing) {
+    return existing;
+  }
+
+  const session = await getServerSession(authOptions);
+  const idToken = session?.idToken;
+  return idToken ? `Bearer ${idToken}` : undefined;
+}
 
 export async function handler(
   request: NextRequest,
@@ -26,6 +39,13 @@ export async function handler(
 
   const headers = new Headers(request.headers);
   headers.delete("host");
+
+  const authHeader = await buildAuthorizationHeader(request);
+  if (authHeader) {
+    headers.set("authorization", authHeader);
+  } else {
+    headers.delete("authorization");
+  }
 
   // Inject service API key for backend authentication
   if (SERVICE_API_KEY) {
