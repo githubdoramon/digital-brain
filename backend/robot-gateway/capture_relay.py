@@ -184,6 +184,7 @@ class CaptureRelayManager:
         self._module_sessions: dict[tuple[str, str], str] = {}
         self._lock = asyncio.Lock()
         self._cleanup_task: asyncio.Task[None] | None = None
+        self._background_tasks: set[asyncio.Task[None]] = set()
         self._mqtt = None
 
     async def start(self, mqtt) -> None:
@@ -394,7 +395,9 @@ class CaptureRelayManager:
             schedule_grace_close = session.viewer_count == 0 and session.upstream_connected
 
         if schedule_grace_close:
-            asyncio.create_task(self._close_after_viewer_grace(session_id, mqtt))
+            task = asyncio.create_task(self._close_after_viewer_grace(session_id, mqtt))
+            self._background_tasks.add(task)
+            task.add_done_callback(self._background_tasks.discard)
 
     async def _close_after_viewer_grace(self, session_id: str, mqtt) -> None:
         await asyncio.sleep(CAPTURE_RELAY_VIEWER_GRACE_SECONDS)
