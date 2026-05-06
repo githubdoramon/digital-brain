@@ -160,7 +160,7 @@ export default function RobotStreamTestPage() {
     socket.onclose = () => {
       if (audioSocketRef.current === socket) {
         audioSocketRef.current = null;
-        setAudioStatus(session ? "disconnected" : "idle");
+        setAudioStatus("disconnected");
       }
     };
     socket.onerror = () => setAudioStatus("error");
@@ -194,7 +194,12 @@ export default function RobotStreamTestPage() {
       }
       socket.close();
     };
-  }, [session]);
+  }, [
+    session?.audio_enabled,
+    session?.viewer_paths.audio_pcm_ws_public,
+    session?.audio_meta?.sample_rate_hz,
+    session?.audio_meta?.channels,
+  ]);
 
   useEffect(() => {
     return () => {

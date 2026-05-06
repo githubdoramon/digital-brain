@@ -181,7 +181,7 @@ def create_capture_router() -> APIRouter:
                     await relay.handle_upstream_binary(session.session_id, message["bytes"])
                 elif message.get("type") == "websocket.disconnect":
                     break
-        except WebSocketDisconnect:
+        except (WebSocketDisconnect, asyncio.CancelledError):
             pass
         except json.JSONDecodeError:
             logger.warning("[capture_relay] Invalid upstream JSON session=%s", session.session_id)

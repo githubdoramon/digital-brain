@@ -23,6 +23,7 @@ from config import (
     CAPTURE_RELAY_SESSION_TTL_SECONDS,
     CAPTURE_RELAY_TOKEN_SECRET,
     CAPTURE_RELAY_TOKEN_TTL_SECONDS,
+    CAPTURE_RELAY_VIEWER_GRACE_SECONDS,
 )
 from observability.logger import get_runtime_logger
 
@@ -375,7 +376,7 @@ class CaptureRelayManager:
             return session, viewer, backlog
 
     async def unregister_viewer(self, session_id: str, viewer: RelayViewer, mqtt) -> None:
-        should_close = False
+        schedule_grace_close = False
         async with self._lock:
             session = self._sessions.get(session_id)
             if session is None:
@@ -390,10 +391,27 @@ class CaptureRelayManager:
                 session_id,
                 session.viewer_count,
             )
-            should_close = session.viewer_count == 0 and session.upstream_connected
+            schedule_grace_close = session.viewer_count == 0 and session.upstream_connected
 
-        if should_close:
-            await self.close_session(session_id, mqtt, reason="last_viewer_left")
+        if schedule_grace_close:
+            asyncio.create_task(self._close_after_viewer_grace(session_id, mqtt))
+
+    async def _close_after_viewer_grace(self, session_id: str, mqtt) -> None:
+        await asyncio.sleep(CAPTURE_RELAY_VIEWER_GRACE_SECONDS)
+        async with self._lock:
+            session = self._sessions.get(session_id)
+            if session is None:
+                return
+            if session.viewer_count > 0:
+                logger.info(
+                    "[capture_relay] Viewer rejoined within grace, keeping session=%s viewers=%d",
+                    session_id,
+                    session.viewer_count,
+                )
+                return
+            if not session.upstream_connected:
+                return
+        await self.close_session(session_id, mqtt, reason="last_viewer_left")
 
     async def mark_upstream_task(self, session_id: str, task: asyncio.Task[None] | None) -> None:
         async with self._lock:
