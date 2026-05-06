@@ -142,7 +142,15 @@ def create_capture_router() -> APIRouter:
     @router.websocket("/api/capture/relay/connect")
     async def connect_capture_relay(websocket: WebSocket):
         auth_header = websocket.headers.get("authorization", "")
+        logger.info(
+            "[capture_relay] upgrade client=%s auth=%s sec-proto=%s header_keys=%s",
+            websocket.client,
+            (auth_header[:24] + "...") if auth_header else "<missing>",
+            websocket.headers.get("sec-websocket-protocol", "<missing>"),
+            sorted(websocket.headers.keys()),
+        )
         if not auth_header.startswith("Bearer "):
+            logger.warning("[capture_relay] rejecting upgrade: missing/invalid Authorization header")
             await websocket.close(code=4401)
             return
 
@@ -152,6 +160,11 @@ def create_capture_router() -> APIRouter:
             relay: CaptureRelayManager = websocket.app.state.capture_relay
             session = await relay.attach_upstream(claims)
         except HTTPException as exc:
+            logger.warning(
+                "[capture_relay] rejecting upgrade: status=%s detail=%s",
+                exc.status_code,
+                exc.detail,
+            )
             await websocket.close(code=4403, reason=exc.detail)
             return
 
