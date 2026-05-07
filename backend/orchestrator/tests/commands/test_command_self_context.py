@@ -118,3 +118,84 @@ def test_event_follow_up_field_inference_uses_self_context(monkeypatch):
     prompt = captured["prompt"]
     assert "You are assisting Ramon." in prompt
     assert "- User: user@example.com" not in prompt
+
+
+def test_event_extraction_infers_immediate_past_time(monkeypatch):
+    monkeypatch.setattr("prompts.context.get_time_context", lambda: "Current test time")
+    monkeypatch.setattr("prompts.context.get_self_context", lambda _email: None)
+    monkeypatch.setattr("prompts.context.get_user_facts_context", lambda *_args, **_kwargs: None)
+
+    fixed_now = event_handler.datetime(2026, 5, 7, 12, 30, 0)
+
+    class FixedDateTime(event_handler.datetime):
+        @classmethod
+        def now(cls, tz=None):
+            if tz is not None:
+                return fixed_now.replace(tzinfo=tz)
+            return fixed_now
+
+    monkeypatch.setattr(event_handler, "datetime", FixedDateTime)
+    monkeypatch.setattr(
+        "llm_helpers.call_llm_json",
+        lambda *_args, **_kwargs: {
+            "need_user_input": {
+                "prompt": "When did this happen?",
+                "questions": ["When did this happen?"],
+                "fields": [{"id": "when", "kind": "text", "label": "When", "required": True}],
+            },
+            "title": "Lunch",
+            "summary": "Had lunch.",
+            "when": None,
+            "end_when": None,
+            "where": None,
+            "documents": [],
+            "tags": [],
+            "types": ["personal"],
+        },
+    )
+
+    result = event_handler._extract_event_entities_with_llm(
+        "I just had lunch",
+        {"user_email": "user@example.com"},
+    )
+
+    assert result["when"] == fixed_now
+    assert result["need_user_input"] is None
+
+
+def test_event_extraction_infers_relative_past_time(monkeypatch):
+    monkeypatch.setattr("prompts.context.get_time_context", lambda: "Current test time")
+    monkeypatch.setattr("prompts.context.get_self_context", lambda _email: None)
+    monkeypatch.setattr("prompts.context.get_user_facts_context", lambda *_args, **_kwargs: None)
+
+    fixed_now = event_handler.datetime(2026, 5, 7, 12, 30, 0)
+
+    class FixedDateTime(event_handler.datetime):
+        @classmethod
+        def now(cls, tz=None):
+            if tz is not None:
+                return fixed_now.replace(tzinfo=tz)
+            return fixed_now
+
+    monkeypatch.setattr(event_handler, "datetime", FixedDateTime)
+    monkeypatch.setattr(
+        "llm_helpers.call_llm_json",
+        lambda *_args, **_kwargs: {
+            "need_user_input": None,
+            "title": "Workout",
+            "summary": "Finished a workout.",
+            "when": None,
+            "end_when": None,
+            "where": None,
+            "documents": [],
+            "tags": [],
+            "types": ["personal"],
+        },
+    )
+
+    result = event_handler._extract_event_entities_with_llm(
+        "Finished my workout 10 minutes ago",
+        {"user_email": "user@example.com"},
+    )
+
+    assert result["when"] == fixed_now - event_handler.timedelta(minutes=10)
