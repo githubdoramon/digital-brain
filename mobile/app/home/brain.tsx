@@ -1,6 +1,5 @@
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
-import * as ImagePicker from 'expo-image-picker';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
@@ -52,6 +51,7 @@ import {
   type ComposerMediaAttachment,
   toChatMediaAttachmentPayload,
 } from '@/chat/mediaAttachments';
+import { pickSingleImage } from '@/utils/imagePicker';
 import {
   clearPendingRun,
   loadChatSession,
@@ -1262,31 +1262,12 @@ export default function ChatScreen() {
       return;
     }
 
-    const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
-    if (!permission.granted) {
-      setMessages((prev) => [
-        ...prev,
-        {
-          id: `${Date.now()}-media-permission`,
-          role: 'assistant',
-          content: 'Allow photo library access to attach pictures in chat.',
-        },
-      ]);
-      setForceScrollNext(true);
-      return;
-    }
-
-    const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ImagePicker.MediaTypeOptions.Images,
-      quality: 0.7,
-      allowsEditing: false,
-    });
-    if (result.canceled || !result.assets?.length) {
-      return;
-    }
-
     try {
-      const nextAttachment = await buildComposerMediaAttachment(result.assets[0]);
+      const asset = await pickSingleImage();
+      if (!asset) {
+        return;
+      }
+      const nextAttachment = await buildComposerMediaAttachment(asset);
       setComposerMediaAttachments((prev) => {
         if (prev.length >= MAX_CHAT_MEDIA_ATTACHMENTS) {
           return prev;
@@ -2425,8 +2406,7 @@ export default function ChatScreen() {
                   minHeight: MIN_CHAT_INPUT_HEIGHT,
                   maxHeight: MAX_CHAT_INPUT_HEIGHT,
                   width: '100%',
-                  paddingLeft: 52,
-                  paddingRight: 60,
+                  paddingRight: 104,
                 },
                 !allowed && {
                   backgroundColor: '#eee',
@@ -2618,8 +2598,8 @@ const styles = StyleSheet.create({
   },
   attachButton: {
     position: 'absolute',
-    left: 10,
-    bottom: 9,
+    right: 50,
+    top: '50%',
     zIndex: 1,
     width: 34,
     height: 34,
@@ -2627,6 +2607,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: '#f2ece5',
+    transform: [{ translateY: -17 }],
   },
   attachButtonPressed: {
     opacity: 0.8,
@@ -2654,7 +2635,7 @@ const styles = StyleSheet.create({
   inlineSendButton: {
     position: 'absolute',
     right: 6,
-    bottom: 5,
+    top: '50%',
     width: 36,
     height: 36,
     borderRadius: 18,
@@ -2666,6 +2647,7 @@ const styles = StyleSheet.create({
     shadowRadius: 10,
     shadowOffset: { width: 0, height: 6 },
     elevation: 5,
+    transform: [{ translateY: -18 }],
   },
   inlineSendButtonPressed: {
     opacity: 0.9,

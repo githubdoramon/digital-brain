@@ -1,5 +1,4 @@
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import * as ImagePicker from 'expo-image-picker';
 import React from 'react';
 import { Alert, StyleSheet } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -20,6 +19,7 @@ import {
 } from '@/components/event-draft/types';
 import { useAppNotice } from '@/hooks/useAppNotice';
 import { theme } from '@/theme';
+import { pickSingleImage } from '@/utils/imagePicker';
 
 type EventDetail = {
   id: string;
@@ -370,39 +370,22 @@ function EventDetailView({ eventId, editable }: EventDetailViewProps) {
   const handleAddPhoto = React.useCallback(async () => {
     if (!eventId || isUploadingPhoto) return;
 
-    const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
-    if (!permission.granted) {
-      Alert.alert('Photos access needed', 'Allow photo library access to attach pictures to this event.');
-      return;
-    }
-
-    const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ImagePicker.MediaTypeOptions.Images,
-      quality: 0.9,
-      allowsEditing: false,
-    });
-
-    if (result.canceled || !result.assets?.length) {
-      return;
-    }
-
-    const asset = result.assets[0];
-    if (!asset?.uri) {
-      showError('Unable to read that photo right now.');
-      return;
-    }
-
-    const formData = new FormData();
-    if (asset.assetId) formData.append('local_asset_id', asset.assetId);
-    formData.append('source', 'mobile_event_editor');
-    formData.append('file', {
-      uri: asset.uri,
-      name: asset.fileName || `event-photo-${Date.now()}.jpg`,
-      type: asset.mimeType || 'image/jpeg',
-    } as unknown as Blob);
-
-    setIsUploadingPhoto(true);
     try {
+      const asset = await pickSingleImage();
+      if (!asset?.uri) {
+        return;
+      }
+
+      const formData = new FormData();
+      if (asset.assetId) formData.append('local_asset_id', asset.assetId);
+      formData.append('source', 'mobile_event_editor');
+      formData.append('file', {
+        uri: asset.uri,
+        name: asset.fileName || `event-photo-${Date.now()}.jpg`,
+        type: asset.mimeType || 'image/jpeg',
+      } as unknown as Blob);
+
+      setIsUploadingPhoto(true);
       await apiFetch(`/mobile/events/${encodeURIComponent(eventId)}/photos`, {
         method: 'POST',
         body: formData,
@@ -412,7 +395,7 @@ function EventDetailView({ eventId, editable }: EventDetailViewProps) {
       showSuccess('Photo linked to event.');
     } catch (error) {
       console.warn('[events] photo upload failed', error);
-      showError('Unable to attach that photo right now.');
+      showError(error instanceof Error ? error.message : 'Unable to attach that photo right now.');
     } finally {
       setIsUploadingPhoto(false);
     }

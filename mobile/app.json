@@ -61,7 +61,8 @@
       [
         "expo-image-picker",
         {
-          "photosPermission": "Digital Brain uses your photo library so you can attach event pictures and sync them to Immich."
+          "photosPermission": "Digital Brain uses your photo library so you can attach event pictures and sync them to Immich.",
+          "cameraPermission": "Digital Brain uses your camera so you can capture event pictures and sync them to Immich."
         }
       ],
       "expo-secure-store",

@@ -36,16 +36,26 @@ export async function buildComposerMediaAttachment(
     throw new Error('Selected photo is missing a URI.');
   }
 
+  const inlineBase64 = typeof asset.base64 === 'string' ? asset.base64.trim() : '';
+  const estimatedInlineBytes = inlineBase64
+    ? Math.floor((inlineBase64.length * 3) / 4)
+    : null;
+
   const fileInfo = await FileSystem.getInfoAsync(asset.uri, { size: true });
-  const fileSize = fileInfo.exists && typeof fileInfo.size === 'number' ? fileInfo.size : null;
+  const fileSize =
+    fileInfo.exists && typeof fileInfo.size === 'number'
+      ? fileInfo.size
+      : estimatedInlineBytes;
   if (fileSize !== null && fileSize > MAX_CHAT_MEDIA_BYTES) {
     const maxMb = Math.round((MAX_CHAT_MEDIA_BYTES / (1024 * 1024)) * 10) / 10;
     throw new Error(`Each attached photo must be ${maxMb} MB or smaller.`);
   }
 
-  const contentBase64 = await FileSystem.readAsStringAsync(asset.uri, {
-    encoding: FileSystem.EncodingType.Base64,
-  });
+  const contentBase64 =
+    inlineBase64 ||
+    (await FileSystem.readAsStringAsync(asset.uri, {
+      encoding: FileSystem.EncodingType.Base64,
+    }));
   if (!contentBase64.trim()) {
     throw new Error('Unable to read that photo right now.');
   }
