@@ -1,0 +1,329 @@
+from __future__ import annotations
+
+import json
+import logging
+import sys
+import threading
+from collections import deque
+from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from typing import Any
+
+LOG_LEVELS = {"debug", "info", "decision", "warning", "error"}
+DECISION_LEVEL = 25
+INTENTIONAL_DEBUG_LEVEL = 15
+SERVICE_ROOT = Path(__file__).resolve().parents[1]
+
+
+@dataclass
+class LogEntry:
+    entry_id: int
+    timestamp: str
+    level: str
+    message: str
+    context: dict[str, Any] | None = None
+    message_segments: list[dict[str, Any]] | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.entry_id,
+            "timestamp": self.timestamp,
+            "level": self.level,
+            "message": self.message,
+            "context": self.context,
+            "message_segments": self.message_segments,
+        }
+
+
+def _try_parse_json_at(text: str, start: int) -> tuple[int, Any, str] | None:
+    first = text[start]
+    if first not in {"{", "["}:
+        return None
+
+    stack: list[str] = [first]
+    in_string = False
+    is_escaped = False
+
+    for index in range(start + 1, len(text)):
+        char = text[index]
+
+        if in_string:
+            if is_escaped:
+                is_escaped = False
+                continue
+            if char == "\\":
+                is_escaped = True
+                continue
+            if char == '"':
+                in_string = False
+            continue
+
+        if char == '"':
+            in_string = True
+            continue
+
+        if char in {"{", "["}:
+            stack.append(char)
+            continue
+
+        if char in {"}", "]"}:
+            top = stack[-1]
+            is_match = (top == "{" and char == "}") or (top == "[" and char == "]")
+            if not is_match:
+                return None
+
+            stack.pop()
+            if not stack:
+                raw = text[start : index + 1]
+                try:
+                    return (index, json.loads(raw), raw)
+                except Exception:
+                    return None
+
+    return None
+
+
+def extract_message_segments(message: str) -> list[dict[str, Any]] | None:
+    if not message:
+        return None
+
+    segments: list[dict[str, Any]] = []
+    text_start = 0
+    cursor = 0
+
+    while cursor < len(message):
+        char = message[cursor]
+        if char not in {"{", "["}:
+            cursor += 1
+            continue
+
+        parsed = _try_parse_json_at(message, cursor)
+        if not parsed:
+            cursor += 1
+            continue
+
+        end, value, raw = parsed
+        if text_start < cursor:
+            segments.append({"kind": "text", "content": message[text_start:cursor]})
+
+        segments.append({"kind": "json", "content": raw, "value": value})
+        cursor = end + 1
+        text_start = cursor
+
+    if text_start < len(message):
+        segments.append({"kind": "text", "content": message[text_start:]})
+
+    if not segments:
+        return None
+
+    has_json = any(segment.get("kind") == "json" for segment in segments)
+    if not has_json:
+        return None
+    return segments
+
+
+class LogBuffer:
+    def __init__(self, max_entries: int = 1000) -> None:
+        self._entries: deque[LogEntry] = deque(maxlen=max_entries)
+        self._lock = threading.Lock()
+        self._counter = 0
+
+    def append(self, level: str, message: str, context: dict[str, Any] | None = None) -> LogEntry:
+        normalized = (level or "info").lower()
+        if normalized not in LOG_LEVELS:
+            normalized = "info"
+        timestamp = datetime.now(timezone.utc).isoformat()
+
+        with self._lock:
+            self._counter += 1
+            entry = LogEntry(
+                entry_id=self._counter,
+                timestamp=timestamp,
+                level=normalized,
+                message=message,
+                context=context,
+                message_segments=extract_message_segments(message),
+            )
+            self._entries.append(entry)
+            return entry
+
+    def get_since(self, last_id: int, level: str | None = None) -> list[LogEntry]:
+        with self._lock:
+            entries = [entry for entry in self._entries if entry.entry_id > last_id]
+        if level:
+            return [entry for entry in entries if entry.level == level]
+        return entries
+
+    def get_recent(
+        self,
+        since_minutes: int | None = None,
+        level: str | None = None,
+        limit: int | None = None,
+    ) -> list[LogEntry]:
+        cutoff = None
+        if since_minutes is not None:
+            cutoff = datetime.now(timezone.utc) - timedelta(minutes=since_minutes)
+
+        with self._lock:
+            entries = list(self._entries)
+
+        if level:
+            entries = [entry for entry in entries if entry.level == level]
+
+        if cutoff:
+            filtered: list[LogEntry] = []
+            for entry in entries:
+                try:
+                    timestamp = datetime.fromisoformat(entry.timestamp.replace("Z", "+00:00"))
+                except ValueError:
+                    continue
+                if timestamp >= cutoff:
+                    filtered.append(entry)
+            entries = filtered
+
+        entries.sort(key=lambda entry: entry.entry_id)
+        if limit is not None and limit > 0:
+            entries = entries[-limit:]
+        return entries
+
+
+_buffer: LogBuffer | None = None
+_buffer_lock = threading.Lock()
+_logging_configured = False
+
+
+def _resolve_handler_level(level: str | None) -> int:
+    normalized = (level or "").strip().lower()
+    if not normalized:
+        normalized = "info"
+    if normalized == "debug":
+        return INTENTIONAL_DEBUG_LEVEL
+    if normalized == "decision":
+        return DECISION_LEVEL
+    if normalized == "warning":
+        return logging.WARNING
+    if normalized == "error":
+        return logging.ERROR
+    return logging.INFO
+
+
+def get_log_buffer() -> LogBuffer:
+    global _buffer
+    if _buffer is None:
+        with _buffer_lock:
+            if _buffer is None:
+                _buffer = LogBuffer()
+    return _buffer
+
+
+def record_log(level: str, message: str, context: dict[str, Any] | None = None) -> None:
+    if not message:
+        return
+    get_log_buffer().append(level, message, context=context)
+
+
+def _init_decision_level() -> None:
+    if logging.getLevelName(DECISION_LEVEL) == "Level 25":
+        logging.addLevelName(DECISION_LEVEL, "DECISION")
+
+        def decision(self: logging.Logger, message: str, *args: Any, **kwargs: Any) -> None:
+            self.log(DECISION_LEVEL, message, *args, **kwargs)
+
+        logging.Logger.decision = decision
+
+
+def _init_intentional_debug_level() -> None:
+    if logging.getLevelName(INTENTIONAL_DEBUG_LEVEL) == f"Level {INTENTIONAL_DEBUG_LEVEL}":
+        logging.addLevelName(INTENTIONAL_DEBUG_LEVEL, "IDEBUG")
+
+        def intentional_debug(
+            self: logging.Logger, message: str, *args: Any, **kwargs: Any
+        ) -> None:
+            self.log(INTENTIONAL_DEBUG_LEVEL, message, *args, **kwargs)
+
+        logging.Logger.intentional_debug = intentional_debug
+
+
+class LogBufferHandler(logging.Handler):
+    @staticmethod
+    def _is_service_record(record: logging.LogRecord) -> bool:
+        pathname = getattr(record, "pathname", "") or ""
+        if not pathname:
+            return False
+        try:
+            record_path = Path(pathname).resolve()
+        except Exception:
+            return False
+        return SERVICE_ROOT in record_path.parents or record_path == SERVICE_ROOT
+
+    def emit(self, record: logging.LogRecord) -> None:
+        try:
+            if (
+                record.levelno < logging.INFO
+                and record.levelno != INTENTIONAL_DEBUG_LEVEL
+                and not self._is_service_record(record)
+            ):
+                return
+            message = self.format(record)
+            level = self._map_level(record.levelno)
+            context = {
+                "logger": record.name,
+                "module": record.module,
+                "line": record.lineno,
+            }
+            record_log(level, message, context=context)
+        except Exception:
+            pass
+
+    @staticmethod
+    def _map_level(levelno: int) -> str:
+        if levelno >= logging.ERROR:
+            return "error"
+        if levelno >= logging.WARNING:
+            return "warning"
+        if levelno == DECISION_LEVEL:
+            return "decision"
+        if levelno == INTENTIONAL_DEBUG_LEVEL:
+            return "debug"
+        if levelno >= logging.INFO:
+            return "info"
+        return "debug"
+
+
+class ConsoleLogHandler(logging.StreamHandler):
+    @staticmethod
+    def _should_emit(record: logging.LogRecord) -> bool:
+        if record.levelno >= logging.WARNING:
+            return True
+        return LogBufferHandler._is_service_record(record)
+
+    def emit(self, record: logging.LogRecord) -> None:
+        if not self._should_emit(record):
+            return
+        super().emit(record)
+
+
+def configure_logging(level: str | None = None) -> None:
+    global _logging_configured
+    if _logging_configured:
+        return
+
+    _init_decision_level()
+    _init_intentional_debug_level()
+    root = logging.getLogger()
+    root.setLevel(logging.DEBUG)
+
+    handler = LogBufferHandler()
+    handler.setLevel(logging.DEBUG)
+    handler.setFormatter(logging.Formatter("%(message)s"))
+    root.addHandler(handler)
+
+    console_handler = ConsoleLogHandler(stream=sys.stderr)
+    console_handler.setLevel(_resolve_handler_level(level))
+    console_handler.setFormatter(
+        logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s")
+    )
+    root.addHandler(console_handler)
+
+    _logging_configured = True

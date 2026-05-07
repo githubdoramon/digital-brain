@@ -18,6 +18,7 @@ from routes.capture import create_capture_router
 from routes.commands import create_commands_router
 from routes.health import create_health_router
 from routes.robots import create_robots_router
+from routes.system import create_system_router
 from routes.telemetry import create_telemetry_router
 from telemetry import handle_status, handle_telemetry
 
@@ -88,3 +89,4 @@ api.include_router(create_robots_router())
 api.include_router(create_telemetry_router())
 api.include_router(create_commands_router())
 api.include_router(create_capture_router())
+api.include_router(create_system_router())

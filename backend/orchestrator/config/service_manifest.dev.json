@@ -23,6 +23,15 @@
       "notes": "Default local development entry"
     },
     {
+      "id": "robot_gateway",
+      "name": "Robot Gateway",
+      "version": "dev",
+      "git_sha": "local",
+      "build_time": null,
+      "image": "appcalipse/digital-brain-robot-gateway:dev",
+      "notes": "Default local development entry"
+    },
+    {
       "id": "db",
       "name": "Postgres + pgvector",
       "version": "pg16",

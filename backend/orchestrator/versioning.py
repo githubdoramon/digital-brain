@@ -82,6 +82,11 @@ def _fallback_services() -> list[dict[str, Any]]:
             os.getenv("ORCHESTRATOR_IMAGE", "appcalipse/digital-brain-orchestrator"),
         ),
         ("frontend", "Frontend Web", os.getenv("FRONTEND_IMAGE", "digital-brain-frontend")),
+        (
+            "robot_gateway",
+            "Robot Gateway",
+            os.getenv("ROBOT_GATEWAY_IMAGE", "appcalipse/digital-brain-robot-gateway"),
+        ),
         ("db", "Postgres + pgvector", "pgvector/pgvector:pg16"),
     )
 

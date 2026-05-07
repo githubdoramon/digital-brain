@@ -1,7 +1,8 @@
 """Logging utilities for robot-gateway."""
 
 import logging
-import sys
+
+from .log_stream import configure_logging as _configure_logging
 
 
 def get_runtime_logger(name: str) -> logging.Logger:
@@ -10,10 +11,5 @@ def get_runtime_logger(name: str) -> logging.Logger:
 
 
 def configure_logging() -> None:
-    """Set up structured logging to stdout."""
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-        stream=sys.stdout,
-        force=True,
-    )
+    """Set up logging: in-memory buffer for /system/logs plus stderr console output."""
+    _configure_logging()

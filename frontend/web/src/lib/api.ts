@@ -308,6 +308,8 @@ export type LogMessageSegment =
   | { kind: "text"; content: string }
   | { kind: "json"; content: string; value: unknown };
 
+export type LogService = "orchestrator" | "robot_gateway";
+
 export type LogEntry = {
   id?: number;
   timestamp: string;
@@ -315,6 +317,7 @@ export type LogEntry = {
   message: string;
   context?: Record<string, unknown> | null;
   message_segments?: LogMessageSegment[] | null;
+  service?: LogService;
 };
 
 /**
@@ -418,18 +421,25 @@ export async function askWithStreaming(
   };
 }
 
+const LOG_SERVICE_BASES: Record<LogService, string> = {
+  orchestrator: API_BASE,
+  robot_gateway: "/api/robot-gateway",
+};
+
 export async function streamSystemLogs(
   level: LogLevel | "all",
   onEntry: (entry: LogEntry) => void,
   onError: (message: string) => void,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  service: LogService = "orchestrator"
 ): Promise<void> {
   const params = new URLSearchParams();
   if (level !== "all") {
     params.set("level", level);
   }
+  const base = LOG_SERVICE_BASES[service];
   const response = await fetch(
-    `${API_BASE}/system/logs/stream${params.toString() ? `?${params.toString()}` : ""}`,
+    `${base}/system/logs/stream${params.toString() ? `?${params.toString()}` : ""}`,
     {
       method: "GET",
       signal,
@@ -471,7 +481,7 @@ export async function streamSystemLogs(
         if (!entry?.timestamp || !entry?.level || !entry?.message) {
           continue;
         }
-        onEntry(entry);
+        onEntry({ ...entry, service });
       } catch {
         onError("Received malformed log event.");
       }
@@ -482,7 +492,8 @@ export async function streamSystemLogs(
 export async function getSystemLogs(
   level: LogLevel | "all",
   sinceMinutes = 15,
-  limit = 200
+  limit = 200,
+  service: LogService = "orchestrator"
 ): Promise<LogEntry[]> {
   const params = new URLSearchParams();
   if (level !== "all") {
@@ -490,8 +501,17 @@ export async function getSystemLogs(
   }
   params.set("since_minutes", `${sinceMinutes}`);
   params.set("limit", `${limit}`);
-  const response = await api.get<{ entries: LogEntry[] }>(
-    `/system/logs?${params.toString()}`
-  );
-  return response.entries ?? [];
+  const base = LOG_SERVICE_BASES[service];
+  const response = await fetch(`${base}/system/logs?${params.toString()}`, {
+    method: "GET",
+    headers: { "Content-Type": "application/json" },
+  });
+  if (!response.ok) {
+    const errorBody = (await response.json().catch(() => undefined)) as
+      | { detail?: string }
+      | undefined;
+    throw new Error(errorBody?.detail || `Request failed: ${response.statusText}`);
+  }
+  const payload = (await response.json()) as { entries?: LogEntry[] };
+  return (payload.entries ?? []).map((entry) => ({ ...entry, service }));
 }

@@ -28,6 +28,10 @@ DIGITAL_BRAIN_SERVICES = {
         "name": "Frontend Web",
         "image": "appcalipse/digital-brain-frontend",
     },
+    "robot_gateway": {
+        "name": "Robot Gateway",
+        "image": "appcalipse/digital-brain-robot-gateway",
+    },
 }
 
 THIRD_PARTY_SERVICES = {

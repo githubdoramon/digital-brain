@@ -7,6 +7,7 @@ import {
   LogEntry,
   LogLevel,
   LogMessageSegment,
+  LogService,
   streamSystemLogs,
 } from "@/lib/api";
 
@@ -34,6 +35,18 @@ type ServiceVersionResponse = {
 type LogRow = LogEntry & { rowKey: string };
 
 const LOG_LEVELS: LogLevel[] = ["debug", "info", "decision", "warning", "error"];
+const LOG_SERVICES: { id: LogService; label: string }[] = [
+  { id: "orchestrator", label: "Orchestrator" },
+  { id: "robot_gateway", label: "Robot Gateway" },
+];
+const LOG_SERVICE_LABELS: Record<LogService, string> = LOG_SERVICES.reduce(
+  (acc, item) => ({ ...acc, [item.id]: item.label }),
+  {} as Record<LogService, string>
+);
+const LOG_SERVICE_COLORS: Record<LogService, string> = {
+  orchestrator: "#a5b4fc",
+  robot_gateway: "#fcd34d",
+};
 const LOG_CONTENT_MAX_WIDTH = 1024;
 const HIDDEN_INDEX_STYLE = {
   position: "absolute",
@@ -61,10 +74,11 @@ function sortLogEntries(entries: LogRow[]): LogRow[] {
 }
 
 function toLogRow(entry: LogEntry): LogRow {
+  const service = entry.service ?? "orchestrator";
   const rowKey =
     typeof entry.id === "number"
-      ? `id:${entry.id}`
-      : `${entry.timestamp}-${Math.random().toString(36).slice(2)}`;
+      ? `${service}:id:${entry.id}`
+      : `${service}:${entry.timestamp}-${Math.random().toString(36).slice(2)}`;
   return {
     ...entry,
     rowKey,
@@ -72,10 +86,11 @@ function toLogRow(entry: LogEntry): LogRow {
 }
 
 function getLogKey(entry: LogEntry): string {
+  const service = entry.service ?? "orchestrator";
   if (typeof entry.id === "number") {
-    return `id:${entry.id}`;
+    return `${service}:id:${entry.id}`;
   }
-  return `${entry.timestamp}|${entry.level}|${entry.message}`;
+  return `${service}|${entry.timestamp}|${entry.level}|${entry.message}`;
 }
 
 function formatDate(input?: string | null): string {
@@ -132,7 +147,8 @@ function formatLogEntryForExport(entry: LogEntry): string {
     })
     .join("");
 
-  return `[${entry.timestamp}] ${entry.level.toUpperCase()} ${message}`;
+  const service = entry.service ?? "orchestrator";
+  return `[${entry.timestamp}] [${service}] ${entry.level.toUpperCase()} ${message}`;
 }
 
 function tryParseJsonAt(text: string, start: number): { end: number; value: unknown; raw: string } | null {
@@ -526,12 +542,17 @@ export default function SystemStatusPage() {
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [isBuildExpanded, setIsBuildExpanded] = useState(false);
   const [logEntries, setLogEntries] = useState<LogRow[]>([]);
-  const [logError, setLogError] = useState<string | null>(null);
+  const [logErrors, setLogErrors] = useState<Partial<Record<LogService, string>>>({});
   const [selectedLevels, setSelectedLevels] = useState<LogLevel[]>(LOG_LEVELS);
+  const [selectedServices, setSelectedServices] = useState<LogService[]>(
+    LOG_SERVICES.map((service) => service.id)
+  );
   const [logSearchQuery, setLogSearchQuery] = useState("");
   const [activeLogMatchIndex, setActiveLogMatchIndex] = useState(0);
   const [isLogPaused, setIsLogPaused] = useState(false);
-  const [logConnected, setLogConnected] = useState(false);
+  const [serviceConnected, setServiceConnected] = useState<
+    Partial<Record<LogService, boolean>>
+  >({});
   const [isLogFullscreen, setIsLogFullscreen] = useState(false);
   const logContainerRef = useRef<HTMLDivElement | null>(null);
   const seenLogKeysRef = useRef<Set<string>>(new Set());
@@ -572,18 +593,27 @@ export default function SystemStatusPage() {
 
   useEffect(() => {
     let mounted = true;
-    getSystemLogs("all", 60, 1000)
-      .then((entries) => {
-        if (!mounted) return;
-        const rows = entries.map(toLogRow);
-        const sorted = sortLogEntries(rows);
-        seenLogKeysRef.current = new Set(sorted.map((row) => getLogKey(row)));
-        setLogEntries(sorted);
-      })
-      .catch((err) => {
-        if (!mounted) return;
-        setLogError(err instanceof Error ? err.message : "Failed to fetch logs.");
+    Promise.allSettled(
+      LOG_SERVICES.map(({ id }) => getSystemLogs("all", 60, 1000, id))
+    ).then((results) => {
+      if (!mounted) return;
+      const allEntries: LogRow[] = [];
+      const errors: Partial<Record<LogService, string>> = {};
+      results.forEach((result, index) => {
+        const service = LOG_SERVICES[index].id;
+        if (result.status === "fulfilled") {
+          allEntries.push(...result.value.map(toLogRow));
+        } else {
+          const reason = result.reason;
+          errors[service] =
+            reason instanceof Error ? reason.message : "Failed to fetch logs.";
+        }
       });
+      const sorted = sortLogEntries(allEntries);
+      seenLogKeysRef.current = new Set(sorted.map((row) => getLogKey(row)));
+      setLogEntries(sorted);
+      setLogErrors((prev) => ({ ...prev, ...errors }));
+    });
     return () => {
       mounted = false;
     };
@@ -591,25 +621,34 @@ export default function SystemStatusPage() {
 
   useEffect(() => {
     if (isLogPaused) {
-      setLogConnected(false);
+      setServiceConnected({});
       return;
     }
 
     let cancelled = false;
     const controller = new AbortController();
-    let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+    const reconnectTimers = new Set<ReturnType<typeof setTimeout>>();
 
     const wait = (ms: number) =>
       new Promise<void>((resolve) => {
-        reconnectTimer = setTimeout(resolve, ms);
+        const timer = setTimeout(() => {
+          reconnectTimers.delete(timer);
+          resolve();
+        }, ms);
+        reconnectTimers.add(timer);
       });
 
-    const runStreamLoop = async () => {
+    const runStreamLoop = async (service: LogService) => {
       let reconnectAttempt = 0;
 
       while (!cancelled && !controller.signal.aborted) {
-        setLogError(null);
-        setLogConnected(true);
+        setLogErrors((prev) => {
+          if (!prev[service]) return prev;
+          const next = { ...prev };
+          delete next[service];
+          return next;
+        });
+        setServiceConnected((prev) => ({ ...prev, [service]: true }));
 
         try {
           await streamSystemLogs(
@@ -630,24 +669,32 @@ export default function SystemStatusPage() {
               });
             },
             (message) => {
-              setLogError(message);
+              setLogErrors((prev) => ({ ...prev, [service]: message }));
             },
-            controller.signal
+            controller.signal,
+            service
           );
 
           if (cancelled || controller.signal.aborted) {
             break;
           }
 
-          setLogConnected(false);
-          setLogError("Log stream disconnected. Reconnecting...");
+          setServiceConnected((prev) => ({ ...prev, [service]: false }));
+          setLogErrors((prev) => ({
+            ...prev,
+            [service]: "Log stream disconnected. Reconnecting...",
+          }));
         } catch (err) {
           if (cancelled || controller.signal.aborted) {
             break;
           }
 
-          setLogConnected(false);
-          setLogError(err instanceof Error ? err.message : "Log stream disconnected. Retrying...");
+          setServiceConnected((prev) => ({ ...prev, [service]: false }));
+          setLogErrors((prev) => ({
+            ...prev,
+            [service]:
+              err instanceof Error ? err.message : "Log stream disconnected. Retrying...",
+          }));
         }
 
         reconnectAttempt += 1;
@@ -656,14 +703,15 @@ export default function SystemStatusPage() {
       }
     };
 
-    void runStreamLoop();
+    LOG_SERVICES.forEach(({ id }) => {
+      void runStreamLoop(id);
+    });
 
     return () => {
       cancelled = true;
       controller.abort();
-      if (reconnectTimer) {
-        clearTimeout(reconnectTimer);
-      }
+      reconnectTimers.forEach((timer) => clearTimeout(timer));
+      reconnectTimers.clear();
     };
   }, [isLogPaused]);
 
@@ -680,9 +728,27 @@ export default function SystemStatusPage() {
     setSelectedLevels(LOG_LEVELS);
   };
 
-  const filteredLogs = selectedLevels.length
-    ? logEntries.filter((entry) => selectedLevels.includes(entry.level))
-    : [];
+  const toggleService = (service: LogService) => {
+    setSelectedServices((current) => {
+      if (current.includes(service)) {
+        return current.filter((item) => item !== service);
+      }
+      return [...current, service];
+    });
+  };
+
+  const resetServices = () => {
+    setSelectedServices(LOG_SERVICES.map((service) => service.id));
+  };
+
+  const filteredLogs =
+    selectedLevels.length && selectedServices.length
+      ? logEntries.filter(
+          (entry) =>
+            selectedLevels.includes(entry.level) &&
+            selectedServices.includes(entry.service ?? "orchestrator")
+        )
+      : [];
   const matchedLogRowKeys = logSearchQuery
     ? filteredLogs
         .filter((entry) => {
@@ -702,14 +768,35 @@ export default function SystemStatusPage() {
   const activeMatchRowKey = hasSearchMatches
     ? matchedLogRowKeys[((activeLogMatchIndex % matchedLogRowKeys.length) + matchedLogRowKeys.length) % matchedLogRowKeys.length]
     : null;
+  const connectedServices = LOG_SERVICES.filter(({ id }) => serviceConnected[id]);
+  const allServicesConnected =
+    connectedServices.length === LOG_SERVICES.length;
+  const anyServiceConnected = connectedServices.length > 0;
+  const statusText = isLogPaused
+    ? "Paused"
+    : allServicesConnected
+    ? "Connected"
+    : anyServiceConnected
+    ? `Connected (${connectedServices.map((service) => service.label).join(", ")})`
+    : "Connecting";
+  const errorEntries = LOG_SERVICES.map(({ id, label }) => ({
+    label,
+    message: logErrors[id],
+  })).filter((item): item is { label: string; message: string } => Boolean(item.message));
+
   const exportableLogsText = [
-    "Orchestrator Logs Export",
+    "System Logs Export",
     `Generated: ${new Date().toISOString()}`,
     `Visible entries: ${filteredLogs.length} of ${logEntries.length}`,
-    `Status: ${isLogPaused ? "Paused" : logConnected ? "Connected" : "Connecting"}`,
+    `Status: ${statusText}`,
+    `Services: ${
+      selectedServices.length
+        ? selectedServices.map((id) => LOG_SERVICE_LABELS[id]).join(", ")
+        : "none"
+    }`,
     `Levels: ${selectedLevels.length ? selectedLevels.join(", ") : "none"}`,
     `Search query: ${logSearchQuery || "(none)"}`,
-    logError ? `Error: ${logError}` : null,
+    ...errorEntries.map((item) => `Error (${item.label}): ${item.message}`),
     "",
     ...filteredLogs.map(formatLogEntryForExport),
   ]
@@ -722,7 +809,7 @@ export default function SystemStatusPage() {
     const anchor = document.createElement("a");
     const timestamp = new Date().toISOString().replace(/[.:]/g, "-");
     anchor.href = url;
-    anchor.download = `orchestrator-logs-${timestamp}.txt`;
+    anchor.download = `system-logs-${timestamp}.txt`;
     document.body.appendChild(anchor);
     anchor.click();
     document.body.removeChild(anchor);
@@ -770,9 +857,9 @@ export default function SystemStatusPage() {
     >
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: "12px" }}>
         <div>
-          <h2 style={{ fontSize: "1.1rem", fontWeight: 600, margin: 0 }}>Orchestrator Logs</h2>
+          <h2 style={{ fontSize: "1.1rem", fontWeight: 600, margin: 0 }}>System Logs</h2>
           <p style={{ margin: "6px 0 0", color: "#6b7280", fontSize: "0.9rem" }}>
-            Live log stream via SSE. Showing {filteredLogs.length} of {logEntries.length} entries.
+            Live log stream via SSE from {LOG_SERVICES.length} services. Showing {filteredLogs.length} of {logEntries.length} entries.
           </p>
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap", justifyContent: "flex-end" }}>
@@ -832,6 +919,56 @@ export default function SystemStatusPage() {
               </>
             ) : null}
           </div>
+          <div style={{ display: "flex", gap: "6px", flexWrap: "wrap" }}>
+            {LOG_SERVICES.map(({ id, label }) => {
+              const isActive = selectedServices.includes(id);
+              return (
+                <button
+                  key={id}
+                  type="button"
+                  onClick={() => toggleService(id)}
+                  title={`Toggle ${label} logs`}
+                  style={{
+                    border: `1px solid ${isActive ? LOG_SERVICE_COLORS[id] : "#d1d5db"}`,
+                    borderRadius: "999px",
+                    padding: "4px 10px",
+                    fontSize: "0.8rem",
+                    background: isActive ? "#e2e8f0" : "#fff",
+                    cursor: "pointer",
+                    fontWeight: 500,
+                  }}
+                >
+                  <span
+                    aria-hidden
+                    style={{
+                      display: "inline-block",
+                      width: "8px",
+                      height: "8px",
+                      borderRadius: "999px",
+                      background: LOG_SERVICE_COLORS[id],
+                      marginRight: "6px",
+                      verticalAlign: "middle",
+                    }}
+                  />
+                  {label}
+                </button>
+              );
+            })}
+          </div>
+          <button
+            type="button"
+            onClick={resetServices}
+            style={{
+              border: "1px solid #d1d5db",
+              borderRadius: "8px",
+              padding: "6px 10px",
+              fontSize: "0.8rem",
+              background: "#fff",
+              cursor: "pointer",
+            }}
+          >
+            All services
+          </button>
           <div style={{ display: "flex", gap: "6px", flexWrap: "wrap" }}>
             {LOG_LEVELS.map((level) => {
               const isActive = selectedLevels.includes(level);
@@ -942,11 +1079,51 @@ export default function SystemStatusPage() {
         </div>
       </div>
 
-      <div style={{ display: "flex", gap: "12px", fontSize: "0.85rem", color: "#64748b" }}>
+      <div
+        style={{
+          display: "flex",
+          gap: "12px",
+          fontSize: "0.85rem",
+          color: "#64748b",
+          flexWrap: "wrap",
+          alignItems: "center",
+        }}
+      >
         <span>
-          <strong>Status:</strong> {isLogPaused ? "Paused" : logConnected ? "Connected" : "Connecting"}
+          <strong>Status:</strong> {statusText}
         </span>
-        {logError && <span style={{ color: "#b91c1c" }}>{logError}</span>}
+        {LOG_SERVICES.map(({ id, label }) => {
+          const isConnected = !isLogPaused && Boolean(serviceConnected[id]);
+          return (
+            <span
+              key={id}
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: "6px",
+                fontSize: "0.78rem",
+              }}
+              title={`${label} stream`}
+            >
+              <span
+                aria-hidden
+                style={{
+                  display: "inline-block",
+                  width: "8px",
+                  height: "8px",
+                  borderRadius: "999px",
+                  background: isConnected ? "#16a34a" : "#94a3b8",
+                }}
+              />
+              {label}
+            </span>
+          );
+        })}
+        {errorEntries.map((item) => (
+          <span key={item.label} style={{ color: "#b91c1c" }}>
+            {item.label}: {item.message}
+          </span>
+        ))}
       </div>
 
       <div
@@ -980,9 +1157,23 @@ export default function SystemStatusPage() {
                     logRowRefs.current.delete(entry.rowKey);
                   }
                 }}
-                style={{ display: "grid", gridTemplateColumns: "80px 70px minmax(0, 1fr)", gap: "8px", minWidth: "100%" }}
+                style={{ display: "grid", gridTemplateColumns: "80px 110px 70px minmax(0, 1fr)", gap: "8px", minWidth: "100%" }}
               >
                 <span style={{ color: "#94a3b8" }}>{formatLogTimestamp(entry.timestamp)}</span>
+                <span
+                  style={{
+                    color: LOG_SERVICE_COLORS[entry.service ?? "orchestrator"],
+                    fontSize: "0.72rem",
+                    textTransform: "uppercase",
+                    letterSpacing: "0.04em",
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                    whiteSpace: "nowrap",
+                  }}
+                  title={LOG_SERVICE_LABELS[entry.service ?? "orchestrator"]}
+                >
+                  {LOG_SERVICE_LABELS[entry.service ?? "orchestrator"]}
+                </span>
                 <span
                   style={{
                     textTransform: "uppercase",
