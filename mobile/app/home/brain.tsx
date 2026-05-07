@@ -86,6 +86,7 @@ import {
   consumeEventDraftEditResult,
   createEventDraftEditSession,
 } from '@/events/draftEditorSession';
+import { useAppNotice } from '@/hooks/useAppNotice';
 import { normalizeSearch } from '@/utils/text';
 
 import { getHomeTabBarClearance } from './tabBarMetrics';
@@ -951,6 +952,7 @@ function pruneContactPreviewBlocks(directives: UiDirectives, previewId: string):
 export default function ChatScreen() {
   const router = useRouter();
   const { token, signOut, email, name, photo, isLoading: isAuthLoading } = useAuth();
+  const { showError } = useAppNotice();
   const insets = useSafeAreaInsets();
   const tabBarHeight = useBottomTabBarHeight();
   const tabBarClearance = Math.max(tabBarHeight, getHomeTabBarClearance(insets.bottom));
@@ -1277,6 +1279,7 @@ export default function ChatScreen() {
       setForceScrollNext(true);
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Unable to attach that photo.';
+      showError(message);
       setMessages((prev) => [
         ...prev,
         {
@@ -1287,7 +1290,7 @@ export default function ChatScreen() {
       ]);
       setForceScrollNext(true);
     }
-  }, [allowed, composerMediaAttachments.length, isSending]);
+  }, [allowed, composerMediaAttachments.length, isSending, showError]);
 
   const sendMessage = useCallback(async (override?: SendMessageInput) => {
     const overrideText = typeof override === 'string' ? override : override?.text;

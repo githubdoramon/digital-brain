@@ -190,6 +190,63 @@ _EVENT_MATCH_EXPLICIT_EXISTING_EVENT_PATTERNS = (
     "not a new one",
 )
 
+_IMMEDIATE_PAST_PATTERNS = (
+    re.compile(r"\bjust now\b", re.IGNORECASE),
+    re.compile(
+        r"\bi just\s+(?:had|finished|got|came|went|returned|ate|met|spoke|talked|wrapped|left|saw|did|completed|attended|visited)\b",
+        re.IGNORECASE,
+    ),
+)
+_RELATIVE_PAST_PATTERN = re.compile(
+    r"\b(?:(?P<article>a|an)|(?P<amount>\d+))\s+"
+    r"(?P<unit>minute|minutes|hour|hours)\s+ago\b",
+    re.IGNORECASE,
+)
+
+
+def _infer_recent_event_datetime(message: str) -> datetime | None:
+    text = str(message or "").strip()
+    if not text:
+        return None
+
+    relative_match = _RELATIVE_PAST_PATTERN.search(text)
+    if relative_match:
+        amount_text = relative_match.group("amount")
+        article = relative_match.group("article")
+        unit = str(relative_match.group("unit") or "").lower()
+        amount = int(amount_text) if amount_text else 1 if article else 0
+        if amount > 0:
+            delta = timedelta(hours=amount) if unit.startswith("hour") else timedelta(minutes=amount)
+            return datetime.now() - delta
+
+    if any(pattern.search(text) for pattern in _IMMEDIATE_PAST_PATTERNS):
+        return datetime.now()
+
+    return None
+
+
+def _need_user_input_is_only_temporal(need_user_input: dict[str, Any] | None) -> bool:
+    if not isinstance(need_user_input, dict):
+        return False
+
+    fields = normalize_clarification_fields(need_user_input.get("fields"))
+    if fields:
+        field_ids = {
+            str(field.get("id") or "").strip().lower()
+            for field in fields
+            if isinstance(field, dict)
+        }
+        field_ids.discard("")
+        if field_ids:
+            return field_ids <= {"when", "end_when"}
+
+    prompt_parts = [str(need_user_input.get("prompt") or "")]
+    prompt_parts.extend(str(question or "") for question in (need_user_input.get("questions") or []))
+    prompt_text = " ".join(part.strip().lower() for part in prompt_parts if part and part.strip())
+    if not prompt_text:
+        return False
+    return any(token in prompt_text for token in (" when", "when ", "time", "date", "happen"))
+
 
 def _event_match_tokens(value: Any) -> set[str]:
     normalized = normalize_search_text(str(value or ""))
@@ -896,6 +953,7 @@ Event description: "{message}"\n
 Extract the following information:
 1. **What happened**: A brief title (5-10 words) and detailed summary
 2. **When**: Parse event start date/time. Time is optional. Return ISO date (YYYY-MM-DD) when only date is known, or ISO datetime when time is known.
+   - If the user says the event just happened (for example: "I just had lunch", "just now", "10 minutes ago"), infer an immediate past datetime instead of asking for clarification.
 3. **End**: Parse optional end date/time if present. Return null if not mentioned.
 4. **Where**: Location/place name (if mentioned)
 5. **Documents**: References to documents/files (if mentioned)
@@ -977,6 +1035,16 @@ Return ONLY valid JSON in this exact format:
         end_when = _parse_optional_datetime(extracted.get("end_when"), "end_when")
 
         need_user_input = normalize_need_user_input(extracted.get("need_user_input"))
+        if when is None:
+            inferred_recent_when = _infer_recent_event_datetime(message)
+            if inferred_recent_when is not None:
+                logger.info(
+                    "[event_extraction] Inferred immediate-past event time from message: %s",
+                    inferred_recent_when.isoformat(),
+                )
+                when = inferred_recent_when
+                if _need_user_input_is_only_temporal(need_user_input):
+                    need_user_input = None
 
         result = {
             "need_user_input": need_user_input,
