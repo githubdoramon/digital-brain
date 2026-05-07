@@ -18,6 +18,7 @@ from schemas import (
     RobotOut,
     RobotUpdateIn,
 )
+from telemetry import apply_derived_module_status
 
 logger = get_runtime_logger(__name__)
 
@@ -39,7 +40,7 @@ def create_robots_router() -> APIRouter:
                 """
                 INSERT INTO robots (robot_id, name, description, tags, metadata)
                 VALUES (%s, %s, %s, %s, %s)
-                RETURNING robot_id, name, description, status, tags, metadata,
+                RETURNING robot_id, name, description, tags, metadata,
                           last_seen_at, registered_at, updated_at
                 """,
                 (
@@ -60,7 +61,7 @@ def create_robots_router() -> APIRouter:
         with get_conn() as conn, conn.cursor() as cur:
             cur.execute(
                 """
-                SELECT robot_id, name, description, status, tags, metadata,
+                SELECT robot_id, name, description, tags, metadata,
                        last_seen_at, registered_at, updated_at
                 FROM robots ORDER BY registered_at DESC
                 """
@@ -71,8 +72,8 @@ def create_robots_router() -> APIRouter:
                 robot_ids = [r["robot_id"] for r in robots]
                 cur.execute(
                     """
-                    SELECT module_id, robot_id, name, module_type, status, capabilities,
-                           metadata, last_seen_at, registered_at, updated_at
+                    SELECT module_id, robot_id, name, module_type, status, status_updated_at,
+                           capabilities, metadata, last_seen_at, registered_at, updated_at
                     FROM robot_modules
                     WHERE robot_id = ANY(%s)
                     ORDER BY registered_at
@@ -81,7 +82,9 @@ def create_robots_router() -> APIRouter:
                 )
                 modules_by_robot: dict[str, list[dict[str, Any]]] = {}
                 for row in cur.fetchall():
-                    modules_by_robot.setdefault(row["robot_id"], []).append(dict(row))
+                    modules_by_robot.setdefault(row["robot_id"], []).append(
+                        apply_derived_module_status(dict(row))
+                    )
 
                 for robot in robots:
                     robot["modules"] = modules_by_robot.get(robot["robot_id"], [])
@@ -96,7 +99,7 @@ def create_robots_router() -> APIRouter:
         with get_conn() as conn, conn.cursor() as cur:
             cur.execute(
                 """
-                SELECT robot_id, name, description, status, tags, metadata,
+                SELECT robot_id, name, description, tags, metadata,
                        last_seen_at, registered_at, updated_at
                 FROM robots WHERE robot_id = %s
                 """,
@@ -108,13 +111,13 @@ def create_robots_router() -> APIRouter:
 
             cur.execute(
                 """
-                SELECT module_id, robot_id, name, module_type, status, capabilities,
-                       metadata, last_seen_at, registered_at, updated_at
+                SELECT module_id, robot_id, name, module_type, status, status_updated_at,
+                       capabilities, metadata, last_seen_at, registered_at, updated_at
                 FROM robot_modules WHERE robot_id = %s ORDER BY registered_at
                 """,
                 (robot_id,),
             )
-            modules = [dict(row) for row in cur.fetchall()]
+            modules = [apply_derived_module_status(dict(row)) for row in cur.fetchall()]
 
         return {**dict(robot), "modules": modules}
 
@@ -145,7 +148,7 @@ def create_robots_router() -> APIRouter:
                 f"""
                 UPDATE robots SET {', '.join(set_clauses)}
                 WHERE robot_id = %s
-                RETURNING robot_id, name, description, status, tags, metadata,
+                RETURNING robot_id, name, description, tags, metadata,
                           last_seen_at, registered_at, updated_at
                 """,
                 params,
@@ -157,13 +160,13 @@ def create_robots_router() -> APIRouter:
 
             cur.execute(
                 """
-                SELECT module_id, robot_id, name, module_type, status, capabilities,
-                       metadata, last_seen_at, registered_at, updated_at
+                SELECT module_id, robot_id, name, module_type, status, status_updated_at,
+                       capabilities, metadata, last_seen_at, registered_at, updated_at
                 FROM robot_modules WHERE robot_id = %s ORDER BY registered_at
                 """,
                 (robot_id,),
             )
-            modules = [dict(row) for row in cur.fetchall()]
+            modules = [apply_derived_module_status(dict(row)) for row in cur.fetchall()]
 
         return {**dict(robot), "modules": modules}
 
@@ -196,8 +199,8 @@ def create_robots_router() -> APIRouter:
                 INSERT INTO robot_modules
                     (module_id, robot_id, name, module_type, capabilities, metadata)
                 VALUES (%s, %s, %s, %s, %s, %s)
-                RETURNING module_id, robot_id, name, module_type, status, capabilities,
-                          metadata, last_seen_at, registered_at, updated_at
+                RETURNING module_id, robot_id, name, module_type, status, status_updated_at,
+                          capabilities, metadata, last_seen_at, registered_at, updated_at
                 """,
                 (
                     body.module_id,
@@ -211,20 +214,20 @@ def create_robots_router() -> APIRouter:
             row = cur.fetchone()
             conn.commit()
 
-        return dict(row)
+        return apply_derived_module_status(dict(row))
 
     @router.get("/robots/{robot_id}/modules", response_model=list[ModuleOut])
     def list_modules(robot_id: str, _: None = Depends(require_service_api_key)):
         with get_conn() as conn, conn.cursor() as cur:
             cur.execute(
                 """
-                SELECT module_id, robot_id, name, module_type, status, capabilities,
-                       metadata, last_seen_at, registered_at, updated_at
+                SELECT module_id, robot_id, name, module_type, status, status_updated_at,
+                       capabilities, metadata, last_seen_at, registered_at, updated_at
                 FROM robot_modules WHERE robot_id = %s ORDER BY registered_at
                 """,
                 (robot_id,),
             )
-            return [dict(row) for row in cur.fetchall()]
+            return [apply_derived_module_status(dict(row)) for row in cur.fetchall()]
 
     @router.put("/robots/{robot_id}/modules/{module_id}", response_model=ModuleOut)
     def update_module(
@@ -254,8 +257,8 @@ def create_robots_router() -> APIRouter:
                 f"""
                 UPDATE robot_modules SET {', '.join(set_clauses)}
                 WHERE robot_id = %s AND module_id = %s
-                RETURNING module_id, robot_id, name, module_type, status, capabilities,
-                          metadata, last_seen_at, registered_at, updated_at
+                RETURNING module_id, robot_id, name, module_type, status, status_updated_at,
+                          capabilities, metadata, last_seen_at, registered_at, updated_at
                 """,
                 params,
             )
@@ -264,7 +267,7 @@ def create_robots_router() -> APIRouter:
                 raise HTTPException(status_code=404, detail="Module not found")
             conn.commit()
 
-        return dict(row)
+        return apply_derived_module_status(dict(row))
 
     @router.delete("/robots/{robot_id}/modules/{module_id}", status_code=204)
     def delete_module(

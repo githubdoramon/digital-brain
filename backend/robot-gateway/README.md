@@ -1,6 +1,6 @@
 # Robot Gateway
 
-MQTT-based communication gateway for physical robots. Receives telemetry, dispatches commands, and tracks robot/module state. Runs as its own container alongside a Mosquitto MQTT broker.
+MQTT-based communication gateway for physical robots. Receives telemetry, dispatches commands, and tracks robot/module activity. Runs as its own container alongside a Mosquitto MQTT broker.
 
 > **Firmware developers**: See [MQTT_PROTOCOL.md](MQTT_PROTOCOL.md) for the exact topic hierarchy and JSON payload schemas the gateway expects.
 
@@ -25,7 +25,6 @@ Each robot has multiple modules. Each module subscribes as a separate MQTT entit
 | `robot/{robot_id}/module/{module_id}/status` | Robot → Gateway | 1 | Module online/offline/error |
 | `robot/{robot_id}/module/{module_id}/command` | Gateway → Robot | 1 | Commands to module |
 | `robot/{robot_id}/module/{module_id}/command/ack` | Robot → Gateway | 1 | Command acknowledgement |
-| `robot/{robot_id}/status` | Robot → Gateway | 1 | Robot-level status |
 | `robot/{robot_id}/module/{module_id}/media` | Reserved | - | Future: image/audio binary payloads |
 
 ## HTTP API
@@ -71,10 +70,19 @@ Uses the same PostgreSQL instance as the orchestrator. Own migration table (`rob
 
 | Table | Purpose |
 |-------|---------|
-| `robots` | Robot registry with status tracking |
+| `robots` | Robot registry + aggregate last-seen tracking |
 | `robot_modules` | Modules per robot (composite PK: robot_id + module_id) |
 | `robot_telemetry` | Time-series telemetry with JSONB payloads |
 | `robot_commands` | Command lifecycle tracking (pending → sent → acknowledged) |
+
+## Status Definitions
+
+- Robots do not have a first-class status field. The gateway tracks only robot metadata plus aggregate `last_seen_at` based on module traffic.
+- Module `status` in API responses is derived, not copied directly from MQTT.
+- A module is `offline` when it has not sent telemetry or a module status message for more than 30 seconds.
+- A fresh module is `online` by default, even if it never published an explicit `online` status message.
+- A fresh explicit module `error` status is surfaced as `error`.
+- A fresh explicit module `offline` status is surfaced as `offline` until newer telemetry/status activity arrives.
 
 ## Telemetry Payload Format
 
@@ -122,6 +130,9 @@ MQTT_PASSWORD=change-me-mqtt
 
 # HTTP port
 ROBOT_GATEWAY_PORT=8001
+
+# Module presence
+# ROBOT_MODULE_OFFLINE_AFTER_SECONDS=30
 
 # Capture relay
 CAPTURE_RELAY_PUBLIC_BASE_URL=https://brain.example.com

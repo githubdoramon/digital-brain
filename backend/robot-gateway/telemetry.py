@@ -9,8 +9,9 @@ from typing import Any
 import psycopg.errors
 
 from db import get_conn
+from module_status import derive_module_status
 from observability.logger import get_runtime_logger
-from schemas import TelemetryPayload
+from schemas import ModuleStatusPayload, TelemetryPayload
 
 logger = get_runtime_logger(__name__)
 
@@ -75,48 +76,66 @@ async def handle_telemetry(robot_id: str, module_id: str | None, payload: dict[s
     )
 
 
-async def handle_status(robot_id: str, module_id: str | None, payload: dict[str, Any]) -> None:
-    """MQTT handler: update robot or module status."""
-    new_status = payload.get("status")
-    if not new_status:
+async def handle_module_status(robot_id: str, module_id: str | None, payload: dict[str, Any]) -> None:
+    """MQTT handler: update module status."""
+    if not module_id:
         logger.warning(
-            "[status] REJECTED robot_id=%s module_id=%s reason=missing_status_field payload=%s",
-            robot_id, module_id or "(robot)", json.dumps(payload)[:200],
+            "[status] REJECTED robot_id=%s reason=robot_level_status_not_supported payload=%s",
+            robot_id, json.dumps(payload)[:200],
         )
         return
 
+    try:
+        msg = ModuleStatusPayload(**payload)
+    except Exception as exc:
+        logger.warning(
+            "[status] REJECTED robot_id=%s module_id=%s reason=schema_validation "
+            "error=%s payload=%s",
+            robot_id, module_id, str(exc)[:200], json.dumps(payload)[:200],
+        )
+        return
+
+    new_status = msg.status
+
     with get_conn() as conn, conn.cursor() as cur:
-        if module_id:
-            cur.execute(
-                """
-                UPDATE robot_modules
-                SET status = %s, last_seen_at = NOW(), updated_at = NOW()
-                WHERE robot_id = %s AND module_id = %s
-                """,
-                (new_status, robot_id, module_id),
-            )
-        else:
-            cur.execute(
-                """
-                UPDATE robots
-                SET status = %s, last_seen_at = NOW(), updated_at = NOW()
-                WHERE robot_id = %s
-                """,
-                (new_status, robot_id),
-            )
+        cur.execute(
+            "UPDATE robots SET last_seen_at = NOW(), updated_at = NOW() WHERE robot_id = %s",
+            (robot_id,),
+        )
+        cur.execute(
+            """
+            UPDATE robot_modules
+            SET status = %s, status_updated_at = NOW(), last_seen_at = NOW(), updated_at = NOW()
+            WHERE robot_id = %s AND module_id = %s
+            """,
+            (new_status, robot_id, module_id),
+        )
         updated = cur.rowcount
         conn.commit()
 
     if updated == 0:
         logger.warning(
             "[status] REJECTED robot_id=%s module_id=%s reason=unregistered status=%s",
-            robot_id, module_id or "(robot)", new_status,
+            robot_id, module_id, new_status,
         )
     else:
         logger.info(
             "[status] ACCEPTED robot_id=%s module_id=%s status=%s",
-            robot_id, module_id or "(robot)", new_status,
+            robot_id, module_id, new_status,
         )
+
+
+def apply_derived_module_status(module_row: dict[str, Any]) -> dict[str, Any]:
+    """Return a response-safe module row with status derived from recent activity."""
+
+    row = dict(module_row)
+    row["status"] = derive_module_status(
+        last_seen_at=row.get("last_seen_at"),
+        reported_status=row.get("status"),
+        status_updated_at=row.get("status_updated_at"),
+    )
+    row.pop("status_updated_at", None)
+    return row
 
 
 def query_telemetry(

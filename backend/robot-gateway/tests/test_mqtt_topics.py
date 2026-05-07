@@ -37,16 +37,6 @@ class TestParseTopicCommandAck:
         assert result.message_type == "command/ack"
 
 
-class TestParseTopicRobotStatus:
-    def test_basic(self):
-        result = parse_topic("robot/r1/status")
-        assert result == ParsedTopic(robot_id="r1", module_id=None, message_type="status")
-
-    def test_module_id_is_none(self):
-        result = parse_topic("robot/r1/status")
-        assert result.module_id is None
-
-
 # ---------------------------------------------------------------------------
 # parse_topic — invalid / unrecognized
 # ---------------------------------------------------------------------------
@@ -72,6 +62,9 @@ class TestParseTopicRejectsInvalid:
     def test_robot_level_telemetry_not_supported(self):
         """Telemetry must come from a module, not the robot itself."""
         assert parse_topic("robot/r1/telemetry") is None
+
+    def test_robot_level_status_not_supported(self):
+        assert parse_topic("robot/r1/status") is None
 
     def test_extra_segments_after_telemetry(self):
         assert parse_topic("robot/r1/module/imu/telemetry/extra") is None

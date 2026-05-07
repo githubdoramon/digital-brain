@@ -37,6 +37,9 @@ ORCHESTRATOR_API_KEY = os.getenv("ORCHESTRATOR_API_KEY")
 # Gateway HTTP port (used in docker CMD, referenced here for completeness)
 ROBOT_GATEWAY_PORT = int(os.getenv("ROBOT_GATEWAY_PORT", "8001"))
 
+# Module presence
+ROBOT_MODULE_OFFLINE_AFTER_SECONDS = int(os.getenv("ROBOT_MODULE_OFFLINE_AFTER_SECONDS", "30"))
+
 # Capture relay
 CAPTURE_RELAY_PUBLIC_BASE_URL = os.getenv("CAPTURE_RELAY_PUBLIC_BASE_URL", "http://localhost:8001")
 CAPTURE_RELAY_TOKEN_SECRET = os.getenv("CAPTURE_RELAY_TOKEN_SECRET", "")

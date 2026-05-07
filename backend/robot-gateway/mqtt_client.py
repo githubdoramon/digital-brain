@@ -26,7 +26,6 @@ _SUBSCRIPTIONS = [
     ("robot/+/module/+/telemetry", 0),   # QoS 0 for high-frequency telemetry
     ("robot/+/module/+/status", 1),       # QoS 1 for reliable status
     ("robot/+/module/+/command/ack", 1),  # QoS 1 for reliable ACKs
-    ("robot/+/status", 1),                # QoS 1 for robot-level status
     ("robot/#", 0),                       # Diagnostic: catch all robot/* traffic
 ]
 
@@ -104,7 +103,7 @@ class MqttManager:
         if not parsed:
             logger.warning(
                 "[mqtt.recv] REJECTED topic=%s reason=unrecognized_pattern "
-                "(expected robot/{id}/module/{mod}/{telemetry|status|command/ack} or robot/{id}/status)",
+                "(expected robot/{id}/module/{mod}/{telemetry|status|command/ack})",
                 topic,
             )
             return

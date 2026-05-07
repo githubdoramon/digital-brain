@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -30,7 +30,6 @@ class RobotOut(BaseModel):
     robot_id: str
     name: str
     description: str | None = None
-    status: str
     tags: list[str] = Field(default_factory=list)
     metadata: dict[str, Any] = Field(default_factory=dict)
     last_seen_at: datetime | None = None
@@ -116,10 +115,10 @@ class CommandOut(BaseModel):
 # Status (MQTT payloads)
 # ---------------------------------------------------------------------------
 
-class RobotStatusPayload(BaseModel):
-    """Schema for MQTT status messages."""
+class ModuleStatusPayload(BaseModel):
+    """Schema for MQTT module status messages."""
 
-    status: str
+    status: Literal["online", "offline", "error"]
     detail: str | None = None
 
 

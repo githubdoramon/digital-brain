@@ -20,7 +20,7 @@ from routes.health import create_health_router
 from routes.robots import create_robots_router
 from routes.system import create_system_router
 from routes.telemetry import create_telemetry_router
-from telemetry import handle_status, handle_telemetry
+from telemetry import handle_module_status, handle_telemetry
 
 logger = get_runtime_logger(__name__)
 
@@ -48,7 +48,7 @@ async def lifespan(app: FastAPI):
     # 3. Start MQTT client
     mqtt = MqttManager()
     mqtt.register_handler("telemetry", handle_telemetry)
-    mqtt.register_handler("status", handle_status)
+    mqtt.register_handler("status", handle_module_status)
     mqtt.register_handler("command/ack", handle_command_ack)
     app.state.mqtt = mqtt
 

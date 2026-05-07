@@ -6,8 +6,8 @@ from pydantic import ValidationError
 from schemas import (
     CommandIn,
     ModuleIn,
+    ModuleStatusPayload,
     RobotIn,
-    RobotStatusPayload,
     RobotUpdateIn,
     TelemetryPayload,
 )
@@ -154,15 +154,15 @@ class TestCommandIn:
 
 
 # ---------------------------------------------------------------------------
-# RobotStatusPayload
+# ModuleStatusPayload
 # ---------------------------------------------------------------------------
 
 
-class TestRobotStatusPayload:
+class TestModuleStatusPayload:
     def test_minimal(self):
-        s = RobotStatusPayload(status="online")
+        s = ModuleStatusPayload(status="online")
         assert s.detail is None
 
     def test_with_detail(self):
-        s = RobotStatusPayload(status="error", detail="Motor overheated")
+        s = ModuleStatusPayload(status="error", detail="Motor overheated")
         assert s.detail == "Motor overheated"

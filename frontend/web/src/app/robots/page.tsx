@@ -11,7 +11,6 @@ type Robot = {
   robot_id: string;
   name: string;
   description: string | null;
-  status: string;
   tags: string[];
   metadata: Record<string, unknown>;
   last_seen_at: string | null;
@@ -371,7 +370,7 @@ export default function RobotsPage() {
                 gap: 6,
               }}
             >
-              {r.name} <StatusBadge status={r.status} />
+              {r.name}
             </button>
           ))}
         </div>
@@ -454,10 +453,6 @@ export default function RobotsPage() {
                 >
                   <span style={{ color: "#999" }}>ID</span>
                   <span>{selectedRobot.robot_id}</span>
-                  <span style={{ color: "#999" }}>Status</span>
-                  <span>
-                    <StatusBadge status={selectedRobot.status} />
-                  </span>
                   <span style={{ color: "#999" }}>Last seen</span>
                   <span>{formatTime(selectedRobot.last_seen_at)}</span>
                   <span style={{ color: "#999" }}>Registered</span>

@@ -34,7 +34,6 @@ The gateway **subscribes** to these patterns and **publishes** commands. From th
 | `robot/{robot_id}/module/{module_id}/telemetry` | **Robot → Gateway** | 0 | Sensor data |
 | `robot/{robot_id}/module/{module_id}/status` | **Robot → Gateway** | 1 | Module state transitions |
 | `robot/{robot_id}/module/{module_id}/command/ack` | **Robot → Gateway** | 1 | Acknowledge a received command |
-| `robot/{robot_id}/status` | **Robot → Gateway** | 1 | Robot-level state (optional) |
 | `robot/{robot_id}/module/{module_id}/command` | **Gateway → Robot** | 1 | Commands the module must execute |
 
 A camera or microphone is just another module. Its structured metadata (frame counts, fps, detected-object tags, codec, etc.) goes in the normal `telemetry` topic as JSON. Raw binary data — image frames, audio chunks — is planned for a sibling topic under the same module path:
@@ -90,23 +89,7 @@ Until the media pipeline is built, cameras/microphones should publish their meta
 
 Publish on boot (`online`), before disconnect (`offline`), and on error state transitions (`error` + `detail`).
 
-### 4.3 Robot status — `robot/{robot_id}/status`
-
-```json
-{
-  "status": "online",
-  "detail": "boot complete"
-}
-```
-
-| Field | Type | Required | Allowed values |
-|-------|------|----------|----------------|
-| `status` | string | **yes** | `online`, `offline`, `error`, `maintenance` |
-| `detail` | string | no | Human-readable context |
-
-Use this for the whole-device lifecycle. Module-level status covers individual subsystems.
-
-### 4.4 Command acknowledgement — `robot/{robot_id}/module/{module_id}/command/ack`
+### 4.3 Command acknowledgement — `robot/{robot_id}/module/{module_id}/command/ack`
 
 ```json
 {
@@ -120,7 +103,7 @@ Use this for the whole-device lifecycle. Module-level status covers individual s
 
 Publish as soon as the command has been received and accepted (not when it finishes executing — that would be a separate telemetry event).
 
-### 4.5 Command (received from gateway) — `robot/{robot_id}/module/{module_id}/command`
+### 4.4 Command (received from gateway) — `robot/{robot_id}/module/{module_id}/command`
 
 The gateway publishes this **to** the robot. Firmware subscribes and processes it.
 
@@ -149,8 +132,15 @@ The gateway publishes this **to** the robot. Firmware subscribes and processes i
 
 ## 6. Retained Messages
 
-- **Retained: yes** — only for `status` topics (both robot-level and module-level). This lets new subscribers see the last known state immediately.
+- **Retained: yes** — only for module `status` topics. This lets new subscribers see the last known state immediately.
 - **Retained: no** — for telemetry, commands, and ACKs.
+
+## 6.1 Presence semantics
+
+- The gateway does not store or expose a separate robot-level status.
+- Module presence is derived from activity, not from retained `online` flags alone.
+- A module is considered `offline` if the gateway has not received telemetry or a module status message for more than 30 seconds.
+- A fresh module with recent activity is treated as `online` unless its latest explicit module status is `error` or `offline`.
 
 ## 7. Registration (required before publishing)
 
@@ -200,9 +190,6 @@ POST /robots/head-sensors/modules    → module_id: "head-sensors"
 ### On boot
 
 ```
-PUBLISH robot/robot-1/status                    (retained, QoS 1)
-{"status": "online", "detail": "boot complete"}
-
 PUBLISH robot/robot-1/module/head-sensors/status        (retained, QoS 1)
 {"status": "online"}
 ```
@@ -226,11 +213,11 @@ PUBLISH robot/robot-1/module/head-sensors/telemetry     (QoS 0)
 ### On disconnect (via MQTT Last Will)
 
 ```
-Last Will topic:   robot/robot-1/status            (retained, QoS 1)
+Last Will topic:   robot/robot-1/module/head-sensors/status  (retained, QoS 1)
 Last Will payload: {"status": "offline"}
 ```
 
-Setting a Last Will on connect ensures the broker publishes `offline` if the robot drops without a graceful disconnect.
+Setting a Last Will on connect ensures the broker publishes `offline` if the module drops without a graceful disconnect.
 
 ### Subscriptions
 

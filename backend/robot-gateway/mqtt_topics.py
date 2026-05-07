@@ -19,7 +19,6 @@ def parse_topic(topic: str) -> ParsedTopic | None:
         robot/{robot_id}/module/{module_id}/telemetry
         robot/{robot_id}/module/{module_id}/status
         robot/{robot_id}/module/{module_id}/command/ack
-        robot/{robot_id}/status
     """
     parts = topic.split("/")
 
@@ -27,10 +26,6 @@ def parse_topic(topic: str) -> ParsedTopic | None:
         return None
 
     robot_id = parts[1]
-
-    # robot/{robot_id}/status
-    if len(parts) == 3 and parts[2] == "status":
-        return ParsedTopic(robot_id=robot_id, module_id=None, message_type="status")
 
     # robot/{robot_id}/module/{module_id}/...
     if len(parts) >= 5 and parts[2] == "module":
