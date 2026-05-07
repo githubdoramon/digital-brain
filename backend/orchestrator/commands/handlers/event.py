@@ -111,6 +111,7 @@ EVENT_MATCH_CANDIDATE_FLOOR = 35.0  # below this, ignore the candidate entirely
 EVENT_MATCH_AUTO_UPDATE_SCORE = 65.0  # at/above this, propose update confidently
 EVENT_MATCH_AMBIGUOUS_GAP = 5.0  # top-2 within this range -> ambiguous
 EVENT_MATCH_MAX_CANDIDATES = 5
+EVENT_MATCH_SEARCH_LIMIT = 12
 
 _EVENT_MATCH_STOPWORDS = {
     "a",
@@ -176,6 +177,17 @@ _EVENT_MATCH_EXPLICIT_NEW_EVENT_PATTERNS = (
     "another event",
     "new event",
 )
+_EVENT_MATCH_EXPLICIT_EXISTING_EVENT_PATTERNS = (
+    "same as last one",
+    "same as the last one",
+    "same as last time",
+    "same as the previous one",
+    "same as previous one",
+    "update the existing event",
+    "update existing event",
+    "existing event",
+    "not a new one",
+)
 
 
 def _event_match_tokens(value: Any) -> set[str]:
@@ -207,6 +219,13 @@ def _user_explicitly_rejected_same_event(raw_message: str | None) -> bool:
     if not normalized:
         return False
     return any(pattern in normalized for pattern in _EVENT_MATCH_EXPLICIT_NEW_EVENT_PATTERNS)
+
+
+def _user_explicitly_requested_existing_event(raw_message: str | None) -> bool:
+    normalized = _normalized_event_match_text(raw_message)
+    if not normalized:
+        return False
+    return any(pattern in normalized for pattern in _EVENT_MATCH_EXPLICIT_EXISTING_EVENT_PATTERNS)
 
 
 def _extract_client_location(context: dict[str, Any]) -> dict[str, Any] | None:
@@ -1370,6 +1389,32 @@ def _search_event_candidates(
     ]
 
 
+def _search_event_candidates_structured(
+    query: str,
+    time_start: str | None,
+    time_end: str | None,
+    people_ids: list[str],
+    place_id: str | None,
+    limit: int,
+) -> list[dict[str, Any]]:
+    try:
+        search_result = retrieval.search_memories(
+            query=query,
+            people=people_ids or None,
+            place_ids=[place_id] if place_id else None,
+            time_start=time_start,
+            time_end=time_end,
+            limit=limit,
+            sort_order="relevance",
+        )
+    except Exception as exc:  # pragma: no cover - defensive, retrieval shouldn't raise
+        logger.warning("[handle_event] structured event match search failed: %s", exc)
+        return []
+    return [
+        result for result in (search_result.get("results") or []) if result.get("kind") == "event"
+    ]
+
+
 _EVENT_MATCH_QUERY_CHAR_LIMIT = 240
 
 
@@ -1396,6 +1441,66 @@ def _build_event_match_query(
     return ""
 
 
+def _build_event_match_queries(
+    raw_message: str | None,
+    extracted: dict[str, Any],
+    resolution: dict[str, Any] | None,
+) -> list[str]:
+    queries: list[str] = []
+    primary_query = _build_event_match_query(raw_message, extracted)
+    if primary_query:
+        queries.append(primary_query)
+
+    focused_parts: list[str] = []
+    for candidate in (extracted.get("title"), extracted.get("where")):
+        text = str(candidate or "").strip()
+        if text:
+            focused_parts.append(text)
+    if isinstance(resolution, dict):
+        for contact in resolution.get("contacts") or []:
+            if not isinstance(contact, dict):
+                continue
+            display_name = str(contact.get("display_name") or "").strip()
+            if display_name:
+                focused_parts.append(display_name)
+            if len(focused_parts) >= 5:
+                break
+    focused_query = " ".join(focused_parts).strip()
+    if focused_query:
+        queries.append(focused_query)
+
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for query in queries:
+        normalized = _normalized_event_match_text(query)
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        deduped.append(query[:_EVENT_MATCH_QUERY_CHAR_LIMIT])
+    return deduped
+
+
+def _compute_exact_day_match_window(when_value: Any) -> tuple[str | None, str | None]:
+    if not isinstance(when_value, datetime):
+        return None, None
+    day_start = when_value.replace(hour=0, minute=0, second=0, microsecond=0)
+    day_end = day_start + timedelta(days=1)
+    return day_start.isoformat(), day_end.isoformat()
+
+
+def _merge_event_candidate_lists(*candidate_lists: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    merged: list[dict[str, Any]] = []
+    seen_ids: set[str] = set()
+    for candidate_list in candidate_lists:
+        for candidate in candidate_list:
+            candidate_id = str(candidate.get("id") or "").strip()
+            if not candidate_id or candidate_id in seen_ids:
+                continue
+            seen_ids.add(candidate_id)
+            merged.append(candidate)
+    return merged
+
+
 def _find_event_matches(
     raw_message: str | None,
     extracted: dict[str, Any],
@@ -1411,13 +1516,14 @@ def _find_event_matches(
     time-windowed pass returns nothing we retry without a time filter so a
     badly mis-dated extraction can still surface the right event.
     """
-    query = _build_event_match_query(raw_message, extracted)
-    if not query:
+    queries = _build_event_match_queries(raw_message, extracted, resolution)
+    if not queries:
         return {"operation": "create", "candidates": []}
 
     if _user_explicitly_rejected_same_event(raw_message):
         logger.info("[handle_event] Event match skipped: user explicitly said this is a new event")
         return {"operation": "create", "candidates": []}
+    explicit_existing_event = _user_explicitly_requested_existing_event(raw_message)
 
     time_start, time_end = _compute_event_match_window(extracted.get("when"))
     end_when = extracted.get("end_when")
@@ -1448,16 +1554,53 @@ def _find_event_matches(
 
     extracted_when = extracted.get("when") if isinstance(extracted.get("when"), datetime) else None
     people_id_set = set(people_ids)
-    query_tokens = _event_match_tokens(query)
+    all_query_tokens = _event_match_tokens(" ".join(queries))
     title_tokens = _event_match_tokens(extracted.get("title"))
     where_tokens = _event_match_tokens(extracted.get("where"))
 
-    raw_results = _search_event_candidates(query, time_start, time_end, EVENT_MATCH_MAX_CANDIDATES)
+    raw_results: list[dict[str, Any]] = []
+    exact_day_start, exact_day_end = _compute_exact_day_match_window(extracted.get("when"))
+    if (people_ids or place_id) and exact_day_start and exact_day_end:
+        structured_results: list[dict[str, Any]] = []
+        for query in queries:
+            structured_results.extend(
+                _search_event_candidates_structured(
+                    query,
+                    exact_day_start,
+                    exact_day_end,
+                    people_ids,
+                    place_id,
+                    EVENT_MATCH_SEARCH_LIMIT,
+                )
+            )
+        raw_results = _merge_event_candidate_lists(structured_results)
+
+    if not raw_results:
+        semantic_results: list[dict[str, Any]] = []
+        for query in queries:
+            semantic_results.extend(
+                _search_event_candidates(query, time_start, time_end, EVENT_MATCH_SEARCH_LIMIT)
+            )
+        raw_results = _merge_event_candidate_lists(semantic_results)
+
     if not raw_results and (time_start or time_end):
-        logger.info(
-            "[handle_event] Event match: no hits in time window, retrying text-only"
-        )
-        raw_results = _search_event_candidates(query, None, None, EVENT_MATCH_MAX_CANDIDATES)
+        logger.info("[handle_event] Event match: no hits in time window, retrying text-only")
+        text_only_results: list[dict[str, Any]] = []
+        for query in queries:
+            text_only_results.extend(
+                _search_event_candidates(query, None, None, EVENT_MATCH_SEARCH_LIMIT)
+            )
+        raw_results = _merge_event_candidate_lists(text_only_results)
+
+    if explicit_existing_event and not raw_results:
+        logger.info("[handle_event] Event match: explicit existing-event request, widening search")
+        widened_results: list[dict[str, Any]] = []
+        for query in queries:
+            widened_results.extend(
+                _search_event_candidates(query, None, None, EVENT_MATCH_SEARCH_LIMIT * 2)
+            )
+        raw_results = _merge_event_candidate_lists(widened_results)
+
     if not raw_results:
         return {"operation": "create", "candidates": []}
 
@@ -1479,16 +1622,18 @@ def _find_event_matches(
         candidate_place_tokens = _event_match_tokens(result_place_name)
         candidate_text_tokens = _event_match_tokens(
             " ".join(
-                part
-                for part in (
-                    result.get("title"),
-                    result.get("summary"),
-                    result_place_name,
-                )
-                if str(part or "").strip()
+                [
+                    str(part).strip()
+                    for part in (
+                        result.get("title"),
+                        result.get("summary"),
+                        result_place_name,
+                    )
+                    if str(part or "").strip()
+                ]
             )
         )
-        query_overlap = _token_overlap_ratio(query_tokens, candidate_text_tokens)
+        query_overlap = _token_overlap_ratio(all_query_tokens, candidate_text_tokens)
         title_overlap = _token_overlap_ratio(
             title_tokens,
             candidate_title_tokens or candidate_text_tokens,
@@ -1528,7 +1673,7 @@ def _find_event_matches(
                     result_when = result_when.replace(tzinfo=None)
                 elif extracted_when.tzinfo and not result_when.tzinfo:
                     result_when = result_when.replace(tzinfo=extracted_when.tzinfo)
-                if result_when.date() != extracted_when.date():
+                if result_when.date() != extracted_when.date() and not explicit_existing_event:
                     logger.info(
                         "[handle_event] Rejecting candidate %s due to calendar-date mismatch: %s vs %s",
                         result.get("id"),
@@ -1543,6 +1688,9 @@ def _find_event_matches(
                 elif days_apart < 2:
                     normalized_score += 8.0
                     match_sources.append("near_day")
+                elif explicit_existing_event:
+                    normalized_score -= min(12.0, days_apart * 1.5)
+                    match_sources.append("cross_day_existing")
                 elif days_apart >= 7:
                     # User explicitly dated the event; a week+ off is almost
                     # certainly not the one they meant. Penalize hard so text

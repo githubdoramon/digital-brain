@@ -1324,3 +1324,93 @@ def test_find_event_matches_honors_explicit_new_event_correction(monkeypatch):
     )
 
     assert match == {"operation": "create", "candidates": []}
+
+
+def test_find_event_matches_uses_structured_exact_day_search(monkeypatch):
+    extracted = {
+        "title": "Physiotherapy session with Rita Castro",
+        "summary": "Had a physiotherapy session with Rita Castro at Policlínica Monserrat.",
+        "when": event_handler.datetime.fromisoformat("2026-05-07T00:00:00"),
+        "where": "Policlínica Monserrat",
+    }
+    resolution = {
+        "contacts": [{"contact_id": "contact:rita", "display_name": "Rita Castro"}],
+        "matched_place": {"place_id": "place:monserrat", "name": "Policlínica Monserrat"},
+    }
+    calls = {"structured": 0, "semantic": 0}
+
+    monkeypatch.setattr(
+        event_handler,
+        "_search_event_candidates",
+        lambda *_args, **_kwargs: calls.__setitem__("semantic", calls["semantic"] + 1) or [],
+    )
+
+    def fake_structured(*_args, **_kwargs):
+        calls["structured"] += 1
+        return [
+            {
+                "id": "event:physio-10",
+                "title": "10th physiotherapy session",
+                "summary": "Physiotherapy with Rita Castro at Policlínica Monserrat.",
+                "score": 0.82,
+                "start_date": "2026-05-07T08:00:00",
+                "people": ["contact:rita"],
+                "place": {"place_id": "place:monserrat", "name": "Policlínica Monserrat"},
+            }
+        ]
+
+    monkeypatch.setattr(event_handler, "_search_event_candidates_structured", fake_structured)
+
+    match = event_handler._find_event_matches(
+        "physiotherapy session today with Rita Castro at policlinica Monserrat",
+        extracted,
+        resolution,
+    )
+
+    assert calls["structured"] >= 1
+    assert match.get("operation") == "update"
+    assert match.get("existing_event_id") == "event:physio-10"
+
+
+def test_find_event_matches_widens_for_explicit_existing_request(monkeypatch):
+    extracted = {
+        "title": "Physiotherapy session with Rita Castro",
+        "summary": "Had a physiotherapy session with Rita Castro at Policlínica Monserrat.",
+        "when": event_handler.datetime.fromisoformat("2026-05-07T00:00:00"),
+        "where": "Policlínica Monserrat",
+    }
+    resolution = {
+        "contacts": [{"contact_id": "contact:rita", "display_name": "Rita Castro"}],
+        "matched_place": {"place_id": "place:monserrat", "name": "Policlínica Monserrat"},
+    }
+
+    def fake_search(query, time_start, time_end, limit):
+        if time_start or time_end:
+            return []
+        return [
+            {
+                "id": "event:physio-9",
+                "title": "9th physiotherapy session",
+                "summary": "Physiotherapy with Rita Castro at Policlínica Monserrat.",
+                "score": 0.88,
+                "start_date": "2026-05-05T08:00:00",
+                "people": ["contact:rita"],
+                "place": {"place_id": "place:monserrat", "name": "Policlínica Monserrat"},
+            }
+        ]
+
+    monkeypatch.setattr(event_handler, "_search_event_candidates", fake_search)
+    monkeypatch.setattr(
+        event_handler,
+        "_search_event_candidates_structured",
+        lambda *_args, **_kwargs: [],
+    )
+
+    match = event_handler._find_event_matches(
+        "physiotherapy session today with Rita Castro at policlinica Monserrat was the same as last one. Update the existing event.",
+        extracted,
+        resolution,
+    )
+
+    assert match.get("operation") == "update"
+    assert match.get("existing_event_id") == "event:physio-9"
