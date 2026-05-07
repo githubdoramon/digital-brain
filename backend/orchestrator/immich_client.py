@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Any
 
 import requests
@@ -144,3 +145,192 @@ def fetch_person_thumbnail(
 
     content_type = response.headers.get("content-type") or "image/jpeg"
     return response.content, content_type
+
+
+def upload_asset(
+    image_bytes: bytes,
+    *,
+    filename: str,
+    mime_type: str | None,
+    taken_at: datetime | None,
+    device_asset_id: str,
+    device_id: str | None = None,
+    config: ImmichConfig | None = None,
+) -> dict[str, Any]:
+    if not image_bytes:
+        raise ImmichClientError("Image payload is empty")
+    if not device_asset_id:
+        raise ImmichClientError("device_asset_id is required")
+
+    cfg = config or get_immich_config()
+    resolved_device_id = (device_id or cfg.device_id or "digital-brain").strip()
+    timestamp = _format_timestamp(taken_at or datetime.now(timezone.utc))
+    url = f"{cfg.base_url}/api/assets"
+    headers = {
+        "x-api-key": cfg.api_key,
+        "accept": "application/json",
+    }
+    data = {
+        "deviceAssetId": device_asset_id,
+        "deviceId": resolved_device_id,
+        "fileCreatedAt": timestamp,
+        "fileModifiedAt": timestamp,
+        "isFavorite": "false",
+    }
+    files = {
+        "assetData": (
+            filename,
+            image_bytes,
+            mime_type or "application/octet-stream",
+        )
+    }
+    timeout = cfg.http_timeout or IMMICH_HTTP_TIMEOUT
+
+    try:
+        response = requests.post(url, headers=headers, data=data, files=files, timeout=timeout)
+    except requests.RequestException as exc:
+        raise ImmichClientError(f"Failed to reach Immich upload endpoint: {exc}") from exc
+
+    if response.status_code >= 400:
+        snippet = response.text[:200]
+        raise ImmichClientError(f"Immich upload failed ({response.status_code}): {snippet}")
+
+    try:
+        payload = response.json()
+    except ValueError as exc:
+        raise ImmichClientError("Immich upload returned invalid JSON response") from exc
+
+    return payload if isinstance(payload, dict) else {"raw": payload}
+
+
+def fetch_asset(asset_id: str, config: ImmichConfig | None = None) -> dict[str, Any]:
+    normalized_asset_id = str(asset_id or "").strip()
+    if not normalized_asset_id:
+        raise ImmichClientError("asset_id is required")
+
+    cfg = config or get_immich_config()
+    url = f"{cfg.base_url}/api/assets/{normalized_asset_id}"
+    headers = {
+        "x-api-key": cfg.api_key,
+        "accept": "application/json",
+    }
+    timeout = cfg.http_timeout or IMMICH_HTTP_TIMEOUT
+
+    try:
+        response = requests.get(url, headers=headers, timeout=timeout)
+    except requests.RequestException as exc:
+        raise ImmichClientError(f"Immich asset request failed: {exc}") from exc
+
+    if response.status_code >= 400:
+        snippet = response.text[:200]
+        raise ImmichClientError(f"Immich asset fetch failed ({response.status_code}): {snippet}")
+
+    try:
+        payload = response.json()
+    except ValueError as exc:
+        raise ImmichClientError("Immich asset fetch returned invalid JSON response") from exc
+
+    if not isinstance(payload, dict):
+        raise ImmichClientError("Immich asset fetch returned unexpected payload")
+    return payload
+
+
+def fetch_asset_thumbnail(
+    asset_id: str,
+    *,
+    size: str = "preview",
+    config: ImmichConfig | None = None,
+) -> tuple[bytes, str]:
+    normalized_asset_id = str(asset_id or "").strip()
+    if not normalized_asset_id:
+        raise ImmichClientError("asset_id is required")
+
+    cfg = config or get_immich_config()
+    url = f"{cfg.base_url}/api/assets/{normalized_asset_id}/thumbnail"
+    headers = {
+        "x-api-key": cfg.api_key,
+        "accept": "image/*",
+    }
+    timeout = cfg.http_timeout or IMMICH_HTTP_TIMEOUT
+
+    try:
+        response = requests.get(url, headers=headers, params={"size": size}, timeout=timeout)
+    except requests.RequestException as exc:
+        raise ImmichClientError(f"Immich thumbnail request failed: {exc}") from exc
+
+    if response.status_code >= 400:
+        snippet = response.text[:200]
+        raise ImmichClientError(f"Immich thumbnail fetch failed ({response.status_code}): {snippet}")
+
+    return response.content, response.headers.get("content-type") or "image/jpeg"
+
+
+def extract_asset_id(payload: dict[str, Any] | None) -> str | None:
+    if not isinstance(payload, dict):
+        return None
+
+    direct_candidates = [
+        payload.get("id"),
+        payload.get("assetId"),
+        payload.get("asset_id"),
+        payload.get("existingAssetId"),
+        payload.get("existing_asset_id"),
+        payload.get("duplicateAssetId"),
+        payload.get("duplicate_asset_id"),
+    ]
+    for candidate in direct_candidates:
+        normalized = _normalize_string(candidate)
+        if normalized:
+            return normalized
+
+    nested_keys = ("asset", "data", "result")
+    for key in nested_keys:
+        nested = payload.get(key)
+        if isinstance(nested, dict):
+            nested_asset_id = extract_asset_id(nested)
+            if nested_asset_id:
+                return nested_asset_id
+
+    return None
+
+
+def extract_tagged_person_ids(asset_payload: dict[str, Any] | None) -> list[str]:
+    seen: set[str] = set()
+    ordered: list[str] = []
+
+    def _add(candidate: Any) -> None:
+        normalized = _normalize_string(candidate)
+        if normalized and normalized not in seen:
+            seen.add(normalized)
+            ordered.append(normalized)
+
+    def _walk(value: Any, parent_key: str | None = None) -> None:
+        if isinstance(value, dict):
+            current_key = (parent_key or "").lower()
+            if current_key in {"people", "personwithfaces", "personwithface", "person"}:
+                _add(value.get("id") or value.get("personId") or value.get("person_id"))
+            if current_key in {"faces", "face"}:
+                _add(value.get("personId") or value.get("person_id") or value.get("id"))
+            for key, nested in value.items():
+                key_lower = str(key).lower()
+                if key_lower in {"personid", "person_id"}:
+                    _add(nested)
+                _walk(nested, key_lower)
+            return
+        if isinstance(value, list):
+            for item in value:
+                _walk(item, parent_key)
+
+    _walk(asset_payload)
+    return ordered
+
+
+def _normalize_string(value: Any) -> str | None:
+    cleaned = str(value or "").strip()
+    return cleaned or None
+
+
+def _format_timestamp(value: datetime) -> str:
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")

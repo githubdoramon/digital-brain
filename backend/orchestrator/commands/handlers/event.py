@@ -15,6 +15,7 @@ import contacts as contacts_service
 import events as events_service
 import places as places_service
 import retrieval
+from chat_media import merge_staged_chat_media_attachments, summarize_staged_chat_media_attachments
 from commands.handlers.clarification_utils import (
     build_clarification_result,
     build_clarification_storage_payload,
@@ -2286,6 +2287,7 @@ def handle_event(parsed: ParsedCommand, context: dict) -> dict[str, Any]:
     previous_contact_result: dict[str, Any] = {}
     previous_resolution: dict[str, Any] = {}
     previous_relationship_suggestions: list[dict[str, Any]] = []
+    previous_media_attachments: list[dict[str, Any]] = []
     target_field_ids: list[str] = []
     skip_contact_resolution = False
     original_message_to_store = raw_message
@@ -2317,6 +2319,11 @@ def handle_event(parsed: ParsedCommand, context: dict) -> dict[str, Any]:
         previous_relationship_suggestions = list(
             clarification_context.get("relationship_suggestions") or []
         )
+        previous_media_attachments = [
+            attachment
+            for attachment in (clarification_context.get("media_attachments") or [])
+            if isinstance(attachment, dict)
+        ]
         target_field_ids = _normalize_event_field_ids(
             clarification_context.get("requested_field_ids")
         )
@@ -2385,6 +2392,11 @@ def handle_event(parsed: ParsedCommand, context: dict) -> dict[str, Any]:
                 "[handle_event] Skipping contact resolution for non-participant follow-up: %s",
                 target_field_ids,
             )
+
+    media_attachments = merge_staged_chat_media_attachments(
+        previous_media_attachments,
+        context.get("media_attachments") if isinstance(context.get("media_attachments"), list) else [],
+    )
 
     # Extract entities using LLM with time context
     logger.info("[handle_event] STEP 1: Extracting entities with LLM...")
@@ -2543,6 +2555,7 @@ def handle_event(parsed: ParsedCommand, context: dict) -> dict[str, Any]:
                     "user_email": user_email,
                     "requested_field_ids": requested_field_ids,
                     "relationship_suggestions": previous_relationship_suggestions,
+                    "media_attachments": media_attachments,
                 },
             ),
             context.get("event_pending_key"),
@@ -2854,6 +2867,8 @@ def handle_event(parsed: ParsedCommand, context: dict) -> dict[str, Any]:
             ]
         )
 
+    media_attachment_summaries = summarize_staged_chat_media_attachments(media_attachments)
+
     # Generate a preview ID and store the data
     preview_id = f"event:preview:{uuid4().hex[:8]}"
 
@@ -2880,6 +2895,7 @@ def handle_event(parsed: ParsedCommand, context: dict) -> dict[str, Any]:
             "existing_event_id": existing_event_id,
             "matched_event": matched_event,
             "candidate_events": candidate_events,
+            "media_attachments": media_attachments,
         },
     )
 
@@ -2928,6 +2944,7 @@ def handle_event(parsed: ParsedCommand, context: dict) -> dict[str, Any]:
         "existing_event_id": existing_event_id,
         "matched_event": matched_event,
         "candidate_events": candidate_events,
+        "media_attachments": media_attachment_summaries,
         "requires_confirmation": True,
         "message": message,
     }

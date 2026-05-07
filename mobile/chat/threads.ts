@@ -37,6 +37,17 @@ export type CommandResolvedMeta = {
   label?: string;
 };
 
+export type MessageMediaAttachment = {
+  attachment_id?: string;
+  file_name?: string | null;
+  mime_type?: string | null;
+  source?: string | null;
+  captured_at?: string | null;
+  width?: number | null;
+  height?: number | null;
+  uri?: string | null;
+};
+
 export type ChatMessage = {
   id: string;
   role: 'user' | 'assistant';
@@ -46,6 +57,7 @@ export type ChatMessage = {
     ui_directives?: UiDirectives;
     linked_items?: LinkedItem[];
     command_resolved?: CommandResolvedMeta;
+    media_attachments?: MessageMediaAttachment[];
   };
 };
 
@@ -79,6 +91,9 @@ export async function restoreChatHistory(
               ? (meta.linked_items as LinkedItem[])
               : undefined,
             command_resolved: meta.command_resolved as CommandResolvedMeta | undefined,
+            media_attachments: Array.isArray(meta.media_attachments)
+              ? (meta.media_attachments as MessageMediaAttachment[])
+              : undefined,
           }
         : undefined,
     };

@@ -139,6 +139,7 @@ def _event_confirmation_directive(command_result: dict[str, Any]) -> dict[str, A
         matched_event_raw if isinstance(matched_event_raw, dict) else None
     )
     candidate_events = _dict_list(command_result.get("candidate_events"))
+    media_attachments = _dict_list(command_result.get("media_attachments"))
     is_update = operation == "update" and matched_event is not None
 
     preview_title = "Event update preview" if is_update else "Event preview"
@@ -158,6 +159,10 @@ def _event_confirmation_directive(command_result: dict[str, Any]) -> dict[str, A
         f"Tags: {_joined_or_default(_string_list(extracted.get('tags')), 'None')}",
         f"Types: {_joined_or_default(_string_list(extracted.get('types')), 'Generic')}",
     ]
+    if media_attachments:
+        preview_lines.append(
+            f"Photos: {len(media_attachments)} attachment{'s' if len(media_attachments) != 1 else ''} ready"
+        )
 
     blocks: list[dict[str, Any]] = [
         {

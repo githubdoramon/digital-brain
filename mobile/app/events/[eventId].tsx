@@ -1,16 +1,23 @@
 import { useLocalSearchParams, useRouter } from 'expo-router';
+import * as ImagePicker from 'expo-image-picker';
 import React from 'react';
 import { Alert, StyleSheet } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Ionicons from '@expo/vector-icons/Ionicons';
 
 import { apiFetch } from '@/api/client';
+import { useAuth } from '@/auth/AuthContext';
 import { AppPressable as Pressable } from '@/components/AppPressable';
 import {
   EventDetailsForm,
   EventDraftEditorScreen,
 } from '@/components/event-draft/EventDraftEditorScreen';
-import { EMPTY_EVENT_DRAFT, type EventDraft, type EventPlaceOption } from '@/components/event-draft/types';
+import {
+  EMPTY_EVENT_DRAFT,
+  type EventDraft,
+  type EventPhoto,
+  type EventPlaceOption,
+} from '@/components/event-draft/types';
 import { useAppNotice } from '@/hooks/useAppNotice';
 import { theme } from '@/theme';
 
@@ -30,6 +37,7 @@ type EventDetail = {
   } | null;
   types?: string[] | null;
   external_id?: string | null;
+  photos?: EventPhoto[] | null;
 };
 
 type Contact = {
@@ -170,6 +178,7 @@ type EventDetailViewProps = {
 function EventDetailView({ eventId, editable }: EventDetailViewProps) {
   const router = useRouter();
   const insets = useSafeAreaInsets();
+  const { token } = useAuth();
   const { showSuccess, showError } = useAppNotice();
   const [event, setEvent] = React.useState<EventDetail | null>(null);
   const [contactMap, setContactMap] = React.useState<Map<string, string>>(new Map());
@@ -178,6 +187,7 @@ function EventDetailView({ eventId, editable }: EventDetailViewProps) {
   const [isEditing, setIsEditing] = React.useState(editable);
   const [isSaving, setIsSaving] = React.useState(false);
   const [isDeleting, setIsDeleting] = React.useState(false);
+  const [isUploadingPhoto, setIsUploadingPhoto] = React.useState(false);
 
   React.useEffect(() => {
     setIsEditing(editable);
@@ -259,6 +269,8 @@ function EventDetailView({ eventId, editable }: EventDetailViewProps) {
 
   const title = String(event?.title || '').trim() || 'Event details';
   const subtitle = formatDateRange(event?.start_date, event?.end_date);
+
+  const photos = React.useMemo(() => event?.photos || [], [event?.photos]);
 
   const handleSave = React.useCallback(
     async (nextDraft: EventDraft) => {
@@ -349,11 +361,105 @@ function EventDetailView({ eventId, editable }: EventDetailViewProps) {
     ]);
   }, [eventId, isDeleting, performDelete]);
 
+  const reloadEvent = React.useCallback(async () => {
+    if (!eventId) return;
+    const refreshed = (await apiFetch(`/mobile/events/${encodeURIComponent(eventId)}`)) as EventDetail;
+    setEvent(refreshed);
+  }, [eventId]);
+
+  const handleAddPhoto = React.useCallback(async () => {
+    if (!eventId || isUploadingPhoto) return;
+
+    const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (!permission.granted) {
+      Alert.alert('Photos access needed', 'Allow photo library access to attach pictures to this event.');
+      return;
+    }
+
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      quality: 0.9,
+      allowsEditing: false,
+    });
+
+    if (result.canceled || !result.assets?.length) {
+      return;
+    }
+
+    const asset = result.assets[0];
+    if (!asset?.uri) {
+      showError('Unable to read that photo right now.');
+      return;
+    }
+
+    const formData = new FormData();
+    if (asset.assetId) formData.append('local_asset_id', asset.assetId);
+    formData.append('source', 'mobile_event_editor');
+    formData.append('file', {
+      uri: asset.uri,
+      name: asset.fileName || `event-photo-${Date.now()}.jpg`,
+      type: asset.mimeType || 'image/jpeg',
+    } as unknown as Blob);
+
+    setIsUploadingPhoto(true);
+    try {
+      await apiFetch(`/mobile/events/${encodeURIComponent(eventId)}/photos`, {
+        method: 'POST',
+        body: formData,
+        token,
+      });
+      await reloadEvent();
+      showSuccess('Photo linked to event.');
+    } catch (error) {
+      console.warn('[events] photo upload failed', error);
+      showError('Unable to attach that photo right now.');
+    } finally {
+      setIsUploadingPhoto(false);
+    }
+  }, [eventId, isUploadingPhoto, reloadEvent, showError, showSuccess, token]);
+
+  const handleRemovePhoto = React.useCallback(
+    (assetId: string) => {
+      if (!eventId || !assetId) return;
+      Alert.alert('Unlink photo?', 'This removes the photo from the event but keeps it in Immich.', [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Unlink',
+          style: 'destructive',
+          onPress: () => {
+            void (async () => {
+              try {
+                await apiFetch(
+                  `/mobile/events/${encodeURIComponent(eventId)}/photos/${encodeURIComponent(assetId)}`,
+                  {
+                    method: 'DELETE',
+                    token,
+                  },
+                );
+                await reloadEvent();
+                showSuccess('Photo unlinked.');
+              } catch (error) {
+                console.warn('[events] photo unlink failed', error);
+                showError('Unable to unlink that photo right now.');
+              }
+            })();
+          },
+        },
+      ]);
+    },
+    [eventId, reloadEvent, showError, showSuccess, token],
+  );
+
   const content = (
     <EventDetailsForm
       initialDraft={draft || EMPTY_EVENT_DRAFT}
       availableContacts={availableContacts}
       availablePlaces={availablePlaces}
+      photos={photos}
+      photoToken={token}
+      isUploadingPhoto={isUploadingPhoto}
+      onAddPhoto={eventId ? handleAddPhoto : undefined}
+      onRemovePhoto={eventId ? handleRemovePhoto : undefined}
       editable={isEditing}
       headerKicker={isEditing ? 'Event editor' : 'Linked event'}
       headerTitle={title}

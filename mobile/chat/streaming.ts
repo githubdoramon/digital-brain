@@ -2,6 +2,7 @@ import { fetch as expoFetch } from 'expo/fetch';
 
 import { apiFetch, API_BASE_URL } from '@/api/client';
 import type { LinkedItem } from '@/chat/linkedItems';
+import type { ChatMediaAttachmentPayload } from '@/chat/mediaAttachments';
 import type { CommandResult as ThreadCommandResult } from '@/chat/threads';
 import type { UiDirectives, UiSubmissionInput } from '@/chat/uiDirectives';
 import { getClientContext } from '@/location/clientContext';
@@ -52,6 +53,7 @@ type StreamAskParams = {
   question: string;
   pendingCommandId?: string | null;
   uiSubmission?: UiSubmissionInput;
+  mediaAttachments?: ChatMediaAttachmentPayload[];
   callbacks?: StreamCallbacks;
 };
 
@@ -212,6 +214,7 @@ export async function askWithStreaming({
   question,
   pendingCommandId,
   uiSubmission,
+  mediaAttachments,
   callbacks,
 }: StreamAskParams): Promise<AskResponse> {
   const payload = {
@@ -219,6 +222,7 @@ export async function askWithStreaming({
     pending_event_id: pendingCommandId ?? undefined,
     client_context: getClientContext(),
     ui_submission: uiSubmission ?? undefined,
+    media_attachments: mediaAttachments && mediaAttachments.length > 0 ? mediaAttachments : undefined,
   };
 
   const streamResponse = await expoFetch(`${API_BASE_URL}/mobile/ask/stream`, {

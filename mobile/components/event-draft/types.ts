@@ -3,6 +3,27 @@ export type EventDraftParticipant = {
   displayName: string;
 };
 
+export type EventPhotoTaggedContact = {
+  contact_id: string;
+  display_name: string;
+};
+
+export type EventPhoto = {
+  asset_id: string;
+  checksum?: string | null;
+  file_name?: string | null;
+  mime_type?: string | null;
+  captured_at?: string | null;
+  local_asset_id?: string | null;
+  source?: string | null;
+  width?: number | null;
+  height?: number | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+  thumbnail_path?: string | null;
+  tagged_contacts?: EventPhotoTaggedContact[];
+};
+
 export type EventContactOption = {
   contact_id: string;
   display_name: string;

@@ -1,4 +1,5 @@
 from datetime import datetime
+from pathlib import Path
 
 import pytest
 from fastapi import HTTPException
@@ -90,6 +91,77 @@ def test_confirm_event_persists_inferred_group_on_confirmation(monkeypatch):
     assert group_upserts[0]["confirmed"] is False
     assert len(result.created_groups) == 1
     assert result.created_groups[0]["name"] == "soccer team"
+
+
+def test_confirm_event_uploads_staged_media_attachments(monkeypatch, tmp_path: Path):
+    command_data = _base_command_data()
+    staged_path = tmp_path / "event-photo.jpg"
+    staged_path.write_bytes(b"fake-image-bytes")
+    command_data["media_attachments"] = [
+        {
+            "attachment_id": "chat-media-1",
+            "file_name": "event-photo.jpg",
+            "mime_type": "image/jpeg",
+            "source": "mobile_chat",
+            "captured_at": datetime(2026, 2, 18, 18, 30, 0),
+            "local_asset_id": "asset-1",
+            "storage_path": str(staged_path),
+        }
+    ]
+
+    uploaded_calls: list[dict] = []
+
+    monkeypatch.setattr("commands.event.get_command_data", lambda _preview_id: command_data)
+    monkeypatch.setattr("commands.event.delete_command_data", lambda _preview_id: None)
+    monkeypatch.setattr(
+        "commands.event.clear_pending_event_by_preview_id", lambda _preview_id: None
+    )
+    monkeypatch.setattr("commands.event._persist_event_resolved", lambda _preview_id, _status: None)
+    monkeypatch.setattr("commands.event.events_service.ingest_event", lambda _event_in: None)
+    monkeypatch.setattr(
+        "commands.event.event_photos_service.attach_event_photo",
+        lambda event_id, **kwargs: uploaded_calls.append({"event_id": event_id, **kwargs})
+        or {"asset_id": "asset:uploaded", "file_name": kwargs.get("filename")},
+    )
+
+    payload = EventCommandConfirmation(preview_id="event:preview:media123", confirmed=True)
+    result = confirm_event_command(payload, "user@example.com")
+
+    assert result.success is True
+    assert len(uploaded_calls) == 1
+    assert uploaded_calls[0]["event_id"].startswith("event:")
+    assert uploaded_calls[0]["filename"] == "event-photo.jpg"
+    assert uploaded_calls[0]["image_bytes"] == b"fake-image-bytes"
+    assert result.attached_photos == [{"asset_id": "asset:uploaded", "file_name": "event-photo.jpg"}]
+    assert staged_path.exists() is False
+
+
+def test_confirm_event_cancel_cleans_staged_media_attachments(monkeypatch, tmp_path: Path):
+    staged_path = tmp_path / "cancel-photo.jpg"
+    staged_path.write_bytes(b"cancel-bytes")
+    command_data = {
+        "media_attachments": [
+            {
+                "attachment_id": "chat-media-cancel",
+                "file_name": "cancel-photo.jpg",
+                "mime_type": "image/jpeg",
+                "storage_path": str(staged_path),
+            }
+        ]
+    }
+
+    monkeypatch.setattr("commands.event.get_command_data", lambda _preview_id: command_data)
+    monkeypatch.setattr("commands.event.delete_command_data", lambda _preview_id: None)
+    monkeypatch.setattr(
+        "commands.event.clear_pending_event_by_preview_id", lambda _preview_id: None
+    )
+    monkeypatch.setattr("commands.event._persist_event_resolved", lambda _preview_id, _status: None)
+
+    payload = EventCommandConfirmation(preview_id="event:preview:cancel-media", confirmed=False)
+    result = confirm_event_command(payload, "user@example.com")
+
+    assert result.success is False
+    assert staged_path.exists() is False
 
 
 def test_confirm_event_skips_group_upsert_when_no_members(monkeypatch):

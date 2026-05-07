@@ -13,8 +13,13 @@ from fastapi import HTTPException
 import contact_groups as contact_groups_service
 import contacts as contacts_service
 import conversations
+import event_photos as event_photos_service
 import events as events_service
 import places as places_service
+from chat_media import (
+    delete_staged_chat_media_attachments,
+    load_staged_chat_media_attachment,
+)
 from observability.logger import get_runtime_logger
 from schemas import (
     ContactIn,
@@ -61,6 +66,8 @@ def handle_pending_event(
     pending_event_id: str | None,
     *,
     client_context: dict[str, Any] | None = None,
+    media_attachments: list[dict[str, Any]] | None = None,
+    user_metadata: dict[str, Any] | None = None,
     command_response_text: CommandResponseTextFn,
     command_assistant_metadata: CommandAssistantMetadataFn,
     progress_callback: ProgressCallbackFn | None = None,
@@ -117,9 +124,12 @@ def handle_pending_event(
         "thread_id": command_thread_id,
         "event_pending_key": key,
         "client_context": client_context,
+        "media_attachments": media_attachments or [],
         "progress_callback": progress_callback,
     }
     command_result = registry.execute(parsed_cmd, context)
+    if command_result.get("type") == "error" and media_attachments:
+        delete_staged_chat_media_attachments(media_attachments)
 
     assistant_metadata, ui_directives = command_assistant_metadata(command_result)
     try:
@@ -128,6 +138,7 @@ def handle_pending_event(
             user_email,
             question,
             command_response_text(command_result),
+            user_metadata=user_metadata,
             assistant_metadata=assistant_metadata,
         )
     except Exception as exc:
@@ -294,6 +305,19 @@ def _persist_event_resolved(preview_id: str, status: str) -> None:
         )
 
 
+def _get_command_media_attachments(command_data: dict[str, Any] | None) -> list[dict[str, Any]]:
+    if not isinstance(command_data, dict):
+        return []
+    attachments = command_data.get("media_attachments")
+    if not isinstance(attachments, list):
+        return []
+    return [attachment for attachment in attachments if isinstance(attachment, dict)]
+
+
+def _delete_command_media_attachments(command_data: dict[str, Any] | None) -> None:
+    delete_staged_chat_media_attachments(_get_command_media_attachments(command_data))
+
+
 def confirm_event_command(
     payload: EventCommandConfirmation,
     user_email: str,
@@ -302,6 +326,8 @@ def confirm_event_command(
         raise HTTPException(status_code=400, detail="Authenticated user email missing")
 
     if not payload.confirmed:
+        existing_command_data = get_command_data(payload.preview_id)
+        _delete_command_media_attachments(existing_command_data)
         delete_command_data(payload.preview_id)
         clear_pending_event_by_preview_id(payload.preview_id)
         _persist_event_resolved(payload.preview_id, "cancelled")
@@ -319,6 +345,7 @@ def confirm_event_command(
 
     extracted = command_data["extracted"]
     resolution = command_data["resolution"]
+    media_attachments = _get_command_media_attachments(command_data)
     normalized_modifications = _normalize_event_modifications(payload.modifications)
     group_confirmations = payload.group_confirmations or {}
     if not group_confirmations:
@@ -388,6 +415,8 @@ def confirm_event_command(
         created_contacts = []
         contact_id_map = {}
         created_groups = []
+        attached_photos = []
+        photo_errors = []
 
         # When participant override is enabled, the client sends the full list
         # of desired contact IDs.  IDs prefixed with ``new:`` are placeholder
@@ -786,6 +815,31 @@ def confirm_event_command(
             )
             events_service.ingest_event(event_in)
 
+        for media_attachment in media_attachments:
+            try:
+                image_bytes, attachment_meta = load_staged_chat_media_attachment(media_attachment)
+                attached_photo = event_photos_service.attach_event_photo(
+                    event_id,
+                    image_bytes=image_bytes,
+                    filename=str(attachment_meta.get("file_name") or "event-photo.jpg"),
+                    mime_type=str(attachment_meta.get("mime_type") or "").strip() or None,
+                    captured_at=attachment_meta.get("captured_at"),
+                    local_asset_id=str(attachment_meta.get("local_asset_id") or "").strip() or None,
+                    source=str(attachment_meta.get("source") or "chat_event_command").strip()
+                    or "chat_event_command",
+                )
+                attached_photos.append(attached_photo)
+            except Exception as exc:
+                file_name = str(media_attachment.get("file_name") or "photo").strip() or "photo"
+                logger.warning(
+                    "[event_confirm] Failed to attach staged photo %s to %s: %s",
+                    file_name,
+                    event_id,
+                    exc,
+                    exc_info=exc,
+                )
+                photo_errors.append(f"{file_name}: {exc}")
+
         for proposed_group in resolution.get("proposed_contact_groups", []):
             if not isinstance(proposed_group, dict):
                 continue
@@ -834,6 +888,7 @@ def confirm_event_command(
             if created_group:
                 created_groups.append(created_group)
 
+        _delete_command_media_attachments(command_data)
         delete_command_data(payload.preview_id)
         clear_pending_event_by_preview_id(payload.preview_id)
         _persist_event_resolved(payload.preview_id, "updated" if is_update else "created")
@@ -844,6 +899,8 @@ def confirm_event_command(
             created_contacts=created_contacts,
             created_places=created_places,
             created_groups=created_groups,
+            attached_photos=attached_photos,
+            photo_errors=photo_errors,
             operation="update" if is_update else "create",
         )
 

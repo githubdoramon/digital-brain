@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Response, UploadFile
 
+import event_photos as event_photos_service
 import events as events_service
 import todos as todos_service
 from auth import get_current_user, require_service_api_key
@@ -25,6 +27,14 @@ def _clean_id_list(values: list[str] | None) -> list[str] | None:
     if values is None:
         return None
     return [str(value).strip() for value in values if str(value).strip()]
+
+
+def _parse_optional_datetime(value: str | None) -> datetime | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    normalized = f"{text[:-1]}+00:00" if text.endswith("Z") else text
+    return datetime.fromisoformat(normalized)
 
 
 def create_events_router(
@@ -142,6 +152,74 @@ def create_events_router(
         if not events:
             raise HTTPException(status_code=404, detail="Event not found")
         return events[0]
+
+    @router.post("/mobile/events/{event_id}/photos")
+    async def upload_event_photo(
+        event_id: str,
+        file: UploadFile = File(...),
+        captured_at: str | None = Form(default=None),
+        local_asset_id: str | None = Form(default=None),
+        source: str | None = Form(default=None),
+        user: dict = Depends(get_current_user),
+    ):
+        try:
+            parsed_captured_at = _parse_optional_datetime(captured_at)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail="captured_at must be ISO 8601") from exc
+
+        try:
+            image_bytes = await file.read()
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=f"Failed to read image: {exc}") from exc
+
+        try:
+            photo = event_photos_service.attach_event_photo(
+                event_id,
+                image_bytes=image_bytes,
+                filename=file.filename or "event-photo.jpg",
+                mime_type=file.content_type,
+                captured_at=parsed_captured_at,
+                local_asset_id=local_asset_id,
+                source=source,
+            )
+        except event_photos_service.EventPhotoError as exc:
+            detail = str(exc)
+            status_code = 404 if detail == "Event not found" else 400
+            raise HTTPException(status_code=status_code, detail=detail) from exc
+        except Exception as exc:
+            logger.exception("[event_photos] Failed to attach photo: %s", exc)
+            raise HTTPException(status_code=500, detail="Failed to attach event photo") from exc
+
+        return {"ok": True, "photo": photo}
+
+    @router.get("/mobile/events/{event_id}/photos/{asset_id}/thumbnail")
+    def get_event_photo_thumbnail(
+        event_id: str,
+        asset_id: str,
+        user: dict = Depends(get_current_user),
+    ):
+        try:
+            content, content_type = event_photos_service.fetch_event_photo_thumbnail(event_id, asset_id)
+        except event_photos_service.EventPhotoError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except Exception as exc:
+            logger.exception("[event_photos] Failed to load thumbnail: %s", exc)
+            raise HTTPException(status_code=502, detail="Failed to load event photo thumbnail") from exc
+        return Response(content=content, media_type=content_type)
+
+    @router.delete("/mobile/events/{event_id}/photos/{asset_id}")
+    def unlink_event_photo(
+        event_id: str,
+        asset_id: str,
+        user: dict = Depends(get_current_user),
+    ):
+        try:
+            deleted = event_photos_service.unlink_event_photo(event_id, asset_id)
+        except event_photos_service.EventPhotoError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        if not deleted:
+            raise HTTPException(status_code=404, detail="Event photo not found")
+        return {"ok": True}
 
     @router.delete("/events/{event_id}")
     @router.delete("/mobile/events/{event_id}")

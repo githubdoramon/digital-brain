@@ -422,6 +422,21 @@ class LinkedItemOut(BaseModel):
     role: str | None = None
 
 
+class ChatMediaAttachmentIn(BaseModel):
+    attachment_id: str = Field(alias="attachment_id")
+    file_name: str = Field(alias="file_name")
+    mime_type: str | None = Field(default=None, alias="mime_type")
+    content_base64: str = Field(alias="content_base64")
+    source: str | None = None
+    captured_at: datetime | None = None
+    local_asset_id: str | None = Field(default=None, alias="local_asset_id")
+    width: int | None = None
+    height: int | None = None
+
+    class Config:
+        populate_by_name = True
+
+
 class AskIn(BaseModel):
     question: str
     limit: int | None = 30
@@ -430,6 +445,7 @@ class AskIn(BaseModel):
     pending_event_id: str | None = None
     client_context: ClientContextIn | None = None
     ui_submission: UiSubmissionIn | None = None
+    media_attachments: list[ChatMediaAttachmentIn] = Field(default_factory=list)
 
 
 class AskOut(BaseModel):
@@ -543,6 +559,8 @@ class EventCommandResult(BaseModel):
     created_contacts: list[dict[str, Any]] = Field(default_factory=list)
     created_places: list[dict[str, Any]] = Field(default_factory=list)
     created_groups: list[dict[str, Any]] = Field(default_factory=list)
+    attached_photos: list[dict[str, Any]] = Field(default_factory=list)
+    photo_errors: list[str] = Field(default_factory=list)
     error: str | None = None
 
 

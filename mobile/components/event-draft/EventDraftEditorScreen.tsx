@@ -24,12 +24,14 @@ import {
   CollapsingTopBar,
 } from '@/components/CollapsingTopBar';
 import { FloatingSaveButton } from '@/components/FloatingSaveButton';
+import { EventPhotoCard } from '@/components/event-draft/EventPhotoCard';
 import { UiDirectiveDateTimePickerSheet } from '@/components/ui-directive-card/UiDirectiveDateTimePickerSheet';
 import {
   EMPTY_EVENT_DRAFT,
   type EventContactOption,
   type EventDraft,
   type EventMatchCandidate,
+  type EventPhoto,
   type EventPlaceOption,
 } from '@/components/event-draft/types';
 import {
@@ -51,6 +53,11 @@ type EventDetailsFormProps = {
   headerSubtitle?: string;
   doneLabel?: string;
   deleteLabel?: string;
+  photos?: EventPhoto[];
+  photoToken?: string | null;
+  isUploadingPhoto?: boolean;
+  onAddPhoto?: () => void;
+  onRemovePhoto?: (assetId: string) => void;
   onDelete?: () => void;
   deleteDisabled?: boolean;
   onDone?: (draft: EventDraft) => void;
@@ -131,6 +138,11 @@ export function EventDetailsForm({
   headerSubtitle,
   doneLabel = 'Done',
   deleteLabel = 'Delete',
+  photos = [],
+  photoToken,
+  isUploadingPhoto = false,
+  onAddPhoto,
+  onRemovePhoto,
   onDelete,
   deleteDisabled = false,
   onDone,
@@ -455,6 +467,19 @@ export function EventDetailsForm({
                   </Pressable>
                 ))}
               </View>
+            </Card>
+          ) : null}
+
+          {photos.length > 0 || onAddPhoto || onRemovePhoto ? (
+            <Card style={styles.card}>
+              <EventPhotoCard
+                photos={photos}
+                editable={Boolean(onAddPhoto) || Boolean(onRemovePhoto)}
+                isUploading={isUploadingPhoto}
+                token={photoToken}
+                onAddPhoto={onAddPhoto}
+                onRemovePhoto={onRemovePhoto}
+              />
             </Card>
           ) : null}
 

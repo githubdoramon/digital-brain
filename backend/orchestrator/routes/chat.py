@@ -14,6 +14,12 @@ from fastapi.responses import StreamingResponse
 import conversations
 import llm
 from auth import get_current_user
+from chat_media import (
+    ChatMediaError,
+    delete_staged_chat_media_attachments,
+    stage_chat_media_attachments,
+    summarize_staged_chat_media_attachments,
+)
 from commands.event import (
     event_pending_key,
     handle_pending_event,
@@ -50,6 +56,46 @@ def _llm_unavailable_error_payload() -> dict[str, str]:
 
 def _raise_http_for_llm_unavailable(exc: Exception) -> None:
     raise HTTPException(status_code=503, detail=_llm_unavailable_message()) from exc
+
+
+def _command_media_payloads(payload: AskIn) -> list[dict[str, Any]]:
+    return [
+        attachment.model_dump(exclude_none=True, by_alias=True)
+        for attachment in (payload.media_attachments or [])
+    ]
+
+
+def _prepare_command_media(
+    payload: AskIn,
+    user_email: str,
+) -> tuple[list[dict[str, Any]], dict[str, Any] | None]:
+    raw_attachments = _command_media_payloads(payload)
+    if not raw_attachments:
+        return [], None
+
+    from commands import parse_command
+    from commands.storage import get_pending_event
+
+    requested_thread_id = payload.thread_id or payload.session_id
+    has_pending_event = bool(
+        payload.pending_event_id
+        or get_pending_event(event_pending_key(user_email, requested_thread_id))
+    )
+    parsed_command = parse_command(payload.question)
+    is_event_command = bool(parsed_command and parsed_command.command == "event")
+    if not has_pending_event and not is_event_command:
+        raise HTTPException(
+            status_code=400,
+            detail="Media attachments are currently supported only with /event.",
+        )
+
+    try:
+        staged = stage_chat_media_attachments(raw_attachments, user_email=user_email)
+    except ChatMediaError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    user_metadata = {"media_attachments": summarize_staged_chat_media_attachments(staged)}
+    return staged, user_metadata
 
 
 def create_chat_router() -> APIRouter:
@@ -89,6 +135,7 @@ def create_chat_router() -> APIRouter:
         user_email = user.get("email")
         if not user_email:
             raise HTTPException(status_code=400, detail="Authenticated user email missing")
+        staged_media_attachments, command_user_metadata = _prepare_command_media(payload, user_email)
 
         try:
             command_payload = handle_pending_event(
@@ -100,6 +147,8 @@ def create_chat_router() -> APIRouter:
                 client_context=payload.client_context.model_dump(exclude_none=True)
                 if payload.client_context
                 else None,
+                media_attachments=staged_media_attachments,
+                user_metadata=command_user_metadata,
                 command_response_text=_command_response_text,
                 command_assistant_metadata=_command_assistant_metadata,
                 progress_callback=None,
@@ -113,6 +162,8 @@ def create_chat_router() -> APIRouter:
                     payload.client_context.model_dump(exclude_none=True)
                     if payload.client_context
                     else None,
+                    media_attachments=staged_media_attachments,
+                    user_metadata=command_user_metadata,
                     progress_callback=None,
                 )
             if command_payload:
@@ -234,6 +285,7 @@ def create_chat_router() -> APIRouter:
         user_email = user.get("email")
         if not user_email:
             raise HTTPException(status_code=400, detail="Authenticated user email missing")
+        staged_media_attachments, command_user_metadata = _prepare_command_media(payload, user_email)
         run_id = _create_ask_run(user_email, payload.thread_id or payload.session_id)
 
         from commands import parse_command
@@ -276,6 +328,8 @@ def create_chat_router() -> APIRouter:
                             client_context=payload.client_context.model_dump(exclude_none=True)
                             if payload.client_context
                             else None,
+                            media_attachments=staged_media_attachments,
+                            user_metadata=command_user_metadata,
                             command_response_text=_command_response_text,
                             command_assistant_metadata=_command_assistant_metadata,
                             progress_callback=emit_status,
@@ -289,6 +343,8 @@ def create_chat_router() -> APIRouter:
                                 payload.client_context.model_dump(exclude_none=True)
                                 if payload.client_context
                                 else None,
+                                media_attachments=staged_media_attachments,
+                                user_metadata=command_user_metadata,
                                 progress_callback=emit_status,
                             )
                         if not command_payload:
@@ -905,6 +961,8 @@ def _handle_command(
     user: dict,
     thread_id: str | None,
     client_context: dict[str, Any] | None = None,
+    media_attachments: list[dict[str, Any]] | None = None,
+    user_metadata: dict[str, Any] | None = None,
     progress_callback: Callable[[str], None] | None = None,
 ) -> tuple[dict[str, Any], str, dict[str, Any] | None] | None:
     from commands import get_command_registry, parse_command
@@ -930,9 +988,12 @@ def _handle_command(
         "thread_id": command_thread_id,
         "event_pending_key": pending_key,
         "client_context": client_context,
+        "media_attachments": media_attachments or [],
         "progress_callback": progress_callback,
     }
     command_result = registry.execute(parsed_cmd, context)
+    if command_result.get("type") == "error" and media_attachments:
+        delete_staged_chat_media_attachments(media_attachments)
 
     if thread_id is None:
         conversations.set_main_session_thread(user_email, command_thread_id)
@@ -944,6 +1005,7 @@ def _handle_command(
             user_email,
             question,
             _command_response_text(command_result),
+            user_metadata=user_metadata,
             assistant_metadata=assistant_metadata,
         )
     except Exception as exc:

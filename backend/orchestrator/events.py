@@ -11,6 +11,7 @@ from typing import Any, Callable
 from uuid import uuid4
 
 import contacts as contacts_service
+import event_photos as event_photos_service
 from db import enrich_people, fetch_events, get_conn
 from embeddings import embed_text
 from observability.logger import get_runtime_logger
@@ -631,6 +632,7 @@ def delete_event(event_id: str) -> bool:
 
 def get_events(ids: list[str]) -> list[dict[str, Any]]:
     rows = fetch_events(ids)
+    photos_by_event = event_photos_service.list_event_photos_for_events(ids)
     return [
         {
             "id": r["id"],
@@ -642,6 +644,7 @@ def get_events(ids: list[str]) -> list[dict[str, Any]]:
             "title": r.get("title"),
             "summary": r.get("summary"),
             "external_id": r.get("external_id"),
+            "photos": photos_by_event.get(r["id"], []),
             "place": (
                 {
                     "place_id": r["place_id"],
@@ -904,6 +907,7 @@ def _get_event_by_id(event_id: str | None) -> dict[str, Any] | None:
             "summary": row["summary"],
             "raw": raw_data,
             "external_id": row["external_id"],
+            "photos": event_photos_service.list_event_photos(normalized),
         }
 
 

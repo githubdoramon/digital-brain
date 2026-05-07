@@ -1,11 +1,13 @@
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
+import * as ImagePicker from 'expo-image-picker';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Animated,
   AppState,
   FlatList,
+  Image,
   Keyboard,
   KeyboardEvent,
   KeyboardAvoidingView,
@@ -34,6 +36,7 @@ import { UiDirectiveCard } from '@/components/ui-directive-card';
 import { SlashCommandPalette } from '@/components/SlashCommandPalette';
 import { renderAssistantMarkdown } from '@/components/MarkdownRenderer';
 import { StreamingAssistantCard } from '@/components/StreamingAssistantCard';
+import { ComposerMediaTray } from '@/components/chat/ComposerMediaTray';
 import type {
   EventContactOption,
   EventDraft,
@@ -43,6 +46,12 @@ import type {
   EventPlaceOption,
 } from '@/components/event-draft/types';
 import { askWithStreaming, waitForRunCompletion } from '@/chat/streaming';
+import {
+  buildComposerMediaAttachment,
+  MAX_CHAT_MEDIA_ATTACHMENTS,
+  type ComposerMediaAttachment,
+  toChatMediaAttachmentPayload,
+} from '@/chat/mediaAttachments';
 import {
   clearPendingRun,
   loadChatSession,
@@ -56,6 +65,7 @@ import { routeForLinkedItem, type LinkedItem } from '@/chat/linkedItems';
 import type {
   CommandResolvedMeta,
   CommandResult as ThreadCommandResult,
+  MessageMediaAttachment,
 } from '@/chat/threads';
 import type { UiDirectiveBlock, UiDirectives, UiSubmissionInput } from '@/chat/uiDirectives';
 import {
@@ -90,6 +100,7 @@ type Message = {
     ui_directives?: UiDirectives;
     linked_items?: LinkedItem[];
     command_resolved?: CommandResolvedMeta;
+    media_attachments?: MessageMediaAttachment[];
     request_error?: RequestErrorMetadata;
     progress_chip?: string;
   };
@@ -108,6 +119,7 @@ type SendMessageInput =
       text?: string;
       pendingCommandId?: string | null;
       uiSubmission?: UiSubmissionInput;
+      mediaAttachments?: ComposerMediaAttachment[];
     };
 
 type EventAction = {
@@ -966,6 +978,7 @@ export default function ChatScreen() {
   const [forceScrollNext, setForceScrollNext] = useState(false);
   const [isBootstrapping, setIsBootstrapping] = useState(true);
   const [expandedErrorMessageIds, setExpandedErrorMessageIds] = useState<Record<string, boolean>>({});
+  const [composerMediaAttachments, setComposerMediaAttachments] = useState<ComposerMediaAttachment[]>([]);
   const hasHydratedSessionRef = useRef(false);
   const restoreGenerationRef = useRef(0);
   const [composerHeight, setComposerHeight] = useState(0);
@@ -982,7 +995,7 @@ export default function ChatScreen() {
       : tabBarClearance + keyboardHeight + 80;
 
   const allowed = email === 'REDACTED-EMAIL';
-  const canSend = input.trim().length > 0 && !isSending && allowed;
+  const canSend = (input.trim().length > 0 || composerMediaAttachments.length > 0) && !isSending && allowed;
 
   const starterMessages = useMemo<Message[]>(
     () => [
@@ -1228,26 +1241,116 @@ export default function ChatScreen() {
     };
   }, []);
 
+  const removeComposerMediaAttachment = useCallback((attachmentId: string) => {
+    setComposerMediaAttachments((prev) =>
+      prev.filter((attachment) => attachment.attachmentId !== attachmentId),
+    );
+  }, []);
+
+  const addComposerMediaAttachment = useCallback(async () => {
+    if (!allowed || isSending) return;
+    if (composerMediaAttachments.length >= MAX_CHAT_MEDIA_ATTACHMENTS) {
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: `${Date.now()}-media-limit`,
+          role: 'assistant',
+          content: `You can attach up to ${MAX_CHAT_MEDIA_ATTACHMENTS} photos to one /event message.`,
+        },
+      ]);
+      setForceScrollNext(true);
+      return;
+    }
+
+    const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (!permission.granted) {
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: `${Date.now()}-media-permission`,
+          role: 'assistant',
+          content: 'Allow photo library access to attach pictures in chat.',
+        },
+      ]);
+      setForceScrollNext(true);
+      return;
+    }
+
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      quality: 0.7,
+      allowsEditing: false,
+    });
+    if (result.canceled || !result.assets?.length) {
+      return;
+    }
+
+    try {
+      const nextAttachment = await buildComposerMediaAttachment(result.assets[0]);
+      setComposerMediaAttachments((prev) => {
+        if (prev.length >= MAX_CHAT_MEDIA_ATTACHMENTS) {
+          return prev;
+        }
+        return [...prev, nextAttachment];
+      });
+      setForceScrollNext(true);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unable to attach that photo.';
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: `${Date.now()}-media-error`,
+          role: 'assistant',
+          content: message,
+        },
+      ]);
+      setForceScrollNext(true);
+    }
+  }, [allowed, composerMediaAttachments.length, isSending]);
+
   const sendMessage = useCallback(async (override?: SendMessageInput) => {
     const overrideText = typeof override === 'string' ? override : override?.text;
     const overridePendingCommandId =
       typeof override === 'string' ? undefined : override?.pendingCommandId;
     const uiSubmission = typeof override === 'string' ? undefined : override?.uiSubmission;
+    const overrideMediaAttachments =
+      typeof override === 'string' ? undefined : override?.mediaAttachments;
 
     const draft = overrideText ?? input;
     const trimmed = draft.trim();
     const outboundText =
       trimmed || uiSubmission?.text_fallback?.trim() || 'Submitted structured response.';
+    const outboundMediaAttachments = overrideMediaAttachments ?? composerMediaAttachments;
 
-    if (!outboundText || isSending || !allowed || isBootstrapping) return;
+    if ((!outboundText && outboundMediaAttachments.length === 0) || isSending || !allowed || isBootstrapping) return;
     Keyboard.dismiss();
     setInput('');
+    setComposerMediaAttachments([]);
     setForceScrollNext(true);
     const pendingId = `${Date.now()}-pending`;
 
     setMessages((prev) => [
       ...prev,
-      { id: `${Date.now()}-user`, role: 'user', content: outboundText },
+      {
+        id: `${Date.now()}-user`,
+        role: 'user',
+        content: outboundText,
+        metadata:
+          outboundMediaAttachments.length > 0
+            ? {
+                media_attachments: outboundMediaAttachments.map((attachment) => ({
+                  attachment_id: attachment.attachmentId,
+                  file_name: attachment.fileName,
+                  mime_type: attachment.mimeType,
+                  source: attachment.source,
+                  captured_at: attachment.capturedAt ?? null,
+                  width: attachment.width ?? null,
+                  height: attachment.height ?? null,
+                  uri: attachment.uri,
+                })),
+              }
+            : undefined,
+      },
       { id: pendingId, role: 'assistant', content: 'Thinking...', pending: true },
     ]);
 
@@ -1300,6 +1403,7 @@ export default function ChatScreen() {
         pendingCommandId:
           overridePendingCommandId !== undefined ? overridePendingCommandId : pendingEventId,
         uiSubmission,
+        mediaAttachments: outboundMediaAttachments.map(toChatMediaAttachmentPayload),
         callbacks: {
           onSessionInfo: (threadIdFromStream) => {
             setThreadId((prev) => threadIdFromStream ?? prev);
@@ -1387,6 +1491,9 @@ export default function ChatScreen() {
       if (authExpired) {
         await clearPendingRun();
         await signOut();
+        if (outboundMediaAttachments.length > 0) {
+          setComposerMediaAttachments(outboundMediaAttachments);
+        }
         setForceScrollNext(true);
         setMessages((prev) =>
           prev.map((message) =>
@@ -1404,6 +1511,9 @@ export default function ChatScreen() {
       const requestError = backendErrorDetails(error);
       if (!activeRunId) {
         await clearPendingRun();
+        if (outboundMediaAttachments.length > 0) {
+          setComposerMediaAttachments(outboundMediaAttachments);
+        }
       }
       setForceScrollNext(true);
       setMessages((prev) =>
@@ -1428,7 +1538,17 @@ export default function ChatScreen() {
     } finally {
       setIsSending(false);
     }
-  }, [allowed, input, isBootstrapping, isSending, pendingEventId, signOut, threadId, token]);
+  }, [
+    allowed,
+    composerMediaAttachments,
+    input,
+    isBootstrapping,
+    isSending,
+    pendingEventId,
+    signOut,
+    threadId,
+    token,
+  ]);
 
   const loadEventEditorContacts = useCallback(async (): Promise<EventContactOption[]> => {
     if (!token) return [];
@@ -2131,6 +2251,7 @@ export default function ChatScreen() {
               }
             }
             const requestError = item.metadata?.request_error;
+            const userMediaAttachments = item.metadata?.media_attachments || [];
             const isErrorExpanded = Boolean(expandedErrorMessageIds[item.id]);
 
             return (
@@ -2139,6 +2260,32 @@ export default function ChatScreen() {
                   styles.messageBubble,
                   item.role === 'user' ? styles.userBubble : styles.assistantBubble,
                 ]}>
+                {item.role === 'user' && userMediaAttachments.length > 0 ? (
+                  <View style={styles.userMediaRow}>
+                    {userMediaAttachments.slice(0, 4).map((attachment, index) =>
+                      attachment.uri ? (
+                        <Image
+                          key={`${item.id}:media:${attachment.attachment_id || index}`}
+                          source={{ uri: attachment.uri }}
+                          style={styles.userMediaImage}
+                          resizeMode="cover"
+                        />
+                      ) : (
+                        <View
+                          key={`${item.id}:media:${attachment.attachment_id || index}`}
+                          style={[styles.userMediaImage, styles.userMediaFallback]}
+                        >
+                          <Ionicons name="image-outline" size={18} color="#fff" />
+                        </View>
+                      ),
+                    )}
+                    {userMediaAttachments.length > 4 ? (
+                      <View style={[styles.userMediaImage, styles.userMediaOverflow]}>
+                        <Text style={styles.userMediaOverflowText}>{`+${userMediaAttachments.length - 4}`}</Text>
+                      </View>
+                    ) : null}
+                  </View>
+                ) : null}
                 {item.role === 'assistant' ? (
                   <View style={styles.markdownContainer}>
                     {renderAssistantMarkdown(item.content, item.id)}
@@ -2247,7 +2394,27 @@ export default function ChatScreen() {
             },
           ]}
         >
+          <ComposerMediaTray
+            attachments={composerMediaAttachments}
+            onRemoveAttachment={removeComposerMediaAttachment}
+          />
           <View style={styles.inputWrap}>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Attach photo"
+              onPress={() => {
+                void addComposerMediaAttachment();
+              }}
+              disabled={!allowed || isSending || composerMediaAttachments.length >= MAX_CHAT_MEDIA_ATTACHMENTS}
+              style={({ pressed }) => [
+                styles.attachButton,
+                pressed && styles.attachButtonPressed,
+                (!allowed || isSending || composerMediaAttachments.length >= MAX_CHAT_MEDIA_ATTACHMENTS) &&
+                  styles.attachButtonDisabled,
+              ]}
+            >
+              <Ionicons name="image-outline" size={18} color={theme.colors.ink} />
+            </Pressable>
             <TextInput
               ref={inputRef}
               value={input}
@@ -2258,6 +2425,7 @@ export default function ChatScreen() {
                   minHeight: MIN_CHAT_INPUT_HEIGHT,
                   maxHeight: MAX_CHAT_INPUT_HEIGHT,
                   width: '100%',
+                  paddingLeft: 52,
                   paddingRight: 60,
                 },
                 !allowed && {
@@ -2347,6 +2515,32 @@ const styles = StyleSheet.create({
   markdownContainer: {
     gap: 6,
   },
+  userMediaRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    marginBottom: 10,
+  },
+  userMediaImage: {
+    width: 68,
+    height: 68,
+    borderRadius: 16,
+    backgroundColor: 'rgba(255,255,255,0.18)',
+  },
+  userMediaFallback: {
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  userMediaOverflow: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(255,255,255,0.22)',
+  },
+  userMediaOverflowText: {
+    color: '#fff',
+    fontSize: 14,
+    fontWeight: '700',
+  },
   userText: {
     color: '#fff',
   },
@@ -2415,13 +2609,30 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     paddingVertical: 14,
     backgroundColor: 'transparent',
-    flexDirection: 'row',
     gap: 10,
-    alignItems: 'flex-end',
+    alignItems: 'stretch',
   },
   inputWrap: {
     flex: 1,
     position: 'relative',
+  },
+  attachButton: {
+    position: 'absolute',
+    left: 10,
+    bottom: 9,
+    zIndex: 1,
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#f2ece5',
+  },
+  attachButtonPressed: {
+    opacity: 0.8,
+  },
+  attachButtonDisabled: {
+    opacity: 0.45,
   },
   input: {
     fontSize: 16,
