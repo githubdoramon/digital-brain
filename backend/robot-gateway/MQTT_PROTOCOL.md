@@ -139,7 +139,7 @@ The gateway publishes this **to** the robot. Firmware subscribes and processes i
 
 - The gateway does not store or expose a separate robot-level status.
 - Module presence is derived from activity, not from retained `online` flags alone.
-- A module is considered `offline` if the gateway has not received telemetry or a module status message for more than 30 seconds.
+- A module is considered `offline` if the gateway has not received telemetry or a module status message for more than 60 seconds.
 - A fresh module with recent activity is treated as `online` unless its latest explicit module status is `error` or `offline`.
 
 ## 7. Registration (required before publishing)

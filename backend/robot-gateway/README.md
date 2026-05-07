@@ -79,7 +79,7 @@ Uses the same PostgreSQL instance as the orchestrator. Own migration table (`rob
 
 - Robots do not have a first-class status field. The gateway tracks only robot metadata plus aggregate `last_seen_at` based on module traffic.
 - Module `status` in API responses is derived, not copied directly from MQTT.
-- A module is `offline` when it has not sent telemetry or a module status message for more than 30 seconds.
+- A module is `offline` when it has not sent telemetry or a module status message for more than 60 seconds.
 - A fresh module is `online` by default, even if it never published an explicit `online` status message.
 - A fresh explicit module `error` status is surfaced as `error`.
 - A fresh explicit module `offline` status is surfaced as `offline` until newer telemetry/status activity arrives.
@@ -132,7 +132,7 @@ MQTT_PASSWORD=change-me-mqtt
 ROBOT_GATEWAY_PORT=8001
 
 # Module presence
-# ROBOT_MODULE_OFFLINE_AFTER_SECONDS=30
+# ROBOT_MODULE_OFFLINE_AFTER_SECONDS=60
 
 # Capture relay
 CAPTURE_RELAY_PUBLIC_BASE_URL=https://brain.example.com

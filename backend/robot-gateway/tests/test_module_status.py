@@ -18,13 +18,13 @@ def test_recent_module_without_explicit_status_is_online():
     )
 
 
-def test_stale_module_is_offline_after_30_seconds():
+def test_stale_module_is_offline_after_60_seconds():
     now = datetime(2026, 5, 7, 12, 0, tzinfo=UTC)
     assert (
         derive_module_status(
-            last_seen_at=now - timedelta(seconds=31),
+            last_seen_at=now - timedelta(seconds=61),
             reported_status="online",
-            status_updated_at=now - timedelta(seconds=31),
+            status_updated_at=now - timedelta(seconds=61),
             now=now,
         )
         == "offline"
