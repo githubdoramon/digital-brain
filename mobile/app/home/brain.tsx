@@ -51,7 +51,6 @@ import {
   type ComposerMediaAttachment,
   toChatMediaAttachmentPayload,
 } from '@/chat/mediaAttachments';
-import { pickSingleImage } from '@/utils/imagePicker';
 import {
   clearPendingRun,
   loadChatSession,
@@ -87,6 +86,7 @@ import {
   createEventDraftEditSession,
 } from '@/events/draftEditorSession';
 import { useAppNotice } from '@/hooks/useAppNotice';
+import { useSingleImagePicker } from '@/hooks/useImagePicker';
 import { normalizeSearch } from '@/utils/text';
 
 import { getHomeTabBarClearance } from './tabBarMetrics';
@@ -1086,6 +1086,7 @@ export default function ChatScreen() {
   const router = useRouter();
   const { token, signOut, email, name, photo, isLoading: isAuthLoading } = useAuth();
   const { showError } = useAppNotice();
+  const { pickSingleImage, imagePickerSheet } = useSingleImagePicker();
   const insets = useSafeAreaInsets();
   const tabBarHeight = useBottomTabBarHeight();
   const tabBarClearance = Math.max(tabBarHeight, getHomeTabBarClearance(insets.bottom));
@@ -1423,7 +1424,7 @@ export default function ChatScreen() {
       ]);
       setForceScrollNext(true);
     }
-  }, [allowed, composerMediaAttachments.length, isSending, showError]);
+  }, [allowed, composerMediaAttachments.length, isSending, pickSingleImage, showError]);
 
   const sendMessage = useCallback(async (override?: SendMessageInput) => {
     const overrideText = typeof override === 'string' ? override : override?.text;
@@ -2596,6 +2597,7 @@ export default function ChatScreen() {
         </View>
 
       </KeyboardAvoidingView>
+      {imagePickerSheet}
     </LinearGradient>
   );
 }

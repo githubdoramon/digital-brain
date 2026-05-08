@@ -18,8 +18,8 @@ import {
   type EventPlaceOption,
 } from '@/components/event-draft/types';
 import { useAppNotice } from '@/hooks/useAppNotice';
+import { useSingleImagePicker } from '@/hooks/useImagePicker';
 import { theme } from '@/theme';
-import { pickSingleImage } from '@/utils/imagePicker';
 
 type EventDetail = {
   id: string;
@@ -180,6 +180,7 @@ function EventDetailView({ eventId, editable }: EventDetailViewProps) {
   const insets = useSafeAreaInsets();
   const { token } = useAuth();
   const { showSuccess, showError } = useAppNotice();
+  const { pickSingleImage, imagePickerSheet } = useSingleImagePicker();
   const [event, setEvent] = React.useState<EventDetail | null>(null);
   const [contactMap, setContactMap] = React.useState<Map<string, string>>(new Map());
   const [availableContacts, setAvailableContacts] = React.useState<Contact[]>([]);
@@ -399,7 +400,7 @@ function EventDetailView({ eventId, editable }: EventDetailViewProps) {
     } finally {
       setIsUploadingPhoto(false);
     }
-  }, [eventId, isUploadingPhoto, reloadEvent, showError, showSuccess, token]);
+  }, [eventId, isUploadingPhoto, pickSingleImage, reloadEvent, showError, showSuccess, token]);
 
   const handleRemovePhoto = React.useCallback(
     (assetId: string) => {
@@ -463,6 +464,7 @@ function EventDetailView({ eventId, editable }: EventDetailViewProps) {
   return (
     <>
       {content}
+      {imagePickerSheet}
       <Pressable
         accessibilityRole="button"
         accessibilityLabel="Edit event"
