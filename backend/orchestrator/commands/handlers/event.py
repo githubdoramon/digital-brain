@@ -7,6 +7,7 @@ It extracts entities, checks for existing ones, and asks for confirmation.
 
 import re
 from concurrent.futures import ThreadPoolExecutor
+from copy import deepcopy
 from datetime import datetime, timedelta
 from typing import Any
 from uuid import uuid4
@@ -2911,6 +2912,9 @@ def handle_event(parsed: ParsedCommand, context: dict) -> dict[str, Any]:
     existing_event_id = str(event_match.get("existing_event_id") or "").strip() or None
     matched_event = event_match.get("matched_event")
     candidate_events = list(event_match.get("candidates") or [])
+    original_extracted = deepcopy(extracted)
+    original_resolution = deepcopy(resolution)
+
     if operation == "ambiguous":
         # Ambiguous reverts to create by default; the user can pick a candidate
         # in the editor to switch to update. We keep the candidates around so
@@ -2959,6 +2963,8 @@ def handle_event(parsed: ParsedCommand, context: dict) -> dict[str, Any]:
             "thread_id": context.get("thread_id"),
             "clarification_messages": clarification_messages,
             "requested_field_ids": [],
+            "original_extracted": original_extracted,
+            "original_resolution": original_resolution,
             "operation": operation,
             "existing_event_id": existing_event_id,
             "matched_event": matched_event,
@@ -3007,6 +3013,8 @@ def handle_event(parsed: ParsedCommand, context: dict) -> dict[str, Any]:
         "preview_id": preview_id,
         "extracted": extracted,
         "resolution": resolution,
+        "original_extracted": original_extracted,
+        "original_resolution": original_resolution,
         "relationship_suggestions": relationship_suggestions,
         "operation": operation,
         "existing_event_id": existing_event_id,

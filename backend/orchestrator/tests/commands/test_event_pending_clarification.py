@@ -378,6 +378,104 @@ def test_handle_event_skips_low_confidence_inferred_known_place(monkeypatch):
     assert result.get("resolution", {}).get("inferred_location", {}).get("place_id") == "plc_home"
 
 
+def test_handle_event_preserves_original_preview_before_match_merge(monkeypatch):
+    def fake_extract_event_entities(*_args, **_kwargs):
+        return {
+            "title": "Lunch with Sam",
+            "summary": "Talked about next quarter planning.",
+            "when": "2026-05-02T12:30:00",
+            "end_when": None,
+            "where": "Corner Cafe",
+            "documents": [],
+            "tags": ["work"],
+            "types": ["meeting"],
+            "need_user_input": None,
+        }
+
+    def fake_resolve_contacts(*_args, **_kwargs):
+        return (
+            {
+                "contacts": [{"contact_id": "contact:sam", "display_name": "Sam"}],
+                "new_entities": {"contacts": [], "places": [], "documents": []},
+                "matched_place": None,
+            },
+            {"ambiguous_contacts": []},
+        )
+
+    monkeypatch.setattr(
+        "commands.handlers.event._extract_event_entities_with_llm",
+        fake_extract_event_entities,
+    )
+    monkeypatch.setattr(
+        "commands.handlers.event._resolve_contacts_with_agent",
+        fake_resolve_contacts,
+    )
+    monkeypatch.setattr("commands.handlers.event.infer_current_place", lambda *_a, **_k: None)
+    monkeypatch.setattr(
+        "commands.handlers.event.places_service.find_best_place_match",
+        lambda *_a, **_k: None,
+    )
+    monkeypatch.setattr("commands.handlers.event.geocode_place_name", lambda *_a, **_k: None)
+    monkeypatch.setattr(
+        "commands.handlers.event._find_event_matches",
+        lambda *_a, **_k: {
+            "operation": "update",
+            "existing_event_id": "event:existing-lunch",
+            "matched_event": {
+                "event_id": "event:existing-lunch",
+                "title": "Lunch with Sam",
+                "start_date": "2026-05-01T12:00:00",
+                "place": {"place_id": "place:old-cafe", "name": "Old Cafe"},
+                "match_score": 96,
+            },
+            "candidates": [],
+        },
+    )
+    monkeypatch.setattr(
+        "commands.handlers.event.events_service.get_event_by_id",
+        lambda event_id: {
+            "id": event_id,
+            "title": "Lunch with Sam",
+            "summary": "Existing summary",
+            "start_date": "2026-05-01T12:00:00",
+            "end_date": None,
+            "place_id": "place:old-cafe",
+            "tags": ["work", "planning"],
+            "types": ["meeting"],
+            "people": ["contact:sam", "contact:alex"],
+        },
+    )
+    monkeypatch.setattr(
+        "commands.handlers.event.places_service.get_place",
+        lambda place_id: {"place_id": place_id, "name": "Old Cafe"},
+    )
+    monkeypatch.setattr(
+        "commands.handlers.event.contacts_service.get_contact",
+        lambda contact_id: {"contact_id": contact_id, "display_name": "Alex"},
+    )
+
+    result = handle_event(
+        ParsedCommand(
+            command="event",
+            args="had lunch with Sam at Corner Cafe and talked about next quarter planning",
+            raw_message="/event had lunch with Sam at Corner Cafe and talked about next quarter planning",
+        ),
+        {"user_email": "user@example.com", "thread_id": "thread-lunch"},
+    )
+
+    assert result["type"] == "event_confirmation"
+    assert result["operation"] == "update"
+    assert result["extracted"]["when"] == "2026-05-01T12:00:00"
+    assert result["extracted"]["where"] == "Old Cafe"
+    assert result["original_extracted"]["when"] == "2026-05-02T12:30:00"
+    assert result["original_extracted"]["where"] == "Corner Cafe"
+    assert result["original_resolution"]["contacts"] == [
+        {"contact_id": "contact:sam", "display_name": "Sam"}
+    ]
+
+    delete_command_data(result["preview_id"])
+
+
 def test_handle_event_maps_similar_where_to_existing_place(monkeypatch):
     def fake_extract_event_entities(
         event_message,

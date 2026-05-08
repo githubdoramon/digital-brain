@@ -156,6 +156,26 @@ type EventCommandResultPayload = {
   existing_event_id?: string | null;
   matched_event?: EventMatchCandidatePayload | null;
   candidate_events?: EventMatchCandidatePayload[];
+  original_extracted?: {
+    title?: unknown;
+    summary?: unknown;
+    when?: unknown;
+    end_when?: unknown;
+    where?: unknown;
+    tags?: unknown;
+    types?: unknown;
+  };
+  original_resolution?: {
+    contacts?: { contact_id?: unknown; display_name?: unknown }[];
+    new_entities?: {
+      contacts?: { display_name?: unknown; contact_id?: unknown }[];
+      places?: { name?: unknown }[];
+      documents?: { reference?: unknown }[];
+    };
+    matched_place?: {
+      place_id?: unknown;
+    };
+  };
   relationship_suggestions?: {
     from_contact_id?: unknown;
     from_display_name?: unknown;
@@ -509,18 +529,25 @@ function buildEventCandidateList(
   return out;
 }
 
-function buildEventDraft(commandResult: CommandResult | undefined, previewId: string): EventDraft | null {
-  if (!commandResult || typeof commandResult !== 'object') return null;
-  const payload = commandResult as EventCommandResultPayload;
+function buildEventDraftFromPayload(
+  payload: EventCommandResultPayload,
+  previewId: string,
+  options?: {
+    useOriginalValues?: boolean;
+    forceOperation?: EventDraftOperation;
+  },
+): EventDraft | null {
   const payloadPreviewId = textValue(payload.preview_id);
   if (payloadPreviewId !== previewId) return null;
-  const extracted = payload.extracted;
+
+  const useOriginalValues = options?.useOriginalValues === true;
+  const extracted = useOriginalValues ? payload.original_extracted : payload.extracted;
+  const resolution = useOriginalValues ? payload.original_resolution : payload.resolution;
   if (!extracted || typeof extracted !== 'object') return null;
-  const resolvedContacts = Array.isArray(payload.resolution?.contacts)
-    ? payload.resolution?.contacts
-    : [];
-  const newEntityContacts = Array.isArray(payload.resolution?.new_entities?.contacts)
-    ? payload.resolution?.new_entities?.contacts
+
+  const resolvedContacts = Array.isArray(resolution?.contacts) ? resolution.contacts : [];
+  const newEntityContacts = Array.isArray(resolution?.new_entities?.contacts)
+    ? resolution.new_entities?.contacts
     : [];
 
   const seenIds = new Set<string>();
@@ -552,7 +579,8 @@ function buildEventDraft(commandResult: CommandResult | undefined, previewId: st
     });
   }
 
-  const operation: EventDraftOperation = payload.operation === 'update' ? 'update' : 'create';
+  const operation: EventDraftOperation =
+    options?.forceOperation ?? (payload.operation === 'update' ? 'update' : 'create');
   const existingEventId = textValue(payload.existing_event_id) || null;
   const matchedEvent = operation === 'update' ? buildEventMatchCandidate(payload.matched_event) : null;
 
@@ -562,7 +590,7 @@ function buildEventDraft(commandResult: CommandResult | undefined, previewId: st
     when: textValue(extracted.when),
     endWhen: textValue(extracted.end_when),
     where: textValue(extracted.where),
-    placeId: textValue(payload.resolution?.matched_place?.place_id) || null,
+    placeId: textValue(resolution?.matched_place?.place_id) || null,
     tags: stringArrayValue(extracted.tags),
     types: stringArrayValue(extracted.types),
     participants,
@@ -570,6 +598,22 @@ function buildEventDraft(commandResult: CommandResult | undefined, previewId: st
     existingEventId: operation === 'update' ? existingEventId : null,
     matchedEvent,
   };
+}
+
+function buildEventDraft(commandResult: CommandResult | undefined, previewId: string): EventDraft | null {
+  if (!commandResult || typeof commandResult !== 'object') return null;
+  return buildEventDraftFromPayload(commandResult as EventCommandResultPayload, previewId);
+}
+
+function buildCreateFallbackEventDraft(
+  commandResult: CommandResult | undefined,
+  previewId: string,
+): EventDraft | null {
+  if (!commandResult || typeof commandResult !== 'object') return null;
+  return buildEventDraftFromPayload(commandResult as EventCommandResultPayload, previewId, {
+    useOriginalValues: true,
+    forceOperation: 'create',
+  });
 }
 
 function applyDraftModifications(
@@ -782,6 +826,11 @@ function updateEventPreviewCard(
       block.id === `${EVENT_PREVIEW_BLOCK_PREFIX}${previewId}`
         ? {
             ...block,
+            title: draft.operation === 'update' ? 'Event update preview' : 'Event preview',
+            description:
+              draft.operation === 'update'
+                ? 'Review this before updating the event.'
+                : 'Review this before creating the event.',
             body,
           }
         : block,
@@ -826,6 +875,59 @@ function upsertInfoCardBlock(
     ...directives,
     blocks: nextBlocks,
   };
+}
+
+function updateEventMatchCards(
+  directives: UiDirectives,
+  previewId: string,
+  draft: EventDraft,
+  candidateEvents: EventMatchCandidate[],
+): UiDirectives {
+  const filteredBlocks = directives.blocks.filter(
+    (block) =>
+      block.id !== `event_matched:${previewId}` && block.id !== `event_candidates:${previewId}`,
+  );
+  const nextDirectives = {
+    ...directives,
+    blocks: filteredBlocks,
+  };
+
+  if (draft.operation === 'update' && draft.matchedEvent) {
+    const matchLines = [
+      `Title: ${draft.matchedEvent.title || 'Untitled event'}`,
+      `When: ${formatEventPreviewWhen(draft.matchedEvent.startDate || '')}`,
+    ];
+    if (draft.matchedEvent.place?.name) {
+      matchLines.push(`Where: ${draft.matchedEvent.place.name}`);
+    }
+    if (draft.matchedEvent.matchScore > 0) {
+      matchLines.push(`Match confidence: ${Math.round(draft.matchedEvent.matchScore)}%`);
+    }
+    return upsertInfoCardBlock(
+      nextDirectives,
+      previewId,
+      'event_matched:',
+      'Matches existing event',
+      matchLines,
+    );
+  }
+
+  if (draft.operation === 'create' && candidateEvents.length > 0) {
+    return upsertInfoCardBlock(
+      nextDirectives,
+      previewId,
+      'event_candidates:',
+      'Similar events',
+      candidateEvents
+        .slice(0, 3)
+        .map(
+          (candidate) =>
+            `${candidate.title || 'Untitled event'} - ${formatEventPreviewWhen(candidate.startDate || '')}`,
+        ),
+    );
+  }
+
+  return nextDirectives;
 }
 
 function updateEventAuxiliaryCards(
@@ -1893,6 +1995,7 @@ export default function ChatScreen() {
           const candidateEvents = buildEventCandidateList(
             (commandResult as EventCommandResultPayload | undefined)?.candidate_events,
           );
+          const createFallbackDraft = buildCreateFallbackEventDraft(commandResult, action.previewId);
           const session = createEventDraftEditSession({
             previewId: action.previewId,
             baseDraft,
@@ -1902,6 +2005,7 @@ export default function ChatScreen() {
               contactNameById,
               candidateEvents,
             ),
+            createFallbackDraft,
             availableContacts: loadedContacts,
             availablePlaces: loadedPlaces,
             candidateEvents,
@@ -2243,8 +2347,14 @@ export default function ChatScreen() {
                   eventPreviewId,
                   modifiedDraft,
                 );
-                directivesForCard = updateEventAuxiliaryCards(
+                const withUpdatedMatchCards = updateEventMatchCards(
                   withUpdatedPreview,
+                  eventPreviewId,
+                  modifiedDraft,
+                  candidateEvents,
+                );
+                directivesForCard = updateEventAuxiliaryCards(
+                  withUpdatedMatchCards,
                   commandResult,
                   eventPreviewId,
                   modifiedDraft,

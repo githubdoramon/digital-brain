@@ -10,6 +10,7 @@ export type EventDraftEditSession = {
   previewId: string;
   baseDraft: EventDraft;
   initialDraft: EventDraft;
+  createFallbackDraft: EventDraft | null;
   availableContacts: EventContactOption[];
   availablePlaces: EventPlaceOption[];
   candidateEvents: EventMatchCandidate[];

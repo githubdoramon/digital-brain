@@ -44,6 +44,8 @@ import { matchesContactSearch } from '@/utils/contactSearch';
 
 type EventDetailsFormProps = {
   initialDraft: EventDraft;
+  updateBaseDraft?: EventDraft | null;
+  createFallbackDraft?: EventDraft | null;
   availableContacts: EventContactOption[];
   availablePlaces: EventPlaceOption[];
   candidateEvents?: EventMatchCandidate[];
@@ -113,6 +115,27 @@ function readOnlyList(values: string[], fallback: string) {
   return filtered.length ? filtered : [fallback];
 }
 
+function sameDraftText(left: string | null | undefined, right: string | null | undefined) {
+  return (left || '').trim() === (right || '').trim();
+}
+
+function sameDraftList(left: string[], right: string[]) {
+  if (left.length !== right.length) return false;
+  return left.every((value, index) => value === right[index]);
+}
+
+function sameDraftParticipants(
+  left: EventDraft['participants'],
+  right: EventDraft['participants'],
+) {
+  if (left.length !== right.length) return false;
+  return left.every(
+    (participant, index) =>
+      participant.contactId === right[index]?.contactId &&
+      participant.displayName === right[index]?.displayName,
+  );
+}
+
 function formatPlaceLabel(place: EventPlaceOption): string {
   const parts = [place.name, place.city, place.country]
     .map((value) => String(value || '').trim())
@@ -129,6 +152,8 @@ function buildPlaceSearchText(place: EventPlaceOption): string {
 
 export function EventDetailsForm({
   initialDraft,
+  updateBaseDraft = null,
+  createFallbackDraft = null,
   availableContacts,
   availablePlaces,
   candidateEvents = [],
@@ -323,11 +348,63 @@ export function EventDetailsForm({
   }, []);
 
   const createNewInstead = React.useCallback(() => {
+    if (createFallbackDraft) {
+      const nextDraft: EventDraft = {
+        title: sameDraftText(title, updateBaseDraft?.title) ? createFallbackDraft.title : title,
+        summary: sameDraftText(summary, updateBaseDraft?.summary)
+          ? createFallbackDraft.summary
+          : summary,
+        when: sameDraftText(when, updateBaseDraft?.when) ? createFallbackDraft.when : when,
+        endWhen: sameDraftText(endWhen, updateBaseDraft?.endWhen)
+          ? createFallbackDraft.endWhen
+          : endWhen,
+        where: sameDraftText(where, updateBaseDraft?.where) ? createFallbackDraft.where : where,
+        placeId:
+          (updateBaseDraft?.placeId || null) === (selectedPlaceId || null)
+            ? createFallbackDraft.placeId || null
+            : selectedPlaceId,
+        tags: sameDraftList(inputToList(tagsInput), updateBaseDraft?.tags || [])
+          ? createFallbackDraft.tags
+          : inputToList(tagsInput),
+        types: sameDraftList(inputToList(typesInput), updateBaseDraft?.types || [])
+          ? createFallbackDraft.types
+          : inputToList(typesInput),
+        participants: sameDraftParticipants(selectedParticipants, updateBaseDraft?.participants || [])
+          ? createFallbackDraft.participants
+          : selectedParticipants,
+        operation: 'create',
+        existingEventId: null,
+        matchedEvent: null,
+      };
+
+      setTitle(nextDraft.title);
+      setSummary(nextDraft.summary);
+      setWhen(nextDraft.when || '');
+      setEndWhen(nextDraft.endWhen || '');
+      setWhere(nextDraft.where);
+      setSelectedPlaceId(nextDraft.placeId || null);
+      setTagsInput(listToInput(nextDraft.tags));
+      setTypesInput(listToInput(nextDraft.types));
+      setSelectedParticipantIds(nextDraft.participants.map((participant) => participant.contactId));
+      setParticipantQuery('');
+    }
     setOperation('create');
     setExistingEventId(null);
     setMatchedEvent(null);
     setShowCandidatePicker(false);
-  }, []);
+  }, [
+    createFallbackDraft,
+    endWhen,
+    selectedParticipants,
+    selectedPlaceId,
+    summary,
+    tagsInput,
+    title,
+    typesInput,
+    updateBaseDraft,
+    when,
+    where,
+  ]);
 
   const readOnlyParticipants = selectedParticipants;
   const readOnlyTags = readOnlyList(inputToList(tagsInput), 'None');
@@ -833,6 +910,8 @@ export function EventDraftEditorScreen({ sessionId }: DraftEditorScreenProps) {
   return (
     <EventDetailsForm
       initialDraft={session.initialDraft || EMPTY_EVENT_DRAFT}
+      updateBaseDraft={session.baseDraft}
+      createFallbackDraft={session.createFallbackDraft}
       availableContacts={session.availableContacts}
       availablePlaces={session.availablePlaces}
       candidateEvents={session.candidateEvents}
