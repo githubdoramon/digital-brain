@@ -339,23 +339,129 @@ def _resolve_contact_reference(name: str) -> dict[str, Any]:
         return {"status": "missing"}
     matches = _best_contact_matches(normalized_name)
     if not matches:
-        return {
+        result = {
             "status": "new",
             "display_name": normalized_name,
             "temp_id": f"new_contact:{_safe_entity_slug(normalized_name) or 'contact'}",
         }
+        logger.debug(
+            "[handle_contact] resolve_contact_reference query=%r status=%s",
+            normalized_name,
+            result["status"],
+        )
+        return result
     top = matches[0]
     top_score = float(top.get("match_score") or 0)
     if len(matches) > 1:
         second_score = float(matches[1].get("match_score") or 0)
         if top_score < 98 and abs(top_score - second_score) <= 3:
-            return {"status": "ambiguous", "query": normalized_name, "matches": matches[:3]}
-    return {
+            result = {"status": "ambiguous", "query": normalized_name, "matches": matches[:3]}
+            logger.info(
+                "[handle_contact] resolve_contact_reference query=%r status=ambiguous matches=%s",
+                normalized_name,
+                [
+                    {
+                        "display_name": str(match.get("display_name") or ""),
+                        "match_score": float(match.get("match_score") or 0),
+                    }
+                    for match in matches[:3]
+                ],
+            )
+            return result
+    result = {
         "status": "existing",
         "contact_id": str(top.get("contact_id") or ""),
         "display_name": str(top.get("display_name") or normalized_name),
         "match_score": top_score,
     }
+    logger.debug(
+        "[handle_contact] resolve_contact_reference query=%r status=%s display_name=%r score=%.1f",
+        normalized_name,
+        result["status"],
+        result.get("display_name"),
+        top_score,
+    )
+    return result
+
+
+def _build_new_contact_reference(name: str) -> dict[str, Any]:
+    normalized_name = str(name or "").strip()
+    return {
+        "status": "new",
+        "display_name": normalized_name,
+        "temp_id": f"new_contact:{_safe_entity_slug(normalized_name) or 'contact'}",
+    }
+
+
+def _infer_forced_new_contact_resolution(
+    conversation_messages: list[dict[str, str]] | None,
+    extracted: dict[str, Any] | None,
+) -> tuple[set[str], bool, str | None]:
+    user_messages = [
+        str(item.get("content") or "").strip()
+        for item in (conversation_messages or [])
+        if str(item.get("role") or "").strip() == "user" and str(item.get("content") or "").strip()
+    ]
+    if len(user_messages) < 2:
+        return set(), False, None
+
+    latest_detail = user_messages[-1]
+    latest_detail_normalized = normalize_search_text(latest_detail)
+    if not latest_detail_normalized:
+        return set(), False, None
+
+    explicit_new_phrases = (
+        "new",
+        "doesnt exist",
+        "doesn't exist",
+        "none of these",
+        "not found",
+        "not existing",
+    )
+    if not any(phrase in latest_detail_normalized for phrase in explicit_new_phrases):
+        return set(), False, latest_detail
+
+    contact_names = [
+        str(contact.get("contact_name") or "").strip()
+        for contact in _dict_items((extracted or {}).get("contacts"))
+        if str(contact.get("contact_name") or "").strip()
+    ]
+    normalized_contact_names = {
+        normalize_search_text(name): name for name in contact_names if normalize_search_text(name)
+    }
+
+    forced_specific_names: set[str] = set()
+    for normalized_name in normalized_contact_names:
+        if normalized_name in latest_detail_normalized:
+            forced_specific_names.add(normalized_name)
+            continue
+        first_name = normalized_name.split()[0] if normalized_name.split() else ""
+        if first_name and re.search(rf"\b{re.escape(first_name)}\b", latest_detail_normalized):
+            forced_specific_names.add(normalized_name)
+
+    latest_assistant = next(
+        (
+            str(item.get("content") or "").strip()
+            for item in reversed(conversation_messages or [])
+            if str(item.get("role") or "").strip() == "assistant"
+            and str(item.get("content") or "").strip()
+        ),
+        "",
+    )
+    latest_assistant_normalized = normalize_search_text(latest_assistant)
+    if not forced_specific_names and latest_assistant_normalized:
+        assistant_matches = [
+            normalized_name
+            for normalized_name in normalized_contact_names
+            if normalized_name and normalized_name in latest_assistant_normalized
+        ]
+        if len(assistant_matches) == 1:
+            forced_specific_names.add(assistant_matches[0])
+
+    force_all_ambiguous = any(
+        token in latest_detail_normalized for token in ("both", "all", "them", "those contacts")
+    )
+    return forced_specific_names, force_all_ambiguous, latest_detail
 
 
 def _normalize_relationship_type(value: str | None) -> str | None:
@@ -698,7 +804,13 @@ def _append_parent_derived_relationships(
                 )
 
 
-def _build_proposal(extracted: dict[str, Any], *, original_message: str) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+def _build_proposal(
+    extracted: dict[str, Any],
+    *,
+    original_message: str,
+    forced_new_contact_names: set[str] | None = None,
+    force_all_ambiguous_new_contacts: bool = False,
+) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
     main_name = str(extracted.get("main_contact_name") or "").strip()
     related_name = str(extracted.get("related_contact_name") or "").strip()
     legacy_relationship_type, legacy_reciprocal_type = _normalize_relationship_pair(
@@ -765,6 +877,7 @@ def _build_proposal(extracted: dict[str, Any], *, original_message: str) -> tupl
     }
     refs: dict[str, dict[str, Any]] = {}
     places_by_text: dict[str, dict[str, Any]] = {}
+    forced_new_contact_names = set(forced_new_contact_names or set())
 
     def resolve_contact(name: str, field_id: str) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
         normalized_name = str(name or "").strip()
@@ -780,7 +893,25 @@ def _build_proposal(extracted: dict[str, Any], *, original_message: str) -> tupl
         key = normalize_search_text(normalized_name)
         if key in refs:
             return refs[key], None
+        if key in forced_new_contact_names:
+            ref = _build_new_contact_reference(normalized_name)
+            refs[key] = ref
+            _ensure_contact_create(proposal, ref)
+            logger.info(
+                "[handle_contact] forcing new contact from clarification query=%r",
+                normalized_name,
+            )
+            return ref, None
         ref = _resolve_contact_reference(normalized_name)
+        if ref.get("status") == "ambiguous" and force_all_ambiguous_new_contacts:
+            ref = _build_new_contact_reference(normalized_name)
+            refs[key] = ref
+            _ensure_contact_create(proposal, ref)
+            logger.info(
+                "[handle_contact] forcing ambiguous contact to new from clarification query=%r",
+                normalized_name,
+            )
+            return ref, None
         if ref.get("status") == "ambiguous":
             return None, build_need_user_input(
                 prompt=f"I found multiple contacts for {normalized_name}. Which one did you mean?",
@@ -819,6 +950,8 @@ def _build_proposal(extracted: dict[str, Any], *, original_message: str) -> tupl
 
     applied_update_refs: set[str] = set()
     for raw_update in contact_updates:
+        if not isinstance(raw_update, dict):
+            continue
         target_name = str(
             raw_update.get("contact_name")
             or raw_update.get("name")
@@ -1167,8 +1300,20 @@ def handle_contact(parsed: ParsedCommand, context: dict[str, Any]) -> dict[str, 
         conversation_messages=conversation_messages,
         existing_extraction=previous_extraction,
     )
+    logger.info(
+        "[handle_contact] extraction complete need_user_input=%s contacts=%d relationships=%d place_links=%d",
+        bool(extracted.get("need_user_input")),
+        len(_dict_items(extracted.get("contacts"))),
+        len(_dict_items(extracted.get("relationships"))),
+        len(_dict_items(extracted.get("contact_place_links"))),
+    )
     explicit_need_user_input = normalize_need_user_input(extracted.get("need_user_input"))
     if explicit_need_user_input:
+        clarification_prompt = str(explicit_need_user_input.get("prompt") or "")
+        logger.info(
+            "[handle_contact] extraction requested clarification prompt=%r",
+            clarification_prompt,
+        )
         clarification_preview_id = create_clarification_preview_id("contact")
         store_clarification_preview(
             clarification_preview_id,
@@ -1197,8 +1342,29 @@ def handle_contact(parsed: ParsedCommand, context: dict[str, Any]) -> dict[str, 
             },
         )
 
-    proposal, proposal_need_user_input = _build_proposal(extracted, original_message=original_message)
+    forced_new_contact_names, force_all_ambiguous_new_contacts, latest_clarification_detail = (
+        _infer_forced_new_contact_resolution(conversation_messages, extracted)
+    )
+    if forced_new_contact_names or force_all_ambiguous_new_contacts:
+        logger.info(
+            "[handle_contact] clarification requested new contact resolution detail=%r specific_names=%s force_all_ambiguous=%s",
+            latest_clarification_detail,
+            sorted(forced_new_contact_names),
+            force_all_ambiguous_new_contacts,
+        )
+
+    proposal, proposal_need_user_input = _build_proposal(
+        extracted,
+        original_message=original_message,
+        forced_new_contact_names=forced_new_contact_names,
+        force_all_ambiguous_new_contacts=force_all_ambiguous_new_contacts,
+    )
     if proposal_need_user_input:
+        proposal_clarification_prompt = str(proposal_need_user_input.get("prompt") or "")
+        logger.info(
+            "[handle_contact] proposal requires clarification prompt=%r",
+            proposal_clarification_prompt,
+        )
         clarification_preview_id = create_clarification_preview_id("contact")
         store_clarification_preview(
             clarification_preview_id,
@@ -1233,6 +1399,14 @@ def handle_contact(parsed: ParsedCommand, context: dict[str, Any]) -> dict[str, 
             "type": "error",
             "message": "I couldn't build a contact proposal from that request.",
         }
+
+    logger.info(
+        "[handle_contact] proposal ready contacts=%d relationships=%d derived_relationships=%d place_links=%d",
+        len(_dict_items(proposal.get("contacts"))),
+        len(_dict_items(proposal.get("relationships"))),
+        len(_dict_items(proposal.get("derived_relationships"))),
+        len(_dict_items(proposal.get("contact_place_links"))),
+    )
 
     edit_fields = _build_edit_fields(proposal, preview_id)
 

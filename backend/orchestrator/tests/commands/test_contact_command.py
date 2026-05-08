@@ -367,6 +367,115 @@ def test_contact_follow_up_strips_structured_field_label(monkeypatch):
     clear_pending_event(context["event_pending_key"])
 
 
+def test_contact_follow_up_can_force_ambiguous_matches_to_new(monkeypatch):
+    context = {
+        "user_email": "user@example.com",
+        "thread_id": "thread-contact-new-children",
+        "event_pending_key": "user@example.com:thread-contact-new-children",
+    }
+
+    extracted_payload = {
+        "contacts": [
+            {"contact_name": "Erick Wakamoto Takarabe", "birthday": "1984-03-08"},
+            {"contact_name": "Aline Yamaguti Matsukuma", "birthday": "1984-08-01"},
+            {"contact_name": "Guilherme Matsukuma Takarabe", "birthday": "2019-06-02"},
+            {"contact_name": "Fernanda Yaeko Matsukuma Takarabe", "birthday": "2024-05-24"},
+        ],
+        "relationships": [
+            {
+                "from_contact_name": "Erick Wakamoto Takarabe",
+                "to_contact_name": "Aline Yamaguti Matsukuma",
+                "relationship_type": "Husband",
+                "reciprocal_type": "Wife",
+            },
+            {
+                "from_contact_name": "Erick Wakamoto Takarabe",
+                "to_contact_name": "Guilherme Matsukuma Takarabe",
+                "relationship_type": "Father",
+                "reciprocal_type": "Child",
+            },
+            {
+                "from_contact_name": "Aline Yamaguti Matsukuma",
+                "to_contact_name": "Guilherme Matsukuma Takarabe",
+                "relationship_type": "Mother",
+                "reciprocal_type": "Child",
+            },
+            {
+                "from_contact_name": "Erick Wakamoto Takarabe",
+                "to_contact_name": "Fernanda Yaeko Matsukuma Takarabe",
+                "relationship_type": "Father",
+                "reciprocal_type": "Child",
+            },
+            {
+                "from_contact_name": "Aline Yamaguti Matsukuma",
+                "to_contact_name": "Fernanda Yaeko Matsukuma Takarabe",
+                "relationship_type": "Mother",
+                "reciprocal_type": "Child",
+            },
+        ],
+        "contact_place_links": [],
+        "need_user_input": None,
+    }
+
+    monkeypatch.setattr(
+        "commands.handlers.contact._llm_extract_contact_changes",
+        lambda *_args, **_kwargs: extracted_payload,
+    )
+
+    def fake_search_contacts(name, **_kwargs):
+        if name in {
+            "Guilherme Matsukuma Takarabe",
+            "Fernanda Yaeko Matsukuma Takarabe",
+        }:
+            return [
+                {"contact_id": f"contact:{name}:1", "display_name": f"{name} A", "match_score": 96},
+                {"contact_id": f"contact:{name}:2", "display_name": f"{name} B", "match_score": 95},
+            ]
+        return []
+
+    monkeypatch.setattr(
+        "commands.handlers.contact.contacts_service.search_contacts",
+        fake_search_contacts,
+    )
+
+    first = handle_contact(
+        ParsedCommand(
+            command="contact",
+            args=(
+                "Erick wakamoto takarabe (birthday 08/03/1984) is married to Aline Yamaguti Matsukuma "
+                "(01/08/1984). They are parents of a boy - Guilherme Matsukuma Takarabe (02/06/2019) "
+                "and a girl - Fernanda Yaeko Matsukuma Takarabe (24/05/2024)"
+            ),
+            raw_message="/contact family update",
+        ),
+        context,
+    )
+
+    assert first["type"] == "need_user_input"
+    clarification_id = first["clarification_id"]
+
+    second = handle_contact(
+        ParsedCommand(
+            command="contact",
+            args=f"Both contacts are new. You can't have found any duplicate one for them [clarification_id:{clarification_id}]",
+            raw_message="/contact follow-up",
+        ),
+        context,
+    )
+
+    assert second["type"] == "contact_confirmation"
+    create_refs = {
+        item["reference"]
+        for item in second["proposal"]["contacts"]
+        if item.get("operation") == "create"
+    }
+    assert "new_contact:guilherme-matsukuma-takarabe" in create_refs
+    assert "new_contact:fernanda-yaeko-matsukuma-takarabe" in create_refs
+
+    delete_command_data(second["preview_id"])
+    clear_pending_event(context["event_pending_key"])
+
+
 def test_contact_strip_clarification_field_labels_helper():
     detail = contact_handler._strip_clarification_field_labels(
         "Who did you mean by 'Rita'?: Rita Castro",
