@@ -182,6 +182,52 @@ def test_handle_contact_requests_clarification_for_ambiguous_birth_date(monkeypa
     clear_pending_event(context["event_pending_key"])
 
 
+def test_handle_contact_disambiguation_includes_select_options(monkeypatch):
+    parsed = ParsedCommand(
+        command="contact",
+        args="Guilherme is my nephew",
+        raw_message="/contact Guilherme is my nephew",
+    )
+    context = {
+        "user_email": "user@example.com",
+        "thread_id": "thread-contact-disambiguation",
+        "event_pending_key": "user@example.com:thread-contact-disambiguation",
+    }
+
+    monkeypatch.setattr(
+        "commands.handlers.contact._llm_extract_contact_changes",
+        lambda *_args, **_kwargs: {
+            "contacts": [{"contact_name": "Guilherme Matsukuma Takarabe"}],
+            "relationships": [],
+            "contact_place_links": [],
+            "need_user_input": None,
+        },
+    )
+    monkeypatch.setattr(
+        "commands.handlers.contact.contacts_service.search_contacts",
+        lambda *_args, **_kwargs: [
+            {"contact_id": "contact:guilherme-1", "display_name": "Guilherme Melo", "match_score": 96},
+            {"contact_id": "contact:guilherme-2", "display_name": "Guilherme Sarinho", "match_score": 95},
+        ],
+    )
+
+    result = handle_contact(parsed, context)
+
+    assert result["type"] == "need_user_input"
+    fields = result["need_user_input"]["fields"]
+    assert len(fields) == 1
+    assert fields[0]["kind"] == "select"
+    assert [option["label"] for option in fields[0]["options"]] == [
+        "Guilherme Melo",
+        "Guilherme Sarinho",
+        "None of these - create a new contact",
+    ]
+
+    clarification_id = result["clarification_id"]
+    delete_command_data(clarification_id)
+    clear_pending_event(context["event_pending_key"])
+
+
 def test_contact_clarification_follow_up_passes_conversation_history(monkeypatch):
     context = {
         "user_email": "user@example.com",

@@ -160,6 +160,36 @@ def _clarification_fields(field_ids: list[str]) -> list[dict[str, Any]]:
     return output or [{"id": "details", "kind": "textarea", "label": "Details", "required": True}]
 
 
+def _ambiguous_contact_field(
+    *,
+    field_id: str,
+    label: str,
+    matches: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    options: list[dict[str, str]] = []
+    seen_labels: set[str] = set()
+    for idx, match in enumerate(matches[:5]):
+        display_name = str(match.get("display_name") or "").strip()
+        if not display_name or display_name in seen_labels:
+            continue
+        seen_labels.add(display_name)
+        options.append({"id": f"match_{idx + 1}", "label": display_name})
+
+    if options:
+        options.append({"id": "none_of_these", "label": "None of these - create a new contact"})
+        return [
+            {
+                "id": field_id,
+                "kind": "select",
+                "label": label,
+                "required": True,
+                "options": options,
+            }
+        ]
+
+    return _clarification_fields([field_id])
+
+
 def _format_contact_command_conversation(messages: list[dict[str, str]] | None, fallback_message: str) -> str:
     conversation: list[dict[str, str]] = []
     for item in messages or []:
@@ -913,10 +943,16 @@ def _build_proposal(
             )
             return ref, None
         if ref.get("status") == "ambiguous":
+            matches = [item for item in (ref.get("matches") or []) if isinstance(item, dict)]
+            prompt = f"I found multiple contacts for {normalized_name}. Which one did you mean?"
             return None, build_need_user_input(
-                prompt=f"I found multiple contacts for {normalized_name}. Which one did you mean?",
-                questions=[f"I found multiple contacts for {normalized_name}. Which one did you mean?"],
-                fields=_clarification_fields([field_id]),
+                prompt=prompt,
+                questions=[prompt],
+                fields=_ambiguous_contact_field(
+                    field_id=field_id,
+                    label=f"Who did you mean by '{normalized_name}'?",
+                    matches=matches,
+                ),
                 kind="disambiguation",
                 source="contact_command",
                 submission_mode="ui_submission",
@@ -1076,11 +1112,13 @@ def _build_proposal(
             f"Link {contact_ref.get('display_name')} to {place_ref.get('name')} as {link_role}",
         )
 
+    first_relationship_data = first_relationship if isinstance(first_relationship, dict) else {}
+    first_place_data = first_place_ref if isinstance(first_place_ref, dict) else {}
     proposal["edit_context"] = {
         "main_contact_reference": _contact_reference_value(main_ref),
         "related_contact_reference": _contact_reference_value(related_ref),
-        "primary_relationship_id": (first_relationship or {}).get("proposal_id"),
-        "place_reference": (first_place_ref or {}).get("place_id") or (first_place_ref or {}).get("temp_id"),
+        "primary_relationship_id": first_relationship_data.get("proposal_id"),
+        "place_reference": first_place_data.get("place_id") or first_place_data.get("temp_id"),
     }
 
     for line in proposal["explicit_change_lines"]:
