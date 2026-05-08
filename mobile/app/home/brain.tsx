@@ -708,6 +708,37 @@ function clarificationIdFromAction(
   return clarificationId || null;
 }
 
+function extractClarificationDirectiveId(directives: UiDirectives | undefined): string | null {
+  if (!directives) return null;
+
+  for (const block of directives.blocks || []) {
+    if (block.type !== 'clarification_form') continue;
+    const actionId = block.action_id?.trim();
+    const eventClarificationId = clarificationIdFromAction(
+      actionId,
+      EVENT_CLARIFICATION_ACTION_PREFIX,
+    );
+    if (eventClarificationId) {
+      return eventClarificationId;
+    }
+
+    const contactClarificationId = clarificationIdFromAction(
+      actionId,
+      CONTACT_CLARIFICATION_ACTION_PREFIX,
+    );
+    if (contactClarificationId) {
+      return contactClarificationId;
+    }
+  }
+
+  return null;
+}
+
+function isClarificationDirective(directives: UiDirectives | undefined): boolean {
+  if (!directives) return false;
+  return (directives.blocks || []).some((block) => block.type === 'clarification_form');
+}
+
 function formatEventPreviewWhen(value: string): string {
   const raw = value.trim();
   if (!raw) return 'Not specified';
@@ -2237,6 +2268,12 @@ export default function ChatScreen() {
             const requestError = item.metadata?.request_error;
             const userMediaAttachments = item.metadata?.media_attachments || [];
             const isErrorExpanded = Boolean(expandedErrorMessageIds[item.id]);
+            const clarificationDirectiveId = extractClarificationDirectiveId(directivesForCard);
+            const isStaleClarificationCard = Boolean(
+              clarificationDirectiveId &&
+                isClarificationDirective(directivesForCard) &&
+                pendingEventId !== clarificationDirectiveId,
+            );
 
             return (
               <View
@@ -2279,7 +2316,7 @@ export default function ChatScreen() {
                     {item.content}
                   </Text>
                 )}
-                {directivesForCard && (
+                {directivesForCard && !isStaleClarificationCard && (
                   <View style={styles.commandCardWrap}>
                     <UiDirectiveCard
                       directives={directivesForCard}
