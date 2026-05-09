@@ -23,7 +23,7 @@ export type ThreadMessage = {
 };
 
 export type MainSession = {
-  thread_id: string;
+  thread_id?: string | null;
   thread_title?: string | null;
   is_new_session: boolean;
   pending_event_id?: string | null;

@@ -686,6 +686,7 @@ def create_chat_router() -> APIRouter:
         user_email = user.get("email")
         if not user_email:
             raise HTTPException(status_code=400, detail="Authenticated user email missing")
+        conversations.delete_empty_threads(user_email)
         threads = conversations.list_threads(user_email)
         return [ThreadOut(**thread) for thread in threads]
 
@@ -696,8 +697,18 @@ def create_chat_router() -> APIRouter:
         if not user_email:
             raise HTTPException(status_code=400, detail="Authenticated user email missing")
 
-        thread, is_new_session, _ = conversations.resolve_main_session(user_email, "")
-        thread_id = str(thread["id"])
+        conversations.delete_empty_threads(user_email)
+        active_session = conversations.get_active_main_session(user_email)
+        if not active_session:
+            return MainSessionOut(
+                thread_id=None,
+                thread_title=None,
+                is_new_session=False,
+                pending_event_id=None,
+                messages=[],
+            )
+
+        thread_id = str(active_session["thread_id"])
         thread_detail = conversations.get_thread_with_messages(thread_id, user_email) or {}
 
         from commands.storage import get_pending_event
@@ -706,8 +717,8 @@ def create_chat_router() -> APIRouter:
 
         return MainSessionOut(
             thread_id=thread_id,
-            thread_title=thread_detail.get("title") or thread.get("title"),
-            is_new_session=is_new_session,
+            thread_title=thread_detail.get("title") or active_session.get("thread_title"),
+            is_new_session=False,
             pending_event_id=pending_event_id,
             messages=thread_detail.get("messages") or [],
         )

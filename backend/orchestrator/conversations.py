@@ -445,6 +445,13 @@ DEFAULT_IDLE_MINUTES = 30
 RESET_TRIGGERS = ["/new"]
 
 
+def _is_main_session_timed_out(updated_at: datetime, idle_minutes: int = DEFAULT_IDLE_MINUTES) -> bool:
+    if updated_at.tzinfo is None:
+        updated_at = updated_at.replace(tzinfo=timezone.utc)
+    elapsed = datetime.now(timezone.utc) - updated_at
+    return elapsed.total_seconds() > (idle_minutes * 60)
+
+
 def parse_session_command(message: str) -> tuple[bool, str]:
     """
     Parse message for session commands like /new.
@@ -499,6 +506,76 @@ def get_main_session(user_email: str) -> dict[str, Any] | None:
             (user_email,),
         )
         return cur.fetchone()
+
+
+def clear_main_session_thread(user_email: str) -> None:
+    if not user_email:
+        return
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            UPDATE main_sessions
+            SET current_thread_id = NULL,
+                updated_at = NOW()
+            WHERE user_email = %s
+            """,
+            (user_email,),
+        )
+        conn.commit()
+
+
+def delete_empty_threads(user_email: str | None = None) -> int:
+    with get_conn() as conn, conn.cursor() as cur:
+        if user_email:
+            cur.execute(
+                """
+                DELETE FROM conversation_threads t
+                WHERE t.user_email = %s
+                  AND NOT EXISTS (
+                      SELECT 1
+                      FROM conversation_messages m
+                      WHERE m.thread_id = t.id
+                  )
+                RETURNING 1
+                """,
+                (user_email,),
+            )
+        else:
+            cur.execute(
+                """
+                DELETE FROM conversation_threads t
+                WHERE NOT EXISTS (
+                    SELECT 1
+                    FROM conversation_messages m
+                    WHERE m.thread_id = t.id
+                )
+                RETURNING 1
+                """
+            )
+        deleted_rows = cur.fetchall()
+        conn.commit()
+    return len(deleted_rows)
+
+
+def get_active_main_session(user_email: str, idle_minutes: int = DEFAULT_IDLE_MINUTES) -> dict[str, Any] | None:
+    main_session = get_main_session(user_email)
+    if not main_session:
+        return None
+
+    current_thread_id = main_session.get("current_thread_id")
+    thread_id = main_session.get("thread_id")
+    updated_at = main_session.get("updated_at")
+
+    if not current_thread_id or not thread_id or not isinstance(updated_at, datetime):
+        if current_thread_id and not thread_id:
+            clear_main_session_thread(user_email)
+        return None
+
+    if _is_main_session_timed_out(updated_at, idle_minutes=idle_minutes):
+        clear_main_session_thread(user_email)
+        return None
+
+    return main_session
 
 
 def _upsert_main_session(user_email: str, thread_id: str) -> None:
@@ -576,6 +653,7 @@ def resolve_main_session(
         raise ValueError("user_email is required")
 
     is_reset, stripped_body = parse_session_command(message)
+    delete_empty_threads(user_email)
     main_session = get_main_session(user_email)
 
     # First time user or no main session exists
@@ -596,10 +674,7 @@ def resolve_main_session(
 
     # Check idle timeout
     updated_at = main_session["updated_at"]
-    if updated_at.tzinfo is None:
-        updated_at = updated_at.replace(tzinfo=timezone.utc)
-    elapsed = datetime.now(timezone.utc) - updated_at
-    is_timed_out = elapsed.total_seconds() > (idle_minutes * 60)
+    is_timed_out = _is_main_session_timed_out(updated_at, idle_minutes=idle_minutes)
 
     if is_reset or is_timed_out:
         # Create new thread, update pointer

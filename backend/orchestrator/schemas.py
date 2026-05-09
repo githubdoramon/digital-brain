@@ -502,7 +502,7 @@ class ThreadDetailOut(ThreadOut):
 
 
 class MainSessionOut(BaseModel):
-    thread_id: str
+    thread_id: str | None = None
     thread_title: str | None = None
     is_new_session: bool = False
     pending_event_id: str | None = None
