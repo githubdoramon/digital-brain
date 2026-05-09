@@ -43,9 +43,15 @@ def _persist_contact_resolved(preview_id: str, status: str) -> None:
         msg_id = conversations.find_message_id_by_metadata_preview(preview_id)
         if msg_id is not None:
             conversations.set_message_metadata_field(msg_id, "contact_resolved", status)
+            label = "Contact update cancelled" if status == "cancelled" else "Contact changes applied"
+            conversations.set_message_metadata_field(
+                msg_id,
+                "command_resolved",
+                {"status": status, "label": label},
+            )
     except Exception as exc:
         logger.warning(
-            "[contact_confirm] Could not persist contact_resolved=%s for %s: %s",
+            "[contact_confirm] Could not persist command_resolved=%s for %s: %s",
             status,
             preview_id,
             exc,

@@ -2096,6 +2096,10 @@ export default function ChatScreen() {
               : resolvedStatus === 'updated'
                 ? 'Event updated'
                 : 'Event cancelled';
+          const resolved: CommandResolvedMeta = {
+            status: resolvedStatus,
+            label: resolvedLabel,
+          };
           setMessages((prev) =>
             prev.map((message) =>
               message.id === messageId
@@ -2103,10 +2107,7 @@ export default function ChatScreen() {
                     ...message,
                     metadata: {
                       ...message.metadata,
-                      command_resolved: {
-                        status: resolvedStatus,
-                        label: resolvedLabel,
-                      },
+                      command_resolved: resolved,
                     },
                   }
                 : message,

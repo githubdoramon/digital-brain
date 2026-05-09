@@ -16,6 +16,50 @@ logger = get_runtime_logger(__name__)
 _DEFAULT_TITLE_PREFIX = "Untitled conversation"
 
 
+def _command_resolved_label(status: str, kind: str) -> str | None:
+    normalized_status = str(status or "").strip().lower()
+    normalized_kind = str(kind or "").strip().lower()
+    if normalized_kind == "event":
+        if normalized_status == "created":
+            return "Event created"
+        if normalized_status == "updated":
+            return "Event updated"
+        if normalized_status == "cancelled":
+            return "Event cancelled"
+    if normalized_kind == "contact":
+        if normalized_status == "cancelled":
+            return "Contact update cancelled"
+        if normalized_status in {"created", "updated"}:
+            return "Contact changes applied"
+    return None
+
+
+def _normalize_command_resolved_metadata(metadata: Any) -> dict[str, Any]:
+    if not isinstance(metadata, dict):
+        return {}
+
+    normalized = dict(metadata)
+    command_resolved = normalized.get("command_resolved")
+    if isinstance(command_resolved, dict) and str(command_resolved.get("status") or "").strip():
+        return normalized
+
+    event_status = str(normalized.get("event_resolved") or "").strip().lower()
+    if event_status:
+        normalized["command_resolved"] = {
+            "status": event_status,
+            "label": _command_resolved_label(event_status, "event"),
+        }
+        return normalized
+
+    contact_status = str(normalized.get("contact_resolved") or "").strip().lower()
+    if contact_status:
+        normalized["command_resolved"] = {
+            "status": contact_status,
+            "label": _command_resolved_label(contact_status, "contact"),
+        }
+    return normalized
+
+
 def _generate_default_title() -> str:
     timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M")
     return f"{_DEFAULT_TITLE_PREFIX} - {timestamp} UTC"
@@ -154,6 +198,9 @@ def get_thread_with_messages(thread_id: str, user_email: str) -> dict[str, Any] 
         )
         messages = cur.fetchall()
 
+    for message in messages:
+        message["metadata"] = _normalize_command_resolved_metadata(message.get("metadata"))
+
     thread["messages"] = messages
     thread.pop("user_email", None)
     return thread
@@ -197,7 +244,8 @@ def get_latest_assistant_metadata(thread_id: str, user_email: str) -> dict[str, 
     if not row:
         return None
     metadata = row.get("metadata")
-    return metadata if isinstance(metadata, dict) else None
+    normalized = _normalize_command_resolved_metadata(metadata)
+    return normalized or None
 
 
 def record_exchange(
