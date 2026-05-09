@@ -136,6 +136,7 @@ type ContactAction = {
 type ChatConversationScreenProps = {
   mode?: 'main' | 'thread';
   initialThreadId?: string | null;
+  tabBarHeight?: number;
 };
 
 type EventMatchCandidatePayload = {
@@ -1090,13 +1091,13 @@ function pruneContactPreviewBlocks(directives: UiDirectives, previewId: string):
 export function ChatConversationScreen({
   mode = 'main',
   initialThreadId = null,
+  tabBarHeight = 0,
 }: ChatConversationScreenProps) {
   const router = useRouter();
   const { token, signOut, email, name, photo, isLoading: isAuthLoading } = useAuth();
   const { showError } = useAppNotice();
   const { pickSingleImage, imagePickerSheet } = useSingleImagePicker();
   const insets = useSafeAreaInsets();
-  const tabBarHeight = useBottomTabBarHeight();
   const tabBarClearance = Math.max(tabBarHeight, getHomeTabBarClearance(insets.bottom));
   const scrollY = useRef(new Animated.Value(0)).current;
   const listRef = useRef<FlatList<Message>>(null);
@@ -2665,7 +2666,8 @@ export function ChatConversationScreen({
 }
 
 export default function ChatScreen() {
-  return <ChatConversationScreen />;
+  const tabBarHeight = useBottomTabBarHeight();
+  return <ChatConversationScreen tabBarHeight={tabBarHeight} />;
 }
 
 const styles = StyleSheet.create({

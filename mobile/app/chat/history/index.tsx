@@ -77,7 +77,7 @@ export default function ThreadHistoryScreen() {
           contentContainerStyle={styles.listContent}
           renderItem={({ item }) => (
             <Pressable
-              onPress={() => router.push({ pathname: '/chat/[threadId]', params: { threadId: item.id } })}
+              onPress={() => router.push(`/chat/${encodeURIComponent(item.id)}`)}
               style={({ pressed }) => [pressed && styles.itemPressed]}
             >
               <Card variant="elevated" style={styles.card}>
@@ -89,7 +89,7 @@ export default function ThreadHistoryScreen() {
                     {item.last_message_preview}
                   </Text>
                 ) : null}
-                <Text style={styles.cardMeta}>{formatThreadDate(item.created_at)}</Text>
+                <Text style={styles.cardMeta}>{`Updated ${formatThreadDate(item.updated_at)}`}</Text>
               </Card>
             </Pressable>
           )}

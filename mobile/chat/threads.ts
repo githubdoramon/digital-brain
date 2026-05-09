@@ -103,9 +103,11 @@ function mapThreadMessage(msg: ThreadMessage): ChatMessage {
   };
 }
 
-function sortThreadsByCreatedAtDesc<T extends { created_at: string }>(threads: T[]): T[] {
+function sortThreadsByUpdatedAtDesc<T extends { updated_at: string; created_at: string }>(threads: T[]): T[] {
   return [...threads].sort(
-    (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime(),
+    (a, b) =>
+      new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime() ||
+      new Date(b.created_at).getTime() - new Date(a.created_at).getTime(),
   );
 }
 
@@ -115,7 +117,7 @@ export function isCommandThread(thread: Pick<ThreadSummary, 'title'>): boolean {
 
 export async function listNonCommandThreads(token: string): Promise<ThreadSummary[]> {
   const threads = (await apiFetch('/mobile/threads', { token })) as ThreadSummary[];
-  return sortThreadsByCreatedAtDesc((threads || []).filter((thread) => !isCommandThread(thread)));
+  return sortThreadsByUpdatedAtDesc((threads || []).filter((thread) => !isCommandThread(thread)));
 }
 
 export async function loadThreadHistory(token: string, threadId: string): Promise<RestoreResult> {

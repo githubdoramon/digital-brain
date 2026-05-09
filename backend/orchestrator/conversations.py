@@ -14,6 +14,7 @@ from observability.logger import get_runtime_logger
 logger = get_runtime_logger(__name__)
 
 _DEFAULT_TITLE_PREFIX = "Untitled conversation"
+_LEGACY_MAIN_SESSION_TITLE_PREFIX = "Quick Chat"
 
 
 def _command_resolved_label(status: str, kind: str) -> str | None:
@@ -68,7 +69,7 @@ def _generate_default_title() -> str:
 def is_default_title(title: str | None) -> bool:
     if not title:
         return True
-    return title.startswith(_DEFAULT_TITLE_PREFIX)
+    return title.startswith((_DEFAULT_TITLE_PREFIX, _LEGACY_MAIN_SESSION_TITLE_PREFIX))
 
 
 def _generate_thread_id() -> str:
@@ -538,9 +539,9 @@ def _touch_main_session(user_email: str) -> None:
 
 
 def _create_thread_for_main_session(user_email: str) -> dict[str, Any]:
-    """Create a new thread for the main session with a Quick Chat title."""
+    """Create a new thread for the main session with a temporary default title."""
     new_thread_id = _generate_thread_id()
-    title = f"Quick Chat - {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M')} UTC"
+    title = _generate_default_title()
     with get_conn() as conn, conn.cursor(row_factory=dict_row) as cur:
         cur.execute(
             """

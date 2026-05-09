@@ -44,3 +44,11 @@ def test_normalize_command_resolved_metadata_maps_legacy_contact_status():
         "status": "cancelled",
         "label": "Contact update cancelled",
     }
+
+
+def test_is_default_title_accepts_current_default_prefix():
+    assert conversations.is_default_title("Untitled conversation - 2026-05-09 10:15 UTC") is True
+
+
+def test_is_default_title_accepts_legacy_quick_chat_prefix():
+    assert conversations.is_default_title("Quick Chat - 2026-05-09 10:15 UTC") is True
