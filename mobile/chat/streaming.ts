@@ -51,6 +51,7 @@ type AskRunStatus = {
 type StreamAskParams = {
   token?: string | null;
   question: string;
+  threadId?: string | null;
   pendingCommandId?: string | null;
   uiSubmission?: UiSubmissionInput;
   mediaAttachments?: ChatMediaAttachmentPayload[];
@@ -212,6 +213,7 @@ export async function waitForRunCompletion(
 export async function askWithStreaming({
   token,
   question,
+  threadId,
   pendingCommandId,
   uiSubmission,
   mediaAttachments,
@@ -219,6 +221,7 @@ export async function askWithStreaming({
 }: StreamAskParams): Promise<AskResponse> {
   const payload = {
     question,
+    thread_id: threadId ?? undefined,
     pending_event_id: pendingCommandId ?? undefined,
     client_context: getClientContext(),
     ui_submission: uiSubmission ?? undefined,

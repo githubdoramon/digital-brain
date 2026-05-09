@@ -307,6 +307,25 @@ function RootLayoutNav({ loaded }: { loaded: boolean }) {
           }}
         />
         <Stack.Screen
+          name="chat/history/index"
+          options={{
+            headerShown: true,
+            headerTitle: 'Thread history',
+            headerBackTitle: ' ',
+            headerBackTitleStyle: { fontSize: 0 },
+            headerBackButtonMenuEnabled: false,
+            headerShadowVisible: false,
+            headerTintColor: theme.colors.ink,
+            headerStyle: { backgroundColor: '#f7f2ec' },
+          }}
+        />
+        <Stack.Screen
+          name="chat/[threadId]/index"
+          options={{
+            headerShown: false,
+          }}
+        />
+        <Stack.Screen
           name="contacts/proposals/[previewId]/index"
           options={{
             headerShown: false,

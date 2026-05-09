@@ -59,7 +59,7 @@ import {
   savePendingRun,
   StoredChatSession,
 } from '@/chat/session';
-import { restoreChatHistory } from '@/chat/threads';
+import { loadThreadHistory, restoreChatHistory } from '@/chat/threads';
 import { routeForLinkedItem, type LinkedItem } from '@/chat/linkedItems';
 import type {
   CommandResolvedMeta,
@@ -131,6 +131,11 @@ type EventAction = {
 type ContactAction = {
   type: 'confirm' | 'cancel' | 'edit';
   previewId: string;
+};
+
+type ChatConversationScreenProps = {
+  mode?: 'main' | 'thread';
+  initialThreadId?: string | null;
 };
 
 type EventMatchCandidatePayload = {
@@ -1082,7 +1087,10 @@ function pruneContactPreviewBlocks(directives: UiDirectives, previewId: string):
   };
 }
 
-export default function ChatScreen() {
+export function ChatConversationScreen({
+  mode = 'main',
+  initialThreadId = null,
+}: ChatConversationScreenProps) {
   const router = useRouter();
   const { token, signOut, email, name, photo, isLoading: isAuthLoading } = useAuth();
   const { showError } = useAppNotice();
@@ -1096,7 +1104,7 @@ export default function ChatScreen() {
   const scrollFallbackTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [input, setInput] = useState('');
   const [isSending, setIsSending] = useState(false);
-  const [threadId, setThreadId] = useState<string | null>(null);
+  const [threadId, setThreadId] = useState<string | null>(initialThreadId);
   const [isConfirmingEvent, setIsConfirmingEvent] = useState(false);
   const [pendingEventId, setPendingEventId] = useState<string | null>(null);
   const [eventDraftModificationsByPreview, setEventDraftModificationsByPreview] = useState<
@@ -1120,6 +1128,8 @@ export default function ChatScreen() {
   const [composerHeight, setComposerHeight] = useState(0);
   const [keyboardVisible, setKeyboardVisible] = useState(false);
   const [keyboardHeight, setKeyboardHeight] = useState(0);
+  const isMainChat = mode === 'main';
+  const commandsEnabled = isMainChat;
   const composerBottomOffset = keyboardVisible
     ? Platform.OS === 'ios'
       ? Math.max(0, keyboardHeight - insets.bottom) + COMPOSER_KEYBOARD_GAP
@@ -1131,7 +1141,13 @@ export default function ChatScreen() {
       : tabBarClearance + keyboardHeight + 80;
 
   const allowed = email === 'REDACTED-EMAIL';
-  const canSend = (input.trim().length > 0 || composerMediaAttachments.length > 0) && !isSending && allowed;
+  const trimmedInputForSend = input.trim();
+  const isBlockedCommandInput = !commandsEnabled && trimmedInputForSend.startsWith('/');
+  const canSend =
+    (trimmedInputForSend.length > 0 || composerMediaAttachments.length > 0) &&
+    !isSending &&
+    allowed &&
+    !isBlockedCommandInput;
 
   const starterMessages = useMemo<Message[]>(
     () => [
@@ -1154,6 +1170,14 @@ export default function ChatScreen() {
   }, [starterMessages, messages]);
 
   useEffect(() => {
+    hasHydratedSessionRef.current = false;
+    if (!isMainChat) {
+      setThreadId(initialThreadId);
+      setPendingEventId(null);
+    }
+  }, [initialThreadId, isMainChat]);
+
+  useEffect(() => {
     let cancelled = false;
     const restoreGeneration = restoreGenerationRef.current + 1;
     restoreGenerationRef.current = restoreGeneration;
@@ -1169,7 +1193,7 @@ export default function ChatScreen() {
       if (!token || !allowed) {
         hasHydratedSessionRef.current = false;
         if (!isCurrentRestore()) return;
-        setThreadId(null);
+        setThreadId(initialThreadId);
         setPendingEventId(null);
         setMessages(starterMessages);
         setIsBootstrapping(false);
@@ -1185,9 +1209,11 @@ export default function ChatScreen() {
       if (!isCurrentRestore()) return;
       setIsBootstrapping(true);
       try {
-        const stored = await loadChatSession();
-        if (!isCurrentRestore()) return;
-        const restored = await restoreChatHistory(token, stored);
+        const restored = isMainChat
+          ? await restoreChatHistory(token, await loadChatSession())
+          : initialThreadId
+            ? await loadThreadHistory(token, initialThreadId)
+            : { threadId: null, pendingEventId: null, messages: [] };
         if (!isCurrentRestore()) return;
 
         hasHydratedSessionRef.current = true;
@@ -1216,18 +1242,20 @@ export default function ChatScreen() {
     return () => {
       cancelled = true;
     };
-  }, [isAuthLoading, token, allowed, signOut, starterMessages]);
+  }, [allowed, initialThreadId, isAuthLoading, isMainChat, signOut, starterMessages, token]);
 
   useEffect(() => {
+    if (!isMainChat) return;
     if (isBootstrapping || isAuthLoading) return;
     const stored: StoredChatSession = {
       threadId,
       pendingEventId,
     };
     void saveChatSession(stored);
-  }, [threadId, pendingEventId, isBootstrapping, isAuthLoading]);
+  }, [threadId, pendingEventId, isBootstrapping, isAuthLoading, isMainChat]);
 
   const resumePendingRun = useCallback(async () => {
+    if (!isMainChat) return;
     if (!token) return;
     const pendingRun = await loadPendingRun();
     if (!pendingRun?.runId) return;
@@ -1310,14 +1338,16 @@ export default function ChatScreen() {
     } catch {
       // Keep pending run marker for another retry on next foreground.
     }
-  }, [pendingEventId, token]);
+  }, [isMainChat, pendingEventId, token]);
 
   useEffect(() => {
+    if (!isMainChat) return;
     if (!token || !allowed || isAuthLoading || isBootstrapping) return;
     void resumePendingRun();
-  }, [allowed, isAuthLoading, isBootstrapping, resumePendingRun, token]);
+  }, [allowed, isAuthLoading, isBootstrapping, isMainChat, resumePendingRun, token]);
 
   useEffect(() => {
+    if (!isMainChat) return;
     if (!token || !allowed || isAuthLoading || isBootstrapping) return;
 
     const subscription = AppState.addEventListener('change', (nextState) => {
@@ -1344,7 +1374,7 @@ export default function ChatScreen() {
     return () => {
       subscription.remove();
     };
-  }, [allowed, isAuthLoading, isBootstrapping, pendingEventId, resumePendingRun, threadId, token]);
+  }, [allowed, isAuthLoading, isBootstrapping, isMainChat, pendingEventId, resumePendingRun, threadId, token]);
 
   useEffect(() => {
     if (!pendingEventId) {
@@ -1518,14 +1548,19 @@ export default function ChatScreen() {
       const response = await askWithStreaming({
         token,
         question: outboundText,
+        threadId: isMainChat ? undefined : threadId,
         pendingCommandId:
-          overridePendingCommandId !== undefined ? overridePendingCommandId : pendingEventId,
+          commandsEnabled
+            ? overridePendingCommandId !== undefined
+              ? overridePendingCommandId
+              : pendingEventId
+            : null,
         uiSubmission,
         mediaAttachments: outboundMediaAttachments.map(toChatMediaAttachmentPayload),
         callbacks: {
           onSessionInfo: (threadIdFromStream) => {
             setThreadId((prev) => threadIdFromStream ?? prev);
-            if (activeRunId) {
+            if (isMainChat && activeRunId) {
               void savePendingRun({
                 runId: activeRunId,
                 pendingMessageId: pendingId,
@@ -1537,13 +1572,15 @@ export default function ChatScreen() {
           },
           onRunId: (runIdFromStream) => {
             activeRunId = runIdFromStream;
-            void savePendingRun({
-              runId: runIdFromStream,
-              pendingMessageId: pendingId,
-              threadId: threadId,
-              question: outboundText,
-              startedAt: Date.now(),
-            });
+            if (isMainChat) {
+              void savePendingRun({
+                runId: runIdFromStream,
+                pendingMessageId: pendingId,
+                threadId: threadId,
+                question: outboundText,
+                startedAt: Date.now(),
+              });
+            }
           },
           onStatus: (statusMessage) => {
             lastStatus = statusMessage;
@@ -1567,7 +1604,9 @@ export default function ChatScreen() {
         },
       });
 
-      await clearPendingRun();
+      if (isMainChat) {
+        await clearPendingRun();
+      }
 
       setThreadId((prev) => response.thread_id ?? prev);
       const commandResult = response.command_result as CommandResult | undefined;
@@ -1607,7 +1646,9 @@ export default function ChatScreen() {
     } catch (error) {
       const authExpired = (error as Error & { authExpired?: boolean }).authExpired;
       if (authExpired) {
-        await clearPendingRun();
+        if (isMainChat) {
+          await clearPendingRun();
+        }
         await signOut();
         if (outboundMediaAttachments.length > 0) {
           setComposerMediaAttachments(outboundMediaAttachments);
@@ -1628,7 +1669,9 @@ export default function ChatScreen() {
       }
       const requestError = backendErrorDetails(error);
       if (!activeRunId) {
-        await clearPendingRun();
+        if (isMainChat) {
+          await clearPendingRun();
+        }
         if (outboundMediaAttachments.length > 0) {
           setComposerMediaAttachments(outboundMediaAttachments);
         }
@@ -1659,8 +1702,10 @@ export default function ChatScreen() {
   }, [
     allowed,
     composerMediaAttachments,
+    commandsEnabled,
     input,
     isBootstrapping,
+    isMainChat,
     isSending,
     pendingEventId,
     signOut,
@@ -2201,7 +2246,7 @@ export default function ChatScreen() {
 
   const trimmedInput = input.trimStart();
   const hasCommandToken = /^\/\w+\s/.test(trimmedInput);
-  const showSlashPalette = trimmedInput.startsWith('/') && !hasCommandToken;
+  const showSlashPalette = commandsEnabled && trimmedInput.startsWith('/') && !hasCommandToken;
   const slashQuery = trimmedInput.slice(1).split(/\s/)[0];
   const showAnchoredSlashPalette = showSlashPalette && composerHeight > 0;
   const lastMessage = messages[messages.length - 1];
@@ -2494,12 +2539,25 @@ export default function ChatScreen() {
         />
         <CollapsingTopBar
           title="Brain"
-          secondaryTitle={'Talk to "your" memory'}
+          secondaryTitle={isMainChat ? 'Talk to "your" memory' : undefined}
           scrollY={scrollY}
           profileName={name || email || 'You'}
           profilePhoto={photo}
           token={token}
-          onPressProfile={() => router.push('/settings')}
+          onPressProfile={isMainChat ? () => router.push('/settings') : undefined}
+          onPressBack={!isMainChat ? () => router.back() : undefined}
+          rightAccessory={
+            isMainChat ? (
+              <Pressable
+                onPress={() => router.push('/chat/history')}
+                accessibilityRole="button"
+                accessibilityLabel="Open thread history"
+                style={({ pressed }) => [styles.headerActionButton, pressed && styles.headerActionButtonPressed]}
+              >
+                <Ionicons name="time-outline" size={18} color={theme.colors.ink} />
+              </Pressable>
+            ) : undefined
+          }
         />
         {showAnchoredSlashPalette && (
           <View style={[styles.slashPaletteAnchor, { bottom: composerHeight + composerBottomOffset + 8 }]}>
@@ -2531,6 +2589,9 @@ export default function ChatScreen() {
             attachments={composerMediaAttachments}
             onRemoveAttachment={removeComposerMediaAttachment}
           />
+          {!commandsEnabled ? (
+            <Text style={styles.composerNotice}>Commands are disabled in historical threads.</Text>
+          ) : null}
           <View style={styles.inputWrap}>
             <Pressable
               accessibilityRole="button"
@@ -2565,7 +2626,7 @@ export default function ChatScreen() {
                 },
               ]}
               onChangeText={setInput}
-              placeholder="Ask me anything..."
+              placeholder={commandsEnabled ? 'Ask me anything...' : 'Reply to this thread...'}
               placeholderTextColor="#A7AFB7"
               multiline
               onFocus={() => {
@@ -2601,6 +2662,10 @@ export default function ChatScreen() {
       {imagePickerSheet}
     </LinearGradient>
   );
+}
+
+export default function ChatScreen() {
+  return <ChatConversationScreen />;
 }
 
 const styles = StyleSheet.create({
@@ -2733,6 +2798,19 @@ const styles = StyleSheet.create({
     zIndex: 3,
     elevation: 3,
   },
+  headerActionButton: {
+    minHeight: 40,
+    minWidth: 40,
+    borderRadius: 20,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: theme.colors.line,
+    backgroundColor: 'rgba(255, 255, 255, 0.92)',
+  },
+  headerActionButtonPressed: {
+    opacity: 0.75,
+  },
   composer: {
     position: 'absolute',
     left: 0,
@@ -2748,6 +2826,12 @@ const styles = StyleSheet.create({
   inputWrap: {
     flex: 1,
     position: 'relative',
+  },
+  composerNotice: {
+    fontSize: 12,
+    lineHeight: 16,
+    color: theme.colors.mutedInk,
+    paddingHorizontal: 8,
   },
   attachButton: {
     position: 'absolute',

@@ -17,6 +17,7 @@ type CollapsingTopBarProps = {
   token?: string | null;
   onPressProfile?: () => void;
   onPressBack?: () => void;
+  rightAccessory?: React.ReactNode;
 };
 
 export const COLLAPSING_TOP_BAR_HEIGHT = 48;
@@ -36,15 +37,18 @@ export function CollapsingTopBar({
   token,
   onPressProfile,
   onPressBack,
+  rightAccessory,
 }: CollapsingTopBarProps) {
   const insets = useSafeAreaInsets();
   const collapsedTop =
     insets.top + Math.round((COLLAPSING_TOP_BAR_HEIGHT - COLLAPSED_TITLE_LINE_HEIGHT ) / 2) - (Platform.OS === 'ios' ? 2 : 0);
   const hasBack = Boolean(onPressBack);
   const hasProfile = Boolean(onPressProfile);
+  const hasRightAccessory = Boolean(rightAccessory);
   const expandedLeft = 20;
   const collapsedLeft = hasBack ? 52 : 20;
-  const collapsedRight = hasProfile ? 80 : 20;
+  const rightActionCount = (hasProfile ? 1 : 0) + (hasRightAccessory ? 1 : 0);
+  const collapsedRight = rightActionCount > 0 ? 20 + rightActionCount * 40 + (rightActionCount - 1) * 8 : 20;
   const travelDistance = insets.top + COLLAPSING_TOP_BAR_HEIGHT - collapsedTop - 8;
   const collapseProgress = scrollY.interpolate({
     inputRange: [0, Math.max(64, travelDistance + 28)],
@@ -136,16 +140,19 @@ export function CollapsingTopBar({
         </View>
       ) : null}
 
-      {hasProfile ? (
+      {hasProfile || hasRightAccessory ? (
         <View style={[styles.rightActionWrap, { top: insets.top + 4 }]}> 
-          <Pressable
-            onPress={onPressProfile}
-            accessibilityRole="button"
-            accessibilityLabel="Open profile settings"
-            style={({ pressed }) => [styles.avatarButton, pressed && styles.buttonPressed]}
-          >
-            <Avatar name={profileName || 'You'} uri={profilePhoto} token={token} size={32} />
-          </Pressable>
+          {rightAccessory}
+          {hasProfile ? (
+            <Pressable
+              onPress={onPressProfile}
+              accessibilityRole="button"
+              accessibilityLabel="Open profile settings"
+              style={({ pressed }) => [styles.avatarButton, pressed && styles.buttonPressed]}
+            >
+              <Avatar name={profileName || 'You'} uri={profilePhoto} token={token} size={32} />
+            </Pressable>
+          ) : null}
         </View>
       ) : null}
     </View>
@@ -184,6 +191,9 @@ const styles = StyleSheet.create({
   rightActionWrap: {
     position: 'absolute',
     right: 20,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
   },
   backButton: {
     marginLeft: -6,

@@ -41,7 +41,7 @@ export async function buildComposerMediaAttachment(
     ? Math.floor((inlineBase64.length * 3) / 4)
     : null;
 
-  const fileInfo = await FileSystem.getInfoAsync(asset.uri, { size: true });
+  const fileInfo = await FileSystem.getInfoAsync(asset.uri);
   const fileSize =
     fileInfo.exists && typeof fileInfo.size === 'number'
       ? fileInfo.size

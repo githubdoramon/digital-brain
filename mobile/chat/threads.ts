@@ -30,6 +30,18 @@ export type MainSession = {
   messages: ThreadMessage[];
 };
 
+export type ThreadSummary = {
+  id: string;
+  title?: string | null;
+  created_at: string;
+  updated_at: string;
+  last_message_preview?: string | null;
+};
+
+export type ThreadDetail = ThreadSummary & {
+  messages: ThreadMessage[];
+};
+
 export type CommandResolvedStatus = 'created' | 'cancelled' | 'updated';
 
 export type CommandResolvedMeta = {
@@ -67,6 +79,57 @@ type RestoreResult = {
   messages: ChatMessage[];
 };
 
+const COMMAND_THREAD_PREFIX = 'Command: /';
+
+function mapThreadMessage(msg: ThreadMessage): ChatMessage {
+  const meta = msg.metadata ?? undefined;
+  return {
+    id: `${msg.message_id}`,
+    role: msg.role,
+    content: msg.content,
+    metadata: meta
+      ? {
+          command_result: meta.command_result,
+          ui_directives: meta.ui_directives,
+          linked_items: Array.isArray(meta.linked_items)
+            ? (meta.linked_items as LinkedItem[])
+            : undefined,
+          command_resolved: meta.command_resolved as CommandResolvedMeta | undefined,
+          media_attachments: Array.isArray(meta.media_attachments)
+            ? (meta.media_attachments as MessageMediaAttachment[])
+            : undefined,
+        }
+      : undefined,
+  };
+}
+
+function sortThreadsByCreatedAtDesc<T extends { created_at: string }>(threads: T[]): T[] {
+  return [...threads].sort(
+    (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime(),
+  );
+}
+
+export function isCommandThread(thread: Pick<ThreadSummary, 'title'>): boolean {
+  return (thread.title || '').trim().startsWith(COMMAND_THREAD_PREFIX);
+}
+
+export async function listNonCommandThreads(token: string): Promise<ThreadSummary[]> {
+  const threads = (await apiFetch('/mobile/threads', { token })) as ThreadSummary[];
+  return sortThreadsByCreatedAtDesc((threads || []).filter((thread) => !isCommandThread(thread)));
+}
+
+export async function loadThreadHistory(token: string, threadId: string): Promise<RestoreResult> {
+  const thread = (await apiFetch(`/mobile/threads/${encodeURIComponent(threadId)}`, {
+    token,
+  })) as ThreadDetail;
+
+  return {
+    threadId: thread.id,
+    pendingEventId: null,
+    messages: (thread.messages || []).map(mapThreadMessage),
+  };
+}
+
 export async function restoreChatHistory(
   token: string,
   storedSession: StoredChatSession | null,
@@ -76,28 +139,7 @@ export async function restoreChatHistory(
   const threadId = mainSession.thread_id ?? null;
   const resolvedPendingEventId = mainSession.pending_event_id ?? null;
 
-  let messages: ChatMessage[] = [];
-  messages = (mainSession.messages || []).map((msg) => {
-    const meta = msg.metadata ?? undefined;
-    return {
-      id: `${msg.message_id}`,
-      role: msg.role,
-      content: msg.content,
-      metadata: meta
-        ? {
-            command_result: meta.command_result,
-            ui_directives: meta.ui_directives,
-            linked_items: Array.isArray(meta.linked_items)
-              ? (meta.linked_items as LinkedItem[])
-              : undefined,
-            command_resolved: meta.command_resolved as CommandResolvedMeta | undefined,
-            media_attachments: Array.isArray(meta.media_attachments)
-              ? (meta.media_attachments as MessageMediaAttachment[])
-              : undefined,
-          }
-        : undefined,
-    };
-  });
+  const messages = (mainSession.messages || []).map(mapThreadMessage);
 
   return {
     threadId,
