@@ -1098,7 +1098,10 @@ export function ChatConversationScreen({
   const { showError } = useAppNotice();
   const { pickSingleImage, imagePickerSheet } = useSingleImagePicker();
   const insets = useSafeAreaInsets();
-  const tabBarClearance = Math.max(tabBarHeight, getHomeTabBarClearance(insets.bottom));
+  const isMainChat = mode === 'main';
+  const tabBarClearance = isMainChat
+    ? Math.max(tabBarHeight, getHomeTabBarClearance(insets.bottom))
+    : insets.bottom;
   const scrollY = useRef(new Animated.Value(0)).current;
   const listRef = useRef<FlatList<Message>>(null);
   const inputRef = useRef<TextInput>(null);
@@ -1129,7 +1132,6 @@ export function ChatConversationScreen({
   const [composerHeight, setComposerHeight] = useState(0);
   const [keyboardVisible, setKeyboardVisible] = useState(false);
   const [keyboardHeight, setKeyboardHeight] = useState(0);
-  const isMainChat = mode === 'main';
   const commandsEnabled = isMainChat;
   const composerBottomOffset = keyboardVisible
     ? Platform.OS === 'ios'
@@ -2309,7 +2311,7 @@ export function ChatConversationScreen({
   return (
     <LinearGradient colors={theme.gradients.dusk} style={styles.container}>
       <KeyboardAvoidingView
-        style={styles.screen}
+        style={[styles.screen, !isMainChat && styles.threadScreen]}
         behavior={undefined}
         keyboardVerticalOffset={0}
       >
@@ -2328,7 +2330,9 @@ export function ChatConversationScreen({
           contentContainerStyle={[
             styles.listContent,
             {
-              paddingTop: insets.top + COLLAPSING_TOP_BAR_HEIGHT + COLLAPSING_CONTENT_TOP_PADDING,
+              paddingTop: isMainChat
+                ? insets.top + COLLAPSING_TOP_BAR_HEIGHT + COLLAPSING_CONTENT_TOP_PADDING
+                : insets.top + COLLAPSING_TOP_BAR_HEIGHT - 8,
             },
           ]}
           onScroll={Animated.event([{ nativeEvent: { contentOffset: { y: scrollY } } }], {
@@ -2539,7 +2543,7 @@ export function ChatConversationScreen({
           }}
         />
         <CollapsingTopBar
-          title="Brain"
+          title={isMainChat ? 'Brain' : undefined}
           secondaryTitle={isMainChat ? 'Talk to "your" memory' : undefined}
           scrollY={scrollY}
           profileName={name || email || 'You'}
@@ -2580,7 +2584,7 @@ export function ChatConversationScreen({
             styles.composer,
             {
               bottom: composerBottomOffset,
-              paddingBottom: keyboardVisible ? 24 : tabBarClearance + 8,
+              paddingBottom: keyboardVisible ? 24 : tabBarClearance + (isMainChat ? 8 : 4),
               paddingRight: 16,
               gap: 10,
             },
@@ -2677,6 +2681,9 @@ const styles = StyleSheet.create({
   screen: {
     flex: 1,
     paddingTop: COLLAPSING_SECONDARY_TITLE_BLOCK_HEIGHT + 20,
+  },
+  threadScreen: {
+    paddingTop: 0,
   },
   list: {
     flex: 1,

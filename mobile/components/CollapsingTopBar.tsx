@@ -9,7 +9,7 @@ import { theme } from '@/theme';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 type CollapsingTopBarProps = {
-  title: string;
+  title?: string;
   secondaryTitle?: string;
   scrollY: Animated.Value;
   profileName?: string;
@@ -95,23 +95,25 @@ export function CollapsingTopBar({
     <View pointerEvents="box-none" style={styles.wrap}>
       <ScrollHeaderBackdrop height={insets.top + COLLAPSING_TOP_BAR_HEIGHT} opacity={barOpacity} />
 
-      <Animated.Text
-        numberOfLines={1}
-        style={[
-          styles.collapsedTitle,
-          {
-            top: collapsedTop,
-            left: collapsedLeft,
-            right: collapsedRight,
-            fontSize: titleSize,
-            color: titleColor,
-            letterSpacing: titleLetterSpacing,
-            transform: [{ translateX: titleTranslateX }, { translateY: titleTranslateY }],
-          },
-        ]}
-      >
-        {title}
-      </Animated.Text>
+      {title ? (
+        <Animated.Text
+          numberOfLines={1}
+          style={[
+            styles.collapsedTitle,
+            {
+              top: collapsedTop,
+              left: collapsedLeft,
+              right: collapsedRight,
+              fontSize: titleSize,
+              color: titleColor,
+              letterSpacing: titleLetterSpacing,
+              transform: [{ translateX: titleTranslateX }, { translateY: titleTranslateY }],
+            },
+          ]}
+        >
+          {title}
+        </Animated.Text>
+      ) : null}
 
       {secondaryTitle ? (
         <Animated.Text
