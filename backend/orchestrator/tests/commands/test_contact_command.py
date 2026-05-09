@@ -522,6 +522,114 @@ def test_contact_follow_up_can_force_ambiguous_matches_to_new(monkeypatch):
     clear_pending_event(context["event_pending_key"])
 
 
+def test_contact_follow_up_keeps_force_new_intent_across_name_clarification(monkeypatch):
+    context = {
+        "user_email": "user@example.com",
+        "thread_id": "thread-contact-force-new-name",
+        "event_pending_key": "user@example.com:thread-contact-force-new-name",
+    }
+
+    extraction_calls = []
+
+    def fake_extract(*_args, **_kwargs):
+        extraction_calls.append(True)
+        base_payload = {
+            "contacts": [
+                {"contact_name": "Betinho"},
+                {"contact_name": "Amanda Aparecida Oliveira"},
+                {"contact_name": "Thomas", "birthday": "2024-05-09"},
+                {"contact_name": "Arthur", "birthday": "2024-05-09"},
+            ],
+            "relationships": [
+                {
+                    "from_contact_name": "Betinho",
+                    "to_contact_name": "Amanda Aparecida Oliveira",
+                    "relationship_type": "Husband",
+                    "reciprocal_type": "Wife",
+                }
+            ],
+            "contact_place_links": [],
+        }
+        if len(extraction_calls) == 2:
+            return {
+                **base_payload,
+                "need_user_input": {
+                    "kind": "clarification",
+                    "prompt": "Which new contact would you like to add?",
+                    "questions": ["What is the name of the new contact?"],
+                    "fields": [
+                        {
+                            "id": "contact_name",
+                            "kind": "text",
+                            "label": "Contact name",
+                            "required": True,
+                        }
+                    ],
+                    "submission_mode": "ui_submission",
+                },
+            }
+        return {**base_payload, "need_user_input": None}
+
+    monkeypatch.setattr("commands.handlers.contact._llm_extract_contact_changes", fake_extract)
+
+    def fake_search_contacts(name, **_kwargs):
+        if name == "Amanda Aparecida Oliveira":
+            return [
+                {"contact_id": "contact:amanda-1", "display_name": "Adriana Oliveira Carvalho", "match_score": 88},
+                {"contact_id": "contact:amanda-2", "display_name": "Henrique Oliveira", "match_score": 88},
+            ]
+        return []
+
+    monkeypatch.setattr(
+        "commands.handlers.contact.contacts_service.search_contacts",
+        fake_search_contacts,
+    )
+
+    first = handle_contact(
+        ParsedCommand(
+            command="contact",
+            args="Betinho is married to Amanda Aparecida Oliveira.",
+            raw_message="/contact Betinho is married to Amanda Aparecida Oliveira.",
+        ),
+        context,
+    )
+
+    assert first["type"] == "need_user_input"
+    first_clarification_id = first["clarification_id"]
+
+    second = handle_contact(
+        ParsedCommand(
+            command="contact",
+            args=f"None of these - create a new contact [clarification_id:{first_clarification_id}]",
+            raw_message="/contact follow-up",
+        ),
+        context,
+    )
+
+    assert second["type"] == "need_user_input"
+    second_clarification_id = second["clarification_id"]
+
+    third = handle_contact(
+        ParsedCommand(
+            command="contact",
+            args=f"Amanda Aparecida Oliveira [clarification_id:{second_clarification_id}]",
+            raw_message="/contact follow-up",
+        ),
+        context,
+    )
+
+    assert third["type"] == "contact_confirmation"
+    create_refs = {
+        item["reference"]
+        for item in third["proposal"]["contacts"]
+        if item.get("operation") == "create"
+    }
+    assert "new_contact:amanda-aparecida-oliveira" in create_refs
+
+    delete_command_data(third["preview_id"])
+    clear_pending_event(context["event_pending_key"])
+
+
 def test_contact_strip_clarification_field_labels_helper():
     detail = contact_handler._strip_clarification_field_labels(
         "Who did you mean by 'Rita'?: Rita Castro",

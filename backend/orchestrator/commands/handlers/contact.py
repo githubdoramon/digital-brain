@@ -427,11 +427,16 @@ def _infer_forced_new_contact_resolution(
     conversation_messages: list[dict[str, str]] | None,
     extracted: dict[str, Any] | None,
 ) -> tuple[set[str], bool, str | None]:
-    user_messages = [
-        str(item.get("content") or "").strip()
+    transcript = [
+        {
+            "role": str(item.get("role") or "").strip(),
+            "content": str(item.get("content") or "").strip(),
+        }
         for item in (conversation_messages or [])
-        if str(item.get("role") or "").strip() == "user" and str(item.get("content") or "").strip()
+        if str(item.get("role") or "").strip() in {"user", "assistant"}
+        and str(item.get("content") or "").strip()
     ]
+    user_messages = [item["content"] for item in transcript if item["role"] == "user"]
     if len(user_messages) < 2:
         return set(), False, None
 
@@ -448,8 +453,10 @@ def _infer_forced_new_contact_resolution(
         "not found",
         "not existing",
     )
-    if not any(phrase in latest_detail_normalized for phrase in explicit_new_phrases):
-        return set(), False, latest_detail
+
+    def _contains_explicit_new_intent(text: str) -> bool:
+        normalized_text = normalize_search_text(text)
+        return any(phrase in normalized_text for phrase in explicit_new_phrases)
 
     contact_names = [
         str(contact.get("contact_name") or "").strip()
@@ -460,14 +467,52 @@ def _infer_forced_new_contact_resolution(
         normalize_search_text(name): name for name in contact_names if normalize_search_text(name)
     }
 
+    def _matched_contact_names(detail_normalized: str) -> set[str]:
+        matches: set[str] = set()
+        for normalized_name in normalized_contact_names:
+            if normalized_name in detail_normalized:
+                matches.add(normalized_name)
+                continue
+            first_name = normalized_name.split()[0] if normalized_name.split() else ""
+            if first_name and re.search(rf"\b{re.escape(first_name)}\b", detail_normalized):
+                matches.add(normalized_name)
+        return matches
+
+    if not _contains_explicit_new_intent(latest_detail):
+        previous_user_messages = user_messages[:-1]
+        prior_new_intent = next(
+            (message for message in reversed(previous_user_messages) if _contains_explicit_new_intent(message)),
+            None,
+        )
+        if not prior_new_intent:
+            return set(), False, latest_detail
+
+        latest_assistant_before_user = next(
+            (
+                item["content"]
+                for item in reversed(transcript[:-1])
+                if item["role"] == "assistant"
+            ),
+            "",
+        )
+        assistant_prompt_normalized = normalize_search_text(latest_assistant_before_user)
+        is_new_contact_naming_step = any(
+            phrase in assistant_prompt_normalized
+            for phrase in (
+                "which new contact",
+                "name of the new contact",
+                "contact name",
+                "what is the name of the new contact",
+            )
+        )
+        if not is_new_contact_naming_step:
+            return set(), False, latest_detail
+
+        matched_names = _matched_contact_names(latest_detail_normalized)
+        return matched_names, False, latest_detail
+
     forced_specific_names: set[str] = set()
-    for normalized_name in normalized_contact_names:
-        if normalized_name in latest_detail_normalized:
-            forced_specific_names.add(normalized_name)
-            continue
-        first_name = normalized_name.split()[0] if normalized_name.split() else ""
-        if first_name and re.search(rf"\b{re.escape(first_name)}\b", latest_detail_normalized):
-            forced_specific_names.add(normalized_name)
+    forced_specific_names.update(_matched_contact_names(latest_detail_normalized))
 
     latest_assistant = next(
         (
