@@ -39,27 +39,12 @@ export function UiDirectiveChoiceBlock({ block, isSubmitting, submittingOptionId
           variant={isResolved ? 'secondary' : buttonVariant(option)}
           disabled={isSubmitting || isResolved}
           loading={Boolean(isSubmitting && submittingOptionId === option.id)}
-          loadingLabel={buttonLoadingLabel(option.label)}
           onPress={() => onSelect(option)}
           style={styles.choiceButton}
         />
       ))}
     </View>
   );
-}
-
-function buttonLoadingLabel(label: string): string {
-  const trimmed = label.trim();
-  if (!trimmed) return 'Working';
-  if (/cancel/i.test(trimmed)) return 'Cancelling';
-  if (/edit/i.test(trimmed)) return 'Opening editor';
-  if (/create/i.test(trimmed)) return 'Creating';
-  if (/update/i.test(trimmed)) return 'Updating';
-  if (/save/i.test(trimmed)) return 'Saving';
-  if (/confirm/i.test(trimmed)) return 'Confirming';
-  if (/continue|proceed/i.test(trimmed)) return 'Continuing';
-  if (/yes|ok/i.test(trimmed)) return 'Working';
-  return trimmed;
 }
 
 function buttonVariant(option: UiDirectiveOption): 'primary' | 'secondary' {

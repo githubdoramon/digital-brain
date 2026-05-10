@@ -556,6 +556,9 @@ export default function EntitiesScreen() {
         const searchParams = buildCommonSearchParams();
         searchParams.set('limit', String(EVENT_PAGE_SIZE));
         searchParams.set('offset', String(offset));
+        if (filters.includeFutureEvents) {
+          searchParams.set('include_future', 'true');
+        }
         const result = (await apiFetch(`/mobile/events/search?${searchParams.toString()}`)) as EventSearchResponse;
         if (requestId !== requestVersionRef.current) return;
         const incomingEvents = sortEventsByStartDateDesc(result.events ?? []);
@@ -579,7 +582,7 @@ export default function EntitiesScreen() {
         }
       }
     },
-    [buildCommonSearchParams],
+    [buildCommonSearchParams, filters.includeFutureEvents],
   );
 
   const loadDocuments = React.useCallback(
@@ -908,6 +911,7 @@ export default function EntitiesScreen() {
 
       <EntityFilterSheet
         visible={showFilterSheet}
+        filters={filters}
         chips={activeFilterChips}
         onApply={setFilters}
         onRemove={handleRemoveActiveFilter}

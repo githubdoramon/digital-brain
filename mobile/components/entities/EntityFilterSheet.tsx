@@ -1,6 +1,6 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
 import React from 'react';
-import { ScrollView, StyleSheet, Text, View } from 'react-native';
+import { ScrollView, StyleSheet, Switch, Text, View } from 'react-native';
 
 import { AppPressable as Pressable } from '@/components/AppPressable';
 import { BottomSheet } from '@/components/BottomSheet';
@@ -11,13 +11,14 @@ import { ENTITY_META, EMPTY_ENTITY_FILTERS, type EntityFilters, type EntityKind 
 
 type EntityFilterSheetProps = {
   visible: boolean;
+  filters: EntityFilters;
   chips: { id: string; kind: EntityKind; label: string }[];
   onApply: (filters: EntityFilters) => void;
   onRemove: (kind: EntityKind, id: string) => void;
   onClose: () => void;
 };
 
-export function EntityFilterSheet({ visible, chips, onApply, onRemove, onClose }: EntityFilterSheetProps) {
+export function EntityFilterSheet({ visible, filters, chips, onApply, onRemove, onClose }: EntityFilterSheetProps) {
 
   return (
     <BottomSheet visible={visible} onClose={onClose}>
@@ -57,6 +58,20 @@ export function EntityFilterSheet({ visible, chips, onApply, onRemove, onClose }
               ) : (
                 <Text style={styles.emptyText}>No selected {ENTITY_META[kind].label.toLowerCase()} yet.</Text>
               )}
+              {kind === 'events' ? (
+                <View style={styles.toggleRow}>
+                  <View style={styles.toggleCopy}>
+                    <Text style={styles.toggleTitle}>Include future events</Text>
+                    <Text style={styles.toggleDescription}>Show upcoming events in the main events list and event filters.</Text>
+                  </View>
+                  <Switch
+                    value={filters.includeFutureEvents}
+                    onValueChange={(value) => onApply({ ...filters, includeFutureEvents: value })}
+                    trackColor={{ false: theme.colors.line, true: theme.colors.paleTeal }}
+                    thumbColor={filters.includeFutureEvents ? theme.colors.accent : '#f2f2f2'}
+                  />
+                </View>
+              ) : null}
             </View>
           );
         })}
@@ -71,6 +86,7 @@ export function EntityFilterSheet({ visible, chips, onApply, onRemove, onClose }
               contactIds: [...EMPTY_ENTITY_FILTERS.contactIds],
               placeIds: [...EMPTY_ENTITY_FILTERS.placeIds],
               eventIds: [...EMPTY_ENTITY_FILTERS.eventIds],
+              includeFutureEvents: EMPTY_ENTITY_FILTERS.includeFutureEvents,
             });
             onClose();
           }}
@@ -160,6 +176,28 @@ const styles = StyleSheet.create({
   },
   emptyText: {
     fontSize: 13,
+    color: theme.colors.mutedInk,
+  },
+  toggleRow: {
+    marginTop: 2,
+    paddingHorizontal: 2,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 12,
+  },
+  toggleCopy: {
+    flex: 1,
+    gap: 3,
+  },
+  toggleTitle: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: theme.colors.ink,
+  },
+  toggleDescription: {
+    fontSize: 12,
+    lineHeight: 17,
     color: theme.colors.mutedInk,
   },
   footer: {

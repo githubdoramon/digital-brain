@@ -75,6 +75,7 @@ def create_events_router(
         query: str | None = Query(default=None),
         limit: int = Query(default=10, ge=1, le=50),
         offset: int = Query(default=0, ge=0),
+        include_future: bool = Query(default=False),
         contact_ids: list[str] | None = Query(default=None),
         place_ids: list[str] | None = Query(default=None),
         event_ids: list[str] | None = Query(default=None),
@@ -97,6 +98,9 @@ def create_events_router(
                 """
             )
             params.extend([like, like])
+
+        if not include_future:
+            where_clauses.append("(e.start_date IS NULL OR e.start_date <= NOW())")
 
         if clean_contact_ids:
             where_clauses.append(

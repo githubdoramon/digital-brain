@@ -4,6 +4,7 @@ export type EntityFilters = {
   contactIds: string[];
   placeIds: string[];
   eventIds: string[];
+  includeFutureEvents: boolean;
 };
 
 export type EntityFilterOption = {
@@ -83,6 +84,7 @@ export const EMPTY_ENTITY_FILTERS: EntityFilters = {
   contactIds: [],
   placeIds: [],
   eventIds: [],
+  includeFutureEvents: false,
 };
 
 export const ENTITY_META: Record<
