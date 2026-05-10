@@ -18,6 +18,7 @@ import { UiDirectiveDateTimePickerSheet } from './UiDirectiveDateTimePickerSheet
 type Props = {
   block: UiDirectiveBlock;
   isSubmitting: boolean;
+  isSubmitLoading?: boolean;
   getFieldValue: (field: UiDirectiveField) => string;
   setFieldValue: (field: UiDirectiveField, value: string) => void;
   onFieldFocus?: () => void;
@@ -36,6 +37,7 @@ function pickerIconName(field: UiDirectiveField): React.ComponentProps<typeof Io
 export function UiDirectiveFormBlock({
   block,
   isSubmitting,
+  isSubmitLoading = false,
   getFieldValue,
   setFieldValue,
   onFieldFocus,
@@ -137,6 +139,7 @@ export function UiDirectiveFormBlock({
         label={block.submit_label || 'Submit'}
         variant="primary"
         disabled={isSubmitting}
+        loading={isSubmitLoading}
         onPress={onSubmit}
         style={styles.submitButton}
       />

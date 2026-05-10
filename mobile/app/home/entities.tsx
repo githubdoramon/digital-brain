@@ -57,6 +57,20 @@ import { theme } from '@/theme';
 const EVENT_PAGE_SIZE = 30;
 type EntityListRow = ContactListItem | PlaceListItem | EventListItem | DocumentListItem;
 
+function getEventSortTime(event: EventListItem): number {
+  if (!event.start_date) return Number.NEGATIVE_INFINITY;
+  const timestamp = new Date(event.start_date).getTime();
+  return Number.isNaN(timestamp) ? Number.NEGATIVE_INFINITY : timestamp;
+}
+
+function sortEventsByStartDateDesc(events: EventListItem[]): EventListItem[] {
+  return [...events].sort((left, right) => {
+    const timeDiff = getEventSortTime(right) - getEventSortTime(left);
+    if (timeDiff !== 0) return timeDiff;
+    return right.id.localeCompare(left.id);
+  });
+}
+
 function appendIds(searchParams: URLSearchParams, key: string, values: string[]) {
   for (const value of values) {
     searchParams.append(key, value);
@@ -369,7 +383,7 @@ export default function EntitiesScreen() {
       const nextOptions: EntityFilterOption[] = [];
       const contactItems = ((contactsResult as { contacts?: ContactListItem[] }).contacts || []) as ContactListItem[];
       const placeItems = ((placesResult as { places?: PlaceListItem[] }).places || []) as PlaceListItem[];
-      const eventItems = ((eventsResult as EventSearchResponse).events || []) as EventListItem[];
+      const eventItems = sortEventsByStartDateDesc(((eventsResult as EventSearchResponse).events || []) as EventListItem[]);
 
       contactItems.forEach((contact) => {
         nextOptions.push({
@@ -544,11 +558,11 @@ export default function EntitiesScreen() {
         searchParams.set('offset', String(offset));
         const result = (await apiFetch(`/mobile/events/search?${searchParams.toString()}`)) as EventSearchResponse;
         if (requestId !== requestVersionRef.current) return;
-        const incomingEvents = result.events ?? [];
+        const incomingEvents = sortEventsByStartDateDesc(result.events ?? []);
         setEvents((current) => {
           if (!append) return incomingEvents;
           const seen = new Set(current.map((event) => event.id));
-          return current.concat(incomingEvents.filter((event) => !seen.has(event.id)));
+          return sortEventsByStartDateDesc(current.concat(incomingEvents.filter((event) => !seen.has(event.id))));
         });
         eventNextOffsetRef.current = typeof result.next_offset === 'number' ? result.next_offset : offset + incomingEvents.length;
         eventHasMoreRef.current = Boolean(result.has_more);

@@ -1,5 +1,5 @@
-import React, { useMemo, useState } from 'react';
-import { StyleSheet, Text, View } from 'react-native';
+import React, { useEffect, useMemo, useState } from 'react';
+import { ActivityIndicator, StyleSheet, Text, View } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
 
 import type { CommandResolvedMeta } from '@/chat/threads';
@@ -104,6 +104,11 @@ type EventEditAction = {
   option: UiDirectiveOption;
 };
 
+type PendingSubmission =
+  | { kind: 'choice'; blockId: string; optionId: string }
+  | { kind: 'form'; blockId: string }
+  | { kind: 'edit'; blockId: string; optionId: string };
+
 export function UiDirectiveCard({
   directives,
   isSubmitting = false,
@@ -113,7 +118,14 @@ export function UiDirectiveCard({
 }: Props) {
   const isResolved = Boolean(resolved);
   const [formValues, setFormValues] = useState<Record<string, string>>({});
+  const [pendingSubmission, setPendingSubmission] = useState<PendingSubmission | null>(null);
   const blocks = useMemo(() => directives.blocks || [], [directives.blocks]);
+
+  useEffect(() => {
+    if (!isSubmitting) {
+      setPendingSubmission(null);
+    }
+  }, [isSubmitting]);
   const eventEditActionsByPreviewId = useMemo(() => {
     const mapping = new Map<string, EventEditAction>();
     for (const block of blocks) {
@@ -150,6 +162,7 @@ export function UiDirectiveCard({
     formValues[fieldStateKey(block, field)] ?? field.value ?? '';
 
   const submitChoice = (block: UiDirectiveBlock, option: UiDirectiveOption) => {
+    setPendingSubmission({ kind: 'choice', blockId: block.id, optionId: option.id });
     onSubmit({
       block_id: block.id,
       action_id: actionIdForBlock(block),
@@ -172,6 +185,7 @@ export function UiDirectiveCard({
       }
     }
 
+    setPendingSubmission({ kind: 'form', blockId: block.id });
     onSubmit({
       block_id: block.id,
       action_id: actionIdForBlock(block),
@@ -232,7 +246,8 @@ export function UiDirectiveCard({
                   accessibilityRole="button"
                   accessibilityLabel="Edit draft"
                   disabled={isSubmitting}
-                  onPress={() =>
+                  onPress={() => {
+                    setPendingSubmission({ kind: 'edit', blockId: editAction.blockId, optionId: editAction.option.id });
                     onSubmit({
                       block_id: editAction.blockId,
                       action_id: editAction.actionId,
@@ -241,15 +256,19 @@ export function UiDirectiveCard({
                         option_label: editAction.option.label,
                       },
                       text_fallback: editAction.option.label,
-                    })
-                  }
+                    });
+                  }}
                   style={({ pressed }) => [
                     styles.editButton,
                     pressed && styles.editButtonPressed,
                     isSubmitting && styles.editButtonDisabled,
                   ]}
                 >
-                  <Ionicons name="create" size={24} color={theme.colors.accentDeep} />
+                  {isSubmitting && pendingSubmission?.kind === 'edit' && pendingSubmission.optionId === editAction.option.id ? (
+                    <ActivityIndicator size="small" color={theme.colors.accentDeep} />
+                  ) : (
+                    <Ionicons name="create" size={24} color={theme.colors.accentDeep} />
+                  )}
                 </Pressable>
               ) : null}
             </View>
@@ -261,6 +280,9 @@ export function UiDirectiveCard({
               <UiDirectiveFormBlock
                 block={block}
                 isSubmitting={isSubmitting}
+                isSubmitLoading={Boolean(
+                  isSubmitting && pendingSubmission?.kind === 'form' && pendingSubmission.blockId === block.id,
+                )}
                 getFieldValue={(field) => getFieldValue(block, field)}
                 setFieldValue={(field, value) => setFieldValue(block, field, value)}
                 onFieldFocus={onFieldFocus}
@@ -272,6 +294,11 @@ export function UiDirectiveCard({
               <UiDirectiveChoiceBlock
                 block={block}
                 isSubmitting={isSubmitting}
+                submittingOptionId={
+                  isSubmitting && pendingSubmission?.kind === 'choice' && pendingSubmission.blockId === block.id
+                    ? pendingSubmission.optionId
+                    : null
+                }
                 resolvedStatus={resolved?.status}
                 onSelect={(option) => submitChoice(block, option)}
               />
