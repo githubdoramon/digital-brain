@@ -10,7 +10,41 @@ export type ResolvedPickedImageAsset = {
   width?: number | null;
   height?: number | null;
   exif?: Record<string, unknown> | null;
+  debug: {
+    resolutionMethod: 'media-library-original' | 'picker-fallback';
+    pickerUri: string;
+    resolvedUri: string;
+    pickerFileName?: string | null;
+    resolvedFileName: string;
+    assetId?: string | null;
+    pickerHasGps: boolean;
+    resolvedHasGps: boolean;
+    pickerExifKeys: string[];
+    resolvedExifKeys: string[];
+  };
 };
+
+function hasGpsExif(exif: Record<string, unknown> | null): boolean {
+  if (!exif) {
+    return false;
+  }
+  return [
+    exif.GPSLatitude,
+    exif.GPSLongitude,
+    exif.latitude,
+    exif.longitude,
+    exif.gpsLatitude,
+    exif.gpsLongitude,
+  ].some((value) => value !== undefined && value !== null && String(value).trim() !== '');
+}
+
+function exifKeys(exif: Record<string, unknown> | null): string[] {
+  return exif ? Object.keys(exif).sort() : [];
+}
+
+function logResolvedAssetDebug(debug: ResolvedPickedImageAsset['debug']) {
+  console.info('[event-photos] resolved picked asset', debug);
+}
 
 function inferMimeType(fileName: string, fallback?: string | null): string {
   const normalizedFallback = String(fallback ?? '').trim();
@@ -48,7 +82,7 @@ export async function resolvePickedImageAsset(
       const assetFileName = String(info.filename ?? '').trim();
       const resolvedUri = assetLocalUri || pickerUri;
       const resolvedFileName = assetFileName || pickerFileName || `photo-${Date.now()}.jpg`;
-      return {
+      const resolved = {
         assetId: asset.assetId,
         uri: resolvedUri,
         displayUri: pickerUri,
@@ -57,14 +91,28 @@ export async function resolvePickedImageAsset(
         width: typeof asset.width === 'number' ? asset.width : null,
         height: typeof asset.height === 'number' ? asset.height : null,
         exif: normalizeExif(info.exif) || pickerExif,
+        debug: {
+          resolutionMethod: 'media-library-original',
+          pickerUri,
+          resolvedUri,
+          pickerFileName: pickerFileName || null,
+          resolvedFileName: resolvedFileName,
+          assetId: asset.assetId,
+          pickerHasGps: hasGpsExif(pickerExif),
+          resolvedHasGps: hasGpsExif(normalizeExif(info.exif) || pickerExif),
+          pickerExifKeys: exifKeys(pickerExif),
+          resolvedExifKeys: exifKeys(normalizeExif(info.exif) || pickerExif),
+        },
       };
+      logResolvedAssetDebug(resolved.debug);
+      return resolved;
     } catch {
       // Fall back to the picker-exported asset if MediaLibrary cannot resolve the original file.
     }
   }
 
   const fallbackFileName = pickerFileName || `photo-${Date.now()}.jpg`;
-  return {
+  const fallback = {
     assetId: asset.assetId ?? null,
     uri: pickerUri,
     displayUri: pickerUri,
@@ -73,5 +121,19 @@ export async function resolvePickedImageAsset(
     width: typeof asset.width === 'number' ? asset.width : null,
     height: typeof asset.height === 'number' ? asset.height : null,
     exif: pickerExif,
+    debug: {
+      resolutionMethod: 'picker-fallback',
+      pickerUri,
+      resolvedUri: pickerUri,
+      pickerFileName: pickerFileName || null,
+      resolvedFileName: fallbackFileName,
+      assetId: asset.assetId ?? null,
+      pickerHasGps: hasGpsExif(pickerExif),
+      resolvedHasGps: hasGpsExif(pickerExif),
+      pickerExifKeys: exifKeys(pickerExif),
+      resolvedExifKeys: exifKeys(pickerExif),
+    },
   };
+  logResolvedAssetDebug(fallback.debug);
+  return fallback;
 }

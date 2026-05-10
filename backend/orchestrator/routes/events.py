@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from datetime import datetime
 from typing import Any
 
@@ -164,6 +165,7 @@ def create_events_router(
         captured_at: str | None = Form(default=None),
         local_asset_id: str | None = Form(default=None),
         source: str | None = Form(default=None),
+        debug_client: str | None = Form(default=None),
         user: dict = Depends(get_current_user),
     ):
         try:
@@ -171,10 +173,30 @@ def create_events_router(
         except ValueError as exc:
             raise HTTPException(status_code=400, detail="captured_at must be ISO 8601") from exc
 
+        parsed_debug_client: dict[str, Any] | None = None
+        if debug_client:
+            try:
+                candidate = json.loads(debug_client)
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail="debug_client must be valid JSON") from exc
+            if isinstance(candidate, dict):
+                parsed_debug_client = candidate
+
         try:
             image_bytes = await file.read()
         except Exception as exc:
             raise HTTPException(status_code=400, detail=f"Failed to read image: {exc}") from exc
+
+        logger.info(
+            "[event_photos] Incoming upload request: event_id=%s filename=%s content_type=%s size_bytes=%s local_asset_id=%s source=%s client_debug=%s",
+            event_id,
+            file.filename,
+            file.content_type,
+            len(image_bytes),
+            local_asset_id,
+            source,
+            parsed_debug_client,
+        )
 
         try:
             photo = event_photos_service.attach_event_photo(
@@ -185,6 +207,7 @@ def create_events_router(
                 captured_at=parsed_captured_at,
                 local_asset_id=local_asset_id,
                 source=source,
+                client_debug=parsed_debug_client,
             )
         except event_photos_service.EventPhotoError as exc:
             detail = str(exc)

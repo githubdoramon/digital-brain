@@ -42,6 +42,21 @@ type EventDetail = {
   photos?: EventPhoto[] | null;
 };
 
+type UploadEventPhotoResponse = {
+  ok: boolean;
+  photo?: EventPhoto & {
+    debug?: {
+      summary?: string | null;
+      resolution_method?: string | null;
+      client_has_gps?: boolean | null;
+      immich_has_gps?: boolean | null;
+      client_file_name?: string | null;
+      immich_original_file_name?: string | null;
+      mismatch?: boolean | null;
+    };
+  };
+};
+
 type Contact = {
   contact_id: string;
   display_name: string;
@@ -385,6 +400,7 @@ function EventDetailView({ eventId, editable }: EventDetailViewProps) {
       const capturedAt = extractAssetCapturedAt(resolvedAsset);
       if (capturedAt) formData.append('captured_at', capturedAt);
       formData.append('source', 'mobile_event_editor');
+      formData.append('debug_client', JSON.stringify(resolvedAsset.debug));
       formData.append('file', {
         uri: resolvedAsset.uri,
         name: resolvedAsset.fileName || `event-photo-${Date.now()}.jpg`,
@@ -392,13 +408,24 @@ function EventDetailView({ eventId, editable }: EventDetailViewProps) {
       } as unknown as Blob);
 
       setIsUploadingPhoto(true);
-      await apiFetch(`/mobile/events/${encodeURIComponent(eventId)}/photos`, {
+      const response = (await apiFetch(`/mobile/events/${encodeURIComponent(eventId)}/photos`, {
         method: 'POST',
         body: formData,
         token,
-      });
+      })) as UploadEventPhotoResponse;
+      console.info('[event-photos] upload response debug', response.photo?.debug || null);
       await reloadEvent();
-      showSuccess('Photo linked to event.');
+      const debugSummary = response.photo?.debug?.summary?.trim();
+      if (debugSummary) {
+        const showDebugAsError = Boolean(response.photo?.debug?.mismatch);
+        if (showDebugAsError) {
+          showError(debugSummary);
+        } else {
+          showSuccess(debugSummary);
+        }
+      } else {
+        showSuccess('Photo linked to event.');
+      }
     } catch (error) {
       console.warn('[events] photo upload failed', error);
       showError(error instanceof Error ? error.message : 'Unable to attach that photo right now.');

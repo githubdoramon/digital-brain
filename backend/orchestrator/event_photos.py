@@ -12,6 +12,7 @@ from psycopg.types.json import Jsonb
 import contacts as contacts_service
 import immich_client
 from db import get_conn
+from observability.logger import get_runtime_logger
 
 
 class EventPhotoError(RuntimeError):
@@ -21,6 +22,7 @@ class EventPhotoError(RuntimeError):
 IMMICH_EVENT_PHOTO_DEVICE_ID = (
     os.getenv("IMMICH_EVENT_PHOTO_DEVICE_ID") or "digital-brain-events"
 ).strip()
+logger = get_runtime_logger(__name__)
 
 
 def attach_event_photo(
@@ -32,6 +34,7 @@ def attach_event_photo(
     captured_at: datetime | None,
     local_asset_id: str | None = None,
     source: str | None = None,
+    client_debug: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     normalized_event_id = _normalize_required_string(event_id, "event_id")
     if not image_bytes:
@@ -41,12 +44,24 @@ def attach_event_photo(
         raise EventPhotoError("Event not found")
 
     checksum = hashlib.sha256(image_bytes).hexdigest()
+    upload_debug = _build_upload_debug(
+        filename=filename,
+        mime_type=mime_type,
+        captured_at=captured_at,
+        local_asset_id=local_asset_id,
+        source=source,
+        checksum=checksum,
+        image_bytes=image_bytes,
+        client_debug=client_debug,
+        device_asset_id=_build_device_asset_id(normalized_event_id, local_asset_id),
+    )
+    logger.info("[event_photos] Upload debug pre-Immich: %s", upload_debug)
     upload_result = immich_client.upload_asset(
         image_bytes,
         filename=filename,
         mime_type=mime_type,
         taken_at=captured_at,
-        device_asset_id=_build_device_asset_id(normalized_event_id, local_asset_id),
+        device_asset_id=upload_debug["device_asset_id"],
         device_id=IMMICH_EVENT_PHOTO_DEVICE_ID,
     )
     asset_id = immich_client.extract_asset_id(upload_result)
@@ -59,6 +74,12 @@ def attach_event_photo(
         "immich_upload": upload_result,
         "immich_asset": asset_payload,
         "detected_people": detected_people,
+        "debug": _build_photo_debug(
+            upload_debug=upload_debug,
+            upload_result=upload_result,
+            asset_payload=asset_payload,
+            detected_people=detected_people,
+        ),
     }
     photo_row = _upsert_event_photo(
         normalized_event_id,
@@ -73,6 +94,7 @@ def attach_event_photo(
         tagged_contacts=tagged_contacts,
     )
     _merge_event_contacts(normalized_event_id, tagged_contacts)
+    logger.info("[event_photos] Upload debug post-Immich: %s", metadata.get("debug"))
     return photo_row
 
 
@@ -385,6 +407,7 @@ def _serialize_photo_row(row: dict[str, Any]) -> dict[str, Any]:
         "thumbnail_path": f"/mobile/events/{event_id}/photos/{asset_id}/thumbnail" if event_id and asset_id else None,
         "tagged_contacts": [],
         "detected_people": detected_people if isinstance(detected_people, list) else [],
+        "debug": metadata.get("debug") if isinstance(metadata.get("debug"), dict) else None,
     }
 
 
@@ -473,3 +496,89 @@ def _coerce_int(value: Any) -> int | None:
         return int(value)
     except (TypeError, ValueError):
         return None
+
+
+def _build_upload_debug(
+    *,
+    filename: str,
+    mime_type: str | None,
+    captured_at: datetime | None,
+    local_asset_id: str | None,
+    source: str | None,
+    checksum: str,
+    image_bytes: bytes,
+    client_debug: dict[str, Any] | None,
+    device_asset_id: str,
+) -> dict[str, Any]:
+    return {
+        "client": client_debug or {},
+        "filename": filename,
+        "mime_type": mime_type,
+        "captured_at": _datetime_to_iso(captured_at),
+        "local_asset_id": local_asset_id,
+        "source": source,
+        "sha256": checksum,
+        "size_bytes": len(image_bytes),
+        "device_asset_id": device_asset_id,
+    }
+
+
+def _build_photo_debug(
+    *,
+    upload_debug: dict[str, Any],
+    upload_result: dict[str, Any],
+    asset_payload: dict[str, Any],
+    detected_people: Sequence[dict[str, Any]],
+) -> dict[str, Any]:
+    client = upload_debug.get("client") if isinstance(upload_debug.get("client"), dict) else {}
+    exif_info = asset_payload.get("exifInfo") if isinstance(asset_payload.get("exifInfo"), dict) else {}
+    client_file_name = str(client.get("resolvedFileName") or upload_debug.get("filename") or "").strip() or None
+    immich_file_name = str(asset_payload.get("originalFileName") or "").strip() or None
+    client_has_gps = bool(client.get("resolvedHasGps"))
+    immich_has_gps = _immich_has_gps(exif_info)
+    mismatch = bool(
+        (client_file_name and immich_file_name and client_file_name != immich_file_name)
+        or client_has_gps != immich_has_gps
+    )
+    summary = (
+        "Photo debug: "
+        f"source={client.get('resolutionMethod') or 'unknown'} | "
+        f"clientName={client_file_name or 'n/a'} | "
+        f"immichName={immich_file_name or 'n/a'} | "
+        f"clientGps={'yes' if client_has_gps else 'no'} | "
+        f"immichGps={'yes' if immich_has_gps else 'no'} | "
+        f"assetStatus={upload_result.get('status') or 'unknown'}"
+    )
+    return {
+        "summary": summary,
+        "resolution_method": client.get("resolutionMethod"),
+        "client_file_name": client_file_name,
+        "immich_original_file_name": immich_file_name,
+        "client_has_gps": client_has_gps,
+        "immich_has_gps": immich_has_gps,
+        "client_exif_keys": client.get("resolvedExifKeys") if isinstance(client.get("resolvedExifKeys"), list) else [],
+        "immich_exif_keys": sorted(exif_info.keys()),
+        "immich_exif_location": {
+            "city": exif_info.get("city"),
+            "state": exif_info.get("state"),
+            "country": exif_info.get("country"),
+            "latitude": exif_info.get("latitude"),
+            "longitude": exif_info.get("longitude"),
+        },
+        "detected_people_count": len(detected_people),
+        "upload_result": upload_result,
+        "mismatch": mismatch,
+    }
+
+
+def _immich_has_gps(exif_info: dict[str, Any]) -> bool:
+    return any(
+        value is not None and str(value).strip() != ""
+        for value in (
+            exif_info.get("latitude"),
+            exif_info.get("longitude"),
+            exif_info.get("city"),
+            exif_info.get("state"),
+            exif_info.get("country"),
+        )
+    )
