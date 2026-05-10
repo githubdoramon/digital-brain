@@ -1,6 +1,8 @@
 import * as MediaLibrary from 'expo-media-library';
 import type * as ImagePicker from 'expo-image-picker';
 
+import { appendEventPhotoDebugLog } from '@/debug/eventPhotoDebugLog';
+
 export type ResolvedPickedImageAsset = {
   assetId?: string | null;
   uri: string;
@@ -105,6 +107,7 @@ export async function resolvePickedImageAsset(
         },
       };
       logResolvedAssetDebug(resolved.debug);
+      void appendEventPhotoDebugLog('resolved-picked-asset', resolved.debug);
       return resolved;
     } catch {
       // Fall back to the picker-exported asset if MediaLibrary cannot resolve the original file.
@@ -135,5 +138,6 @@ export async function resolvePickedImageAsset(
     },
   };
   logResolvedAssetDebug(fallback.debug);
+  void appendEventPhotoDebugLog('resolved-picked-asset', fallback.debug);
   return fallback;
 }

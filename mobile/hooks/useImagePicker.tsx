@@ -48,49 +48,63 @@ function useImageSourceSheet(): {
 
 export function useSingleImagePicker(): {
   pickSingleImage: () => Promise<ImagePicker.ImagePickerAsset | null>;
+  pickImages: (options?: { maxSelection?: number }) => Promise<ImagePicker.ImagePickerAsset[]>;
   imagePickerSheet: React.ReactNode;
 } {
   const { chooseSource, sheet } = useImageSourceSheet();
 
-  const pickSingleImage = React.useCallback(async (): Promise<ImagePicker.ImagePickerAsset | null> => {
-    const source = await chooseSource();
-    if (!source) {
-      return null;
-    }
-
-    if (source === 'camera') {
-      const cameraPermission = await ImagePicker.requestCameraPermissionsAsync();
-      if (!cameraPermission.granted) {
-        throw new Error('Allow camera access to capture a photo.');
+  const pickImages = React.useCallback(
+    async ({ maxSelection = 1 }: { maxSelection?: number } = {}): Promise<ImagePicker.ImagePickerAsset[]> => {
+      const source = await chooseSource();
+      if (!source) {
+        return [];
       }
 
-      const result = await ImagePicker.launchCameraAsync({
+      if (source === 'camera') {
+        const cameraPermission = await ImagePicker.requestCameraPermissionsAsync();
+        if (!cameraPermission.granted) {
+          throw new Error('Allow camera access to capture a photo.');
+        }
+
+        const result = await ImagePicker.launchCameraAsync({
+          mediaTypes: ImagePicker.MediaTypeOptions.Images,
+          allowsEditing: false,
+          quality: 1,
+          exif: true,
+        });
+        return result.canceled || !result.assets?.length ? [] : [result.assets[0]];
+      }
+
+      const libraryPermission = await MediaLibrary.requestPermissionsAsync(false, ['photo']);
+      if (!libraryPermission.granted) {
+        throw new Error('Allow photo library access to choose a photo.');
+      }
+
+      const allowMultiple = maxSelection > 1;
+      const result = await ImagePicker.launchImageLibraryAsync({
         mediaTypes: ImagePicker.MediaTypeOptions.Images,
         allowsEditing: false,
         quality: 1,
         exif: true,
+        allowsMultipleSelection: allowMultiple,
+        selectionLimit: allowMultiple ? maxSelection : 1,
+        orderedSelection: allowMultiple,
+        preferredAssetRepresentationMode:
+          ImagePicker.UIImagePickerPreferredAssetRepresentationMode.Current,
       });
-      return result.canceled || !result.assets?.length ? null : result.assets[0];
-    }
+      return result.canceled || !result.assets?.length ? [] : result.assets;
+    },
+    [chooseSource],
+  );
 
-    const libraryPermission = await MediaLibrary.requestPermissionsAsync(false, ['photo']);
-    if (!libraryPermission.granted) {
-      throw new Error('Allow photo library access to choose a photo.');
-    }
-
-    const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ImagePicker.MediaTypeOptions.Images,
-      allowsEditing: false,
-      quality: 1,
-      exif: true,
-      preferredAssetRepresentationMode:
-        ImagePicker.UIImagePickerPreferredAssetRepresentationMode.Current,
-    });
-    return result.canceled || !result.assets?.length ? null : result.assets[0];
-  }, [chooseSource]);
+  const pickSingleImage = React.useCallback(async (): Promise<ImagePicker.ImagePickerAsset | null> => {
+    const assets = await pickImages({ maxSelection: 1 });
+    return assets[0] ?? null;
+  }, [pickImages]);
 
   return {
     pickSingleImage,
+    pickImages,
     imagePickerSheet: sheet,
   };
 }

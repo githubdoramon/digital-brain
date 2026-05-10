@@ -20,6 +20,7 @@ import {
 } from '@/components/event-draft/types';
 import { useAppNotice } from '@/hooks/useAppNotice';
 import { useSingleImagePicker } from '@/hooks/useImagePicker';
+import { appendEventPhotoDebugLog } from '@/debug/eventPhotoDebugLog';
 import { resolvePickedImageAsset } from '@/media/pickedImageAsset';
 import { theme } from '@/theme';
 
@@ -197,7 +198,7 @@ function EventDetailView({ eventId, editable }: EventDetailViewProps) {
   const insets = useSafeAreaInsets();
   const { token } = useAuth();
   const { showSuccess, showError } = useAppNotice();
-  const { pickSingleImage, imagePickerSheet } = useSingleImagePicker();
+  const { pickImages, imagePickerSheet } = useSingleImagePicker();
   const [event, setEvent] = React.useState<EventDetail | null>(null);
   const [contactMap, setContactMap] = React.useState<Map<string, string>>(new Map());
   const [availableContacts, setAvailableContacts] = React.useState<Contact[]>([]);
@@ -389,50 +390,67 @@ function EventDetailView({ eventId, editable }: EventDetailViewProps) {
     if (!eventId || isUploadingPhoto) return;
 
     try {
-      const asset = await pickSingleImage();
-      if (!asset?.uri) {
+      const assets = await pickImages({ maxSelection: 10 });
+      if (assets.length === 0) {
         return;
       }
-      const resolvedAsset = await resolvePickedImageAsset(asset);
-
-      const formData = new FormData();
-      if (resolvedAsset.assetId) formData.append('local_asset_id', resolvedAsset.assetId);
-      const capturedAt = extractAssetCapturedAt(resolvedAsset);
-      if (capturedAt) formData.append('captured_at', capturedAt);
-      formData.append('source', 'mobile_event_editor');
-      formData.append('debug_client', JSON.stringify(resolvedAsset.debug));
-      formData.append('file', {
-        uri: resolvedAsset.uri,
-        name: resolvedAsset.fileName || `event-photo-${Date.now()}.jpg`,
-        type: resolvedAsset.mimeType || 'image/jpeg',
-      } as unknown as Blob);
 
       setIsUploadingPhoto(true);
-      const response = (await apiFetch(`/mobile/events/${encodeURIComponent(eventId)}/photos`, {
-        method: 'POST',
-        body: formData,
-        token,
-      })) as UploadEventPhotoResponse;
-      console.info('[event-photos] upload response debug', response.photo?.debug || null);
-      await reloadEvent();
-      const debugSummary = response.photo?.debug?.summary?.trim();
-      if (debugSummary) {
-        const showDebugAsError = Boolean(response.photo?.debug?.mismatch);
-        if (showDebugAsError) {
-          showError(debugSummary);
-        } else {
-          showSuccess(debugSummary);
+      const debugSummaries: string[] = [];
+      for (const asset of assets) {
+        if (!asset?.uri) {
+          continue;
         }
+        const resolvedAsset = await resolvePickedImageAsset(asset);
+
+        const formData = new FormData();
+        if (resolvedAsset.assetId) formData.append('local_asset_id', resolvedAsset.assetId);
+        const capturedAt = extractAssetCapturedAt(resolvedAsset);
+        if (capturedAt) formData.append('captured_at', capturedAt);
+        formData.append('source', 'mobile_event_editor');
+        formData.append('debug_client', JSON.stringify(resolvedAsset.debug));
+        formData.append('file', {
+          uri: resolvedAsset.uri,
+          name: resolvedAsset.fileName || `event-photo-${Date.now()}.jpg`,
+          type: resolvedAsset.mimeType || 'image/jpeg',
+        } as unknown as Blob);
+
+        const response = (await apiFetch(`/mobile/events/${encodeURIComponent(eventId)}/photos`, {
+          method: 'POST',
+          body: formData,
+          token,
+        })) as UploadEventPhotoResponse;
+        console.info('[event-photos] upload response debug', response.photo?.debug || null);
+        await appendEventPhotoDebugLog('event-photo-upload-response', {
+          eventId,
+          assetId: response.photo?.asset_id ?? null,
+          debug: response.photo?.debug ?? null,
+        });
+        const debugSummary = response.photo?.debug?.summary?.trim();
+        if (debugSummary) {
+          debugSummaries.push(debugSummary);
+        }
+      }
+
+      await reloadEvent();
+      if (debugSummaries.length === 1) {
+        showSuccess(debugSummaries[0]);
+      } else if (debugSummaries.length > 1) {
+        showSuccess(`Linked ${debugSummaries.length} photos. Check latest upload logs for per-photo debug details.`);
       } else {
-        showSuccess('Photo linked to event.');
+        showSuccess(`Linked ${assets.length} ${assets.length === 1 ? 'photo' : 'photos'}.`);
       }
     } catch (error) {
       console.warn('[events] photo upload failed', error);
+      void appendEventPhotoDebugLog('event-photo-upload-error', {
+        eventId,
+        error: error instanceof Error ? error.message : String(error),
+      });
       showError(error instanceof Error ? error.message : 'Unable to attach that photo right now.');
     } finally {
       setIsUploadingPhoto(false);
     }
-  }, [eventId, isUploadingPhoto, pickSingleImage, reloadEvent, showError, showSuccess, token]);
+  }, [eventId, isUploadingPhoto, pickImages, reloadEvent, showError, showSuccess, token]);
 
   const handleRemovePhoto = React.useCallback(
     (assetId: string) => {

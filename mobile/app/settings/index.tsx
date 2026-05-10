@@ -30,6 +30,12 @@ import {
   type BackgroundLocationDebugStatus,
 } from '@/location/backgroundLocation';
 import {
+  clearEventPhotoDebugLog,
+  getEventPhotoDebugLogFileName,
+  getEventPhotoDebugLogInfo,
+  readEventPhotoDebugLog,
+} from '@/debug/eventPhotoDebugLog';
+import {
   getLocationDebugSnapshot,
   buildLocationDebugLogText,
   hydrateLocationDebugSnapshot,
@@ -119,6 +125,11 @@ export default function SettingsScreen() {
   const [backgroundStatus, setBackgroundStatus] = React.useState<BackgroundLocationDebugStatus | null>(null);
   const [isRefreshingLocationDebug, setIsRefreshingLocationDebug] = React.useState(false);
   const [isExportingLocationDebug, setIsExportingLocationDebug] = React.useState(false);
+  const [eventPhotoDebugInfo, setEventPhotoDebugInfo] = React.useState<{ exists: boolean; sizeBytes: number }>({
+    exists: false,
+    sizeBytes: 0,
+  });
+  const [isExportingEventPhotoDebug, setIsExportingEventPhotoDebug] = React.useState(false);
   const appVersion = Application.nativeApplicationVersion ?? Constants.expoConfig?.version ?? 'Unknown';
   const buildNumber = Application.nativeBuildVersion ?? 'Unknown';
   const buildTimestamp = formatBuildTimestamp(
@@ -131,6 +142,7 @@ export default function SettingsScreen() {
       const status = await getBackgroundLocationDebugStatus();
       setBackgroundStatus(status);
       setLocationDebug(await hydrateLocationDebugSnapshot());
+      setEventPhotoDebugInfo(await getEventPhotoDebugLogInfo());
     } finally {
       setIsRefreshingLocationDebug(false);
     }
@@ -188,6 +200,65 @@ export default function SettingsScreen() {
       showError(message);
     } finally {
       setIsExportingLocationDebug(false);
+    }
+  }, [showError, showSuccess]);
+
+  const exportEventPhotoDebug = React.useCallback(async () => {
+    setIsExportingEventPhotoDebug(true);
+    try {
+      const logText = await readEventPhotoDebugLog();
+      if (!logText.trim()) {
+        throw new Error('No event photo debug log is available yet.');
+      }
+
+      const fileName = getEventPhotoDebugLogFileName();
+      const tempFileUri = `${FileSystem.cacheDirectory ?? FileSystem.documentDirectory}${fileName}`;
+      await FileSystem.writeAsStringAsync(tempFileUri, logText, {
+        encoding: FileSystem.EncodingType.UTF8,
+      });
+
+      let exported = false;
+      if (Platform.OS === 'android') {
+        const initialUri = StorageAccessFramework.getUriForDirectoryInRoot('Download');
+        const permission = await StorageAccessFramework.requestDirectoryPermissionsAsync(initialUri);
+        if (!permission.granted || !permission.directoryUri) {
+          throw new Error('Downloads access not granted.');
+        }
+
+        const targetUri = await StorageAccessFramework.createFileAsync(
+          permission.directoryUri,
+          fileName.replace(/\.txt$/i, ''),
+          'text/plain',
+        );
+        const base64Content = await FileSystem.readAsStringAsync(tempFileUri, {
+          encoding: FileSystem.EncodingType.Base64,
+        });
+        await FileSystem.writeAsStringAsync(targetUri, base64Content, {
+          encoding: FileSystem.EncodingType.Base64,
+        });
+        exported = true;
+        showSuccess(`Saved event photo debug to Downloads as ${fileName}.`);
+      } else {
+        const shareResult = await Share.share({
+          url: tempFileUri,
+          message: logText,
+          title: fileName,
+        });
+        exported = shareResult.action !== Share.dismissedAction;
+        if (exported) {
+          showSuccess('Shared event photo debug log.');
+        }
+      }
+
+      if (exported) {
+        await clearEventPhotoDebugLog();
+        setEventPhotoDebugInfo(await getEventPhotoDebugLogInfo());
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to export event photo debug log.';
+      showError(message);
+    } finally {
+      setIsExportingEventPhotoDebug(false);
     }
   }, [showError, showSuccess]);
 
@@ -263,6 +334,21 @@ export default function SettingsScreen() {
           <Text style={styles.versionValue}>{`${appVersion} (${buildNumber})`}</Text>
           <Text style={styles.versionLabel}>Build timestamp</Text>
           <Text style={styles.versionValue}>{buildTimestamp}</Text>
+        </Card>
+
+        <Card style={[styles.card, styles.versionCard]}>
+          <Text style={styles.versionLabel}>Event photo debug</Text>
+          <Text style={styles.versionValue}>Log file present: {eventPhotoDebugInfo.exists ? 'yes' : 'no'}</Text>
+          <Text style={styles.versionValue}>Log file size: {eventPhotoDebugInfo.sizeBytes} bytes</Text>
+          <Button
+            label={isExportingEventPhotoDebug ? 'Exporting...' : 'Download event photo debug'}
+            onPress={() => {
+              void exportEventPhotoDebug();
+            }}
+            variant="secondary"
+            disabled={!eventPhotoDebugInfo.exists}
+            style={styles.debugRefreshButton}
+          />
         </Card>
 
         <Card style={[styles.card, styles.versionCard]}>

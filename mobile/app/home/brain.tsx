@@ -1096,7 +1096,7 @@ export function ChatConversationScreen({
   const router = useRouter();
   const { token, signOut, email, name, photo, isLoading: isAuthLoading } = useAuth();
   const { showError } = useAppNotice();
-  const { pickSingleImage, imagePickerSheet } = useSingleImagePicker();
+  const { pickImages, imagePickerSheet } = useSingleImagePicker();
   const insets = useSafeAreaInsets();
   const isMainChat = mode === 'main';
   const tabBarClearance = isMainChat
@@ -1432,16 +1432,17 @@ export function ChatConversationScreen({
     }
 
     try {
-      const asset = await pickSingleImage();
-      if (!asset) {
+      const remainingSlots = MAX_CHAT_MEDIA_ATTACHMENTS - composerMediaAttachments.length;
+      const assets = await pickImages({ maxSelection: remainingSlots });
+      if (assets.length === 0) {
         return;
       }
-      const nextAttachment = await buildComposerMediaAttachment(asset);
+      const nextAttachments = await Promise.all(assets.map((asset) => buildComposerMediaAttachment(asset)));
       setComposerMediaAttachments((prev) => {
         if (prev.length >= MAX_CHAT_MEDIA_ATTACHMENTS) {
           return prev;
         }
-        return [...prev, nextAttachment];
+        return [...prev, ...nextAttachments].slice(0, MAX_CHAT_MEDIA_ATTACHMENTS);
       });
       setForceScrollNext(true);
     } catch (error) {
@@ -1457,7 +1458,7 @@ export function ChatConversationScreen({
       ]);
       setForceScrollNext(true);
     }
-  }, [allowed, composerMediaAttachments.length, isSending, pickSingleImage, showError]);
+  }, [allowed, composerMediaAttachments.length, isSending, pickImages, showError]);
 
   const sendMessage = useCallback(async (override?: SendMessageInput) => {
     const overrideText = typeof override === 'string' ? override : override?.text;
