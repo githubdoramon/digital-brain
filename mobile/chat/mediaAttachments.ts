@@ -29,6 +29,42 @@ export type ChatMediaAttachmentPayload = {
   height?: number | null;
 };
 
+function exifDateToIso(value: unknown): string | null {
+  const raw = String(value ?? '').trim();
+  if (!raw) {
+    return null;
+  }
+
+  const exifMatch = raw.match(
+    /^(\d{4}):(\d{2}):(\d{2})[ T](\d{2}):(\d{2}):(\d{2})(?:([+-]\d{2}:?\d{2}|Z))?$/,
+  );
+  if (exifMatch) {
+    const [, year, month, day, hour, minute, second, suffix] = exifMatch;
+    const timezone = suffix ? (suffix.includes(':') || suffix === 'Z' ? suffix : `${suffix.slice(0, 3)}:${suffix.slice(3)}`) : 'Z';
+    return `${year}-${month}-${day}T${hour}:${minute}:${second}${timezone}`;
+  }
+
+  const parsed = new Date(raw);
+  if (Number.isNaN(parsed.getTime())) {
+    return null;
+  }
+  return parsed.toISOString();
+}
+
+export function extractAssetCapturedAt(asset: ImagePicker.ImagePickerAsset): string | null {
+  const exif = asset.exif && typeof asset.exif === 'object' ? asset.exif : null;
+  if (!exif) {
+    return null;
+  }
+
+  return (
+    exifDateToIso(exif.DateTimeOriginal) ||
+    exifDateToIso(exif.DateTimeDigitized) ||
+    exifDateToIso(exif.DateTime) ||
+    null
+  );
+}
+
 export async function buildComposerMediaAttachment(
   asset: ImagePicker.ImagePickerAsset,
 ): Promise<ComposerMediaAttachment> {
@@ -36,26 +72,16 @@ export async function buildComposerMediaAttachment(
     throw new Error('Selected photo is missing a URI.');
   }
 
-  const inlineBase64 = typeof asset.base64 === 'string' ? asset.base64.trim() : '';
-  const estimatedInlineBytes = inlineBase64
-    ? Math.floor((inlineBase64.length * 3) / 4)
-    : null;
-
   const fileInfo = await FileSystem.getInfoAsync(asset.uri);
-  const fileSize =
-    fileInfo.exists && typeof fileInfo.size === 'number'
-      ? fileInfo.size
-      : estimatedInlineBytes;
+  const fileSize = fileInfo.exists && typeof fileInfo.size === 'number' ? fileInfo.size : null;
   if (fileSize !== null && fileSize > MAX_CHAT_MEDIA_BYTES) {
     const maxMb = Math.round((MAX_CHAT_MEDIA_BYTES / (1024 * 1024)) * 10) / 10;
     throw new Error(`Each attached photo must be ${maxMb} MB or smaller.`);
   }
 
-  const contentBase64 =
-    inlineBase64 ||
-    (await FileSystem.readAsStringAsync(asset.uri, {
-      encoding: FileSystem.EncodingType.Base64,
-    }));
+  const contentBase64 = await FileSystem.readAsStringAsync(asset.uri, {
+    encoding: FileSystem.EncodingType.Base64,
+  });
   if (!contentBase64.trim()) {
     throw new Error('Unable to read that photo right now.');
   }
@@ -68,7 +94,7 @@ export async function buildComposerMediaAttachment(
     contentBase64,
     source: 'mobile_chat',
     localAssetId: asset.assetId ?? null,
-    capturedAt: null,
+    capturedAt: extractAssetCapturedAt(asset),
     width: asset.width ?? null,
     height: asset.height ?? null,
   };

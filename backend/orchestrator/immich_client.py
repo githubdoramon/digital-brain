@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import base64
+import hashlib
 import os
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -169,12 +171,14 @@ def upload_asset(
     headers = {
         "x-api-key": cfg.api_key,
         "accept": "application/json",
+        "x-immich-checksum": base64.b64encode(hashlib.sha1(image_bytes).digest()).decode("ascii"),
     }
     data = {
         "deviceAssetId": device_asset_id,
         "deviceId": resolved_device_id,
         "fileCreatedAt": timestamp,
         "fileModifiedAt": timestamp,
+        "filename": filename,
         "isFavorite": "false",
     }
     files = {
@@ -233,6 +237,38 @@ def fetch_asset(asset_id: str, config: ImmichConfig | None = None) -> dict[str, 
     if not isinstance(payload, dict):
         raise ImmichClientError("Immich asset fetch returned unexpected payload")
     return payload
+
+
+def fetch_asset_faces(asset_id: str, config: ImmichConfig | None = None) -> list[dict[str, Any]]:
+    normalized_asset_id = str(asset_id or "").strip()
+    if not normalized_asset_id:
+        raise ImmichClientError("asset_id is required")
+
+    cfg = config or get_immich_config()
+    url = f"{cfg.base_url}/api/faces"
+    headers = {
+        "x-api-key": cfg.api_key,
+        "accept": "application/json",
+    }
+    timeout = cfg.http_timeout or IMMICH_HTTP_TIMEOUT
+
+    try:
+        response = requests.get(url, headers=headers, params={"id": normalized_asset_id}, timeout=timeout)
+    except requests.RequestException as exc:
+        raise ImmichClientError(f"Immich face request failed: {exc}") from exc
+
+    if response.status_code >= 400:
+        snippet = response.text[:200]
+        raise ImmichClientError(f"Immich face fetch failed ({response.status_code}): {snippet}")
+
+    try:
+        payload = response.json()
+    except ValueError as exc:
+        raise ImmichClientError("Immich face fetch returned invalid JSON response") from exc
+
+    if not isinstance(payload, list):
+        raise ImmichClientError("Immich face fetch returned unexpected payload")
+    return [face for face in payload if isinstance(face, dict)]
 
 
 def fetch_asset_thumbnail(
@@ -295,22 +331,41 @@ def extract_asset_id(payload: dict[str, Any] | None) -> str | None:
 
 
 def extract_tagged_person_ids(asset_payload: dict[str, Any] | None) -> list[str]:
-    seen: set[str] = set()
-    ordered: list[str] = []
+    person_ids: list[str] = []
+    for person in extract_tagged_people(asset_payload):
+        person_id = person.get("person_id")
+        if isinstance(person_id, str) and person_id:
+            person_ids.append(person_id)
+    return person_ids
 
-    def _add(candidate: Any) -> None:
+
+def extract_tagged_people(asset_payload: dict[str, Any] | None) -> list[dict[str, str | None]]:
+    seen: set[str] = set()
+    ordered: list[dict[str, str | None]] = []
+
+    def _add(candidate: Any, name: Any = None) -> None:
         normalized = _normalize_string(candidate)
         if normalized and normalized not in seen:
             seen.add(normalized)
-            ordered.append(normalized)
+            ordered.append({"person_id": normalized, "name": _normalize_string(name)})
 
     def _walk(value: Any, parent_key: str | None = None) -> None:
         if isinstance(value, dict):
             current_key = (parent_key or "").lower()
             if current_key in {"people", "personwithfaces", "personwithface", "person"}:
-                _add(value.get("id") or value.get("personId") or value.get("person_id"))
+                _add(
+                    value.get("id") or value.get("personId") or value.get("person_id"),
+                    value.get("name"),
+                )
             if current_key in {"faces", "face"}:
-                _add(value.get("personId") or value.get("person_id") or value.get("id"))
+                person = value.get("person") if isinstance(value.get("person"), dict) else None
+                _add(
+                    value.get("personId")
+                    or value.get("person_id")
+                    or (person or {}).get("id")
+                    or value.get("id"),
+                    (person or {}).get("name"),
+                )
             for key, nested in value.items():
                 key_lower = str(key).lower()
                 if key_lower in {"personid", "person_id"}:

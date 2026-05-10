@@ -65,6 +65,9 @@ export function EventPhotoCard({
         <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.photoRow}>
           {photos.map((photo) => {
             const taggedContacts = photo.tagged_contacts || [];
+            const detectedPeople = (photo.detected_people || []).filter(
+              (person) => !taggedContacts.some((contact) => contact.contact_id === person.contact_id),
+            );
             const thumbnailUri = photo.thumbnail_path
               ? `${API_BASE_URL}${photo.thumbnail_path}`
               : null;
@@ -95,9 +98,27 @@ export function EventPhotoCard({
                       </View>
                     ) : null}
                   </View>
-                ) : (
-                  <Text style={styles.emptyTags}>No recognized people linked.</Text>
-                )}
+                ) : null}
+                {detectedPeople.length > 0 ? (
+                  <View style={styles.suggestionBlock}>
+                    <Text style={styles.suggestionLabel}>Detected in Immich</Text>
+                    <View style={styles.tagRow}>
+                      {detectedPeople.slice(0, 3).map((person) => (
+                        <View key={`${photo.asset_id}:${person.person_id}`} style={styles.suggestionChip}>
+                          <Text style={styles.suggestionChipText}>{person.display_name}</Text>
+                        </View>
+                      ))}
+                      {detectedPeople.length > 3 ? (
+                        <View style={styles.suggestionChip}>
+                          <Text style={styles.suggestionChipText}>{`+${detectedPeople.length - 3}`}</Text>
+                        </View>
+                      ) : null}
+                    </View>
+                  </View>
+                ) : null}
+                {taggedContacts.length === 0 && detectedPeople.length === 0 ? (
+                  <Text style={styles.emptyTags}>No recognized people linked yet.</Text>
+                ) : null}
                 {editable && onRemovePhoto ? (
                   <Pressable
                     accessibilityRole="button"
@@ -187,6 +208,27 @@ const styles = StyleSheet.create({
   emptyTags: {
     fontSize: 12,
     color: theme.colors.mutedInk,
+  },
+  suggestionBlock: {
+    gap: 6,
+  },
+  suggestionLabel: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: theme.colors.mutedInk,
+    textTransform: 'uppercase',
+    letterSpacing: 0.6,
+  },
+  suggestionChip: {
+    borderRadius: 999,
+    backgroundColor: '#f7ede3',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+  },
+  suggestionChipText: {
+    color: theme.colors.accentDeep,
+    fontSize: 11,
+    fontWeight: '600',
   },
   unlinkButton: {
     alignSelf: 'flex-start',

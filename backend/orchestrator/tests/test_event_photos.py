@@ -35,6 +35,20 @@ def test_extract_tagged_person_ids_walks_people_and_faces():
     ]
 
 
+def test_extract_tagged_people_prefers_face_person_name():
+    payload = {
+        "faces": [
+            {"person": {"id": "person:2", "name": "Sam"}},
+            {"personId": "person:3"},
+        ]
+    }
+
+    assert immich_client.extract_tagged_people(payload) == [
+        {"person_id": "person:2", "name": "Sam"},
+        {"person_id": "person:3", "name": None},
+    ]
+
+
 def test_get_events_includes_linked_photos(monkeypatch):
     monkeypatch.setattr(
         events,

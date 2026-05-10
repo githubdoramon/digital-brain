@@ -7,6 +7,7 @@ import Ionicons from '@expo/vector-icons/Ionicons';
 import { apiFetch } from '@/api/client';
 import { useAuth } from '@/auth/AuthContext';
 import { AppPressable as Pressable } from '@/components/AppPressable';
+import { extractAssetCapturedAt } from '@/chat/mediaAttachments';
 import {
   EventDetailsForm,
   EventDraftEditorScreen,
@@ -379,6 +380,8 @@ function EventDetailView({ eventId, editable }: EventDetailViewProps) {
 
       const formData = new FormData();
       if (asset.assetId) formData.append('local_asset_id', asset.assetId);
+      const capturedAt = extractAssetCapturedAt(asset);
+      if (capturedAt) formData.append('captured_at', capturedAt);
       formData.append('source', 'mobile_event_editor');
       formData.append('file', {
         uri: asset.uri,

@@ -53,11 +53,12 @@ def attach_event_photo(
     if not asset_id:
         raise EventPhotoError("Immich upload succeeded but no asset ID was returned")
 
-    asset_payload = immich_client.fetch_asset(asset_id)
-    tagged_contacts = _resolve_tagged_contacts(asset_payload)
+    asset_payload, detected_people = _fetch_immich_asset_context(asset_id)
+    tagged_contacts = _resolve_tagged_contacts(detected_people)
     metadata = {
         "immich_upload": upload_result,
         "immich_asset": asset_payload,
+        "detected_people": detected_people,
     }
     photo_row = _upsert_event_photo(
         normalized_event_id,
@@ -130,10 +131,13 @@ def list_event_photos_for_events(event_ids: Sequence[str]) -> dict[str, list[dic
         photo = photos_by_key.get(key)
         if photo is None:
             photo = _serialize_photo_row(row)
+            photo = _refresh_photo_people_metadata(event_id, photo)
             photos_by_key[key] = photo
             photos_by_event.setdefault(event_id, []).append(photo)
         contact_id = str(row.get("contact_id") or "").strip()
-        if contact_id:
+        if contact_id and not any(
+            existing.get("contact_id") == contact_id for existing in photo["tagged_contacts"]
+        ):
             photo["tagged_contacts"].append(
                 {
                     "contact_id": contact_id,
@@ -272,23 +276,51 @@ def _upsert_event_photo(
 
 
 def _resolve_tagged_contacts(asset_payload: dict[str, Any]) -> list[dict[str, str]]:
+    return _resolve_tagged_contacts_from_detected_people(_resolve_detected_people(asset_payload))
+
+
+def _resolve_tagged_contacts_from_detected_people(
+    detected_people: Sequence[dict[str, Any]],
+) -> list[dict[str, str]]:
     tagged_contacts: list[dict[str, str]] = []
     seen_contact_ids: set[str] = set()
-    for person_id in immich_client.extract_tagged_person_ids(asset_payload):
-        contact = contacts_service.get_contact_by_external_id(person_id)
-        if not contact:
-            continue
-        contact_id = str(contact.get("contact_id") or "").strip()
+    for person in detected_people:
+        contact_id = str(person.get("contact_id") or "").strip()
         if not contact_id or contact_id in seen_contact_ids:
             continue
         seen_contact_ids.add(contact_id)
         tagged_contacts.append(
             {
                 "contact_id": contact_id,
-                "display_name": str(contact.get("display_name") or contact_id).strip() or contact_id,
+                "display_name": str(person.get("display_name") or contact_id).strip() or contact_id,
             }
         )
     return tagged_contacts
+
+
+def _resolve_detected_people(asset_payload: dict[str, Any]) -> list[dict[str, Any]]:
+    detected_people: list[dict[str, Any]] = []
+    seen_person_ids: set[str] = set()
+    for person in immich_client.extract_tagged_people(asset_payload):
+        person_id = str(person.get("person_id") or "").strip()
+        if not person_id or person_id in seen_person_ids:
+            continue
+        seen_person_ids.add(person_id)
+        matched_contact = contacts_service.get_contact_by_external_id(person_id)
+        contact_id = str(matched_contact.get("contact_id") or "").strip() if matched_contact else None
+        display_name = (
+            str(matched_contact.get("display_name") or "").strip() if matched_contact else ""
+        ) or str(person.get("name") or person_id).strip() or person_id
+        detected_people.append(
+            {
+                "person_id": person_id,
+                "name": str(person.get("name") or "").strip() or None,
+                "contact_id": contact_id or None,
+                "display_name": display_name,
+                "has_contact_match": bool(contact_id),
+            }
+        )
+    return detected_people
 
 
 def _merge_event_contacts(event_id: str, tagged_contacts: Sequence[dict[str, str]]) -> None:
@@ -314,7 +346,7 @@ def _merge_event_contacts(event_id: str, tagged_contacts: Sequence[dict[str, str
 def _build_device_asset_id(event_id: str, local_asset_id: str | None) -> str:
     local_part = _normalize_required_string(local_asset_id, "local_asset_id") if local_asset_id else None
     if local_part:
-        return f"event-photo:{event_id}:{local_part}:{uuid4().hex[:8]}"
+        return f"event-photo:{local_part}"
     return f"event-photo:{event_id}:{uuid4().hex}"
 
 
@@ -336,6 +368,8 @@ def _event_photo_exists(event_id: str, asset_id: str) -> bool:
 def _serialize_photo_row(row: dict[str, Any]) -> dict[str, Any]:
     event_id = str(row.get("event_id") or "").strip()
     asset_id = str(row.get("immich_asset_id") or "").strip()
+    metadata = row.get("metadata") if isinstance(row.get("metadata"), dict) else {}
+    detected_people = metadata.get("detected_people") if isinstance(metadata, dict) else None
     return {
         "asset_id": asset_id,
         "checksum": row.get("checksum"),
@@ -350,7 +384,54 @@ def _serialize_photo_row(row: dict[str, Any]) -> dict[str, Any]:
         "updated_at": _datetime_to_iso(row.get("updated_at")),
         "thumbnail_path": f"/mobile/events/{event_id}/photos/{asset_id}/thumbnail" if event_id and asset_id else None,
         "tagged_contacts": [],
+        "detected_people": detected_people if isinstance(detected_people, list) else [],
     }
+
+
+def _fetch_immich_asset_context(asset_id: str) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    asset_payload = immich_client.fetch_asset(asset_id)
+    combined_payload: dict[str, Any] = dict(asset_payload)
+    try:
+        faces = immich_client.fetch_asset_faces(asset_id)
+    except Exception:
+        faces = []
+    if faces:
+        combined_payload["faces"] = faces
+    return asset_payload, _resolve_detected_people(combined_payload)
+
+
+def _refresh_photo_people_metadata(event_id: str, photo: dict[str, Any]) -> dict[str, Any]:
+    asset_id = str(photo.get("asset_id") or "").strip()
+    if not event_id or not asset_id:
+        return photo
+
+    try:
+        asset_payload, detected_people = _fetch_immich_asset_context(asset_id)
+    except Exception:
+        return photo
+
+    tagged_contacts = _resolve_tagged_contacts_from_detected_people(detected_people)
+    if tagged_contacts == (photo.get("tagged_contacts") or []) and detected_people == (photo.get("detected_people") or []):
+        return photo
+
+    metadata = {
+        "immich_asset": asset_payload,
+        "detected_people": detected_people,
+    }
+    updated_photo = _upsert_event_photo(
+        event_id,
+        asset_id=asset_id,
+        checksum=str(photo.get("checksum") or "").strip(),
+        filename=str(photo.get("file_name") or asset_id).strip() or asset_id,
+        mime_type=str(photo.get("mime_type") or "").strip() or None,
+        captured_at=_parse_iso_datetime(photo.get("captured_at")),
+        local_asset_id=str(photo.get("local_asset_id") or "").strip() or None,
+        source=str(photo.get("source") or "").strip() or None,
+        metadata=metadata,
+        tagged_contacts=tagged_contacts,
+    )
+    _merge_event_contacts(event_id, tagged_contacts)
+    return updated_photo
 
 
 def _normalize_required_string(value: str, field_name: str) -> str:

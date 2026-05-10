@@ -65,9 +65,9 @@ export function useSingleImagePicker(): {
 
       const result = await ImagePicker.launchCameraAsync({
         mediaTypes: ImagePicker.MediaTypeOptions.Images,
-        quality: 0.8,
         allowsEditing: false,
-        base64: true,
+        quality: 1,
+        exif: true,
       });
       return result.canceled || !result.assets?.length ? null : result.assets[0];
     }
@@ -79,9 +79,9 @@ export function useSingleImagePicker(): {
 
     const result = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ImagePicker.MediaTypeOptions.Images,
-      quality: 0.8,
       allowsEditing: false,
-      base64: true,
+      quality: 1,
+      exif: true,
     });
     return result.canceled || !result.assets?.length ? null : result.assets[0];
   }, [chooseSource]);

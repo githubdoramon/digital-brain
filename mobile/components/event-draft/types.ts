@@ -8,6 +8,14 @@ export type EventPhotoTaggedContact = {
   display_name: string;
 };
 
+export type EventPhotoDetectedPerson = {
+  person_id: string;
+  name?: string | null;
+  contact_id?: string | null;
+  display_name: string;
+  has_contact_match?: boolean;
+};
+
 export type EventPhoto = {
   asset_id: string;
   checksum?: string | null;
@@ -22,6 +30,7 @@ export type EventPhoto = {
   updated_at?: string | null;
   thumbnail_path?: string | null;
   tagged_contacts?: EventPhotoTaggedContact[];
+  detected_people?: EventPhotoDetectedPerson[];
 };
 
 export type EventContactOption = {
