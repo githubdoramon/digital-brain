@@ -20,6 +20,7 @@ import {
 } from '@/components/event-draft/types';
 import { useAppNotice } from '@/hooks/useAppNotice';
 import { useSingleImagePicker } from '@/hooks/useImagePicker';
+import { resolvePickedImageAsset } from '@/media/pickedImageAsset';
 import { theme } from '@/theme';
 
 type EventDetail = {
@@ -377,16 +378,17 @@ function EventDetailView({ eventId, editable }: EventDetailViewProps) {
       if (!asset?.uri) {
         return;
       }
+      const resolvedAsset = await resolvePickedImageAsset(asset);
 
       const formData = new FormData();
-      if (asset.assetId) formData.append('local_asset_id', asset.assetId);
-      const capturedAt = extractAssetCapturedAt(asset);
+      if (resolvedAsset.assetId) formData.append('local_asset_id', resolvedAsset.assetId);
+      const capturedAt = extractAssetCapturedAt(resolvedAsset);
       if (capturedAt) formData.append('captured_at', capturedAt);
       formData.append('source', 'mobile_event_editor');
       formData.append('file', {
-        uri: asset.uri,
-        name: asset.fileName || `event-photo-${Date.now()}.jpg`,
-        type: asset.mimeType || 'image/jpeg',
+        uri: resolvedAsset.uri,
+        name: resolvedAsset.fileName || `event-photo-${Date.now()}.jpg`,
+        type: resolvedAsset.mimeType || 'image/jpeg',
       } as unknown as Blob);
 
       setIsUploadingPhoto(true);

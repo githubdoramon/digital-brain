@@ -32,13 +32,14 @@
       "softwareKeyboardLayoutMode": "resize",
       "predictiveBackGestureEnabled": false,
       "package": "com.appcalipse.digitalbrain",
-      "permissions": [
-        "POST_NOTIFICATIONS",
-        "ACCESS_COARSE_LOCATION",
-        "ACCESS_FINE_LOCATION",
-        "ACCESS_BACKGROUND_LOCATION",
-        "FOREGROUND_SERVICE",
-        "FOREGROUND_SERVICE_LOCATION"
+        "permissions": [
+          "POST_NOTIFICATIONS",
+          "ACCESS_COARSE_LOCATION",
+          "ACCESS_FINE_LOCATION",
+          "ACCESS_MEDIA_LOCATION",
+          "ACCESS_BACKGROUND_LOCATION",
+          "FOREGROUND_SERVICE",
+          "FOREGROUND_SERVICE_LOCATION"
       ]
     },
     "plugins": [
@@ -63,6 +64,13 @@
         {
           "photosPermission": "Digital Brain uses your photo library so you can attach event pictures and sync them to Immich.",
           "cameraPermission": "Digital Brain uses your camera so you can capture event pictures and sync them to Immich."
+        }
+      ],
+      [
+        "expo-media-library",
+        {
+          "isAccessMediaLocationEnabled": true,
+          "granularPermissions": ["photo"]
         }
       ],
       "expo-secure-store",

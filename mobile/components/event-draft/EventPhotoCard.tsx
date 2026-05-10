@@ -5,7 +5,7 @@ import { Image, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { API_BASE_URL } from '@/api/client';
 import { AppPressable as Pressable } from '@/components/AppPressable';
 import { Button } from '@/components/Button';
-import { type EventPhoto } from '@/components/event-draft/types';
+import { type EventPhoto, type EventPhotoDetectedPerson } from '@/components/event-draft/types';
 import { theme } from '@/theme';
 
 type EventPhotoCardProps = {
@@ -27,6 +27,11 @@ function formatPhotoMeta(photo: EventPhoto) {
     day: 'numeric',
     year: 'numeric',
   });
+}
+
+function detectedPersonLabel(photo: EventPhoto, person: EventPhotoDetectedPerson) {
+  const matchedContact = (photo.tagged_contacts || []).find((contact) => contact.contact_id === person.contact_id);
+  return (matchedContact?.display_name || person.display_name || person.name || '').trim();
 }
 
 export function EventPhotoCard({
@@ -65,9 +70,13 @@ export function EventPhotoCard({
         <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.photoRow}>
           {photos.map((photo) => {
             const taggedContacts = photo.tagged_contacts || [];
-            const detectedPeople = (photo.detected_people || []).filter(
-              (person) => !taggedContacts.some((contact) => contact.contact_id === person.contact_id),
-            );
+            const detectedPeople = (photo.detected_people || [])
+              .filter((person) => !taggedContacts.some((contact) => contact.contact_id === person.contact_id))
+              .map((person) => ({
+                ...person,
+                label: detectedPersonLabel(photo, person),
+              }))
+              .filter((person) => person.label);
             const thumbnailUri = photo.thumbnail_path
               ? `${API_BASE_URL}${photo.thumbnail_path}`
               : null;
@@ -105,7 +114,7 @@ export function EventPhotoCard({
                     <View style={styles.tagRow}>
                       {detectedPeople.slice(0, 3).map((person) => (
                         <View key={`${photo.asset_id}:${person.person_id}`} style={styles.suggestionChip}>
-                          <Text style={styles.suggestionChipText}>{person.display_name}</Text>
+                          <Text style={styles.suggestionChipText}>{person.label}</Text>
                         </View>
                       ))}
                       {detectedPeople.length > 3 ? (

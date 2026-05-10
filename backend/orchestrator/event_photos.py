@@ -54,7 +54,7 @@ def attach_event_photo(
         raise EventPhotoError("Immich upload succeeded but no asset ID was returned")
 
     asset_payload, detected_people = _fetch_immich_asset_context(asset_id)
-    tagged_contacts = _resolve_tagged_contacts(detected_people)
+    tagged_contacts = _resolve_tagged_contacts_from_detected_people(detected_people)
     metadata = {
         "immich_upload": upload_result,
         "immich_asset": asset_payload,
@@ -310,13 +310,13 @@ def _resolve_detected_people(asset_payload: dict[str, Any]) -> list[dict[str, An
         contact_id = str(matched_contact.get("contact_id") or "").strip() if matched_contact else None
         display_name = (
             str(matched_contact.get("display_name") or "").strip() if matched_contact else ""
-        ) or str(person.get("name") or person_id).strip() or person_id
+        ) or str(person.get("name") or "").strip()
         detected_people.append(
             {
                 "person_id": person_id,
                 "name": str(person.get("name") or "").strip() or None,
                 "contact_id": contact_id or None,
-                "display_name": display_name,
+                "display_name": display_name or None,
                 "has_contact_match": bool(contact_id),
             }
         )

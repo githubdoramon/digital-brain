@@ -1,6 +1,8 @@
 import * as FileSystem from 'expo-file-system/legacy';
 import type * as ImagePicker from 'expo-image-picker';
 
+import { resolvePickedImageAsset, type ResolvedPickedImageAsset } from '@/media/pickedImageAsset';
+
 export const MAX_CHAT_MEDIA_ATTACHMENTS = 5;
 export const MAX_CHAT_MEDIA_BYTES = 6 * 1024 * 1024;
 
@@ -51,7 +53,9 @@ function exifDateToIso(value: unknown): string | null {
   return parsed.toISOString();
 }
 
-export function extractAssetCapturedAt(asset: ImagePicker.ImagePickerAsset): string | null {
+export function extractAssetCapturedAt(
+  asset: ImagePicker.ImagePickerAsset | ResolvedPickedImageAsset,
+): string | null {
   const exif = asset.exif && typeof asset.exif === 'object' ? asset.exif : null;
   if (!exif) {
     return null;
@@ -72,14 +76,16 @@ export async function buildComposerMediaAttachment(
     throw new Error('Selected photo is missing a URI.');
   }
 
-  const fileInfo = await FileSystem.getInfoAsync(asset.uri);
+  const resolvedAsset = await resolvePickedImageAsset(asset);
+
+  const fileInfo = await FileSystem.getInfoAsync(resolvedAsset.uri);
   const fileSize = fileInfo.exists && typeof fileInfo.size === 'number' ? fileInfo.size : null;
   if (fileSize !== null && fileSize > MAX_CHAT_MEDIA_BYTES) {
     const maxMb = Math.round((MAX_CHAT_MEDIA_BYTES / (1024 * 1024)) * 10) / 10;
     throw new Error(`Each attached photo must be ${maxMb} MB or smaller.`);
   }
 
-  const contentBase64 = await FileSystem.readAsStringAsync(asset.uri, {
+  const contentBase64 = await FileSystem.readAsStringAsync(resolvedAsset.uri, {
     encoding: FileSystem.EncodingType.Base64,
   });
   if (!contentBase64.trim()) {
@@ -88,15 +94,15 @@ export async function buildComposerMediaAttachment(
 
   return {
     attachmentId: `chat-media-${Date.now()}-${Math.round(Math.random() * 1_000_000)}`,
-    fileName: asset.fileName || `chat-photo-${Date.now()}.jpg`,
-    mimeType: asset.mimeType || 'image/jpeg',
-    uri: asset.uri,
+    fileName: resolvedAsset.fileName || `chat-photo-${Date.now()}.jpg`,
+    mimeType: resolvedAsset.mimeType || 'image/jpeg',
+    uri: resolvedAsset.displayUri,
     contentBase64,
     source: 'mobile_chat',
-    localAssetId: asset.assetId ?? null,
-    capturedAt: extractAssetCapturedAt(asset),
-    width: asset.width ?? null,
-    height: asset.height ?? null,
+    localAssetId: resolvedAsset.assetId ?? null,
+    capturedAt: extractAssetCapturedAt(resolvedAsset),
+    width: resolvedAsset.width ?? null,
+    height: resolvedAsset.height ?? null,
   };
 }
 
