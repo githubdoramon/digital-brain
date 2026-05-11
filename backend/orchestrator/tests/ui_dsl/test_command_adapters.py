@@ -39,6 +39,30 @@ def test_event_confirmation_maps_to_ui_directives():
     assert "cancel:event:preview:abcd1234" in option_ids
 
 
+def test_event_confirmation_truncates_oversized_preview_body():
+    command_result = {
+        "type": "event_confirmation",
+        "preview_id": "event:preview:longbody",
+        "message": "Please confirm",
+        "extracted": {
+            "title": "Long summary event",
+            "summary": "A" * 5000,
+            "when": "2026-02-09T12:30:00",
+            "where": "Home",
+            "who": [],
+            "tags": ["personal"],
+            "types": ["generic"],
+        },
+        "resolution": {"new_entities": {"contacts": [], "places": [], "documents": []}},
+    }
+
+    directive = command_result_to_ui_directives(command_result)
+
+    assert directive is not None
+    preview_block = next(block for block in directive["blocks"] if block["id"] == "event_preview:event:preview:longbody")
+    assert len(preview_block["body"]) <= 1800
+
+
 def test_clarification_maps_to_form_directive():
     command_result = {
         "type": "need_user_input",

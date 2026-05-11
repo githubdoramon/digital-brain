@@ -747,6 +747,12 @@ def confirm_event_command(
         if place_id and isinstance(pending_contact_place_link, dict):
             contact_id = str(pending_contact_place_link.get("contact_id") or "").strip()
             if contact_id:
+                logger.info(
+                    "[event_confirm] Upserting contact-place link contact_id=%s place_id=%s role=%s",
+                    contact_id,
+                    place_id,
+                    str(pending_contact_place_link.get("role") or "").strip() or None,
+                )
                 places_service.upsert_contact_place(
                     contact_id=contact_id,
                     place_id=place_id,
@@ -767,6 +773,16 @@ def confirm_event_command(
             start_when = datetime.now()
 
         start_when, end_when = _align_datetime_awareness(start_when, end_when)
+
+        logger.info(
+            "[event_confirm] Final event payload operation=%s place_id=%s start=%s end=%s tags=%d types=%d",
+            operation,
+            place_id,
+            start_when,
+            end_when,
+            len(extracted.get("tags", [])),
+            len(extracted.get("types", [])),
+        )
 
         if end_when and end_when < start_when:
             raise HTTPException(

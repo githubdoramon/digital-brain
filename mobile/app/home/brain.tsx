@@ -267,6 +267,17 @@ function backendErrorDetails(error: unknown): RequestErrorMetadata {
   }
 }
 
+function conciseBackendErrorMessage(error: unknown, fallback: string): string {
+  const detail = backendErrorDetails(error).details
+    .replace(/^HTTP \d+:\s*/i, '')
+    .replace(/^\{"detail":\s*/i, '')
+    .replace(/"\}\s*$/i, '')
+    .trim();
+
+  if (!detail) return fallback;
+  return detail.length > 220 ? `${detail.slice(0, 217).trimEnd()}...` : detail;
+}
+
 function formatFieldLabel(fieldId: string): string {
   return fieldId
     .replace(/_/g, ' ')
@@ -2166,14 +2177,16 @@ export function ChatConversationScreen({
         } catch (error) {
           const detail = error instanceof Error ? error.message.toLowerCase() : '';
           const expired = detail.includes('not found or expired');
+          const fallbackMessage = expired
+            ? 'This event draft expired. Please run /event again.'
+            : 'I could not complete that event action right now.';
+          console.error('[brain] event confirm failed', error);
           setMessages((prev) => [
             ...prev,
             {
               id: `${Date.now()}-event-action-error`,
               role: 'assistant',
-              content: expired
-                ? 'This event draft expired. Please run /event again.'
-                : 'I could not complete that event action right now.',
+              content: conciseBackendErrorMessage(error, fallbackMessage),
             },
           ]);
           setForceScrollNext(true);

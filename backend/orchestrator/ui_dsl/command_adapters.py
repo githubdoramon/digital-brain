@@ -28,6 +28,8 @@ _CONTACT_ACTION_CANCEL_PREFIX = "cancel:"
 
 logger = get_runtime_logger(__name__)
 
+_INFO_CARD_BODY_MAX_LENGTH = 1800
+
 
 def command_result_to_ui_directives(command_result: dict[str, Any]) -> dict[str, Any] | None:
     """Map a command result into sanitized UI directives when supported."""
@@ -151,7 +153,7 @@ def _event_confirmation_directive(command_result: dict[str, Any]) -> dict[str, A
 
     preview_lines = [
         f"Title: {_normalized_text(extracted.get('title')) or 'Untitled event'}",
-        f"Summary: {_normalized_text(extracted.get('summary')) or 'No summary provided.'}",
+        f"Summary: {_truncate_text(_normalized_text(extracted.get('summary')) or 'No summary provided.', max_length=420)}",
         f"When: {_format_when(extracted.get('when'))}",
         f"Ends: {_format_when(extracted.get('end_when'))}",
         f"Where: {_normalized_text(extracted.get('where')) or 'Not specified'}",
@@ -170,7 +172,7 @@ def _event_confirmation_directive(command_result: dict[str, Any]) -> dict[str, A
             "type": "info_card",
             "title": preview_title,
             "description": preview_description,
-            "body": "\n".join(preview_lines),
+            "body": _truncate_text("\n".join(preview_lines), max_length=_INFO_CARD_BODY_MAX_LENGTH),
         }
     ]
 
@@ -191,7 +193,7 @@ def _event_confirmation_directive(command_result: dict[str, Any]) -> dict[str, A
                 "type": "info_card",
                 "title": "Matches existing event",
                 "description": "Edit to pick a different match or create a new event instead.",
-                "body": "\n".join(match_lines),
+                "body": _truncate_text("\n".join(match_lines), max_length=_INFO_CARD_BODY_MAX_LENGTH),
             }
         )
     elif not is_update and candidate_events:
@@ -209,7 +211,7 @@ def _event_confirmation_directive(command_result: dict[str, Any]) -> dict[str, A
                     "type": "info_card",
                     "title": "Similar events",
                     "description": "Open edit to update one of these instead.",
-                    "body": "\n".join(candidate_lines),
+                    "body": _truncate_text("\n".join(candidate_lines), max_length=_INFO_CARD_BODY_MAX_LENGTH),
                 }
             )
 
@@ -229,7 +231,7 @@ def _event_confirmation_directive(command_result: dict[str, Any]) -> dict[str, A
                 "id": f"event_new_entities:{preview_id or 'draft'}",
                 "type": "info_card",
                 "title": "New entities",
-                "body": "\n".join(entity_lines),
+                "body": _truncate_text("\n".join(entity_lines), max_length=_INFO_CARD_BODY_MAX_LENGTH),
             }
         )
 
@@ -247,7 +249,7 @@ def _event_confirmation_directive(command_result: dict[str, Any]) -> dict[str, A
                     "id": f"event_relationships:{preview_id or 'draft'}",
                     "type": "info_card",
                     "title": "Suggested relationships",
-                    "body": "\n".join(rel_lines),
+                    "body": _truncate_text("\n".join(rel_lines), max_length=_INFO_CARD_BODY_MAX_LENGTH),
                 }
             )
 
@@ -295,7 +297,7 @@ def _contact_confirmation_directive(command_result: dict[str, Any]) -> dict[str,
                 "type": "info_card",
                 "title": "Contact update preview",
                 "description": "Review these graph changes before applying them.",
-                "body": "\n".join(summary_lines),
+                "body": _truncate_text("\n".join(summary_lines), max_length=_INFO_CARD_BODY_MAX_LENGTH),
             }
         )
 
@@ -330,7 +332,7 @@ def _contact_confirmation_directive(command_result: dict[str, Any]) -> dict[str,
                 "id": f"contact_empty:{preview_id or 'draft'}",
                 "type": "info_card",
                 "title": "Contact update preview",
-                "body": fallback_text,
+                "body": _truncate_text(fallback_text, max_length=_INFO_CARD_BODY_MAX_LENGTH),
             }
         )
 
@@ -355,6 +357,14 @@ def _format_when(value: Any) -> str:
 
 def _joined_or_default(values: list[str], default_text: str) -> str:
     return ", ".join(values) if values else default_text
+
+
+def _truncate_text(value: str, *, max_length: int) -> str:
+    if len(value) <= max_length:
+        return value
+    if max_length <= 3:
+        return value[:max_length]
+    return value[: max_length - 3].rstrip() + "..."
 
 
 def _event_clarification_action_id(clarification_id: str) -> str:
