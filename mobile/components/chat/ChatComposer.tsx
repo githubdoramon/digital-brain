@@ -21,6 +21,10 @@ import {
   transcribeAudioFile,
 } from '@/chat/localTranscription';
 import {
+  appendVoiceTranscriptionDebugLog,
+  copyLatestVoiceDebugAudio,
+} from '@/debug/voiceTranscriptionDebug';
+import {
   ensureVoiceRecordingReady,
   getVoiceRecordingErrorMessage,
   requireRecordingUri,
@@ -30,6 +34,7 @@ import {
 import {
   formatVoiceDuration,
   mergeTranscriptIntoDraft,
+  normalizeTranscriptText,
   type VoiceComposerPhase,
 } from '@/chat/voiceState';
 import { theme } from '@/theme';
@@ -172,14 +177,28 @@ export function ChatComposer({
       await recorder.stop();
       await restoreVoiceAudioMode().catch(() => undefined);
       const recordingUri = requireRecordingUri(recorder.uri);
-      const transcript = await transcribeAudioFile(recordingUri, applyTranscriptionStatus);
-      onChangeInput(mergeTranscriptIntoDraft(latestInputRef.current, transcript));
+      const recordingInfo = await copyLatestVoiceDebugAudio(recordingUri).catch(async () => {
+        return null;
+      });
+      await appendVoiceTranscriptionDebugLog('voice_recording_ready', {
+        recordingUri,
+        copiedAudioUri: recordingInfo?.uri ?? null,
+        copiedAudioSizeBytes: recordingInfo?.sizeBytes ?? null,
+        durationMillis: recorderState.durationMillis,
+        draftBeforeTranscription: normalizeTranscriptText(latestInputRef.current),
+      }).catch(() => undefined);
+      const transcription = await transcribeAudioFile(recordingUri, applyTranscriptionStatus);
+      onChangeInput(mergeTranscriptIntoDraft(latestInputRef.current, transcription.text));
       requestAnimationFrame(() => {
         inputRef.current?.focus();
       });
       resetVoiceUi();
     } catch (error) {
       await restoreVoiceAudioMode().catch(() => undefined);
+      await appendVoiceTranscriptionDebugLog('voice_capture_failure', {
+        error: error instanceof Error ? error.message : String(error),
+        durationMillis: recorderState.durationMillis,
+      }).catch(() => undefined);
       resetVoiceUi();
       onErrorMessage(
         error instanceof VoiceRecordingError
@@ -193,6 +212,7 @@ export function ChatComposer({
     onChangeInput,
     onErrorMessage,
     recorder,
+    recorderState.durationMillis,
     resetVoiceUi,
   ]);
 
@@ -216,6 +236,9 @@ export function ChatComposer({
       }
     } catch (error) {
       await restoreVoiceAudioMode().catch(() => undefined);
+      await appendVoiceTranscriptionDebugLog('voice_capture_start_failure', {
+        error: error instanceof Error ? error.message : String(error),
+      }).catch(() => undefined);
       resetVoiceUi();
       onErrorMessage(getVoiceRecordingErrorMessage(error));
     }

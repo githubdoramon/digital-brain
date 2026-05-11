@@ -36,6 +36,13 @@ import {
   readEventPhotoDebugLog,
 } from '@/debug/eventPhotoDebugLog';
 import {
+  clearVoiceTranscriptionDebugArtifacts,
+  getVoiceTranscriptionDebugAudioFileName,
+  getVoiceTranscriptionDebugInfo,
+  getVoiceTranscriptionDebugLogFileName,
+  readVoiceTranscriptionDebugLog,
+} from '@/debug/voiceTranscriptionDebug';
+import {
   getLocationDebugSnapshot,
   buildLocationDebugLogText,
   hydrateLocationDebugSnapshot,
@@ -130,6 +137,21 @@ export default function SettingsScreen() {
     sizeBytes: 0,
   });
   const [isExportingEventPhotoDebug, setIsExportingEventPhotoDebug] = React.useState(false);
+  const [voiceDebugInfo, setVoiceDebugInfo] = React.useState<{
+    logExists: boolean;
+    logSizeBytes: number;
+    audioExists: boolean;
+    audioSizeBytes: number;
+    audioUri: string | null;
+  }>({
+    logExists: false,
+    logSizeBytes: 0,
+    audioExists: false,
+    audioSizeBytes: 0,
+    audioUri: null,
+  });
+  const [isExportingVoiceDebugLog, setIsExportingVoiceDebugLog] = React.useState(false);
+  const [isExportingVoiceDebugAudio, setIsExportingVoiceDebugAudio] = React.useState(false);
   const appVersion = Application.nativeApplicationVersion ?? Constants.expoConfig?.version ?? 'Unknown';
   const buildNumber = Application.nativeBuildVersion ?? 'Unknown';
   const buildTimestamp = formatBuildTimestamp(
@@ -143,6 +165,7 @@ export default function SettingsScreen() {
       setBackgroundStatus(status);
       setLocationDebug(await hydrateLocationDebugSnapshot());
       setEventPhotoDebugInfo(await getEventPhotoDebugLogInfo());
+      setVoiceDebugInfo(await getVoiceTranscriptionDebugInfo());
     } finally {
       setIsRefreshingLocationDebug(false);
     }
@@ -262,6 +285,104 @@ export default function SettingsScreen() {
     }
   }, [showError, showSuccess]);
 
+  const exportVoiceDebugLog = React.useCallback(async () => {
+    setIsExportingVoiceDebugLog(true);
+    try {
+      const logText = await readVoiceTranscriptionDebugLog();
+      if (!logText.trim()) {
+        throw new Error('No voice transcription debug log is available yet.');
+      }
+
+      const fileName = getVoiceTranscriptionDebugLogFileName();
+      const tempFileUri = `${FileSystem.cacheDirectory ?? FileSystem.documentDirectory}${fileName}`;
+      await FileSystem.writeAsStringAsync(tempFileUri, logText, {
+        encoding: FileSystem.EncodingType.UTF8,
+      });
+
+      let exported = false;
+      if (Platform.OS === 'android') {
+        const initialUri = StorageAccessFramework.getUriForDirectoryInRoot('Download');
+        const permission = await StorageAccessFramework.requestDirectoryPermissionsAsync(initialUri);
+        if (!permission.granted || !permission.directoryUri) {
+          throw new Error('Downloads access not granted.');
+        }
+
+        const targetUri = await StorageAccessFramework.createFileAsync(
+          permission.directoryUri,
+          fileName.replace(/\.txt$/i, ''),
+          'text/plain',
+        );
+        const base64Content = await FileSystem.readAsStringAsync(tempFileUri, {
+          encoding: FileSystem.EncodingType.Base64,
+        });
+        await FileSystem.writeAsStringAsync(targetUri, base64Content, {
+          encoding: FileSystem.EncodingType.Base64,
+        });
+        exported = true;
+        showSuccess(`Saved voice debug log to Downloads as ${fileName}.`);
+      } else {
+        const shareResult = await Share.share({
+          url: tempFileUri,
+          message: logText,
+          title: fileName,
+        });
+        exported = shareResult.action !== Share.dismissedAction;
+        if (exported) {
+          showSuccess('Shared voice transcription debug log.');
+        }
+      }
+
+      if (exported) {
+        setVoiceDebugInfo(await getVoiceTranscriptionDebugInfo());
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to export voice transcription debug log.';
+      showError(message);
+    } finally {
+      setIsExportingVoiceDebugLog(false);
+    }
+  }, [showError, showSuccess]);
+
+  const exportVoiceDebugAudio = React.useCallback(async () => {
+    setIsExportingVoiceDebugAudio(true);
+    try {
+      const current = await getVoiceTranscriptionDebugInfo();
+      if (!current.audioExists || !current.audioUri) {
+        throw new Error('No recorded voice sample is available yet.');
+      }
+
+      const fileName = getVoiceTranscriptionDebugAudioFileName();
+      const tempFileUri = `${FileSystem.cacheDirectory ?? FileSystem.documentDirectory}${fileName}`;
+      await FileSystem.copyAsync({ from: current.audioUri, to: tempFileUri });
+
+      const shareResult = await Share.share({
+        url: tempFileUri,
+        title: fileName,
+        message: 'Latest Digital Brain voice transcription sample.',
+      });
+
+      if (shareResult.action !== Share.dismissedAction) {
+        showSuccess('Shared latest voice transcription sample.');
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to export voice sample.';
+      showError(message);
+    } finally {
+      setIsExportingVoiceDebugAudio(false);
+    }
+  }, [showError, showSuccess]);
+
+  const clearVoiceDebug = React.useCallback(async () => {
+    try {
+      await clearVoiceTranscriptionDebugArtifacts();
+      setVoiceDebugInfo(await getVoiceTranscriptionDebugInfo());
+      showSuccess('Cleared voice transcription debug artifacts.');
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to clear voice transcription debug artifacts.';
+      showError(message);
+    }
+  }, [showError, showSuccess]);
+
   return (
     <LinearGradient
       colors={theme.gradients.sunrise}
@@ -334,6 +455,41 @@ export default function SettingsScreen() {
           <Text style={styles.versionValue}>{`${appVersion} (${buildNumber})`}</Text>
           <Text style={styles.versionLabel}>Build timestamp</Text>
           <Text style={styles.versionValue}>{buildTimestamp}</Text>
+        </Card>
+
+        <Card style={[styles.card, styles.versionCard]}>
+          <Text style={styles.versionLabel}>Voice transcription debug</Text>
+          <Text style={styles.versionValue}>Log file present: {voiceDebugInfo.logExists ? 'yes' : 'no'}</Text>
+          <Text style={styles.versionValue}>Log file size: {voiceDebugInfo.logSizeBytes} bytes</Text>
+          <Text style={styles.versionValue}>Audio sample present: {voiceDebugInfo.audioExists ? 'yes' : 'no'}</Text>
+          <Text style={styles.versionValue}>Audio sample size: {voiceDebugInfo.audioSizeBytes} bytes</Text>
+          <Button
+            label={isExportingVoiceDebugLog ? 'Exporting...' : 'Download voice debug log'}
+            onPress={() => {
+              void exportVoiceDebugLog();
+            }}
+            variant="secondary"
+            disabled={!voiceDebugInfo.logExists}
+            style={styles.debugRefreshButton}
+          />
+          <Button
+            label={isExportingVoiceDebugAudio ? 'Sharing...' : 'Share latest voice sample'}
+            onPress={() => {
+              void exportVoiceDebugAudio();
+            }}
+            variant="secondary"
+            disabled={!voiceDebugInfo.audioExists}
+            style={styles.debugRefreshButton}
+          />
+          <Button
+            label="Clear voice debug"
+            onPress={() => {
+              void clearVoiceDebug();
+            }}
+            variant="secondary"
+            disabled={!voiceDebugInfo.logExists && !voiceDebugInfo.audioExists}
+            style={styles.debugRefreshButton}
+          />
         </Card>
 
         <Card style={[styles.card, styles.versionCard]}>

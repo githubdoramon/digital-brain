@@ -2,6 +2,7 @@ import * as FileSystem from 'expo-file-system/legacy';
 import { Platform } from 'react-native';
 import { initWhisper, type WhisperContext } from 'whisper.rn';
 
+import { appendVoiceTranscriptionDebugLog } from '@/debug/voiceTranscriptionDebug';
 import { normalizeTranscriptText } from '@/chat/voiceState';
 
 export type LocalTranscriptionStage =
@@ -12,6 +13,18 @@ export type LocalTranscriptionStage =
 export type LocalTranscriptionStatus = {
   stage: LocalTranscriptionStage;
   progress?: number;
+};
+
+export type LocalTranscriptionSuccess = {
+  text: string;
+  rawText: string;
+  language: string;
+  isAborted: boolean;
+  segments: {
+    text: string;
+    t0: number;
+    t1: number;
+  }[];
 };
 
 export type LocalTranscriptionErrorCode =
@@ -106,7 +119,7 @@ async function getWhisperContext(onStatus?: (status: LocalTranscriptionStatus) =
 export async function transcribeAudioFile(
   fileUri: string,
   onStatus?: (status: LocalTranscriptionStatus) => void,
-) {
+): Promise<LocalTranscriptionSuccess> {
   const whisperContext = await getWhisperContext(onStatus);
   onStatus?.({ stage: 'transcribing', progress: 0 });
 
@@ -121,6 +134,17 @@ export async function transcribeAudioFile(
     const result = await promise;
     const text = normalizeTranscriptText(result.result);
 
+    await appendVoiceTranscriptionDebugLog('voice_transcription_result', {
+      fileUri,
+      modelFileName: MODEL_FILE_NAME,
+      rawText: result.result,
+      normalizedText: text,
+      language: result.language,
+      isAborted: result.isAborted,
+      segmentCount: result.segments.length,
+      segments: result.segments,
+    }).catch(() => undefined);
+
     if (!text) {
       throw new LocalTranscriptionError(
         'no_speech',
@@ -128,8 +152,20 @@ export async function transcribeAudioFile(
       );
     }
 
-    return text;
+    return {
+      text,
+      rawText: result.result,
+      language: result.language,
+      isAborted: result.isAborted,
+      segments: result.segments,
+    };
   } catch (error) {
+    await appendVoiceTranscriptionDebugLog('voice_transcription_failure', {
+      fileUri,
+      modelFileName: MODEL_FILE_NAME,
+      error: error instanceof Error ? error.message : String(error),
+    }).catch(() => undefined);
+
     if (error instanceof LocalTranscriptionError) {
       throw error;
     }
