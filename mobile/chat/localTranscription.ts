@@ -29,7 +29,7 @@ export class LocalTranscriptionError extends Error {
   }
 }
 
-const MODEL_FILE_NAME = 'ggml-small.bin';
+const MODEL_FILE_NAME = 'ggml-tiny.en.bin';
 const MODEL_URL = `https://huggingface.co/ggerganov/whisper.cpp/resolve/main/${MODEL_FILE_NAME}`;
 const MODEL_DIRECTORY = `${FileSystem.documentDirectory ?? FileSystem.cacheDirectory}whisper/`;
 const MODEL_FILE_URI = `${MODEL_DIRECTORY}${MODEL_FILE_NAME}`;
@@ -112,7 +112,8 @@ export async function transcribeAudioFile(
 
   try {
     const { promise } = whisperContext.transcribe(fileUri, {
-      language: 'auto',
+      language: 'en',
+      maxThreads: 4,
       onProgress: (progress: number) => {
         onStatus?.({ stage: 'transcribing', progress });
       },

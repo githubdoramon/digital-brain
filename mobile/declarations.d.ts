@@ -15,11 +15,11 @@ declare module 'whisper.rn' {
   export type TranscribeResult = {
     result: string;
     language: string;
-    segments: Array<{
+    segments: {
       text: string;
       t0: number;
       t1: number;
-    }>;
+    }[];
     isAborted: boolean;
   };
 

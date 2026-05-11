@@ -459,10 +459,10 @@ export function ChatComposer({
             onPress={handleSendPress}
             onPressIn={handlePressIn}
             onLongPress={handleLongPress}
-            onTouchMove={handleTouchMove}
             onPressOut={handlePressOut}
             delayLongPress={LONG_PRESS_DELAY_MS}
             disabled={!allowed || isSending}
+            {...({ onPressMove: handleTouchMove } as Record<string, unknown>)}
             style={({ pressed }) => [
               styles.inlineSendButton,
               (voicePhase === 'starting' || voicePhase === 'recording') && styles.inlineSendButtonRecording,
@@ -563,7 +563,6 @@ const styles = StyleSheet.create({
   },
   inlineSendButtonPressed: {
     opacity: 0.9,
-    transform: [{ scale: 0.98 }],
   },
   inlineSendButtonDisabled: {
     opacity: 0.75,
