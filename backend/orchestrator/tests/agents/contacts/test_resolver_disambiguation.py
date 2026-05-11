@@ -803,6 +803,33 @@ def test_extract_people_splits_selector_prompt(monkeypatch):
     assert "extract collective participant selectors" in prompts[1].lower()
 
 
+def test_extract_people_ignores_non_collective_company_mentions(monkeypatch):
+    def fake_call_llm_json(prompt, **_kwargs):
+        prompt_lower = prompt.lower()
+        if "extract collective participant selectors" in prompt_lower:
+            return {
+                "selectors": [
+                    {
+                        "kind": "company",
+                        "value": "Acme",
+                        "raw": "from Acme",
+                        "deterministic": True,
+                    }
+                ]
+            }
+        return {"people": ["user", "Seb"]}
+
+    monkeypatch.setattr(resolver, "call_llm_json", fake_call_llm_json)
+
+    people, selectors = resolver.extract_people_from_text(
+        "this morning, I was fired from Acme by Seb",
+        include_collective_selectors=True,
+    )
+
+    assert people == ["user", "Seb"]
+    assert selectors == []
+
+
 def test_nested_relationship_reuses_prior_resolved_full_name(monkeypatch):
     monkeypatch.setattr(
         resolver.contacts_service,

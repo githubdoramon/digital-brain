@@ -1194,6 +1194,8 @@ Text: \"{text}\"
   * \"everyone from company Acme\" -> {{\"kind\":\"company\",\"value\":\"Acme\",\"raw\":\"everyone from company Acme\",\"deterministic\":true}}
   * \"all people from my soccer team\" -> {{\"kind\":\"group\",\"value\":\"soccer team\",\"raw\":\"my soccer team\",\"deterministic\":false}}
 - Do not use family/relationship groups as collective selectors.
+- Do NOT infer a collective selector from a singular organization mention like "I was fired from Acme" or "I met Seb at Acme".
+- Only return a selector when the text explicitly refers to a plural or collective set such as "everyone", "all", "team", "people", "staff", or "employees".
 
 Return ONLY valid JSON:
 {{
@@ -1207,6 +1209,36 @@ Return ONLY valid JSON:
   ]
 }}"""
     return _with_clarification_guidelines(prompt)
+
+
+_EXPLICIT_COLLECTIVE_SELECTOR_PATTERN = re.compile(
+    r"\b(?:everyone|everybody|all|team|teams|people|folks|staff|employees|employee|"
+    r"coworkers|coworker|co-workers|co-worker|colleagues|group|groups|department|"
+    r"company|org|organization)\b"
+)
+
+
+def _selector_has_explicit_collective_intent(
+    *,
+    text: str,
+    kind: str,
+    value: str,
+    raw: str,
+) -> bool:
+    if kind == "group":
+        return True
+
+    normalized_text = normalize_search_text(text)
+    if not _EXPLICIT_COLLECTIVE_SELECTOR_PATTERN.search(normalized_text):
+        return False
+
+    normalized_raw = normalize_search_text(raw)
+    normalized_value = normalize_search_text(value)
+    selector_tokens = [normalized_raw, normalized_value]
+    if kind == "email_domain" and normalized_value:
+        selector_tokens.append(f"@{normalized_value}")
+
+    return any(token and token in normalized_text for token in selector_tokens)
 
 
 def _extract_collective_selectors_via_llm(
@@ -1233,11 +1265,19 @@ def _extract_collective_selectors_via_llm(
             value = str(selector.get("value") or "").strip()
             if not value:
                 continue
+            raw = str(selector.get("raw") or value).strip()
+            if not _selector_has_explicit_collective_intent(
+                text=text,
+                kind=kind,
+                value=value,
+                raw=raw,
+            ):
+                continue
             llm_collective_selectors.append(
                 {
                     "kind": kind,
                     "value": value,
-                    "raw": str(selector.get("raw") or value).strip(),
+                    "raw": raw,
                     "deterministic": "true" if bool(selector.get("deterministic")) else "false",
                 }
             )

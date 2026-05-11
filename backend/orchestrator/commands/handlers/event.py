@@ -1934,6 +1934,7 @@ def _resolve_contacts_with_agent(
             resolution["proposed_contact_groups"].append(candidate)
 
     for resolved in contact_result.get("resolved_contacts", []):
+        matched_via = str(resolved.get("matched_via") or "").strip().lower()
         resolution["contacts"].append(
             {
                 "contact_id": resolved.get("contact_id"),
@@ -1945,6 +1946,8 @@ def _resolve_contacts_with_agent(
 
         original_text = resolved.get("original_text")
         display_name = resolved.get("display_name")
+        if matched_via.startswith("selector_"):
+            continue
         if original_text and display_name and original_text.lower() != display_name.lower():
             if original_text.lower() != "user":
                 resolution["name_replacements"][original_text] = display_name

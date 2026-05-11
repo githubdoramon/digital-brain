@@ -1356,6 +1356,43 @@ def test_find_event_matches_requires_auto_update_threshold(monkeypatch):
     assert match == {"operation": "create", "candidates": []}
 
 
+def test_resolve_contacts_with_agent_skips_selector_name_replacements(monkeypatch):
+    def fake_resolve_contacts_from_text(*_args, **_kwargs):
+        return {
+            "resolved_contacts": [
+                {
+                    "original_text": "from Acme",
+                    "contact_id": "contact:xinu",
+                    "display_name": "Xinu",
+                    "matched_via": "selector_company",
+                    "confidence": "high",
+                },
+                {
+                    "original_text": "Seb",
+                    "contact_id": "contact:seb",
+                    "display_name": "Owen Park",
+                    "matched_via": "direct_match",
+                    "confidence": "high",
+                },
+            ],
+            "new_contacts": [],
+            "group_confirmation_candidates": [],
+            "group_upsert_candidates": [],
+        }
+
+    monkeypatch.setattr(
+        "agents.contacts.resolve_contacts_from_text",
+        fake_resolve_contacts_from_text,
+    )
+
+    resolution, _contact_result = event_handler._resolve_contacts_with_agent(
+        "this morning, I was fired from Acme by Seb",
+        "user@example.com",
+    )
+
+    assert resolution["name_replacements"] == {"Seb": "Owen Park"}
+
+
 def test_find_event_matches_rejects_calendar_day_mismatch(monkeypatch):
     extracted = {
         "title": "Lunch at Dragao with Family",
