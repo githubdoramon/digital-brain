@@ -5,3 +5,4 @@
 .python-version
 .DS_Store
 OPEN_SOURCE_AUDIT.md
+node_modules

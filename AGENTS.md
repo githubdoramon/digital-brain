@@ -14,6 +14,8 @@ Personal memory orchestrator with a **bounded agent architecture**. Backend: Fas
 
 **Mobile screen convention**: Reuse established full-screen patterns before creating new screen chrome. Screens that own a custom/collapsing header (for example event/contact draft editors) must hide the native Expo Stack header in `mobile/app/_layout.tsx` to avoid double navigation bars.
 
+**Mobile voice input convention**: Chat dictation uses on-device Whisper in `mobile` with a long-press send gesture, swipe-up lock, and transcript insertion into the composer (never auto-send). This requires a native Expo dev build / prebuild workflow; do not assume it works in Expo Go.
+
 ## Architecture Documentation
 
 Detailed architecture docs live in `backend/orchestrator/docs/architecture/`:

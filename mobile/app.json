@@ -38,6 +38,7 @@
           "ACCESS_FINE_LOCATION",
           "ACCESS_MEDIA_LOCATION",
           "ACCESS_BACKGROUND_LOCATION",
+          "RECORD_AUDIO",
           "FOREGROUND_SERVICE",
           "FOREGROUND_SERVICE_LOCATION"
       ]
@@ -52,6 +53,14 @@
       "expo-router",
       "expo-font",
       "expo-notifications",
+       [
+        "expo-audio",
+        {
+          "microphonePermission": "Digital Brain uses your microphone so you can dictate chat messages with on-device Whisper transcription.",
+          "enableBackgroundPlayback": false,
+          "enableBackgroundRecording": false
+        }
+      ],
       [
         "expo-location",
         {

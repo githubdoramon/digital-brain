@@ -2,7 +2,6 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  ActivityIndicator,
   Animated,
   AppState,
   FlatList,
@@ -35,7 +34,7 @@ import { UiDirectiveCard } from '@/components/ui-directive-card';
 import { SlashCommandPalette } from '@/components/SlashCommandPalette';
 import { renderAssistantMarkdown } from '@/components/MarkdownRenderer';
 import { StreamingAssistantCard } from '@/components/StreamingAssistantCard';
-import { ComposerMediaTray } from '@/components/chat/ComposerMediaTray';
+import { ChatComposer } from '@/components/chat/ChatComposer';
 import type {
   EventContactOption,
   EventDraft,
@@ -2577,92 +2576,42 @@ export function ChatConversationScreen({
           </View>
         )}
 
-        <View
-          onLayout={(event) => {
-            setComposerHeight(event.nativeEvent.layout.height);
+        <ChatComposer
+          attachments={composerMediaAttachments}
+          onRemoveAttachment={removeComposerMediaAttachment}
+          commandsEnabled={commandsEnabled}
+          allowed={allowed}
+          isSending={isSending}
+          canSend={canSend}
+          input={input}
+          inputRef={inputRef}
+          placeholder={commandsEnabled ? 'Ask me anything...' : 'Reply to this thread...'}
+          minInputHeight={MIN_CHAT_INPUT_HEIGHT}
+          maxInputHeight={MAX_CHAT_INPUT_HEIGHT}
+          composerBottomOffset={composerBottomOffset}
+          composerPaddingBottom={keyboardVisible ? 24 : tabBarClearance + (isMainChat ? 8 : 4)}
+          onComposerHeightChange={setComposerHeight}
+          onChangeInput={setInput}
+          onSend={() => {
+            void sendMessage();
           }}
-          style={[
-            styles.composer,
-            {
-              bottom: composerBottomOffset,
-              paddingBottom: keyboardVisible ? 24 : tabBarClearance + (isMainChat ? 8 : 4),
-              paddingRight: 16,
-              gap: 10,
-            },
-          ]}
-        >
-          <ComposerMediaTray
-            attachments={composerMediaAttachments}
-            onRemoveAttachment={removeComposerMediaAttachment}
-          />
-          {!commandsEnabled ? (
-            <Text style={styles.composerNotice}>Commands are disabled in historical threads.</Text>
-          ) : null}
-          <View style={styles.inputWrap}>
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel="Attach photo"
-              onPress={() => {
-                void addComposerMediaAttachment();
-              }}
-              disabled={!allowed || isSending || composerMediaAttachments.length >= MAX_CHAT_MEDIA_ATTACHMENTS}
-              style={({ pressed }) => [
-                styles.attachButton,
-                pressed && styles.attachButtonPressed,
-                (!allowed || isSending || composerMediaAttachments.length >= MAX_CHAT_MEDIA_ATTACHMENTS) &&
-                  styles.attachButtonDisabled,
-              ]}
-            >
-              <Ionicons name="image-outline" size={18} color={theme.colors.ink} />
-            </Pressable>
-            <TextInput
-              ref={inputRef}
-              value={input}
-              editable={allowed}
-              style={[
-                styles.input,
-                {
-                  minHeight: MIN_CHAT_INPUT_HEIGHT,
-                  maxHeight: MAX_CHAT_INPUT_HEIGHT,
-                  width: '100%',
-                  paddingRight: 104,
-                },
-                !allowed && {
-                  backgroundColor: '#eee',
-                },
-              ]}
-              onChangeText={setInput}
-              placeholder={commandsEnabled ? 'Ask me anything...' : 'Reply to this thread...'}
-              placeholderTextColor="#A7AFB7"
-              multiline
-              onFocus={() => {
-                setForceScrollNext(true);
-              }}
-              onBlur={() => {
-                if (Platform.OS === 'android') {
-                  setKeyboardVisible(false);
-                  setKeyboardHeight(0);
-                }
-              }}
-              scrollEnabled={true}
-            />
-            <Pressable
-              onPress={() => sendMessage()}
-              disabled={!canSend}
-              style={({ pressed }) => [
-                styles.inlineSendButton,
-                pressed && styles.inlineSendButtonPressed,
-                !canSend && styles.inlineSendButtonDisabled,
-              ]}
-            >
-              {isSending ? (
-                <ActivityIndicator size="small" color="#fff" />
-              ) : (
-                <Ionicons name="send" size={16} color="#fff" />
-              )}
-            </Pressable>
-          </View>
-        </View>
+          onAttachPhoto={() => {
+            void addComposerMediaAttachment();
+          }}
+          onInputFocus={() => {
+            setForceScrollNext(true);
+          }}
+          onInputBlur={() => {
+            if (Platform.OS === 'android') {
+              setKeyboardVisible(false);
+              setKeyboardHeight(0);
+            }
+          }}
+          onErrorMessage={showError}
+          attachDisabled={
+            !allowed || isSending || composerMediaAttachments.length >= MAX_CHAT_MEDIA_ATTACHMENTS
+          }
+        />
 
       </KeyboardAvoidingView>
       {imagePickerSheet}
@@ -2819,88 +2768,6 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(255, 255, 255, 0.92)',
   },
   headerActionButtonPressed: {
-    opacity: 0.75,
-  },
-  composer: {
-    position: 'absolute',
-    left: 0,
-    right: 0,
-    bottom: 0,
-    zIndex: 2,
-    paddingHorizontal: 16,
-    paddingVertical: 14,
-    backgroundColor: 'transparent',
-    gap: 10,
-    alignItems: 'stretch',
-  },
-  inputWrap: {
-    flex: 1,
-    position: 'relative',
-  },
-  composerNotice: {
-    fontSize: 12,
-    lineHeight: 16,
-    color: theme.colors.mutedInk,
-    paddingHorizontal: 8,
-  },
-  attachButton: {
-    position: 'absolute',
-    right: 50,
-    top: '50%',
-    zIndex: 1,
-    width: 34,
-    height: 34,
-    borderRadius: 17,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: '#f2ece5',
-    transform: [{ translateY: -17 }],
-  },
-  attachButtonPressed: {
-    opacity: 0.8,
-  },
-  attachButtonDisabled: {
-    opacity: 0.45,
-  },
-  input: {
-    fontSize: 16,
-    lineHeight: 20,
-    paddingHorizontal: 14,
-    paddingVertical: 12,
-    borderRadius: theme.radius.xl,
-    borderWidth: 1,
-    borderColor: theme.colors.line,
-    backgroundColor: '#fff',
-    color: theme.colors.ink,
-    textAlignVertical: 'center',
-    shadowColor: theme.shadow.color,
-    shadowOpacity: 0.12,
-    shadowRadius: 12,
-    shadowOffset: { width: 0, height: 8 },
-    elevation: 3,
-  },
-  inlineSendButton: {
-    position: 'absolute',
-    right: 6,
-    top: '50%',
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: theme.colors.accent,
-    shadowColor: theme.shadow.color,
-    shadowOpacity: 0.24,
-    shadowRadius: 10,
-    shadowOffset: { width: 0, height: 6 },
-    elevation: 5,
-    transform: [{ translateY: -18 }],
-  },
-  inlineSendButtonPressed: {
-    opacity: 0.9,
-    transform: [{ scale: 0.98 }],
-  },
-  inlineSendButtonDisabled: {
     opacity: 0.75,
   },
 });

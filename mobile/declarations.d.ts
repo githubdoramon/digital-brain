@@ -5,3 +5,40 @@ declare module '*.svg' {
   const content: FunctionComponent<SvgProps>;
   export default content;
 }
+
+declare module 'whisper.rn' {
+  export type TranscribeFileOptions = {
+    language?: string;
+    onProgress?: (progress: number) => void;
+  };
+
+  export type TranscribeResult = {
+    result: string;
+    language: string;
+    segments: Array<{
+      text: string;
+      t0: number;
+      t1: number;
+    }>;
+    isAborted: boolean;
+  };
+
+  export class WhisperContext {
+    transcribe(
+      filePathOrBase64: string | number,
+      options?: TranscribeFileOptions,
+    ): {
+      stop: () => Promise<void>;
+      promise: Promise<TranscribeResult>;
+    };
+    release(): Promise<void>;
+  }
+
+  export function initWhisper(options: {
+    filePath: string | number;
+    isBundleAsset?: boolean;
+    useCoreMLIos?: boolean;
+    useGpu?: boolean;
+    useFlashAttn?: boolean;
+  }): Promise<WhisperContext>;
+}
