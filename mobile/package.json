@@ -41,6 +41,7 @@
     "expo-system-ui": "~55.0.10",
     "expo-task-manager": "~55.0.12",
     "expo-web-browser": "~55.0.10",
+    "ffmpeg-kit-react-native": "^6.0.2",
     "react": "19.2.0",
     "react-dom": "19.2.0",
     "react-native": "0.83.2",
