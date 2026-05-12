@@ -20,6 +20,7 @@ export type LocalTranscriptionSuccess = {
   rawText: string;
   language: string;
   isAborted: boolean;
+  modelFileName: string;
   segments: {
     text: string;
     t0: number;
@@ -137,6 +138,7 @@ export async function transcribeAudioFile(
     await appendVoiceTranscriptionDebugLog('voice_transcription_result', {
       fileUri,
       modelFileName: MODEL_FILE_NAME,
+      audioContainer: fileUri.split('.').pop() ?? null,
       rawText: result.result,
       normalizedText: text,
       language: result.language,
@@ -157,6 +159,7 @@ export async function transcribeAudioFile(
       rawText: result.result,
       language: result.language,
       isAborted: result.isAborted,
+      modelFileName: MODEL_FILE_NAME,
       segments: result.segments,
     };
   } catch (error) {

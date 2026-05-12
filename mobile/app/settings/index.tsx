@@ -355,14 +355,34 @@ export default function SettingsScreen() {
       const tempFileUri = `${FileSystem.cacheDirectory ?? FileSystem.documentDirectory}${fileName}`;
       await FileSystem.copyAsync({ from: current.audioUri, to: tempFileUri });
 
-      const shareResult = await Share.share({
-        url: tempFileUri,
-        title: fileName,
-        message: 'Latest Digital Brain voice transcription sample.',
-      });
+      if (Platform.OS === 'android') {
+        const initialUri = StorageAccessFramework.getUriForDirectoryInRoot('Download');
+        const permission = await StorageAccessFramework.requestDirectoryPermissionsAsync(initialUri);
+        if (!permission.granted || !permission.directoryUri) {
+          throw new Error('Downloads access not granted.');
+        }
 
-      if (shareResult.action !== Share.dismissedAction) {
-        showSuccess('Shared latest voice transcription sample.');
+        const targetUri = await StorageAccessFramework.createFileAsync(
+          permission.directoryUri,
+          fileName.replace(/\.m4a$/i, ''),
+          'audio/mp4',
+        );
+        const base64Content = await FileSystem.readAsStringAsync(tempFileUri, {
+          encoding: FileSystem.EncodingType.Base64,
+        });
+        await FileSystem.writeAsStringAsync(targetUri, base64Content, {
+          encoding: FileSystem.EncodingType.Base64,
+        });
+        showSuccess(`Saved voice sample to Downloads as ${fileName}.`);
+      } else {
+        const shareResult = await Share.share({
+          url: tempFileUri,
+          title: fileName,
+        });
+
+        if (shareResult.action !== Share.dismissedAction) {
+          showSuccess('Shared latest voice transcription sample.');
+        }
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Failed to export voice sample.';

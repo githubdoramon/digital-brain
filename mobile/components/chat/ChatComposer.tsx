@@ -11,7 +11,12 @@ import {
   TextInput,
   View,
 } from 'react-native';
-import { RecordingPresets, useAudioRecorder, useAudioRecorderState } from 'expo-audio';
+import {
+  AudioQuality,
+  IOSOutputFormat,
+  useAudioRecorder,
+  useAudioRecorderState,
+} from 'expo-audio';
 
 import { ComposerMediaTray } from '@/components/chat/ComposerMediaTray';
 import type { ComposerMediaAttachment } from '@/chat/mediaAttachments';
@@ -41,6 +46,31 @@ import { theme } from '@/theme';
 
 const LOCK_THRESHOLD_PX = 72;
 const LONG_PRESS_DELAY_MS = 260;
+const VOICE_RECORDING_OPTIONS = {
+  extension: '.m4a',
+  sampleRate: 16000,
+  numberOfChannels: 1,
+  bitRate: 64000,
+  isMeteringEnabled: true,
+  android: {
+    extension: '.m4a',
+    outputFormat: 'mpeg4',
+    audioEncoder: 'aac',
+  },
+  ios: {
+    extension: '.m4a',
+    sampleRate: 16000,
+    outputFormat: IOSOutputFormat.MPEG4AAC,
+    audioQuality: AudioQuality.HIGH,
+    linearPCMBitDepth: 16,
+    linearPCMIsBigEndian: false,
+    linearPCMIsFloat: false,
+  },
+  web: {
+    mimeType: 'audio/mp4',
+    bitsPerSecond: 64000,
+  },
+} as const;
 
 type Props = {
   attachments: ComposerMediaAttachment[];
@@ -89,7 +119,7 @@ export function ChatComposer({
   onErrorMessage,
   attachDisabled,
 }: Props) {
-  const recorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
+  const recorder = useAudioRecorder(VOICE_RECORDING_OPTIONS);
   const recorderState = useAudioRecorderState(recorder, 200);
   const [voicePhase, setVoicePhase] = useState<VoiceComposerPhase>('idle');
   const [voiceStatusText, setVoiceStatusText] = useState('');
@@ -113,6 +143,7 @@ export function ChatComposer({
   const inputIsEmpty = input.trim().length === 0;
   const shouldShowVoiceBanner = voicePhase === 'starting' || voicePhase === 'recording';
   const shouldShowVoicePanel = voicePhase === 'locked' || voicePhase === 'transcribing';
+  const sendButtonDisabled = !allowed || isSending || voicePhase === 'transcribing';
 
   const resetVoiceUi = useCallback(() => {
     longPressHandledRef.current = false;
@@ -185,9 +216,26 @@ export function ChatComposer({
         copiedAudioUri: recordingInfo?.uri ?? null,
         copiedAudioSizeBytes: recordingInfo?.sizeBytes ?? null,
         durationMillis: recorderState.durationMillis,
+        metering: recorderState.metering ?? null,
+        recorderStateUrl: recorderState.url ?? null,
+        recordingOptions: {
+          extension: VOICE_RECORDING_OPTIONS.extension,
+          sampleRate: VOICE_RECORDING_OPTIONS.sampleRate,
+          numberOfChannels: VOICE_RECORDING_OPTIONS.numberOfChannels,
+          bitRate: VOICE_RECORDING_OPTIONS.bitRate,
+          android: VOICE_RECORDING_OPTIONS.android,
+          ios: VOICE_RECORDING_OPTIONS.ios,
+        },
         draftBeforeTranscription: normalizeTranscriptText(latestInputRef.current),
       }).catch(() => undefined);
       const transcription = await transcribeAudioFile(recordingUri, applyTranscriptionStatus);
+      await appendVoiceTranscriptionDebugLog('voice_transcription_applied', {
+        text: transcription.text,
+        rawText: transcription.rawText,
+        language: transcription.language,
+        modelFileName: transcription.modelFileName,
+        segmentCount: transcription.segments.length,
+      }).catch(() => undefined);
       onChangeInput(mergeTranscriptIntoDraft(latestInputRef.current, transcription.text));
       requestAnimationFrame(() => {
         inputRef.current?.focus();
@@ -198,6 +246,7 @@ export function ChatComposer({
       await appendVoiceTranscriptionDebugLog('voice_capture_failure', {
         error: error instanceof Error ? error.message : String(error),
         durationMillis: recorderState.durationMillis,
+        metering: recorderState.metering ?? null,
       }).catch(() => undefined);
       resetVoiceUi();
       onErrorMessage(
@@ -213,6 +262,8 @@ export function ChatComposer({
     onErrorMessage,
     recorder,
     recorderState.durationMillis,
+    recorderState.metering,
+    recorderState.url,
     resetVoiceUi,
   ]);
 
@@ -433,74 +484,73 @@ export function ChatComposer({
             </View>
           ) : null}
         </View>
-      ) : (
-        <View style={styles.inputWrap}>
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel="Attach photo"
-            onPress={onAttachPhoto}
-            disabled={attachDisabled || voicePhase !== 'idle'}
-            style={({ pressed }) => [
-              styles.attachButton,
-              pressed && styles.attachButtonPressed,
-              (attachDisabled || voicePhase !== 'idle') && styles.attachButtonDisabled,
-            ]}
-          >
-            <Ionicons name="image-outline" size={18} color={theme.colors.ink} />
-          </Pressable>
-          <TextInput
-            ref={inputRef}
-            value={input}
-            editable={allowed && voicePhase === 'idle'}
-            style={[
-              styles.input,
-              {
-                minHeight: minInputHeight,
-                maxHeight: maxInputHeight,
-                width: '100%',
-                paddingRight: 104,
-              },
-              !allowed && {
-                backgroundColor: '#eee',
-              },
-            ]}
-            onChangeText={onChangeInput}
-            placeholder={placeholder}
-            placeholderTextColor="#A7AFB7"
-            multiline
-            onFocus={onInputFocus}
-            onBlur={onInputBlur}
-            scrollEnabled
-          />
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel={
-              !inputIsEmpty || attachments.length > 0
-                ? 'Send message'
-                : 'Hold to record a voice message'
-            }
-            onPress={handleSendPress}
-            onPressIn={handlePressIn}
-            onLongPress={handleLongPress}
-            onPressOut={handlePressOut}
-            delayLongPress={LONG_PRESS_DELAY_MS}
-            disabled={!allowed || isSending}
-            {...({ onPressMove: handleTouchMove } as Record<string, unknown>)}
-            style={({ pressed }) => [
-              styles.inlineSendButton,
-              (voicePhase === 'starting' || voicePhase === 'recording') && styles.inlineSendButtonRecording,
-              pressed && styles.inlineSendButtonPressed,
-              !allowed && styles.inlineSendButtonDisabled,
-            ]}
-          >
-            {isSending ? (
-              <ActivityIndicator size="small" color="#fff" />
-            ) : buttonIconName ? (
-              <Ionicons name={buttonIconName} size={16} color="#fff" />
-            ) : null}
-          </Pressable>
-        </View>
-      )}
+      ) : null}
+      <View style={styles.inputWrap}>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Attach photo"
+          onPress={onAttachPhoto}
+          disabled={attachDisabled || voicePhase !== 'idle'}
+          style={({ pressed }) => [
+            styles.attachButton,
+            pressed && styles.attachButtonPressed,
+            (attachDisabled || voicePhase !== 'idle') && styles.attachButtonDisabled,
+          ]}
+        >
+          <Ionicons name="image-outline" size={18} color={theme.colors.ink} />
+        </Pressable>
+        <TextInput
+          ref={inputRef}
+          value={input}
+          editable={allowed}
+          style={[
+            styles.input,
+            {
+              minHeight: minInputHeight,
+              maxHeight: maxInputHeight,
+              width: '100%',
+              paddingRight: 104,
+            },
+            !allowed && {
+              backgroundColor: '#eee',
+            },
+          ]}
+          onChangeText={onChangeInput}
+          placeholder={placeholder}
+          placeholderTextColor="#A7AFB7"
+          multiline
+          onFocus={onInputFocus}
+          onBlur={onInputBlur}
+          scrollEnabled
+        />
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={
+            !inputIsEmpty || attachments.length > 0
+              ? 'Send message'
+              : 'Hold to record a voice message'
+          }
+          onPress={handleSendPress}
+          onPressIn={handlePressIn}
+          onLongPress={handleLongPress}
+          onPressOut={handlePressOut}
+          delayLongPress={LONG_PRESS_DELAY_MS}
+          disabled={sendButtonDisabled}
+          {...({ onPressMove: handleTouchMove } as Record<string, unknown>)}
+          style={({ pressed }) => [
+            styles.inlineSendButton,
+            (voicePhase === 'starting' || voicePhase === 'recording') && styles.inlineSendButtonRecording,
+            pressed && styles.inlineSendButtonPressed,
+            sendButtonDisabled && styles.inlineSendButtonDisabled,
+          ]}
+        >
+          {isSending ? (
+            <ActivityIndicator size="small" color="#fff" />
+          ) : buttonIconName ? (
+            <Ionicons name={buttonIconName} size={16} color="#fff" />
+          ) : null}
+        </Pressable>
+      </View>
     </View>
   );
 }
