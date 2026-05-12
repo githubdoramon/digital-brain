@@ -50,6 +50,18 @@ const MODEL_FILE_URI = `${MODEL_DIRECTORY}${MODEL_FILE_NAME}`;
 
 let whisperContextPromise: Promise<WhisperContext> | null = null;
 
+function normalizeWhisperFilePath(fileUri: string) {
+  if (fileUri.startsWith('file:///')) {
+    return fileUri.slice('file://'.length);
+  }
+
+  if (fileUri.startsWith('file:/')) {
+    return fileUri.slice('file:'.length);
+  }
+
+  return fileUri;
+}
+
 async function ensureModelFile(onStatus?: (status: LocalTranscriptionStatus) => void) {
   const info = await FileSystem.getInfoAsync(MODEL_FILE_URI);
   if (info.exists && !info.isDirectory) {
@@ -125,7 +137,8 @@ export async function transcribeAudioFile(
   onStatus?.({ stage: 'transcribing', progress: 0 });
 
   try {
-    const { promise } = whisperContext.transcribe(fileUri, {
+    const normalizedFilePath = normalizeWhisperFilePath(fileUri);
+    const { promise } = whisperContext.transcribe(normalizedFilePath, {
       language: 'en',
       maxThreads: 4,
       onProgress: (progress: number) => {
@@ -137,6 +150,7 @@ export async function transcribeAudioFile(
 
     await appendVoiceTranscriptionDebugLog('voice_transcription_result', {
       fileUri,
+      normalizedFilePath,
       modelFileName: MODEL_FILE_NAME,
       audioContainer: fileUri.split('.').pop() ?? null,
       rawText: result.result,
@@ -165,6 +179,7 @@ export async function transcribeAudioFile(
   } catch (error) {
     await appendVoiceTranscriptionDebugLog('voice_transcription_failure', {
       fileUri,
+      normalizedFilePath: normalizeWhisperFilePath(fileUri),
       modelFileName: MODEL_FILE_NAME,
       error: error instanceof Error ? error.message : String(error),
     }).catch(() => undefined);
