@@ -1,4 +1,4 @@
-import { getRecordingPermissionsAsync, requestRecordingPermissionsAsync, setAudioModeAsync } from 'expo-audio';
+import { AudioStudioModule } from '@siteed/audio-studio';
 import { Platform } from 'react-native';
 
 export type VoiceRecordingErrorCode =
@@ -24,10 +24,10 @@ export async function ensureVoiceRecordingReady() {
     );
   }
 
-  const currentPermission = await getRecordingPermissionsAsync();
-  const granted = currentPermission.granted
+  const currentPermission = await AudioStudioModule.getPermissionsAsync?.();
+  const granted = currentPermission?.granted
     ? true
-    : (await requestRecordingPermissionsAsync()).granted;
+    : (await AudioStudioModule.requestPermissionsAsync?.())?.granted;
 
   if (!granted) {
     throw new VoiceRecordingError(
@@ -35,17 +35,10 @@ export async function ensureVoiceRecordingReady() {
       'Microphone access is required to dictate a message.',
     );
   }
-
-  await setAudioModeAsync({
-    allowsRecording: true,
-    playsInSilentMode: true,
-  });
 }
 
 export async function restoreVoiceAudioMode() {
-  await setAudioModeAsync({
-    allowsRecording: false,
-  });
+  return undefined;
 }
 
 export function requireRecordingUri(recordingUri: string | null | undefined) {

@@ -50,7 +50,7 @@ type PluginEntry = NonNullable<ExpoConfig['plugins']>[number];
 const withPlugin = (
   plugins: ExpoConfig['plugins'],
   pluginName: string,
-  options?: Record<string, string>,
+  options?: Record<string, unknown>,
 ): PluginEntry[] => {
   const nextPlugins = [...(plugins ?? [])];
   const hasOptions = !!options && Object.keys(options).length > 0;
@@ -113,9 +113,28 @@ export default ({ config }: ConfigContext): ExpoConfig => {
     ...(googleMapsApiKey ? { androidGoogleMapsApiKey: googleMapsApiKey } : {}),
     ...(googleMapsApiKey ? { iosGoogleMapsApiKey: googleMapsApiKey } : {}),
   });
+  const pluginsWithAsset = withPlugin(pluginsWithMaps, 'expo-asset');
+  const pluginsWithAudioStudio = withPlugin(pluginsWithAsset, '@siteed/audio-studio', {
+    enablePhoneStateHandling: false,
+    enableNotifications: false,
+    enableBackgroundAudio: false,
+    enableDeviceDetection: false,
+    iosBackgroundModes: {
+      useVoIP: false,
+      useAudio: false,
+      useProcessing: false,
+      useLocation: false,
+      useExternalAccessory: false,
+    },
+    iosConfig: {
+      microphoneUsageDescription:
+        'Digital Brain uses your microphone so you can dictate chat messages with on-device Whisper transcription.',
+      notificationUsageDescription: 'Digital Brain can show recording controls while capturing audio.',
+    },
+  });
 
   return withSystemDebugKeystore({
     ...merged,
-    plugins: withPlugin(pluginsWithMaps, 'expo-background-task'),
+    plugins: withPlugin(pluginsWithAudioStudio, 'expo-background-task'),
   });
 };

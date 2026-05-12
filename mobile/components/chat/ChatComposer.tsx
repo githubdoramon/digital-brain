@@ -11,12 +11,7 @@ import {
   TextInput,
   View,
 } from 'react-native';
-import {
-  AudioQuality,
-  IOSOutputFormat,
-  useAudioRecorder,
-  useAudioRecorderState,
-} from 'expo-audio';
+import { useAudioRecorder, type RecordingConfig } from '@siteed/audio-studio';
 
 import { ComposerMediaTray } from '@/components/chat/ComposerMediaTray';
 import type { ComposerMediaAttachment } from '@/chat/mediaAttachments';
@@ -46,31 +41,27 @@ import { theme } from '@/theme';
 
 const LOCK_THRESHOLD_PX = 72;
 const LONG_PRESS_DELAY_MS = 260;
-const VOICE_RECORDING_OPTIONS = {
-  extension: '.m4a',
+const VOICE_RECORDING_OPTIONS: RecordingConfig = {
   sampleRate: 16000,
-  numberOfChannels: 1,
-  bitRate: 64000,
-  isMeteringEnabled: true,
-  android: {
-    extension: '.m4a',
-    outputFormat: 'mpeg4',
-    audioEncoder: 'aac',
+  channels: 1,
+  encoding: 'pcm_16bit',
+  output: {
+    primary: {
+      enabled: true,
+      format: 'wav',
+    },
+    compressed: {
+      enabled: false,
+    },
   },
   ios: {
-    extension: '.m4a',
-    sampleRate: 16000,
-    outputFormat: IOSOutputFormat.MPEG4AAC,
-    audioQuality: AudioQuality.HIGH,
-    linearPCMBitDepth: 16,
-    linearPCMIsBigEndian: false,
-    linearPCMIsFloat: false,
+    audioSession: {
+      category: 'PlayAndRecord',
+      mode: 'Default',
+      categoryOptions: ['DefaultToSpeaker'],
+    },
   },
-  web: {
-    mimeType: 'audio/mp4',
-    bitsPerSecond: 64000,
-  },
-} as const;
+};
 
 type Props = {
   attachments: ComposerMediaAttachment[];
@@ -119,8 +110,7 @@ export function ChatComposer({
   onErrorMessage,
   attachDisabled,
 }: Props) {
-  const recorder = useAudioRecorder(VOICE_RECORDING_OPTIONS);
-  const recorderState = useAudioRecorderState(recorder, 200);
+  const recorder = useAudioRecorder();
   const [voicePhase, setVoicePhase] = useState<VoiceComposerPhase>('idle');
   const [voiceStatusText, setVoiceStatusText] = useState('');
   const [lockQueued, setLockQueued] = useState(false);
@@ -156,13 +146,13 @@ export function ChatComposer({
 
   const stopRecorderSilently = useCallback(async () => {
     try {
-      if (recorderState.isRecording) {
-        await recorder.stop();
+      if (recorder.isRecording || recorder.isPaused) {
+        await recorder.stopRecording();
       }
     } catch {
       // Ignore cleanup failures during cancellation.
     }
-  }, [recorder, recorderState.isRecording]);
+  }, [recorder]);
 
   const cancelVoiceCapture = useCallback(async () => {
     await stopRecorderSilently();
@@ -205,9 +195,9 @@ export function ChatComposer({
     setVoiceStatusText('Finishing recording');
 
     try {
-      await recorder.stop();
       await restoreVoiceAudioMode().catch(() => undefined);
-      const recordingUri = requireRecordingUri(recorder.uri);
+      const recording = await recorder.stopRecording();
+      const recordingUri = requireRecordingUri(recording?.fileUri);
       const recordingInfo = await copyLatestVoiceDebugAudio(recordingUri).catch(async () => {
         return null;
       });
@@ -215,15 +205,17 @@ export function ChatComposer({
         recordingUri,
         copiedAudioUri: recordingInfo?.uri ?? null,
         copiedAudioSizeBytes: recordingInfo?.sizeBytes ?? null,
-        durationMillis: recorderState.durationMillis,
-        metering: recorderState.metering ?? null,
-        recorderStateUrl: recorderState.url ?? null,
+        durationMillis: recording?.durationMs ?? recorder.durationMs,
+        sizeBytes: recording?.size ?? recorder.size,
+        mimeType: recording?.mimeType ?? null,
+        bitDepth: recording?.bitDepth ?? null,
+        channels: recording?.channels ?? null,
+        sampleRate: recording?.sampleRate ?? null,
         recordingOptions: {
-          extension: VOICE_RECORDING_OPTIONS.extension,
           sampleRate: VOICE_RECORDING_OPTIONS.sampleRate,
-          numberOfChannels: VOICE_RECORDING_OPTIONS.numberOfChannels,
-          bitRate: VOICE_RECORDING_OPTIONS.bitRate,
-          android: VOICE_RECORDING_OPTIONS.android,
+          channels: VOICE_RECORDING_OPTIONS.channels,
+          encoding: VOICE_RECORDING_OPTIONS.encoding,
+          output: VOICE_RECORDING_OPTIONS.output,
           ios: VOICE_RECORDING_OPTIONS.ios,
         },
         draftBeforeTranscription: normalizeTranscriptText(latestInputRef.current),
@@ -245,8 +237,8 @@ export function ChatComposer({
       await restoreVoiceAudioMode().catch(() => undefined);
       await appendVoiceTranscriptionDebugLog('voice_capture_failure', {
         error: error instanceof Error ? error.message : String(error),
-        durationMillis: recorderState.durationMillis,
-        metering: recorderState.metering ?? null,
+        durationMillis: recorder.durationMs,
+        sizeBytes: recorder.size,
       }).catch(() => undefined);
       resetVoiceUi();
       onErrorMessage(
@@ -261,9 +253,6 @@ export function ChatComposer({
     onChangeInput,
     onErrorMessage,
     recorder,
-    recorderState.durationMillis,
-    recorderState.metering,
-    recorderState.url,
     resetVoiceUi,
   ]);
 
@@ -276,8 +265,7 @@ export function ChatComposer({
 
     try {
       await ensureVoiceRecordingReady();
-      await recorder.prepareToRecordAsync();
-      recorder.record();
+      await recorder.startRecording(VOICE_RECORDING_OPTIONS);
       setVoiceStatusText('Recording');
       setVoicePhase('recording');
 
@@ -301,7 +289,11 @@ export function ChatComposer({
         return;
       }
 
-      if (voicePhaseRef.current === 'starting' || voicePhaseRef.current === 'recording' || voicePhaseRef.current === 'locked') {
+      if (
+        voicePhaseRef.current === 'starting' ||
+        voicePhaseRef.current === 'recording' ||
+        voicePhaseRef.current === 'locked'
+      ) {
         void cancelVoiceCapture();
         onErrorMessage('Voice recording stopped when the app left the foreground.');
       }
@@ -435,7 +427,7 @@ export function ChatComposer({
           <View style={styles.voiceBannerDot} />
           <View style={styles.voiceBannerTextWrap}>
             <Text style={styles.voiceBannerTitle}>
-              {voicePhase === 'starting' ? 'Preparing voice capture' : formatVoiceDuration(recorderState.durationMillis)}
+              {voicePhase === 'starting' ? 'Preparing voice capture' : formatVoiceDuration(recorder.durationMs)}
             </Text>
             <Text style={styles.voiceBannerSubtitle}>{voiceBannerSubtitle}</Text>
           </View>
@@ -453,7 +445,7 @@ export function ChatComposer({
             <View style={styles.voicePanelTextWrap}>
               <Text style={styles.voicePanelTitle}>
                 {voicePhase === 'locked'
-                  ? formatVoiceDuration(recorderState.durationMillis)
+                  ? formatVoiceDuration(recorder.durationMs)
                   : voiceStatusText || 'Transcribing'}
               </Text>
               <Text style={styles.voicePanelSubtitle}>{voicePanelSubtitle}</Text>

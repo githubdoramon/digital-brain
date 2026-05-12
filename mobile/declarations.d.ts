@@ -9,6 +9,7 @@ declare module '*.svg' {
 declare module 'whisper.rn' {
   export type TranscribeFileOptions = {
     language?: string;
+    maxThreads?: number;
     onProgress?: (progress: number) => void;
   };
 

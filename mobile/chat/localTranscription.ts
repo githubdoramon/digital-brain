@@ -1,5 +1,4 @@
 import * as FileSystem from 'expo-file-system/legacy';
-import { FFmpegKit } from 'ffmpeg-kit-react-native';
 import { Platform } from 'react-native';
 import { initWhisper, type WhisperContext } from 'whisper.rn';
 
@@ -48,55 +47,8 @@ const MODEL_FILE_NAME = 'ggml-tiny.en.bin';
 const MODEL_URL = `https://huggingface.co/ggerganov/whisper.cpp/resolve/main/${MODEL_FILE_NAME}`;
 const MODEL_DIRECTORY = `${FileSystem.documentDirectory ?? FileSystem.cacheDirectory}whisper/`;
 const MODEL_FILE_URI = `${MODEL_DIRECTORY}${MODEL_FILE_NAME}`;
-const TRANSCRIPTION_AUDIO_DIRECTORY = `${FileSystem.cacheDirectory ?? FileSystem.documentDirectory}voice-transcription/`;
 
 let whisperContextPromise: Promise<WhisperContext> | null = null;
-
-function stripFileScheme(uri: string) {
-  return uri.startsWith('file://') ? uri.slice(7) : uri;
-}
-
-async function convertAudioToWhisperWave(sourceFileUri: string) {
-  await FileSystem.makeDirectoryAsync(TRANSCRIPTION_AUDIO_DIRECTORY, { intermediates: true });
-  const targetFileUri = `${TRANSCRIPTION_AUDIO_DIRECTORY}whisper-input-${Date.now()}.wav`;
-  const targetFilePath = stripFileScheme(targetFileUri);
-  const sourceFilePath = stripFileScheme(sourceFileUri);
-
-  const ffmpegSession = await FFmpegKit.executeWithArguments([
-    '-y',
-    '-i',
-    sourceFilePath,
-    '-vn',
-    '-acodec',
-    'pcm_s16le',
-    '-ar',
-    '16000',
-    '-ac',
-    '1',
-    targetFilePath,
-  ]);
-  const returnCode = await ffmpegSession.getReturnCode();
-  const ffmpegOutput = await ffmpegSession.getOutput();
-
-  if (!returnCode || !returnCode.isValueSuccess()) {
-    throw new LocalTranscriptionError(
-      'transcription_failed',
-      ffmpegOutput || 'FFmpeg could not convert the recorded audio into a Whisper-compatible WAV file.',
-    );
-  }
-
-  const targetInfo = await FileSystem.getInfoAsync(targetFileUri);
-
-  await appendVoiceTranscriptionDebugLog('voice_audio_conversion_result', {
-    sourceFileUri,
-    targetFileUri,
-    targetSizeBytes: targetInfo.exists && typeof targetInfo.size === 'number' ? targetInfo.size : 0,
-    returnCode: returnCode.getValue(),
-    ffmpegOutput,
-  }).catch(() => undefined);
-
-  return targetFileUri;
-}
 
 async function ensureModelFile(onStatus?: (status: LocalTranscriptionStatus) => void) {
   const info = await FileSystem.getInfoAsync(MODEL_FILE_URI);
@@ -173,8 +125,7 @@ export async function transcribeAudioFile(
   onStatus?.({ stage: 'transcribing', progress: 0 });
 
   try {
-    const waveFileUri = await convertAudioToWhisperWave(fileUri);
-    const { promise } = whisperContext.transcribe(waveFileUri, {
+    const { promise } = whisperContext.transcribe(fileUri, {
       language: 'en',
       maxThreads: 4,
       onProgress: (progress: number) => {
@@ -186,9 +137,8 @@ export async function transcribeAudioFile(
 
     await appendVoiceTranscriptionDebugLog('voice_transcription_result', {
       fileUri,
-      waveFileUri,
       modelFileName: MODEL_FILE_NAME,
-      audioContainer: waveFileUri.split('.').pop() ?? null,
+      audioContainer: fileUri.split('.').pop() ?? null,
       rawText: result.result,
       normalizedText: text,
       language: result.language,
