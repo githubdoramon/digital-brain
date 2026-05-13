@@ -139,7 +139,7 @@ export function ChatComposer({
   const shouldShowVoicePanel = voicePhase === 'locked' || voicePhase === 'transcribing';
   const sendButtonDisabled = !allowed || isSending || voicePhase === 'transcribing';
   const sendButtonExpanded = isSendButtonPressed || voicePhase === 'starting' || voicePhase === 'recording';
-  const shouldShowSlideHint = sendButtonExpanded || voicePhase === 'locked';
+  const shouldShowSlideHint = sendButtonExpanded && voicePhase !== 'locked';
 
   const resetVoiceUi = useCallback(() => {
     longPressHandledRef.current = false;
@@ -355,6 +355,11 @@ export function ChatComposer({
 
     if (nextLiftDistance >= LOCK_THRESHOLD_PX) {
       setLockQueued(true);
+      setIsSendButtonPressed(false);
+      setDragLiftDistance(0);
+      pointerStartYRef.current = null;
+      setVoicePhase('locked');
+      setVoiceStatusText('Recording locked');
     }
   }, [lockQueued]);
 
@@ -372,15 +377,8 @@ export function ChatComposer({
       return;
     }
 
-    if (lockQueued) {
-      setLockQueued(false);
-      setVoicePhase('locked');
-      setVoiceStatusText('Recording locked');
-      return;
-    }
-
     void finalizeVoiceCapture();
-  }, [finalizeVoiceCapture, lockQueued]);
+  }, [finalizeVoiceCapture]);
 
   const voiceBannerSubtitle = useMemo(() => {
     if (voicePhase === 'starting') {
@@ -535,16 +533,15 @@ export function ChatComposer({
               pointerEvents="none"
               style={[
                 styles.slideHintWrap,
-                lockQueued && styles.slideHintWrapLocked,
                 dragLiftDistance > 0 && {
                   transform: [{ translateY: -Math.min(dragLiftDistance * 0.45, 22) }],
                 },
               ]}
             >
               <Ionicons
-                name={lockQueued ? 'lock-closed' : 'arrow-up'}
+                name="arrow-up"
                 size={16}
-                color={lockQueued ? '#fff' : theme.colors.accentDeep}
+                color={theme.colors.accentDeep}
               />
             </View>
           )}
@@ -693,9 +690,9 @@ const styles = StyleSheet.create({
     position: 'absolute',
     right: 6,
     top: '50%',
-    width: SEND_BUTTON_EXPANDED_SIZE,
-    height: SEND_BUTTON_EXPANDED_SIZE,
-    transform: [{ translateY: -(SEND_BUTTON_EXPANDED_SIZE / 2) }],
+    width: SEND_BUTTON_SIZE,
+    height: SEND_BUTTON_SIZE,
+    transform: [{ translateY: -(SEND_BUTTON_SIZE / 2) }],
     alignItems: 'center',
     justifyContent: 'flex-end',
   },
@@ -715,10 +712,6 @@ const styles = StyleSheet.create({
     shadowRadius: 10,
     shadowOffset: { width: 0, height: 6 },
     elevation: 3,
-  },
-  slideHintWrapLocked: {
-    backgroundColor: theme.colors.accentDeep,
-    borderColor: theme.colors.accentDeep,
   },
   voiceBanner: {
     flexDirection: 'row',
