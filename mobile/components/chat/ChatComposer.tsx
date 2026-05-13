@@ -39,8 +39,10 @@ import {
 } from '@/chat/voiceState';
 import { theme } from '@/theme';
 
-const LOCK_THRESHOLD_PX = 72;
+const LOCK_THRESHOLD_PX = 56;
 const LONG_PRESS_DELAY_MS = 260;
+const SEND_BUTTON_SIZE = 40;
+const SEND_BUTTON_EXPANDED_SIZE = 56;
 const VOICE_RECORDING_OPTIONS: RecordingConfig = {
   sampleRate: 16000,
   channels: 1,
@@ -114,6 +116,8 @@ export function ChatComposer({
   const [voicePhase, setVoicePhase] = useState<VoiceComposerPhase>('idle');
   const [voiceStatusText, setVoiceStatusText] = useState('');
   const [lockQueued, setLockQueued] = useState(false);
+  const [isSendButtonPressed, setIsSendButtonPressed] = useState(false);
+  const [dragLiftDistance, setDragLiftDistance] = useState(0);
   const longPressHandledRef = useRef(false);
   const pointerStartYRef = useRef<number | null>(null);
   const shouldFinalizeAfterStartRef = useRef(false);
@@ -134,12 +138,15 @@ export function ChatComposer({
   const shouldShowVoiceBanner = voicePhase === 'starting' || voicePhase === 'recording';
   const shouldShowVoicePanel = voicePhase === 'locked' || voicePhase === 'transcribing';
   const sendButtonDisabled = !allowed || isSending || voicePhase === 'transcribing';
+  const sendButtonExpanded = isSendButtonPressed || voicePhase === 'starting' || voicePhase === 'recording';
 
   const resetVoiceUi = useCallback(() => {
     longPressHandledRef.current = false;
     shouldFinalizeAfterStartRef.current = false;
     pointerStartYRef.current = null;
     setLockQueued(false);
+    setIsSendButtonPressed(false);
+    setDragLiftDistance(0);
     setVoiceStatusText('');
     setVoicePhase('idle');
   }, []);
@@ -326,6 +333,7 @@ export function ChatComposer({
 
   const handlePressIn = useCallback((event: GestureResponderEvent) => {
     pointerStartYRef.current = event.nativeEvent.pageY;
+    setIsSendButtonPressed(true);
   }, []);
 
   const handleLongPress = useCallback(() => {
@@ -341,13 +349,18 @@ export function ChatComposer({
       return;
     }
 
-    if (pointerStartYRef.current - event.nativeEvent.pageY >= LOCK_THRESHOLD_PX) {
+    const nextLiftDistance = Math.max(0, pointerStartYRef.current - event.nativeEvent.pageY);
+    setDragLiftDistance(nextLiftDistance);
+
+    if (nextLiftDistance >= LOCK_THRESHOLD_PX) {
       setLockQueued(true);
     }
   }, [lockQueued]);
 
   const handlePressOut = useCallback(() => {
     pointerStartYRef.current = null;
+    setIsSendButtonPressed(false);
+    setDragLiftDistance(0);
 
     if (voicePhaseRef.current === 'starting') {
       shouldFinalizeAfterStartRef.current = true;
@@ -378,6 +391,18 @@ export function ChatComposer({
     }
 
     return 'Release to transcribe, or swipe up to lock.';
+  }, [lockQueued, voicePhase]);
+
+  const slideHintText = useMemo(() => {
+    if (lockQueued) {
+      return 'Release to lock';
+    }
+
+    if (voicePhase === 'recording' || voicePhase === 'starting') {
+      return 'Slide up to lock';
+    }
+
+    return 'Hold to talk';
   }, [lockQueued, voicePhase]);
 
   const voicePanelSubtitle = useMemo(() => {
@@ -477,7 +502,11 @@ export function ChatComposer({
           ) : null}
         </View>
       ) : null}
-      <View style={styles.inputWrap}>
+      <View
+        style={styles.inputWrap}
+        onMoveShouldSetResponderCapture={() => voicePhaseRef.current === 'recording'}
+        onResponderMove={handleTouchMove}
+      >
         <Pressable
           accessibilityRole="button"
           accessibilityLabel="Attach photo"
@@ -515,33 +544,60 @@ export function ChatComposer({
           onBlur={onInputBlur}
           scrollEnabled
         />
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel={
-            !inputIsEmpty || attachments.length > 0
-              ? 'Send message'
-              : 'Hold to record a voice message'
-          }
-          onPress={handleSendPress}
-          onPressIn={handlePressIn}
-          onLongPress={handleLongPress}
-          onPressOut={handlePressOut}
-          delayLongPress={LONG_PRESS_DELAY_MS}
-          disabled={sendButtonDisabled}
-          {...({ onPressMove: handleTouchMove } as Record<string, unknown>)}
-          style={({ pressed }) => [
-            styles.inlineSendButton,
-            (voicePhase === 'starting' || voicePhase === 'recording') && styles.inlineSendButtonRecording,
-            pressed && styles.inlineSendButtonPressed,
-            sendButtonDisabled && styles.inlineSendButtonDisabled,
-          ]}
-        >
-          {isSending ? (
-            <ActivityIndicator size="small" color="#fff" />
-          ) : buttonIconName ? (
-            <Ionicons name={buttonIconName} size={16} color="#fff" />
-          ) : null}
-        </Pressable>
+        <View style={styles.sendButtonDock} pointerEvents="box-none">
+          {!inputIsEmpty && attachments.length === 0 && voicePhase === 'idle' ? null : (
+            <View
+              pointerEvents="none"
+              style={[
+                styles.slideHintWrap,
+                lockQueued && styles.slideHintWrapLocked,
+                dragLiftDistance > 0 && {
+                  transform: [{ translateY: -Math.min(dragLiftDistance * 0.35, 18) }],
+                },
+              ]}
+            >
+              <Ionicons
+                name={lockQueued ? 'lock-closed' : 'arrow-up'}
+                size={12}
+                color={lockQueued ? '#fff' : theme.colors.accentDeep}
+              />
+              <Text style={[styles.slideHintText, lockQueued && styles.slideHintTextLocked]}>
+                {slideHintText}
+              </Text>
+            </View>
+          )}
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={
+              !inputIsEmpty || attachments.length > 0
+                ? 'Send message'
+                : 'Hold to record a voice message'
+            }
+            onPress={handleSendPress}
+            onPressIn={handlePressIn}
+            onLongPress={handleLongPress}
+            onPressOut={handlePressOut}
+            delayLongPress={LONG_PRESS_DELAY_MS}
+            disabled={sendButtonDisabled}
+            pressRetentionOffset={{ top: 120, bottom: 40, left: 40, right: 40 }}
+            hitSlop={10}
+            {...({ onPressMove: handleTouchMove } as Record<string, unknown>)}
+            style={({ pressed }) => [
+              styles.inlineSendButton,
+              sendButtonExpanded && styles.inlineSendButtonExpanded,
+              (voicePhase === 'starting' || voicePhase === 'recording') &&
+                styles.inlineSendButtonRecording,
+              pressed && styles.inlineSendButtonPressed,
+              sendButtonDisabled && styles.inlineSendButtonDisabled,
+            ]}
+          >
+            {isSending ? (
+              <ActivityIndicator size="small" color="#fff" />
+            ) : buttonIconName ? (
+              <Ionicons name={buttonIconName} size={sendButtonExpanded ? 22 : 18} color="#fff" />
+            ) : null}
+          </Pressable>
+        </View>
       </View>
     </View>
   );
@@ -608,11 +664,11 @@ const styles = StyleSheet.create({
   },
   inlineSendButton: {
     position: 'absolute',
-    right: 6,
-    top: '50%',
-    width: 36,
-    height: 36,
-    borderRadius: 18,
+    right: 0,
+    bottom: 0,
+    width: SEND_BUTTON_SIZE,
+    height: SEND_BUTTON_SIZE,
+    borderRadius: SEND_BUTTON_SIZE / 2,
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: theme.colors.accent,
@@ -621,16 +677,67 @@ const styles = StyleSheet.create({
     shadowRadius: 10,
     shadowOffset: { width: 0, height: 6 },
     elevation: 5,
-    transform: [{ translateY: -18 }],
+  },
+  inlineSendButtonExpanded: {
+    width: SEND_BUTTON_EXPANDED_SIZE,
+    height: SEND_BUTTON_EXPANDED_SIZE,
+    borderRadius: SEND_BUTTON_EXPANDED_SIZE / 2,
+    right: -(SEND_BUTTON_EXPANDED_SIZE - SEND_BUTTON_SIZE) / 2,
+    bottom: -(SEND_BUTTON_EXPANDED_SIZE - SEND_BUTTON_SIZE) / 2,
   },
   inlineSendButtonRecording: {
     backgroundColor: theme.colors.accentDeep,
+    shadowOpacity: 0.34,
+    shadowRadius: 18,
   },
   inlineSendButtonPressed: {
     opacity: 0.9,
   },
   inlineSendButtonDisabled: {
     opacity: 0.75,
+  },
+  sendButtonDock: {
+    position: 'absolute',
+    right: 6,
+    top: '50%',
+    width: SEND_BUTTON_SIZE,
+    height: SEND_BUTTON_SIZE,
+    transform: [{ translateY: -20 }],
+    alignItems: 'center',
+    justifyContent: 'flex-end',
+  },
+  slideHintWrap: {
+    position: 'absolute',
+    bottom: SEND_BUTTON_EXPANDED_SIZE + 10,
+    minWidth: 112,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 999,
+    backgroundColor: 'rgba(255,255,255,0.96)',
+    borderWidth: 1,
+    borderColor: '#f0cbc6',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    shadowColor: theme.shadow.color,
+    shadowOpacity: 0.12,
+    shadowRadius: 10,
+    shadowOffset: { width: 0, height: 6 },
+    elevation: 3,
+  },
+  slideHintWrapLocked: {
+    backgroundColor: theme.colors.accentDeep,
+    borderColor: theme.colors.accentDeep,
+  },
+  slideHintText: {
+    fontSize: 11,
+    lineHeight: 14,
+    fontWeight: '700',
+    color: theme.colors.accentDeep,
+  },
+  slideHintTextLocked: {
+    color: '#fff',
   },
   voiceBanner: {
     flexDirection: 'row',
