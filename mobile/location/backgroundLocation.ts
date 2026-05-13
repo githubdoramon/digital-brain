@@ -44,6 +44,13 @@ type PostedBackgroundLocation = {
   capturedAtMs: number;
 };
 
+type BackgroundTaskRegistrationSnapshot = {
+  locationTaskRegistered: boolean;
+  drainTaskRegistered: boolean;
+  locationTaskDefined: boolean;
+  drainTaskDefined: boolean;
+};
+
 const BACKGROUND_POST_DEDUPE_MIN_DISTANCE_METERS = 15;
 const BACKGROUND_POST_DEDUPE_MIN_SECONDS = 30;
 const BACKGROUND_BUFFER_FLUSH_MIN_DISTANCE_METERS = 50;
@@ -78,8 +85,10 @@ function buildDebugErrorPayload(error: unknown): {
   contentType?: string;
   bodyPreview?: string;
   requestUrl?: string;
+  requestMethod?: string;
   tokenPresent?: boolean;
   authDiagnostics?: Record<string, unknown>;
+  fetchFailed?: boolean;
 } {
   const errorWithMeta = error as Error & {
     status?: number;
@@ -87,8 +96,10 @@ function buildDebugErrorPayload(error: unknown): {
     contentType?: string;
     bodyPreview?: string;
     requestUrl?: string;
+    requestMethod?: string;
     tokenPresent?: boolean;
     authDiagnostics?: Record<string, unknown>;
+    fetchFailed?: boolean;
   };
   return {
     message: errorWithMeta?.message || 'Unknown error',
@@ -99,8 +110,24 @@ function buildDebugErrorPayload(error: unknown): {
     ...(typeof errorWithMeta?.contentType === 'string' ? { contentType: errorWithMeta.contentType } : {}),
     ...(typeof errorWithMeta?.bodyPreview === 'string' ? { bodyPreview: errorWithMeta.bodyPreview } : {}),
     ...(typeof errorWithMeta?.requestUrl === 'string' ? { requestUrl: errorWithMeta.requestUrl } : {}),
+    ...(typeof errorWithMeta?.requestMethod === 'string' ? { requestMethod: errorWithMeta.requestMethod } : {}),
     ...(typeof errorWithMeta?.tokenPresent === 'boolean' ? { tokenPresent: errorWithMeta.tokenPresent } : {}),
     ...(errorWithMeta?.authDiagnostics ? { authDiagnostics: errorWithMeta.authDiagnostics } : {}),
+    ...(typeof errorWithMeta?.fetchFailed === 'boolean' ? { fetchFailed: errorWithMeta.fetchFailed } : {}),
+  };
+}
+
+async function getTaskRegistrationSnapshot(): Promise<BackgroundTaskRegistrationSnapshot> {
+  const [locationTaskRegistered, drainTaskRegistered] = await Promise.all([
+    Location.hasStartedLocationUpdatesAsync(BACKGROUND_LOCATION_TASK),
+    TaskManager.isTaskRegisteredAsync(BACKGROUND_LOCATION_DRAIN_TASK),
+  ]);
+
+  return {
+    locationTaskRegistered,
+    drainTaskRegistered,
+    locationTaskDefined: TaskManager.isTaskDefined(BACKGROUND_LOCATION_TASK),
+    drainTaskDefined: TaskManager.isTaskDefined(BACKGROUND_LOCATION_DRAIN_TASK),
   };
 }
 
@@ -324,6 +351,12 @@ async function ensureBackgroundDrainTaskRegistered(): Promise<void> {
 
 if (!TaskManager.isTaskDefined(BACKGROUND_LOCATION_TASK)) {
   TaskManager.defineTask(BACKGROUND_LOCATION_TASK, async ({ data, error, executionInfo }) => {
+    const taskRegistration = await getTaskRegistrationSnapshot().catch(() => ({
+      locationTaskRegistered: false,
+      drainTaskRegistered: false,
+      locationTaskDefined: TaskManager.isTaskDefined(BACKGROUND_LOCATION_TASK),
+      drainTaskDefined: TaskManager.isTaskDefined(BACKGROUND_LOCATION_DRAIN_TASK),
+    }));
     const locations = ((data as { locations?: BackgroundLocationSample[] } | undefined)?.locations ?? []).filter(
       Boolean,
     );
@@ -345,12 +378,16 @@ if (!TaskManager.isTaskDefined(BACKGROUND_LOCATION_TASK)) {
       reportLocationDebugEvent('background_task_error', {
         error,
         payload: {
+          reason: 'task_invocation_error',
+          running_in_background: executionContext !== 'active',
           batch_id: batchId,
           sample_count: locations.length,
           batch_first_captured_at: batchFirstCapturedAt,
           batch_last_captured_at: batchLastCapturedAt,
           execution_context: executionContext,
           oldest_sample_age_seconds: oldestSampleAgeSeconds,
+          execution_info_event_id: executionInfo?.eventId,
+          task_registration: taskRegistration,
         },
       });
       return;
@@ -358,12 +395,15 @@ if (!TaskManager.isTaskDefined(BACKGROUND_LOCATION_TASK)) {
 
     reportLocationDebugEvent('background_task_batch_received', {
       payload: {
+        running_in_background: executionContext !== 'active',
         batch_id: batchId,
         sample_count: locations.length,
         batch_first_captured_at: batchFirstCapturedAt,
         batch_last_captured_at: batchLastCapturedAt,
         execution_context: executionContext,
         oldest_sample_age_seconds: oldestSampleAgeSeconds,
+        execution_info_event_id: executionInfo?.eventId,
+        task_registration: taskRegistration,
         will_flush_buffered_samples:
           executionContext === 'active' && oldestSampleAgeSeconds >= BACKGROUND_BUFFERED_SAMPLE_MIN_AGE_SECONDS,
       },
@@ -387,12 +427,17 @@ if (!TaskManager.isTaskDefined(BACKGROUND_LOCATION_TASK)) {
       reportLocationDebugEvent('background_task_empty', {
         message: 'Background task had no location samples',
         payload: {
+          reason: 'no_location_samples',
+          request_attempted: false,
+          running_in_background: executionContext !== 'active',
           batch_id: batchId,
           sample_count: locations.length,
           batch_first_captured_at: batchFirstCapturedAt,
           batch_last_captured_at: batchLastCapturedAt,
           execution_context: executionContext,
           oldest_sample_age_seconds: oldestSampleAgeSeconds,
+          execution_info_event_id: executionInfo?.eventId,
+          task_registration: taskRegistration,
         },
       });
       return;
@@ -414,6 +459,8 @@ if (!TaskManager.isTaskDefined(BACKGROUND_LOCATION_TASK)) {
           message: errorPayload.message,
           error: taskError,
           payload: {
+            reason: errorPayload.fetchFailed ? 'request_failed_before_response' : 'queue_or_request_error',
+            request_attempted: true,
             batch_id: batchId,
             sample_index: index + 1,
             sample_count: locations.length,
@@ -423,12 +470,17 @@ if (!TaskManager.isTaskDefined(BACKGROUND_LOCATION_TASK)) {
             oldest_sample_age_seconds: oldestSampleAgeSeconds,
             status: errorPayload.status,
             auth_expired: errorPayload.authExpired,
+            fetch_failed: errorPayload.fetchFailed,
             content_type: errorPayload.contentType,
             response_preview: errorPayload.bodyPreview,
             request_url: errorPayload.requestUrl,
+            request_method: errorPayload.requestMethod,
             token_present: errorPayload.tokenPresent,
             api_base_url: API_BASE_URL,
             app_state: getLocationRuntimeState().appState,
+            running_in_background: executionContext !== 'active',
+            execution_info_event_id: executionInfo?.eventId,
+            task_registration: taskRegistration,
             ...(errorPayload.authDiagnostics ?? {}),
           },
         });
@@ -441,7 +493,9 @@ export type BackgroundLocationDebugStatus = {
   foregroundPermission: string;
   backgroundPermission: string;
   taskStarted: boolean;
+  taskDefined: boolean;
   drainTaskRegistered: boolean;
+  drainTaskDefined: boolean;
   backgroundTaskStatus: string;
   queuedLocationCount: number;
   oldestQueuedCapturedAt: string | null;
@@ -466,7 +520,9 @@ export async function getBackgroundLocationDebugStatus(): Promise<BackgroundLoca
   reportLocationDebugEvent('background_worker_status_snapshot', {
     payload: {
       location_task_started: taskStarted,
+      location_task_defined: TaskManager.isTaskDefined(BACKGROUND_LOCATION_TASK),
       drain_task_registered: drainTaskRegistered,
+      drain_task_defined: TaskManager.isTaskDefined(BACKGROUND_LOCATION_DRAIN_TASK),
       background_task_status: resolvedBackgroundTaskStatus,
       queued_location_count: queueSummary.queueSize,
       oldest_queued_captured_at: queueSummary.oldestCapturedAt,
@@ -479,7 +535,9 @@ export async function getBackgroundLocationDebugStatus(): Promise<BackgroundLoca
     foregroundPermission: foregroundPermission.status,
     backgroundPermission: backgroundPermission.status,
     taskStarted,
+    taskDefined: TaskManager.isTaskDefined(BACKGROUND_LOCATION_TASK),
     drainTaskRegistered,
+    drainTaskDefined: TaskManager.isTaskDefined(BACKGROUND_LOCATION_DRAIN_TASK),
     backgroundTaskStatus: resolvedBackgroundTaskStatus,
     queuedLocationCount: queueSummary.queueSize,
     oldestQueuedCapturedAt: queueSummary.oldestCapturedAt,
@@ -488,8 +546,14 @@ export async function getBackgroundLocationDebugStatus(): Promise<BackgroundLoca
 }
 
 export async function syncBackgroundLocationTracking(enabled: boolean): Promise<void> {
+  const taskRegistration = await getTaskRegistrationSnapshot().catch(() => ({
+    locationTaskRegistered: false,
+    drainTaskRegistered: false,
+    locationTaskDefined: TaskManager.isTaskDefined(BACKGROUND_LOCATION_TASK),
+    drainTaskDefined: TaskManager.isTaskDefined(BACKGROUND_LOCATION_DRAIN_TASK),
+  }));
   reportLocationDebugEvent('background_tracking_sync_requested', {
-    payload: { enabled },
+    payload: { enabled, task_registration: taskRegistration },
   });
   const alreadyStarted = await Location.hasStartedLocationUpdatesAsync(BACKGROUND_LOCATION_TASK);
 
@@ -510,7 +574,7 @@ export async function syncBackgroundLocationTracking(enabled: boolean): Promise<
   if (foregroundStatus !== 'granted') {
     reportLocationDebugEvent('background_tracking_blocked', {
       message: 'Foreground permission not granted',
-      payload: { foreground_status: foregroundStatus },
+      payload: { foreground_status: foregroundStatus, reason: 'foreground_permission_not_granted' },
     });
     return;
   }
@@ -523,7 +587,7 @@ export async function syncBackgroundLocationTracking(enabled: boolean): Promise<
   if (backgroundStatus !== 'granted') {
     reportLocationDebugEvent('background_tracking_blocked', {
       message: 'Background permission not granted',
-      payload: { background_status: backgroundStatus },
+      payload: { background_status: backgroundStatus, reason: 'background_permission_not_granted' },
     });
     return;
   }
@@ -538,19 +602,31 @@ export async function syncBackgroundLocationTracking(enabled: boolean): Promise<
     return;
   }
 
-  await Location.startLocationUpdatesAsync(BACKGROUND_LOCATION_TASK, {
-    accuracy: Location.Accuracy.Balanced,
-    distanceInterval: BACKGROUND_DISTANCE_INTERVAL_METERS,
-    timeInterval: BACKGROUND_TIME_INTERVAL_MS,
-    deferredUpdatesDistance: BACKGROUND_DISTANCE_INTERVAL_METERS,
-    deferredUpdatesInterval: BACKGROUND_TIME_INTERVAL_MS,
-    pausesUpdatesAutomatically: true,
-    showsBackgroundLocationIndicator: false,
-    foregroundService: {
-      notificationTitle: 'Digital Brain location updates',
-      notificationBody: 'Location updates are used to keep your context accurate.',
-    },
-  });
+  try {
+    await Location.startLocationUpdatesAsync(BACKGROUND_LOCATION_TASK, {
+      accuracy: Location.Accuracy.Balanced,
+      distanceInterval: BACKGROUND_DISTANCE_INTERVAL_METERS,
+      timeInterval: BACKGROUND_TIME_INTERVAL_MS,
+      deferredUpdatesDistance: BACKGROUND_DISTANCE_INTERVAL_METERS,
+      deferredUpdatesInterval: BACKGROUND_TIME_INTERVAL_MS,
+      pausesUpdatesAutomatically: true,
+      showsBackgroundLocationIndicator: false,
+      foregroundService: {
+        notificationTitle: 'Digital Brain location updates',
+        notificationBody: 'Location updates are used to keep your context accurate.',
+      },
+    });
+  } catch (error) {
+    reportLocationDebugEvent('background_tracking_start_error', {
+      message: error instanceof Error ? error.message : 'Failed to start background location tracking',
+      error,
+      payload: {
+        reason: 'start_location_updates_failed',
+        task_registration: taskRegistration,
+      },
+    });
+    throw error;
+  }
   await ensureBackgroundDrainTaskRegistered().catch((error) => {
     reportLocationDebugEvent('background_drain_task_register_error', {
       error,

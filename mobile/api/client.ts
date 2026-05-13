@@ -14,6 +14,8 @@ type ApiFetchError = Error & {
   requestUrl?: string;
   tokenPresent?: boolean;
   authDiagnostics?: Record<string, unknown>;
+  requestMethod?: string;
+  fetchFailed?: boolean;
 };
 
 let authTokenProvider: (() => string | null | Promise<string | null>) | null = null;
@@ -54,14 +56,36 @@ export async function apiFetch(path: string, options: FetchOptions = {}) {
   const authDiagnostics = authDiagnosticsProvider ? await authDiagnosticsProvider() : {};
   const startTime = Date.now();
   const requestUrl = `${API_BASE_URL}${path}`;
-  const response = await fetch(requestUrl, {
-    ...rest,
-    headers: {
-      ...(isFormDataBody ? {} : { 'Content-Type': 'application/json' }),
-      ...(headers ?? {}),
-      ...(resolvedToken ? { Authorization: `Bearer ${resolvedToken}` } : {}),
-    },
-  });
+  const requestMethod = rest.method ?? 'GET';
+  let response: Response;
+
+  try {
+    response = await fetch(requestUrl, {
+      ...rest,
+      headers: {
+        ...(isFormDataBody ? {} : { 'Content-Type': 'application/json' }),
+        ...(headers ?? {}),
+        ...(resolvedToken ? { Authorization: `Bearer ${resolvedToken}` } : {}),
+      },
+    });
+  } catch (error) {
+    const fetchError = error as ApiFetchError;
+    fetchError.requestUrl = requestUrl;
+    fetchError.requestMethod = requestMethod;
+    fetchError.tokenPresent = Boolean(resolvedToken);
+    fetchError.authDiagnostics = authDiagnostics;
+    fetchError.fetchFailed = true;
+    console.error('[apiFetch] network failure', {
+      path,
+      requestUrl,
+      requestMethod,
+      durationMs: Date.now() - startTime,
+      tokenPresent: Boolean(resolvedToken),
+      error: fetchError.message,
+    });
+    throw fetchError;
+  }
+
   const contentType = response.headers.get('content-type') ?? '';
 
   if (!response.ok) {

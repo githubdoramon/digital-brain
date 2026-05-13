@@ -52,7 +52,31 @@ type ApiFetchError = Error & {
   requestUrl?: string;
   tokenPresent?: boolean;
   authDiagnostics?: Record<string, unknown>;
+  requestMethod?: string;
+  fetchFailed?: boolean;
 };
+
+function describeSyncFailure(error: ApiFetchError): string {
+  if (error.fetchFailed) {
+    return 'request_failed_before_response';
+  }
+  if (error.authExpired) {
+    return 'auth_expired';
+  }
+  if (typeof error.status === 'number') {
+    if (error.status >= 500) {
+      return 'backend_server_error';
+    }
+    if (error.status >= 400) {
+      return 'backend_client_error';
+    }
+    return 'unexpected_http_status';
+  }
+  if (error.contentType && !error.contentType.includes('application/json')) {
+    return 'unexpected_response_content_type';
+  }
+  return 'unknown_request_error';
+}
 
 async function readQueue(): Promise<QueuedBackgroundLocationEntry[]> {
   try {
@@ -116,6 +140,7 @@ async function drainQueuedBackgroundLocationsInner(trigger: DrainTrigger): Promi
       trigger,
       queue_size: initialQueueSize,
       app_state: runtimeState.appState,
+      will_attempt_request: initialQueueSize > 0,
     },
     recordInHistory: false,
   });
@@ -131,6 +156,8 @@ async function drainQueuedBackgroundLocationsInner(trigger: DrainTrigger): Promi
     reportLocationDebugEvent('background_queue_drain_blocked', {
       message: 'Missing auth token while draining queued background locations',
       payload: {
+        reason: 'missing_auth_token',
+        request_attempted: false,
         trigger,
         queue_size: queue.length,
         app_state: runtimeState.appState,
@@ -145,6 +172,7 @@ async function drainQueuedBackgroundLocationsInner(trigger: DrainTrigger): Promi
     const currentRuntimeState = getLocationRuntimeState();
     reportLocationDebugEvent('background_sync_attempt', {
       payload: {
+        request_attempted: true,
         debug_request_id: entry.debugRequestId,
         batch_id: entry.batchId,
         sample_index: entry.sampleIndex,
@@ -161,6 +189,8 @@ async function drainQueuedBackgroundLocationsInner(trigger: DrainTrigger): Promi
         queue_size: queue.length,
         attempt_count: entry.attemptCount,
         api_base_url: API_BASE_URL,
+        request_url: `${API_BASE_URL}/mobile/location`,
+        request_method: 'POST',
         app_state: currentRuntimeState.appState,
         last_app_state_change_at: currentRuntimeState.lastAppStateChangeAt,
         ...tokenDiagnostics,
@@ -201,6 +231,8 @@ async function drainQueuedBackgroundLocationsInner(trigger: DrainTrigger): Promi
       drainedCount += 1;
       reportLocationDebugEvent('background_sync_success', {
         payload: {
+          request_attempted: true,
+          request_completed: true,
           debug_request_id: entry.debugRequestId,
           batch_id: entry.batchId,
           sample_index: entry.sampleIndex,
@@ -216,6 +248,8 @@ async function drainQueuedBackgroundLocationsInner(trigger: DrainTrigger): Promi
           queue_trigger: trigger,
           queue_size: queue.length,
           api_base_url: API_BASE_URL,
+          request_url: `${API_BASE_URL}/mobile/location`,
+          request_method: 'POST',
           app_state: getLocationRuntimeState().appState,
           ...tokenDiagnostics,
         },
@@ -236,6 +270,9 @@ async function drainQueuedBackgroundLocationsInner(trigger: DrainTrigger): Promi
         message: fetchError.message,
         error,
         payload: {
+          reason: describeSyncFailure(fetchError),
+          request_attempted: true,
+          request_completed: !fetchError.fetchFailed,
           debug_request_id: entry.debugRequestId,
           batch_id: entry.batchId,
           sample_index: entry.sampleIndex,
@@ -250,9 +287,11 @@ async function drainQueuedBackgroundLocationsInner(trigger: DrainTrigger): Promi
           attempt_count: entry.attemptCount + 1,
           status: fetchError.status,
           auth_expired: fetchError.authExpired,
+          fetch_failed: fetchError.fetchFailed,
           content_type: fetchError.contentType,
           response_preview: fetchError.bodyPreview,
           request_url: fetchError.requestUrl,
+          request_method: fetchError.requestMethod,
           token_present: fetchError.tokenPresent,
           api_base_url: API_BASE_URL,
           app_state: getLocationRuntimeState().appState,
