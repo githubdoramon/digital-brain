@@ -139,6 +139,7 @@ export function ChatComposer({
   const shouldShowVoicePanel = voicePhase === 'locked' || voicePhase === 'transcribing';
   const sendButtonDisabled = !allowed || isSending || voicePhase === 'transcribing';
   const sendButtonExpanded = isSendButtonPressed || voicePhase === 'starting' || voicePhase === 'recording';
+  const shouldShowSlideHint = sendButtonExpanded || voicePhase === 'locked';
 
   const resetVoiceUi = useCallback(() => {
     longPressHandledRef.current = false;
@@ -393,18 +394,6 @@ export function ChatComposer({
     return 'Release to transcribe, or swipe up to lock.';
   }, [lockQueued, voicePhase]);
 
-  const slideHintText = useMemo(() => {
-    if (lockQueued) {
-      return 'Release to lock';
-    }
-
-    if (voicePhase === 'recording' || voicePhase === 'starting') {
-      return 'Slide up to lock';
-    }
-
-    return 'Hold to talk';
-  }, [lockQueued, voicePhase]);
-
   const voicePanelSubtitle = useMemo(() => {
     if (voicePhase === 'locked') {
       return 'Tap stop to transcribe, or cancel to discard.';
@@ -502,11 +491,7 @@ export function ChatComposer({
           ) : null}
         </View>
       ) : null}
-      <View
-        style={styles.inputWrap}
-        onMoveShouldSetResponderCapture={() => voicePhaseRef.current === 'recording'}
-        onResponderMove={handleTouchMove}
-      >
+      <View style={styles.inputWrap}>
         <Pressable
           accessibilityRole="button"
           accessibilityLabel="Attach photo"
@@ -545,25 +530,22 @@ export function ChatComposer({
           scrollEnabled
         />
         <View style={styles.sendButtonDock} pointerEvents="box-none">
-          {!inputIsEmpty && attachments.length === 0 && voicePhase === 'idle' ? null : (
+          {!shouldShowSlideHint ? null : (
             <View
               pointerEvents="none"
               style={[
                 styles.slideHintWrap,
                 lockQueued && styles.slideHintWrapLocked,
                 dragLiftDistance > 0 && {
-                  transform: [{ translateY: -Math.min(dragLiftDistance * 0.35, 18) }],
+                  transform: [{ translateY: -Math.min(dragLiftDistance * 0.45, 22) }],
                 },
               ]}
             >
               <Ionicons
                 name={lockQueued ? 'lock-closed' : 'arrow-up'}
-                size={12}
+                size={16}
                 color={lockQueued ? '#fff' : theme.colors.accentDeep}
               />
-              <Text style={[styles.slideHintText, lockQueued && styles.slideHintTextLocked]}>
-                {slideHintText}
-              </Text>
             </View>
           )}
           <Pressable
@@ -579,23 +561,29 @@ export function ChatComposer({
             onPressOut={handlePressOut}
             delayLongPress={LONG_PRESS_DELAY_MS}
             disabled={sendButtonDisabled}
-            pressRetentionOffset={{ top: 120, bottom: 40, left: 40, right: 40 }}
-            hitSlop={10}
-            {...({ onPressMove: handleTouchMove } as Record<string, unknown>)}
+            pressRetentionOffset={{ top: 220, bottom: 60, left: 60, right: 60 }}
+            hitSlop={16}
+            {...({ onPressMove: handleTouchMove, onTouchMove: handleTouchMove } as Record<string, unknown>)}
             style={({ pressed }) => [
               styles.inlineSendButton,
-              sendButtonExpanded && styles.inlineSendButtonExpanded,
-              (voicePhase === 'starting' || voicePhase === 'recording') &&
-                styles.inlineSendButtonRecording,
               pressed && styles.inlineSendButtonPressed,
               sendButtonDisabled && styles.inlineSendButtonDisabled,
             ]}
           >
-            {isSending ? (
-              <ActivityIndicator size="small" color="#fff" />
-            ) : buttonIconName ? (
-              <Ionicons name={buttonIconName} size={sendButtonExpanded ? 22 : 18} color="#fff" />
-            ) : null}
+            <View
+              style={[
+                styles.inlineSendButtonVisual,
+                sendButtonExpanded && styles.inlineSendButtonVisualExpanded,
+                (voicePhase === 'starting' || voicePhase === 'recording') &&
+                  styles.inlineSendButtonVisualRecording,
+              ]}
+            >
+              {isSending ? (
+                <ActivityIndicator size="small" color="#fff" />
+              ) : buttonIconName ? (
+                <Ionicons name={buttonIconName} size={sendButtonExpanded ? 26 : 18} color="#fff" />
+              ) : null}
+            </View>
           </Pressable>
         </View>
       </View>
@@ -664,8 +652,15 @@ const styles = StyleSheet.create({
   },
   inlineSendButton: {
     position: 'absolute',
-    right: 0,
-    bottom: 0,
+    right: -(SEND_BUTTON_EXPANDED_SIZE - SEND_BUTTON_SIZE) / 2,
+    bottom: -(SEND_BUTTON_EXPANDED_SIZE - SEND_BUTTON_SIZE) / 2,
+    width: SEND_BUTTON_EXPANDED_SIZE,
+    height: SEND_BUTTON_EXPANDED_SIZE,
+    borderRadius: SEND_BUTTON_EXPANDED_SIZE / 2,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  inlineSendButtonVisual: {
     width: SEND_BUTTON_SIZE,
     height: SEND_BUTTON_SIZE,
     borderRadius: SEND_BUTTON_SIZE / 2,
@@ -678,14 +673,12 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: 6 },
     elevation: 5,
   },
-  inlineSendButtonExpanded: {
+  inlineSendButtonVisualExpanded: {
     width: SEND_BUTTON_EXPANDED_SIZE,
     height: SEND_BUTTON_EXPANDED_SIZE,
     borderRadius: SEND_BUTTON_EXPANDED_SIZE / 2,
-    right: -(SEND_BUTTON_EXPANDED_SIZE - SEND_BUTTON_SIZE) / 2,
-    bottom: -(SEND_BUTTON_EXPANDED_SIZE - SEND_BUTTON_SIZE) / 2,
   },
-  inlineSendButtonRecording: {
+  inlineSendButtonVisualRecording: {
     backgroundColor: theme.colors.accentDeep,
     shadowOpacity: 0.34,
     shadowRadius: 18,
@@ -700,26 +693,23 @@ const styles = StyleSheet.create({
     position: 'absolute',
     right: 6,
     top: '50%',
-    width: SEND_BUTTON_SIZE,
-    height: SEND_BUTTON_SIZE,
-    transform: [{ translateY: -20 }],
+    width: SEND_BUTTON_EXPANDED_SIZE,
+    height: SEND_BUTTON_EXPANDED_SIZE,
+    transform: [{ translateY: -(SEND_BUTTON_EXPANDED_SIZE / 2) }],
     alignItems: 'center',
     justifyContent: 'flex-end',
   },
   slideHintWrap: {
     position: 'absolute',
     bottom: SEND_BUTTON_EXPANDED_SIZE + 10,
-    minWidth: 112,
-    paddingHorizontal: 10,
-    paddingVertical: 6,
+    width: 34,
+    height: 34,
     borderRadius: 999,
     backgroundColor: 'rgba(255,255,255,0.96)',
     borderWidth: 1,
     borderColor: '#f0cbc6',
-    flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 6,
     shadowColor: theme.shadow.color,
     shadowOpacity: 0.12,
     shadowRadius: 10,
@@ -729,15 +719,6 @@ const styles = StyleSheet.create({
   slideHintWrapLocked: {
     backgroundColor: theme.colors.accentDeep,
     borderColor: theme.colors.accentDeep,
-  },
-  slideHintText: {
-    fontSize: 11,
-    lineHeight: 14,
-    fontWeight: '700',
-    color: theme.colors.accentDeep,
-  },
-  slideHintTextLocked: {
-    color: '#fff',
   },
   voiceBanner: {
     flexDirection: 'row',
