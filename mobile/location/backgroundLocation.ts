@@ -1,6 +1,7 @@
 import * as BackgroundTask from 'expo-background-task';
 import * as Location from 'expo-location';
 import * as TaskManager from 'expo-task-manager';
+import { Platform } from 'react-native';
 
 import {
   getStoredGoogleIdTokenDiagnostics,
@@ -49,6 +50,14 @@ type BackgroundTaskRegistrationSnapshot = {
   drainTaskRegistered: boolean;
   locationTaskDefined: boolean;
   drainTaskDefined: boolean;
+};
+
+type BackgroundExecutionDiagnostics = {
+  platform: string;
+  locationServicesEnabled?: boolean;
+  providerStatus?: Record<string, unknown>;
+  foregroundPermissionDetails?: Record<string, unknown>;
+  backgroundPermissionDetails?: Record<string, unknown>;
 };
 
 const BACKGROUND_POST_DEDUPE_MIN_DISTANCE_METERS = 15;
@@ -128,6 +137,41 @@ async function getTaskRegistrationSnapshot(): Promise<BackgroundTaskRegistration
     drainTaskRegistered,
     locationTaskDefined: TaskManager.isTaskDefined(BACKGROUND_LOCATION_TASK),
     drainTaskDefined: TaskManager.isTaskDefined(BACKGROUND_LOCATION_DRAIN_TASK),
+  };
+}
+
+function buildPermissionDetails(permission: {
+  status?: string;
+  granted?: boolean;
+  canAskAgain?: boolean;
+  expires?: string;
+  ios?: Record<string, unknown>;
+  android?: Record<string, unknown>;
+}): Record<string, unknown> {
+  return {
+    status: permission.status,
+    granted: permission.granted,
+    can_ask_again: permission.canAskAgain,
+    expires: permission.expires,
+    ...(permission.ios ? { ios: permission.ios } : {}),
+    ...(permission.android ? { android: permission.android } : {}),
+  };
+}
+
+async function getBackgroundExecutionDiagnostics(): Promise<BackgroundExecutionDiagnostics> {
+  const [locationServicesEnabled, providerStatus, foregroundPermission, backgroundPermission] = await Promise.all([
+    Location.hasServicesEnabledAsync().catch(() => undefined),
+    Location.getProviderStatusAsync().catch(() => undefined),
+    Location.getForegroundPermissionsAsync().catch(() => undefined),
+    Location.getBackgroundPermissionsAsync().catch(() => undefined),
+  ]);
+
+  return {
+    platform: Platform.OS,
+    ...(typeof locationServicesEnabled === 'boolean' ? { locationServicesEnabled } : {}),
+    ...(providerStatus ? { providerStatus: providerStatus as Record<string, unknown> } : {}),
+    ...(foregroundPermission ? { foregroundPermissionDetails: buildPermissionDetails(foregroundPermission) } : {}),
+    ...(backgroundPermission ? { backgroundPermissionDetails: buildPermissionDetails(backgroundPermission) } : {}),
   };
 }
 
@@ -351,12 +395,15 @@ async function ensureBackgroundDrainTaskRegistered(): Promise<void> {
 
 if (!TaskManager.isTaskDefined(BACKGROUND_LOCATION_TASK)) {
   TaskManager.defineTask(BACKGROUND_LOCATION_TASK, async ({ data, error, executionInfo }) => {
-    const taskRegistration = await getTaskRegistrationSnapshot().catch(() => ({
-      locationTaskRegistered: false,
-      drainTaskRegistered: false,
-      locationTaskDefined: TaskManager.isTaskDefined(BACKGROUND_LOCATION_TASK),
-      drainTaskDefined: TaskManager.isTaskDefined(BACKGROUND_LOCATION_DRAIN_TASK),
-    }));
+    const [taskRegistration, executionDiagnostics] = await Promise.all([
+      getTaskRegistrationSnapshot().catch(() => ({
+        locationTaskRegistered: false,
+        drainTaskRegistered: false,
+        locationTaskDefined: TaskManager.isTaskDefined(BACKGROUND_LOCATION_TASK),
+        drainTaskDefined: TaskManager.isTaskDefined(BACKGROUND_LOCATION_DRAIN_TASK),
+      })),
+      getBackgroundExecutionDiagnostics().catch(() => ({ platform: Platform.OS })),
+    ]);
     const locations = ((data as { locations?: BackgroundLocationSample[] } | undefined)?.locations ?? []).filter(
       Boolean,
     );
@@ -388,6 +435,7 @@ if (!TaskManager.isTaskDefined(BACKGROUND_LOCATION_TASK)) {
           oldest_sample_age_seconds: oldestSampleAgeSeconds,
           execution_info_event_id: executionInfo?.eventId,
           task_registration: taskRegistration,
+          execution_diagnostics: executionDiagnostics,
         },
       });
       return;
@@ -404,6 +452,7 @@ if (!TaskManager.isTaskDefined(BACKGROUND_LOCATION_TASK)) {
         oldest_sample_age_seconds: oldestSampleAgeSeconds,
         execution_info_event_id: executionInfo?.eventId,
         task_registration: taskRegistration,
+        execution_diagnostics: executionDiagnostics,
         will_flush_buffered_samples:
           executionContext === 'active' && oldestSampleAgeSeconds >= BACKGROUND_BUFFERED_SAMPLE_MIN_AGE_SECONDS,
       },
@@ -438,6 +487,7 @@ if (!TaskManager.isTaskDefined(BACKGROUND_LOCATION_TASK)) {
           oldest_sample_age_seconds: oldestSampleAgeSeconds,
           execution_info_event_id: executionInfo?.eventId,
           task_registration: taskRegistration,
+          execution_diagnostics: executionDiagnostics,
         },
       });
       return;
@@ -481,6 +531,7 @@ if (!TaskManager.isTaskDefined(BACKGROUND_LOCATION_TASK)) {
             running_in_background: executionContext !== 'active',
             execution_info_event_id: executionInfo?.eventId,
             task_registration: taskRegistration,
+            execution_diagnostics: executionDiagnostics,
             ...(errorPayload.authDiagnostics ?? {}),
           },
         });
@@ -492,6 +543,7 @@ if (!TaskManager.isTaskDefined(BACKGROUND_LOCATION_TASK)) {
 export type BackgroundLocationDebugStatus = {
   foregroundPermission: string;
   backgroundPermission: string;
+  locationServicesEnabled: boolean | null;
   taskStarted: boolean;
   taskDefined: boolean;
   drainTaskRegistered: boolean;
@@ -500,16 +552,28 @@ export type BackgroundLocationDebugStatus = {
   queuedLocationCount: number;
   oldestQueuedCapturedAt: string | null;
   newestQueuedCapturedAt: string | null;
+  providerStatus: Record<string, unknown> | null;
 };
 
 export async function getBackgroundLocationDebugStatus(): Promise<BackgroundLocationDebugStatus> {
-  const [foregroundPermission, backgroundPermission, taskStarted, drainTaskRegistered, backgroundTaskStatus, queueSummary] = await Promise.all([
+  const [
+    foregroundPermission,
+    backgroundPermission,
+    taskStarted,
+    drainTaskRegistered,
+    backgroundTaskStatus,
+    queueSummary,
+    locationServicesEnabled,
+    providerStatus,
+  ] = await Promise.all([
     Location.getForegroundPermissionsAsync(),
     Location.getBackgroundPermissionsAsync(),
     Location.hasStartedLocationUpdatesAsync(BACKGROUND_LOCATION_TASK),
     TaskManager.isTaskRegisteredAsync(BACKGROUND_LOCATION_DRAIN_TASK),
     BackgroundTask.getStatusAsync(),
     getQueuedBackgroundLocationSummary(),
+    Location.hasServicesEnabledAsync().catch(() => null),
+    Location.getProviderStatusAsync().catch(() => null),
   ]);
 
   const resolvedBackgroundTaskStatus =
@@ -524,6 +588,8 @@ export async function getBackgroundLocationDebugStatus(): Promise<BackgroundLoca
       drain_task_registered: drainTaskRegistered,
       drain_task_defined: TaskManager.isTaskDefined(BACKGROUND_LOCATION_DRAIN_TASK),
       background_task_status: resolvedBackgroundTaskStatus,
+      location_services_enabled: locationServicesEnabled,
+      provider_status: providerStatus,
       queued_location_count: queueSummary.queueSize,
       oldest_queued_captured_at: queueSummary.oldestCapturedAt,
       newest_queued_captured_at: queueSummary.newestCapturedAt,
@@ -534,6 +600,7 @@ export async function getBackgroundLocationDebugStatus(): Promise<BackgroundLoca
   return {
     foregroundPermission: foregroundPermission.status,
     backgroundPermission: backgroundPermission.status,
+    locationServicesEnabled,
     taskStarted,
     taskDefined: TaskManager.isTaskDefined(BACKGROUND_LOCATION_TASK),
     drainTaskRegistered,
@@ -542,6 +609,7 @@ export async function getBackgroundLocationDebugStatus(): Promise<BackgroundLoca
     queuedLocationCount: queueSummary.queueSize,
     oldestQueuedCapturedAt: queueSummary.oldestCapturedAt,
     newestQueuedCapturedAt: queueSummary.newestCapturedAt,
+    providerStatus,
   };
 }
 
