@@ -60,6 +60,13 @@ type BackgroundExecutionDiagnostics = {
   backgroundPermissionDetails?: Record<string, unknown>;
 };
 
+type AndroidTaskDiagnostics = {
+  taskManagerAvailable: boolean | null;
+  backgroundLocationAvailable: boolean | null;
+  registeredTasks: Record<string, unknown>[];
+  locationTaskOptions: Record<string, unknown> | null;
+};
+
 const BACKGROUND_POST_DEDUPE_MIN_DISTANCE_METERS = 15;
 const BACKGROUND_POST_DEDUPE_MIN_SECONDS = 30;
 const BACKGROUND_BUFFER_FLUSH_MIN_DISTANCE_METERS = 50;
@@ -172,6 +179,22 @@ async function getBackgroundExecutionDiagnostics(): Promise<BackgroundExecutionD
     ...(providerStatus ? { providerStatus: providerStatus as Record<string, unknown> } : {}),
     ...(foregroundPermission ? { foregroundPermissionDetails: buildPermissionDetails(foregroundPermission) } : {}),
     ...(backgroundPermission ? { backgroundPermissionDetails: buildPermissionDetails(backgroundPermission) } : {}),
+  };
+}
+
+async function getAndroidTaskDiagnostics(): Promise<AndroidTaskDiagnostics> {
+  const [taskManagerAvailable, backgroundLocationAvailable, registeredTasks, locationTaskOptions] = await Promise.all([
+    TaskManager.isAvailableAsync().catch(() => null),
+    Location.isBackgroundLocationAvailableAsync().catch(() => null),
+    TaskManager.getRegisteredTasksAsync().catch(() => []),
+    TaskManager.getTaskOptionsAsync(BACKGROUND_LOCATION_TASK).catch(() => null),
+  ]);
+
+  return {
+    taskManagerAvailable,
+    backgroundLocationAvailable,
+    registeredTasks: Array.isArray(registeredTasks) ? (registeredTasks as Record<string, unknown>[]) : [],
+    locationTaskOptions: (locationTaskOptions as Record<string, unknown> | null) ?? null,
   };
 }
 
@@ -544,6 +567,8 @@ export type BackgroundLocationDebugStatus = {
   foregroundPermission: string;
   backgroundPermission: string;
   locationServicesEnabled: boolean | null;
+  backgroundLocationAvailable: boolean | null;
+  taskManagerAvailable: boolean | null;
   taskStarted: boolean;
   taskDefined: boolean;
   drainTaskRegistered: boolean;
@@ -553,6 +578,8 @@ export type BackgroundLocationDebugStatus = {
   oldestQueuedCapturedAt: string | null;
   newestQueuedCapturedAt: string | null;
   providerStatus: Record<string, unknown> | null;
+  registeredTasks: Record<string, unknown>[];
+  locationTaskOptions: Record<string, unknown> | null;
 };
 
 export async function getBackgroundLocationDebugStatus(): Promise<BackgroundLocationDebugStatus> {
@@ -565,6 +592,10 @@ export async function getBackgroundLocationDebugStatus(): Promise<BackgroundLoca
     queueSummary,
     locationServicesEnabled,
     providerStatus,
+    backgroundLocationAvailable,
+    taskManagerAvailable,
+    registeredTasks,
+    locationTaskOptions,
   ] = await Promise.all([
     Location.getForegroundPermissionsAsync(),
     Location.getBackgroundPermissionsAsync(),
@@ -574,12 +605,23 @@ export async function getBackgroundLocationDebugStatus(): Promise<BackgroundLoca
     getQueuedBackgroundLocationSummary(),
     Location.hasServicesEnabledAsync().catch(() => null),
     Location.getProviderStatusAsync().catch(() => null),
+    Location.isBackgroundLocationAvailableAsync().catch(() => null),
+    TaskManager.isAvailableAsync().catch(() => null),
+    TaskManager.getRegisteredTasksAsync().catch(() => []),
+    TaskManager.getTaskOptionsAsync(BACKGROUND_LOCATION_TASK).catch(() => null),
   ]);
 
   const resolvedBackgroundTaskStatus =
     typeof backgroundTaskStatus === 'number'
       ? BackgroundTask.BackgroundTaskStatus[backgroundTaskStatus] ?? String(backgroundTaskStatus)
       : 'unknown';
+
+  const androidTaskDiagnostics = await getAndroidTaskDiagnostics().catch(() => ({
+    taskManagerAvailable: null,
+    backgroundLocationAvailable: null,
+    registeredTasks: [],
+    locationTaskOptions: null,
+  }));
 
   reportLocationDebugEvent('background_worker_status_snapshot', {
     payload: {
@@ -589,7 +631,11 @@ export async function getBackgroundLocationDebugStatus(): Promise<BackgroundLoca
       drain_task_defined: TaskManager.isTaskDefined(BACKGROUND_LOCATION_DRAIN_TASK),
       background_task_status: resolvedBackgroundTaskStatus,
       location_services_enabled: locationServicesEnabled,
+      background_location_available: backgroundLocationAvailable,
+      task_manager_available: taskManagerAvailable,
       provider_status: providerStatus,
+      registered_tasks: registeredTasks,
+      location_task_options: locationTaskOptions,
       queued_location_count: queueSummary.queueSize,
       oldest_queued_captured_at: queueSummary.oldestCapturedAt,
       newest_queued_captured_at: queueSummary.newestCapturedAt,
@@ -597,10 +643,29 @@ export async function getBackgroundLocationDebugStatus(): Promise<BackgroundLoca
     recordInHistory: false,
   });
 
+  if (Platform.OS === 'android') {
+    reportLocationDebugEvent('android_background_diagnostics_snapshot', {
+      payload: {
+        background_task_status: resolvedBackgroundTaskStatus,
+        location_task_started: taskStarted,
+        drain_task_registered: drainTaskRegistered,
+        location_services_enabled: locationServicesEnabled,
+        provider_status: providerStatus,
+        task_manager_available: androidTaskDiagnostics.taskManagerAvailable,
+        background_location_available: androidTaskDiagnostics.backgroundLocationAvailable,
+        registered_tasks: androidTaskDiagnostics.registeredTasks,
+        location_task_options: androidTaskDiagnostics.locationTaskOptions,
+      },
+      recordInHistory: false,
+    });
+  }
+
   return {
     foregroundPermission: foregroundPermission.status,
     backgroundPermission: backgroundPermission.status,
     locationServicesEnabled,
+    backgroundLocationAvailable: androidTaskDiagnostics.backgroundLocationAvailable ?? backgroundLocationAvailable,
+    taskManagerAvailable: androidTaskDiagnostics.taskManagerAvailable ?? taskManagerAvailable,
     taskStarted,
     taskDefined: TaskManager.isTaskDefined(BACKGROUND_LOCATION_TASK),
     drainTaskRegistered,
@@ -610,6 +675,8 @@ export async function getBackgroundLocationDebugStatus(): Promise<BackgroundLoca
     oldestQueuedCapturedAt: queueSummary.oldestCapturedAt,
     newestQueuedCapturedAt: queueSummary.newestCapturedAt,
     providerStatus,
+    registeredTasks: androidTaskDiagnostics.registeredTasks,
+    locationTaskOptions: androidTaskDiagnostics.locationTaskOptions,
   };
 }
 
