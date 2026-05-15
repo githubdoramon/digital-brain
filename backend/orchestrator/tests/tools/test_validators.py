@@ -569,14 +569,14 @@ class TestGoalCompletionValidatorTemporal:
                         {
                             "id": "meeting:older",
                             "kind": "event",
-                            "title": "Avery <> Ramon - 1:1",
+                            "title": "Avery <> Alex - 1:1",
                             "score": 0.59,
                             "start_date": "2025-12-09T11:29:00+00:00",
                         },
                         {
                             "id": "meeting:newer",
                             "kind": "event",
-                            "title": "Avery <> Ramon - 1:1",
+                            "title": "Avery <> Alex - 1:1",
                             "score": 0.57,
                             "start_date": "2026-04-06T11:30:00+01:00",
                         },
@@ -598,7 +598,7 @@ class TestGoalCompletionValidatorTemporal:
         assert achieved is False
         assert "must be inspected with get_events" in reason
         assert pending == [
-            "Call get_events with action='by_ids' and event_ids=['meeting:newer'] for 'Avery <> Ramon - 1:1' before responding"
+            "Call get_events with action='by_ids' and event_ids=['meeting:newer'] for 'Avery <> Alex - 1:1' before responding"
         ]
 
     def test_evolving_status_query_with_inspected_latest_event_is_achieved(self):
@@ -619,7 +619,7 @@ class TestGoalCompletionValidatorTemporal:
                         {
                             "id": "meeting:newer",
                             "kind": "event",
-                            "title": "Avery <> Ramon - 1:1",
+                            "title": "Avery <> Alex - 1:1",
                             "score": 0.57,
                             "start_date": "2026-04-06T11:30:00+01:00",
                         },
@@ -636,7 +636,7 @@ class TestGoalCompletionValidatorTemporal:
                     "events": [
                         {
                             "id": "meeting:newer",
-                            "title": "Avery <> Ramon - 1:1",
+                            "title": "Avery <> Alex - 1:1",
                             "summary": "due date: April 15",
                         }
                     ],

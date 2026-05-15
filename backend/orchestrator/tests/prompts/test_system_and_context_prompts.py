@@ -23,18 +23,18 @@ def test_self_context_includes_known_aliases_and_emails(monkeypatch):
         def find_self_contact(_email):
             return {
                 "display_name": "Alex Carter",
-                "emails": ["user@example.com", "redacted@example.invalid"],
-                "aliases": ["Ramon", "R. Canales"],
+                "emails": ["alex@example.com", "acarter@example.com"],
+                "aliases": ["Alex", "A. Carter"],
             }
 
     monkeypatch.setitem(sys.modules, "contacts", _ContactsModule())
-    context = get_self_context("user@example.com")
+    context = get_self_context("alex@example.com")
     assert context is not None
     assert "Known user emails" in context
-    assert "user@example.com" in context
-    assert "redacted@example.invalid" in context
+    assert "alex@example.com" in context
+    assert "acarter@example.com" in context
     assert "Known user aliases" in context
-    assert "R. Canales" in context
+    assert "A. Carter" in context
 
 
 def test_location_context_includes_inferred_place_details():

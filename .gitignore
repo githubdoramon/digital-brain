@@ -1,8 +1,56 @@
+# Audit notes (must never ship)
+OPEN_SOURCE_AUDIT.md
+OPEN_SOURCE_HANDOFF.md
+oss-history-rewrite/
+
+# Env / dotfiles
 .env
-.env.local
+.env.*
+!.env.template
+!.env.example
+!env.template
+
+# Python
 **/.venv/*
 **/__pycache__/*
 .python-version
+.ruff_cache/
+
+# OS
 .DS_Store
-OPEN_SOURCE_AUDIT.md
-node_modules
+
+# Secrets / credentials (never commit any of these)
+*.jks
+*.p12
+*.p8
+*.keystore
+*.pem
+*.key
+*.cer
+*.mobileprovision
+credentials.json
+credentials/
+google-services.json
+GoogleService-Info.plist
+service-account*.json
+firebase-adminsdk*.json
+*-service-account.json
+secrets/
+
+# Node / Expo / native build artifacts
+node_modules/
+.next/
+dist/
+build/
+ios/Pods/
+ios/build/
+android/.gradle/
+android/build/
+android/app/build/
+android/.idea/
+*.log
+
+# Editors
+.idea/
+.vscode/
+*.swp

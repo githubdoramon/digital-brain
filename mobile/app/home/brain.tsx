@@ -1153,7 +1153,12 @@ export function ChatConversationScreen({
       ? composerHeight + composerBottomOffset + 16
       : tabBarClearance + keyboardHeight + 80;
 
-  const allowed = email === 'REDACTED-EMAIL';
+  const allowedEmails = (process.env.EXPO_PUBLIC_ALLOWED_EMAILS ?? '')
+    .split(',')
+    .map((e) => e.trim().toLowerCase())
+    .filter(Boolean);
+  const allowed =
+    allowedEmails.length === 0 || (email ? allowedEmails.includes(email.toLowerCase()) : false);
   const trimmedInputForSend = input.trim();
   const isBlockedCommandInput = !commandsEnabled && trimmedInputForSend.startsWith('/');
   const canSend =

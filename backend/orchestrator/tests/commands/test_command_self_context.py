@@ -7,7 +7,7 @@ def test_contact_extraction_uses_self_context_instead_of_raw_user_line(monkeypat
 
     monkeypatch.setattr(
         "prompts.context.get_self_context",
-        lambda _email: "You are assisting Ramon. Known user aliases: Ramon.",
+        lambda _email: "You are assisting Alex. Known user aliases: Alex.",
     )
     monkeypatch.setattr(
         "prompts.context.get_user_facts_context",
@@ -32,7 +32,7 @@ def test_contact_extraction_uses_self_context_instead_of_raw_user_line(monkeypat
 
     contact_handler._llm_extract_contact_changes(
         "Sage is a lawyer",
-        user_email="user@example.com",
+        user_email="alex@example.com",
         conversation_messages=[
             {"role": "user", "content": "Sage is a lawyer"},
             {"role": "assistant", "content": "Which Sage?"},
@@ -42,7 +42,7 @@ def test_contact_extraction_uses_self_context_instead_of_raw_user_line(monkeypat
     )
 
     prompt = captured["prompt"]
-    assert "You are assisting Ramon." in prompt
+    assert "You are assisting Alex." in prompt
     assert "Contact resolution rules:" in prompt
     assert "Sage means Patricia." in prompt
     assert "Existing contact extraction from earlier turns" in prompt
@@ -53,7 +53,7 @@ def test_contact_extraction_uses_self_context_instead_of_raw_user_line(monkeypat
     assert '"reciprocal_type":' in prompt
     assert '"contact_place_links": [' in prompt
     assert "Father/Daughter" in prompt
-    assert "User: user@example.com" not in prompt
+    assert "User: alex@example.com" not in prompt
 
 
 def test_event_extraction_uses_self_context_instead_of_raw_user_line(monkeypatch):
@@ -62,7 +62,7 @@ def test_event_extraction_uses_self_context_instead_of_raw_user_line(monkeypatch
     monkeypatch.setattr("prompts.context.get_time_context", lambda: "Current test time")
     monkeypatch.setattr(
         "prompts.context.get_self_context",
-        lambda _email: "You are assisting Ramon. Known user aliases: Ramon.",
+        lambda _email: "You are assisting Alex. Known user aliases: Alex.",
     )
     monkeypatch.setattr("prompts.context.get_user_facts_context", lambda *_args, **_kwargs: None)
 
@@ -84,12 +84,12 @@ def test_event_extraction_uses_self_context_instead_of_raw_user_line(monkeypatch
 
     event_handler._extract_event_entities_with_llm(
         "Lunch with Sage",
-        {"user_email": "user@example.com"},
+        {"user_email": "alex@example.com"},
     )
 
     prompt = captured["prompt"]
-    assert "You are assisting Ramon." in prompt
-    assert "- User: user@example.com" not in prompt
+    assert "You are assisting Alex." in prompt
+    assert "- User: alex@example.com" not in prompt
 
 
 def test_event_follow_up_field_inference_uses_self_context(monkeypatch):
@@ -98,7 +98,7 @@ def test_event_follow_up_field_inference_uses_self_context(monkeypatch):
     monkeypatch.setattr("prompts.context.get_time_context", lambda: "Current test time")
     monkeypatch.setattr(
         "prompts.context.get_self_context",
-        lambda _email: "You are assisting Ramon. Known user aliases: Ramon.",
+        lambda _email: "You are assisting Alex. Known user aliases: Alex.",
     )
     monkeypatch.setattr("prompts.context.get_user_facts_context", lambda *_args, **_kwargs: None)
 
@@ -111,13 +111,13 @@ def test_event_follow_up_field_inference_uses_self_context(monkeypatch):
     fields = event_handler._infer_follow_up_target_fields(
         "at home",
         {"title": "Lunch", "where": None},
-        {"user_email": "user@example.com"},
+        {"user_email": "alex@example.com"},
     )
 
     assert fields == ["where"]
     prompt = captured["prompt"]
-    assert "You are assisting Ramon." in prompt
-    assert "- User: user@example.com" not in prompt
+    assert "You are assisting Alex." in prompt
+    assert "- User: alex@example.com" not in prompt
 
 
 def test_event_extraction_infers_immediate_past_time(monkeypatch):
@@ -156,7 +156,7 @@ def test_event_extraction_infers_immediate_past_time(monkeypatch):
 
     result = event_handler._extract_event_entities_with_llm(
         "I just had lunch",
-        {"user_email": "user@example.com"},
+        {"user_email": "alex@example.com"},
     )
 
     assert result["when"] == fixed_now
@@ -195,7 +195,7 @@ def test_event_extraction_infers_relative_past_time(monkeypatch):
 
     result = event_handler._extract_event_entities_with_llm(
         "Finished my workout 10 minutes ago",
-        {"user_email": "user@example.com"},
+        {"user_email": "alex@example.com"},
     )
 
     assert result["when"] == fixed_now - event_handler.timedelta(minutes=10)

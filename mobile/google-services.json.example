@@ -1,0 +1,47 @@
+{
+  "_comment": "Copy to google-services.json and replace placeholders with values from your Firebase project. This file is gitignored in real builds; only the .example shape lives in the repo.",
+  "project_info": {
+    "project_number": "YOUR_FIREBASE_PROJECT_NUMBER",
+    "project_id": "your-firebase-project-id",
+    "storage_bucket": "your-firebase-project-id.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:YOUR_PROJECT_NUMBER:android:YOUR_APP_HASH",
+        "android_client_info": {
+          "package_name": "com.yourorg.yourapp"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "YOUR_PROJECT_NUMBER-YOUR_OAUTH_HASH.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "YOUR_FIREBASE_WEB_API_KEY"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "YOUR_PROJECT_NUMBER-YOUR_OAUTH_HASH.apps.googleusercontent.com",
+              "client_type": 3
+            },
+            {
+              "client_id": "YOUR_PROJECT_NUMBER-YOUR_IOS_OAUTH_HASH.apps.googleusercontent.com",
+              "client_type": 2,
+              "ios_info": {
+                "bundle_id": "com.yourorg.yourapp"
+              }
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
