@@ -817,16 +817,16 @@ def test_extract_people_ignores_non_collective_company_mentions(monkeypatch):
                     }
                 ]
             }
-        return {"people": ["user", "Seb"]}
+        return {"people": ["user", "Pat"]}
 
     monkeypatch.setattr(resolver, "call_llm_json", fake_call_llm_json)
 
     people, selectors = resolver.extract_people_from_text(
-        "this morning, I was fired from Acme by Seb",
+        "this morning, I was fired from Acme by Pat",
         include_collective_selectors=True,
     )
 
-    assert people == ["user", "Seb"]
+    assert people == ["user", "Pat"]
     assert selectors == []
 
 

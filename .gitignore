@@ -1,7 +1,5 @@
-# Audit notes (must never ship)
-OPEN_SOURCE_AUDIT.md
-OPEN_SOURCE_HANDOFF.md
-oss-history-rewrite/
+# Pre-publish scratch (audit notes, history-rewrite tooling)
+.oss-prep/
 
 # Env / dotfiles
 .env

@@ -305,7 +305,7 @@ class TestValidateEventSections:
             "- You have three meetings scheduled today.\n"
             "## Schedule\n"
             "- **10:30 - 10:55** - 1:1 with Sean\n"
-            "- **11:30 - 11:55** - 1:1 with Seb\n"
+            "- **11:30 - 11:55** - 1:1 with Pat\n"
             "- **15:00 - 16:00** - Leadership weekly\n"
             "## Event Prep\n"
             "### 10:30 - 1:1 with Sean\n"
@@ -314,7 +314,7 @@ class TestValidateEventSections:
         context = _ctx(
             events=[
                 _event("1:1 with Sean"),
-                _event("1:1 with Seb"),
+                _event("1:1 with Pat"),
                 _event("Leadership weekly"),
             ]
         )

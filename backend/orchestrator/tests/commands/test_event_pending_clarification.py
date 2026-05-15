@@ -1368,7 +1368,7 @@ def test_resolve_contacts_with_agent_skips_selector_name_replacements(monkeypatc
                     "confidence": "high",
                 },
                 {
-                    "original_text": "Seb",
+                    "original_text": "Pat",
                     "contact_id": "contact:seb",
                     "display_name": "Owen Park",
                     "matched_via": "direct_match",
@@ -1386,11 +1386,11 @@ def test_resolve_contacts_with_agent_skips_selector_name_replacements(monkeypatc
     )
 
     resolution, _contact_result = event_handler._resolve_contacts_with_agent(
-        "this morning, I was fired from Acme by Seb",
+        "this morning, I was fired from Acme by Pat",
         "user@example.com",
     )
 
-    assert resolution["name_replacements"] == {"Seb": "Owen Park"}
+    assert resolution["name_replacements"] == {"Pat": "Owen Park"}
 
 
 def test_find_event_matches_rejects_calendar_day_mismatch(monkeypatch):

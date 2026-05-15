@@ -434,6 +434,31 @@ source .venv/bin/activate
 pytest tests/agent/test_controller.py tests/integration/test_full_flow.py tests/tools/test_validators.py
 ```
 
+## Test data & examples — always anonymize
+
+This repo is open-source. **Never** use real people, real addresses, real
+domains, or real businesses in code, tests, fixtures, comments, prompts, eval
+cases, UI placeholders, or docs.
+
+- Names: use generic invented full names (e.g. `Alex Carter`, `Dana Lewis`,
+  `Robin Lake`, `Morgan Brooks`). Keep families/groups internally consistent
+  across files so tests still make sense.
+- Emails: `@example.com`, `@example.org`, `@example.invalid` (RFC 6761) only.
+  Never `@gmail.com` / `@yahoo.com` / a real domain you operate.
+- Phone numbers: use the RFC 6761 reserved block — `+1 555 555 01XX`.
+- Addresses: invent street names (`12 Maple Street, Springfield`). Never copy
+  a real address — Portuguese `Rua …` patterns and real towns (Springfield,
+  Riverside, Estoril, etc.) are off-limits.
+- Companies / venues: use clearly-fake names (`Acme`, `Beacon`, `The Tide`).
+  Do not name real restaurants, neighborhoods, or employers.
+- Domains: `acme.example` / `example.com`. The TLD `.example` is reserved
+  for documentation per RFC 2606.
+- LLM prompts and few-shot examples count as code — same rules apply. If a
+  prompt currently references a real entity, replace it before commit.
+
+When in doubt, ask: would I be comfortable if this string ended up on
+HackerNews? If no, anonymize.
+
 ## Data & Storage
 
 - **Database schema**: `backend/db/init.sql`

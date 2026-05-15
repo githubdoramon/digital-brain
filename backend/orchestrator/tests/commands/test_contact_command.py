@@ -10,8 +10,8 @@ from ui_dsl.clarification import SUPPORTED_CLARIFICATION_FIELD_KINDS
 def test_handle_contact_builds_contact_confirmation_and_derives_family_links(monkeypatch):
     parsed = ParsedCommand(
         command="contact",
-        args="Dana is the father of Isa",
-        raw_message="/contact Dana is the father of Isa",
+        args="Dana is the father of Pip",
+        raw_message="/contact Dana is the father of Pip",
     )
     context = {
         "user_email": "user@example.com",
@@ -23,7 +23,7 @@ def test_handle_contact_builds_contact_confirmation_and_derives_family_links(mon
         "commands.handlers.contact._llm_extract_contact_changes",
         lambda *_args, **_kwargs: {
             "main_contact_name": "Dana",
-            "related_contact_name": "Isa",
+            "related_contact_name": "Pip",
             "relationship_type": "father",
             "birth_date_text": None,
             "place_text": None,
@@ -73,9 +73,9 @@ def test_handle_contact_builds_contact_confirmation_and_derives_family_links(mon
     result = handle_contact(parsed, context)
 
     assert result["type"] == "contact_confirmation"
-    assert any("Dana -> Father -> Isa" in line for line in result["explicit_change_lines"])
-    assert any("Sage -> Parent -> Isa" in line for line in result["derived_change_lines"])
-    assert any("Joao -> Grandfather -> Isa" in line for line in result["derived_change_lines"])
+    assert any("Dana -> Father -> Pip" in line for line in result["explicit_change_lines"])
+    assert any("Sage -> Parent -> Pip" in line for line in result["derived_change_lines"])
+    assert any("Joao -> Grandfather -> Pip" in line for line in result["derived_change_lines"])
     assert any(field["id"] == "aliases" for field in result["edit_fields"])
     assert all(field["kind"] in SUPPORTED_CLARIFICATION_FIELD_KINDS for field in result["edit_fields"])
     assert any(field["id"] == "derived_" + rel["proposal_id"] for field in result["edit_fields"] for rel in result["proposal"]["derived_relationships"])
@@ -758,7 +758,7 @@ def test_confirm_contact_command_applies_updates(monkeypatch):
                     "proposal_id": "contact-create-isa",
                     "operation": "create",
                     "reference": "new_contact:isa",
-                    "display_name": "Isa",
+                    "display_name": "Pip",
                 },
                 {
                     "proposal_id": "contact-update-paul",

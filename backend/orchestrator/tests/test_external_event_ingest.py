@@ -197,7 +197,7 @@ def test_extract_next_steps_supports_grouped_assignee_lists():
   - Add V1 scope topic to today's standup agenda
   - Continue exploring legal workarounds for active gamification features; loop
     in the team for ideas
-- Seb
+- Pat
   - Clearly communicate V1 scope and expectations to the team at today's standup
 """
 
@@ -215,7 +215,7 @@ Alex
   ◦ Add V1 scope topic to today's standup agenda
   ◦ Continue exploring legal workarounds for active gamification features; loop
     in the team for ideas
-Seb
+Pat
   ◦ Clearly communicate V1 scope and expectations to the team at today's standup
 """
 
@@ -233,7 +233,7 @@ def test_extract_next_steps_supports_same_indent_assignee_and_task_bullets():
 - Add V1 scope topic to today's standup agenda
 - Continue exploring legal workarounds for active gamification features; loop
   in the team for ideas
-- Seb
+- Pat
 - Clearly communicate V1 scope and expectations to the team at today's standup
 - Follow up on crypto casino license option via his contact
 """
@@ -269,7 +269,7 @@ def test_ingest_meeting_notes_creates_todos_from_grouped_user_section(monkeypatc
 - Alex
   - Share updated scope draft before Friday
   - Follow up with legal on the open licensing question
-- Seb
+- Pat
   - Align the rollout note with the team
 """,
         attendeesEmails=[],
@@ -306,7 +306,7 @@ def test_ingest_meeting_notes_ignores_assignee_label_with_unicode_bullets(monkey
 Alex
   ◦ Share updated scope draft before Friday
   ◦ Follow up with legal on the open licensing question
-Seb
+Pat
   ◦ Align the rollout note with the team
 """,
         attendeesEmails=[],
@@ -337,14 +337,14 @@ def test_ingest_meeting_notes_creates_todos_from_same_indent_grouped_bullets(mon
 
     meeting = MeetingIn(
         id="meeting-789",
-        title="Seb / Alex 1:1",
+        title="Pat / Alex 1:1",
         date=datetime(2026, 4, 1, 10, 59, tzinfo=timezone.utc),
         content="""### Next Steps
 - Alex
 - Add V1 scope topic to today's standup agenda
 - Continue exploring legal workarounds for active gamification features; loop
   in the team for ideas
-- Seb
+- Pat
 - Clearly communicate V1 scope and expectations to the team at today's standup
 - Follow up on crypto casino license option via his contact
 """,
