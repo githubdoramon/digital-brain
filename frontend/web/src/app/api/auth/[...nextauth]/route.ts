@@ -15,8 +15,6 @@ const getAllowedUsers = (): Set<string> => {
   return users;
 };
 
-const allowedUsers = getAllowedUsers();
-
 type GoogleJWT = JWT & {
   accessToken?: string;
   refreshToken?: string;
@@ -143,6 +141,14 @@ export const authOptions: NextAuthOptions = {
   callbacks: {
     async signIn({ user }): Promise<boolean> {
       const userEmail = user.email;
+      let allowedUsers: Set<string>;
+
+      try {
+        allowedUsers = getAllowedUsers();
+      } catch (error) {
+        console.error("NextAuth allowlist configuration error", error);
+        return false;
+      }
 
       // Check if user is in allowlist
       if (userEmail && allowedUsers.has(userEmail)) {
