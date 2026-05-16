@@ -1,7 +1,7 @@
 import type { ConfigContext, ExpoConfig } from '@expo/config';
 import { withAppBuildGradle } from 'expo/config-plugins';
 import { existsSync } from 'fs';
-import { join } from 'path';
+import { isAbsolute, join, resolve } from 'path';
 
 enum AppVariant {
   Development = 'development',
@@ -37,15 +37,22 @@ const getAppName = () => {
   return 'Digital Brain';
 };
 
-const requireConfigFile = (relativePath: string) => {
-  const absolutePath = join(__dirname, relativePath);
-  if (!existsSync(absolutePath)) {
+const requireConfigFile = (relativePath: string, envPathName?: string) => {
+  const configuredPath = envPathName ? getOptionalEnv(envPathName) : undefined;
+  const resolvedPath = configuredPath
+    ? isAbsolute(configuredPath)
+      ? configuredPath
+      : resolve(__dirname, configuredPath)
+    : join(__dirname, relativePath);
+
+  const displayPath = configuredPath ?? relativePath;
+  if (!existsSync(resolvedPath)) {
     throw new Error(
-      `Missing required config file: ${relativePath} for APP_VARIANT=${APP_VARIANT}.`,
+      `Missing required config file: ${displayPath} for APP_VARIANT=${APP_VARIANT}.${envPathName ? ` Set ${envPathName} to an absolute or project-relative path when building locally.` : ''}`,
     );
   }
 
-  return relativePath;
+  return resolvedPath;
 };
 
 const appJson = require('./app.json');
@@ -88,7 +95,10 @@ function withSystemDebugKeystore(config: ExpoConfig) {
 export default ({ config }: ConfigContext): ExpoConfig => {
   const appName = getAppName();
   const bundleId = getUniqueIdentifier();
-  const androidGoogleServicesFile = requireConfigFile('./google-services.json');
+  const androidGoogleServicesFile = requireConfigFile(
+    './google-services.json',
+    'GOOGLE_SERVICES_FILE',
+  );
   const googleMapsApiKey = process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY;
   const buildTimestamp = process.env.EXPO_PUBLIC_BUILD_TIMESTAMP ?? new Date().toISOString();
   const appScheme = getOptionalEnv('APP_SCHEME');

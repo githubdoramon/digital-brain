@@ -12,7 +12,7 @@
     "lint:fix": "eslint . --ext .ts,.tsx --fix",
     "format": "prettier . --write",
     "format:check": "prettier . --check",
-    "eas:build:android:apk": "set -a; source .env; set +a; APP_VARIANT=production eas build -p android --profile preview --local"
+    "eas:build:android:apk": "set -a; source .env; set +a; NODE_ENV=production GOOGLE_SERVICES_FILE=\"${GOOGLE_SERVICES_FILE:-$(pwd)/google-services.json}\" APP_VARIANT=production eas build -p android --profile preview --local"
   },
   "dependencies": {
     "@expo/vector-icons": "^15.0.3",
