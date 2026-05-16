@@ -152,7 +152,7 @@ def test_repair_reference_ids_recovers_generic_contact_and_place_ids():
     state = AgentState(goal="Who lives at this place?")
     state.remember_information_candidate(
         kind="contact",
-        candidate_id="contact:avery-acme-xyz",
+        candidate_id="contact:avery-acme-example",
         label="Avery Hill",
     )
     state.remember_information_candidate(
@@ -170,6 +170,6 @@ def test_repair_reference_ids_recovers_generic_contact_and_place_ids():
         state=state,
     )
 
-    assert repaired["contact_id"] == "contact:avery-acme-xyz"
+    assert repaired["contact_id"] == "contact:avery-acme-example"
     assert repaired["place_id"] == "place:home-springfield-portugal"
-    assert repaired["contact_ids"] == ["contact:avery-acme-xyz"]
+    assert repaired["contact_ids"] == ["contact:avery-acme-example"]

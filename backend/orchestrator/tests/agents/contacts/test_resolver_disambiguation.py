@@ -344,7 +344,7 @@ def test_llm_disambiguation_prompt_includes_aliases_and_match_hints(monkeypatch)
         person_text="Gio",
         candidates=[
             {
-                "contact_id": "contact:gio-acme-xyz",
+                "contact_id": "contact:gio-acme-example",
                 "display_name": "Giovanni Panerai",
                 "aliases": ["Gio", "Panerai"],
                 "match_reason": "exact name match: gio",

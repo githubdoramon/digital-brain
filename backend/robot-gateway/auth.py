@@ -28,14 +28,17 @@ if DEV_BYPASS_AUTH and not DEV_USER_EMAIL:
     raise ValueError("DEV_USER_EMAIL is required when DEV_BYPASS_AUTH is enabled")
 
 
-def get_allowed_users() -> set[str] | None:
+def get_allowed_users() -> set[str]:
     allowlist = os.environ.get("ALLOWED_USERS", "").strip()
     if not allowlist:
-        return None
-    return {email.strip() for email in allowlist.split(",") if email.strip()}
+        raise ValueError("ALLOWED_USERS must be configured and non-empty unless DEV_BYPASS_AUTH is enabled")
+    users = {email.strip() for email in allowlist.split(",") if email.strip()}
+    if not users:
+        raise ValueError("ALLOWED_USERS must contain at least one email address")
+    return users
 
 
-ALLOWED_USERS = get_allowed_users()
+ALLOWED_USERS = set() if DEV_BYPASS_AUTH else get_allowed_users()
 
 
 def require_service_api_key(
@@ -72,8 +75,6 @@ def verify_google_token(token: str) -> dict:
 
 
 def check_user_allowed(email: str) -> None:
-    if ALLOWED_USERS is None:
-        return
     if email not in ALLOWED_USERS:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,

@@ -1063,7 +1063,7 @@ class TestContactAwareMemorySearch:
             {
                 "mention_text": "Gio",
                 "display_name": "Giovanni Panerai",
-                "contact_id": "contact:gio-acme-xyz",
+                "contact_id": "contact:gio-acme-example",
             }
         ]
 
@@ -1072,7 +1072,7 @@ class TestContactAwareMemorySearch:
         assert context is not None
         assert "RESOLVED CONTACT SCOPE" in context
         assert "'Gio' -> 'Giovanni Panerai'" in context
-        assert "contact:gio-acme-xyz" in context
+        assert "contact:gio-acme-example" in context
         assert "query to 'events'" in context
 
     def test_blocks_redundant_equivalent_memory_search(self, controller):

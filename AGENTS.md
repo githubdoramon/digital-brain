@@ -348,6 +348,7 @@ DATABASE_URL=postgresql://user:pass@localhost/db
 
 # Auth
 GOOGLE_CLIENT_ID=xxx.apps.googleusercontent.com
+# Required: non-empty comma-separated allowlist
 ALLOWED_USERS=user@example.com
 
 # Optional: Home Assistant
@@ -367,7 +368,7 @@ NEXTAUTH_URL=http://localhost:3000
 GOOGLE_CLIENT_ID=xxx.apps.googleusercontent.com
 GOOGLE_CLIENT_SECRET=xxx
 BACKEND_API_BASE=http://localhost:8000
-ALLOWLIST=user@example.com
+ALLOWED_USERS=user@example.com
 ```
 
 See `backend/env.template` and `frontend/web/env.template` for full templates.

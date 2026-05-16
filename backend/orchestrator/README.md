@@ -21,8 +21,8 @@ Set these environment variables:
 # Required: Your Google OAuth Client ID (same as frontend)
 GOOGLE_CLIENT_ID=your-client-id.apps.googleusercontent.com
 
-# Optional: Comma-separated list of allowed emails
-# Empty = allow all users with valid Google accounts
+# Required: Comma-separated list of allowed emails
+# Empty or missing is rejected at startup unless DEV_BYPASS_AUTH is enabled locally
 ALLOWED_USERS=user1@example.com,user2@example.com
 ```
 
@@ -75,4 +75,17 @@ uvicorn app:api --reload
 
 ## Deployment
 
-Make sure to set `GOOGLE_CLIENT_ID` and `ALLOWED_USERS` in your deployment environment.
+Make sure to set `GOOGLE_CLIENT_ID` and a non-empty `ALLOWED_USERS` in your deployment environment.
+
+If you enable Telegram photo ingest, also set:
+
+```bash
+TELEGRAM_BOT_TOKEN=...
+TELEGRAM_ALLOWED_CHAT_IDS=123456789
+TELEGRAM_WEBHOOK_SECRET=...
+IMMICH_SERVER_URL=...
+IMMICH_API_KEY=...
+```
+
+The Telegram integration is fail-closed: when `TELEGRAM_BOT_TOKEN` is configured, both
+`TELEGRAM_ALLOWED_CHAT_IDS` and `TELEGRAM_WEBHOOK_SECRET` are required.

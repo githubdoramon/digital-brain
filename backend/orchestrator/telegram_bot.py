@@ -122,6 +122,14 @@ def _load_config() -> TelegramConfig:
     device_id = immich_cfg.device_id or "telegram-bot"
     secret = (os.getenv("TELEGRAM_WEBHOOK_SECRET") or "").strip() or None
     allowed_ids = _parse_allowed_chat_ids(os.getenv("TELEGRAM_ALLOWED_CHAT_IDS"))
+    if not secret:
+        raise TelegramConfigError(
+            "TELEGRAM_WEBHOOK_SECRET must be configured when TELEGRAM_BOT_TOKEN is enabled"
+        )
+    if not allowed_ids:
+        raise TelegramConfigError(
+            "TELEGRAM_ALLOWED_CHAT_IDS must be configured with at least one chat ID when TELEGRAM_BOT_TOKEN is enabled"
+        )
 
     return TelegramConfig(
         bot_token=bot_token,
@@ -149,8 +157,6 @@ def _parse_allowed_chat_ids(raw: str | None) -> set[int]:
 
 
 def _verify_secret(provided: str | None, config: TelegramConfig) -> None:
-    if not config.secret_token:
-        return
     if provided != config.secret_token:
         raise TelegramAuthError("Invalid Telegram secret token")
 

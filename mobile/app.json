@@ -5,7 +5,6 @@
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
-    "scheme": "com.googleusercontent.apps.000000000000-redacted-oauth-ios-1",
     "userInterfaceStyle": "automatic",
     "splash": {
       "image": "./assets/images/splash-icon.png",
@@ -77,19 +76,13 @@
       "expo-secure-store",
       "expo-web-browser",
       "react-native-maps",
-      ["@react-native-google-signin/google-signin", {
-        "iosUrlScheme": "com.googleusercontent.apps.000000000000-redacted-oauth-ios-2"
-      }]
+      "@react-native-google-signin/google-signin"
     ],
     "experiments": {
       "typedRoutes": true
     },
     "extra": {
-      "router": {},
-      "eas": {
-        "projectId": "00000000-0000-0000-0000-000000000000"
-      }
-    },
-    "owner": "your-expo-owner"
+      "router": {}
+    }
   }
 }
