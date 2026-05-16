@@ -567,7 +567,7 @@ def test_places_group_by_country(monkeypatch):
         {"entity": "places", "operation": "group_by", "group_by": "country"}
     )
 
-    assert result["groups"] == [{"key": "PT", "count": 11}]
+    assert result["groups"] == [{"key": "WT", "count": 11}]
     query, _ = cursor.executed[0]
     assert "p.country" in query
 

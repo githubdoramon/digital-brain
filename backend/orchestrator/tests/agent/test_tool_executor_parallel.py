@@ -157,19 +157,19 @@ def test_repair_reference_ids_recovers_generic_contact_and_place_ids():
     )
     state.remember_information_candidate(
         kind="place",
-        candidate_id="place:home-springfield-portugal",
+        candidate_id="place:home-springfield",
         label="Home",
     )
 
     repaired = coordinator._repair_reference_ids(
         args={
-            "contact_id": "contact:avery-s...",
-            "place_id": "place:home-a...",
-            "contact_ids": ["contact:avery-s..."],
+            "contact_id": "contact:avery-a...",
+            "place_id": "place:home-s...",
+            "contact_ids": ["contact:avery-a..."],
         },
         state=state,
     )
 
     assert repaired["contact_id"] == "contact:avery-acme-example"
-    assert repaired["place_id"] == "place:home-springfield-portugal"
+    assert repaired["place_id"] == "place:home-springfield"
     assert repaired["contact_ids"] == ["contact:avery-acme-example"]

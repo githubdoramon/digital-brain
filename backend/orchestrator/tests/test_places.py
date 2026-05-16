@@ -95,7 +95,7 @@ def test_search_places_matches_address_and_description(monkeypatch):
                 "name": "Theo's apt",
                 "aliases": [],
                 "description": "Apartment building near old town",
-                "address": "Maple Street, 23, Springfield",
+                "address": "12 Maple Street, Springfield",
                 "city": "Springfield",
                 "country": "Westoria",
                 "lat": 38.68,
