@@ -71,7 +71,7 @@ async def lifespan(app: FastAPI):
 
 api = FastAPI(
     title="Robot Gateway",
-    version="0.1",
+    version="0.1.1",
     lifespan=lifespan,
 )
 

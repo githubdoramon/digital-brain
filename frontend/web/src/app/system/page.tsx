@@ -1213,7 +1213,7 @@ export default function SystemStatusPage() {
       <div>
         <h1 style={{ fontSize: "1.75rem", fontWeight: 600 }}>System Status</h1>
         <p style={{ color: "#555", marginTop: "8px" }}>
-          Overview of running containers, their versions, and build timestamps exposed by the orchestrator.
+          Overview of running containers, version metadata, and build timestamps exposed by the orchestrator.
         </p>
       </div>
 

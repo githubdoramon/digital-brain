@@ -128,7 +128,7 @@ async def lifespan(_app: FastAPI):
     yield
 
 
-api = FastAPI(title="Personal Memory Orchestrator", version="0.3", lifespan=lifespan)
+api = FastAPI(title="Personal Memory Orchestrator", version="0.3.1", lifespan=lifespan)
 
 api.include_router(create_daily_briefing_router())
 api.include_router(create_news_router())
