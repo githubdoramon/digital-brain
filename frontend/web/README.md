@@ -6,8 +6,6 @@ Personal memory orchestrator frontend with Google OAuth authentication.
 
 ## Setup
 
-See [AUTH_SETUP.md](./AUTH_SETUP.md) for Google OAuth configuration.
-
 ### Quick Start
 
 ```bash
@@ -15,8 +13,8 @@ See [AUTH_SETUP.md](./AUTH_SETUP.md) for Google OAuth configuration.
 npm install
 
 # Configure environment
-cp env.example .env.local
-# Edit .env.local with your Google OAuth credentials
+cp env.template .env.local
+# Edit .env.local with your Google OAuth credentials and a non-empty ALLOWED_USERS
 
 # Run dev server
 npm run dev
@@ -33,8 +31,8 @@ npm run dev
 
 ## Documentation
 
-- [AUTH_SETUP.md](./AUTH_SETUP.md) - Google OAuth configuration
-- [ACCESS_CONTROL.md](./ACCESS_CONTROL.md) - User access management
+- `env.template` - required frontend environment variables
+- `src/app/api/auth/[...nextauth]/route.ts` - NextAuth Google OAuth configuration
 
 ## Tech Stack
 

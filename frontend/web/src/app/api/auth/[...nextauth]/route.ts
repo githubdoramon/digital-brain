@@ -3,10 +3,16 @@ import GoogleProvider from "next-auth/providers/google";
 import { JWT } from "next-auth/jwt";
 
 // Parse the allowlist from environment variable
-const getAllowedUsers = (): Set<string> | null => {
+const getAllowedUsers = (): Set<string> => {
   const allowlist = process.env.ALLOWED_USERS?.trim();
-  if (!allowlist) return null;
-  return new Set(allowlist.split(",").map(u => u.trim()).filter(Boolean));
+  if (!allowlist) {
+    throw new Error("ALLOWED_USERS must be configured and non-empty");
+  }
+  const users = new Set(allowlist.split(",").map((u) => u.trim()).filter(Boolean));
+  if (users.size === 0) {
+    throw new Error("ALLOWED_USERS must contain at least one email address");
+  }
+  return users;
 };
 
 const allowedUsers = getAllowedUsers();
@@ -137,11 +143,6 @@ export const authOptions: NextAuthOptions = {
   callbacks: {
     async signIn({ user }): Promise<boolean> {
       const userEmail = user.email;
-        
-      // No allowlist configured: allow any authenticated user
-      if (!allowedUsers) {
-        return true;
-      }
 
       // Check if user is in allowlist
       if (userEmail && allowedUsers.has(userEmail)) {

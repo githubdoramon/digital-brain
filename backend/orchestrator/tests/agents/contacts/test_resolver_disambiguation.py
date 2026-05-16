@@ -313,7 +313,7 @@ def test_extract_people_restores_named_possessive_coworker_group(monkeypatch):
     def fake_call_llm_json(prompt, **_kwargs):
         if "Extract collective participant selectors" in prompt:
             return {"selectors": []}
-        return {"people": ["Ramon"]}
+        return {"people": ["Alex"]}
 
     monkeypatch.setattr(resolver, "call_llm_json", fake_call_llm_json)
 
@@ -322,7 +322,7 @@ def test_extract_people_restores_named_possessive_coworker_group(monkeypatch):
         include_collective_selectors=True,
     )
 
-    assert people == ["Ramon", "Alex's co workers"]
+    assert people == ["Alex", "Alex's co workers"]
     assert selectors == []
 
 
@@ -344,7 +344,7 @@ def test_llm_disambiguation_prompt_includes_aliases_and_match_hints(monkeypatch)
         person_text="Gio",
         candidates=[
             {
-                "contact_id": "contact:gio-acme-xyz",
+                "contact_id": "contact:gio-acme-example",
                 "display_name": "Giovanni Panerai",
                 "aliases": ["Gio", "Panerai"],
                 "match_reason": "exact name match: gio",
@@ -579,7 +579,7 @@ def test_resolve_contacts_restores_named_coworker_group_after_llm_extraction(mon
     def fake_call_llm_json(prompt, **_kwargs):
         if "Extract collective participant selectors" in prompt:
             return {"selectors": []}
-        return {"people": ["Ramon"]}
+        return {"people": ["Alex"]}
 
     monkeypatch.setattr(resolver, "call_llm_json", fake_call_llm_json)
     monkeypatch.setattr(
@@ -616,7 +616,7 @@ def test_resolve_contacts_restores_named_coworker_group_after_llm_extraction(mon
         mode=resolver.MINIMAL_RESOLUTION_MODE,
     )
 
-    assert result["people_mentioned"] == ["Ramon", "Alex's co workers"]
+    assert result["people_mentioned"] == ["Alex", "Alex's co workers"]
 
 
 def test_resolve_contacts_collective_selector_bypasses_fast_path(monkeypatch):
@@ -817,16 +817,16 @@ def test_extract_people_ignores_non_collective_company_mentions(monkeypatch):
                     }
                 ]
             }
-        return {"people": ["user", "Seb"]}
+        return {"people": ["user", "Pat"]}
 
     monkeypatch.setattr(resolver, "call_llm_json", fake_call_llm_json)
 
     people, selectors = resolver.extract_people_from_text(
-        "this morning, I was fired from Acme by Seb",
+        "this morning, I was fired from Acme by Pat",
         include_collective_selectors=True,
     )
 
-    assert people == ["user", "Seb"]
+    assert people == ["user", "Pat"]
     assert selectors == []
 
 
@@ -1059,7 +1059,7 @@ def test_resolve_contact_my_whole_family_anchors_on_user(monkeypatch):
     monkeypatch.setattr(
         resolver.contacts_service,
         "find_self_contact",
-        lambda *_a, **_k: {"contact_id": "contact:user", "display_name": "Ramon"},
+        lambda *_a, **_k: {"contact_id": "contact:user", "display_name": "Alex"},
     )
     monkeypatch.setattr(
         resolver.contacts_service,
@@ -1129,7 +1129,7 @@ def test_resolve_contact_named_coworker_group_uses_related_candidates(monkeypatc
                 "aliases": [],
             }
         ]
-        if query == "Ramon"
+        if query == "Alex"
         else [],
     )
     monkeypatch.setattr(
@@ -1167,7 +1167,7 @@ def test_resolve_contact_named_coworker_group_uses_related_candidates(monkeypatc
             "candidate_numbers": [1, 2],
             "collective_reference": True,
             "confidence": "high",
-            "reasoning": "co workers refers to Ramon coworkers",
+            "reasoning": "co workers refers to Alex coworkers",
         },
     )
 

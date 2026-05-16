@@ -112,7 +112,7 @@ def test_search_contacts_any_non_email_query_ignores_email_domain_noise(monkeypa
     def fake_load(contact_ids=None):
         assert contact_ids == ["contact-email", "contact-role"]
         return [
-            _contact("contact-email", "Alice Example", emails=["alice@acme.example"]),
+            _contact("contact-email", "Alice Example", emails=["alice@acme.com"]),
             _contact(
                 "contact-role",
                 "Dana Executive",
@@ -187,21 +187,21 @@ def test_search_contacts_comment_weight_can_beat_email_match(monkeypatch):
             _contact(
                 "contact-email",
                 "Email Person",
-                emails=["exec@acme.example"],
+                emails=["exec@acme.com"],
                 comments="",
             ),
             _contact(
                 "contact-comment",
                 "Comment Person",
                 emails=[],
-                comments="@acme.example",
+                comments="@acme.com",
             ),
         ],
     )
     monkeypatch.setattr(contacts, "list_contacts", list)
 
     # Includes "@" to activate email-intent scoring in "any" mode.
-    results = contacts.search_contacts("@acme.example", search_by="any", limit=5)
+    results = contacts.search_contacts("@acme.com", search_by="any", limit=5)
     assert len(results) >= 1
     assert results[0]["contact_id"] == "contact-comment"
     assert results[0]["match_reason"] == "comment match"
@@ -214,9 +214,9 @@ def test_search_contacts_with_none_limit_returns_all_matches(monkeypatch):
         contacts,
         "list_contacts",
         lambda: [
-            _contact("c1", "Ana", emails=["ana@gmail.com"]),
-            _contact("c2", "Bruno", emails=["bruno@gmail.com"]),
-            _contact("c3", "Carla", emails=["carla@gmail.com"]),
+            _contact("c1", "Ana", emails=["ana@example.com"]),
+            _contact("c2", "Bruno", emails=["bruno@example.com"]),
+            _contact("c3", "Carla", emails=["carla@example.com"]),
         ],
     )
 

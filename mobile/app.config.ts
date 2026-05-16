@@ -16,6 +16,11 @@ const resolveAppVariant = (): AppVariant => {
 const APP_VARIANT = resolveAppVariant();
 const IS_DEV = APP_VARIANT === AppVariant.Development;
 
+const getOptionalEnv = (name: string): string | undefined => {
+  const value = process.env[name]?.trim();
+  return value ? value : undefined;
+};
+
 const getUniqueIdentifier = () => {
   if (IS_DEV) {
     return 'com.appcalipse.digitalbrain.dev';
@@ -86,16 +91,32 @@ export default ({ config }: ConfigContext): ExpoConfig => {
   const androidGoogleServicesFile = requireConfigFile('./google-services.json');
   const googleMapsApiKey = process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY;
   const buildTimestamp = process.env.EXPO_PUBLIC_BUILD_TIMESTAMP ?? new Date().toISOString();
+  const appScheme = getOptionalEnv('APP_SCHEME');
+  const expoOwner = getOptionalEnv('EXPO_ACCOUNT_OWNER');
+  const easProjectId = getOptionalEnv('EXPO_PUBLIC_EAS_PROJECT_ID');
+  const googleIosUrlScheme = getOptionalEnv('GOOGLE_IOS_URL_SCHEME');
+  const extra = {
+    ...(appJson.expo.extra ?? {}),
+    ...(config.extra ?? {}),
+    buildTimestamp,
+    ...(easProjectId
+      ? {
+          eas: {
+            ...((appJson.expo.extra as { eas?: Record<string, unknown> } | undefined)?.eas ?? {}),
+            ...((config.extra as { eas?: Record<string, unknown> } | undefined)?.eas ?? {}),
+            projectId: easProjectId,
+          },
+        }
+      : {}),
+  };
 
   const merged = {
     ...appJson.expo,
     ...config,
-    extra: {
-      ...(appJson.expo.extra ?? {}),
-      ...(config.extra ?? {}),
-      buildTimestamp,
-    },
+    extra,
     name: appName,
+    ...(appScheme ? { scheme: appScheme } : {}),
+    ...(expoOwner ? { owner: expoOwner } : {}),
     ios: {
       ...(appJson.expo.ios ?? {}),
       ...(config.ios ?? {}),
@@ -113,7 +134,12 @@ export default ({ config }: ConfigContext): ExpoConfig => {
     ...(googleMapsApiKey ? { androidGoogleMapsApiKey: googleMapsApiKey } : {}),
     ...(googleMapsApiKey ? { iosGoogleMapsApiKey: googleMapsApiKey } : {}),
   });
-  const pluginsWithAsset = withPlugin(pluginsWithMaps, 'expo-asset');
+  const pluginsWithGoogleSignin = withPlugin(
+    pluginsWithMaps,
+    '@react-native-google-signin/google-signin',
+    googleIosUrlScheme ? { iosUrlScheme: googleIosUrlScheme } : undefined,
+  );
+  const pluginsWithAsset = withPlugin(pluginsWithGoogleSignin, 'expo-asset');
   const pluginsWithAudioStudio = withPlugin(pluginsWithAsset, '@siteed/audio-studio', {
     enablePhoneStateHandling: false,
     enableNotifications: false,

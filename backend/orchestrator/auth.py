@@ -1,7 +1,6 @@
 """Authentication middleware for Google OAuth JWT validation."""
 
 import os
-from typing import Optional
 
 from fastapi import Header, HTTPException, status
 from google.auth.transport import requests
@@ -27,16 +26,18 @@ if DEV_BYPASS_AUTH and not DEV_USER_EMAIL:
     raise ValueError("DEV_USER_EMAIL is required when DEV_BYPASS_AUTH is enabled")
 
 
-# Parse allowed users from environment
-def get_allowed_users() -> Optional[set[str]]:
-    """Get set of allowed user emails, or None if all users allowed."""
+def get_allowed_users() -> set[str]:
+    """Get the required set of allowed user emails."""
     allowlist = os.environ.get("ALLOWED_USERS", "").strip()
     if not allowlist:
-        return None
-    return {email.strip() for email in allowlist.split(",") if email.strip()}
+        raise ValueError("ALLOWED_USERS must be configured and non-empty unless DEV_BYPASS_AUTH is enabled")
+    users = {email.strip() for email in allowlist.split(",") if email.strip()}
+    if not users:
+        raise ValueError("ALLOWED_USERS must contain at least one email address")
+    return users
 
 
-ALLOWED_USERS = get_allowed_users()
+ALLOWED_USERS = set() if DEV_BYPASS_AUTH else get_allowed_users()
 ORCHESTRATOR_API_KEY = os.environ.get("ORCHESTRATOR_API_KEY")
 
 
@@ -101,10 +102,6 @@ def check_user_allowed(email: str) -> None:
     Raises:
         HTTPException: If user is not allowed
     """
-    if ALLOWED_USERS is None:
-        # No allowlist configured, allow all users
-        return
-
     if email not in ALLOWED_USERS:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -112,7 +109,7 @@ def check_user_allowed(email: str) -> None:
         )
 
 
-async def get_current_user(authorization: Optional[str] = Header(None)) -> dict:
+async def get_current_user(authorization: str | None = Header(None)) -> dict:
     """
     FastAPI dependency to get and validate current user from JWT.
 

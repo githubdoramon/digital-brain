@@ -275,7 +275,7 @@ class TestResponseBundle:
         controller = _build_controller(AgentConfig(max_steps=3, max_tool_calls=5))
 
         call = controller._build_pending_completion_tool_call(
-            "Call get_events with action='by_ids' and event_ids=['google:event-123'] for 'Avery <> Ramon - 1:1' before responding"
+            "Call get_events with action='by_ids' and event_ids=['google:event-123'] for 'Avery <> Alex - 1:1' before responding"
         )
 
         assert call is not None
@@ -1063,7 +1063,7 @@ class TestContactAwareMemorySearch:
             {
                 "mention_text": "Gio",
                 "display_name": "Giovanni Panerai",
-                "contact_id": "contact:gio-acme-xyz",
+                "contact_id": "contact:gio-acme-example",
             }
         ]
 
@@ -1072,7 +1072,7 @@ class TestContactAwareMemorySearch:
         assert context is not None
         assert "RESOLVED CONTACT SCOPE" in context
         assert "'Gio' -> 'Giovanni Panerai'" in context
-        assert "contact:gio-acme-xyz" in context
+        assert "contact:gio-acme-example" in context
         assert "query to 'events'" in context
 
     def test_blocks_redundant_equivalent_memory_search(self, controller):
@@ -1600,14 +1600,14 @@ class TestLinkedItemsSelection:
             {
                 "mention_text": "user",
                 "display_name": "Alex Carter",
-                "contact_id": "contact:alex-carter",
+                "contact_id": "contact:alex-example",
                 "confidence": 1.0,
                 "matched_via": "user_email",
             },
         ]
         state.resolution["active_contact_scope_ids"] = [
             "contact:dana-acme-example",
-            "contact:alex-carter",
+            "contact:alex-example",
         ]
         state.record_tool_call(
             ToolCallRecord(
@@ -1627,7 +1627,7 @@ class TestLinkedItemsSelection:
                             "end_date": "2026-04-22T16:30:00+01:00",
                             "summary": "Dana Lewis joined the Beacon team sync.",
                             "people": [
-                                {"contact_id": "contact:alex-carter", "display_name": "Alex Carter"},
+                                {"contact_id": "contact:alex-example", "display_name": "Alex Carter"},
                                 {"contact_id": "contact:dana-acme-example", "display_name": "Dana Lewis"},
                             ],
                             "tags": ["Work", "Meeting"],
@@ -1640,7 +1640,7 @@ class TestLinkedItemsSelection:
                             "end_date": "2026-04-17T17:00:00+01:00",
                             "summary": "Broad team weekly.",
                             "people": [
-                                {"contact_id": "contact:alex-carter", "display_name": "Alex Carter"},
+                                {"contact_id": "contact:alex-example", "display_name": "Alex Carter"},
                                 {"contact_id": "contact:dana-acme-example", "display_name": "Dana Lewis"},
                             ],
                             "tags": ["Work"],
@@ -1730,7 +1730,7 @@ class TestLinkedItemsSelection:
                             "end_date": "2026-04-19T21:00:00+01:00",
                             "summary": "Went to Dana's house to hang around outside work.",
                             "people": [
-                                {"contact_id": "contact:alex-carter", "display_name": "Alex Carter"},
+                                {"contact_id": "contact:alex-example", "display_name": "Alex Carter"},
                                 {"contact_id": "contact:dana-acme-example", "display_name": "Dana Lewis"},
                             ],
                             "tags": ["Family", "visit"],

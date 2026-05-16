@@ -193,15 +193,15 @@ def test_create_coworker_relationships_skips_existing_pairs(monkeypatch):
 
 def test_extract_next_steps_supports_grouped_assignee_lists():
     content = """# Next Steps
-- Ramon
+- Alex
   - Add V1 scope topic to today's standup agenda
   - Continue exploring legal workarounds for active gamification features; loop
     in the team for ideas
-- Seb
+- Pat
   - Clearly communicate V1 scope and expectations to the team at today's standup
 """
 
-    steps = events._extract_next_steps(content, user_tokens=["Ramon"])
+    steps = events._extract_next_steps(content, user_tokens=["Alex"])
 
     assert steps == [
         "Add V1 scope topic to today's standup agenda",
@@ -211,15 +211,15 @@ def test_extract_next_steps_supports_grouped_assignee_lists():
 
 def test_extract_next_steps_supports_unicode_bullets_and_plain_name_labels():
     content = """# Next Steps
-Ramon
+Alex
   ◦ Add V1 scope topic to today's standup agenda
   ◦ Continue exploring legal workarounds for active gamification features; loop
     in the team for ideas
-Seb
+Pat
   ◦ Clearly communicate V1 scope and expectations to the team at today's standup
 """
 
-    steps = events._extract_next_steps(content, user_tokens=["Ramon"])
+    steps = events._extract_next_steps(content, user_tokens=["Alex"])
 
     assert steps == [
         "Add V1 scope topic to today's standup agenda",
@@ -229,16 +229,16 @@ Seb
 
 def test_extract_next_steps_supports_same_indent_assignee_and_task_bullets():
     content = """### Next Steps
-- Ramon
+- Alex
 - Add V1 scope topic to today's standup agenda
 - Continue exploring legal workarounds for active gamification features; loop
   in the team for ideas
-- Seb
+- Pat
 - Clearly communicate V1 scope and expectations to the team at today's standup
 - Follow up on crypto casino license option via his contact
 """
 
-    steps = events._extract_next_steps(content, user_tokens=["Ramon"])
+    steps = events._extract_next_steps(content, user_tokens=["Alex"])
 
     assert steps == [
         "Add V1 scope topic to today's standup agenda",
@@ -249,7 +249,7 @@ def test_extract_next_steps_supports_same_indent_assignee_and_task_bullets():
 def test_ingest_meeting_notes_creates_todos_from_grouped_user_section(monkeypatch):
     monkeypatch.setattr(
         "events._load_current_user_from_env",
-        lambda: {"name": "Ram\u00f3n Costa", "email": "user@example.com"},
+        lambda: {"name": "\u00c1lex Sanders", "email": "alex@example.com"},
     )
     monkeypatch.setattr("events._resolve_attendee_contacts", lambda *_args, **_kwargs: ([], {}))
     monkeypatch.setattr("events._create_coworker_relationships", lambda *_args, **_kwargs: None)
@@ -266,10 +266,10 @@ def test_ingest_meeting_notes_creates_todos_from_grouped_user_section(monkeypatc
         title="Weekly sync",
         date=datetime(2026, 2, 27, 9, 0, tzinfo=timezone.utc),
         content="""# Next Steps
-- Ramon
+- Alex
   - Share updated scope draft before Friday
   - Follow up with legal on the open licensing question
-- Seb
+- Pat
   - Align the rollout note with the team
 """,
         attendeesEmails=[],
@@ -286,7 +286,7 @@ def test_ingest_meeting_notes_creates_todos_from_grouped_user_section(monkeypatc
 def test_ingest_meeting_notes_ignores_assignee_label_with_unicode_bullets(monkeypatch):
     monkeypatch.setattr(
         "events._load_current_user_from_env",
-        lambda: {"name": "Ramon Costa", "email": "user@example.com"},
+        lambda: {"name": "Alex Sanders", "email": "alex@example.com"},
     )
     monkeypatch.setattr("events._resolve_attendee_contacts", lambda *_args, **_kwargs: ([], {}))
     monkeypatch.setattr("events._create_coworker_relationships", lambda *_args, **_kwargs: None)
@@ -303,10 +303,10 @@ def test_ingest_meeting_notes_ignores_assignee_label_with_unicode_bullets(monkey
         title="Weekly sync",
         date=datetime(2026, 2, 27, 9, 0, tzinfo=timezone.utc),
         content="""# Next Steps
-Ramon
+Alex
   ◦ Share updated scope draft before Friday
   ◦ Follow up with legal on the open licensing question
-Seb
+Pat
   ◦ Align the rollout note with the team
 """,
         attendeesEmails=[],
@@ -323,7 +323,7 @@ Seb
 def test_ingest_meeting_notes_creates_todos_from_same_indent_grouped_bullets(monkeypatch):
     monkeypatch.setattr(
         "events._load_current_user_from_env",
-        lambda: {"name": "Alex Carter", "email": "user@example.com"},
+        lambda: {"name": "Alex Carter", "email": "alex.carter@example.com"},
     )
     monkeypatch.setattr("events._resolve_attendee_contacts", lambda *_args, **_kwargs: ([], {}))
     monkeypatch.setattr("events._create_coworker_relationships", lambda *_args, **_kwargs: None)
@@ -337,14 +337,14 @@ def test_ingest_meeting_notes_creates_todos_from_same_indent_grouped_bullets(mon
 
     meeting = MeetingIn(
         id="meeting-789",
-        title="Seb / Ramon 1:1",
+        title="Pat / Alex 1:1",
         date=datetime(2026, 4, 1, 10, 59, tzinfo=timezone.utc),
         content="""### Next Steps
-- Ramon
+- Alex
 - Add V1 scope topic to today's standup agenda
 - Continue exploring legal workarounds for active gamification features; loop
   in the team for ideas
-- Seb
+- Pat
 - Clearly communicate V1 scope and expectations to the team at today's standup
 - Follow up on crypto casino license option via his contact
 """,

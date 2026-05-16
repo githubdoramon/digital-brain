@@ -76,7 +76,7 @@ def test_build_tool_message_payload_keeps_raw_detail_for_event_inspection():
             "events": [
                 {
                     "id": "event:1",
-                    "title": "Avery <> Ramon - 1:1",
+                    "title": "Avery <> Alex - 1:1",
                     "summary": "A" * 1200,
                 }
             ],
@@ -99,7 +99,7 @@ def test_build_tool_message_payload_compacts_when_budget_is_tight():
             "events": [
                 {
                     "id": "event:1",
-                    "title": "Avery <> Ramon - 1:1",
+                    "title": "Avery <> Alex - 1:1",
                     "summary": "B" * 30000,
                 }
             ],
@@ -119,7 +119,7 @@ def test_repair_reference_ids_recovers_ellipsized_event_id_from_candidates():
     state.remember_information_candidate(
         kind="event",
         candidate_id="google:na1m412fkp6aa9pjgjl5su0kv2_20260406T103000Z:b06712cd",
-        label="Avery <> Ramon - 1:1",
+        label="Avery <> Alex - 1:1",
     )
 
     repaired = coordinator._repair_reference_ids(
@@ -152,7 +152,7 @@ def test_repair_reference_ids_recovers_generic_contact_and_place_ids():
     state = AgentState(goal="Who lives at this place?")
     state.remember_information_candidate(
         kind="contact",
-        candidate_id="contact:avery-acme-xyz",
+        candidate_id="contact:avery-acme-example",
         label="Avery Hill",
     )
     state.remember_information_candidate(
@@ -170,6 +170,6 @@ def test_repair_reference_ids_recovers_generic_contact_and_place_ids():
         state=state,
     )
 
-    assert repaired["contact_id"] == "contact:avery-acme-xyz"
+    assert repaired["contact_id"] == "contact:avery-acme-example"
     assert repaired["place_id"] == "place:home-springfield-portugal"
-    assert repaired["contact_ids"] == ["contact:avery-acme-xyz"]
+    assert repaired["contact_ids"] == ["contact:avery-acme-example"]

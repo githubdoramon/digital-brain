@@ -1194,7 +1194,7 @@ Text: \"{text}\"
   * \"everyone from company Acme\" -> {{\"kind\":\"company\",\"value\":\"Acme\",\"raw\":\"everyone from company Acme\",\"deterministic\":true}}
   * \"all people from my soccer team\" -> {{\"kind\":\"group\",\"value\":\"soccer team\",\"raw\":\"my soccer team\",\"deterministic\":false}}
 - Do not use family/relationship groups as collective selectors.
-- Do NOT infer a collective selector from a singular organization mention like "I was fired from Acme" or "I met Seb at Acme".
+- Do NOT infer a collective selector from a singular organization mention like "I was fired from Acme" or "I met Pat at Acme".
 - Only return a selector when the text explicitly refers to a plural or collective set such as "everyone", "all", "team", "people", "staff", or "employees".
 
 Return ONLY valid JSON:
