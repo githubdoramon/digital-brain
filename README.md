@@ -1,6 +1,14 @@
 # Digital Brain
 
-Monorepo containing backend services and frontend client for the Digital Brain project.
+A agentic memory and orchestration system running on private local LLM infrastructure for contextual retrieval, and long-term operational intelligence for work and personal life.
+
+## Why
+
+My memory is a big piece of shit. I got tired of not remembering who was in a given event, what I got as a gift for my birthday, when is my best friend's birthday, or when I had dinner with my wife 2 weeks ago. So I decided to put all of this in the same place, and put some AI on top, because, why not?
+
+## Code quality
+
+Although I started the project caring a bit about code quality, it quickly evolved to a heavily vibe-coded repo. Sometimes I care again and review some of the code, sometimes I am just prompting from mobile and yolo push stuff. So, expect anything.
 
 ## Structure
 
