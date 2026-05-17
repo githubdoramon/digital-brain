@@ -171,6 +171,7 @@ _EVENT_MATCH_STOPWORDS = {
 }
 
 _EVENT_MATCH_QUERY_OVERLAP_FLOOR = 0.18
+_EVENT_MATCH_STRONG_QUERY_OVERLAP_FLOOR = 0.35
 _EVENT_MATCH_TITLE_OVERLAP_FLOOR = 0.34
 _EVENT_MATCH_PLACE_OVERLAP_FLOOR = 0.6
 _EVENT_MATCH_EXPLICIT_NEW_EVENT_PATTERNS = (
@@ -189,6 +190,10 @@ _EVENT_MATCH_EXPLICIT_EXISTING_EVENT_PATTERNS = (
     "update existing event",
     "existing event",
     "not a new one",
+)
+
+_EVENT_MATCH_MUTUALLY_EXCLUSIVE_TOKEN_GROUPS = (
+    {"breakfast", "brunch", "lunch", "dinner"},
 )
 
 _IMMEDIATE_PAST_PATTERNS = (
@@ -271,6 +276,17 @@ def _token_overlap_ratio(left: set[str], right: set[str]) -> float:
 
 def _normalized_event_match_text(value: Any) -> str:
     return normalize_search_text(str(value or ""))
+
+
+def _has_mutually_exclusive_token_conflict(left: set[str], right: set[str]) -> bool:
+    if not left or not right:
+        return False
+    for group in _EVENT_MATCH_MUTUALLY_EXCLUSIVE_TOKEN_GROUPS:
+        left_hits = left & group
+        right_hits = right & group
+        if left_hits and right_hits and left_hits != right_hits:
+            return True
+    return False
 
 
 def _user_explicitly_rejected_same_event(raw_message: str | None) -> bool:
@@ -1710,6 +1726,19 @@ def _find_event_matches(
         )
         place_overlap = _token_overlap_ratio(where_tokens, candidate_place_tokens)
         place_match = bool(place_id and result_place and result_place == place_id)
+        result_people = {str(cid) for cid in (result.get("people") or []) if cid}
+        people_overlap_count = len(result_people & people_id_set) if people_id_set else 0
+        has_title_conflict = (
+            bool(title_tokens)
+            and bool(candidate_title_tokens)
+            and title_overlap == 0.0
+            and query_overlap < _EVENT_MATCH_STRONG_QUERY_OVERLAP_FLOOR
+            and (place_match or people_overlap_count >= 2)
+        )
+        meal_conflict = _has_mutually_exclusive_token_conflict(
+            all_query_tokens | title_tokens,
+            candidate_title_tokens | candidate_text_tokens,
+        )
         has_content_anchor = (
             query_overlap >= _EVENT_MATCH_QUERY_OVERLAP_FLOOR
             or title_overlap >= _EVENT_MATCH_TITLE_OVERLAP_FLOOR
@@ -1717,6 +1746,18 @@ def _find_event_matches(
             or place_match
         )
         if not has_content_anchor:
+            continue
+        if not explicit_existing_event and has_title_conflict:
+            logger.info(
+                "[handle_event] Rejecting candidate %s due to weak lexical overlap with conflicting title",
+                result.get("id"),
+            )
+            continue
+        if not explicit_existing_event and meal_conflict and query_overlap < 0.5:
+            logger.info(
+                "[handle_event] Rejecting candidate %s due to mutually exclusive meal semantics",
+                result.get("id"),
+            )
             continue
         match_sources: list[str] = []
         if query_overlap >= _EVENT_MATCH_QUERY_OVERLAP_FLOOR:
@@ -1772,10 +1813,8 @@ def _find_event_matches(
                 pass
 
         if people_id_set:
-            result_people = {str(cid) for cid in (result.get("people") or []) if cid}
-            overlap = len(result_people & people_id_set)
-            if overlap:
-                normalized_score += min(15.0, 5.0 * overlap)
+            if people_overlap_count:
+                normalized_score += min(15.0, 5.0 * people_overlap_count)
                 match_sources.append("people_overlap")
 
         if place_id:

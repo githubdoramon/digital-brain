@@ -830,6 +830,39 @@ def test_extract_people_ignores_non_collective_company_mentions(monkeypatch):
     assert selectors == []
 
 
+def test_extract_people_ignores_family_like_group_selectors(monkeypatch):
+    def fake_call_llm_json(prompt, **_kwargs):
+        prompt_lower = prompt.lower()
+        if "extract collective participant selectors" in prompt_lower:
+            return {
+                "selectors": [
+                    {
+                        "kind": "group",
+                        "value": "children",
+                        "raw": "the children",
+                        "deterministic": False,
+                    },
+                    {
+                        "kind": "group",
+                        "value": "kids",
+                        "raw": "the kids",
+                        "deterministic": False,
+                    },
+                ]
+            }
+        return {"people": ["user", "my wife", "my daughter"]}
+
+    monkeypatch.setattr(resolver, "call_llm_json", fake_call_llm_json)
+
+    people, selectors = resolver.extract_people_from_text(
+        "afternoon with the children at my house. Me, wife, daughter. The kids played outside.",
+        include_collective_selectors=True,
+    )
+
+    assert people == ["user", "my wife", "my daughter"]
+    assert selectors == []
+
+
 def test_nested_relationship_reuses_prior_resolved_full_name(monkeypatch):
     monkeypatch.setattr(
         resolver.contacts_service,

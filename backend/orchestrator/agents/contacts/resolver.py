@@ -1217,6 +1217,11 @@ _EXPLICIT_COLLECTIVE_SELECTOR_PATTERN = re.compile(
     r"company|org|organization)\b"
 )
 
+_DISALLOWED_RELATIONSHIP_GROUP_SELECTOR_PATTERN = re.compile(
+    r"\b(?:family|whole family|children|child|kids|kid|wife|husband|spouse|"
+    r"daughter|son|parent|parents|mother|father|brother|sister|mom|dad)\b"
+)
+
 
 def _selector_has_explicit_collective_intent(
     *,
@@ -1225,15 +1230,30 @@ def _selector_has_explicit_collective_intent(
     value: str,
     raw: str,
 ) -> bool:
-    if kind == "group":
-        return True
-
     normalized_text = normalize_search_text(text)
-    if not _EXPLICIT_COLLECTIVE_SELECTOR_PATTERN.search(normalized_text):
-        return False
-
     normalized_raw = normalize_search_text(raw)
     normalized_value = normalize_search_text(value)
+
+    if kind == "group":
+        group_text = " ".join(part for part in (normalized_raw, normalized_value) if part).strip()
+        if group_text and _DISALLOWED_RELATIONSHIP_GROUP_SELECTOR_PATTERN.search(group_text):
+            logger.debug(
+                "[contact_resolver] Rejecting collective selector kind=%s raw=%r value=%r: family/relationship-style group",
+                kind,
+                raw,
+                value,
+            )
+            return False
+
+    if not _EXPLICIT_COLLECTIVE_SELECTOR_PATTERN.search(normalized_text):
+        logger.debug(
+            "[contact_resolver] Rejecting collective selector kind=%s raw=%r value=%r: no explicit collective intent in text",
+            kind,
+            raw,
+            value,
+        )
+        return False
+
     selector_tokens = [normalized_raw, normalized_value]
     if kind == "email_domain" and normalized_value:
         selector_tokens.append(f"@{normalized_value}")

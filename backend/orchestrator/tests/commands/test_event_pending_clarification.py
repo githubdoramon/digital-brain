@@ -1549,3 +1549,45 @@ def test_find_event_matches_widens_for_explicit_existing_request(monkeypatch):
 
     assert match.get("operation") == "update"
     assert match.get("existing_event_id") == "event:physio-9"
+
+
+def test_find_event_matches_rejects_same_day_home_false_positive_with_conflicting_title(monkeypatch):
+    extracted = {
+        "title": "Family afternoon with dinner at home",
+        "summary": "Spent the afternoon at home, had beers, and ordered Italian food for dinner.",
+        "when": event_handler.datetime.fromisoformat("2026-05-17T14:30:00+00:00"),
+        "where": "Home",
+    }
+    resolution = {
+        "contacts": [
+            {"contact_id": "contact:ramon", "display_name": "Ramon"},
+            {"contact_id": "contact:marcela", "display_name": "Marcela"},
+            {"contact_id": "contact:sophia", "display_name": "Sophia"},
+        ],
+        "matched_place": {"place_id": "place:home", "name": "Home"},
+    }
+
+    monkeypatch.setattr(event_handler, "_search_event_candidates", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(
+        event_handler,
+        "_search_event_candidates_structured",
+        lambda *_args, **_kwargs: [
+            {
+                "id": "event:lunch",
+                "title": "Japanese lunch at Caidan",
+                "summary": "Had lunch earlier that day.",
+                "score": 0.86,
+                "start_date": "2026-05-17T12:00:00+00:00",
+                "people": ["contact:ramon", "contact:marcela", "contact:sophia"],
+                "place": {"place_id": "place:home", "name": "Home"},
+            }
+        ],
+    )
+
+    match = event_handler._find_event_matches(
+        "afternoon with the children at my house. As usual having beers. We ordered Italian food for dinner.",
+        extracted,
+        resolution,
+    )
+
+    assert match == {"operation": "create", "candidates": []}
