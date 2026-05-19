@@ -70,21 +70,54 @@ export default function NotificationSettingsScreen() {
   const [activeTypeId, setActiveTypeId] = useState<string | null>(null);
   const [draftChannels, setDraftChannels] = useState<Set<NotificationChannel>>(new Set());
   const [savingTypeId, setSavingTypeId] = useState<string | null>(null);
+  const [pushSetupRequired, setPushSetupRequired] = useState(false);
 
   const activeSetting = useMemo(
     () => settings.find((item) => item.notificationType === activeTypeId) ?? null,
     [activeTypeId, settings],
   );
 
+  const syncCurrentDevicePushRegistration = useCallback(async () => {
+    if (!token) {
+      return false;
+    }
+
+    const registration = await getDeviceRegistrationIfGranted();
+    if (!registration) {
+      await SecureStore.deleteItemAsync(TOKEN_KEY);
+      return false;
+    }
+
+    await apiFetch('/mobile/devices/register', {
+      method: 'POST',
+      body: JSON.stringify(registration),
+      token,
+    });
+    await SecureStore.setItemAsync(TOKEN_KEY, registration.expoPushToken);
+    return true;
+  }, [token]);
+
   const loadSettings = useCallback(async () => {
     if (!token) {
       setIsLoading(false);
+      setPushSetupRequired(false);
       return;
     }
     setIsLoading(true);
     try {
       const response = (await apiFetch('/mobile/settings/notifications', { token })) as NotificationSettingsResponse;
-      setSettings(Array.isArray(response?.types) ? response.types : []);
+      const nextSettings = Array.isArray(response?.types) ? response.types : [];
+      setSettings(nextSettings);
+
+      const hasPushEnabled = nextSettings.some((item) => item.channels.includes('push'));
+      if (!hasPushEnabled) {
+        await SecureStore.deleteItemAsync(TOKEN_KEY);
+        setPushSetupRequired(false);
+        return;
+      }
+
+      const pushReadyOnThisInstall = await syncCurrentDevicePushRegistration();
+      setPushSetupRequired(!pushReadyOnThisInstall);
     } catch (error) {
       const authExpired = (error as Error & { authExpired?: boolean }).authExpired;
       if (authExpired) {
@@ -96,7 +129,7 @@ export default function NotificationSettingsScreen() {
     } finally {
       setIsLoading(false);
     }
-  }, [showError, signOut, token]);
+  }, [showError, signOut, syncCurrentDevicePushRegistration, token]);
 
   useFocusEffect(
     useCallback(() => {
@@ -144,6 +177,7 @@ export default function NotificationSettingsScreen() {
           token,
         });
         await SecureStore.setItemAsync(TOKEN_KEY, registration.expoPushToken);
+        setPushSetupRequired(false);
       }
 
       const updated = (await apiFetch(`/mobile/settings/notifications/${notificationType}`, {
@@ -160,6 +194,7 @@ export default function NotificationSettingsScreen() {
       const pushStillEnabled = nextSettings.some((item) => item.channels.includes('push'));
       if (!pushStillEnabled) {
         await unregisterDevice();
+        setPushSetupRequired(false);
       }
       showSuccess(
         normalizedChannels.length
@@ -274,7 +309,9 @@ export default function NotificationSettingsScreen() {
       >
         <Card style={styles.card}>
           <Text style={styles.helperText}>
-            Enable each notification type, then choose where you want to receive it.
+            {pushSetupRequired
+              ? 'Push was enabled before, but this install still needs OS permission and device registration. Open a notification type and re-enable Push on this device.'
+              : 'Enable each notification type, then choose where you want to receive it.'}
           </Text>
         </Card>
 
@@ -294,7 +331,11 @@ export default function NotificationSettingsScreen() {
               >
                 <View style={styles.rowTextWrap}>
                   <Text style={styles.rowTitle}>{item.title}</Text>
-                  <Text style={styles.rowSubtitle}>{formatChannels(item.channels)}</Text>
+                  <Text style={styles.rowSubtitle}>
+                    {item.channels.includes('push') && pushSetupRequired
+                      ? `${formatChannels(item.channels)} - setup needed on this device`
+                      : formatChannels(item.channels)}
+                  </Text>
                 </View>
                 <View style={styles.rowActions}>
                   <Switch
