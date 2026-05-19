@@ -12,7 +12,7 @@ EXPO_BATCH_SIZE = 100
 
 def send_push_notification(title: str, message: str, tokens: list[str]) -> dict[str, Any]:
     if not tokens:
-        return {"sent": 0, "success": 0, "errors": []}
+        return {"sent": 0, "success": 0, "errors": [], "tickets": []}
 
     payloads = [
         {
@@ -25,6 +25,7 @@ def send_push_notification(title: str, message: str, tokens: list[str]) -> dict[
     ]
 
     errors: list[str] = []
+    tickets: list[dict[str, Any]] = []
     success = 0
     sent = 0
 
@@ -42,7 +43,9 @@ def send_push_notification(title: str, message: str, tokens: list[str]) -> dict[
             continue
 
         results = data.get("data") or []
-        for result in results:
+        for index, result in enumerate(results):
+            token = batch[index].get("to") if index < len(batch) else None
+            tickets.append({"token": token, **result})
             if result.get("status") == "ok":
                 success += 1
             else:
@@ -53,6 +56,7 @@ def send_push_notification(title: str, message: str, tokens: list[str]) -> dict[
         "sent": sent,
         "success": success,
         "errors": errors,
+        "tickets": tickets,
     }
 
 

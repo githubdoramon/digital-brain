@@ -293,6 +293,8 @@ User Question → Intent Router → Conversational Profile Dispatch → Tool Vis
 - `GET /system/versions` – Service versions
 - `GET /system/logs` – Read recent in-memory runtime logs
 - `GET /system/logs/stream` – Stream runtime logs over SSE
+- `GET /system/notifications/devices` – List the current user's registered push devices
+- `POST /system/notifications/test` – Send a direct push test to one registered device
 - `POST /access/gate` – Face recognition (Immich)
 
 ## Frontend Structure

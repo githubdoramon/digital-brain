@@ -7,10 +7,17 @@ from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from fastapi.responses import StreamingResponse
 
 import action_logs
+import devices
 import immich_client
 from auth import get_current_user, require_service_api_key
+from notifications.channels.push import send_push_notification
 from observability.log_stream import LOG_LEVELS, get_log_buffer
-from schemas import ServiceVersionCollection
+from schemas import (
+    PushNotificationTestIn,
+    PushNotificationTestOut,
+    ServiceVersionCollection,
+    UserDeviceListOut,
+)
 from versioning import get_service_versions
 
 
@@ -87,6 +94,33 @@ def create_system_router() -> APIRouter:
             limit=limit,
         )
         return {"entries": [entry.to_dict() for entry in entries]}
+
+    @router.get("/system/notifications/devices", response_model=UserDeviceListOut)
+    def list_notification_devices(user: dict = Depends(get_current_user)):
+        email = user.get("email") or user.get("user_email")
+        if not email:
+            raise HTTPException(status_code=400, detail="User email is missing")
+        return {"devices": devices.list_user_devices(email)}
+
+    @router.post("/system/notifications/test", response_model=PushNotificationTestOut)
+    def send_test_notification(
+        payload: PushNotificationTestIn,
+        user: dict = Depends(get_current_user),
+    ):
+        email = user.get("email") or user.get("user_email")
+        if not email:
+            raise HTTPException(status_code=400, detail="User email is missing")
+
+        device = devices.get_user_device(email, payload.device_id)
+        if not device:
+            raise HTTPException(status_code=404, detail="Device not found")
+
+        push_result = send_push_notification(
+            payload.title,
+            payload.message,
+            [device["expo_push_token"]],
+        )
+        return {"device": device, **push_result}
 
     @router.post("/access/gate")
     def validate_gate_access(

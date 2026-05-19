@@ -268,9 +268,41 @@ class DeviceRegisterIn(BaseModel):
         populate_by_name = True
 
 
+class UserDeviceOut(BaseModel):
+    device_id: str = Field(alias="deviceId")
+    user_email: str = Field(alias="userEmail")
+    expo_push_token: str = Field(alias="expoPushToken")
+    platform: str
+    device_name: str | None = Field(default=None, alias="deviceName")
+    app_version: str | None = Field(default=None, alias="appVersion")
+    os_version: str | None = Field(default=None, alias="osVersion")
+    created_at: datetime | None = Field(default=None, alias="createdAt")
+    updated_at: datetime | None = Field(default=None, alias="updatedAt")
+    last_seen_at: datetime | None = Field(default=None, alias="lastSeenAt")
+
+    class Config:
+        populate_by_name = True
+
+
+class UserDeviceListOut(BaseModel):
+    devices: list[UserDeviceOut] = Field(default_factory=list)
+
+
 class PushNotificationTestIn(BaseModel):
+    device_id: str = Field(alias="deviceId")
     title: str
     message: str
+
+    class Config:
+        populate_by_name = True
+
+
+class PushNotificationTestOut(BaseModel):
+    device: UserDeviceOut
+    sent: int
+    success: int
+    errors: list[str] = Field(default_factory=list)
+    tickets: list[dict[str, object]] = Field(default_factory=list)
 
 
 class NotificationTypeSettingsOut(BaseModel):

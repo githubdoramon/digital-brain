@@ -85,3 +85,49 @@ def unregister_device(user_email: str, expo_push_token: str) -> bool:
         deleted = cur.rowcount > 0
         conn.commit()
         return deleted
+
+
+def list_user_devices(user_email: str) -> list[dict]:
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT device_id,
+                   user_email,
+                   expo_push_token,
+                   platform,
+                   device_name,
+                   app_version,
+                   os_version,
+                   created_at,
+                   updated_at,
+                   last_seen_at
+            FROM user_devices
+            WHERE user_email = %s
+            ORDER BY updated_at DESC NULLS LAST, created_at DESC NULLS LAST
+            """,
+            (user_email,),
+        )
+        return cur.fetchall() or []
+
+
+def get_user_device(user_email: str, device_id: str) -> dict | None:
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT device_id,
+                   user_email,
+                   expo_push_token,
+                   platform,
+                   device_name,
+                   app_version,
+                   os_version,
+                   created_at,
+                   updated_at,
+                   last_seen_at
+            FROM user_devices
+            WHERE user_email = %s AND device_id = %s
+            LIMIT 1
+            """,
+            (user_email, device_id),
+        )
+        return cur.fetchone()

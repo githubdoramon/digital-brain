@@ -1215,6 +1215,11 @@ export default function SystemStatusPage() {
         <p style={{ color: "#555", marginTop: "8px" }}>
           Overview of running containers, version metadata, and build timestamps exposed by the orchestrator.
         </p>
+        <p style={{ marginTop: "10px" }}>
+          <a href="/system/notifications" style={{ color: "#0b6bcb", textDecoration: "underline" }}>
+            Open push notification test page
+          </a>
+        </p>
       </div>
 
       <div
