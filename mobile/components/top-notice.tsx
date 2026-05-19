@@ -67,10 +67,12 @@ export function TopNoticeProvider({ children }: { children: React.ReactNode }) {
     [opacity, translateY]
   );
 
+  const contextValue = React.useMemo(() => ({ showNotice }), [showNotice]);
+
   const gradientColors = getGradientColors(notice.variant);
 
   return (
-    <TopNoticeContext.Provider value={{ showNotice }}>
+    <TopNoticeContext.Provider value={contextValue}>
       {children}
       {notice.visible ? (
         <Animated.View
