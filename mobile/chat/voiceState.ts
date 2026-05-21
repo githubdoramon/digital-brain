@@ -16,7 +16,12 @@ export function mergeTranscriptIntoDraft(currentDraft: string, transcript: strin
 }
 
 export function normalizeTranscriptText(text: string) {
-  return text.replace(/\s+/gu, ' ').trim();
+  const normalized = text.replace(/\s+/gu, ' ').trim();
+  return normalizeSpokenSlashCommand(normalized);
+}
+
+function normalizeSpokenSlashCommand(text: string) {
+  return text.replace(/^slash\s+([a-z][a-z0-9-]*)(?=\s|$)/iu, '/$1');
 }
 
 export function formatVoiceDuration(durationMillis: number) {
