@@ -135,7 +135,24 @@ export async function loadThreadHistory(token: string, threadId: string): Promis
 export async function restoreChatHistory(
   token: string,
   storedSession: StoredChatSession | null,
+  options?: {
+    preferStoredThread?: boolean;
+  },
 ): Promise<RestoreResult> {
+  const preferStoredThread = options?.preferStoredThread === true;
+
+  if (preferStoredThread && storedSession?.threadId) {
+    try {
+      const restored = await loadThreadHistory(token, storedSession.threadId);
+      return {
+        ...restored,
+        pendingEventId: storedSession.pendingEventId ?? null,
+      };
+    } catch {
+      // Fall back to main-session restore when the exact thread is unavailable.
+    }
+  }
+
   const mainSession = (await apiFetch('/mobile/main-session', { token })) as MainSession;
 
   const threadId = mainSession.thread_id ?? null;

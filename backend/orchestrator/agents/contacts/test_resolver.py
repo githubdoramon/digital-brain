@@ -260,6 +260,18 @@ def test_fast_extract_people_from_text_handles_bare_family_mentions_in_with_list
     assert "wife" in people
 
 
+def test_fast_extract_people_from_text_includes_leading_named_subject():
+    people, selectors, applied = _fast_extract_people_from_text(
+        "Marcela is going out with Paulinha and Rosana at 20h, to O Rio, at Barreiro."
+    )
+
+    assert applied is True
+    assert selectors == []
+    assert "Marcela" in people
+    assert "Paulinha" in people
+    assert "Rosana" in people
+
+
 def test_resolve_contacts_from_text_merges_llm_people_when_fast_path_is_incomplete():
     with (
         patch(

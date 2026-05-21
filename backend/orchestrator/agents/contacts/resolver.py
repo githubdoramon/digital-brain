@@ -150,6 +150,9 @@ _LIST_WITH_CONTEXT_PATTERN = re.compile(
 )
 _LIST_SPLIT_PATTERN = re.compile(r"\s*(?:,|&|\band\b|\bplus\b)\s*", re.IGNORECASE)
 _PRECEDING_PLACE_PREPOSITION_PATTERN = re.compile(r"(?:^|\s)(?:at|in|near|inside)\s*$", re.IGNORECASE)
+_LEADING_SUBJECT_PERSON_PATTERN = re.compile(
+    rf"^\s*(?P<subject>(?:Dr\.|Mr\.|Mrs\.|Ms\.|Prof\.)?\s*{_SHORT_CIRCUIT_NAME_TOKEN}(?:\s+{_SHORT_CIRCUIT_NAME_TOKEN}){{0,2}})\s+(?:(?i:is|was)\s+(?:going|meeting|visiting|calling|seeing|having|joining|attending|heading)\b|(?i:went|met|visited|called|saw|joined|attended|headed|left|came|had)\b)"
+)
 _CONTACT_RESOLUTION_MODEL_OVERRIDE: ContextVar[str | None] = ContextVar(
     "contact_resolution_model_override", default=None
 )
@@ -606,6 +609,17 @@ def _extract_people_from_with_lists(text: str) -> list[str]:
     return mentions
 
 
+def _extract_leading_subject_person(text: str) -> list[str]:
+    match = _LEADING_SUBJECT_PERSON_PATTERN.search(text)
+    if not match:
+        return []
+
+    candidate = str(match.group("subject") or "").strip(" .,!?;:\"'")
+    if not _looks_like_list_person_mention(candidate):
+        return []
+    return [candidate]
+
+
 def _merge_people_mentions(*batches: list[str]) -> list[str]:
     merged: list[str] = []
     seen: set[str] = set()
@@ -737,6 +751,10 @@ def _fast_extract_people_from_text(
             explicit_people_count += 1
 
     for candidate in _extract_people_from_with_lists(raw_text):
+        if _append_person(candidate):
+            explicit_people_count += 1
+
+    for candidate in _extract_leading_subject_person(raw_text):
         if _append_person(candidate):
             explicit_people_count += 1
 
