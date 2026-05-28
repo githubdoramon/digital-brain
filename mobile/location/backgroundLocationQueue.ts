@@ -198,6 +198,7 @@ async function drainQueuedBackgroundLocationsInner(trigger: DrainTrigger): Promi
       recordInHistory: false,
     });
 
+    const requestStartedAt = Date.now();
     try {
       await apiFetch('/mobile/location', {
         method: 'POST',
@@ -233,6 +234,7 @@ async function drainQueuedBackgroundLocationsInner(trigger: DrainTrigger): Promi
         payload: {
           request_attempted: true,
           request_completed: true,
+          request_duration_ms: Date.now() - requestStartedAt,
           debug_request_id: entry.debugRequestId,
           batch_id: entry.batchId,
           sample_index: entry.sampleIndex,
@@ -273,6 +275,7 @@ async function drainQueuedBackgroundLocationsInner(trigger: DrainTrigger): Promi
           reason: describeSyncFailure(fetchError),
           request_attempted: true,
           request_completed: !fetchError.fetchFailed,
+          request_duration_ms: Date.now() - requestStartedAt,
           debug_request_id: entry.debugRequestId,
           batch_id: entry.batchId,
           sample_index: entry.sampleIndex,

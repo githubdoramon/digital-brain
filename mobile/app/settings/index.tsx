@@ -45,7 +45,10 @@ import {
 import {
   getLocationDebugSnapshot,
   buildLocationDebugLogText,
+  getLocationDebugLogInfo,
   hydrateLocationDebugSnapshot,
+  isBackgroundRelevantLocationEvent,
+  readLocationDebugLogText,
   subscribeLocationDebug,
   type LocationDebugEvent,
   type LocationDebugSnapshot,
@@ -120,6 +123,10 @@ function LocationDebugEventRow({ event }: { event: LocationDebugEvent }) {
   );
 }
 
+function getRelevantBackgroundEvents(snapshot: LocationDebugSnapshot): LocationDebugEvent[] {
+  return (snapshot.eventLog ?? []).filter(isBackgroundRelevantLocationEvent);
+}
+
 export default function SettingsScreen() {
   const router = useRouter();
   const { signOut } = useAuth();
@@ -132,6 +139,10 @@ export default function SettingsScreen() {
   const [backgroundStatus, setBackgroundStatus] = React.useState<BackgroundLocationDebugStatus | null>(null);
   const [isRefreshingLocationDebug, setIsRefreshingLocationDebug] = React.useState(false);
   const [isExportingLocationDebug, setIsExportingLocationDebug] = React.useState(false);
+  const [locationDebugLogInfo, setLocationDebugLogInfo] = React.useState<{ exists: boolean; sizeBytes: number }>({
+    exists: false,
+    sizeBytes: 0,
+  });
   const [eventPhotoDebugInfo, setEventPhotoDebugInfo] = React.useState<{ exists: boolean; sizeBytes: number }>({
     exists: false,
     sizeBytes: 0,
@@ -164,6 +175,7 @@ export default function SettingsScreen() {
       const status = await getBackgroundLocationDebugStatus();
       setBackgroundStatus(status);
       setLocationDebug(await hydrateLocationDebugSnapshot());
+      setLocationDebugLogInfo(await getLocationDebugLogInfo());
       setEventPhotoDebugInfo(await getEventPhotoDebugLogInfo());
       setVoiceDebugInfo(await getVoiceTranscriptionDebugInfo());
     } finally {
@@ -179,13 +191,22 @@ export default function SettingsScreen() {
     return unsubscribe;
   }, [refreshLocationDebug]);
 
+  const backgroundEvents = React.useMemo(() => getRelevantBackgroundEvents(locationDebug), [locationDebug]);
+  const lastBackgroundEvent = backgroundEvents[0] ?? null;
+  const backgroundFailures = React.useMemo(
+    () => (locationDebug.recentFailures ?? []).filter(isBackgroundRelevantLocationEvent),
+    [locationDebug],
+  );
+
   const exportLocationDebug = React.useCallback(async () => {
     setIsExportingLocationDebug(true);
     try {
       const currentSnapshot = await hydrateLocationDebugSnapshot();
-      const logText = buildLocationDebugLogText(currentSnapshot);
+      const logText =
+        (await readLocationDebugLogText({ backgroundOnly: true })) ||
+        buildLocationDebugLogText(currentSnapshot, { backgroundOnly: true });
       const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-      const fileName = `digital-brain-location-debug-${timestamp}.txt`;
+      const fileName = `digital-brain-background-location-debug-${timestamp}.txt`;
       const tempFileUri = `${FileSystem.cacheDirectory ?? FileSystem.documentDirectory}${fileName}`;
       await FileSystem.writeAsStringAsync(tempFileUri, logText, {
         encoding: FileSystem.EncodingType.UTF8,
@@ -209,6 +230,7 @@ export default function SettingsScreen() {
         await FileSystem.writeAsStringAsync(targetUri, base64Content, {
           encoding: FileSystem.EncodingType.Base64,
         });
+        setLocationDebugLogInfo(await getLocationDebugLogInfo());
         showSuccess(`Saved to Downloads as ${fileName}.`);
         return;
       }
@@ -218,8 +240,9 @@ export default function SettingsScreen() {
         message: logText,
         title: fileName,
       });
+      setLocationDebugLogInfo(await getLocationDebugLogInfo());
     } catch (error) {
-      const message = error instanceof Error ? error.message : 'Failed to export location debug log.';
+      const message = error instanceof Error ? error.message : 'Failed to export background location debug log.';
       showError(message);
     } finally {
       setIsExportingLocationDebug(false);
@@ -528,7 +551,7 @@ export default function SettingsScreen() {
         </Card>
 
         <Card style={[styles.card, styles.versionCard]}>
-          <Text style={styles.versionLabel}>Location debug</Text>
+          <Text style={styles.versionLabel}>Background location sync</Text>
           <Text style={styles.versionValue}>Foreground permission: {backgroundStatus?.foregroundPermission ?? 'unknown'}</Text>
           <Text style={styles.versionValue}>Background permission: {backgroundStatus?.backgroundPermission ?? 'unknown'}</Text>
           <Text style={styles.versionValue}>Location services enabled: {backgroundStatus?.locationServicesEnabled == null ? 'unknown' : backgroundStatus.locationServicesEnabled ? 'yes' : 'no'}</Text>
@@ -545,25 +568,29 @@ export default function SettingsScreen() {
           <Text style={styles.versionValue}>Queued background locations: {backgroundStatus?.queuedLocationCount ?? 0}</Text>
           <Text style={styles.versionValue}>Oldest queued capture: {formatBuildTimestamp(backgroundStatus?.oldestQueuedCapturedAt)}</Text>
           <Text style={styles.versionValue}>Newest queued capture: {formatBuildTimestamp(backgroundStatus?.newestQueuedCapturedAt)}</Text>
-          <Text style={styles.versionValue}>Last event: {locationDebug.lastEventName ?? 'none'}</Text>
-          <Text style={styles.versionValue}>Last event at: {formatBuildTimestamp(locationDebug.lastEventAt)}</Text>
-          <Text style={styles.versionValue}>Last message: {locationDebug.lastMessage ?? 'none'}</Text>
-          <Text style={styles.versionValue}>Last error: {locationDebug.lastError ?? 'none'}</Text>
-          <Text style={styles.versionValue}>Last captured at: {formatBuildTimestamp(getPayloadString(locationDebug.lastPayload, 'captured_at'))}</Text>
+          <Text style={styles.versionValue}>Background log file: {locationDebugLogInfo.exists ? 'yes' : 'no'}</Text>
+          <Text style={styles.versionValue}>Background log size: {locationDebugLogInfo.sizeBytes} bytes</Text>
+          <Text style={styles.versionValue}>Background event count: {backgroundEvents.length}</Text>
+          <Text style={styles.versionValue}>Last background event: {lastBackgroundEvent?.eventName ?? 'none'}</Text>
+          <Text style={styles.versionValue}>Last background event at: {formatBuildTimestamp(lastBackgroundEvent?.at)}</Text>
+          <Text style={styles.versionValue}>Last background message: {lastBackgroundEvent?.message ?? 'none'}</Text>
+          <Text style={styles.versionValue}>Last background error: {lastBackgroundEvent?.error ?? 'none'}</Text>
+          <Text style={styles.versionValue}>Last captured at: {formatBuildTimestamp(getPayloadString(lastBackgroundEvent?.payload, 'captured_at'))}</Text>
           <Text style={styles.versionValue}>
-            Last batch window: {formatBuildTimestamp(getPayloadString(locationDebug.lastPayload, 'batch_first_captured_at'))} - {formatBuildTimestamp(getPayloadString(locationDebug.lastPayload, 'batch_last_captured_at'))}
+            Last batch window: {formatBuildTimestamp(getPayloadString(lastBackgroundEvent?.payload, 'batch_first_captured_at'))} - {formatBuildTimestamp(getPayloadString(lastBackgroundEvent?.payload, 'batch_last_captured_at'))}
           </Text>
-          <Text style={styles.versionValue}>Last request URL: {getPayloadString(locationDebug.lastPayload, 'request_url')}</Text>
-          <Text style={styles.versionValue}>Last status: {getPayloadNumber(locationDebug.lastPayload, 'status')}</Text>
-          <Text style={styles.versionValue}>Last content type: {getPayloadString(locationDebug.lastPayload, 'content_type')}</Text>
-          <Text style={styles.versionValue}>Last app state: {getPayloadString(locationDebug.lastPayload, 'app_state')}</Text>
-          <Text style={styles.versionValue}>Last token present: {getPayloadBoolean(locationDebug.lastPayload, 'token_present')}</Text>
-          <Text style={styles.versionValue}>Last token fingerprint: {getPayloadString(locationDebug.lastPayload, 'token_fingerprint')}</Text>
-          <Text style={styles.versionValue}>Last token expires at: {formatBuildTimestamp(getPayloadString(locationDebug.lastPayload, 'token_expires_at'))}</Text>
-          <Text style={styles.versionValue}>Last token expires in: {getPayloadNumber(locationDebug.lastPayload, 'token_expires_in_seconds')}</Text>
-          <Text style={styles.versionValue}>Last token expired: {getPayloadBoolean(locationDebug.lastPayload, 'token_is_expired')}</Text>
-          <Text style={styles.versionValue}>Last sample count: {getPayloadNumber(locationDebug.lastPayload, 'sample_count')}</Text>
-          <Text style={styles.versionValue}>Last payload: {formatDebugPayload(locationDebug.lastPayload)}</Text>
+          <Text style={styles.versionValue}>Last request URL: {getPayloadString(lastBackgroundEvent?.payload, 'request_url')}</Text>
+          <Text style={styles.versionValue}>Last status: {getPayloadNumber(lastBackgroundEvent?.payload, 'status')}</Text>
+          <Text style={styles.versionValue}>Last content type: {getPayloadString(lastBackgroundEvent?.payload, 'content_type')}</Text>
+          <Text style={styles.versionValue}>Last app state: {getPayloadString(lastBackgroundEvent?.payload, 'app_state')}</Text>
+          <Text style={styles.versionValue}>Last duration: {getPayloadNumber(lastBackgroundEvent?.payload, 'request_duration_ms')} ms</Text>
+          <Text style={styles.versionValue}>Last token present: {getPayloadBoolean(lastBackgroundEvent?.payload, 'token_present')}</Text>
+          <Text style={styles.versionValue}>Last token fingerprint: {getPayloadString(lastBackgroundEvent?.payload, 'token_fingerprint')}</Text>
+          <Text style={styles.versionValue}>Last token expires at: {formatBuildTimestamp(getPayloadString(lastBackgroundEvent?.payload, 'token_expires_at'))}</Text>
+          <Text style={styles.versionValue}>Last token expires in: {getPayloadNumber(lastBackgroundEvent?.payload, 'token_expires_in_seconds')}</Text>
+          <Text style={styles.versionValue}>Last token expired: {getPayloadBoolean(lastBackgroundEvent?.payload, 'token_is_expired')}</Text>
+          <Text style={styles.versionValue}>Last sample count: {getPayloadNumber(lastBackgroundEvent?.payload, 'sample_count')}</Text>
+          <Text style={styles.versionValue}>Last payload: {formatDebugPayload(lastBackgroundEvent?.payload)}</Text>
           <Text style={styles.versionValue}>Last success at: {formatBuildTimestamp(locationDebug.lastSuccessAt)}</Text>
           <Text style={styles.versionValue}>Total successes: {locationDebug.totalSuccessCount ?? 0}</Text>
           <Text style={styles.versionValue}>
@@ -578,20 +605,28 @@ export default function SettingsScreen() {
             style={styles.debugRefreshButton}
           />
           <Button
-            label={isExportingLocationDebug ? 'Exporting...' : 'Export mobile logs'}
+            label={isExportingLocationDebug ? 'Exporting...' : 'Download background location log'}
             onPress={() => {
               void exportLocationDebug();
             }}
             variant="secondary"
             style={styles.debugRefreshButton}
           />
-          <Text style={styles.versionLabel}>Recent failures</Text>
-          {(locationDebug.recentFailures ?? []).length ? (
-            locationDebug.recentFailures?.map((event) => (
+          <Text style={styles.versionLabel}>Background failures</Text>
+          {backgroundFailures.length ? (
+            backgroundFailures.map((event) => (
               <LocationDebugEventRow key={`${event.at}-${event.eventName}`} event={event} />
             ))
           ) : (
-            <Text style={styles.versionValue}>No stored failures yet.</Text>
+            <Text style={styles.versionValue}>No stored background failures yet.</Text>
+          )}
+          <Text style={styles.versionLabel}>Recent background activity</Text>
+          {backgroundEvents.length ? (
+            backgroundEvents.slice(0, 20).map((event) => (
+              <LocationDebugEventRow key={`${event.at}-${event.eventName}`} event={event} />
+            ))
+          ) : (
+            <Text style={styles.versionValue}>No stored background activity yet.</Text>
           )}
         </Card>
 
