@@ -48,6 +48,13 @@ type NotificationSettingsResponse = {
   types: NotificationTypeSetting[];
 };
 
+type DiagnosticError = Error & {
+  status?: number;
+  bodyPreview?: string;
+  requestUrl?: string;
+  fetchFailed?: boolean;
+};
+
 const TOKEN_KEY = 'digitalbrain.expoPushToken';
 const CHANNELS: NotificationChannel[] = ['push', 'email'];
 
@@ -116,8 +123,15 @@ export default function NotificationSettingsScreen() {
         return;
       }
 
-      const pushReadyOnThisInstall = await syncCurrentDevicePushRegistration();
-      setPushSetupRequired(!pushReadyOnThisInstall);
+      try {
+        const pushReadyOnThisInstall = await syncCurrentDevicePushRegistration();
+        setPushSetupRequired(!pushReadyOnThisInstall);
+      } catch (error) {
+        console.warn('[notifications] Could not sync push registration while loading settings', {
+          error: error instanceof Error ? error.message : String(error),
+        });
+        setPushSetupRequired(true);
+      }
     } catch (error) {
       const authExpired = (error as Error & { authExpired?: boolean }).authExpired;
       if (authExpired) {
@@ -151,11 +165,17 @@ export default function NotificationSettingsScreen() {
     async (notificationType: string, channels: NotificationChannel[]) => {
       if (!token) return;
       const normalizedChannels = [...new Set(channels)];
+      console.info('[notifications] Persisting channels', {
+        notificationType,
+        channels: normalizedChannels,
+      });
 
       const hasPush = normalizedChannels.includes('push');
       if (hasPush) {
+        console.info('[notifications] Push channel selected; checking current device registration');
         let registration = await getDeviceRegistrationIfGranted();
         if (!registration) {
+          console.info('[notifications] No existing push registration; requesting one');
           registration = await registerForPushNotifications();
         }
         if (!registration) {
@@ -171,6 +191,10 @@ export default function NotificationSettingsScreen() {
           await persistChannels(notificationType, fallbackChannels);
           return;
         }
+        console.info('[notifications] Registering device with backend', {
+          platform: registration.platform,
+          tokenPrefix: registration.expoPushToken.slice(0, 18),
+        });
         await apiFetch('/mobile/devices/register', {
           method: 'POST',
           body: JSON.stringify(registration),
@@ -220,6 +244,15 @@ export default function NotificationSettingsScreen() {
             Alert.alert('Session expired', 'Please sign in again.');
             return;
           }
+          const diagnosticError = error as DiagnosticError;
+          console.error('[notifications] Could not disable notification type', {
+            notificationType: item.notificationType,
+            status: diagnosticError.status,
+            bodyPreview: diagnosticError.bodyPreview,
+            requestUrl: diagnosticError.requestUrl,
+            fetchFailed: diagnosticError.fetchFailed,
+            message: diagnosticError.message,
+          });
           showError('We could not save notification settings.');
         } finally {
           setIsSaving(false);
@@ -269,6 +302,16 @@ export default function NotificationSettingsScreen() {
         Alert.alert('Session expired', 'Please sign in again.');
         return;
       }
+      const diagnosticError = error as DiagnosticError;
+      console.error('[notifications] Could not save notification type channels', {
+        notificationType: activeSetting.notificationType,
+        channels: selectedChannels,
+        status: diagnosticError.status,
+        bodyPreview: diagnosticError.bodyPreview,
+        requestUrl: diagnosticError.requestUrl,
+        fetchFailed: diagnosticError.fetchFailed,
+        message: diagnosticError.message,
+      });
       showError('We could not save notification settings.');
     } finally {
       setIsSaving(false);
