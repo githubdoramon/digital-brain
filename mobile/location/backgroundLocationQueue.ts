@@ -18,6 +18,7 @@ let drainInFlight: Promise<{
   remainingQueueSize: number;
 }> | null = null;
 let drainRerunRequested = false;
+let queueMutationInFlight: Promise<void> = Promise.resolve();
 
 export type QueuedBackgroundLocationEntry = {
   id: string;
@@ -98,12 +99,61 @@ async function writeQueue(queue: QueuedBackgroundLocationEntry[]): Promise<void>
   await AsyncStorage.setItem(BACKGROUND_LOCATION_QUEUE_KEY, JSON.stringify(queue));
 }
 
+async function mutateQueue<T>(
+  mutator:
+    | ((queue: QueuedBackgroundLocationEntry[]) => Promise<{
+        queue: QueuedBackgroundLocationEntry[];
+        result: T;
+      }>)
+    | ((queue: QueuedBackgroundLocationEntry[]) => {
+        queue: QueuedBackgroundLocationEntry[];
+        result: T;
+      }),
+): Promise<T> {
+  let result!: T;
+
+  queueMutationInFlight = queueMutationInFlight
+    .catch(() => undefined)
+    .then(async () => {
+      const queue = await readQueue();
+      const mutation = await mutator(queue);
+      await writeQueue(mutation.queue);
+      result = mutation.result;
+    });
+
+  await queueMutationInFlight;
+  return result;
+}
+
 export async function enqueueBackgroundLocationEntry(entry: QueuedBackgroundLocationEntry): Promise<void> {
-  const queue = await readQueue();
-  if (queue.some((item) => item.id === entry.id)) {
+  const outcome = await mutateQueue((queue) => {
+    if (queue.some((item) => item.id === entry.id)) {
+      return {
+        queue,
+        result: {
+          deduped: true,
+          queueSize: queue.length,
+        },
+      };
+    }
+
+    const nextQueue = [entry, ...queue]
+      .sort((first, second) => first.capturedAtMs - second.capturedAtMs)
+      .slice(-MAX_QUEUED_BACKGROUND_LOCATIONS);
+
+    return {
+      queue: nextQueue,
+      result: {
+        deduped: false,
+        queueSize: nextQueue.length,
+      },
+    };
+  });
+
+  if (outcome.deduped) {
     reportLocationDebugEvent('background_queue_deduped', {
       payload: {
-        queue_size: queue.length,
+        queue_size: outcome.queueSize,
         debug_request_id: entry.debugRequestId,
         batch_id: entry.batchId,
       },
@@ -112,11 +162,9 @@ export async function enqueueBackgroundLocationEntry(entry: QueuedBackgroundLoca
     return;
   }
 
-  const nextQueue = [entry, ...queue].sort((first, second) => first.capturedAtMs - second.capturedAtMs).slice(-MAX_QUEUED_BACKGROUND_LOCATIONS);
-  await writeQueue(nextQueue);
   reportLocationDebugEvent('background_queue_enqueued', {
     payload: {
-      queue_size: nextQueue.length,
+      queue_size: outcome.queueSize,
       debug_request_id: entry.debugRequestId,
       batch_id: entry.batchId,
       captured_at: entry.capturedAt,
@@ -227,8 +275,13 @@ async function drainQueuedBackgroundLocationsInner(trigger: DrainTrigger): Promi
         }),
       });
 
-      queue = queue.filter((item) => item.id !== entry.id);
-      await writeQueue(queue);
+      queue = await mutateQueue((currentQueue) => {
+        const nextQueue = currentQueue.filter((item) => item.id !== entry.id);
+        return {
+          queue: nextQueue,
+          result: nextQueue,
+        };
+      });
       drainedCount += 1;
       reportLocationDebugEvent('background_sync_success', {
         payload: {
@@ -258,16 +311,22 @@ async function drainQueuedBackgroundLocationsInner(trigger: DrainTrigger): Promi
       });
     } catch (error) {
       const fetchError = error as ApiFetchError;
-      queue = queue.map((item) =>
-        item.id === entry.id
-          ? {
-              ...item,
-              attemptCount: item.attemptCount + 1,
-              lastAttemptAt: new Date().toISOString(),
-            }
-          : item,
-      );
-      await writeQueue(queue);
+      queue = await mutateQueue((currentQueue) => {
+        const lastAttemptAt = new Date().toISOString();
+        const nextQueue = currentQueue.map((item) =>
+          item.id === entry.id
+            ? {
+                ...item,
+                attemptCount: item.attemptCount + 1,
+                lastAttemptAt,
+              }
+            : item,
+        );
+        return {
+          queue: nextQueue,
+          result: nextQueue,
+        };
+      });
       reportLocationDebugEvent('background_sync_error', {
         message: fetchError.message,
         error,
