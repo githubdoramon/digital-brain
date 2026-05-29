@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -340,7 +340,7 @@ def test_confirm_event_applies_end_when_modification(monkeypatch):
 
     assert result.success is True
     assert captured_event["event"] is not None
-    assert captured_event["event"].end_date == datetime(2026, 2, 18, 19, 15)
+    assert captured_event["event"].end_date == datetime(2026, 2, 18, 19, 15, tzinfo=timezone.utc)
 
 
 def test_confirm_event_rejects_end_when_before_start(monkeypatch):

@@ -102,6 +102,10 @@ _FIRST_PERSON_PARTICIPANT_PATTERN = re.compile(
     r"\b(i|me|my|we|us|our)\b|^(?:had|met|visited|called|saw|went)\b",
     re.IGNORECASE,
 )
+_LEADING_TEMPORAL_FIRST_PERSON_PATTERN = re.compile(
+    r"^(?:today|yesterday|tomorrow|tonight|this\s+(?:morning|afternoon|evening)|last\s+night)\s+i\b",
+    re.IGNORECASE,
+)
 _PROFESSION_INFERENCE_SENTINEL = object()
 _PROFESSION_TITLE_CUE_PATTERN = re.compile(
     r"\b(dr\.?|prof\.?|professor|doctor|dentist|therapist|teacher|coach|trainer|lawyer|attorney|engineer|designer|developer|nurse|physician|surgeon)\b",
@@ -625,6 +629,9 @@ def _extract_leading_subject_person(text: str) -> list[str]:
         return []
 
     candidate = str(match.group("subject") or "").strip(" .,!?;:\"'")
+    candidate_normalized = normalize_search_text(candidate)
+    if _LEADING_TEMPORAL_FIRST_PERSON_PATTERN.match(candidate_normalized):
+        return []
     if not _looks_like_list_person_mention(candidate):
         return []
     return [candidate]
@@ -1407,6 +1414,13 @@ For possessive org titles, output ONE person mention only, formatted as "<title>
                 # Skip second-person pronouns
                 if person_lower in ["you", "your", "yours", "yourself"]:
                     logger.info("[contact_resolver] Skipping second-person pronoun: '%s'", person)
+                    continue
+
+                if _LEADING_TEMPORAL_FIRST_PERSON_PATTERN.match(person_lower):
+                    logger.info(
+                        "[contact_resolver] Skipping malformed temporal first-person extraction: '%s'",
+                        person,
+                    )
                     continue
 
                 filtered_people.append(person)
