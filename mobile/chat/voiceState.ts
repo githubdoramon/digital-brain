@@ -21,7 +21,7 @@ export function normalizeTranscriptText(text: string) {
 }
 
 function normalizeSpokenSlashCommand(text: string) {
-  return text.replace(/^[sS]lash\s+([a-z][a-z0-9-]*)(?=\s|$)/iu, '/$1');
+  return text.replace(/^[sS]lash[\s,.:;!?-]+([a-z][a-z0-9-]*)(?=\b|[\s,.:;!?-]|$)/iu, '/$1');
 }
 
 export function formatVoiceDuration(durationMillis: number) {
