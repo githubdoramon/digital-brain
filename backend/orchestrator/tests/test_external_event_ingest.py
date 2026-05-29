@@ -109,6 +109,42 @@ def test_ingest_external_event_authoritatively_replaces_people_and_place_but_kee
     assert captured[0].summary == "Old summary"
 
 
+def test_ingest_external_event_collects_attendees_from_raw_payload(monkeypatch):
+    monkeypatch.setattr("events._get_event_id_by_external_id", lambda _external_id: None)
+    monkeypatch.setattr("events._find_matching_meeting_event", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr("events._get_event_by_id", lambda _event_id: None)
+    monkeypatch.setattr("events._load_current_user_from_env", lambda: None)
+    monkeypatch.setattr(
+        "events._resolve_attendee_contacts",
+        lambda attendee_emails, **_kwargs: (list(attendee_emails), {}),
+    )
+    monkeypatch.setattr("events._create_coworker_relationships", lambda *_args, **_kwargs: None)
+
+    captured: list[EventIn] = []
+    monkeypatch.setattr("events.ingest_event", lambda event: captured.append(event))
+
+    payload = ExternalEventPayload(
+        event=EventIn(
+            id="ghi789",
+            startDate=datetime(2026, 2, 26, 11, 0, tzinfo=timezone.utc),
+            title="Partner sync",
+            raw={
+                "attendees": [
+                    {"email": "alex@example.com", "displayName": "Alex Carter"},
+                    {"address": "dana@example.com"},
+                    "alex@example.com",
+                ]
+            },
+        ),
+        externalType="google",
+    )
+
+    events.ingest_external_event(payload)
+
+    assert len(captured) == 1
+    assert captured[0].people == ["alex@example.com", "dana@example.com"]
+
+
 def test_merge_event_stays_additive_by_default():
     existing = {
         "id": "event:additive",
@@ -169,6 +205,21 @@ def test_resolve_attendee_contacts_groups_all_attendees_by_domain(monkeypatch):
         "contact:me",
     ]
     assert attendee_contacts_by_domain["other.com"] == ["contact:carol"]
+
+
+def test_event_in_normalizes_attendees_alias_and_objects():
+    event = EventIn(
+        id="google:alias-test",
+        startDate=datetime(2026, 2, 28, 10, 0, tzinfo=timezone.utc),
+        title="Alias test",
+        attendees=[
+            {"email": "alex@example.com"},
+            {"address": "dana@example.com"},
+            "alex@example.com",
+        ],
+    )
+
+    assert event.attendees_emails == ["alex@example.com", "dana@example.com"]
 
 
 def test_create_coworker_relationships_skips_existing_pairs(monkeypatch):

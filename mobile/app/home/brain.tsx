@@ -278,6 +278,27 @@ function conciseBackendErrorMessage(error: unknown, fallback: string): string {
   return detail.length > 220 ? `${detail.slice(0, 217).trimEnd()}...` : detail;
 }
 
+function shouldKeepPendingRun(error: unknown): boolean {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+  const typedError = error as Error & { isReconnectable?: boolean };
+  if (typedError.isReconnectable === true) {
+    return true;
+  }
+  if (typedError.isReconnectable === false) {
+    return false;
+  }
+  const message = typedError.message.toLowerCase();
+  return (
+    message.includes('connection abort') ||
+    message.includes('network request failed') ||
+    message.includes('stream ended before final response bundle') ||
+    message.includes('timed out waiting for run to complete') ||
+    message.includes('terminated')
+  );
+}
+
 function formatFieldLabel(fieldId: string): string {
   return fieldId
     .replace(/_/g, ' ')
@@ -1357,8 +1378,26 @@ export function ChatConversationScreen({
         setMessages(restored.messages);
       }
       await clearPendingRun();
-    } catch {
-      // Keep pending run marker for another retry on next foreground.
+    } catch (error) {
+      if (shouldKeepPendingRun(error)) {
+        return;
+      }
+      updatePendingMessage(conciseBackendErrorMessage(error, 'I hit a snag reaching the brain.'));
+      setMessages((prev) =>
+        prev.map((message) =>
+          message.id === pendingRun.pendingMessageId
+            ? {
+                ...message,
+                pending: false,
+                metadata: {
+                  ...message.metadata,
+                  request_error: backendErrorDetails(error),
+                },
+              }
+            : message,
+        ),
+      );
+      await clearPendingRun();
     }
   }, [isMainChat, pendingEventId, token]);
 
@@ -1695,7 +1734,8 @@ export function ChatConversationScreen({
         return;
       }
       const requestError = backendErrorDetails(error);
-      if (!activeRunId) {
+      const keepPendingRun = Boolean(activeRunId) && shouldKeepPendingRun(error);
+      if (!keepPendingRun) {
         if (isMainChat) {
           await clearPendingRun();
         }
@@ -1709,11 +1749,14 @@ export function ChatConversationScreen({
           message.id === pendingId
             ? {
                 ...message,
-                content: activeRunId
+                content: keepPendingRun
                   ? 'Reconnecting...'
-                  : 'I hit a snag reaching the brain. Try again in a moment.',
-                pending: Boolean(activeRunId),
-                metadata: activeRunId
+                  : conciseBackendErrorMessage(
+                      error,
+                      'I hit a snag reaching the brain. Try again in a moment.',
+                    ),
+                pending: keepPendingRun,
+                metadata: keepPendingRun
                   ? message.metadata
                   : {
                       ...message.metadata,

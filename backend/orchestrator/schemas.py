@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import date, datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import AliasChoices, BaseModel, Field, field_validator
 
 
 class ContactIn(BaseModel):
@@ -46,13 +46,55 @@ class EventIn(BaseModel):
     end_date: datetime | None = Field(default=None, alias="endDate")
     place_id: str | None = Field(default=None, alias="placeId")
     people: list[str] | None = Field(default_factory=list, alias="people")
-    attendees_emails: list[str] | None = Field(default=None, alias="attendeesEmails")
+    attendees_emails: list[str] | None = Field(
+        default=None,
+        alias="attendeesEmails",
+        validation_alias=AliasChoices(
+            "attendeesEmails",
+            "attendees_emails",
+            "attendees",
+            "attendeeEmails",
+        ),
+    )
     tags: list[str] | None = Field(default_factory=list)
     types: list[str] | None = Field(default_factory=list)
     title: str | None = ""
     summary: str | None = ""
     raw: dict[str, Any] | None = Field(default_factory=dict)
     external_id: str | None = Field(default=None, alias="externalId")
+
+    @field_validator("attendees_emails", mode="before")
+    @classmethod
+    def _normalize_attendee_emails(cls, value: Any) -> list[str] | None:
+        if value is None:
+            return None
+        if isinstance(value, str):
+            candidate_values = [value]
+        elif isinstance(value, (list, tuple, set)):
+            candidate_values = list(value)
+        else:
+            return None
+
+        normalized: list[str] = []
+        seen: set[str] = set()
+        for item in candidate_values:
+            email: str | None = None
+            if isinstance(item, str):
+                email = item.strip()
+            elif isinstance(item, dict):
+                for key in ("email", "mail", "address"):
+                    candidate = item.get(key)
+                    if isinstance(candidate, str) and candidate.strip():
+                        email = candidate.strip()
+                        break
+            if not email:
+                continue
+            lowered = email.lower()
+            if lowered in seen:
+                continue
+            seen.add(lowered)
+            normalized.append(email)
+        return normalized or None
 
 
 class ExternalEventPayload(BaseModel):
@@ -69,8 +111,22 @@ class MeetingIn(BaseModel):
     content: str | None = None
     date: datetime
     link: str | None = None
-    attendees_emails: list[str] | None = Field(default=None, alias="attendeesEmails")
+    attendees_emails: list[str] | None = Field(
+        default=None,
+        alias="attendeesEmails",
+        validation_alias=AliasChoices(
+            "attendeesEmails",
+            "attendees_emails",
+            "attendees",
+            "attendeeEmails",
+        ),
+    )
     tags: list[str] | None = Field(default_factory=list)
+
+    @field_validator("attendees_emails", mode="before")
+    @classmethod
+    def _normalize_attendees(cls, value: Any) -> list[str] | None:
+        return EventIn._normalize_attendee_emails(value)
 
 
 class ContactRelationshipIn(BaseModel):

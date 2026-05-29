@@ -145,6 +145,37 @@ def _resolve_attendee_contacts(
     return unique_contacts, attendee_contacts_by_domain
 
 
+def _collect_attendee_emails(*sources: Any) -> list[str]:
+    emails: list[str] = []
+    seen: set[str] = set()
+
+    def _add_items(value: Any) -> None:
+        if value is None:
+            return
+        items = [value] if isinstance(value, str) else value
+        if not isinstance(items, Sequence) or isinstance(items, (bytes, bytearray, str)):
+            return
+        for item in items:
+            email: str | None = None
+            if isinstance(item, str):
+                email = item
+            elif isinstance(item, dict):
+                for key in ("email", "mail", "address"):
+                    candidate = item.get(key)
+                    if isinstance(candidate, str) and candidate.strip():
+                        email = candidate
+                        break
+            normalized = contacts_service.normalize_email(email) if email else None
+            if not normalized or normalized in seen:
+                continue
+            seen.add(normalized)
+            emails.append(normalized)
+
+    for source in sources:
+        _add_items(source)
+    return emails
+
+
 def _get_existing_relationship_ids(relationship_ids: Sequence[str]) -> set[str]:
     if not relationship_ids:
         return set()
@@ -216,7 +247,13 @@ def ingest_external_event(payload: ExternalEventPayload) -> str:
     if existing_event:
         event = _merge_event(existing_event, event, mode=EventMergeMode.AUTHORITATIVE_EXTERNAL)
 
-    attendee_emails = event.attendees_emails or []
+    raw_payload = event.raw if isinstance(event.raw, dict) else {}
+    attendee_emails = _collect_attendee_emails(
+        event.attendees_emails,
+        raw_payload.get("attendees"),
+        raw_payload.get("attendeesEmails"),
+        raw_payload.get("attendeeEmails"),
+    )
     contact_cache: dict[str, tuple[str | None, bool]] = {}
     current_user = _load_current_user_from_env()
     unique_contacts, attendee_contacts_by_domain = _resolve_attendee_contacts(

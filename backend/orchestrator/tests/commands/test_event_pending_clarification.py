@@ -1637,6 +1637,55 @@ def test_find_event_matches_uses_structured_exact_day_search(monkeypatch):
     assert match.get("existing_event_id") == "event:physio-10"
 
 
+def test_find_event_matches_relaxes_exact_day_filters_when_existing_event_misses_one_contact(
+    monkeypatch,
+):
+    extracted = {
+        "title": "Physiotherapy session with Dana Lewis",
+        "summary": "Had physiotherapy with Dana Lewis at Monserrat Clinic.",
+        "when": event_handler.datetime.fromisoformat("2026-05-07T08:00:00"),
+        "where": "Monserrat Clinic",
+    }
+    resolution = {
+        "contacts": [
+            {"contact_id": "contact:dana", "display_name": "Dana Lewis"},
+            {"contact_id": "contact:alex", "display_name": "Alex Carter"},
+        ],
+        "matched_place": {"place_id": "place:monserrat", "name": "Monserrat Clinic"},
+    }
+    seen_filters: list[tuple[tuple[str, ...], str | None]] = []
+
+    def fake_structured(_query, _time_start, _time_end, people_ids, place_id, _limit):
+        seen_filters.append((tuple(people_ids), place_id))
+        if people_ids == ["contact:dana"] and place_id == "place:monserrat":
+            return [
+                {
+                    "id": "event:physio-11",
+                    "title": "Physiotherapy session with Dana Lewis",
+                    "summary": "Physiotherapy appointment at Monserrat Clinic.",
+                    "score": 0.86,
+                    "start_date": "2026-05-07T08:05:00",
+                    "people": ["contact:dana"],
+                    "place": {"place_id": "place:monserrat", "name": "Monserrat Clinic"},
+                }
+            ]
+        return []
+
+    monkeypatch.setattr(event_handler, "_search_event_candidates_structured", fake_structured)
+    monkeypatch.setattr(event_handler, "_search_event_candidates", lambda *_args, **_kwargs: [])
+
+    match = event_handler._find_event_matches(
+        "physiotherapy today at 8 with Dana Lewis at Monserrat Clinic",
+        extracted,
+        resolution,
+    )
+
+    assert (("contact:dana", "contact:alex"), "place:monserrat") in seen_filters
+    assert (("contact:dana",), "place:monserrat") in seen_filters
+    assert match.get("operation") == "update"
+    assert match.get("existing_event_id") == "event:physio-11"
+
+
 def test_find_event_matches_widens_for_explicit_existing_request(monkeypatch):
     extracted = {
         "title": "Physiotherapy session with Rita Castro",

@@ -48,6 +48,13 @@ type AskRunStatus = {
   error?: { code?: string; message?: string } | null;
 };
 
+type StreamRequestError = Error & {
+  status?: number;
+  authExpired?: boolean;
+  isReconnectable?: boolean;
+  errorCode?: string;
+};
+
 type StreamAskParams = {
   token?: string | null;
   question: string;
@@ -151,6 +158,12 @@ function delay(ms: number) {
 }
 
 function shouldTryRunPolling(error: unknown): boolean {
+  if (error instanceof Error) {
+    const typedError = error as StreamRequestError;
+    if (typedError.isReconnectable === false) {
+      return false;
+    }
+  }
   if (!(error instanceof Error)) {
     return false;
   }
@@ -163,6 +176,31 @@ function shouldTryRunPolling(error: unknown): boolean {
   );
 }
 
+function buildStreamRequestError(
+  message: string,
+  options?: {
+    status?: number;
+    authExpired?: boolean;
+    isReconnectable?: boolean;
+    errorCode?: string;
+  },
+): StreamRequestError {
+  const error = new Error(message) as StreamRequestError;
+  if (options?.status !== undefined) {
+    error.status = options.status;
+  }
+  if (options?.authExpired) {
+    error.authExpired = true;
+  }
+  if (options?.isReconnectable !== undefined) {
+    error.isReconnectable = options.isReconnectable;
+  }
+  if (options?.errorCode) {
+    error.errorCode = options.errorCode;
+  }
+  return error;
+}
+
 export async function waitForRunCompletion(
   runId: string,
   token: string | null | undefined,
@@ -173,7 +211,7 @@ export async function waitForRunCompletion(
   },
 ): Promise<AskResponse> {
   if (!token) {
-    throw new Error('Missing token for run polling');
+    throw buildStreamRequestError('Missing token for run polling', { isReconnectable: false });
   }
 
   const intervalMs = options?.intervalMs ?? 2000;
@@ -203,11 +241,16 @@ export async function waitForRunCompletion(
 
     if (run.status === 'failed' || run.status === 'cancelled') {
       const message = run.error?.message || 'Request failed while reconnecting';
-      throw new Error(message);
+      throw buildStreamRequestError(message, {
+        isReconnectable: false,
+        errorCode: run.error?.code,
+      });
     }
   }
 
-  throw new Error('Timed out waiting for run to complete');
+  throw buildStreamRequestError('Timed out waiting for run to complete', {
+    isReconnectable: true,
+  });
 }
 
 export async function askWithStreaming({
@@ -249,12 +292,11 @@ export async function askWithStreaming({
       // Ignore non-JSON error body and use raw text fallback.
     }
 
-    const error = new Error(detail) as Error & { status?: number; authExpired?: boolean };
-    error.status = streamResponse.status;
-    if (streamResponse.status === 401) {
-      error.authExpired = true;
-    }
-    throw error;
+    throw buildStreamRequestError(detail, {
+      status: streamResponse.status,
+      authExpired: streamResponse.status === 401,
+      isReconnectable: false,
+    });
   }
 
   const headerRunId = streamResponse.headers.get('x-ask-run-id')?.trim() || null;
@@ -335,7 +377,7 @@ export async function askWithStreaming({
         typeof event.message === 'string' && event.message.trim()
           ? event.message.trim()
           : 'Stream ended with an error';
-      throw new Error(message);
+      throw buildStreamRequestError(message, { isReconnectable: false });
     }
 
     if (event.type === 'done') {
@@ -408,7 +450,9 @@ export async function askWithStreaming({
       callbacks?.onStatus?.('Reconnecting...');
       return waitForRunCompletion(runId, token, callbacks);
     }
-    throw new Error('Stream ended before final response bundle');
+    throw buildStreamRequestError('Stream ended before final response bundle', {
+      isReconnectable: true,
+    });
   }
 
   return doneBundle;

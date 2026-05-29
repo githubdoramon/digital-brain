@@ -1515,6 +1515,32 @@ def _search_event_candidates_structured(
     ]
 
 
+def _build_structured_event_match_plans(
+    people_ids: list[str],
+    place_id: str | None,
+) -> list[tuple[list[str], str | None, str]]:
+    plans: list[tuple[list[str], str | None, str]] = []
+    seen: set[tuple[tuple[str, ...], str | None]] = set()
+
+    def _add_plan(plan_people: list[str], plan_place: str | None, label: str) -> None:
+        normalized_people = [str(contact_id).strip() for contact_id in plan_people if str(contact_id).strip()]
+        key = (tuple(normalized_people), plan_place)
+        if key in seen:
+            return
+        seen.add(key)
+        plans.append((normalized_people, plan_place, label))
+
+    if people_ids or place_id:
+        _add_plan(people_ids, place_id, "strict")
+    if place_id and people_ids:
+        _add_plan([], place_id, "place_only")
+    for contact_id in people_ids:
+        _add_plan([contact_id], place_id, "single_person_with_place" if place_id else "single_person")
+    if len(people_ids) > 1:
+        _add_plan([], None, "exact_day_text_only")
+    return plans
+
+
 _EVENT_MATCH_QUERY_CHAR_LIMIT = 240
 
 
@@ -1664,16 +1690,34 @@ def _find_event_matches(
 
     raw_results: list[dict[str, Any]] = []
     exact_day_start, exact_day_end = _compute_exact_day_match_window(extracted.get("when"))
-    if (people_ids or place_id) and exact_day_start and exact_day_end:
+    if exact_day_start and exact_day_end:
         structured_results: list[dict[str, Any]] = []
+        structured_plans = _build_structured_event_match_plans(people_ids, place_id)
         for query in queries:
-            structured_results.extend(
-                _search_event_candidates_structured(
+            for plan_people_ids, plan_place_id, plan_label in structured_plans:
+                plan_results = _search_event_candidates_structured(
                     query,
                     exact_day_start,
                     exact_day_end,
-                    people_ids,
-                    place_id,
+                    plan_people_ids,
+                    plan_place_id,
+                    EVENT_MATCH_SEARCH_LIMIT,
+                )
+                if plan_results:
+                    logger.info(
+                        "[handle_event] Event match structured pass hit: label=%s query=%r people=%d place=%s results=%d",
+                        plan_label,
+                        query,
+                        len(plan_people_ids),
+                        plan_place_id,
+                        len(plan_results),
+                    )
+                    structured_results.extend(plan_results)
+            structured_results.extend(
+                _search_event_candidates(
+                    query,
+                    exact_day_start,
+                    exact_day_end,
                     EVENT_MATCH_SEARCH_LIMIT,
                 )
             )
@@ -1816,6 +1860,17 @@ def _find_event_matches(
                 if days_apart < 0.5:
                     normalized_score += 45.0
                     match_sources.append("same_day")
+                    minutes_apart = abs(
+                        (result_when - comparable_extracted_when).total_seconds()
+                    ) / 60.0
+                    if minutes_apart <= 20:
+                        normalized_score += 14.0
+                        match_sources.append("exact_time")
+                    elif minutes_apart <= 90:
+                        normalized_score += 7.0
+                        match_sources.append("near_time")
+                    elif minutes_apart >= 360 and not explicit_existing_event:
+                        normalized_score -= 8.0
                 elif days_apart < 2:
                     normalized_score += 8.0
                     match_sources.append("near_day")
