@@ -3353,6 +3353,53 @@ def _llm_disambiguate_contact(
             "confidence": str,
         }
     """
+    def _build_relationship_summary(candidate: dict[str, Any]) -> str:
+        contact_id = str(candidate.get("contact_id") or "").strip()
+        if not contact_id:
+            return ""
+
+        relationship_context = _get_relationship_context(
+            contact_id,
+            include_contact_details=True,
+            request_context=request_context,
+        )
+        relationships = relationship_context.get("relationships") or []
+        if not isinstance(relationships, list) or not relationships:
+            return ""
+
+        fragments: list[str] = []
+        seen: set[str] = set()
+        for rel in relationships:
+            if not isinstance(rel, dict):
+                continue
+            related_contact = rel.get("related_contact") or {}
+            related_name = str(related_contact.get("display_name") or "").strip()
+            rel_type = str(rel.get("type") or "").strip().lower()
+            other_type = str(rel.get("other_type") or "").strip().lower()
+
+            if rel_type and related_name:
+                fragment = f"{rel_type} of {related_name}"
+            elif other_type and related_name:
+                fragment = f"related to {related_name} as {other_type}"
+            elif rel_type:
+                fragment = rel_type
+            elif other_type:
+                fragment = other_type
+            else:
+                continue
+
+            fragment_key = normalize_search_text(fragment)
+            if fragment_key in seen:
+                continue
+            seen.add(fragment_key)
+            fragments.append(fragment)
+            if len(fragments) >= 3:
+                break
+
+        if not fragments:
+            return ""
+        return f" | Relationships: {'; '.join(fragments)}"
+
     formatted_candidates: list[str] = []
     for i, candidate in enumerate(candidates):
         aliases = [
@@ -3361,9 +3408,10 @@ def _llm_disambiguate_contact(
         alias_suffix = f" | Aliases: {', '.join(aliases[:5])}" if aliases else ""
         reason = str(candidate.get("match_reason") or "").strip()
         reason_suffix = f" | Match hint: {reason}" if reason else ""
+        relationship_suffix = _build_relationship_summary(candidate)
         formatted_candidates.append(
             f"- {i + 1}. {candidate['display_name']} (ID: {candidate['contact_id']})"
-            f"{alias_suffix}{reason_suffix}"
+            f"{alias_suffix}{reason_suffix}{relationship_suffix}"
         )
     candidate_list = "\n".join(formatted_candidates)
 

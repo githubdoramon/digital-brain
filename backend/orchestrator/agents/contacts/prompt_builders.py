@@ -136,6 +136,7 @@ Interpretation hints:
 - If context explicitly indicates the person is not in the candidate list and is a new person, set \"new_contact\": true. Examples: the user says they met someone for the first time, or explicitly says it is a new contact.
 - If context explicitly says the person should not be added to the event or was not part of it, prefer \"cannot_decide\" with \"new_contact\": false.
 - Do not ignore explicit user clarification even if name similarity exists.
+- When candidate relationship evidence conflicts with weak name/alias similarity, prefer the relationship evidence.
 
 CRITICAL RULES:
 1. You MUST choose from the candidates above or say \"cannot_decide\"

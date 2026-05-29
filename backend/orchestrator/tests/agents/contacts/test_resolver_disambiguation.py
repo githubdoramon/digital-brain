@@ -68,6 +68,64 @@ def test_llm_disambiguation_reraises_llm_unavailable(monkeypatch):
         raise AssertionError("Expected LLMUnavailableError")
 
 
+def test_llm_disambiguation_prompt_includes_candidate_relationships(monkeypatch):
+    captured = {}
+
+    def fake_get_relationship_context(contact_id, **_kwargs):
+        if contact_id == "contact:alex-a":
+            return {
+                "relationships": [
+                    {
+                        "type": "spouse",
+                        "other_type": "spouse",
+                        "related_contact": {"display_name": "Robin Lake"},
+                    },
+                    {
+                        "type": "parent",
+                        "other_type": "child",
+                        "related_contact": {"display_name": "Jamie Vale"},
+                    },
+                ]
+            }
+        if contact_id == "contact:alex-b":
+            return {
+                "relationships": [
+                    {
+                        "type": "colleague",
+                        "other_type": "colleague",
+                        "related_contact": {"display_name": "Dana Lewis"},
+                    }
+                ]
+            }
+        return {"relationships": []}
+
+    def fake_llm(prompt, **_kwargs):
+        captured["prompt"] = prompt
+        return {
+            "decision": "cannot_decide",
+            "candidate_number": None,
+            "new_contact": False,
+            "confidence": "low",
+        }
+
+    monkeypatch.setattr(resolver, "_get_relationship_context", fake_get_relationship_context)
+    monkeypatch.setattr(resolver, "_call_contact_resolution_llm_json", fake_llm)
+
+    result = resolver._llm_disambiguate_contact(
+        person_text="Alex",
+        candidates=[
+            {"contact_id": "contact:alex-a", "display_name": "Alex Carter"},
+            {"contact_id": "contact:alex-b", "display_name": "Alex Carter"},
+        ],
+        event_context="Which Alex joined the school meeting?",
+    )
+
+    assert result["resolved"] is False
+    prompt = captured["prompt"]
+    assert "Relationships: spouse of Robin Lake; parent of Jamie Vale" in prompt
+    assert "Relationships: colleague of Dana Lewis" in prompt
+
+
 def test_llm_disambiguation_accepted_when_context_is_specific(monkeypatch):
     candidates = [
         {"contact_id": "contact:gio-a", "display_name": "Giovanni Panerai"},
@@ -101,6 +159,80 @@ def test_llm_disambiguation_accepted_when_context_is_specific(monkeypatch):
 
     assert len(resolved) == 1
     assert resolved[0]["contact_id"] == "contact:gio-a"
+    assert new == []
+    assert ambiguous == []
+
+
+def test_resolve_people_mentions_prefers_relationship_aligned_candidate(monkeypatch):
+    candidates = [
+        {
+            "contact_id": "contact:alex-a",
+            "display_name": "Alex Carter",
+            "aliases": ["Alex"],
+            "match_reason": "exact name match: alex",
+        },
+        {
+            "contact_id": "contact:alex-b",
+            "display_name": "Alex Carter",
+            "aliases": ["Alex"],
+            "match_reason": "exact name match: alex",
+        },
+    ]
+
+    monkeypatch.setattr(
+        resolver,
+        "resolve_contact",
+        lambda *_args, **_kwargs: {
+            "status": "candidates",
+            "candidates": candidates,
+        },
+    )
+
+    def fake_get_relationship_context(contact_id, **_kwargs):
+        if contact_id == "contact:alex-a":
+            return {
+                "relationships": [
+                    {
+                        "type": "spouse",
+                        "other_type": "spouse",
+                        "related_contact": {"display_name": "Robin Lake"},
+                    }
+                ]
+            }
+        if contact_id == "contact:alex-b":
+            return {
+                "relationships": [
+                    {
+                        "type": "colleague",
+                        "other_type": "colleague",
+                        "related_contact": {"display_name": "Dana Lewis"},
+                    }
+                ]
+            }
+        return {"relationships": []}
+
+    def fake_llm(prompt, **_kwargs):
+        assert "Relationships: spouse of Robin Lake" in prompt
+        assert "Relationships: colleague of Dana Lewis" in prompt
+        return {
+            "decision": "resolved",
+            "candidate_number": 1,
+            "new_contact": False,
+            "confidence": "high",
+            "reasoning": "Relationship context matches Robin mentioned in the event.",
+        }
+
+    monkeypatch.setattr(resolver, "_get_relationship_context", fake_get_relationship_context)
+    monkeypatch.setattr(resolver, "_call_contact_resolution_llm_json", fake_llm)
+
+    resolved, new, ambiguous, _cache = resolver._resolve_people_mentions(
+        people=["Alex"],
+        user_email="user@example.com",
+        full_text="When did I last meet Alex and Robin to talk about school?",
+    )
+
+    assert len(resolved) == 1
+    assert resolved[0]["contact_id"] == "contact:alex-a"
     assert new == []
     assert ambiguous == []
 
@@ -357,6 +489,7 @@ def test_llm_disambiguation_prompt_includes_aliases_and_match_hints(monkeypatch)
     prompt = captured["prompt"]
     assert "Aliases: Gio, Panerai" in prompt
     assert "Match hint: exact name match: gio" in prompt
+    assert "prefer the relationship evidence" in prompt
 
 
 def test_llm_disambiguation_prompt_includes_chronological_history(monkeypatch):
