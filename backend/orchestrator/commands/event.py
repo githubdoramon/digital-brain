@@ -22,6 +22,7 @@ from chat_media import (
     load_staged_chat_media_attachment,
     merge_staged_chat_media_attachments,
 )
+from commands.event_datetime import parse_event_datetime
 from observability.logger import get_runtime_logger
 from schemas import (
     ContactIn,
@@ -196,7 +197,7 @@ def _normalize_event_modifications(raw: Any) -> dict[str, Any]:
         else:
             when_text = str(when_raw).strip()
             try:
-                normalized["when"] = datetime.fromisoformat(when_text.replace("Z", "+00:00"))
+                normalized["when"] = parse_event_datetime(when_text)
             except ValueError as exc:
                 raise HTTPException(
                     status_code=400,
@@ -209,9 +210,7 @@ def _normalize_event_modifications(raw: Any) -> dict[str, Any]:
         else:
             end_when_text = str(end_when_raw).strip()
             try:
-                normalized["end_when"] = datetime.fromisoformat(
-                    end_when_text.replace("Z", "+00:00")
-                )
+                normalized["end_when"] = parse_event_datetime(end_when_text)
             except ValueError as exc:
                 raise HTTPException(
                     status_code=400,

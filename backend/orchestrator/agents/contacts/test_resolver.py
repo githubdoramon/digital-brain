@@ -112,8 +112,13 @@ def mock_call_llm_json(prompt: str, **kwargs) -> dict[str, Any]:
 
 
 # Patch the LLM helper module before importing anything
+class _MockLLMUnavailableError(Exception):
+    pass
+
+
 mock_llm_helpers = MagicMock()
 mock_llm_helpers.call_llm_json = mock_call_llm_json
+mock_llm_helpers.LLMUnavailableError = _MockLLMUnavailableError
 sys.modules["llm_helpers"] = mock_llm_helpers
 
 # Mock contacts module before importing
@@ -709,6 +714,33 @@ def test_resolve_contacts_mixed_results(mock_contacts):
 
         assert len(result["resolved_contacts"]) >= 1
         assert len(result["new_contacts"]) == 1
+
+
+@patch("agents.contacts.resolver.contacts_service")
+def test_resolve_contacts_from_text_participant_focus_filters_background_people(mock_contacts):
+    mock_contacts.find_self_contact.return_value = {
+        "contact_id": "user-contact-123",
+        "display_name": "Test User",
+    }
+    mock_contacts.get_contact_relationships.return_value = {"relationships": []}
+    mock_contacts.search_contacts.side_effect = [
+        [{"contact_id": "contact-dana", "display_name": "Dana Lewis", "match_score": 95}],
+        [{"contact_id": "user-contact-123", "display_name": "Test User", "match_score": 100}],
+    ]
+
+    with patch("agents.contacts.resolver.extract_people_from_text") as mock_extract:
+        with patch("agents.contacts.resolver._filter_event_participants_via_llm") as mock_filter:
+            mock_extract.return_value = ["Dana Lewis", "the company's CEO", "user"]
+            mock_filter.return_value = (["Dana Lewis", "user"], ["the company's CEO"])
+
+            result = resolve_contacts_from_text(
+                "Had a catch-up call with Dana Lewis. The company's CEO was discussed but was not part of the call.",
+                "user@example.com",
+                participant_focus=True,
+            )
+
+    assert result["people_mentioned"] == ["Dana Lewis", "user"]
+    assert all(contact["display_name"] != "the company's CEO" for contact in result["resolved_contacts"])
 
 
 def run_manual_tests():

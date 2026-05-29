@@ -2457,10 +2457,13 @@ export function ChatConversationScreen({
             const userMediaAttachments = item.metadata?.media_attachments || [];
             const isErrorExpanded = Boolean(expandedErrorMessageIds[item.id]);
             const clarificationDirectiveId = extractClarificationDirectiveId(directivesForCard);
+            const isLatestAssistantMessage = item.id === lastMessage?.id;
             const isStaleClarificationCard = Boolean(
               clarificationDirectiveId &&
                 isClarificationDirective(directivesForCard) &&
-                pendingEventId !== clarificationDirectiveId,
+                pendingEventId &&
+                pendingEventId !== clarificationDirectiveId &&
+                !isLatestAssistantMessage,
             );
 
             return (

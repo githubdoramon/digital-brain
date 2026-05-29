@@ -17,6 +17,7 @@ import events as events_service
 import places as places_service
 import retrieval
 from chat_media import merge_staged_chat_media_attachments, summarize_staged_chat_media_attachments
+from commands.event_datetime import normalize_event_datetime, parse_event_datetime
 from commands.handlers.clarification_utils import (
     build_clarification_result,
     build_clarification_storage_payload,
@@ -1035,7 +1036,7 @@ Return ONLY valid JSON in this exact format:
             if not raw:
                 return None
             try:
-                parsed = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+                parsed = parse_event_datetime(raw)
                 logger.debug("[event_extraction] Parsed %s: %s", field_name, parsed)
                 return parsed
             except (ValueError, AttributeError) as exc:
@@ -1271,14 +1272,27 @@ def _replace_generic_terms_in_text(
         return ""
 
     result = text if isinstance(text, str) else str(text)
+    normalized_pairs: list[tuple[str, str]] = []
     for generic, actual in replacements.items():
         generic_term = str(generic or "").strip()
         if not generic_term:
             continue
         replacement_text = "" if actual is None else str(actual)
-        # Case-insensitive replacement that preserves case structure
-        pattern = re.compile(re.escape(generic_term), re.IGNORECASE)
-        result = pattern.sub(replacement_text, result)
+        if normalize_search_text(generic_term) == normalize_search_text(replacement_text):
+            continue
+        normalized_pairs.append((generic_term, replacement_text))
+
+    normalized_pairs.sort(key=lambda item: len(item[0]), reverse=True)
+    placeholder_map: dict[str, str] = {}
+    for index, (generic_term, replacement_text) in enumerate(normalized_pairs):
+        escaped = re.escape(generic_term)
+        pattern = re.compile(rf"(?<!\w){escaped}(?!\w)", re.IGNORECASE)
+        placeholder = f"__EVENT_NAME_REPLACEMENT_{index}__"
+        result = pattern.sub(placeholder, result)
+        placeholder_map[placeholder] = replacement_text
+
+    for placeholder, replacement_text in placeholder_map.items():
+        result = result.replace(placeholder, replacement_text)
     return result
 
 
@@ -1363,9 +1377,9 @@ def _merge_existing_event_into_extraction(
     if existing_title:
         extracted["title"] = existing_title
     if existing.get("start_date"):
-        extracted["when"] = existing["start_date"]
+        extracted["when"] = parse_event_datetime(existing["start_date"])
     if existing.get("end_date") is not None:
-        extracted["end_when"] = existing["end_date"]
+        extracted["end_when"] = parse_event_datetime(existing["end_date"])
 
     existing_place_id = str(existing.get("place_id") or "").strip()
     if existing_place_id:
@@ -1612,11 +1626,13 @@ def _find_event_matches(
     explicit_existing_event = _user_explicitly_requested_existing_event(raw_message)
 
     time_start, time_end = _compute_event_match_window(extracted.get("when"))
-    end_when = extracted.get("end_when")
-    if isinstance(end_when, datetime) and time_end:
+    end_when = normalize_event_datetime(
+        extracted.get("end_when") if isinstance(extracted.get("end_when"), datetime) else None
+    )
+    if end_when is not None and time_end:
         try:
-            parsed_end = datetime.fromisoformat(time_end)
-            if end_when > parsed_end:
+            parsed_end = parse_event_datetime(time_end)
+            if parsed_end and end_when > parsed_end:
                 time_end = end_when.isoformat()
         except ValueError:
             pass
@@ -1638,7 +1654,9 @@ def _find_event_matches(
             if contact_id:
                 people_ids.append(contact_id)
 
-    extracted_when = extracted.get("when") if isinstance(extracted.get("when"), datetime) else None
+    extracted_when = normalize_event_datetime(
+        extracted.get("when") if isinstance(extracted.get("when"), datetime) else None
+    )
     people_id_set = set(people_ids)
     all_query_tokens = _event_match_tokens(" ".join(queries))
     title_tokens = _event_match_tokens(extracted.get("title"))
@@ -1779,20 +1797,22 @@ def _find_event_matches(
         # cancelled by a slightly more similar summary on another day.
         if extracted_when and result.get("start_date"):
             try:
-                result_when = datetime.fromisoformat(str(result["start_date"]))
-                if result_when.tzinfo and not extracted_when.tzinfo:
-                    result_when = result_when.replace(tzinfo=None)
-                elif extracted_when.tzinfo and not result_when.tzinfo:
-                    result_when = result_when.replace(tzinfo=extracted_when.tzinfo)
-                if result_when.date() != extracted_when.date() and not explicit_existing_event:
+                result_when = parse_event_datetime(result["start_date"])
+                comparable_extracted_when = normalize_event_datetime(extracted_when)
+                if result_when is None or comparable_extracted_when is None:
+                    continue
+                if (
+                    result_when.date() != comparable_extracted_when.date()
+                    and not explicit_existing_event
+                ):
                     logger.info(
                         "[handle_event] Rejecting candidate %s due to calendar-date mismatch: %s vs %s",
                         result.get("id"),
                         result_when.date(),
-                        extracted_when.date(),
+                        comparable_extracted_when.date(),
                     )
                     continue
-                days_apart = abs((result_when - extracted_when).total_seconds()) / 86400.0
+                days_apart = abs((result_when - comparable_extracted_when).total_seconds()) / 86400.0
                 if days_apart < 0.5:
                     normalized_score += 45.0
                     match_sources.append("same_day")
@@ -1915,6 +1935,7 @@ def _resolve_contacts_with_agent(
         message,
         user_email,
         conversation_messages=conversation_messages,
+        participant_focus=True,
     )
 
     group_upsert_candidates = contact_result.get("group_upsert_candidates", [])
@@ -2671,6 +2692,11 @@ def handle_event(parsed: ParsedCommand, context: dict) -> dict[str, Any]:
             ),
             context.get("event_pending_key"),
         )
+        if need_user_input is None:
+            return {
+                "type": "error",
+                "message": "I still need a few details before I can continue.",
+            }
         return build_clarification_result(
             clarification_preview_id,
             need_user_input,

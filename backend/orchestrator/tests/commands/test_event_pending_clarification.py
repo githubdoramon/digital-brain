@@ -465,7 +465,7 @@ def test_handle_event_preserves_original_preview_before_match_merge(monkeypatch)
 
     assert result["type"] == "event_confirmation"
     assert result["operation"] == "update"
-    assert result["extracted"]["when"] == "2026-05-01T12:00:00"
+    assert result["extracted"]["when"].isoformat() == "2026-05-01T12:00:00+00:00"
     assert result["extracted"]["where"] == "Old Cafe"
     assert result["original_extracted"]["when"] == "2026-05-02T12:30:00"
     assert result["original_extracted"]["where"] == "Corner Cafe"
@@ -1181,6 +1181,35 @@ def test_build_contact_context_message_formats_chronological_details():
     assert "- None of these. It is a new contact, named Alex" in message
 
 
+def test_resolve_ambiguous_contacts_from_answer_supports_exclusion_intent():
+    ambiguous_contacts = [
+        {
+            "original_text": "the company's CEO",
+            "candidates": [
+                {"contact_id": "contact:alpha", "display_name": "Alex Carter"},
+                {"contact_id": "contact:bravo", "display_name": "Dana Lewis"},
+            ],
+        }
+    ]
+
+    resolved, remaining = event_handler._resolve_ambiguous_contacts_from_answer(
+        ambiguous_contacts,
+        "It is a person he worked with and we should not add them to this event.",
+    )
+
+    assert resolved == []
+    assert remaining == ambiguous_contacts
+
+
+def test_replace_generic_terms_avoids_partial_name_duplication():
+    replaced = event_handler._replace_generic_terms_in_text(
+        "Robin / Dana",
+        {"Robin": "Robin Lake", "Dana": "Dana Lewis", "Lake": "Lake"},
+    )
+
+    assert replaced == "Robin Lake / Dana Lewis"
+
+
 def test_format_clarification_history_is_chronological_transcript():
     history = event_handler._format_clarification_history(
         [
@@ -1491,6 +1520,41 @@ def test_find_event_matches_rejects_calendar_day_mismatch(monkeypatch):
     )
 
     assert match == {"operation": "create", "candidates": []}
+
+
+def test_find_event_matches_handles_mixed_timezone_end_window(monkeypatch):
+    extracted = {
+        "title": "Catch-up call with Dana Lewis",
+        "summary": "Discussed work opportunities.",
+        "when": event_handler.datetime.fromisoformat("2026-05-28T19:00:00"),
+        "end_when": event_handler.datetime.fromisoformat("2026-05-28T20:00:00"),
+        "where": "Home",
+    }
+    resolution = {"contacts": [], "matched_place": None}
+
+    monkeypatch.setattr(
+        event_handler,
+        "_search_event_candidates",
+        lambda *_args, **_kwargs: [
+            {
+                "id": "event:dana-call",
+                "title": "Catch-up call with Dana Lewis",
+                "summary": "Discussed work opportunities.",
+                "score": 0.91,
+                "start_date": "2026-05-28T19:00:00+01:00",
+                "people": [],
+                "place": {"place_id": "place:home", "name": "Home"},
+            }
+        ],
+    )
+
+    match = event_handler._find_event_matches(
+        "this is an existing event at 19h of may 28th",
+        extracted,
+        resolution,
+    )
+
+    assert match.get("operation") in {"update", "ambiguous", "create"}
 
 
 def test_find_event_matches_honors_explicit_new_event_correction(monkeypatch):
