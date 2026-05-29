@@ -228,7 +228,7 @@ def test_handle_event_surfaces_proposed_contact_groups(monkeypatch):
     clear_pending_event(context["event_pending_key"])
 
 
-def test_handle_event_prefills_where_from_inferred_known_place(monkeypatch):
+def test_handle_event_defers_inferred_place_without_explicit_where(monkeypatch):
     def fake_extract_event_entities(
         event_message,
         context,
@@ -298,8 +298,9 @@ def test_handle_event_prefills_where_from_inferred_known_place(monkeypatch):
 
     result = handle_event(parsed, context)
     assert result.get("type") == "event_confirmation"
-    assert result.get("extracted", {}).get("where") == "Home"
-    assert result.get("resolution", {}).get("matched_place", {}).get("place_id") == "plc_home"
+    assert result.get("extracted", {}).get("where") is None
+    assert result.get("resolution", {}).get("matched_place") is None
+    assert result.get("resolution", {}).get("inferred_location", {}).get("place_id") == "plc_home"
 
 
 def test_handle_event_skips_low_confidence_inferred_known_place(monkeypatch):
@@ -1407,6 +1408,11 @@ def test_find_event_matches_rejects_same_family_but_unrelated_content(monkeypatc
             }
         ],
     )
+    monkeypatch.setattr(
+        event_handler,
+        "_classify_event_match_reference",
+        lambda *_args, **_kwargs: "create_new",
+    )
 
     match = event_handler._find_event_matches(
         "yesterday at 18h15 I went with wife and daughter eat some burgers at Bueda Fome.",
@@ -1581,6 +1587,11 @@ def test_find_event_matches_honors_explicit_new_event_correction(monkeypatch):
             }
         ],
     )
+    monkeypatch.setattr(
+        event_handler,
+        "_classify_event_match_reference",
+        lambda *_args, **_kwargs: "create_new",
+    )
 
     match = event_handler._find_event_matches(
         "This is not the same event. One was yesterday, the other one is today.",
@@ -1686,6 +1697,144 @@ def test_find_event_matches_relaxes_exact_day_filters_when_existing_event_misses
     assert match.get("existing_event_id") == "event:physio-11"
 
 
+def test_find_event_matches_prefers_time_bounded_candidates_before_semantic_search(monkeypatch):
+    extracted = {
+        "title": "Catch-up call with Dana Lewis",
+        "summary": "Talked about startup progress.",
+        "when": event_handler.datetime.fromisoformat("2026-05-07T19:00:00"),
+        "where": None,
+    }
+    resolution = {
+        "contacts": [{"contact_id": "contact:dana", "display_name": "Dana Lewis"}],
+        "matched_place": None,
+    }
+
+    monkeypatch.setattr(
+        event_handler,
+        "_load_time_bounded_event_candidates",
+        lambda *_args, **_kwargs: [
+            {
+                "id": "event:dana-call",
+                "title": "Catch-up call with Dana Lewis",
+                "summary": "Talked about startup progress.",
+                "score": 0.0,
+                "start_date": "2026-05-07T19:05:00",
+                "people": ["contact:dana"],
+                "place": None,
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        event_handler,
+        "_search_event_candidates",
+        lambda *_args, **_kwargs: pytest.fail("semantic search should not run before bounded ranking"),
+    )
+    monkeypatch.setattr(
+        event_handler,
+        "_search_event_candidates_structured",
+        lambda *_args, **_kwargs: pytest.fail("structured semantic search should not run before bounded ranking"),
+    )
+
+    match = event_handler._find_event_matches(
+        "call with Dana Lewis yesterday at 19h",
+        extracted,
+        resolution,
+    )
+
+    assert match.get("operation") == "update"
+    assert match.get("existing_event_id") == "event:dana-call"
+
+
+def test_handle_event_follow_up_rematch_excludes_previous_event(monkeypatch):
+    clarification_id = "event:clarification:rematch1"
+    seen: dict[str, object] = {}
+
+    clarification_context = {
+        "original_message": "call with Anthony Rose yesterday at 19h",
+        "clarification_messages": [],
+        "requested_field_ids": [],
+        "extracted": {
+            "title": "Wrong matched title",
+            "summary": "Wrong summary",
+            "when": event_handler.datetime.fromisoformat("2026-05-28T15:00:00"),
+            "where": "Home",
+            "tags": ["work"],
+            "types": ["meeting"],
+            "who": ["Betinho"],
+        },
+        "resolution": {
+            "contacts": [{"contact_id": "contact:betinho", "display_name": "Betinho"}],
+            "new_entities": {"contacts": [], "places": [], "documents": []},
+        },
+        "contact_result": {"ambiguous_contacts": []},
+        "relationship_suggestions": [],
+        "media_attachments": [],
+        "existing_event_id": "event:betinho",
+        "matched_event": {
+            "event_id": "event:betinho",
+            "title": "Call with Betinho",
+            "start_date": "2026-05-28T15:00:00+01:00",
+        },
+    }
+
+    monkeypatch.setattr(
+        "commands.handlers.event._classify_follow_up_event_strategy",
+        lambda *_args, **_kwargs: {"action": "rematch", "fields": []},
+    )
+
+    def fake_extract_event_entities(event_message, _context, existing_extracted=None, clarification_messages=None):
+        seen["event_message"] = event_message
+        seen["existing_extracted"] = existing_extracted
+        return {
+            "title": "Catch-up call with Anthony Rose",
+            "summary": "Talked about startup work.",
+            "when": event_handler.datetime.fromisoformat("2026-05-28T19:00:00"),
+            "end_when": None,
+            "where": None,
+            "documents": [],
+            "tags": ["work"],
+            "types": ["meeting"],
+            "need_user_input": None,
+        }
+
+    def fake_resolve_contacts(*_args, **_kwargs):
+        return (
+            {
+                "contacts": [{"contact_id": "contact:anthony", "display_name": "Anthony Rose"}],
+                "new_entities": {"contacts": [], "places": [], "documents": []},
+                "name_replacements": {},
+            },
+            {"ambiguous_contacts": [], "suggested_relationships": []},
+        )
+
+    def fake_find_matches(_raw_message, _extracted, _resolution, *, excluded_event_ids=None):
+        seen["excluded_event_ids"] = excluded_event_ids
+        return {"operation": "create", "candidates": []}
+
+    monkeypatch.setattr("commands.handlers.event._extract_event_entities_with_llm", fake_extract_event_entities)
+    monkeypatch.setattr("commands.handlers.event._resolve_contacts_with_agent", fake_resolve_contacts)
+    monkeypatch.setattr("commands.handlers.event._find_event_matches", fake_find_matches)
+    monkeypatch.setattr("commands.handlers.event.infer_current_place", lambda *_a, **_k: None)
+    monkeypatch.setattr("commands.handlers.event.places_service.find_best_place_match", lambda *_a, **_k: None)
+    monkeypatch.setattr("commands.handlers.event.geocode_place_name", lambda *_a, **_k: None)
+    monkeypatch.setattr("commands.handlers.event.store_command_data", lambda *_a, **_k: None, raising=False)
+    monkeypatch.setattr("commands.storage.get_command_data", lambda _key: clarification_context)
+    monkeypatch.setattr("commands.storage.delete_command_data", lambda _key: None)
+
+    parsed = ParsedCommand(
+        command="event",
+        args=f"Not the right event, it was at 19h [clarification_id:{clarification_id}]",
+        raw_message=f"/event Not the right event, it was at 19h [clarification_id:{clarification_id}]",
+    )
+    context = {"user_email": "user@example.com", "event_pending_key": "user@example.com:thread-rematch"}
+
+    handle_event(parsed, context)
+
+    assert seen["existing_extracted"] is None
+    assert "Not the right event, it was at 19h" in str(seen["event_message"])
+    assert seen["excluded_event_ids"] == {"event:betinho"}
+
+
 def test_find_event_matches_widens_for_explicit_existing_request(monkeypatch):
     extracted = {
         "title": "Physiotherapy session with Rita Castro",
@@ -1718,6 +1867,11 @@ def test_find_event_matches_widens_for_explicit_existing_request(monkeypatch):
         event_handler,
         "_search_event_candidates_structured",
         lambda *_args, **_kwargs: [],
+    )
+    monkeypatch.setattr(
+        event_handler,
+        "_classify_event_match_reference",
+        lambda *_args, **_kwargs: "update_existing",
     )
 
     match = event_handler._find_event_matches(

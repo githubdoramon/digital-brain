@@ -32,6 +32,7 @@ from commands.handlers.clarification_utils import (
 )
 from commands.parser import ParsedCommand
 from commands.registry import CommandRegistry
+from db import fetch_event_people, get_conn
 from llm_helpers import LLMUnavailableError
 from location_inference import geocode_place_name, infer_current_place
 from observability.logger import get_runtime_logger
@@ -175,24 +176,6 @@ _EVENT_MATCH_QUERY_OVERLAP_FLOOR = 0.18
 _EVENT_MATCH_STRONG_QUERY_OVERLAP_FLOOR = 0.35
 _EVENT_MATCH_TITLE_OVERLAP_FLOOR = 0.34
 _EVENT_MATCH_PLACE_OVERLAP_FLOOR = 0.6
-_EVENT_MATCH_EXPLICIT_NEW_EVENT_PATTERNS = (
-    "not the same event",
-    "different event",
-    "another event",
-    "new event",
-)
-_EVENT_MATCH_EXPLICIT_EXISTING_EVENT_PATTERNS = (
-    "same as last one",
-    "same as the last one",
-    "same as last time",
-    "same as the previous one",
-    "same as previous one",
-    "update the existing event",
-    "update existing event",
-    "existing event",
-    "not a new one",
-)
-
 _EVENT_MATCH_MUTUALLY_EXCLUSIVE_TOKEN_GROUPS = (
     {"breakfast", "brunch", "lunch", "dinner"},
 )
@@ -255,6 +238,149 @@ def _need_user_input_is_only_temporal(need_user_input: dict[str, Any] | None) ->
     return any(token in prompt_text for token in (" when", "when ", "time", "date", "happen"))
 
 
+def _classify_event_match_reference(raw_message: str | None) -> str:
+    normalized = _normalized_event_match_text(raw_message)
+    if not normalized:
+        return "neutral"
+    if not any(
+        cue in normalized
+        for cue in (
+            "same",
+            "different",
+            "another",
+            "new",
+            "existing",
+            "update",
+            "right event",
+            "wrong event",
+        )
+    ):
+        return "neutral"
+
+    from llm_helpers import call_llm_json
+
+    prompt = f"""You classify whether a user message indicates how event matching should behave.
+
+User message:
+\"{raw_message or ''}\"
+
+Choose exactly one intent:
+- create_new: the user is saying this should NOT update an existing event and should be treated as a different/new event
+- update_existing: the user is explicitly saying this refers to an existing event that should be updated
+- neutral: the message does not clearly express either preference
+
+Important rules:
+- Focus on the user's intent, not exact phrases.
+- Corrections like saying the previous match was wrong usually mean create_new unless the user clearly says to keep updating the same matched event.
+- Do not infer create_new just because the user mentions a time, place, or person.
+
+Return ONLY valid JSON:
+{{
+  "intent": "neutral",
+  "confidence": "high"
+}}"""
+
+    try:
+        result = call_llm_json(prompt, timeout=15)
+    except Exception as exc:
+        logger.warning("[handle_event] Event match intent classification failed: %s", exc)
+        return "neutral"
+
+    intent = str(result.get("intent") or "").strip().lower()
+    confidence = str(result.get("confidence") or "").strip().lower()
+    if confidence == "low":
+        return "neutral"
+    if intent not in {"create_new", "update_existing", "neutral"}:
+        return "neutral"
+    return intent
+
+
+def _classify_follow_up_event_strategy(
+    follow_up_message: str,
+    clarification_context: dict[str, Any],
+    context: dict[str, Any],
+) -> dict[str, Any]:
+    from llm_helpers import call_llm_json
+    from prompts.context import get_self_context, get_time_context, get_user_facts_context
+
+    existing_extraction = clarification_context.get("extracted") or {}
+    user_email = str(context.get("user_email") or "").strip()
+    self_context = get_self_context(user_email) if user_email else None
+    self_context_block = f"\n{self_context}\n" if self_context else ""
+    user_facts_ctx = (
+        get_user_facts_context(user_email, follow_up_message, scope=RuleScope.EVENT_COMMAND)
+        if user_email
+        else None
+    )
+    user_facts_block = f"\n{user_facts_ctx}\n" if user_facts_ctx else ""
+    extraction_context = _format_field_inference_extraction_context(existing_extraction)
+    time_context = get_time_context()
+    matched_event = clarification_context.get("matched_event")
+    matched_summary = ""
+    if isinstance(matched_event, dict):
+        matched_summary = (
+            "Current matched event candidate:\n"
+            f"- id: {matched_event.get('event_id')!r}\n"
+            f"- title: {matched_event.get('title')!r}\n"
+            f"- when: {matched_event.get('start_date')!r}\n"
+        )
+
+    prompt = f"""You decide how an /event follow-up correction should be handled.
+
+Current context:
+- Date/time: {time_context}
+{self_context_block}
+{user_facts_block}
+{extraction_context}
+{matched_summary}
+
+User follow-up message:
+\"{follow_up_message}\"
+
+Choose exactly one action:
+- patch_existing: keep the current matched event and update only a small set of fields
+- rematch: the current matched event is wrong; rerun extraction/matching from the full user description plus the follow-up correction
+- create_new: do not update any existing event; create a new one
+
+If action is patch_existing, include the smallest set of fields to update from:
+- title
+- summary
+- when
+- end_when
+- where
+- tags
+- types
+- who
+
+Rules:
+- Prefer rematch when the user is correcting which event was chosen.
+- Prefer patch_existing only when the current matched event is still the right one and the user is correcting details on it.
+- Prefer create_new when the user clearly says this is a different/new event.
+- Do not rely on exact trigger phrases; reason from meaning.
+
+Return ONLY valid JSON:
+{{
+  "action": "patch_existing",
+  "fields": ["when"],
+  "confidence": "high"
+}}"""
+
+    try:
+        result = call_llm_json(prompt, timeout=20)
+    except Exception as exc:
+        logger.warning("[handle_event] Follow-up strategy classification failed: %s", exc)
+        return {"action": "patch_existing", "fields": []}
+
+    action = str(result.get("action") or "").strip().lower()
+    confidence = str(result.get("confidence") or "").strip().lower()
+    if confidence == "low":
+        return {"action": "patch_existing", "fields": []}
+    if action not in {"patch_existing", "rematch", "create_new"}:
+        action = "patch_existing"
+    fields = _normalize_event_field_ids(result.get("fields")) if action == "patch_existing" else []
+    return {"action": action, "fields": fields}
+
+
 def _event_match_tokens(value: Any) -> set[str]:
     normalized = normalize_search_text(str(value or ""))
     if not normalized:
@@ -291,17 +417,11 @@ def _has_mutually_exclusive_token_conflict(left: set[str], right: set[str]) -> b
 
 
 def _user_explicitly_rejected_same_event(raw_message: str | None) -> bool:
-    normalized = _normalized_event_match_text(raw_message)
-    if not normalized:
-        return False
-    return any(pattern in normalized for pattern in _EVENT_MATCH_EXPLICIT_NEW_EVENT_PATTERNS)
+    return _classify_event_match_reference(raw_message) == "create_new"
 
 
 def _user_explicitly_requested_existing_event(raw_message: str | None) -> bool:
-    normalized = _normalized_event_match_text(raw_message)
-    if not normalized:
-        return False
-    return any(pattern in normalized for pattern in _EVENT_MATCH_EXPLICIT_EXISTING_EVENT_PATTERNS)
+    return _classify_event_match_reference(raw_message) == "update_existing"
 
 
 def _extract_client_location(context: dict[str, Any]) -> dict[str, Any] | None:
@@ -1515,6 +1635,83 @@ def _search_event_candidates_structured(
     ]
 
 
+def _load_time_bounded_event_candidates(
+    time_start: str,
+    time_end: str,
+    *,
+    anchor_when: datetime | None,
+    limit: int,
+) -> list[dict[str, Any]]:
+    if not time_start or not time_end:
+        return []
+    anchor_value = anchor_when or parse_event_datetime(time_start)
+    if anchor_value is None:
+        return []
+
+    try:
+        with get_conn() as conn, conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT
+                  e.id,
+                  e.start_date,
+                  e.end_date,
+                  e.place_id,
+                  e.tags,
+                  e.types,
+                  e.title,
+                  e.summary,
+                  p.name AS place_name
+                FROM events AS e
+                LEFT JOIN places AS p ON p.place_id = e.place_id
+                WHERE e.start_date >= %s
+                  AND e.start_date < %s
+                ORDER BY ABS(EXTRACT(EPOCH FROM (e.start_date - %s::timestamptz))), e.start_date ASC
+                LIMIT %s
+                """,
+                (time_start, time_end, anchor_value.isoformat(), limit),
+            )
+            rows = cur.fetchall()
+            if not rows:
+                return []
+
+            event_ids = [
+                str(row.get("id") or "").strip() for row in rows if str(row.get("id") or "").strip()
+            ]
+            people_map = fetch_event_people(cur, event_ids)
+    except Exception as exc:
+        logger.warning("[handle_event] Time-bounded event candidate load failed: %s", exc)
+        return []
+
+    candidates: list[dict[str, Any]] = []
+    for row in rows:
+        event_id = str(row.get("id") or "").strip()
+        if not event_id:
+            continue
+        place_id = str(row.get("place_id") or "").strip()
+        place_name = str(row.get("place_name") or "").strip()
+        candidates.append(
+            {
+                "id": event_id,
+                "kind": "event",
+                "start_date": row.get("start_date"),
+                "end_date": row.get("end_date"),
+                "title": row.get("title"),
+                "summary": row.get("summary"),
+                "tags": row.get("tags") or [],
+                "types": row.get("types") or [],
+                "people": people_map.get(event_id, []),
+                "place": (
+                    {"place_id": place_id, "name": place_name or place_id}
+                    if place_id
+                    else None
+                ),
+                "score": 0.0,
+            }
+        )
+    return candidates
+
+
 def _build_structured_event_match_plans(
     people_ids: list[str],
     place_id: str | None,
@@ -1631,6 +1828,8 @@ def _find_event_matches(
     raw_message: str | None,
     extracted: dict[str, Any],
     resolution: dict[str, Any] | None,
+    *,
+    excluded_event_ids: set[str] | None = None,
 ) -> dict[str, Any]:
     """Classify the current extraction as create / update / ambiguous.
 
@@ -1688,9 +1887,25 @@ def _find_event_matches(
     title_tokens = _event_match_tokens(extracted.get("title"))
     where_tokens = _event_match_tokens(extracted.get("where"))
 
+    excluded_ids = {str(event_id).strip() for event_id in (excluded_event_ids or set()) if str(event_id).strip()}
+
     raw_results: list[dict[str, Any]] = []
     exact_day_start, exact_day_end = _compute_exact_day_match_window(extracted.get("when"))
     if exact_day_start and exact_day_end:
+        bounded_results = _load_time_bounded_event_candidates(
+            exact_day_start,
+            exact_day_end,
+            anchor_when=extracted_when,
+            limit=EVENT_MATCH_SEARCH_LIMIT * 4,
+        )
+        if bounded_results:
+            logger.info(
+                "[handle_event] Event match time-bounded candidate set loaded: %d events",
+                len(bounded_results),
+            )
+            raw_results = _merge_event_candidate_lists(bounded_results)
+
+    if not raw_results and exact_day_start and exact_day_end:
         structured_results: list[dict[str, Any]] = []
         structured_plans = _build_structured_event_match_plans(people_ids, place_id)
         for query in queries:
@@ -1713,14 +1928,6 @@ def _find_event_matches(
                         len(plan_results),
                     )
                     structured_results.extend(plan_results)
-            structured_results.extend(
-                _search_event_candidates(
-                    query,
-                    exact_day_start,
-                    exact_day_end,
-                    EVENT_MATCH_SEARCH_LIMIT,
-                )
-            )
         raw_results = _merge_event_candidate_lists(structured_results)
 
     if not raw_results:
@@ -1754,6 +1961,10 @@ def _find_event_matches(
 
     scored: list[dict[str, Any]] = []
     for result in raw_results:
+        result_id = str(result.get("id") or "").strip()
+        if result_id and result_id in excluded_ids:
+            logger.info("[handle_event] Skipping excluded matched event candidate: %s", result_id)
+            continue
         raw_score = float(result.get("score") or 0.0)
         normalized_score = max(0.0, min(100.0, raw_score * 100.0))
         result_place = (
@@ -2478,6 +2689,10 @@ def handle_event(parsed: ParsedCommand, context: dict) -> dict[str, Any]:
     target_field_ids: list[str] = []
     skip_contact_resolution = False
     original_message_to_store = raw_message
+    extraction_base: dict[str, Any] | None = None
+    excluded_event_ids: set[str] = set()
+    force_create_after_follow_up = False
+    event_match_message = raw_message
     if clarification_context:
         clarification_messages = clarification_context.get("clarification_messages")
         original_message = clarification_context.get("original_message") or raw_message
@@ -2514,6 +2729,7 @@ def handle_event(parsed: ParsedCommand, context: dict) -> dict[str, Any]:
         target_field_ids = _normalize_event_field_ids(
             clarification_context.get("requested_field_ids")
         )
+        extraction_base = clarification_context.get("extracted") or None
         ambiguous_contacts = previous_contact_result.get("ambiguous_contacts", [])
 
         if raw_message and ambiguous_contacts:
@@ -2559,17 +2775,61 @@ def handle_event(parsed: ParsedCommand, context: dict) -> dict[str, Any]:
 
         if not target_field_ids and raw_message and clarification_context.get("extracted"):
             if not _has_assistant_clarification_prompt(clarification_messages):
-                inferred_fields = _infer_follow_up_target_fields(
+                strategy = _classify_follow_up_event_strategy(
                     raw_message,
-                    clarification_context.get("extracted") or {},
+                    clarification_context,
                     context,
                 )
-                if inferred_fields:
-                    target_field_ids = inferred_fields
-                    logger.info(
-                        "[handle_event] Inferred follow-up target fields: %s",
-                        target_field_ids,
+                strategy_action = str(strategy.get("action") or "patch_existing").strip().lower()
+                if strategy_action == "patch_existing":
+                    inferred_fields = strategy.get("fields") or []
+                    if not inferred_fields:
+                        inferred_fields = _infer_follow_up_target_fields(
+                            raw_message,
+                            clarification_context.get("extracted") or {},
+                            context,
+                        )
+                    if inferred_fields:
+                        target_field_ids = _normalize_event_field_ids(inferred_fields)
+                        logger.info(
+                            "[handle_event] Inferred follow-up target fields: %s",
+                            target_field_ids,
+                        )
+                elif strategy_action == "rematch":
+                    extraction_base = None
+                    previous_resolution = {}
+                    previous_contact_result = {}
+                    resolution = None
+                    contact_result = None
+                    skip_contact_resolution = False
+                    event_message = _build_contact_context_message(
+                        original_message,
+                        clarification_messages,
                     )
+                    contact_message = event_message
+                    event_match_message = event_message
+                    existing_event_id = str(clarification_context.get("existing_event_id") or "").strip()
+                    if existing_event_id:
+                        excluded_event_ids.add(existing_event_id)
+                    logger.info(
+                        "[handle_event] Follow-up requested a full rematch; excluded prior event=%s",
+                        existing_event_id or None,
+                    )
+                elif strategy_action == "create_new":
+                    extraction_base = None
+                    previous_resolution = {}
+                    previous_contact_result = {}
+                    resolution = None
+                    contact_result = None
+                    skip_contact_resolution = False
+                    force_create_after_follow_up = True
+                    event_message = _build_contact_context_message(
+                        original_message,
+                        clarification_messages,
+                    )
+                    contact_message = event_message
+                    event_match_message = event_message
+                    logger.info("[handle_event] Follow-up requested creating a new event")
 
         if target_field_ids and "who" not in target_field_ids and previous_resolution:
             skip_contact_resolution = True
@@ -2597,7 +2857,7 @@ def handle_event(parsed: ParsedCommand, context: dict) -> dict[str, Any]:
             _extract_event_entities_with_llm,
             event_message,
             extraction_context,
-            clarification_context.get("extracted") if clarification_context else None,
+            extraction_base,
             clarification_messages,
         )
         contact_future = None
@@ -2784,30 +3044,9 @@ def handle_event(parsed: ParsedCommand, context: dict) -> dict[str, Any]:
             inferred_name = str(inferred_location.get("place_name") or "").strip()
         if inferred_name and isinstance(inferred_location, dict):
             resolution["inferred_location"] = inferred_location
-        if (
-            inferred_name
-            and isinstance(inferred_location, dict)
-            and _should_autofill_inferred_place(inferred_location)
-        ):
-            where = inferred_name
-            where_source = "inferred_location"
-            extracted["where"] = inferred_name
+        if inferred_name and isinstance(inferred_location, dict):
             logger.info(
-                "[handle_event] Inferred place from location context: %s (source=%s)",
-                inferred_name,
-                inferred_location.get("source") or "unknown",
-            )
-            inferred_place_id = str(inferred_location.get("place_id") or "").strip()
-            if inferred_place_id:
-                resolution["matched_place"] = {
-                    "place_id": inferred_place_id,
-                    "name": inferred_name,
-                    "confidence": str(inferred_location.get("confidence") or "medium"),
-                    "matched_via": "inferred_location",
-                }
-        elif inferred_name and isinstance(inferred_location, dict):
-            logger.info(
-                "[handle_event] Skipped inferred place autofill: %s "
+                "[handle_event] Deferred inferred place autofill: %s "
                 "(source=%s confidence=%s distance_m=%s)",
                 inferred_name,
                 inferred_location.get("source") or "unknown",
@@ -3030,7 +3269,15 @@ def handle_event(parsed: ParsedCommand, context: dict) -> dict[str, Any]:
 
     # Look for an existing event we might be updating instead of creating.
     _emit_progress(context, "Checking for matching events...")
-    event_match = _find_event_matches(raw_message, extracted, resolution)
+    if force_create_after_follow_up:
+        event_match = {"operation": "create", "candidates": []}
+    else:
+        event_match = _find_event_matches(
+            event_match_message,
+            extracted,
+            resolution,
+            excluded_event_ids=excluded_event_ids,
+        )
     operation = str(event_match.get("operation") or "create")
     existing_event_id = str(event_match.get("existing_event_id") or "").strip() or None
     matched_event = event_match.get("matched_event")
