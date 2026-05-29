@@ -508,7 +508,12 @@ function EventDetailView({ eventId, editable }: EventDetailViewProps) {
   );
 
   if (isEditing) {
-    return content;
+    return (
+      <>
+        {content}
+        {imagePickerSheet}
+      </>
+    );
   }
 
   return (

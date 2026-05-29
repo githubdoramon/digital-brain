@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Callable
+from copy import deepcopy
 from datetime import datetime
 from typing import Any
 from uuid import uuid4
@@ -19,6 +20,7 @@ import places as places_service
 from chat_media import (
     delete_staged_chat_media_attachments,
     load_staged_chat_media_attachment,
+    merge_staged_chat_media_attachments,
 )
 from observability.logger import get_runtime_logger
 from schemas import (
@@ -85,6 +87,12 @@ def handle_pending_event(
         if not pending_event_id:
             clear_pending_event(key)
         return None
+
+    command_data = deepcopy(command_data)
+    command_data["media_attachments"] = merge_staged_chat_media_attachments(
+        _get_command_media_attachments(command_data),
+        media_attachments or [],
+    )
 
     command_thread_id = command_data.get("thread_id") or thread_id
     if command_thread_id:

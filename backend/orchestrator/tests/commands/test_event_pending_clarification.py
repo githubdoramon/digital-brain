@@ -987,6 +987,72 @@ def test_pending_clarification_accepts_plain_follow_up(monkeypatch):
     clear_pending_event(pending_key)
 
 
+def test_pending_clarification_preserves_staged_media_attachments(monkeypatch):
+    user_email = "user@example.com"
+    thread_id = "thread-media"
+    existing_attachment = {
+        "attachment_id": "chat-media-existing",
+        "file_name": "existing.jpg",
+        "mime_type": "image/jpeg",
+        "storage_path": "/tmp/existing.jpg",
+    }
+    incoming_attachment = {
+        "attachment_id": "chat-media-incoming",
+        "file_name": "incoming.jpg",
+        "mime_type": "image/jpeg",
+        "storage_path": "/tmp/incoming.jpg",
+    }
+    stored_payloads: list[tuple[str, dict]] = []
+
+    def fake_parse_command(message: str):
+        return object() if message.startswith("/event ") else None
+
+    class _Registry:
+        @staticmethod
+        def execute(parsed, context):
+            assert parsed is not None
+            assert context.get("thread_id") == thread_id
+            return {"type": "need_user_input", "message": "follow-up accepted"}
+
+    monkeypatch.setattr(
+        "commands.event.get_command_data",
+        lambda _preview_id: {
+            "original_message": "met with Alex about the roadmap",
+            "thread_id": thread_id,
+            "extracted": {},
+            "resolution": {},
+            "media_attachments": [existing_attachment],
+        },
+    )
+    monkeypatch.setattr("commands.event.store_command_data", lambda preview_id, data: stored_payloads.append((preview_id, data)))
+    monkeypatch.setattr("commands.event.delete_command_data", lambda _preview_id: None)
+    monkeypatch.setattr("commands.event.clear_pending_event", lambda _key: None)
+    monkeypatch.setattr("commands.event.parse_command", fake_parse_command)
+    monkeypatch.setattr("commands.event.get_command_registry", lambda: _Registry())
+    monkeypatch.setattr(
+        "commands.event.conversations.record_exchange", lambda *args, **kwargs: None
+    )
+
+    result = handle_pending_event(
+        question="It was yesterday at 3pm",
+        user_email=user_email,
+        user={"email": user_email},
+        thread_id=thread_id,
+        pending_event_id="event:clarification:media1234",
+        media_attachments=[incoming_attachment],
+        command_response_text=lambda command_result: command_result.get("message", ""),
+        command_assistant_metadata=lambda command_result: ({}, None),
+    )
+
+    assert result is not None
+    assert len(stored_payloads) == 1
+    stored_media = stored_payloads[0][1].get("media_attachments") or []
+    assert [attachment.get("attachment_id") for attachment in stored_media] == [
+        "chat-media-existing",
+        "chat-media-incoming",
+    ]
+
+
 def test_extract_clarification_detail_strips_prefixed_original_message():
     original = "met with Alex about the roadmap"
     message = (

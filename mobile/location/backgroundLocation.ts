@@ -72,6 +72,33 @@ const BACKGROUND_POST_DEDUPE_MIN_SECONDS = 30;
 const BACKGROUND_BUFFER_FLUSH_MIN_DISTANCE_METERS = 50;
 const BACKGROUND_BUFFERED_SAMPLE_MIN_AGE_SECONDS = 60;
 
+function buildBackgroundLocationTaskOptions(): Location.LocationTaskOptions {
+  const sharedOptions: Location.LocationTaskOptions = {
+    accuracy: Location.Accuracy.Balanced,
+    distanceInterval: BACKGROUND_DISTANCE_INTERVAL_METERS,
+    timeInterval: BACKGROUND_TIME_INTERVAL_MS,
+    showsBackgroundLocationIndicator: false,
+    foregroundService: {
+      notificationTitle: 'Digital Brain location updates',
+      notificationBody: 'Location updates are used to keep your context accurate.',
+    },
+  };
+
+  if (Platform.OS === 'android') {
+    return {
+      ...sharedOptions,
+      pausesUpdatesAutomatically: false,
+    };
+  }
+
+  return {
+    ...sharedOptions,
+    deferredUpdatesDistance: BACKGROUND_DISTANCE_INTERVAL_METERS,
+    deferredUpdatesInterval: BACKGROUND_TIME_INTERVAL_MS,
+    pausesUpdatesAutomatically: true,
+  };
+}
+
 let lastPostedBackgroundLocation: PostedBackgroundLocation | null = null;
 let lastAcceptedBufferedLocation: PostedBackgroundLocation | null = null;
 
@@ -738,19 +765,15 @@ export async function syncBackgroundLocationTracking(enabled: boolean): Promise<
   }
 
   try {
-    await Location.startLocationUpdatesAsync(BACKGROUND_LOCATION_TASK, {
-      accuracy: Location.Accuracy.Balanced,
-      distanceInterval: BACKGROUND_DISTANCE_INTERVAL_METERS,
-      timeInterval: BACKGROUND_TIME_INTERVAL_MS,
-      deferredUpdatesDistance: BACKGROUND_DISTANCE_INTERVAL_METERS,
-      deferredUpdatesInterval: BACKGROUND_TIME_INTERVAL_MS,
-      pausesUpdatesAutomatically: true,
-      showsBackgroundLocationIndicator: false,
-      foregroundService: {
-        notificationTitle: 'Digital Brain location updates',
-        notificationBody: 'Location updates are used to keep your context accurate.',
+    const taskOptions = buildBackgroundLocationTaskOptions();
+    reportLocationDebugEvent('background_tracking_start_requested', {
+      payload: {
+        platform: Platform.OS,
+        task_options: taskOptions as Record<string, unknown>,
       },
+      recordInHistory: false,
     });
+    await Location.startLocationUpdatesAsync(BACKGROUND_LOCATION_TASK, taskOptions);
   } catch (error) {
     reportLocationDebugEvent('background_tracking_start_error', {
       message: error instanceof Error ? error.message : 'Failed to start background location tracking',
@@ -767,5 +790,11 @@ export async function syncBackgroundLocationTracking(enabled: boolean): Promise<
       error,
     });
   });
-  reportLocationDebugEvent('background_tracking_started');
+  reportLocationDebugEvent('background_tracking_started', {
+    payload: {
+      platform: Platform.OS,
+      task_options: buildBackgroundLocationTaskOptions() as Record<string, unknown>,
+    },
+    recordInHistory: false,
+  });
 }
