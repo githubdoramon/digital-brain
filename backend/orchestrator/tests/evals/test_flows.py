@@ -78,3 +78,20 @@ def test_contact_resolution_eval_can_disable_strict_json_schema(monkeypatch):
     llm_request_options = captured["llm_request_options"]
     assert isinstance(llm_request_options, dict)
     assert llm_request_options["response_format"] is None
+
+
+def test_score_contact_resolution_case_rejects_absent_mentions_present():
+    case = EvalCase(
+        case_id="contact-case-absent-mentions",
+        title="Contact case absent mentions",
+        input={"text": "I met Dana Lewis at the physiotherapy session."},
+        expected={"people_mentioned": ["Dana Lewis"], "absent_mentions": ["I"]},
+    )
+
+    score = flows._score_contact_resolution_case(
+        case,
+        {"status": "success", "people_mentioned": ["Dana Lewis", "I"]},
+    )
+
+    assert score["passed"] is False
+    assert "Unexpected mentions present: i" in score["notes"]

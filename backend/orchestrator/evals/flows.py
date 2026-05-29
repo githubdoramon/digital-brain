@@ -234,6 +234,14 @@ def _score_contact_resolution_case(case: EvalCase, output: dict[str, Any]) -> di
             + ", ".join(sorted(expected_mentions.difference(actual_mentions)))
         )
 
+    forbidden_mentions = _normalized_text_set(case.expected.get("absent_mentions"))
+    present_forbidden_mentions = sorted(forbidden_mentions.intersection(actual_mentions))
+    if present_forbidden_mentions:
+        passed = False
+        notes.append(
+            "Unexpected mentions present: " + ", ".join(present_forbidden_mentions)
+        )
+
     expected_selector_values = _normalized_text_set(case.expected.get("selector_values"))
     actual_selector_values = {
         normalize_search_text(selector.get("value") or "")
@@ -624,6 +632,20 @@ EVAL_FLOWS: list[EvalFlowDefinition] = [
                 title="Named team selector",
                 input={"text": "I want to message my product design team about the new mockups."},
                 expected={"selector_values": ["product design team"], "selector_kinds": ["group"]},
+                response_json_schema=CONTACT_RESOLUTION_RESPONSE_SCHEMA,
+            ),
+            EvalCase(
+                case_id="contact-resolution-direct-object-name",
+                title="First-person event keeps contact, not literal I",
+                input={"text": "I met Dana Lewis at the physiotherapy session."},
+                expected={"people_mentioned": ["Dana Lewis"], "absent_mentions": ["I"]},
+                response_json_schema=CONTACT_RESOLUTION_RESPONSE_SCHEMA,
+            ),
+            EvalCase(
+                case_id="contact-resolution-name-over-relationship-duplicate",
+                title="Named contact beats duplicate relationship mention",
+                input={"text": "I had lunch with my wife Dana Lewis after the school meeting."},
+                expected={"people_mentioned": ["Dana Lewis"], "absent_mentions": ["I", "my wife"]},
                 response_json_schema=CONTACT_RESOLUTION_RESPONSE_SCHEMA,
             ),
         ],

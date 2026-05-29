@@ -102,6 +102,7 @@ _FIRST_PERSON_PARTICIPANT_PATTERN = re.compile(
     r"\b(i|me|my|we|us|our)\b|^(?:had|met|visited|called|saw|went)\b",
     re.IGNORECASE,
 )
+_SELF_REFERENTIAL_PERSON_PATTERN = re.compile(r"^(?:i|me|myself|we|us|ourselves)$", re.IGNORECASE)
 _LEADING_TEMPORAL_FIRST_PERSON_PATTERN = re.compile(
     r"^(?:today|yesterday|tomorrow|tonight|this\s+(?:morning|afternoon|evening)|last\s+night)\s+i\b",
     re.IGNORECASE,
@@ -168,6 +169,12 @@ _LIST_SPLIT_PATTERN = re.compile(r"\s*(?:,|&|\band\b|\bplus\b)\s*", re.IGNORECAS
 _PRECEDING_PLACE_PREPOSITION_PATTERN = re.compile(r"(?:^|\s)(?:at|in|near|inside)\s*$", re.IGNORECASE)
 _LEADING_SUBJECT_PERSON_PATTERN = re.compile(
     rf"^\s*(?P<subject>(?:Dr\.|Mr\.|Mrs\.|Ms\.|Prof\.)?\s*{_SHORT_CIRCUIT_NAME_TOKEN}(?:\s+{_SHORT_CIRCUIT_NAME_TOKEN}){{0,2}})\s+(?:(?i:is|was)\s+(?:going|meeting|visiting|calling|seeing|having|joining|attending|heading)\b|(?i:went|met|visited|called|saw|joined|attended|headed|left|came|had)\b)"
+)
+_DIRECT_OBJECT_PERSON_PATTERN = re.compile(
+    rf"\b(?:i|we)\s+(?:met|meet|met with|talked to|spoke with|called|texted|emailed|saw|visited|joined)\s+"
+    rf"(?P<person>(?:Dr\.|Mr\.|Mrs\.|Ms\.|Prof\.)?\s*{_SHORT_CIRCUIT_NAME_TOKEN}(?:\s+{_SHORT_CIRCUIT_NAME_TOKEN}){{0,2}})"
+    rf"(?=(?:\s+\b(?:at|from|in|on|near|inside|during|around|for|about|to)\b)|[,.!?]|$)",
+    re.IGNORECASE,
 )
 _CONTACT_RESOLUTION_MODEL_OVERRIDE: ContextVar[str | None] = ContextVar(
     "contact_resolution_model_override", default=None
@@ -597,6 +604,8 @@ def _looks_like_list_person_mention(value: str) -> bool:
     candidate = str(value or "").strip()
     if not candidate:
         return False
+    if _SELF_REFERENTIAL_PERSON_PATTERN.fullmatch(candidate):
+        return False
     candidate_normalized = normalize_search_text(candidate)
     if candidate_normalized in _USER_SCOPED_FAMILY_RELATIONSHIP_TERMS:
         return True
@@ -635,6 +644,15 @@ def _extract_leading_subject_person(text: str) -> list[str]:
     if not _looks_like_list_person_mention(candidate):
         return []
     return [candidate]
+
+
+def _extract_direct_object_people(text: str) -> list[str]:
+    mentions: list[str] = []
+    for match in _DIRECT_OBJECT_PERSON_PATTERN.finditer(text):
+        candidate = str(match.group("person") or "").strip(" .,!?;:\"'")
+        if _looks_like_list_person_mention(candidate):
+            mentions.append(candidate)
+    return mentions
 
 
 def _merge_people_mentions(*batches: list[str]) -> list[str]:
@@ -772,6 +790,10 @@ def _fast_extract_people_from_text(
             explicit_people_count += 1
 
     for candidate in _extract_leading_subject_person(raw_text):
+        if _append_person(candidate):
+            explicit_people_count += 1
+
+    for candidate in _extract_direct_object_people(raw_text):
         if _append_person(candidate):
             explicit_people_count += 1
 
@@ -2012,7 +2034,7 @@ def resolve_contacts_from_text(
                 conversation_block=conversation_block,
                 user_facts_block=user_facts_block,
             )
-            if filtered_people:
+            if filtered_people or excluded_people:
                 logger.info(
                     "[contact_resolver] Participant filter kept=%s excluded=%s",
                     filtered_people,

@@ -639,6 +639,39 @@ def test_resolve_contacts_does_not_short_circuit_partial_multi_person_fast_path(
     assert result["people_mentioned"] == ["John", "pedro"]
 
 
+def test_fast_extract_people_captures_direct_object_and_not_literal_i():
+    people, selectors, applied = resolver._fast_extract_people_from_text(
+        "I met Rita at the physiotherapy session"
+    )
+
+    assert applied is True
+    assert selectors == []
+    assert people == ["user", "Rita"]
+
+
+def test_participant_filter_can_clear_people_list(monkeypatch):
+    monkeypatch.setattr(
+        resolver,
+        "_filter_event_participants_via_llm",
+        lambda **_kwargs: ([], ["user", "Rita"]),
+    )
+    monkeypatch.setattr(
+        resolver,
+        "_resolve_people_mentions",
+        lambda *args, **kwargs: ([], [], [], {}),
+    )
+
+    result = resolver.resolve_contacts_from_text(
+        "I met Rita at the physiotherapy session",
+        "user@example.com",
+        mode=resolver.MINIMAL_RESOLUTION_MODE,
+        participant_focus=True,
+    )
+
+    assert result["status"] == "no_people"
+    assert result["people_mentioned"] == []
+
+
 def test_resolve_contacts_group_mentions_bypass_fast_path(monkeypatch):
     captured = {}
 
