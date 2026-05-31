@@ -363,7 +363,7 @@ def test_contact_follow_up_strips_structured_field_label(monkeypatch):
         if len(calls) == 1:
             return first_extraction
         return {
-            "contacts": [{"contact_name": "Rita Castro"}],
+            "contacts": [{"contact_name": "Rita Lake"}],
             "relationships": [],
             "contact_place_links": [],
             "need_user_input": None,
@@ -390,7 +390,7 @@ def test_contact_follow_up_strips_structured_field_label(monkeypatch):
             command="contact",
             args=(
                 "Rita is my physiotherapist\n\n"
-                "Additional details: Who did you mean by 'Rita'?: Rita Castro "
+                "Additional details: Who did you mean by 'Rita'?: Rita Lake "
                 f"[clarification_id:{clarification_id}]"
             ),
             raw_message="/contact follow-up",
@@ -406,7 +406,7 @@ def test_contact_follow_up_strips_structured_field_label(monkeypatch):
             "role": "assistant",
             "content": "I found multiple matching contacts. Please choose who you meant.",
         },
-        {"role": "user", "content": "Rita Castro"},
+        {"role": "user", "content": "Rita Lake"},
     ]
 
     delete_command_data(second["preview_id"])
@@ -535,15 +535,15 @@ def test_contact_follow_up_keeps_force_new_intent_across_name_clarification(monk
         extraction_calls.append(True)
         base_payload = {
             "contacts": [
-                {"contact_name": "Betinho"},
-                {"contact_name": "Amanda Aparecida Oliveira"},
+                {"contact_name": "Benny"},
+                {"contact_name": "Avery Maple"},
                 {"contact_name": "Thomas", "birthday": "2024-05-09"},
                 {"contact_name": "Arthur", "birthday": "2024-05-09"},
             ],
             "relationships": [
                 {
-                    "from_contact_name": "Betinho",
-                    "to_contact_name": "Amanda Aparecida Oliveira",
+                    "from_contact_name": "Benny",
+                    "to_contact_name": "Avery Maple",
                     "relationship_type": "Husband",
                     "reciprocal_type": "Wife",
                 }
@@ -573,7 +573,7 @@ def test_contact_follow_up_keeps_force_new_intent_across_name_clarification(monk
     monkeypatch.setattr("commands.handlers.contact._llm_extract_contact_changes", fake_extract)
 
     def fake_search_contacts(name, **_kwargs):
-        if name == "Amanda Aparecida Oliveira":
+        if name == "Avery Maple":
             return [
                 {"contact_id": "contact:amanda-1", "display_name": "Adriana Oliveira Carvalho", "match_score": 88},
                 {"contact_id": "contact:amanda-2", "display_name": "Henrique Oliveira", "match_score": 88},
@@ -588,8 +588,8 @@ def test_contact_follow_up_keeps_force_new_intent_across_name_clarification(monk
     first = handle_contact(
         ParsedCommand(
             command="contact",
-            args="Betinho is married to Amanda Aparecida Oliveira.",
-            raw_message="/contact Betinho is married to Amanda Aparecida Oliveira.",
+            args="Benny is married to Avery Maple.",
+            raw_message="/contact Benny is married to Avery Maple.",
         ),
         context,
     )
@@ -612,7 +612,7 @@ def test_contact_follow_up_keeps_force_new_intent_across_name_clarification(monk
     third = handle_contact(
         ParsedCommand(
             command="contact",
-            args=f"Amanda Aparecida Oliveira [clarification_id:{second_clarification_id}]",
+            args=f"Avery Maple [clarification_id:{second_clarification_id}]",
             raw_message="/contact follow-up",
         ),
         context,
@@ -624,7 +624,7 @@ def test_contact_follow_up_keeps_force_new_intent_across_name_clarification(monk
         for item in third["proposal"]["contacts"]
         if item.get("operation") == "create"
     }
-    assert "new_contact:amanda-aparecida-oliveira" in create_refs
+    assert "new_contact:avery-maple" in create_refs
 
     delete_command_data(third["preview_id"])
     clear_pending_event(context["event_pending_key"])
@@ -632,18 +632,18 @@ def test_contact_follow_up_keeps_force_new_intent_across_name_clarification(monk
 
 def test_contact_strip_clarification_field_labels_helper():
     detail = contact_handler._strip_clarification_field_labels(
-        "Who did you mean by 'Rita'?: Rita Castro",
+        "Who did you mean by 'Rita'?: Rita Lake",
         ["Who did you mean by 'Rita'?"],
     )
 
-    assert detail == "Rita Castro"
+    assert detail == "Rita Lake"
 
 
 def test_handle_contact_supports_multiple_contacts_and_place_links(monkeypatch):
     parsed = ParsedCommand(
         command="contact",
-        args="Ana and Bruno are lawyers and live at Rua X",
-        raw_message="/contact Ana and Bruno are lawyers and live at Rua X",
+        args="Ava and Bruno are lawyers and live at 12 Maple Street",
+        raw_message="/contact Ava and Bruno are lawyers and live at 12 Maple Street",
     )
     context = {
         "user_email": "user@example.com",
@@ -655,13 +655,13 @@ def test_handle_contact_supports_multiple_contacts_and_place_links(monkeypatch):
         "commands.handlers.contact._llm_extract_contact_changes",
         lambda *_args, **_kwargs: {
             "contacts": [
-                {"contact_name": "Ana", "profession": "Lawyer"},
+                {"contact_name": "Ava", "profession": "Lawyer"},
                 {"contact_name": "Bruno", "profession": "Lawyer"},
             ],
             "relationships": [],
             "contact_place_links": [
-                {"contact_name": "Ana", "place_text": "Rua X", "place_role": "home"},
-                {"contact_name": "Bruno", "place_text": "Rua X", "place_role": "home"},
+                {"contact_name": "Ava", "place_text": "12 Maple Street", "place_role": "home"},
+                {"contact_name": "Bruno", "place_text": "12 Maple Street", "place_role": "home"},
             ],
             "need_user_input": None,
         },
@@ -680,11 +680,11 @@ def test_handle_contact_supports_multiple_contacts_and_place_links(monkeypatch):
     assert result["type"] == "contact_confirmation"
     proposal = result["proposal"]
     created_contacts = [item for item in proposal["contacts"] if item.get("operation") == "create"]
-    assert {item["display_name"] for item in created_contacts} == {"Ana", "Bruno"}
+    assert {item["display_name"] for item in created_contacts} == {"Ava", "Bruno"}
     assert len(proposal["contact_place_links"]) == 2
     assert len(proposal["places"]) == 1
-    assert any("Add profession for Ana: Lawyer" in line for line in result["explicit_change_lines"])
-    assert any("Link Bruno to Rua X as home" in line for line in result["explicit_change_lines"])
+    assert any("Add profession for Ava: Lawyer" in line for line in result["explicit_change_lines"])
+    assert any("Link Bruno to 12 Maple Street as home" in line for line in result["explicit_change_lines"])
 
     delete_command_data(result["preview_id"])
     clear_pending_event(context["event_pending_key"])

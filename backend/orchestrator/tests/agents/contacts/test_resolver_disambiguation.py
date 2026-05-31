@@ -9,8 +9,8 @@ from llm_helpers import LLMUnavailableError
 
 def test_llm_disambiguation_requires_context_signal(monkeypatch):
     candidates = [
-        {"contact_id": "contact:gio-a", "display_name": "Giovanni Panerai"},
-        {"contact_id": "contact:gio-b", "display_name": "Giovanni Ghelfi"},
+        {"contact_id": "contact:gio-a", "display_name": "Giovanni Carter"},
+        {"contact_id": "contact:gio-b", "display_name": "Giovanni Lake"},
     ]
 
     monkeypatch.setattr(
@@ -27,7 +27,7 @@ def test_llm_disambiguation_requires_context_signal(monkeypatch):
         lambda *_args, **_kwargs: {
             "resolved": True,
             "contact_id": "contact:gio-a",
-            "display_name": "Giovanni Panerai",
+            "display_name": "Giovanni Carter",
             "confidence": "high",
         },
     )
@@ -57,8 +57,8 @@ def test_llm_disambiguation_reraises_llm_unavailable(monkeypatch):
         resolver._llm_disambiguate_contact(
             person_text="Gio",
             candidates=[
-                {"contact_id": "contact:gio-a", "display_name": "Giovanni Panerai"},
-                {"contact_id": "contact:gio-b", "display_name": "Giovanni Ghelfi"},
+                {"contact_id": "contact:gio-a", "display_name": "Giovanni Carter"},
+                {"contact_id": "contact:gio-b", "display_name": "Giovanni Lake"},
             ],
             event_context="When did I meet Gio?",
         )
@@ -128,8 +128,8 @@ def test_llm_disambiguation_prompt_includes_candidate_relationships(monkeypatch)
 
 def test_llm_disambiguation_accepted_when_context_is_specific(monkeypatch):
     candidates = [
-        {"contact_id": "contact:gio-a", "display_name": "Giovanni Panerai"},
-        {"contact_id": "contact:gio-b", "display_name": "Giovanni Ghelfi"},
+        {"contact_id": "contact:gio-a", "display_name": "Giovanni Carter"},
+        {"contact_id": "contact:gio-b", "display_name": "Giovanni Lake"},
     ]
 
     monkeypatch.setattr(
@@ -146,7 +146,7 @@ def test_llm_disambiguation_accepted_when_context_is_specific(monkeypatch):
         lambda *_args, **_kwargs: {
             "resolved": True,
             "contact_id": "contact:gio-a",
-            "display_name": "Giovanni Panerai",
+            "display_name": "Giovanni Carter",
             "confidence": "high",
         },
     )
@@ -239,8 +239,8 @@ def test_resolve_people_mentions_prefers_relationship_aligned_candidate(monkeypa
 
 def test_llm_disambiguation_rejected_for_non_high_confidence(monkeypatch):
     candidates = [
-        {"contact_id": "contact:gio-a", "display_name": "Giovanni Panerai"},
-        {"contact_id": "contact:gio-b", "display_name": "Giovanni Ghelfi"},
+        {"contact_id": "contact:gio-a", "display_name": "Giovanni Carter"},
+        {"contact_id": "contact:gio-b", "display_name": "Giovanni Lake"},
     ]
 
     monkeypatch.setattr(
@@ -257,7 +257,7 @@ def test_llm_disambiguation_rejected_for_non_high_confidence(monkeypatch):
         lambda *_args, **_kwargs: {
             "resolved": True,
             "contact_id": "contact:gio-a",
-            "display_name": "Giovanni Panerai",
+            "display_name": "Giovanni Carter",
             "confidence": "medium",
         },
     )
@@ -274,8 +274,8 @@ def test_llm_disambiguation_rejected_for_non_high_confidence(monkeypatch):
 
 def test_llm_disambiguation_balanced_accepts_name_level_match(monkeypatch):
     candidates = [
-        {"contact_id": "contact:gio-a", "display_name": "Giovanni Panerai"},
-        {"contact_id": "contact:gio-b", "display_name": "Giovanni Ghelfi"},
+        {"contact_id": "contact:gio-a", "display_name": "Giovanni Carter"},
+        {"contact_id": "contact:gio-b", "display_name": "Giovanni Lake"},
     ]
 
     monkeypatch.setenv("CONTACT_DISAMBIGUATION_STRICTNESS", "balanced")
@@ -293,7 +293,7 @@ def test_llm_disambiguation_balanced_accepts_name_level_match(monkeypatch):
         lambda *_args, **_kwargs: {
             "resolved": True,
             "contact_id": "contact:gio-a",
-            "display_name": "Giovanni Panerai",
+            "display_name": "Giovanni Carter",
             "confidence": "high",
         },
     )
@@ -477,7 +477,7 @@ def test_llm_disambiguation_prompt_includes_aliases_and_match_hints(monkeypatch)
         candidates=[
             {
                 "contact_id": "contact:gio-acme-example",
-                "display_name": "Giovanni Panerai",
+                "display_name": "Giovanni Carter",
                 "aliases": ["Gio", "Panerai"],
                 "match_reason": "exact name match: gio",
             }
@@ -688,7 +688,7 @@ def test_resolve_contacts_group_mentions_bypass_fast_path(monkeypatch):
     )
 
     result = resolver.resolve_contacts_from_text(
-        "yesterday at 19h I went to the pizza place, at Riverside Village, to celebrate my birthday. My wife and daughter, and Dana's whole family went as well. We talked a lot about my work and the possibility of me getting fired soon.",
+        "yesterday at 19h I went to the pizza place, at Alder Square, to celebrate my birthday. My wife and daughter, and Dana's whole family went as well. We talked a lot about my work and the possibility of me getting fired soon.",
         "user@example.com",
         mode=resolver.MINIMAL_RESOLUTION_MODE,
     )
@@ -1029,6 +1029,39 @@ def test_extract_people_ignores_family_like_group_selectors(monkeypatch):
     assert selectors == []
 
 
+def test_extract_people_ignores_vague_crowd_group_selectors(monkeypatch):
+    def fake_call_llm_json(prompt, **_kwargs):
+        prompt_lower = prompt.lower()
+        if "extract collective participant selectors" in prompt_lower:
+            return {
+                "selectors": [
+                    {
+                        "kind": "group",
+                        "value": "people",
+                        "raw": "Lots of people",
+                        "deterministic": False,
+                    }
+                ]
+            }
+        return {
+            "people": [
+                "user",
+                "Morgan Brooks",
+                "Morgan Brooks's whole family",
+            ]
+        }
+
+    monkeypatch.setattr(resolver, "call_llm_json", fake_call_llm_json)
+
+    people, selectors = resolver.extract_people_from_text(
+        "Lots of people were there, Morgan Brooks's whole family included.",
+        include_collective_selectors=True,
+    )
+
+    assert people == ["user", "Morgan Brooks", "Morgan Brooks's whole family"]
+    assert selectors == []
+
+
 def test_nested_relationship_reuses_prior_resolved_full_name(monkeypatch):
     monkeypatch.setattr(
         resolver.contacts_service,
@@ -1352,7 +1385,7 @@ def test_resolve_contact_named_coworker_group_uses_related_candidates(monkeypatc
                     "contact_id": "contact:gio",
                     "type": "friend",
                     "other_type": "friend",
-                    "related_contact": {"display_name": "Giovanni Panerai"},
+                    "related_contact": {"display_name": "Giovanni Carter"},
                 },
             ]
         }
@@ -1651,6 +1684,50 @@ def test_resolve_contacts_from_text_resolves_bare_family_mentions_against_user_r
         "Robin Tess Lake",
         "Jamie Quinn Lake",
     }
+
+
+def test_resolve_contacts_restores_collective_family_mentions_after_participant_filter(monkeypatch):
+    monkeypatch.setattr(
+        resolver,
+        "_fast_extract_people_from_text",
+        lambda *_args, **_kwargs: ([], [], False),
+    )
+    monkeypatch.setattr(
+        resolver,
+        "extract_people_from_text",
+        lambda *_args, **_kwargs: (
+            ["user", "Morgan Brooks", "Morgan Brooks's whole family"],
+            [],
+        ),
+    )
+    monkeypatch.setattr(
+        resolver,
+        "_filter_event_participants_via_llm",
+        lambda **_kwargs: (["user", "Morgan Brooks"], ["Morgan Brooks's whole family"]),
+    )
+    monkeypatch.setattr(
+        resolver,
+        "_resolve_collective_selectors",
+        lambda *_args, **_kwargs: ([], [], []),
+    )
+    monkeypatch.setattr(
+        resolver,
+        "_resolve_people_mentions",
+        lambda *args, **kwargs: ([], [], [], {}),
+    )
+
+    result = resolver.resolve_contacts_from_text(
+        "Lots of people were there, and Morgan Brooks's whole family was there as well.",
+        "user@example.com",
+        mode=resolver.MINIMAL_RESOLUTION_MODE,
+        participant_focus=True,
+    )
+
+    assert result["people_mentioned"] == [
+        "user",
+        "Morgan Brooks",
+        "Morgan Brooks's whole family",
+    ]
 
 
 def test_infer_professions_for_new_contacts_skips_family_terms_without_llm(monkeypatch):

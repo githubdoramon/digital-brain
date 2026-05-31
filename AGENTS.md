@@ -167,7 +167,7 @@ User Question → Intent Router → Conversational Profile Dispatch → Tool Vis
 - **`resolve_contacts` contract**: model-facing params should remain minimal (`text` only). Runtime identity/context (like `user_email`) is injected by the controller, not authored by the model.
 - **Keep code modular**: avoid bloated files that mix unrelated concerns. When a file starts owning multiple responsibilities (for example, controller loop + guardrails + tool execution internals), extract cohesive modules early.
 - **Documentation hygiene is mandatory**: when behavior, architecture, routing/profile selection, or runtime contracts change, update the corresponding docs in `backend/orchestrator/docs/architecture/` and this `AGENTS.md` in the same work.
-- **Open-source anonymization is mandatory**: never copy real names, emails, places, companies, or other identifying strings from logs, screenshots, or production-like data into tests, fixtures, prompts, docs, or comments. Always replace them with clearly fake equivalents before commit.
+- **Open-source anonymization is mandatory**: never copy real names, emails, places, companies, or other identifying strings from logs, screenshots, or production-like data into tests, fixtures, prompts, docs, or comments. Treat any string that came from a user message, exported log, screenshot, or local database as suspect by default; rewrite it to a clearly fake equivalent before it ever lands in code, even temporarily.
 - **Commit gate for backend changes**: never commit or push backend code changes without running backend tests first in the same working session (at minimum affected tests; prefer full `pytest` when feasible). If linting is configured for the changed backend files, run lint checks too before committing.
 - **Backend lint gate is mandatory**: before every backend commit or push, run the backend linter on the changed Python files (currently `ruff check` from `backend/orchestrator/.venv`, and use `--fix` when safe for import/order issues) and confirm it passes in the same session. Do not rely on tests alone.
 - **Profile intent ownership**: conversational profiles should declare intent ownership via `supports_intent` on the profile/interface implementation; avoid hardcoding intent lists inside the central registry.
@@ -454,15 +454,21 @@ cases, UI placeholders, or docs.
 - Emails: `@example.com`, `@example.org`, `@example.invalid` (RFC 6761) only.
   Never `@gmail.com` / `@yahoo.com` / a real domain you operate.
 - Phone numbers: use the RFC 6761 reserved block — `+1 555 555 01XX`.
-- Addresses: invent street names (`12 Maple Street, Springfield`). Never copy
-  a real address — Portuguese `Rua …` patterns and real towns (Springfield,
-  Riverside, Estoril, etc.) are off-limits.
+- Addresses: invent street names (`12 Maple Street, Harborview`). Never copy
+  a real address — Portuguese `Rua …` patterns and real towns (`Harborview`,
+  `Northgate`, `Alder Point` are good fake examples; avoid real towns entirely).
 - Companies / venues: use clearly-fake names (`Acme`, `Beacon`, `The Tide`).
   Do not name real restaurants, neighborhoods, or employers.
 - Domains: `acme.example` / `example.com`. The TLD `.example` is reserved
   for documentation per RFC 2606.
 - LLM prompts and few-shot examples count as code — same rules apply. If a
   prompt currently references a real entity, replace it before commit.
+- Log-derived examples are especially easy to leak. Never paste names, emails,
+  domains, venues, or place names from a bug report or system log into a test
+  or prompt and plan to anonymize later; anonymize first, then write the test.
+- Before finishing any change that adds or edits tests/prompts/examples, do a
+  quick self-check: "Did any literal string here originate from user data or
+  logs?" If yes, replace it with a fake equivalent before running final checks.
 
 When in doubt, ask: would I be comfortable if this string ended up on
 HackerNews? If no, anonymize.

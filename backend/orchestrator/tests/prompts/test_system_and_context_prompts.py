@@ -67,7 +67,7 @@ def test_location_context_includes_recent_resolved_place_guidance():
         {
             "recent_resolved_place": {
                 "place_id": "plc_home_123",
-                "place_name": "Theo's apt",
+                "place_name": "Morgan's apt",
                 "address": "Maple Street, 23, Springfield",
                 "role_hint": "home",
             }

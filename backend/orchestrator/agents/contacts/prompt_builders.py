@@ -65,6 +65,7 @@ Text: \"{text}\"
 - Do not use family/relationship groups as collective selectors.
 - Do NOT infer a collective selector from a singular organization mention like \"I was fired from Acme\" or \"I met Pat at Acme\".
 - Only return a selector when the text explicitly refers to a plural or collective set such as \"everyone\", \"all\", \"team\", \"people\", \"staff\", or \"employees\".
+- Do NOT return vague crowd references like \"lots of people\", \"many people\", \"some people\", \"a bunch of people\", or \"the people there\". Those are not resolvable selectors.
 
 Return ONLY valid JSON:
 {{

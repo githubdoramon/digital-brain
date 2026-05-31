@@ -16,8 +16,8 @@ def test_service_builds_need_user_input_for_ambiguity(monkeypatch):
                 {
                     "original_text": "Gio",
                     "candidates": [
-                        {"contact_id": "c1", "display_name": "Giovanni Panerai"},
-                        {"contact_id": "c2", "display_name": "Giovanni Ghelfi"},
+                        {"contact_id": "c1", "display_name": "Giovanni Carter"},
+                        {"contact_id": "c2", "display_name": "Giovanni Lake"},
                     ],
                 }
             ],
@@ -58,7 +58,7 @@ def test_service_normalizes_existing_need_user_input(monkeypatch):
                         "kind": "select",
                         "label": "Who did you mean by 'Gio'?",
                         "required": True,
-                        "options": [{"id": "c1", "label": "Giovanni Panerai"}],
+                        "options": [{"id": "c1", "label": "Giovanni Carter"}],
                     }
                 ],
                 "submission_mode": "ui_submission",

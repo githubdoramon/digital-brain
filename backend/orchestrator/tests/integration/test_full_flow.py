@@ -141,7 +141,7 @@ class TestAgentControllerIntegration:
                     "status": "success",
                     "people_mentioned": ["Gio"],
                     "resolved_contacts": [
-                        {"contact_id": "contact-gio", "display_name": "Giovanni Panerai"}
+                        {"contact_id": "contact-gio", "display_name": "Giovanni Carter"}
                     ],
                     "ambiguous_contacts": [],
                 }
@@ -203,7 +203,7 @@ class TestAgentControllerIntegration:
         state.resolution["active_contact_scope"] = [
             {
                 "mention_text": "Gio",
-                "display_name": "Giovanni Panerai",
+                "display_name": "Giovanni Carter",
                 "contact_id": "contact-gio",
             }
         ]
@@ -261,7 +261,7 @@ class TestAgentControllerIntegration:
         state.resolution["active_contact_scope"] = [
             {
                 "mention_text": "Gio",
-                "display_name": "Giovanni Panerai",
+                "display_name": "Giovanni Carter",
                 "contact_id": "contact-gio",
             }
         ]
@@ -384,8 +384,8 @@ class TestAgentControllerIntegration:
                     {
                         "original_text": "Gio",
                         "candidates": [
-                            {"contact_id": "contact-1", "display_name": "Giovanni Panerai"},
-                            {"contact_id": "contact-2", "display_name": "Giovanni Ghelfi"},
+                            {"contact_id": "contact-1", "display_name": "Giovanni Carter"},
+                            {"contact_id": "contact-2", "display_name": "Giovanni Lake"},
                         ],
                     }
                 ],
@@ -404,7 +404,7 @@ class TestAgentControllerIntegration:
 
         assert llm_calls["count"] == 0
         assert "Which Gio did you mean?" in bundle["answer"]
-        assert "Giovanni Panerai" in bundle["answer"]
+        assert "Giovanni Carter" in bundle["answer"]
         assert bundle["ui_directives"] is not None
         assert bundle["ui_directives"]["blocks"][0]["type"] == "clarification_form"
         assert bundle["ui_directives"]["fallback_text"] == "Which Gio did you mean?"

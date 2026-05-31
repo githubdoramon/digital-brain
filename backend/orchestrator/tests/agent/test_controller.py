@@ -873,7 +873,7 @@ class TestContactAwareMemorySearch:
         state.resolution["active_contact_scope"] = [
             {
                 "mention_text": "Gio",
-                "display_name": "Giovanni Panerai",
+                "display_name": "Giovanni Carter",
                 "contact_id": "contact-gio",
             }
         ]
@@ -896,7 +896,7 @@ class TestContactAwareMemorySearch:
         state.resolution["active_contact_scope"] = [
             {
                 "mention_text": "Gio",
-                "display_name": "Giovanni Panerai",
+                "display_name": "Giovanni Carter",
                 "contact_id": "contact-gio",
             }
         ]
@@ -927,7 +927,7 @@ class TestContactAwareMemorySearch:
                 "resolved_contacts": [
                     {
                         "contact_id": "contact-gio",
-                        "display_name": "Giovanni Panerai",
+                        "display_name": "Giovanni Carter",
                         "original_text": "Gio",
                     }
                 ],
@@ -978,7 +978,7 @@ class TestContactAwareMemorySearch:
         state.resolution["active_contact_scope"] = [
             {
                 "mention_text": "Gio",
-                "display_name": "Giovanni Panerai",
+                "display_name": "Giovanni Carter",
                 "contact_id": "contact-gio",
             }
         ]
@@ -1062,7 +1062,7 @@ class TestContactAwareMemorySearch:
         state.resolution["active_contact_scope"] = [
             {
                 "mention_text": "Gio",
-                "display_name": "Giovanni Panerai",
+                "display_name": "Giovanni Carter",
                 "contact_id": "contact:gio-acme-example",
             }
         ]
@@ -1071,7 +1071,7 @@ class TestContactAwareMemorySearch:
 
         assert context is not None
         assert "RESOLVED CONTACT SCOPE" in context
-        assert "'Gio' -> 'Giovanni Panerai'" in context
+        assert "'Gio' -> 'Giovanni Carter'" in context
         assert "contact:gio-acme-example" in context
         assert "query to 'events'" in context
 
@@ -1160,7 +1160,7 @@ class TestContactAwareMemorySearch:
                 "resolved_contacts": [
                     {
                         "contact_id": "contact-gio",
-                        "display_name": "Giovanni Panerai",
+                        "display_name": "Giovanni Carter",
                         "original_text": "Gio",
                     }
                 ],
@@ -1223,7 +1223,7 @@ class TestContactAwareMemorySearch:
                 "status": "success",
                 "people_mentioned": ["Gio"],
                 "resolved_contacts": [
-                    {"contact_id": "contact-gio", "display_name": "Giovanni Panerai"}
+                    {"contact_id": "contact-gio", "display_name": "Giovanni Carter"}
                 ],
                 "ambiguous_contacts": [],
             },
@@ -1250,7 +1250,7 @@ class TestContactAwareMemorySearch:
                 "resolved_contacts": [
                     {
                         "contact_id": "contact-gio",
-                        "display_name": "Giovanni Panerai",
+                        "display_name": "Giovanni Carter",
                         "original_text": "Gio",
                     }
                 ],
@@ -1709,7 +1709,7 @@ class TestLinkedItemsSelection:
             candidate_id="place-the-crest-mlwdm9qq",
             label="The Crest",
             source_tool="get_events",
-            metadata={"name": "The Crest", "city": "Riverside", "country": "Westoria"},
+            metadata={"name": "The Crest", "city": "Harborview", "country": "Westoria"},
             role_hints=["context_anchor"],
         )
         state.record_tool_call(
@@ -1738,7 +1738,7 @@ class TestLinkedItemsSelection:
                             "place": {
                                 "place_id": "place-the-crest-mlwdm9qq",
                                 "name": "The Crest",
-                                "city": "Riverside",
+                                "city": "Harborview",
                                 "country": "Westoria",
                             },
                         }
@@ -1766,7 +1766,7 @@ class TestLinkedItemsSelection:
 
         linked_items = controller._build_linked_items(
             state,
-            answer="You last met Dana Lewis on 19 April 2026 at The Crest in Riverside.",
+            answer="You last met Dana Lewis on 19 April 2026 at The Crest in Harborview.",
         )
 
         assert any(

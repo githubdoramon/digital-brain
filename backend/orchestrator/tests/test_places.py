@@ -92,7 +92,7 @@ def test_search_places_matches_address_and_description(monkeypatch):
         lambda: [
             {
                 "place_id": "plc_theos",
-                "name": "Theo's apt",
+                "name": "Morgan's apt",
                 "aliases": [],
                 "description": "Apartment building near old town",
                 "address": "12 Maple Street, Springfield",

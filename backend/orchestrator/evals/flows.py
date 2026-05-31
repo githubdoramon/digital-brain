@@ -662,11 +662,11 @@ EVAL_FLOWS: list[EvalFlowDefinition] = [
                 case_id="event-extraction-meeting",
                 title="Meeting with absolute datetime",
                 input={
-                    "message": "Project Apollo kickoff on 2026-05-14 14:30 at Porto Office to plan the roadmap.",
+                    "message": "Project Apollo kickoff on 2026-05-14 14:30 at Harborview Office to plan the roadmap.",
                 },
                 expected={
                     "when": "2026-05-14T14:30:00",
-                    "where": "Porto Office",
+                    "where": "Harborview Office",
                     "types": ["meeting"],
                     "needs_clarification": False,
                 },
@@ -769,7 +769,7 @@ EVAL_FLOWS: list[EvalFlowDefinition] = [
                         "summary": "Project sync with design and backend.",
                         "when": "2026-06-04T17:00:00",
                         "end_when": None,
-                        "where": "Porto Office",
+                        "where": "Harborview Office",
                         "documents": [],
                         "tags": ["Work"],
                         "types": ["meeting"],
@@ -780,7 +780,7 @@ EVAL_FLOWS: list[EvalFlowDefinition] = [
                 expected={
                     "when": "2026-06-04T17:00:00",
                     "end_when": "2026-06-04T18:30:00",
-                    "where": "Porto Office",
+                    "where": "Harborview Office",
                     "types": ["meeting"],
                     "needs_clarification": False,
                 },

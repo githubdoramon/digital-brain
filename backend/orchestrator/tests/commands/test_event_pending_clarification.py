@@ -1068,12 +1068,12 @@ def test_extract_clarification_detail_strips_prefixed_original_message():
 
 def test_extract_clarification_detail_strips_structured_field_label():
     detail = event_handler._extract_clarification_detail(
-        "Additional details: Who did you mean by 'Rita'?: Rita Castro",
+        "Additional details: Who did you mean by 'Rita'?: Rita Lake",
         "today's physiotherapy went well",
         ["Who did you mean by 'Rita'?"],
     )
 
-    assert detail == "Rita Castro"
+    assert detail == "Rita Lake"
 
 
 def test_event_clarification_follow_up_strips_structured_contact_disambiguation_label(
@@ -1125,7 +1125,7 @@ def test_event_clarification_follow_up_strips_structured_contact_disambiguation_
 
     def fake_extract(*_args, **_kwargs):
         return {
-            "title": "Physiotherapy Session with Rita Castro",
+            "title": "Physiotherapy Session with Rita Lake",
             "summary": "Went well.",
             "when": "2026-04-21T09:00:00",
             "end_when": None,
@@ -1151,7 +1151,7 @@ def test_event_clarification_follow_up_strips_structured_contact_disambiguation_
             command="event",
             args=(
                 "today's physiotherapy at 9h went well. Rita was the Phisioterapist\n\n"
-                "Additional details: Who did you mean by 'Rita'?: Rita Castro "
+                "Additional details: Who did you mean by 'Rita'?: Rita Lake "
                 f"[clarification_id:{clarification_id}]"
             ),
             raw_message="/event follow-up",
@@ -1160,9 +1160,9 @@ def test_event_clarification_follow_up_strips_structured_contact_disambiguation_
     )
 
     assert result["type"] == "event_confirmation"
-    assert "Rita Castro" in captured["contact_message"]
+    assert "Rita Lake" in captured["contact_message"]
     assert "Who did you mean by 'Rita'?" not in captured["contact_message"]
-    assert "- Rita Castro" in captured["contact_message"]
+    assert "- Rita Lake" in captured["contact_message"]
 
     delete_command_data(result["preview_id"])
     delete_command_data(clarification_id)
@@ -1604,14 +1604,14 @@ def test_find_event_matches_honors_explicit_new_event_correction(monkeypatch):
 
 def test_find_event_matches_uses_structured_exact_day_search(monkeypatch):
     extracted = {
-        "title": "Physiotherapy session with Rita Castro",
-        "summary": "Had a physiotherapy session with Rita Castro at Policlínica Monserrat.",
+        "title": "Physiotherapy session with Rita Lake",
+        "summary": "Had a physiotherapy session with Rita Lake at Beacon Physio Clinic.",
         "when": event_handler.datetime.fromisoformat("2026-05-07T00:00:00"),
-        "where": "Policlínica Monserrat",
+        "where": "Beacon Physio Clinic",
     }
     resolution = {
-        "contacts": [{"contact_id": "contact:rita", "display_name": "Rita Castro"}],
-        "matched_place": {"place_id": "place:monserrat", "name": "Policlínica Monserrat"},
+        "contacts": [{"contact_id": "contact:rita", "display_name": "Rita Lake"}],
+        "matched_place": {"place_id": "place:beacon-physio", "name": "Beacon Physio Clinic"},
     }
     calls = {"structured": 0, "semantic": 0}
 
@@ -1627,18 +1627,18 @@ def test_find_event_matches_uses_structured_exact_day_search(monkeypatch):
             {
                 "id": "event:physio-10",
                 "title": "10th physiotherapy session",
-                "summary": "Physiotherapy with Rita Castro at Policlínica Monserrat.",
+                "summary": "Physiotherapy with Rita Lake at Beacon Physio Clinic.",
                 "score": 0.82,
                 "start_date": "2026-05-07T08:00:00",
                 "people": ["contact:rita"],
-                "place": {"place_id": "place:monserrat", "name": "Policlínica Monserrat"},
+                "place": {"place_id": "place:beacon-physio", "name": "Beacon Physio Clinic"},
             }
         ]
 
     monkeypatch.setattr(event_handler, "_search_event_candidates_structured", fake_structured)
 
     match = event_handler._find_event_matches(
-        "physiotherapy session today with Rita Castro at policlinica Monserrat",
+        "physiotherapy session today with Rita Lake at Beacon Physio Clinic",
         extracted,
         resolution,
     )
@@ -1760,10 +1760,10 @@ def test_handle_event_follow_up_rematch_excludes_previous_event(monkeypatch):
             "where": "Home",
             "tags": ["work"],
             "types": ["meeting"],
-            "who": ["Betinho"],
+            "who": ["Benny"],
         },
         "resolution": {
-            "contacts": [{"contact_id": "contact:betinho", "display_name": "Betinho"}],
+            "contacts": [{"contact_id": "contact:benny", "display_name": "Benny"}],
             "new_entities": {"contacts": [], "places": [], "documents": []},
         },
         "contact_result": {"ambiguous_contacts": []},
@@ -1772,7 +1772,7 @@ def test_handle_event_follow_up_rematch_excludes_previous_event(monkeypatch):
         "existing_event_id": "event:betinho",
         "matched_event": {
             "event_id": "event:betinho",
-            "title": "Call with Betinho",
+            "title": "Call with Benny",
             "start_date": "2026-05-28T15:00:00+01:00",
         },
     }
@@ -1837,14 +1837,14 @@ def test_handle_event_follow_up_rematch_excludes_previous_event(monkeypatch):
 
 def test_find_event_matches_widens_for_explicit_existing_request(monkeypatch):
     extracted = {
-        "title": "Physiotherapy session with Rita Castro",
-        "summary": "Had a physiotherapy session with Rita Castro at Policlínica Monserrat.",
+        "title": "Physiotherapy session with Rita Lake",
+        "summary": "Had a physiotherapy session with Rita Lake at Beacon Physio Clinic.",
         "when": event_handler.datetime.fromisoformat("2026-05-07T00:00:00"),
-        "where": "Policlínica Monserrat",
+        "where": "Beacon Physio Clinic",
     }
     resolution = {
-        "contacts": [{"contact_id": "contact:rita", "display_name": "Rita Castro"}],
-        "matched_place": {"place_id": "place:monserrat", "name": "Policlínica Monserrat"},
+        "contacts": [{"contact_id": "contact:rita", "display_name": "Rita Lake"}],
+        "matched_place": {"place_id": "place:beacon-physio", "name": "Beacon Physio Clinic"},
     }
 
     def fake_search(query, time_start, time_end, limit):
@@ -1854,11 +1854,11 @@ def test_find_event_matches_widens_for_explicit_existing_request(monkeypatch):
             {
                 "id": "event:physio-9",
                 "title": "9th physiotherapy session",
-                "summary": "Physiotherapy with Rita Castro at Policlínica Monserrat.",
+                "summary": "Physiotherapy with Rita Lake at Beacon Physio Clinic.",
                 "score": 0.88,
                 "start_date": "2026-05-05T08:00:00",
                 "people": ["contact:rita"],
-                "place": {"place_id": "place:monserrat", "name": "Policlínica Monserrat"},
+                "place": {"place_id": "place:beacon-physio", "name": "Beacon Physio Clinic"},
             }
         ]
 
@@ -1875,7 +1875,7 @@ def test_find_event_matches_widens_for_explicit_existing_request(monkeypatch):
     )
 
     match = event_handler._find_event_matches(
-        "physiotherapy session today with Rita Castro at policlinica Monserrat was the same as last one. Update the existing event.",
+        "physiotherapy session today with Rita Lake at Beacon Physio Clinic was the same as last one. Update the existing event.",
         extracted,
         resolution,
     )

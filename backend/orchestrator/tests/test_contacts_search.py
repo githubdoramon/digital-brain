@@ -112,7 +112,7 @@ def test_search_contacts_any_non_email_query_ignores_email_domain_noise(monkeypa
     def fake_load(contact_ids=None):
         assert contact_ids == ["contact-email", "contact-role"]
         return [
-            _contact("contact-email", "Alice Example", emails=["alice@acme.com"]),
+            _contact("contact-email", "Alice Example", emails=["alice@acme.example"]),
             _contact(
                 "contact-role",
                 "Dana Executive",

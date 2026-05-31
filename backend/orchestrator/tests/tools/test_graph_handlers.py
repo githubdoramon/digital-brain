@@ -540,7 +540,7 @@ def test_places_group_by_city(monkeypatch):
         results=[
             [
                 {"bucket_key": "Aurora", "bucket_count": 6},
-                {"bucket_key": "Porto", "bucket_count": 3},
+                {"bucket_key": "Harborview", "bucket_count": 3},
             ]
         ]
     )
@@ -552,7 +552,7 @@ def test_places_group_by_city(monkeypatch):
 
     assert result["groups"] == [
         {"key": "Aurora", "count": 6},
-        {"key": "Porto", "count": 3},
+        {"key": "Harborview", "count": 3},
     ]
     query, _ = cursor.executed[0]
     assert "p.city" in query

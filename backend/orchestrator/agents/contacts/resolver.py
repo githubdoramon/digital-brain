@@ -1224,6 +1224,21 @@ _DISALLOWED_RELATIONSHIP_GROUP_SELECTOR_PATTERN = re.compile(
     r"daughter|son|parent|parents|mother|father|brother|sister|mom|dad)\b"
 )
 
+_GENERIC_COLLECTIVE_SELECTOR_VALUE_PATTERN = re.compile(
+    r"^(?:people|person|folks|group|groups|team|teams|staff|employees|employee|everyone|everybody|all)$"
+)
+
+_VAGUE_CROWD_SELECTOR_PATTERN = re.compile(
+    r"^(?:lots?\s+of|many|some|several|a\s+bunch\s+of|bunch\s+of|crowd\s+of|the)\s+"
+    r"(?:people|person|folks|group|groups|team|teams|staff|employees)"
+    r"(?:\s+there)?$"
+)
+
+_PARTICIPATION_CUE_PATTERN = re.compile(
+    r"\b(?:with|along with|were there|was there|there were|there was|went|came|joined|"
+    r"attended|showed up|came along|came over|present|as well)\b"
+)
+
 
 def _selector_has_explicit_collective_intent(
     *,
@@ -1235,6 +1250,24 @@ def _selector_has_explicit_collective_intent(
     normalized_text = normalize_search_text(text)
     normalized_raw = normalize_search_text(raw)
     normalized_value = normalize_search_text(value)
+
+    if kind == "group":
+        if _GENERIC_COLLECTIVE_SELECTOR_VALUE_PATTERN.fullmatch(normalized_value):
+            logger.debug(
+                "[contact_resolver] Rejecting collective selector kind=%s raw=%r value=%r: overly generic group value",
+                kind,
+                raw,
+                value,
+            )
+            return False
+        if _VAGUE_CROWD_SELECTOR_PATTERN.fullmatch(normalized_raw):
+            logger.debug(
+                "[contact_resolver] Rejecting collective selector kind=%s raw=%r value=%r: vague crowd reference",
+                kind,
+                raw,
+                value,
+            )
+            return False
 
     if kind == "group":
         group_text = " ".join(part for part in (normalized_raw, normalized_value) if part).strip()
@@ -1261,6 +1294,60 @@ def _selector_has_explicit_collective_intent(
         selector_tokens.append(f"@{normalized_value}")
 
     return any(token and token in normalized_text for token in selector_tokens)
+
+
+def _collective_mention_has_participation_cue(text: str, mention: str) -> bool:
+    normalized_text = normalize_search_text(text)
+    normalized_mention = normalize_search_text(mention)
+    if not normalized_text or not normalized_mention:
+        return False
+
+    start = normalized_text.find(normalized_mention)
+    if start < 0:
+        return False
+
+    window_start = max(0, start - 80)
+    window_end = min(len(normalized_text), start + len(normalized_mention) + 80)
+    context_window = normalized_text[window_start:window_end]
+    return bool(_PARTICIPATION_CUE_PATTERN.search(context_window))
+
+
+def _restore_participant_collective_mentions(
+    *,
+    text: str,
+    original_people: list[str],
+    filtered_people: list[str],
+) -> list[str]:
+    if not original_people or not filtered_people:
+        return filtered_people
+
+    restored = list(filtered_people)
+    normalized_filtered = {_normalize_entity_for_match(person) for person in restored}
+    original_collectives = [
+        person
+        for person in original_people
+        if _POSSESSIVE_COLLECTIVE_PATTERN.fullmatch(str(person or "").strip())
+    ]
+    for collective in original_collectives:
+        collective_norm = _normalize_entity_for_match(collective)
+        if not collective_norm or collective_norm in normalized_filtered:
+            continue
+
+        owner, _, _group = collective.partition("'s ")
+        owner_norm = _normalize_entity_for_match(owner)
+        if not owner_norm or owner_norm not in normalized_filtered:
+            continue
+        if not _collective_mention_has_participation_cue(text, collective):
+            continue
+
+        logger.info(
+            "[contact_resolver] Restoring participant collective mention '%s' after participant filter",
+            collective,
+        )
+        restored.append(collective)
+        normalized_filtered.add(collective_norm)
+
+    return restored
 
 
 def _extract_collective_selectors_via_llm(
@@ -2035,6 +2122,11 @@ def resolve_contacts_from_text(
                 user_facts_block=user_facts_block,
             )
             if filtered_people or excluded_people:
+                filtered_people = _restore_participant_collective_mentions(
+                    text=effective_text,
+                    original_people=people,
+                    filtered_people=filtered_people,
+                )
                 logger.info(
                     "[contact_resolver] Participant filter kept=%s excluded=%s",
                     filtered_people,
@@ -2487,7 +2579,7 @@ def _is_name_level_match(person_text: str, display_name: str) -> bool:
     """
     Return True when mention tokens plausibly map to selected display-name tokens.
 
-    Example: "gio" -> "Giovanni Panerai"
+    Example: "gio" -> "Giovanni Carter"
     """
     mention_tokens = [
         token

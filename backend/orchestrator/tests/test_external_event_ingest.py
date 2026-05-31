@@ -181,10 +181,10 @@ def test_merge_event_stays_additive_by_default():
 
 def test_resolve_attendee_contacts_groups_all_attendees_by_domain(monkeypatch):
     contact_map = {
-        "alice@acme.com": ("contact:alice", False),
-        "bob@acme.com": ("contact:bob", True),
-        "carol@other.com": ("contact:carol", False),
-        "me@acme.com": ("contact:me", False),
+        "alice@acme.example": ("contact:alice", False),
+        "bob@acme.example": ("contact:bob", True),
+        "carol@other.example": ("contact:carol", False),
+        "me@acme.example": ("contact:me", False),
     }
 
     monkeypatch.setattr(
@@ -193,18 +193,18 @@ def test_resolve_attendee_contacts_groups_all_attendees_by_domain(monkeypatch):
     )
 
     unique_contacts, attendee_contacts_by_domain = events._resolve_attendee_contacts(
-        ["alice@acme.com", "bob@acme.com", "carol@other.com"],
+        ["alice@acme.example", "bob@acme.example", "carol@other.example"],
         contact_cache={},
-        current_user={"email": "me@acme.com"},
+        current_user={"email": "me@acme.example"},
     )
 
     assert unique_contacts == ["contact:alice", "contact:bob", "contact:carol", "contact:me"]
-    assert sorted(attendee_contacts_by_domain["acme.com"]) == [
+    assert sorted(attendee_contacts_by_domain["acme.example"]) == [
         "contact:alice",
         "contact:bob",
         "contact:me",
     ]
-    assert attendee_contacts_by_domain["other.com"] == ["contact:carol"]
+    assert attendee_contacts_by_domain["other.example"] == ["contact:carol"]
 
 
 def test_event_in_normalizes_attendees_alias_and_objects():
