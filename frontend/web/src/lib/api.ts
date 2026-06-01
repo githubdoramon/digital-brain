@@ -34,6 +34,7 @@ export type UiDirectiveField = {
   label: string;
   placeholder?: string;
   required?: boolean;
+  value?: string;
   options?: UiDirectiveOption[];
 };
 
@@ -245,12 +246,20 @@ export const api = {
 export type StreamEvent =
   | { type: "token"; content: string }
   | { type: "clear_content" }
-  | { type: "tool_call"; name: string; args?: Record<string, unknown> }
+  | { type: "tool_call"; name: string; args?: unknown }
   | { type: "tool_result"; name: string; result: unknown }
   | { type: "status"; message: string }
   | { type: "session_info"; thread_id: string; is_new_session: boolean }
   | { type: "done"; bundle: StreamBundle }
   | { type: "error"; message: string };
+
+export type LinkedItem = {
+  entity_type: "event" | "document" | "contact" | "place";
+  entity_id: string;
+  title: string;
+  subtitle?: string | null;
+  role?: string | null;
+};
 
 export type StreamBundle = {
   answer: string;
@@ -265,6 +274,7 @@ export type StreamBundle = {
     type: string;
     [key: string]: unknown;
   };
+  linked_items?: LinkedItem[];
 };
 
 /**
@@ -295,7 +305,7 @@ export async function ask(
 export type StreamCallbacks = {
   onToken?: (content: string, fullContent: string) => void;
   onClearContent?: () => void;
-  onToolCall?: (name: string, args?: Record<string, unknown>) => void;
+  onToolCall?: (name: string, args?: unknown) => void;
   onToolResult?: (name: string, result: unknown) => void;
   onStatus?: (message: string) => void;
   onSessionInfo?: (threadId: string, isNewSession: boolean) => void;
@@ -404,7 +414,7 @@ export async function askWithStreaming(
               break;
             case "error":
               callbacks.onError?.(event.message);
-              break;
+              throw new Error(event.message || "Stream ended with an error");
             case "done":
               return event.bundle;
           }
