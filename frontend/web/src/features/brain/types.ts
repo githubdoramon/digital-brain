@@ -4,6 +4,10 @@ export type ChatMode = "quick" | "threads";
 
 export type AssistantMetadata = {
   command_result?: StreamBundle["command_result"];
+  command_resolved?: {
+    status: "created" | "updated" | "cancelled";
+    label?: string;
+  };
   ui_directives?: UiDirectives;
   linked_items?: LinkedItem[];
   progress_chip?: string;

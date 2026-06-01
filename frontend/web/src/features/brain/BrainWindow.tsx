@@ -12,12 +12,51 @@ import {
   type UiSubmissionInput,
 } from "@/lib/api";
 
+import { EventDraftEditor } from "./EventDraftEditor";
+import {
+  applyEventDraftModifications,
+  buildEventDraft,
+  type EventDraftModifications,
+  updateEventPreviewDirectives,
+} from "./eventDraft";
 import { LinkedItemsRow } from "./linkedItems";
 import { AssistantMarkdown } from "./markdown";
 import { SlashCommandPalette } from "./SlashCommandPalette";
 import { buildToolProgressChip } from "./streamingProgress";
 import type { AssistantMetadata, ChatMode, Message, ThreadDetail, ThreadSummary } from "./types";
 import { UiDirectiveCard } from "./UiDirectiveCard";
+
+const EVENT_CONFIRM_ACTION_ID = "event_confirmation_action";
+const CONTACT_CONFIRM_ACTION_ID = "contact_confirmation_action";
+const EVENT_CONFIRM_OPTION_PREFIX = "confirm:";
+const EVENT_CANCEL_OPTION_PREFIX = "cancel:";
+const EVENT_EDIT_OPTION_PREFIX = "edit:";
+const CONTACT_CONFIRM_OPTION_PREFIX = "confirm:";
+const CONTACT_CANCEL_OPTION_PREFIX = "cancel:";
+const CONTACT_EDIT_OPTION_PREFIX = "edit:";
+
+type CommandAction = {
+  type: "confirm" | "cancel" | "edit";
+  previewId: string;
+};
+
+type EventConfirmResult = {
+  success: boolean;
+  event_id?: string | null;
+  operation?: string | null;
+  error?: string | null;
+};
+
+type ContactConfirmResult = {
+  success: boolean;
+  error?: string | null;
+};
+
+type ActiveDraftEditor = {
+  kind: "event";
+  messageId: string | number;
+  previewId: string;
+};
 
 function buildAssistantMetadata(data: StreamBundle, progressChip?: string): AssistantMetadata | undefined {
   const metadata: AssistantMetadata = {};
@@ -43,6 +82,28 @@ function timestampLabel(value: Date): string {
   });
 }
 
+function parseCommandAction(optionIdRaw: unknown, prefixes: {
+  confirm: string;
+  cancel: string;
+  edit: string;
+}): CommandAction | null {
+  if (typeof optionIdRaw !== "string") return null;
+  const optionId = optionIdRaw.trim();
+  if (optionId.startsWith(prefixes.confirm)) {
+    const previewId = optionId.slice(prefixes.confirm.length).trim();
+    return previewId ? { type: "confirm", previewId } : null;
+  }
+  if (optionId.startsWith(prefixes.cancel)) {
+    const previewId = optionId.slice(prefixes.cancel.length).trim();
+    return previewId ? { type: "cancel", previewId } : null;
+  }
+  if (optionId.startsWith(prefixes.edit)) {
+    const previewId = optionId.slice(prefixes.edit.length).trim();
+    return previewId ? { type: "edit", previewId } : null;
+  }
+  return null;
+}
+
 export function BrainWindow() {
   const { data: session } = useSession();
   const [messages, setMessages] = useState<Message[]>([]);
@@ -55,6 +116,11 @@ export function BrainWindow() {
   const [isLoadingMessages, setIsLoadingMessages] = useState(false);
   const [pendingEventId, setPendingEventId] = useState<string | null>(null);
   const [chatMode, setChatMode] = useState<ChatMode>("quick");
+  const [activeDirectiveMessageId, setActiveDirectiveMessageId] = useState<string | number | null>(null);
+  const [activeDraftEditor, setActiveDraftEditor] = useState<ActiveDraftEditor | null>(null);
+  const [eventDraftModificationsByPreview, setEventDraftModificationsByPreview] = useState<
+    Record<string, EventDraftModifications>
+  >({});
   const messagesContainerRef = useRef<HTMLDivElement>(null);
   const lastMessageRef = useRef<HTMLDivElement>(null);
   const [isAtBottom, setIsAtBottom] = useState(true);
@@ -71,6 +137,7 @@ export function BrainWindow() {
 
   useEffect(() => {
     setPendingEventId(null);
+    setActiveDraftEditor(null);
   }, [chatMode, selectedThreadId]);
 
   const scrollToLatestMessage = useCallback(() => {
@@ -195,6 +262,25 @@ export function BrainWindow() {
       ),
     );
   }, []);
+
+  const updateMessageMetadata = useCallback(
+    (messageId: string | number, metadata: Partial<AssistantMetadata>) => {
+      setTargetMessages(chatMode, (prev) =>
+        prev.map((message) =>
+          message.id === messageId
+            ? {
+                ...message,
+                metadata: {
+                  ...message.metadata,
+                  ...metadata,
+                },
+              }
+            : message,
+        ),
+      );
+    },
+    [chatMode, setTargetMessages],
+  );
 
   const submitMessage = useCallback(
     async (options?: { text?: string; uiSubmission?: UiSubmissionInput }) => {
@@ -368,7 +454,116 @@ export function BrainWindow() {
     void submitMessage();
   };
 
-  const handleDirectiveSubmit = (submission: UiSubmissionInput) => {
+  const handleDirectiveSubmit = async (message: Message, submission: UiSubmissionInput) => {
+    if (submission.action_id === EVENT_CONFIRM_ACTION_ID) {
+      const action = parseCommandAction(submission.values?.option_id, {
+        confirm: EVENT_CONFIRM_OPTION_PREFIX,
+        cancel: EVENT_CANCEL_OPTION_PREFIX,
+        edit: EVENT_EDIT_OPTION_PREFIX,
+      });
+      if (!action || activeDirectiveMessageId) return;
+
+      if (action.type === "edit") {
+        const baseDraft = buildEventDraft(message.metadata?.command_result, action.previewId);
+        if (!baseDraft) {
+          updateMessageMetadata(message.id, {
+            request_error: "I could not load that event draft for editing. Please retry from the latest preview.",
+          });
+          return;
+        }
+        setActiveDraftEditor({ kind: "event", messageId: message.id, previewId: action.previewId });
+        return;
+      }
+
+      if (pendingEventId && action.previewId !== pendingEventId) {
+        window.alert("That draft is no longer active. Use the newest event preview card.");
+        return;
+      }
+
+      setActiveDirectiveMessageId(message.id);
+      try {
+        const result = await api.post<EventConfirmResult>("/commands/event/confirm", {
+          preview_id: action.previewId,
+          confirmed: action.type === "confirm",
+          modifications: eventDraftModificationsByPreview[action.previewId] || {},
+          skip_entities: {},
+        });
+        if (!result.success) {
+          throw new Error(result.error || "Event action failed");
+        }
+        const status =
+          action.type !== "confirm" ? "cancelled" : result.operation === "update" ? "updated" : "created";
+        updateMessageMetadata(message.id, {
+          command_resolved: {
+            status,
+            label:
+              status === "created"
+                ? "Event created"
+                : status === "updated"
+                  ? "Event updated"
+                  : "Event cancelled",
+          },
+        });
+        setEventDraftModificationsByPreview((prev) => {
+          if (!prev[action.previewId]) return prev;
+          const next = { ...prev };
+          delete next[action.previewId];
+          return next;
+        });
+        if (activeDraftEditor?.previewId === action.previewId) {
+          setActiveDraftEditor(null);
+        }
+        setPendingEventId(null);
+        await refreshThreads();
+      } catch (error) {
+        const detail = error instanceof Error ? error.message : "I could not complete that event action.";
+        updateMessageMetadata(message.id, { request_error: detail });
+      } finally {
+        setActiveDirectiveMessageId(null);
+      }
+      return;
+    }
+
+    if (submission.action_id === CONTACT_CONFIRM_ACTION_ID) {
+      const action = parseCommandAction(submission.values?.option_id, {
+        confirm: CONTACT_CONFIRM_OPTION_PREFIX,
+        cancel: CONTACT_CANCEL_OPTION_PREFIX,
+        edit: CONTACT_EDIT_OPTION_PREFIX,
+      });
+      if (!action || activeDirectiveMessageId) return;
+
+      if (action.type === "edit") {
+        window.alert("Desktop contact editing is not wired up yet. Use the mobile draft editor for this action.");
+        return;
+      }
+
+      setActiveDirectiveMessageId(message.id);
+      try {
+        const result = await api.post<ContactConfirmResult>("/commands/contact/confirm", {
+          preview_id: action.previewId,
+          confirmed: action.type === "confirm",
+          modifications: {},
+        });
+        if (!result.success) {
+          throw new Error(result.error || "Contact action failed");
+        }
+        updateMessageMetadata(message.id, {
+          command_resolved: {
+            status: action.type === "confirm" ? "created" : "cancelled",
+            label: action.type === "confirm" ? "Contact changes applied" : "Contact update cancelled",
+          },
+        });
+        setPendingEventId(null);
+        await refreshThreads();
+      } catch (error) {
+        const detail = error instanceof Error ? error.message : "I could not complete that contact action.";
+        updateMessageMetadata(message.id, { request_error: detail });
+      } finally {
+        setActiveDirectiveMessageId(null);
+      }
+      return;
+    }
+
     void submitMessage({
       text: submission.text_fallback || "Submitted structured response.",
       uiSubmission: submission,
@@ -600,6 +795,40 @@ export function BrainWindow() {
               const uiDirectives = message.metadata?.ui_directives;
               const linkedItems = message.metadata?.linked_items || [];
               const requestError = message.metadata?.request_error;
+              const activeEventEditor =
+                activeDraftEditor?.kind === "event" && activeDraftEditor.messageId === message.id
+                  ? activeDraftEditor
+                  : null;
+              const activeEventBaseDraft = activeEventEditor
+                ? buildEventDraft(message.metadata?.command_result, activeEventEditor.previewId)
+                : null;
+              const activeEventInitialDraft =
+                activeEventBaseDraft && activeEventEditor
+                  ? applyEventDraftModifications(
+                      activeEventBaseDraft,
+                      eventDraftModificationsByPreview[activeEventEditor.previewId],
+                    )
+                  : null;
+              const eventPreviewId =
+                message.metadata?.command_result &&
+                typeof message.metadata.command_result.preview_id === "string"
+                  ? message.metadata.command_result.preview_id
+                  : null;
+              const eventBaseDraft =
+                eventPreviewId && uiDirectives
+                  ? buildEventDraft(message.metadata?.command_result, eventPreviewId)
+                  : null;
+              const directivesForCard =
+                uiDirectives && eventPreviewId && eventBaseDraft
+                  ? updateEventPreviewDirectives(
+                      uiDirectives,
+                      eventPreviewId,
+                      applyEventDraftModifications(
+                        eventBaseDraft,
+                        eventDraftModificationsByPreview[eventPreviewId],
+                      ),
+                    )
+                  : uiDirectives;
               return (
                 <div
                   key={message.id}
@@ -647,8 +876,34 @@ export function BrainWindow() {
                       <div style={{ color: "#991b1b", fontSize: "0.78rem" }}>{requestError}</div>
                     ) : null}
                   </div>
-                  {uiDirectives ? (
-                    <UiDirectiveCard directives={uiDirectives} disabled={isLoading} onSubmit={handleDirectiveSubmit} />
+                  {directivesForCard ? (
+                    <UiDirectiveCard
+                      directives={directivesForCard}
+                      disabled={isLoading || activeDirectiveMessageId === message.id}
+                      resolved={message.metadata?.command_resolved}
+                      onSubmit={(submission) => {
+                        void handleDirectiveSubmit(message, submission);
+                      }}
+                    />
+                  ) : null}
+                  {activeEventEditor && activeEventBaseDraft && activeEventInitialDraft ? (
+                    <EventDraftEditor
+                      baseDraft={activeEventBaseDraft}
+                      initialDraft={activeEventInitialDraft}
+                      onCancel={() => setActiveDraftEditor(null)}
+                      onSave={(modifications) => {
+                        setEventDraftModificationsByPreview((prev) => {
+                          const next = { ...prev };
+                          if (Object.keys(modifications).length > 0) {
+                            next[activeEventEditor.previewId] = modifications;
+                          } else {
+                            delete next[activeEventEditor.previewId];
+                          }
+                          return next;
+                        });
+                        setActiveDraftEditor(null);
+                      }}
+                    />
                   ) : null}
                   <LinkedItemsRow items={linkedItems} />
                   <div

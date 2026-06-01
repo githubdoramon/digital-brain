@@ -2,6 +2,7 @@
 
 import { FormEvent, useMemo, useState } from "react";
 import type { UiDirectiveBlock, UiDirectiveField, UiDirectives, UiSubmissionInput } from "@/lib/api";
+import type { AssistantMetadata } from "./types";
 
 function actionIdForBlock(block: UiDirectiveBlock): string {
   return block.action_id?.trim() || block.id;
@@ -70,14 +71,17 @@ function renderBody(body: string | undefined) {
 export function UiDirectiveCard({
   directives,
   disabled = false,
+  resolved,
   onSubmit,
 }: {
   directives: UiDirectives;
   disabled?: boolean;
+  resolved?: AssistantMetadata["command_resolved"];
   onSubmit: (submission: UiSubmissionInput) => void;
 }) {
   const blocks = useMemo(() => directives.blocks || [], [directives.blocks]);
   const [formValues, setFormValues] = useState<Record<string, string>>({});
+  const isResolved = Boolean(resolved);
 
   const getFieldValue = (block: UiDirectiveBlock, field: UiDirectiveField) =>
     formValues[fieldStateKey(block, field)] ?? field.value ?? "";
@@ -110,6 +114,21 @@ export function UiDirectiveCard({
 
   return (
     <div style={{ display: "grid", gap: "10px", maxWidth: "80%", width: "min(680px, 100%)" }}>
+      {resolved ? (
+        <div
+          style={{
+            background: resolved.status === "cancelled" ? "#f1f5f9" : "#ecfdf5",
+            border: `1px solid ${resolved.status === "cancelled" ? "#cbd5e1" : "#a7f3d0"}`,
+            borderRadius: "8px",
+            color: resolved.status === "cancelled" ? "#475569" : "#047857",
+            fontSize: "0.88rem",
+            fontWeight: 650,
+            padding: "10px 12px",
+          }}
+        >
+          {resolved.label || (resolved.status === "cancelled" ? "Cancelled" : "Changes applied")}
+        </div>
+      ) : null}
       {blocks.map((block) => (
         <div
           key={block.id}
@@ -163,7 +182,7 @@ export function UiDirectiveCard({
                 <button
                   key={option.id}
                   type="button"
-                  disabled={disabled}
+                  disabled={disabled || isResolved}
                   onClick={() =>
                     onSubmit({
                       block_id: block.id,
@@ -175,9 +194,9 @@ export function UiDirectiveCard({
                   style={{
                     border: "1px solid #0b6bcb",
                     borderRadius: "8px",
-                    background: disabled ? "#e2e8f0" : "#0b6bcb",
-                    color: disabled ? "#64748b" : "#ffffff",
-                    cursor: disabled ? "not-allowed" : "pointer",
+                    background: disabled || isResolved ? "#e2e8f0" : "#0b6bcb",
+                    color: disabled || isResolved ? "#64748b" : "#ffffff",
+                    cursor: disabled || isResolved ? "not-allowed" : "pointer",
                     fontWeight: 650,
                     padding: "8px 12px",
                   }}
@@ -210,7 +229,7 @@ export function UiDirectiveCard({
                         value={getFieldValue(block, field)}
                         onChange={(event) => setFieldValue(block, field, event.target.value)}
                         placeholder={field.placeholder}
-                        disabled={disabled}
+                        disabled={disabled || isResolved}
                         rows={3}
                         style={{ ...commonStyle, resize: "vertical" }}
                       />
@@ -218,7 +237,7 @@ export function UiDirectiveCard({
                       <select
                         value={getFieldValue(block, field)}
                         onChange={(event) => setFieldValue(block, field, event.target.value)}
-                        disabled={disabled}
+                        disabled={disabled || isResolved}
                         style={commonStyle}
                       >
                         <option value="">Select...</option>
@@ -234,7 +253,7 @@ export function UiDirectiveCard({
                         value={getFieldValue(block, field)}
                         onChange={(event) => setFieldValue(block, field, event.target.value)}
                         placeholder={field.placeholder}
-                        disabled={disabled}
+                        disabled={disabled || isResolved}
                         style={commonStyle}
                       />
                     )}
@@ -244,13 +263,13 @@ export function UiDirectiveCard({
               <div>
                 <button
                   type="submit"
-                  disabled={disabled}
+                  disabled={disabled || isResolved}
                   style={{
                     border: "1px solid #0b6bcb",
                     borderRadius: "8px",
-                    background: disabled ? "#e2e8f0" : "#0b6bcb",
-                    color: disabled ? "#64748b" : "#ffffff",
-                    cursor: disabled ? "not-allowed" : "pointer",
+                    background: disabled || isResolved ? "#e2e8f0" : "#0b6bcb",
+                    color: disabled || isResolved ? "#64748b" : "#ffffff",
+                    cursor: disabled || isResolved ? "not-allowed" : "pointer",
                     fontWeight: 650,
                     padding: "8px 12px",
                   }}
