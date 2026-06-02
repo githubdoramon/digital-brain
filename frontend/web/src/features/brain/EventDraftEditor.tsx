@@ -53,6 +53,7 @@ export function EventDraftEditor({
       when,
       endWhen,
       where,
+      participants: initialDraft.participants,
       tags: parseList(tags),
       types: parseList(types),
     };

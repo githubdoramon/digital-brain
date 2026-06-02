@@ -11,6 +11,7 @@ import { getLocationRuntimeState } from '@/location/runtimeState';
 
 const BACKGROUND_LOCATION_QUEUE_KEY = 'digitalbrain.backgroundLocationQueue';
 const MAX_QUEUED_BACKGROUND_LOCATIONS = 200;
+const BACKGROUND_LOCATION_UPLOAD_TIMEOUT_MS = 15_000;
 
 let drainInFlight: Promise<{
   initialQueueSize: number;
@@ -44,6 +45,8 @@ export type QueuedBackgroundLocationEntry = {
 };
 
 type DrainTrigger = 'location_task' | 'background_task_worker' | 'manual';
+
+let pendingDrainTrigger: DrainTrigger | null = null;
 
 type ApiFetchError = Error & {
   status?: number;
@@ -247,9 +250,14 @@ async function drainQueuedBackgroundLocationsInner(trigger: DrainTrigger): Promi
     });
 
     const requestStartedAt = Date.now();
+    const abortController = typeof AbortController !== 'undefined' ? new AbortController() : null;
+    const uploadTimeout = abortController
+      ? setTimeout(() => abortController.abort(), BACKGROUND_LOCATION_UPLOAD_TIMEOUT_MS)
+      : null;
     try {
       await apiFetch('/mobile/location', {
         method: 'POST',
+        ...(abortController ? { signal: abortController.signal } : {}),
         token,
         onAuthExpired: async () => {
           const refreshedToken = await refreshStoredGoogleIdToken();
@@ -274,6 +282,9 @@ async function drainQueuedBackgroundLocationsInner(trigger: DrainTrigger): Promi
           timezone: entry.timezone,
         }),
       });
+      if (uploadTimeout) {
+        clearTimeout(uploadTimeout);
+      }
 
       queue = await mutateQueue((currentQueue) => {
         const nextQueue = currentQueue.filter((item) => item.id !== entry.id);
@@ -310,6 +321,9 @@ async function drainQueuedBackgroundLocationsInner(trigger: DrainTrigger): Promi
         },
       });
     } catch (error) {
+      if (uploadTimeout) {
+        clearTimeout(uploadTimeout);
+      }
       const fetchError = error as ApiFetchError;
       queue = await mutateQueue((currentQueue) => {
         const lastAttemptAt = new Date().toISOString();
@@ -389,6 +403,7 @@ export async function drainQueuedBackgroundLocations(trigger: DrainTrigger): Pro
 }> {
   if (drainInFlight) {
     drainRerunRequested = true;
+    pendingDrainTrigger = trigger;
     reportLocationDebugEvent('background_queue_drain_coalesced', {
       payload: {
         trigger,
@@ -402,7 +417,9 @@ export async function drainQueuedBackgroundLocations(trigger: DrainTrigger): Pro
     let lastResult = await drainQueuedBackgroundLocationsInner(trigger);
     while (drainRerunRequested) {
       drainRerunRequested = false;
-      lastResult = await drainQueuedBackgroundLocationsInner('location_task');
+      const rerunTrigger = pendingDrainTrigger ?? trigger;
+      pendingDrainTrigger = null;
+      lastResult = await drainQueuedBackgroundLocationsInner(rerunTrigger);
     }
     return lastResult;
   })();

@@ -3,9 +3,7 @@ import * as Location from 'expo-location';
 import * as TaskManager from 'expo-task-manager';
 import { Platform } from 'react-native';
 
-import {
-  getStoredGoogleIdTokenDiagnostics,
-} from '@/auth/backgroundToken';
+import { getStoredGoogleIdTokenDiagnostics } from '@/auth/backgroundToken';
 import {
   drainQueuedBackgroundLocations,
   enqueueBackgroundLocationEntry,
@@ -67,6 +65,26 @@ type AndroidTaskDiagnostics = {
   locationTaskOptions: Record<string, unknown> | null;
 };
 
+function stableStringify(value: unknown): string {
+  if (Array.isArray(value)) {
+    return `[${value.map(stableStringify).join(',')}]`;
+  }
+  if (value && typeof value === 'object') {
+    return `{${Object.entries(value as Record<string, unknown>)
+      .sort(([firstKey], [secondKey]) => firstKey.localeCompare(secondKey))
+      .map(([key, entryValue]) => `${JSON.stringify(key)}:${stableStringify(entryValue)}`)
+      .join(',')}}`;
+  }
+  return JSON.stringify(value) ?? 'undefined';
+}
+
+function areLocationTaskOptionsEqual(
+  currentOptions: Record<string, unknown> | null,
+  desiredOptions: Location.LocationTaskOptions,
+): boolean {
+  return stableStringify(currentOptions ?? {}) === stableStringify(desiredOptions as Record<string, unknown>);
+}
+
 const BACKGROUND_POST_DEDUPE_MIN_DISTANCE_METERS = 15;
 const BACKGROUND_POST_DEDUPE_MIN_SECONDS = 30;
 const BACKGROUND_BUFFER_FLUSH_MIN_DISTANCE_METERS = 50;
@@ -81,6 +99,8 @@ function buildBackgroundLocationTaskOptions(): Location.LocationTaskOptions {
     foregroundService: {
       notificationTitle: 'Digital Brain location updates',
       notificationBody: 'Location updates are used to keep your context accurate.',
+      notificationColor: '#e45c4d',
+      killServiceOnDestroy: false,
     },
   };
 
@@ -178,7 +198,7 @@ function buildPermissionDetails(permission: {
   status?: string;
   granted?: boolean;
   canAskAgain?: boolean;
-  expires?: string;
+  expires?: string | number;
   ios?: Record<string, unknown>;
   android?: Record<string, unknown>;
 }): Record<string, unknown> {
@@ -754,18 +774,48 @@ export async function syncBackgroundLocationTracking(enabled: boolean): Promise<
     return;
   }
 
+  const taskOptions = buildBackgroundLocationTaskOptions();
+
   if (alreadyStarted) {
-    await ensureBackgroundDrainTaskRegistered().catch((error) => {
-      reportLocationDebugEvent('background_drain_task_register_error', {
+    const currentTaskOptions = (await TaskManager.getTaskOptionsAsync(BACKGROUND_LOCATION_TASK).catch(
+      () => null,
+    )) as Record<string, unknown> | null;
+    const optionsChanged = !areLocationTaskOptionsEqual(currentTaskOptions, taskOptions);
+    const shouldRefreshAndroidForegroundService = Platform.OS === 'android';
+
+    if (!optionsChanged && !shouldRefreshAndroidForegroundService) {
+      await ensureBackgroundDrainTaskRegistered().catch((error) => {
+        reportLocationDebugEvent('background_drain_task_register_error', {
+          error,
+        });
+      });
+      reportLocationDebugEvent('background_tracking_already_started', {
+        payload: {
+          platform: Platform.OS,
+          location_task_options: currentTaskOptions,
+        },
+        recordInHistory: false,
+      });
+      return;
+    }
+
+    reportLocationDebugEvent('background_tracking_restart_requested', {
+      payload: {
+        platform: Platform.OS,
+        reason: optionsChanged ? 'task_options_changed' : 'android_foreground_service_refresh',
+        current_task_options: currentTaskOptions,
+        desired_task_options: taskOptions as Record<string, unknown>,
+      },
+      recordInHistory: false,
+    });
+    await Location.stopLocationUpdatesAsync(BACKGROUND_LOCATION_TASK).catch((error) => {
+      reportLocationDebugEvent('background_tracking_stop_before_restart_error', {
         error,
       });
     });
-    reportLocationDebugEvent('background_tracking_already_started');
-    return;
   }
 
   try {
-    const taskOptions = buildBackgroundLocationTaskOptions();
     reportLocationDebugEvent('background_tracking_start_requested', {
       payload: {
         platform: Platform.OS,
@@ -793,7 +843,7 @@ export async function syncBackgroundLocationTracking(enabled: boolean): Promise<
   reportLocationDebugEvent('background_tracking_started', {
     payload: {
       platform: Platform.OS,
-      task_options: buildBackgroundLocationTaskOptions() as Record<string, unknown>,
+      task_options: taskOptions as Record<string, unknown>,
     },
     recordInHistory: false,
   });

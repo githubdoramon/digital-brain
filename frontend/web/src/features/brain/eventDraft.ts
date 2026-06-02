@@ -6,6 +6,7 @@ export type EventDraft = {
   when: string;
   endWhen: string;
   where: string;
+  participants: string[];
   tags: string[];
   types: string[];
 };
@@ -78,6 +79,29 @@ export function buildEventDraft(commandResult: CommandResult | undefined, previe
       ? (commandResult.extracted as Record<string, unknown>)
       : null;
   if (!extracted) return null;
+  const resolution =
+    commandResult.resolution && typeof commandResult.resolution === "object"
+      ? (commandResult.resolution as Record<string, unknown>)
+      : {};
+  const contacts = Array.isArray(resolution.contacts) ? resolution.contacts : [];
+  const newEntities =
+    resolution.new_entities && typeof resolution.new_entities === "object"
+      ? (resolution.new_entities as Record<string, unknown>)
+      : {};
+  const newContacts = Array.isArray(newEntities.contacts) ? newEntities.contacts : [];
+  const participants = [
+    ...contacts.map((contact) =>
+      contact && typeof contact === "object"
+        ? textValue((contact as Record<string, unknown>).display_name)
+        : "",
+    ),
+    ...newContacts.map((contact) =>
+      contact && typeof contact === "object"
+        ? textValue((contact as Record<string, unknown>).display_name)
+        : "",
+    ),
+  ].filter(Boolean);
+  const fallbackWho = participants.length > 0 ? participants : stringArrayValue(extracted.who);
 
   return {
     title: textValue(extracted.title),
@@ -85,6 +109,7 @@ export function buildEventDraft(commandResult: CommandResult | undefined, previe
     when: textValue(extracted.when),
     endWhen: textValue(extracted.end_when),
     where: textValue(extracted.where),
+    participants: fallbackWho,
     tags: stringArrayValue(extracted.tags),
     types: stringArrayValue(extracted.types),
   };
@@ -111,6 +136,7 @@ export function applyEventDraftModifications(
           ? baseDraft.endWhen
           : modifications.end_when,
     where: modifications.where ?? baseDraft.where,
+    participants: baseDraft.participants,
     tags: modifications.tags ?? baseDraft.tags,
     types: modifications.types ?? baseDraft.types,
   };
@@ -157,6 +183,7 @@ export function updateEventPreviewDirectives(
     `When: ${formatEventPreviewWhen(draft.when)}`,
     `Ends: ${formatEventPreviewWhen(draft.endWhen)}`,
     `Where: ${draft.where.trim() || "Not specified"}`,
+    `Who: ${draft.participants.length > 0 ? draft.participants.join(", ") : "No participants detected"}`,
     `Tags: ${draft.tags.length > 0 ? draft.tags.join(", ") : "None"}`,
     `Types: ${draft.types.length > 0 ? draft.types.join(", ") : "Generic"}`,
   ].join("\n");

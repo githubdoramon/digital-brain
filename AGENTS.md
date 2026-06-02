@@ -16,6 +16,8 @@ Personal memory orchestrator with a **bounded agent architecture**. Backend: Fas
 
 **Mobile voice input convention**: Chat dictation uses on-device Whisper in `mobile` with a long-press send gesture, swipe-up lock, and transcript insertion into the composer (never auto-send). This requires a native Expo dev build / prebuild workflow; do not assume it works in Expo Go.
 
+**Mobile background task convention**: Expo background task definitions must be imported from `mobile/index.js` before `expo-router/entry`, so headless/background launches register the tasks even when React navigation has not mounted.
+
 ## Architecture Documentation
 
 Detailed architecture docs live in `backend/orchestrator/docs/architecture/`:
