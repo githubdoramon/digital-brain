@@ -90,6 +90,7 @@ Existing groups (canonical source: `tools/registry.py`):
 | `web` | External web access | web_search, fetch_web_page |
 | `home` | Home automation | home_assistant |
 | `skills` | Skill scripts | run_skill_script |
+| `pdf` | Generated PDF artifacts and document ingestion | create_pdf, ingest_generated_pdf |
 | `ui` | UI directives | emit_ui_directive |
 | `system` | System commands | bash |
 

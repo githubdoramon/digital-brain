@@ -1,6 +1,7 @@
 import { fetch as expoFetch } from 'expo/fetch';
 
 import { apiFetch, API_BASE_URL } from '@/api/client';
+import type { GeneratedFile } from '@/chat/generatedFiles';
 import type { LinkedItem } from '@/chat/linkedItems';
 import type { ChatMediaAttachmentPayload } from '@/chat/mediaAttachments';
 import type { CommandResult as ThreadCommandResult } from '@/chat/threads';
@@ -17,6 +18,7 @@ export type AskResponse = {
   command_result?: CommandResult;
   ui_directives?: UiDirectives;
   linked_items?: LinkedItem[];
+  generated_files?: GeneratedFile[];
 };
 
 type StreamEvent =
@@ -83,6 +85,8 @@ function humanToolName(toolNameRaw: string): string {
     search_memories: 'Searching memory',
     get_events: 'Checking an event',
     get_document: 'Looking at a document',
+    create_pdf: 'Creating a PDF',
+    ingest_generated_pdf: 'Saving a PDF',
     resolve_contacts: 'Resolving contacts',
     lookup_contact: 'Looking up a contact',
     select_contacts: 'Selecting contacts',

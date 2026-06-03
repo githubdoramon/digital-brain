@@ -2074,6 +2074,7 @@ class AgentController:
             "events_results": self._collected_events_results(state),
             "document_results": self._collected_document_results(state),
             "linked_items": self._build_linked_items(state, answer=""),
+            "generated_files": self._build_generated_files(state),
             "ui_directives": state.ui_directives,
             "limit_hit": violation.limit_type.value,
             "profile": self.runtime_profile.name,
@@ -2159,6 +2160,7 @@ class AgentController:
             "events_results": self._collected_events_results(state),
             "document_results": self._collected_document_results(state),
             "linked_items": self._build_linked_items(state, answer=answer),
+            "generated_files": self._build_generated_files(state),
             "ui_directives": state.ui_directives,
             # Completion metadata (clawdbot-inspired)
             "_meta": {
@@ -2195,6 +2197,38 @@ class AgentController:
             bundle["activated_skills"] = [s.get("name") for s in state.activated_skills]
 
         return bundle
+
+    def _build_generated_files(self, state: AgentState) -> list[dict[str, Any]]:
+        """Build downloadable file chips from controller-executed generation tools."""
+        generated_files: list[dict[str, Any]] = []
+        seen_ids: set[str] = set()
+        for call in state.tool_calls:
+            if call.tool_name != "create_pdf" or not call.success:
+                continue
+            artifact = call.result.get("artifact")
+            if not isinstance(artifact, dict):
+                continue
+            artifact_id = str(artifact.get("artifact_id") or "").strip()
+            if not artifact_id or artifact_id in seen_ids:
+                continue
+            seen_ids.add(artifact_id)
+            generated_files.append(
+                {
+                    "kind": "generated_pdf",
+                    "artifact_id": artifact_id,
+                    "title": str(artifact.get("title") or "Generated PDF").strip()
+                    or "Generated PDF",
+                    "filename": str(artifact.get("filename") or "generated.pdf").strip()
+                    or "generated.pdf",
+                    "file_mime": str(artifact.get("file_mime") or "application/pdf").strip()
+                    or "application/pdf",
+                    "file_size": artifact.get("file_size"),
+                    "download_url": artifact.get("download_url"),
+                    "web_download_url": artifact.get("web_download_url"),
+                    "mobile_download_url": artifact.get("mobile_download_url"),
+                }
+            )
+        return generated_files
 
     def _strip_tool_reference_artifacts(self, answer: str) -> str:
         """Remove bracketed tool-field placeholders accidentally surfaced by the model."""

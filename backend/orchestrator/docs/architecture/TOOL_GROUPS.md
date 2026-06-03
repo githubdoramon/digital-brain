@@ -8,7 +8,8 @@ Tool groups are the canonical capability taxonomy and are now used both for meta
 
 ```python
 TOOL_GROUPS = {
-    "memory": ["search_memories", "get_events", "get_document"],
+    "memory": ["search_memories", "get_events", "get_document", "summarize_memories"],
+    "graph": ["query_graph"],
     "resolution": [
         "resolve_contacts",
         "lookup_contact",
@@ -20,6 +21,7 @@ TOOL_GROUPS = {
     "web": ["web_search", "fetch_web_page"],
     "home": ["home_assistant"],
     "skills": ["run_skill_script"],
+    "pdf": ["create_pdf", "ingest_generated_pdf"],
     "ui": ["emit_ui_directive"],
     "system": ["bash"],
 }
@@ -45,13 +47,13 @@ flowchart LR
 ## Intent-to-Group Mapping
 
 - `MEMORY_SEARCH`: `memory`, `resolution`
-- `DATA_QUERY`: `memory`, `resolution`
+- `DATA_QUERY`: `graph`, `memory`, `resolution`
 - `CONTACT_LOOKUP`: `resolution`, `memory`
 - `WEB_SEARCH`: `web`
 - `HOME_CONTROL`: `home`
 - `SKILL_EXECUTION`: `skills`, `memory`
 - `SYSTEM_COMMAND`: `system`
-- `CONVERSATIONAL`: none
+- `CONVERSATIONAL`: `memory`, `resolution`, `web`, `pdf`, `ui`
 - `UNKNOWN`: all groups
 
 ## Policy Summary
@@ -75,6 +77,16 @@ Negative examples:
 - Do not use `lookup_contact` to count event interactions; it is for contact profiles/relationships.
 - Use `lookup_places` / `lookup_contact_places` / `lookup_place_contacts` for place-entity resolution, not for free-form event retrieval.
 - Do not rely only on event title keywords (for example only searching `meeting`) when ranking interactions across a time window.
+
+## PDF Tool Guidance
+
+- Use `create_pdf` when the user asks for a generated, printable, or downloadable PDF.
+- PDF content is modeled as `body_markdown`; tabular content should be expressed as markdown pipe tables, not a separate structured table parameter.
+- `create_pdf` stores an authenticated generated artifact and returns web and mobile download URLs.
+- The controller derives `generated_files` metadata from successful `create_pdf` calls so web and mobile chat can render download chips without relying on model-authored UI markup.
+- Set `ingest_as_document=true` only when the user asks to save/index the generated PDF as a document.
+- Use `ingest_generated_pdf` for a previously generated artifact when the user later asks to add it through the regular document ingest flow.
+- Generated PDF ingestion must go through `documents.ingest_document` so parsing, metadata, embeddings, contact inference, and document download behavior remain consistent with uploaded files.
 
 ## When Editing Groups
 

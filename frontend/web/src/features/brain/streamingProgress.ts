@@ -26,6 +26,8 @@ function humanToolName(toolNameRaw: string): string {
     fetch_web_page: "Fetching a web page",
     home_assistant: "Using Home Assistant",
     run_skill_script: "Running a skill",
+    create_pdf: "Creating a PDF",
+    ingest_generated_pdf: "Saving a PDF",
     emit_ui_directive: "Building a response card",
     bash: "Running a system command",
   };

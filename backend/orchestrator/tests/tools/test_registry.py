@@ -13,7 +13,7 @@ class TestToolGroups:
 
     def test_all_groups_defined(self):
         """Test all expected groups exist."""
-        expected = ["memory", "resolution", "web", "home", "skills", "ui", "system"]
+        expected = ["memory", "resolution", "web", "home", "skills", "pdf", "ui", "system"]
         for group in expected:
             assert group in TOOL_GROUPS
 
@@ -22,6 +22,11 @@ class TestToolGroups:
         assert "search_memories" in TOOL_GROUPS["memory"]
         assert "get_events" in TOOL_GROUPS["memory"]
         assert "get_document" in TOOL_GROUPS["memory"]
+
+    def test_pdf_group_tools(self):
+        """Test pdf group tools."""
+        assert "create_pdf" in TOOL_GROUPS["pdf"]
+        assert "ingest_generated_pdf" in TOOL_GROUPS["pdf"]
 
 
 class TestToolRegistry:
@@ -204,6 +209,21 @@ class TestPreregisteredTools:
         contract = populated_registry.get_contract("search_memories")
         assert contract is not None
         assert contract.name == "search_memories"
+
+    def test_create_pdf_registered(self, populated_registry):
+        """Test create_pdf tool is registered."""
+        contract = populated_registry.get_contract("create_pdf")
+        assert contract is not None
+        assert contract.name == "create_pdf"
+        param_names = contract.get_all_param_names()
+        assert "body_markdown" in param_names
+        assert "ingest_as_document" in param_names
+
+    def test_ingest_generated_pdf_registered(self, populated_registry):
+        """Test ingest_generated_pdf tool is registered."""
+        contract = populated_registry.get_contract("ingest_generated_pdf")
+        assert contract is not None
+        assert contract.name == "ingest_generated_pdf"
 
     def test_search_memories_default_limit_is_30(self, populated_registry):
         """Test search_memories default limit encourages broader recall."""

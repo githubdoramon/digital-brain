@@ -559,6 +559,7 @@ class AskOut(BaseModel):
     command_result: dict[str, Any] | None = None
     pending_event_id: str | None = None
     linked_items: list[LinkedItemOut] = Field(default_factory=list)
+    generated_files: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class ThreadCreate(BaseModel):

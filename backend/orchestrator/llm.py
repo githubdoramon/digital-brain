@@ -179,6 +179,9 @@ async def answer_question(
             linked_items = result.get("linked_items")
             if isinstance(linked_items, list) and linked_items:
                 assistant_metadata["linked_items"] = linked_items
+            generated_files = result.get("generated_files")
+            if isinstance(generated_files, list) and generated_files:
+                assistant_metadata["generated_files"] = generated_files
             resolved_place = _extract_resolved_place_from_result(result)
             if resolved_place:
                 assistant_metadata["resolved_place"] = resolved_place
@@ -293,6 +296,9 @@ async def answer_question_stream(
             linked_items = final_bundle.get("linked_items")
             if isinstance(linked_items, list) and linked_items:
                 assistant_metadata["linked_items"] = linked_items
+            generated_files = final_bundle.get("generated_files")
+            if isinstance(generated_files, list) and generated_files:
+                assistant_metadata["generated_files"] = generated_files
             resolved_place = _extract_resolved_place_from_result(final_bundle)
             if resolved_place:
                 assistant_metadata["resolved_place"] = resolved_place

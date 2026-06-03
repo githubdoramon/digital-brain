@@ -37,6 +37,7 @@ TOOL_GROUPS = {
     "web": ["web_search", "fetch_web_page"],
     "home": ["home_assistant"],
     "skills": ["run_skill_script"],
+    "pdf": ["create_pdf", "ingest_generated_pdf"],
     "ui": ["emit_ui_directive"],
     "system": ["bash"],
 }
@@ -800,6 +801,139 @@ def _register_all_tools(registry: ToolRegistry) -> None:
                     type="object",
                     description="Arguments to pass to the script as JSON.",
                     required=False,
+                ),
+            ],
+        )
+    )
+
+    # create_pdf
+    registry.register(
+        ToolContract(
+            name="create_pdf",
+            description=(
+                "Create a downloadable PDF artifact from user-requested content. Use when the user asks "
+                "for a PDF, downloadable report, printable table, summary sheet, or similar generated document. "
+                "Provide body_markdown with clear headings, paragraphs, bullet lists, and/or markdown pipe tables. "
+                "Use markdown pipe tables for all tabular content. "
+                "Set ingest_as_document=true only when the user asks to save/index the generated PDF as a document "
+                "or when the generated PDF should become searchable personal memory."
+            ),
+            parameters=[
+                ToolParameter(
+                    name="title",
+                    type="string",
+                    description="PDF title shown at the top of the document.",
+                    required=True,
+                    min_length=1,
+                    max_length=160,
+                ),
+                ToolParameter(
+                    name="body_markdown",
+                    type="string",
+                    description=(
+                        "Main PDF content as markdown-like text. Supports headings, paragraphs, bullet lists, "
+                        "and pipe tables for tabular information."
+                    ),
+                    required=True,
+                    min_length=1,
+                    max_length=60000,
+                ),
+                ToolParameter(
+                    name="filename",
+                    type="string",
+                    description="Optional PDF filename. The controller sanitizes it and forces a .pdf extension.",
+                    required=False,
+                    max_length=120,
+                ),
+                ToolParameter(
+                    name="ingest_as_document",
+                    type="boolean",
+                    description=(
+                        "Whether to immediately add the generated PDF through the regular document ingest flow. "
+                        "Default false unless the user asks to save/index it as a document."
+                    ),
+                    required=False,
+                    default=False,
+                ),
+                ToolParameter(
+                    name="document_title",
+                    type="string",
+                    description="Optional title to use when ingest_as_document=true.",
+                    required=False,
+                    max_length=160,
+                ),
+                ToolParameter(
+                    name="description",
+                    type="string",
+                    description="Optional description to use when ingest_as_document=true.",
+                    required=False,
+                    max_length=1000,
+                ),
+                ToolParameter(
+                    name="tags",
+                    type="array",
+                    description="Optional document tags to use when ingest_as_document=true.",
+                    required=False,
+                    items_type="string",
+                ),
+                ToolParameter(
+                    name="contact_ids",
+                    type="array",
+                    description=(
+                        "Optional contact IDs to link when ingest_as_document=true. Use only resolved contact IDs."
+                    ),
+                    required=False,
+                    items_type="string",
+                ),
+            ],
+        )
+    )
+
+    # ingest_generated_pdf
+    registry.register(
+        ToolContract(
+            name="ingest_generated_pdf",
+            description=(
+                "Add a previously generated PDF artifact to the regular document ingestion pipeline so it "
+                "becomes a searchable document with embeddings, tags, contact links, and document download support. "
+                "Use only for artifact IDs returned by create_pdf."
+            ),
+            parameters=[
+                ToolParameter(
+                    name="artifact_id",
+                    type="string",
+                    description="Generated PDF artifact ID returned by create_pdf, for example pdf:<hex>.",
+                    required=True,
+                    min_length=36,
+                    max_length=36,
+                ),
+                ToolParameter(
+                    name="title",
+                    type="string",
+                    description="Optional document title override.",
+                    required=False,
+                    max_length=160,
+                ),
+                ToolParameter(
+                    name="description",
+                    type="string",
+                    description="Optional document description override.",
+                    required=False,
+                    max_length=1000,
+                ),
+                ToolParameter(
+                    name="tags",
+                    type="array",
+                    description="Optional document tags.",
+                    required=False,
+                    items_type="string",
+                ),
+                ToolParameter(
+                    name="contact_ids",
+                    type="array",
+                    description="Optional resolved contact IDs to link to the ingested document.",
+                    required=False,
+                    items_type="string",
                 ),
             ],
         )

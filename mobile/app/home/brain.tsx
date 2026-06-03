@@ -9,20 +9,23 @@ import {
   Keyboard,
   KeyboardEvent,
   KeyboardAvoidingView,
+  Linking,
   Platform,
   StyleSheet,
   Text,
   TextInput,
   View,
 } from 'react-native';
+import * as FileSystem from 'expo-file-system/legacy';
 import { useBottomTabBarHeight } from '@react-navigation/bottom-tabs';
 import { useFocusEffect } from '@react-navigation/native';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { apiFetch } from '@/api/client';
+import { API_BASE_URL, apiFetch } from '@/api/client';
 import { useAuth } from '@/auth/AuthContext';
 import { AppPressable as Pressable } from '@/components/AppPressable';
+import { GeneratedFilesRow } from '@/components/chat/GeneratedFilesRow';
 import {
   COLLAPSING_CONTENT_TOP_PADDING,
   COLLAPSING_SECONDARY_TITLE_BLOCK_HEIGHT,
@@ -59,6 +62,7 @@ import {
   StoredChatSession,
 } from '@/chat/session';
 import { loadThreadHistory, restoreChatHistory } from '@/chat/threads';
+import { generatedFileLabel, type GeneratedFile } from '@/chat/generatedFiles';
 import { routeForLinkedItem, type LinkedItem } from '@/chat/linkedItems';
 import type {
   CommandResolvedMeta,
@@ -99,6 +103,7 @@ type Message = {
     command_result?: CommandResult;
     ui_directives?: UiDirectives;
     linked_items?: LinkedItem[];
+    generated_files?: GeneratedFile[];
     command_resolved?: CommandResolvedMeta;
     media_attachments?: MessageMediaAttachment[];
     request_error?: RequestErrorMetadata;
@@ -1126,7 +1131,7 @@ export function ChatConversationScreen({
 }: ChatConversationScreenProps) {
   const router = useRouter();
   const { token, signOut, email, name, photo, isLoading: isAuthLoading } = useAuth();
-  const { showError } = useAppNotice();
+  const { showError, showSuccess } = useAppNotice();
   const { pickImages, imagePickerSheet } = useSingleImagePicker();
   const insets = useSafeAreaInsets();
   const isMainChat = mode === 'main';
@@ -1680,6 +1685,9 @@ export function ChatConversationScreen({
       const linkedItems = Array.isArray(response.linked_items)
         ? (response.linked_items as LinkedItem[])
         : [];
+      const generatedFiles = Array.isArray(response.generated_files)
+        ? (response.generated_files as GeneratedFile[])
+        : [];
       const assistantContent =
         response.answer ??
         uiDirectives?.fallback_text ??
@@ -1698,11 +1706,15 @@ export function ChatConversationScreen({
                 content: assistantContent,
                 pending: false,
                 metadata:
-                  commandResult || uiDirectives || linkedItems.length > 0
+                  commandResult ||
+                  uiDirectives ||
+                  linkedItems.length > 0 ||
+                  generatedFiles.length > 0
                     ? {
                         command_result: commandResult,
                         ui_directives: uiDirectives,
                         linked_items: linkedItems.length > 0 ? linkedItems : undefined,
+                        generated_files: generatedFiles.length > 0 ? generatedFiles : undefined,
                       }
                     : undefined,
               }
@@ -2332,6 +2344,53 @@ export function ChatConversationScreen({
     [router],
   );
 
+  const handleGeneratedFilePress = useCallback(
+    async (file: GeneratedFile) => {
+      if (!token) {
+        showError('Session expired. Sign in again.');
+        return;
+      }
+      const path = file.mobile_download_url?.trim() || file.download_url?.trim();
+      if (!path) {
+        showError('Download link unavailable.');
+        return;
+      }
+      const documentDirectory = FileSystem.documentDirectory;
+      if (!documentDirectory) {
+        showError('Download failed: storage unavailable.');
+        return;
+      }
+
+      const safeName = (file.filename || `${file.artifact_id || 'generated'}.pdf`).replace(
+        /[\\/:*?"<>|]/g,
+        '_',
+      );
+      const endpoint = path.startsWith('http') ? path : `${API_BASE_URL}${path}`;
+      const destination = `${documentDirectory}${safeName}`;
+
+      try {
+        const result = await FileSystem.downloadAsync(endpoint, destination, {
+          headers: {
+            Authorization: `Bearer ${token}`,
+          },
+        });
+        if (result.status < 200 || result.status >= 300) {
+          throw new Error(`Download failed with status ${result.status}.`);
+        }
+        showSuccess(`Downloaded ${generatedFileLabel(file)}.`);
+        const openUri =
+          Platform.OS === 'android'
+            ? await FileSystem.getContentUriAsync(result.uri).catch(() => result.uri)
+            : result.uri;
+        void Linking.openURL(openUri).catch(() => undefined);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Failed to download this file.';
+        showError(message);
+      }
+    },
+    [showError, showSuccess, token],
+  );
+
   const scrollToBottom = useCallback(
     (animated: boolean) => {
       if (scrollFallbackTimeoutRef.current) {
@@ -2439,6 +2498,7 @@ export function ChatConversationScreen({
               : undefined;
             const directives = item.metadata?.ui_directives;
             const linkedItems = item.metadata?.linked_items || [];
+            const generatedFiles = item.metadata?.generated_files || [];
             let directivesForCard = directives;
             if (contactPreviewId && directivesForCard) {
               directivesForCard = pruneContactPreviewBlocks(directivesForCard, contactPreviewId);
@@ -2580,6 +2640,13 @@ export function ChatConversationScreen({
                     items={linkedItems}
                     disabled={item.pending || isSending}
                     onPressItem={handleLinkedItemPress}
+                  />
+                ) : null}
+                {generatedFiles.length > 0 ? (
+                  <GeneratedFilesRow
+                    files={generatedFiles}
+                    disabled={item.pending || isSending}
+                    onPressFile={handleGeneratedFilePress}
                   />
                 ) : null}
                 {requestError ? (
