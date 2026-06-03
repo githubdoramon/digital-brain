@@ -71,6 +71,7 @@ backend/orchestrator/
 │   │   ├── homeassistant.py  # Home Assistant MCP integration
 │   │   ├── resolution.py     # Entity resolution
 │   │   ├── skills.py         # Skill script execution
+│   │   ├── pdf.py            # Generated PDF artifacts + ingestion
 │   │   ├── web.py            # Web search/fetch
 │   │   └── system.py         # Bash commands
 │   └── validators/            # Pre/post execution validation
@@ -86,6 +87,7 @@ backend/orchestrator/
 │   ├── todos.py              # Todo routes
 │   ├── events.py             # Event/meeting routes and ingest routes
 │   ├── documents.py          # Document routes and ingest routes
+│   ├── generated_pdfs.py     # Generated PDF download routes
 │   ├── user.py               # Mobile settings/device + user facts routes
 │   ├── system.py             # Versions, logs, and gate access routes
 │   ├── automation.py         # Tools, skills, agents, and telegram webhook routes
@@ -138,7 +140,7 @@ User Question → Intent Router → Conversational Profile Dispatch → Tool Vis
 | `HOME_CONTROL` | home | Smart home automation |
 | `SKILL_EXECUTION` | skills | Run skill scripts |
 | `SYSTEM_COMMAND` | system | Bash/shell commands |
-| `CONVERSATIONAL` | (none) | General chat |
+| `CONVERSATIONAL` | memory, resolution, web, pdf, ui | General chat and generated PDF/content creation |
 
 ### Tool Groups
 
@@ -149,12 +151,15 @@ User Question → Intent Router → Conversational Profile Dispatch → Tool Vis
 | `web` | web_search, fetch_web_page |
 | `home` | home_assistant |
 | `skills` | run_skill_script |
+| `pdf` | create_pdf, ingest_generated_pdf |
 | `ui` | emit_ui_directive |
 | `system` | bash |
 
 ### Important Rules (Recent)
 
 - **Single source of truth for tool groups**: keep router tool groups aligned with `backend/orchestrator/tools/registry.py`; do not maintain divergent copies.
+- **Generated PDF flow**: use `create_pdf` for downloadable generated PDF artifacts and `ingest_generated_pdf` or `create_pdf(ingest_as_document=true)` when the user wants the created PDF added through the regular document ingest flow. Successful PDF creation should surface controller-derived `generated_files` metadata so web/mobile chat can render download chips.
+- **Generated PDF content shape**: `create_pdf` content belongs in `body_markdown`; tables should be markdown pipe tables, not a separate structured parameter.
 - **Prefer enums for internal control-flow values**: avoid raw string comparisons for statuses/actions/modes (for example limit actions, tool statuses, follow-up sources). Define shared enums and compare enum members to prevent typos and drift.
 - **Tool visibility is runtime-enforced**: routing confidence tiers determine visible tool groups (`restricted`, `restricted_with_resolution`, or `full`) and can escalate to full tools on no-progress.
 - **Adaptive model routing is always on**: per-step policy selects model/timeout using query complexity + runtime signals (route confidence tier, step count, tool count).

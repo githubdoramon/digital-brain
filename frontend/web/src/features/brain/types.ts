@@ -1,4 +1,4 @@
-import type { LinkedItem, StreamBundle, UiDirectives } from "@/lib/api";
+import type { GeneratedFile, LinkedItem, StreamBundle, UiDirectives } from "@/lib/api";
 
 export type ChatMode = "quick" | "threads";
 
@@ -10,6 +10,7 @@ export type AssistantMetadata = {
   };
   ui_directives?: UiDirectives;
   linked_items?: LinkedItem[];
+  generated_files?: GeneratedFile[];
   progress_chip?: string;
   request_error?: string;
 } & Record<string, unknown>;

@@ -1,4 +1,5 @@
 import { apiFetch } from '@/api/client';
+import type { GeneratedFile } from '@/chat/generatedFiles';
 import type { LinkedItem } from '@/chat/linkedItems';
 import type { UiDirectives } from './uiDirectives';
 
@@ -17,6 +18,7 @@ export type ThreadMessage = {
     command_result?: CommandResult;
     ui_directives?: UiDirectives;
     linked_items?: LinkedItem[];
+    generated_files?: GeneratedFile[];
     [key: string]: unknown;
   } | null;
   created_at: string;
@@ -68,6 +70,7 @@ export type ChatMessage = {
     command_result?: CommandResult;
     ui_directives?: UiDirectives;
     linked_items?: LinkedItem[];
+    generated_files?: GeneratedFile[];
     command_resolved?: CommandResolvedMeta;
     media_attachments?: MessageMediaAttachment[];
   };
@@ -93,6 +96,9 @@ function mapThreadMessage(msg: ThreadMessage): ChatMessage {
           ui_directives: meta.ui_directives,
           linked_items: Array.isArray(meta.linked_items)
             ? (meta.linked_items as LinkedItem[])
+            : undefined,
+          generated_files: Array.isArray(meta.generated_files)
+            ? (meta.generated_files as GeneratedFile[])
             : undefined,
           command_resolved: meta.command_resolved as CommandResolvedMeta | undefined,
           media_attachments: Array.isArray(meta.media_attachments)

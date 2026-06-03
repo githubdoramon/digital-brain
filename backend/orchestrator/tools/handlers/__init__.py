@@ -13,6 +13,7 @@ from .memory import (
     handle_search_memories,
     handle_summarize_memories,
 )
+from .pdf import handle_create_pdf, handle_ingest_generated_pdf
 from .resolution import (
     handle_lookup_contact,
     handle_lookup_contact_places,
@@ -42,6 +43,8 @@ HANDLERS = {
     "web_search": handle_web_search,
     "fetch_web_page": handle_fetch_web_page,
     "run_skill_script": handle_run_skill_script,
+    "create_pdf": handle_create_pdf,
+    "ingest_generated_pdf": handle_ingest_generated_pdf,
     "emit_ui_directive": handle_emit_ui_directive,
     "bash": handle_bash,
     "home_assistant": handle_home_assistant,
@@ -57,11 +60,13 @@ __all__ = [
     "HANDLERS",
     "get_handler",
     "handle_bash",
+    "handle_create_pdf",
     "handle_emit_ui_directive",
     "handle_fetch_web_page",
     "handle_get_document",
     "handle_get_events",
     "handle_home_assistant",
+    "handle_ingest_generated_pdf",
     "handle_lookup_contact",
     "handle_lookup_contact_places",
     "handle_lookup_place_contacts",

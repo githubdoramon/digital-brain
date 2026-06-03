@@ -19,6 +19,7 @@ import {
   type EventDraftModifications,
   updateEventPreviewDirectives,
 } from "./eventDraft";
+import { GeneratedFilesRow } from "./generatedFiles";
 import { LinkedItemsRow } from "./linkedItems";
 import { AssistantMarkdown } from "./markdown";
 import { SlashCommandPalette } from "./SlashCommandPalette";
@@ -63,6 +64,7 @@ function buildAssistantMetadata(data: StreamBundle, progressChip?: string): Assi
   if (data.command_result) metadata.command_result = data.command_result;
   if (data.ui_directives) metadata.ui_directives = data.ui_directives;
   if (data.linked_items && data.linked_items.length > 0) metadata.linked_items = data.linked_items;
+  if (data.generated_files && data.generated_files.length > 0) metadata.generated_files = data.generated_files;
   if (progressChip) metadata.progress_chip = progressChip;
   return Object.keys(metadata).length > 0 ? metadata : undefined;
 }
@@ -794,6 +796,7 @@ export function BrainWindow() {
               const isLastMessage = index === displayMessages.length - 1;
               const uiDirectives = message.metadata?.ui_directives;
               const linkedItems = message.metadata?.linked_items || [];
+              const generatedFiles = message.metadata?.generated_files || [];
               const requestError = message.metadata?.request_error;
               const activeEventEditor =
                 activeDraftEditor?.kind === "event" && activeDraftEditor.messageId === message.id
@@ -905,6 +908,7 @@ export function BrainWindow() {
                       }}
                     />
                   ) : null}
+                  <GeneratedFilesRow files={generatedFiles} />
                   <LinkedItemsRow items={linkedItems} />
                   <div
                     style={{

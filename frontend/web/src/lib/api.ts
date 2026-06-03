@@ -261,6 +261,18 @@ export type LinkedItem = {
   role?: string | null;
 };
 
+export type GeneratedFile = {
+  kind: "generated_pdf";
+  artifact_id: string;
+  title: string;
+  filename?: string | null;
+  file_mime?: string | null;
+  file_size?: number | null;
+  download_url?: string | null;
+  web_download_url?: string | null;
+  mobile_download_url?: string | null;
+};
+
 export type StreamBundle = {
   answer: string;
   thread_id?: string;
@@ -275,6 +287,7 @@ export type StreamBundle = {
     [key: string]: unknown;
   };
   linked_items?: LinkedItem[];
+  generated_files?: GeneratedFile[];
 };
 
 /**

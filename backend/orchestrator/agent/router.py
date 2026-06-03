@@ -89,7 +89,7 @@ INTENT_TOOL_MAP = {
     IntentType.HOME_CONTROL: ["home"],
     IntentType.SKILL_EXECUTION: ["skills", "memory"],
     IntentType.SYSTEM_COMMAND: ["system"],
-    IntentType.CONVERSATIONAL: ["memory", "resolution", "web", "ui"],
+    IntentType.CONVERSATIONAL: ["memory", "resolution", "web", "pdf", "ui"],
     IntentType.UNKNOWN: list(TOOL_GROUPS.keys()),  # All tools
 }
 
@@ -289,6 +289,25 @@ class IntentRouter:
                 route_source=RouteSource.RULE,
             )
 
+        pdf_keywords = [
+            "create a pdf",
+            "make a pdf",
+            "give me a pdf",
+            "generate a pdf",
+            "pdf report",
+            "downloadable pdf",
+            "save as pdf",
+        ]
+        if any(kw in q_lower for kw in pdf_keywords):
+            return IntentClassification(
+                intent=IntentType.CONVERSATIONAL,
+                confidence=0.9,
+                allowed_tool_groups=INTENT_TOOL_MAP[IntentType.CONVERSATIONAL],
+                pre_resolve_contacts=INTENT_PRE_RESOLVE_CONTACTS[IntentType.CONVERSATIONAL],
+                reasoning="PDF generation keywords detected",
+                route_source=RouteSource.RULE,
+            )
+
         if self._looks_like_personal_document_memory_query(question):
             return IntentClassification(
                 intent=IntentType.MEMORY_SEARCH,
@@ -484,7 +503,7 @@ INTENT TYPES:
 - home_control: Smart home/Home Assistant actions and management
 - skill_execution: Running skill scripts
 - system_command: Bash/shell commands and system management on a server
-- conversational: General chat and conversation between the user and a supporting agent that doesn't fir any of the previous intents
+- conversational: General chat, content drafting, or generated PDF/document creation requests that do not require a specialized retrieval/control intent.
 - unknown: If you are uncertain about the intent, pick this.
 
 Also decide whether pre-resolving contacts is beneficial when creating a answer for the user in upcoming steps:
