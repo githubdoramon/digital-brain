@@ -19,6 +19,7 @@ from schemas import (
     EventIn,
     ExternalEventPayload,
     MeetingIn,
+    MeetingTranscriptPayload,
 )
 
 logger = get_runtime_logger(__name__)
@@ -57,6 +58,21 @@ def create_events_router(
         ids = events_service.ingest_meeting_notes(meetings, todo_writer=todos_service.ingest_todo)
         logger.debug("[meeting_notes] Ingestion completed with %d event id(s)", len(ids))
         return {"ok": True, "ids": ids}
+
+    @router.post("/ingest/meetings/transcript")
+    def ingest_meeting_transcript(
+        payload: MeetingTranscriptPayload,
+        user: dict = Depends(get_current_user),
+    ):
+        try:
+            result = events_service.ingest_meeting_transcript(
+                payload,
+                current_user=user,
+                todo_writer=todos_service.ingest_todo,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"ok": True, "id": result["event_id"], **result}
 
     @router.post("/ingest/event/external")
     def ingest_external_event(

@@ -874,13 +874,101 @@ def _generate_contact_id(email: str) -> str:
     return f"contact:{safe}"
 
 
-def ensure_contact_for_email(email: str) -> tuple[str | None, bool]:
+def _clean_participant_display_name(display_name: str | None) -> str | None:
+    cleaned = " ".join(str(display_name or "").split()).strip()
+    if not cleaned:
+        return None
+    if normalize_search_text(cleaned) in {"me", "myself", "you"}:
+        return None
+    return cleaned
+
+
+def _find_unique_contact_by_name(display_name: str | None) -> dict[str, Any] | None:
+    cleaned = _clean_participant_display_name(display_name)
+    normalized_lower_name = normalize_search_text(cleaned or "")
+    if not normalized_lower_name:
+        return None
+
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT contact_id, display_name, aliases, birthday, emails, phones, links, tags, comments, external_id
+            FROM contacts
+            WHERE unaccent(LOWER(COALESCE(display_name, ''))) = %s
+               OR EXISTS (
+                    SELECT 1
+                    FROM unnest(COALESCE(aliases, ARRAY[]::TEXT[])) AS alias
+                    WHERE unaccent(LOWER(alias)) = %s
+               )
+            ORDER BY contact_id
+            LIMIT 2
+            """,
+            (normalized_lower_name, normalized_lower_name),
+        )
+        rows = [dict(row) for row in cur.fetchall()]
+    if len(rows) != 1:
+        return None
+    return rows[0]
+
+
+def _merge_participant_email_into_contact(
+    contact: dict[str, Any],
+    *,
+    email: str,
+    display_name: str | None,
+) -> None:
+    normalized = normalize_email(email)
+    if not normalized:
+        return
+
+    existing_display = str(contact.get("display_name") or "").strip()
+    cleaned_display = _clean_participant_display_name(display_name)
+    default_display = _display_name_from_email(normalized)
+    final_display = existing_display or cleaned_display or default_display
+    if cleaned_display and (not existing_display or existing_display == default_display):
+        final_display = cleaned_display
+
+    ingest_contact(
+        ContactIn(
+            contact_id=contact["contact_id"],
+            display_name=final_display,
+            aliases=contact.get("aliases") or [],
+            birthday=contact.get("birthday"),
+            emails=_merge_emails(contact.get("emails") or [], [normalized]),
+            phones=contact.get("phones") or [],
+            links=contact.get("links") or [],
+            tags=_merge_lists(contact.get("tags") or [], ["meeting-attendee"]),
+            comments=contact.get("comments"),
+            external_id=contact.get("external_id"),
+        )
+    )
+
+
+def ensure_contact_for_email(
+    email: str,
+    *,
+    display_name: str | None = None,
+) -> tuple[str | None, bool]:
     normalized = normalize_email(email)
     if not normalized:
         return None, False
     existing = get_contact_by_email(normalized)
     if existing:
+        _merge_participant_email_into_contact(
+            existing,
+            email=normalized,
+            display_name=display_name,
+        )
         return existing["contact_id"], False
+
+    name_match = _find_unique_contact_by_name(display_name)
+    if name_match:
+        _merge_participant_email_into_contact(
+            name_match,
+            email=normalized,
+            display_name=display_name,
+        )
+        return name_match["contact_id"], False
 
     base_contact_id = _generate_contact_id(normalized)
     contact_id = base_contact_id
@@ -892,7 +980,7 @@ def ensure_contact_for_email(email: str) -> tuple[str | None, bool]:
 
     contact = ContactIn(
         contact_id=contact_id,
-        display_name=_display_name_from_email(normalized),
+        display_name=_clean_participant_display_name(display_name) or _display_name_from_email(normalized),
         emails=[normalized],
         aliases=[],
         tags=["autocreated", "meeting-attendee"],

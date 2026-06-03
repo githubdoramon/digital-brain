@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import date, datetime
 from typing import Any, Literal
 
-from pydantic import AliasChoices, BaseModel, Field, field_validator
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator
 
 
 class ContactIn(BaseModel):
@@ -127,6 +127,62 @@ class MeetingIn(BaseModel):
     @classmethod
     def _normalize_attendees(cls, value: Any) -> list[str] | None:
         return EventIn._normalize_attendee_emails(value)
+
+
+class MeetingTranscriptMeeting(BaseModel):
+    model_config = ConfigDict(populate_by_name=True, extra="allow")
+
+    original_id: str | None = Field(default=None, alias="original_id")
+    provider: str | None = None
+    title: str | None = None
+    description: str | None = None
+    started_at: datetime = Field(alias="started_at")
+    ended_at: datetime | None = Field(default=None, alias="ended_at")
+
+
+class MeetingTranscriptParticipant(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    name: str | None = None
+    email: str | None = None
+    source: str | None = None
+
+
+class MeetingTranscriptSpeakerIdentity(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    id: str
+    label: str | None = None
+    speaker: dict[str, Any] | None = None
+    identity: dict[str, Any] | None = None
+    source: str | None = None
+
+
+class MeetingTranscriptSegment(BaseModel):
+    model_config = ConfigDict(populate_by_name=True, extra="allow")
+
+    speaker_id: str | None = None
+    started_at: datetime | None = Field(default=None, alias="started_at")
+    ended_at: datetime | None = Field(default=None, alias="ended_at")
+    text: str
+
+
+class MeetingTranscriptBody(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    segments: list[MeetingTranscriptSegment] = Field(default_factory=list)
+
+
+class MeetingTranscriptPayload(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    upload_id: str | None = None
+    session_id: str | None = None
+    transcript_hash: str | None = None
+    meeting: MeetingTranscriptMeeting
+    participants: list[MeetingTranscriptParticipant] = Field(default_factory=list)
+    speaker_identities: list[MeetingTranscriptSpeakerIdentity] = Field(default_factory=list)
+    transcript: MeetingTranscriptBody
 
 
 class ContactRelationshipIn(BaseModel):

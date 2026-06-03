@@ -1,7 +1,8 @@
 from datetime import datetime, timezone
 
+import contacts
 import events
-from schemas import EventIn, ExternalEventPayload, MeetingIn, TodoIn
+from schemas import EventIn, ExternalEventPayload, MeetingIn, MeetingTranscriptPayload, TodoIn
 
 
 def test_ingest_external_event_updates_existing_event_time(monkeypatch):
@@ -207,6 +208,37 @@ def test_resolve_attendee_contacts_groups_all_attendees_by_domain(monkeypatch):
     assert attendee_contacts_by_domain["other.example"] == ["contact:carol"]
 
 
+def test_ensure_contact_for_email_merges_new_email_into_exact_name_match(monkeypatch):
+    matched_contact = {
+        "contact_id": "contact:alex-example",
+        "display_name": "Alex Example",
+        "aliases": ["Alex"],
+        "birthday": None,
+        "emails": ["alex@example.com"],
+        "phones": [],
+        "links": [],
+        "tags": ["work"],
+        "comments": "Known contact",
+        "external_id": None,
+    }
+
+    monkeypatch.setattr("contacts.get_contact_by_email", lambda _email: None)
+    monkeypatch.setattr("contacts._find_unique_contact_by_name", lambda _name: matched_contact)
+
+    captured = []
+    monkeypatch.setattr("contacts.ingest_contact", lambda contact: captured.append(contact))
+
+    contact_id, created = contacts.ensure_contact_for_email(
+        "alex.alt@example.com",
+        display_name="Alex Example",
+    )
+
+    assert contact_id == "contact:alex-example"
+    assert created is False
+    assert captured[0].emails == ["alex@example.com", "alex.alt@example.com"]
+    assert captured[0].tags == ["work", "meeting-attendee"]
+
+
 def test_event_in_normalizes_attendees_alias_and_objects():
     event = EventIn(
         id="google:alias-test",
@@ -220,6 +252,298 @@ def test_event_in_normalizes_attendees_alias_and_objects():
     )
 
     assert event.attendees_emails == ["alex@example.com", "dana@example.com"]
+
+
+def test_ingest_meeting_transcript_creates_summary_and_named_attendees(monkeypatch):
+    monkeypatch.setattr("events._get_event_id_by_external_id", lambda _external_id: None)
+    monkeypatch.setattr("events._find_matching_meeting_event", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr("events._get_event_by_id", lambda _event_id: None)
+    monkeypatch.setattr("events._create_coworker_relationships", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        "events._generate_meeting_transcript_summary",
+        lambda _payload, _transcript_text, **_kwargs: {
+            "summary": "Generated discussion summary",
+            "action_items": [
+                {
+                    "task": "Send the rollout draft",
+                    "assignee_name": "Current User",
+                    "assignee_email": "me@example.com",
+                    "due_date": None,
+                    "evidence": "The meeting agreed to send the rollout draft.",
+                }
+            ],
+        },
+    )
+
+    ensure_calls = []
+
+    def fake_ensure_contact_for_email(email, *, display_name=None):
+        ensure_calls.append((email, display_name))
+        return f"contact:{email.split('@', 1)[0]}", False
+
+    monkeypatch.setattr("events.contacts_service.ensure_contact_for_email", fake_ensure_contact_for_email)
+
+    captured = []
+    monkeypatch.setattr("events.ingest_event", lambda event: captured.append(event))
+    monkeypatch.setattr("events._get_existing_todo_signatures", lambda _event_id: set())
+    created_todos: list[TodoIn] = []
+
+    payload = MeetingTranscriptPayload(
+        upload_id="upload-123",
+        session_id="session-123",
+        transcript_hash="hash-123",
+        meeting={
+            "original_id": "calendar-123",
+            "provider": "google",
+            "title": "Partner sync",
+            "description": "Calendar description",
+            "started_at": "2026-02-26T11:00:00+00:00",
+            "ended_at": "2026-02-26T11:30:00+00:00",
+        },
+        participants=[
+            {
+                "name": "Alex Example",
+                "email": "alex.work@example.com",
+                "source": "calendar",
+            },
+            {
+                "name": "Alex Example",
+                "email": "alex.personal@example.com",
+                "source": "calendar",
+            },
+        ],
+        speaker_identities=[
+            {
+                "id": "speaker_1",
+                "label": "Alex Example",
+                "identity": {
+                    "kind": "participant",
+                    "email": "alex.work@example.com",
+                    "name": "Alex Example",
+                },
+            }
+        ],
+        transcript={
+            "segments": [
+                {
+                    "speaker_id": "speaker_1",
+                    "started_at": "2026-02-26T11:00:01+00:00",
+                    "ended_at": "2026-02-26T11:00:02+00:00",
+                    "text": "We agreed to send the rollout draft.",
+                }
+            ]
+        },
+    )
+
+    result = events.ingest_meeting_transcript(
+        payload,
+        current_user={"name": "Current User", "email": "me@example.com"},
+        todo_writer=lambda todo: created_todos.append(todo),
+    )
+
+    assert result["summary"] == "Generated discussion summary"
+    assert result["action_items"] == [
+        {
+            "task": "Send the rollout draft",
+            "assignee_name": "Current User",
+            "assignee_email": "me@example.com",
+            "due_date": None,
+            "evidence": "The meeting agreed to send the rollout draft.",
+        }
+    ]
+    assert captured[0].summary == "Generated discussion summary"
+    assert captured[0].title == "Partner sync"
+    assert captured[0].external_id == "google:calendar-123"
+    assert captured[0].raw["source"] == "meeting_transcript_ingest"
+    assert captured[0].raw["transcript_text"] == "Alex Example: We agreed to send the rollout draft."
+    assert captured[0].raw["action_items"] == result["action_items"]
+    assert len(result["created_todo_ids"]) == 1
+    assert created_todos[0].todo_id == result["created_todo_ids"][0]
+    assert created_todos[0].description == "Send the rollout draft"
+    assert created_todos[0].contact_ids == ["contact:me"]
+    assert created_todos[0].event_ids == [captured[0].id]
+    assert ("alex.work@example.com", "Alex Example") in ensure_calls
+    assert ("alex.personal@example.com", "Alex Example") in ensure_calls
+    assert ("me@example.com", "Current User") in ensure_calls
+
+
+def test_ingest_meeting_transcript_replaces_existing_calendar_summary(monkeypatch):
+    existing_event_id = "google:calendar-456:event"
+    start = datetime(2026, 2, 26, 12, 0, tzinfo=timezone.utc)
+    monkeypatch.setattr("events._get_event_id_by_external_id", lambda _external_id: existing_event_id)
+    monkeypatch.setattr(
+        "events._get_event_by_id",
+        lambda _event_id: {
+            "id": existing_event_id,
+            "start_date": start,
+            "end_date": None,
+            "place_id": None,
+            "people": ["contact:old"],
+            "tags": ["calendar"],
+            "types": ["meeting"],
+            "title": "Old title",
+            "summary": "Old calendar description",
+            "raw": {"source": "calendar"},
+            "external_id": "google:calendar-456",
+        },
+    )
+    monkeypatch.setattr("events._create_coworker_relationships", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        "events._generate_meeting_transcript_summary",
+        lambda _payload, _transcript_text, **_kwargs: {
+            "summary": "Transcript-grounded summary",
+            "action_items": [],
+        },
+    )
+    monkeypatch.setattr(
+        "events.contacts_service.ensure_contact_for_email",
+        lambda email, **_kwargs: (f"contact:{email.split('@', 1)[0]}", False),
+    )
+
+    captured = []
+    monkeypatch.setattr("events.ingest_event", lambda event: captured.append(event))
+
+    payload = MeetingTranscriptPayload(
+        meeting={
+            "original_id": "calendar-456",
+            "provider": "google",
+            "title": "Updated title",
+            "started_at": start.isoformat(),
+        },
+        participants=[{"name": "Dana Example", "email": "dana@example.com"}],
+        speaker_identities=[],
+        transcript={"segments": [{"speaker_id": "speaker_1", "text": "The transcript has better notes."}]},
+    )
+
+    events.ingest_meeting_transcript(
+        payload,
+        current_user={"name": "Current User", "email": "me@example.com"},
+    )
+
+    assert captured[0].id == existing_event_id
+    assert captured[0].title == "Updated title"
+    assert captured[0].summary == "Transcript-grounded summary"
+    assert captured[0].people == ["contact:dana", "contact:me"]
+
+
+def test_ingest_meeting_transcript_only_creates_current_user_todos(monkeypatch):
+    monkeypatch.setattr("events._get_event_id_by_external_id", lambda _external_id: None)
+    monkeypatch.setattr("events._find_matching_meeting_event", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr("events._get_event_by_id", lambda _event_id: None)
+    monkeypatch.setattr("events._create_coworker_relationships", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr("events._get_existing_todo_signatures", lambda _event_id: {"already exists"})
+    monkeypatch.setattr(
+        "events._generate_meeting_transcript_summary",
+        lambda _payload, _transcript_text, **_kwargs: {
+            "summary": "Generated discussion summary",
+            "action_items": [
+                {
+                    "task": "Prepare the rollout draft",
+                    "assignee_name": "Current User",
+                    "assignee_email": "me@example.com",
+                    "due_date": "2026-03-01",
+                    "evidence": "Current User took the draft.",
+                },
+                {
+                    "task": "Send the customer note",
+                    "assignee_name": "Dana Example",
+                    "assignee_email": "dana@example.com",
+                    "due_date": None,
+                    "evidence": "Dana took the note.",
+                },
+                {
+                    "task": "Already exists",
+                    "assignee_name": "Current User",
+                    "assignee_email": "me@example.com",
+                    "due_date": None,
+                    "evidence": "Duplicate.",
+                },
+            ],
+        },
+    )
+    monkeypatch.setattr(
+        "events.contacts_service.ensure_contact_for_email",
+        lambda email, **_kwargs: (f"contact:{email.split('@', 1)[0]}", False),
+    )
+
+    captured_events = []
+    created_todos: list[TodoIn] = []
+    monkeypatch.setattr("events.ingest_event", lambda event: captured_events.append(event))
+
+    payload = MeetingTranscriptPayload(
+        meeting={
+            "title": "Action planning",
+            "started_at": "2026-02-26T12:00:00+00:00",
+        },
+        participants=[{"name": "Dana Example", "email": "dana@example.com"}],
+        speaker_identities=[],
+        transcript={"segments": [{"speaker_id": "speaker_1", "text": "We split up the action items."}]},
+    )
+
+    result = events.ingest_meeting_transcript(
+        payload,
+        current_user={"name": "Current User", "email": "me@example.com"},
+        todo_writer=lambda todo: created_todos.append(todo),
+    )
+
+    assert len(created_todos) == 1
+    assert created_todos[0].description == "Prepare the rollout draft"
+    assert created_todos[0].due_date.isoformat() == "2026-03-01"
+    assert created_todos[0].contact_ids == ["contact:me"]
+    assert created_todos[0].event_ids == [captured_events[0].id]
+    assert result["created_todo_ids"] == [created_todos[0].todo_id]
+
+
+def test_generate_meeting_transcript_summary_parses_action_items(monkeypatch):
+    def fake_call_llm_json(prompt, **kwargs):
+        assert '"action_items"' in prompt
+        assert "assignee_name" in prompt
+        assert "current user" in prompt.lower()
+        assert kwargs["response_format"] == {"type": "json_object"}
+        return {
+            "summary": "The team agreed to prepare the rollout draft.",
+            "action_items": [
+                {
+                    "task": "Prepare the rollout draft",
+                    "assignee_name": "Current User",
+                    "assignee_email": "ME@EXAMPLE.COM",
+                    "due_date": None,
+                    "evidence": "Current User committed to preparing the rollout draft.",
+                },
+                {"task": "", "assignee_name": "Dana Example"},
+            ],
+        }
+
+    monkeypatch.setattr("llm_helpers.call_llm_json", fake_call_llm_json)
+
+    payload = MeetingTranscriptPayload(
+        meeting={
+            "title": "Rollout planning",
+            "started_at": "2026-02-26T12:00:00+00:00",
+        },
+        participants=[{"name": "Dana Example", "email": "dana@example.com"}],
+        speaker_identities=[],
+        transcript={"segments": [{"speaker_id": "speaker_1", "text": "I will prepare the draft."}]},
+    )
+
+    result = events._generate_meeting_transcript_summary(
+        payload,
+        "Current User: I will prepare the draft.",
+        current_user={"name": "Current User", "email": "me@example.com"},
+    )
+
+    assert result == {
+        "summary": "The team agreed to prepare the rollout draft.",
+        "action_items": [
+            {
+                "task": "Prepare the rollout draft",
+                "assignee_name": "Current User",
+                "assignee_email": "me@example.com",
+                "due_date": None,
+                "evidence": "Current User committed to preparing the rollout draft.",
+            }
+        ],
+    }
 
 
 def test_create_coworker_relationships_skips_existing_pairs(monkeypatch):

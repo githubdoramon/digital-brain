@@ -4,7 +4,7 @@ import json
 import os
 import re
 from collections.abc import Sequence
-from datetime import datetime
+from datetime import date, datetime
 from enum import Enum
 from itertools import combinations
 from typing import Any, Callable
@@ -20,6 +20,7 @@ from schemas import (
     EventIn,
     ExternalEventPayload,
     MeetingIn,
+    MeetingTranscriptPayload,
     TodoIn,
 )
 from search_normalization import normalize_search_text
@@ -32,6 +33,11 @@ from tags_manager import (
 logger = get_runtime_logger(__name__)
 
 MAX_EVENT_EMBED_CHARS = 6000
+# GPT-OSS has a 128k token window. 300k transcript chars is a conservative direct-pass cap
+# that leaves room for instructions, participant context, and structured JSON output.
+MAX_TRANSCRIPT_SUMMARY_INPUT_CHARS = 300_000
+SUMMARY_LOG_PREVIEW_CHARS = 3000
+ACTION_ITEMS_LOG_PREVIEW_CHARS = 5000
 
 EVENT_TYPE_CHOICES = {
     "generic",
@@ -372,6 +378,486 @@ def ingest_meeting_notes(
             todo_writer(todo)
 
     return event_ids
+
+
+def ingest_meeting_transcript(
+    payload: MeetingTranscriptPayload,
+    *,
+    current_user: dict,
+    todo_writer: Callable[[TodoIn], None] | None = None,
+) -> dict[str, Any]:
+    current_email = contacts_service.normalize_email(current_user.get("email") or "")
+    if not current_email:
+        raise ValueError("current_user with email is required")
+
+    meeting = payload.meeting
+    title = (meeting.title or "").strip() or "Untitled meeting"
+    start_date = meeting.started_at
+    end_date = meeting.ended_at
+    transcript_text = _format_meeting_transcript(payload)
+    summary_result = _generate_meeting_transcript_summary(
+        payload,
+        transcript_text,
+        current_user=current_user,
+    )
+    summary = summary_result["summary"]
+    action_items = summary_result["action_items"]
+    logger.info(
+        "[meeting_transcript] Summary generated upload_id=%s session_id=%s transcript_hash=%s "
+        "summary_preview=%s action_items=%s",
+        payload.upload_id,
+        payload.session_id,
+        payload.transcript_hash,
+        _truncate_log_text(summary, SUMMARY_LOG_PREVIEW_CHARS),
+        _truncate_log_text(json.dumps(action_items, ensure_ascii=False), ACTION_ITEMS_LOG_PREVIEW_CHARS),
+    )
+
+    external_identifier = _get_transcript_external_identifier(payload)
+    event_id = _resolve_meeting_transcript_event_id(
+        title=title,
+        start_date=start_date,
+        external_identifier=external_identifier,
+        session_id=payload.session_id,
+    )
+
+    contact_cache: dict[str, tuple[str | None, bool]] = {}
+    participants = _collect_meeting_transcript_participants(payload)
+    unique_contacts, attendee_contacts_by_domain = _resolve_transcript_participant_contacts(
+        participants,
+        contact_cache=contact_cache,
+        current_user=current_user,
+    )
+    _create_coworker_relationships(attendee_contacts_by_domain)
+    logger.info(
+        "[meeting_transcript] Contacts resolved upload_id=%s participant_count=%d contact_ids=%s",
+        payload.upload_id,
+        len(participants),
+        unique_contacts,
+    )
+
+    raw_payload = {
+        "source": "meeting_transcript_ingest",
+        "upload_id": payload.upload_id,
+        "session_id": payload.session_id,
+        "transcript_hash": payload.transcript_hash,
+        "meeting": payload.meeting.model_dump(by_alias=True),
+        "participants": [participant.model_dump() for participant in payload.participants],
+        "speaker_identities": [identity.model_dump() for identity in payload.speaker_identities],
+        "transcript": payload.transcript.model_dump(by_alias=True),
+        "transcript_text": transcript_text,
+        "summary_result": summary_result,
+        "action_items": action_items,
+        "attendee_contact_ids": unique_contacts,
+    }
+
+    event = EventIn(
+        id=event_id,
+        startDate=start_date,
+        endDate=end_date,
+        people=unique_contacts,
+        tags=["transcript"],
+        types=["meeting"],
+        title=title,
+        summary=summary,
+        raw=raw_payload,
+        externalId=external_identifier,
+    )
+
+    existing_event = _get_event_by_id(event_id)
+    if existing_event:
+        event = _merge_event(existing_event, event, mode=EventMergeMode.AUTHORITATIVE_EXTERNAL)
+        event.summary = summary
+
+    ingest_event(event)
+    created_todo_ids = _create_current_user_todos_from_action_items(
+        action_items,
+        event_id=event_id,
+        current_user=current_user,
+        current_user_contact_id=(contact_cache.get(current_email) or (None, False))[0],
+        todo_writer=todo_writer,
+    )
+    logger.info(
+        "[meeting_transcript] Ingestion complete upload_id=%s event_id=%s created_todo_ids=%s",
+        payload.upload_id,
+        event_id,
+        created_todo_ids,
+    )
+    return {
+        "event_id": event_id,
+        "summary": summary,
+        "action_items": action_items,
+        "created_todo_ids": created_todo_ids,
+        "contact_ids": unique_contacts,
+    }
+
+
+def _truncate_log_text(value: str | None, limit: int) -> str:
+    text = str(value or "").strip()
+    if len(text) <= limit:
+        return text
+    return f"{text[:limit].rstrip()}..."
+
+
+def _get_transcript_external_identifier(payload: MeetingTranscriptPayload) -> str | None:
+    provider = (payload.meeting.provider or "").strip().lower()
+    original_id = (payload.meeting.original_id or "").strip()
+    if not provider or not original_id:
+        return None
+    try:
+        return _format_external_event_id(provider, original_id)
+    except ValueError:
+        logger.warning(
+            "[meeting_transcript] Unsupported external meeting provider=%s; storing without external_id",
+            provider,
+        )
+        return None
+
+
+def _resolve_meeting_transcript_event_id(
+    *,
+    title: str,
+    start_date: datetime,
+    external_identifier: str | None,
+    session_id: str | None,
+) -> str:
+    if external_identifier:
+        existing_id = _get_event_id_by_external_id(external_identifier)
+        if existing_id:
+            return existing_id
+
+    matched = _find_matching_meeting_event(title, start_date)
+    if matched:
+        return matched
+
+    if external_identifier:
+        return f"{external_identifier}:{uuid4().hex[:8]}"
+
+    normalized_session = _slugify(session_id or start_date.strftime("%Y%m%dT%H%M%S"))
+    return f"meeting-transcript:{normalized_session}-{_slugify(title)}-{uuid4().hex[:8]}"
+
+
+def _speaker_label_map(payload: MeetingTranscriptPayload) -> dict[str, str]:
+    labels: dict[str, str] = {}
+    for identity in payload.speaker_identities:
+        speaker_id = str(identity.id or "").strip()
+        if not speaker_id:
+            continue
+        identity_payload = identity.identity if isinstance(identity.identity, dict) else {}
+        label = (
+            str(identity_payload.get("name") or "").strip()
+            or str(identity.label or "").strip()
+            or str(identity_payload.get("email") or "").strip()
+            or speaker_id
+        )
+        labels[speaker_id] = label
+    return labels
+
+
+def _format_meeting_transcript(payload: MeetingTranscriptPayload) -> str:
+    labels = _speaker_label_map(payload)
+    lines: list[str] = []
+    for segment in payload.transcript.segments:
+        text = " ".join(str(segment.text or "").split()).strip()
+        if not text:
+            continue
+        label = labels.get(str(segment.speaker_id or ""), segment.speaker_id or "Unknown speaker")
+        lines.append(f"{label}: {text}")
+    return "\n".join(lines).strip()
+
+
+def _collect_meeting_transcript_participants(
+    payload: MeetingTranscriptPayload,
+) -> list[dict[str, str | None]]:
+    participants: list[dict[str, str | None]] = []
+
+    def add_participant(name: str | None, email: str | None, source: str | None) -> None:
+        cleaned_name = " ".join(str(name or "").split()).strip() or None
+        normalized_email = contacts_service.normalize_email(email or "")
+        if not cleaned_name and not normalized_email:
+            return
+        participants.append(
+            {
+                "name": cleaned_name,
+                "email": normalized_email,
+                "source": source,
+            }
+        )
+
+    for participant in payload.participants:
+        add_participant(participant.name, participant.email, participant.source)
+
+    for speaker_identity in payload.speaker_identities:
+        identity = speaker_identity.identity if isinstance(speaker_identity.identity, dict) else {}
+        if identity.get("kind") not in {"participant", "current_user"}:
+            continue
+        add_participant(
+            identity.get("name") or speaker_identity.label,
+            identity.get("email"),
+            speaker_identity.source or "speaker_identity",
+        )
+
+    deduped: list[dict[str, str | None]] = []
+    seen: set[tuple[str, str]] = set()
+    for participant in participants:
+        key = (
+            normalize_search_text(participant.get("name") or ""),
+            contacts_service.normalize_email(participant.get("email") or "") or "",
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(participant)
+    return deduped
+
+
+def _resolve_transcript_participant_contacts(
+    participants: Sequence[dict[str, str | None]],
+    *,
+    contact_cache: dict[str, tuple[str | None, bool]],
+    current_user: dict,
+) -> tuple[list[str], dict[str, list[str]]]:
+    current_email = contacts_service.normalize_email(current_user.get("email") or "")
+    if not current_email:
+        raise ValueError("current_user with email is required")
+
+    contact_ids: list[str] = []
+    attendee_contacts_by_domain: dict[str, list[str]] = {}
+
+    for participant in participants:
+        email = contacts_service.normalize_email(participant.get("email") or "")
+        if not email:
+            continue
+        display_name = participant.get("name")
+        created_now = False
+        contact_id: str | None = None
+        if email in contact_cache:
+            contact_id, _ = contact_cache[email]
+        else:
+            contact_id, created_now = contacts_service.ensure_contact_for_email(
+                email,
+                display_name=display_name,
+            )
+            contact_cache[email] = (contact_id, created_now)
+        if contact_id:
+            contact_ids.append(contact_id)
+            if "@" in email:
+                domain = email.split("@", 1)[1]
+                attendee_contacts_by_domain.setdefault(domain, []).append(contact_id)
+
+    if current_email not in contact_cache:
+        contact_id, created_now = contacts_service.ensure_contact_for_email(
+            current_email,
+            display_name=current_user.get("name"),
+        )
+        contact_cache[current_email] = (contact_id, created_now)
+        if contact_id:
+            contact_ids.append(contact_id)
+            if "@" in current_email:
+                domain = current_email.split("@", 1)[1]
+                attendee_contacts_by_domain.setdefault(domain, []).append(contact_id)
+
+    return list(dict.fromkeys(contact_ids)), attendee_contacts_by_domain
+
+
+def _generate_meeting_transcript_summary(
+    payload: MeetingTranscriptPayload,
+    transcript_text: str,
+    *,
+    current_user: dict,
+) -> dict[str, Any]:
+    if not transcript_text:
+        return _fallback_meeting_transcript_summary(payload, transcript_text)
+
+    from llm_helpers import LLMUnavailableError, call_llm_json
+
+    participant_rows = _collect_meeting_transcript_participants(payload)
+    participants = "\n".join(
+        f"- name={participant.get('name') or 'unknown'}; email={participant.get('email') or 'unknown'}"
+        for participant in participant_rows
+    )
+    current_user_name = str(current_user.get("name") or "").strip() or "current user"
+    current_user_email = contacts_service.normalize_email(current_user.get("email") or "") or "unknown"
+    prompt = f"""
+Summarize this meeting transcript for a personal memory system and extract action items.
+
+Meeting title: {payload.meeting.title or "Untitled meeting"}
+Meeting description: {payload.meeting.description or ""}
+Current user: name={current_user_name}; email={current_user_email}
+Participants:
+{participants or "- Unknown"}
+
+Transcript:
+{transcript_text[:MAX_TRANSCRIPT_SUMMARY_INPUT_CHARS]}
+
+Return valid JSON only with this shape:
+{{
+  "summary": "compact useful summary text",
+  "action_items": [
+    {{
+      "task": "specific task grounded in the transcript",
+      "assignee_name": "person name, current user, or null",
+      "assignee_email": "email if known, otherwise null",
+      "due_date": "ISO date if explicitly stated, otherwise null",
+      "evidence": "short transcript-grounded reason"
+    }}
+  ]
+}}
+
+Summary rules:
+- Include actual discussion topics, important context, decisions, and follow-ups when present.
+- Always output content in English, even if original language of transcript is not English.
+- Do not invent facts.
+
+Action item rules:
+- Only include action items that are explicit or strongly implied by a concrete commitment in the transcript.
+- Assign action items to the named speaker/participant when the transcript makes the assignee clear.
+- Use the current user's name/email when the current user is the assignee.
+- Use null for unknown assignee_name, assignee_email, due_date, or evidence fields.
+- Do not create action items for vague discussion topics or suggestions without ownership.
+""".strip()
+    try:
+        generated = call_llm_json(
+            prompt,
+            system_prompt=(
+                "You write accurate meeting summaries and extract only grounded action items. "
+                "Return strict JSON matching the requested shape."
+            ),
+            use_fast_model=False,
+            temperature=0.2,
+            max_tokens=1200,
+            response_format={"type": "json_object"},
+        )
+    except (LLMUnavailableError, RuntimeError, ValueError, json.JSONDecodeError) as exc:
+        logger.warning("[meeting_transcript] LLM summary unavailable: %s", exc)
+        return _fallback_meeting_transcript_summary(payload, transcript_text)
+
+    return _normalize_meeting_summary_result(generated, payload, transcript_text)
+
+
+def _normalize_meeting_summary_result(
+    result: dict[str, Any],
+    payload: MeetingTranscriptPayload,
+    transcript_text: str,
+) -> dict[str, Any]:
+    summary = " ".join(str(result.get("summary") or "").split()).strip()
+    if not summary:
+        return _fallback_meeting_transcript_summary(payload, transcript_text)
+
+    action_items: list[dict[str, str | None]] = []
+    raw_action_items = result.get("action_items")
+    if isinstance(raw_action_items, list):
+        for item in raw_action_items:
+            if not isinstance(item, dict):
+                continue
+            task = " ".join(str(item.get("task") or "").split()).strip()
+            if not task:
+                continue
+            action_items.append(
+                {
+                    "task": task,
+                    "assignee_name": _clean_optional_text(item.get("assignee_name")),
+                    "assignee_email": contacts_service.normalize_email(item.get("assignee_email") or ""),
+                    "due_date": _clean_optional_text(item.get("due_date")),
+                    "evidence": _clean_optional_text(item.get("evidence")),
+                }
+            )
+
+    return {"summary": summary, "action_items": action_items}
+
+
+def _create_current_user_todos_from_action_items(
+    action_items: Sequence[dict[str, Any]],
+    *,
+    event_id: str,
+    current_user: dict,
+    current_user_contact_id: str | None,
+    todo_writer: Callable[[TodoIn], None] | None,
+) -> list[str]:
+    if not todo_writer:
+        return []
+
+    current_email = contacts_service.normalize_email(current_user.get("email") or "")
+    current_name = normalize_search_text(current_user.get("name") or "")
+    existing_todo_signatures = _get_existing_todo_signatures(event_id)
+    created_todo_ids: list[str] = []
+
+    for action_item in action_items:
+        if not _is_current_user_action_item(
+            action_item,
+            current_email=current_email,
+            current_name=current_name,
+        ):
+            continue
+
+        task = _clean_optional_text(action_item.get("task"))
+        normalized_task = _normalize_todo_description(task)
+        if not task or not normalized_task or normalized_task in existing_todo_signatures:
+            continue
+
+        existing_todo_signatures.add(normalized_task)
+        todo_id = f"todo:{event_id}:transcript:{uuid4().hex[:8]}"
+        todo_writer(
+            TodoIn(
+                todo_id=todo_id,
+                description=task,
+                status="pending",
+                due_date=_parse_action_item_due_date(action_item.get("due_date")),
+                contact_ids=[current_user_contact_id] if current_user_contact_id else [],
+                event_ids=[event_id],
+                place_ids=[],
+            )
+        )
+        created_todo_ids.append(todo_id)
+
+    return created_todo_ids
+
+
+def _is_current_user_action_item(
+    action_item: dict[str, Any],
+    *,
+    current_email: str | None,
+    current_name: str,
+) -> bool:
+    assignee_email = contacts_service.normalize_email(action_item.get("assignee_email") or "")
+    if current_email and assignee_email == current_email:
+        return True
+
+    assignee_name = normalize_search_text(action_item.get("assignee_name") or "")
+    if not assignee_name:
+        return False
+    if assignee_name in {"current user", "me", "myself", "you"}:
+        return True
+    return bool(current_name and assignee_name == current_name)
+
+
+def _parse_action_item_due_date(value: Any) -> date | None:
+    cleaned = _clean_optional_text(value)
+    if not cleaned:
+        return None
+    try:
+        return date.fromisoformat(cleaned)
+    except ValueError:
+        return None
+
+
+def _clean_optional_text(value: Any) -> str | None:
+    cleaned = " ".join(str(value or "").split()).strip()
+    return cleaned or None
+
+
+def _fallback_meeting_transcript_summary(
+    payload: MeetingTranscriptPayload,
+    transcript_text: str,
+) -> dict[str, Any]:
+    description = " ".join(str(payload.meeting.description or "").split()).strip()
+    excerpt = " ".join(str(transcript_text or "").split()).strip()
+    if excerpt:
+        if len(excerpt) > 1200:
+            excerpt = f"{excerpt[:1197].rstrip()}..."
+        return {"summary": f"Transcript excerpt: {excerpt}", "action_items": []}
+    if description:
+        return {"summary": description, "action_items": []}
+    return {"summary": payload.meeting.title or "Meeting transcript received.", "action_items": []}
 
 
 def get_meeting(meeting_id: str) -> dict[str, Any] | None:
