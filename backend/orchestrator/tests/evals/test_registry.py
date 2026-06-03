@@ -18,6 +18,14 @@ def test_list_eval_flows_includes_expected_flows():
     assert "tag_suggestion" in flow_ids
 
 
+def test_router_eval_flow_includes_pdf_generation_case():
+    router_flow = next(flow for flow in registry.list_eval_flows() if flow["flow_id"] == "router")
+    case_ids = {case["case_id"] for case in router_flow["cases"]}
+
+    assert "router-conversational-pdf-markdown-table" in case_ids
+    assert "router-conversational-pdf-followup" in case_ids
+
+
 @pytest.mark.asyncio
 async def test_run_eval_flow_aggregates_attempts(monkeypatch):
     async def execute_case(case, run_config: EvalRunConfig):

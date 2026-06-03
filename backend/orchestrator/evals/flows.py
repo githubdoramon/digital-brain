@@ -576,6 +576,46 @@ EVAL_FLOWS: list[EvalFlowDefinition] = [
                 response_json_schema=ROUTER_RESPONSE_SCHEMA,
             ),
             EvalCase(
+                case_id="router-conversational-pdf-markdown-table",
+                title="Generated PDF from markdown table",
+                input={
+                    "question": (
+                        "Turn this markdown table into a polished PDF I can download:\n\n"
+                        "| Name | Role | Notes |\n"
+                        "| --- | --- | --- |\n"
+                        "| Alice Example | PM | Owns planning |\n"
+                        "| Bob Example | Engineer | Owns API work |"
+                    )
+                },
+                expected={"intent": "conversational", "pre_resolve_contacts": False},
+                response_json_schema=ROUTER_RESPONSE_SCHEMA,
+            ),
+            EvalCase(
+                case_id="router-conversational-pdf-followup",
+                title="Generated PDF follow-up without shortcut phrase",
+                input={
+                    "question": "Would be great if I can have a pdf of this.",
+                    "conversation_history": [
+                        {
+                            "role": "user",
+                            "content": (
+                                "Here is the table I want to share:\n\n"
+                                "| Name | Role | Notes |\n"
+                                "| --- | --- | --- |\n"
+                                "| Alice Example | PM | Owns planning |\n"
+                                "| Bob Example | Engineer | Owns API work |"
+                            ),
+                        },
+                        {
+                            "role": "assistant",
+                            "content": "I can format that into a compact report.",
+                        },
+                    ],
+                },
+                expected={"intent": "conversational", "pre_resolve_contacts": False},
+                response_json_schema=ROUTER_RESPONSE_SCHEMA,
+            ),
+            EvalCase(
                 case_id="router-system-command-files",
                 title="System command from shell-style request",
                 input={"question": "Use ls -la to inspect the files in the current directory."},
