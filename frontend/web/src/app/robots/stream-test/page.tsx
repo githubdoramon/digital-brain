@@ -116,7 +116,11 @@ export default function RobotStreamTestPage() {
     const interval = window.setInterval(async () => {
       try {
         const next = await gw<CaptureStream>(statusPath);
-        setSession(next);
+        setSession((current) =>
+          current?.session_id === next.session_id
+            ? { ...next, viewer_paths: current.viewer_paths }
+            : next
+        );
       } catch {
         setSession(null);
       }
@@ -125,9 +129,7 @@ export default function RobotStreamTestPage() {
     return () => window.clearInterval(interval);
   }, [sessionId, statusPath]);
 
-  const mjpgUrl = session
-    ? `${GW_BASE}${session.viewer_paths.camera_mjpg}?t=${encodeURIComponent(session.last_video_frame_at ?? session.created_at)}`
-    : null;
+  const mjpgUrl = session ? `${GW_BASE}${session.viewer_paths.camera_mjpg}` : null;
 
   useEffect(() => {
     if (!session?.audio_enabled || !session.viewer_paths.audio_pcm_ws_public) {
@@ -152,23 +154,55 @@ export default function RobotStreamTestPage() {
     socket.binaryType = "arraybuffer";
     audioSocketRef.current = socket;
     setAudioStatus("connecting");
+    console.info("[stream-test] audio websocket connecting", {
+      session_id: session.session_id,
+      url: session.viewer_paths.audio_pcm_ws_public,
+    });
 
     const sampleRate = Number(session.audio_meta?.sample_rate_hz ?? 16000) || 16000;
     const channelCount = Number(session.audio_meta?.channels ?? 1) || 1;
+    let receivedChunks = 0;
+    let receivedBytes = 0;
 
-    socket.onopen = () => setAudioStatus("live");
-    socket.onclose = () => {
+    socket.onopen = () => {
+      console.info("[stream-test] audio websocket open", { session_id: session.session_id });
+      setAudioStatus("live");
+    };
+    socket.onclose = (event) => {
+      console.info("[stream-test] audio websocket closed", {
+        session_id: session.session_id,
+        code: event.code,
+        reason: event.reason,
+        wasClean: event.wasClean,
+        receivedChunks,
+        receivedBytes,
+      });
       if (audioSocketRef.current === socket) {
         audioSocketRef.current = null;
         setAudioStatus("disconnected");
       }
     };
-    socket.onerror = () => setAudioStatus("error");
+    socket.onerror = (event) => {
+      console.warn("[stream-test] audio websocket error", { session_id: session.session_id, event });
+      setAudioStatus("error");
+    };
     socket.onmessage = (event) => {
       if (!(event.data instanceof ArrayBuffer)) return;
 
       const pcm = new Int16Array(event.data);
       if (!pcm.length) return;
+      receivedChunks += 1;
+      receivedBytes += event.data.byteLength;
+      if (receivedChunks === 1 || receivedChunks % 100 === 0) {
+        console.info("[stream-test] audio chunk received", {
+          session_id: session.session_id,
+          chunks: receivedChunks,
+          bytes: receivedBytes,
+          lastBytes: event.data.byteLength,
+          sampleRate,
+          channelCount,
+        });
+      }
 
       const frameCount = Math.floor(pcm.length / channelCount);
       const audioBuffer = context.createBuffer(channelCount, frameCount, sampleRate);
@@ -196,6 +230,7 @@ export default function RobotStreamTestPage() {
     };
   }, [
     session?.audio_enabled,
+    session?.session_id,
     session?.viewer_paths.audio_pcm_ws_public,
     session?.audio_meta?.sample_rate_hz,
     session?.audio_meta?.channels,

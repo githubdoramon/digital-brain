@@ -159,6 +159,9 @@ class RelaySession:
     last_audio_chunk_at: datetime | None = None
     last_upstream_activity_at: datetime | None = None
     latest_video_frame: bytes | None = None
+    video_frame_count: int = 0
+    audio_chunk_count: int = 0
+    audio_bytes_received: int = 0
     audio_buffer: deque[bytes] = field(
         default_factory=lambda: deque(maxlen=CAPTURE_RELAY_AUDIO_BUFFER_CHUNKS)
     )
@@ -310,6 +313,7 @@ class CaptureRelayManager:
                 session.video_meta = message
             elif message_type == "audio_meta":
                 session.audio_meta = message
+                logger.info("[capture_relay] Audio metadata session=%s meta=%s", session_id, message)
             elif message_type == "goodbye":
                 session.last_error = str(message.get("reason") or "upstream_goodbye")
 
@@ -329,11 +333,23 @@ class CaptureRelayManager:
             if track_type == VIDEO_TRACK:
                 session.latest_video_frame = chunk
                 session.last_video_frame_at = utc_now()
+                session.video_frame_count += 1
                 viewers = list(session.video_viewers.values())
             elif track_type == AUDIO_TRACK:
                 session.audio_buffer.append(chunk)
                 session.last_audio_chunk_at = utc_now()
+                session.audio_chunk_count += 1
+                session.audio_bytes_received += len(chunk)
                 viewers = list(session.audio_viewers.values())
+                if session.audio_chunk_count == 1 or session.audio_chunk_count % 100 == 0:
+                    logger.info(
+                        "[capture_relay] Audio chunk received session=%s chunks=%d bytes=%d last_bytes=%d viewers=%d",
+                        session_id,
+                        session.audio_chunk_count,
+                        session.audio_bytes_received,
+                        len(chunk),
+                        len(viewers),
+                    )
             else:
                 logger.warning("[capture_relay] Unknown track=%s session=%s", track_type, session_id)
                 return
@@ -370,9 +386,12 @@ class CaptureRelayManager:
             session.audio_viewers[viewer.viewer_id] = viewer
             backlog = list(session.audio_buffer)
             logger.info(
-                "[capture_relay] Audio viewer joined session=%s viewers=%d",
+                "[capture_relay] Audio viewer joined session=%s viewers=%d backlog=%d chunks_received=%d last_audio=%s",
                 session_id,
                 session.viewer_count,
+                len(backlog),
+                session.audio_chunk_count,
+                session.last_audio_chunk_at.isoformat() if session.last_audio_chunk_at else None,
             )
             return session, viewer, backlog
 

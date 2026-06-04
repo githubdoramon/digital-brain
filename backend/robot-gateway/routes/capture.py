@@ -103,19 +103,39 @@ def create_capture_router() -> APIRouter:
     @router.websocket("/api/capture/streams/{session_id}/audio.pcm")
     async def stream_audio_pcm(websocket: WebSocket, session_id: str):
         viewer_token = websocket.query_params.get("token", "")
+        logger.info(
+            "[capture_relay] Audio viewer upgrade session=%s client=%s has_token=%s header_keys=%s",
+            session_id,
+            websocket.client,
+            "yes" if viewer_token else "no",
+            sorted(websocket.headers.keys()),
+        )
         if viewer_token:
             try:
                 claims = validate_relay_token(viewer_token)
-            except HTTPException:
+            except HTTPException as exc:
+                logger.warning(
+                    "[capture_relay] Audio viewer token rejected session=%s status=%s detail=%s",
+                    session_id,
+                    exc.status_code,
+                    exc.detail,
+                )
                 await websocket.close(code=4401)
                 return
             if (
                 claims.get("session_id") != session_id
                 or claims.get("tracks") != ["audio"]
             ):
+                logger.warning(
+                    "[capture_relay] Audio viewer token scope rejected session=%s claims_session=%s tracks=%s",
+                    session_id,
+                    claims.get("session_id"),
+                    claims.get("tracks"),
+                )
                 await websocket.close(code=4403)
                 return
         else:
+            logger.warning("[capture_relay] Audio viewer rejected session=%s reason=missing_token", session_id)
             await websocket.close(code=4401)
             return
 
@@ -124,18 +144,55 @@ def create_capture_router() -> APIRouter:
         session, viewer, backlog = await relay.register_audio_viewer(session_id)
         if not session.audio_enabled:
             await relay.unregister_viewer(session_id, viewer, mqtt)
+            logger.warning("[capture_relay] Audio viewer rejected session=%s reason=audio_disabled", session_id)
             await websocket.close(code=4400, reason="Audio disabled")
             return
 
         await websocket.accept()
+        logger.info(
+            "[capture_relay] Audio viewer accepted session=%s viewer=%s backlog=%d",
+            session_id,
+            viewer.viewer_id,
+            len(backlog),
+        )
+        chunks_sent = 0
+        bytes_sent = 0
         try:
             for chunk in backlog:
                 await websocket.send_bytes(chunk)
+                chunks_sent += 1
+                bytes_sent += len(chunk)
             while True:
                 chunk = await viewer.queue.get()
                 await websocket.send_bytes(chunk)
+                chunks_sent += 1
+                bytes_sent += len(chunk)
+                if chunks_sent == 1 or chunks_sent % 100 == 0:
+                    logger.info(
+                        "[capture_relay] Audio viewer send session=%s viewer=%s chunks=%d bytes=%d last_bytes=%d",
+                        session_id,
+                        viewer.viewer_id,
+                        chunks_sent,
+                        bytes_sent,
+                        len(chunk),
+                    )
         except WebSocketDisconnect:
-            pass
+            logger.info(
+                "[capture_relay] Audio viewer disconnected session=%s viewer=%s chunks=%d bytes=%d",
+                session_id,
+                viewer.viewer_id,
+                chunks_sent,
+                bytes_sent,
+            )
+        except Exception as exc:
+            logger.warning(
+                "[capture_relay] Audio viewer send failed session=%s viewer=%s chunks=%d bytes=%d error=%s",
+                session_id,
+                viewer.viewer_id,
+                chunks_sent,
+                bytes_sent,
+                exc,
+            )
         finally:
             await relay.unregister_viewer(session_id, viewer, mqtt)
 
