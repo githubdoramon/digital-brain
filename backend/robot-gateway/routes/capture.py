@@ -14,6 +14,19 @@ from schemas import CaptureStreamOut, CaptureStreamRequest
 logger = get_runtime_logger(__name__)
 
 
+def _extract_audio_viewer_token(websocket: WebSocket) -> tuple[str, str | None]:
+    query_token = websocket.query_params.get("token", "")
+    if query_token:
+        return query_token, None
+
+    for protocol in websocket.headers.get("sec-websocket-protocol", "").split(","):
+        protocol = protocol.strip()
+        if protocol.startswith("relay-token."):
+            return protocol.removeprefix("relay-token."), "capture-audio"
+
+    return "", None
+
+
 def create_capture_router() -> APIRouter:
     router = APIRouter()
 
@@ -102,12 +115,13 @@ def create_capture_router() -> APIRouter:
 
     @router.websocket("/api/capture/streams/{session_id}/audio.pcm")
     async def stream_audio_pcm(websocket: WebSocket, session_id: str):
-        viewer_token = websocket.query_params.get("token", "")
+        viewer_token, accept_subprotocol = _extract_audio_viewer_token(websocket)
         logger.info(
-            "[capture_relay] Audio viewer upgrade session=%s client=%s has_token=%s header_keys=%s",
+            "[capture_relay] Audio viewer upgrade session=%s client=%s has_token=%s sec-proto=%s header_keys=%s",
             session_id,
             websocket.client,
             "yes" if viewer_token else "no",
+            websocket.headers.get("sec-websocket-protocol", "<missing>"),
             sorted(websocket.headers.keys()),
         )
         if viewer_token:
@@ -148,7 +162,7 @@ def create_capture_router() -> APIRouter:
             await websocket.close(code=4400, reason="Audio disabled")
             return
 
-        await websocket.accept()
+        await websocket.accept(subprotocol=accept_subprotocol)
         logger.info(
             "[capture_relay] Audio viewer accepted session=%s viewer=%s backlog=%d",
             session_id,

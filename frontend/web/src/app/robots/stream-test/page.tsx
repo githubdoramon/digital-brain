@@ -150,7 +150,11 @@ export default function RobotStreamTestPage() {
     void context.resume();
 
     nextAudioTimeRef.current = Math.max(context.currentTime + 0.1, nextAudioTimeRef.current || 0);
-    const socket = new WebSocket(session.viewer_paths.audio_pcm_ws_public);
+    const audioUrl = new URL(session.viewer_paths.audio_pcm_ws_public);
+    const audioToken = audioUrl.searchParams.get("token");
+    const socket = audioToken
+      ? new WebSocket(audioUrl, ["capture-audio", `relay-token.${audioToken}`])
+      : new WebSocket(audioUrl);
     socket.binaryType = "arraybuffer";
     audioSocketRef.current = socket;
     setAudioStatus("connecting");
