@@ -35,6 +35,10 @@ const SERVICE_KEY_RULES: ServiceKeyRule[] = [
   },
 ];
 
+const BEARER_AUTH_PREFIXES = [
+  "/api/orchestrator/ingest/meetings/transcript",
+];
+
 const authMiddleware = withAuth({
   callbacks: {
     authorized({ token }) {
@@ -79,6 +83,7 @@ export default function middleware(request: NextRequest, event: NextFetchEvent) 
   }
 
   if (
+    BEARER_AUTH_PREFIXES.some((prefix) => pathname.startsWith(prefix)) ||
     pathname.startsWith("/api/mobile") ||
     pathname.startsWith("/api/robot-gateway/mobile/")
   ) {
