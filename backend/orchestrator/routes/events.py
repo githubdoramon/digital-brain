@@ -6,6 +6,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Response, UploadFile
 
+import contacts as contacts_service
 import event_photos as event_photos_service
 import events as events_service
 import todos as todos_service
@@ -19,6 +20,7 @@ from schemas import (
     EventIn,
     ExternalEventPayload,
     MeetingIn,
+    MeetingParticipantsResolveIn,
 )
 
 logger = get_runtime_logger(__name__)
@@ -68,6 +70,19 @@ def create_events_router(
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return {"ok": True, "id": event_id}
+
+    @router.post("/participants/resolve")
+    def resolve_participants(
+        payload: MeetingParticipantsResolveIn,
+        user: dict = Depends(get_current_user),
+    ):
+        return {
+            "participants": contacts_service.resolve_meeting_participants(
+                payload.participants,
+                current_user_email=payload.current_user_email,
+                authenticated_user_email=user.get("email"),
+            )
+        }
 
     @router.get("/events/search")
     @router.get("/mobile/events/search")
