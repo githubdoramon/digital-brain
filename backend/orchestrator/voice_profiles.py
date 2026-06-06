@@ -28,6 +28,8 @@ SUGGEST_SCORE_THRESHOLD = 0.74
 SUGGEST_MARGIN_THRESHOLD = 0.04
 PARTICIPANT_SCORE_BOOST = 0.025
 MAX_ALTERNATES = 3
+CLUSTER_UPDATE_SCORE_THRESHOLD = 0.78
+MAX_CLUSTERS_PER_CONTACT = 5
 
 
 def match_speakers(payload: SpeakerVoiceMatchIn, *, current_user: dict | None = None) -> SpeakerVoiceMatchOut:
@@ -128,8 +130,8 @@ def confirm_speaker_profiles(payload: SpeakerVoiceConfirmIn) -> dict[str, Any]:
         embeddings = _valid_embeddings(observation.embeddings, observation.embedding_dim)
         if not embeddings:
             continue
-        _persist_confirmed_observation(payload.session_id, observation, embeddings)
-        _upsert_voice_profile(contact_id, observation.embedding_model, embeddings)
+        cluster_id = _upsert_voice_profile(contact_id, observation.embedding_model, embeddings)
+        _persist_confirmed_observation(payload.session_id, observation, embeddings, cluster_id)
         confirmed_count += len(embeddings)
 
     for rejected in payload.rejected_matches:
@@ -183,15 +185,16 @@ def _load_voice_profiles() -> list[dict[str, Any]]:
     with get_conn() as conn, conn.cursor() as cur:
         cur.execute(
             """
-            SELECT vp.contact_id,
-                   vp.embedding_model,
-                   vp.centroid,
-                   vp.observation_count,
+            SELECT vpc.cluster_id,
+                   vpc.contact_id,
+                   vpc.embedding_model,
+                   vpc.centroid,
+                   vpc.observation_count,
                    c.display_name,
                    c.emails
-            FROM voice_profiles vp
-            JOIN contacts c ON c.contact_id = vp.contact_id
-            WHERE vp.centroid IS NOT NULL
+            FROM voice_profile_clusters vpc
+            JOIN contacts c ON c.contact_id = vpc.contact_id
+            WHERE vpc.centroid IS NOT NULL
             """
         )
         return [dict(row) for row in cur.fetchall()]
@@ -215,6 +218,7 @@ def _rank_candidates(
         raw.append(
             {
                 "contact_id": contact_id,
+                "cluster_id": profile.get("cluster_id"),
                 "name": profile.get("display_name"),
                 "email": _first_email(profile.get("emails")),
                 "score": score,
@@ -224,9 +228,17 @@ def _rank_candidates(
         )
 
     raw.sort(key=lambda candidate: candidate["ranked_score"], reverse=True)
+    best_by_contact: list[dict[str, Any]] = []
+    seen_contact_ids: set[str] = set()
+    for candidate in raw:
+        if candidate["contact_id"] in seen_contact_ids:
+            continue
+        seen_contact_ids.add(candidate["contact_id"])
+        best_by_contact.append(candidate)
+
     candidates: list[SpeakerVoiceMatchCandidate] = []
-    for index, candidate in enumerate(raw[:MAX_ALTERNATES]):
-        next_score = raw[index + 1]["ranked_score"] if index + 1 < len(raw) else None
+    for index, candidate in enumerate(best_by_contact[:MAX_ALTERNATES]):
+        next_score = best_by_contact[index + 1]["ranked_score"] if index + 1 < len(best_by_contact) else None
         margin = None if next_score is None else candidate["ranked_score"] - next_score
         confidence = _confidence(candidate["ranked_score"], margin)
         candidates.append(
@@ -316,6 +328,7 @@ def _persist_confirmed_observation(
     session_id: str | None,
     observation: ConfirmedSpeakerVoiceObservation,
     embeddings: Sequence[Sequence[float]],
+    cluster_id: str | None,
 ) -> None:
     with get_conn() as conn, conn.cursor() as cur:
         for index, embedding in enumerate(embeddings):
@@ -326,6 +339,7 @@ def _persist_confirmed_observation(
                 INSERT INTO voice_observations (
                   observation_id,
                   contact_id,
+                  cluster_id,
                   session_id,
                   speaker_id,
                   embedding_model,
@@ -334,12 +348,13 @@ def _persist_confirmed_observation(
                   source,
                   confirmed_at
                 )
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, NOW())
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
                 ON CONFLICT (observation_id) DO NOTHING
                 """,
                 (
                     f"voice-observation:{session_id or 'unknown'}:{observation.speaker_id}:{uuid4().hex[:12]}",
                     observation.contact_id,
+                    cluster_id,
                     session_id,
                     observation.speaker_id,
                     observation.embedding_model,
@@ -355,66 +370,204 @@ def _upsert_voice_profile(
     contact_id: str,
     embedding_model: str,
     embeddings: Sequence[Sequence[float]],
-) -> None:
+) -> str | None:
     incoming_centroid = _centroid(embeddings)
     if incoming_centroid is None:
-        return
+        return None
     incoming_count = len(embeddings)
 
     with get_conn() as conn, conn.cursor() as cur:
-        cur.execute(
-            """
-            SELECT centroid, confirmed_observation_count
-            FROM voice_profiles
-            WHERE contact_id = %s
-            """,
-            (contact_id,),
+        _upsert_voice_profile_summary(
+            cur,
+            contact_id,
+            embedding_model,
+            incoming_centroid,
+            incoming_count,
         )
-        row = cur.fetchone()
-        if row:
-            existing = dict(row)
-            existing_centroid = _coerce_vector(existing.get("centroid"))
-            existing_count = int(existing.get("confirmed_observation_count") or 0)
-            combined = _weighted_centroid(
-                existing_centroid,
-                existing_count,
-                incoming_centroid,
-                incoming_count,
-            )
-            total = existing_count + incoming_count
-        else:
-            combined = incoming_centroid
-            existing_count = 0
-            total = incoming_count
+        cluster_id = _upsert_voice_profile_cluster(
+            cur,
+            contact_id,
+            embedding_model,
+            incoming_centroid,
+            incoming_count,
+        )
+        conn.commit()
+    return cluster_id
 
+
+def _upsert_voice_profile_summary(
+    cur: Any,
+    contact_id: str,
+    embedding_model: str,
+    incoming_centroid: Sequence[float],
+    incoming_count: int,
+) -> None:
+    cur.execute(
+        """
+        SELECT centroid, confirmed_observation_count
+        FROM voice_profiles
+        WHERE contact_id = %s
+        """,
+        (contact_id,),
+    )
+    row = cur.fetchone()
+    if row:
+        existing = dict(row)
+        existing_centroid = _coerce_vector(existing.get("centroid"))
+        existing_count = int(existing.get("confirmed_observation_count") or 0)
+        combined = _weighted_centroid(
+            existing_centroid,
+            existing_count,
+            incoming_centroid,
+            incoming_count,
+        )
+        total = existing_count + incoming_count
+    else:
+        combined = _normalize(incoming_centroid)
+        total = incoming_count
+
+    cur.execute(
+        """
+        INSERT INTO voice_profiles (
+          contact_id,
+          embedding_model,
+          centroid,
+          observation_count,
+          confirmed_observation_count,
+          last_observed_at
+        )
+        VALUES (%s, %s, %s, %s, %s, NOW())
+        ON CONFLICT (contact_id) DO UPDATE
+          SET embedding_model = EXCLUDED.embedding_model,
+              centroid = EXCLUDED.centroid,
+              observation_count = voice_profiles.observation_count + EXCLUDED.observation_count,
+              confirmed_observation_count = EXCLUDED.confirmed_observation_count,
+              last_observed_at = NOW(),
+              updated_at = NOW()
+        """,
+        (
+            contact_id,
+            embedding_model,
+            combined,
+            incoming_count,
+            total,
+        ),
+    )
+
+
+def _upsert_voice_profile_cluster(
+    cur: Any,
+    contact_id: str,
+    embedding_model: str,
+    incoming_centroid: Sequence[float],
+    incoming_count: int,
+) -> str:
+    cur.execute(
+        """
+        SELECT cluster_id, centroid, confirmed_observation_count, created_at
+        FROM voice_profile_clusters
+        WHERE contact_id = %s
+        ORDER BY confirmed_observation_count DESC, updated_at DESC
+        """,
+        (contact_id,),
+    )
+    clusters = [dict(row) for row in cur.fetchall()]
+    nearest = _nearest_cluster(incoming_centroid, clusters)
+    if nearest and nearest["score"] >= CLUSTER_UPDATE_SCORE_THRESHOLD:
+        cluster = nearest["cluster"]
+        cluster_id = str(cluster["cluster_id"])
+        existing_centroid = _coerce_vector(cluster.get("centroid"))
+        existing_count = int(cluster.get("confirmed_observation_count") or 0)
+        combined = _weighted_centroid(
+            existing_centroid,
+            existing_count,
+            incoming_centroid,
+            incoming_count,
+        )
         cur.execute(
             """
-            INSERT INTO voice_profiles (
-              contact_id,
-              embedding_model,
-              centroid,
-              observation_count,
-              confirmed_observation_count,
-              last_observed_at
-            )
-            VALUES (%s, %s, %s, %s, %s, NOW())
-            ON CONFLICT (contact_id) DO UPDATE
-              SET embedding_model = EXCLUDED.embedding_model,
-                  centroid = EXCLUDED.centroid,
-                  observation_count = voice_profiles.observation_count + EXCLUDED.observation_count,
-                  confirmed_observation_count = EXCLUDED.confirmed_observation_count,
-                  last_observed_at = NOW(),
-                  updated_at = NOW()
+            UPDATE voice_profile_clusters
+            SET embedding_model = %s,
+                centroid = %s,
+                observation_count = observation_count + %s,
+                confirmed_observation_count = confirmed_observation_count + %s,
+                last_observed_at = NOW(),
+                updated_at = NOW()
+            WHERE cluster_id = %s
             """,
             (
-                contact_id,
                 embedding_model,
                 combined,
                 incoming_count,
-                total,
+                incoming_count,
+                cluster_id,
             ),
         )
-        conn.commit()
+        return cluster_id
+
+    if len(clusters) >= MAX_CLUSTERS_PER_CONTACT:
+        weakest = clusters[-1]
+        cluster_id = str(weakest["cluster_id"])
+        cur.execute(
+            """
+            UPDATE voice_profile_clusters
+            SET embedding_model = %s,
+                centroid = %s,
+                observation_count = %s,
+                confirmed_observation_count = %s,
+                last_observed_at = NOW(),
+                updated_at = NOW()
+            WHERE cluster_id = %s
+            """,
+            (
+                embedding_model,
+                _normalize(incoming_centroid),
+                incoming_count,
+                incoming_count,
+                cluster_id,
+            ),
+        )
+        return cluster_id
+
+    cluster_id = f"voice-cluster:{contact_id}:{uuid4().hex[:12]}"
+    cur.execute(
+        """
+        INSERT INTO voice_profile_clusters (
+          cluster_id,
+          contact_id,
+          embedding_model,
+          centroid,
+          observation_count,
+          confirmed_observation_count,
+          last_observed_at
+        )
+        VALUES (%s, %s, %s, %s, %s, %s, NOW())
+        """,
+        (
+            cluster_id,
+            contact_id,
+            embedding_model,
+            _normalize(incoming_centroid),
+            incoming_count,
+            incoming_count,
+        ),
+    )
+    return cluster_id
+
+
+def _nearest_cluster(
+    centroid: Sequence[float],
+    clusters: Sequence[dict[str, Any]],
+) -> dict[str, Any] | None:
+    best: dict[str, Any] | None = None
+    for cluster in clusters:
+        cluster_centroid = _coerce_vector(cluster.get("centroid"))
+        if not cluster_centroid:
+            continue
+        score = _cosine_similarity(centroid, cluster_centroid)
+        if best is None or score > best["score"]:
+            best = {"cluster": cluster, "score": score}
+    return best
 
 
 def _weighted_centroid(

@@ -24,12 +24,14 @@ def test_match_speakers_auto_labels_high_confidence(monkeypatch):
         "_load_voice_profiles",
         lambda: [
             {
+                "cluster_id": "cluster:alice:1",
                 "contact_id": "contact:alice",
                 "display_name": "Alice",
                 "emails": ["alice@example.com"],
                 "centroid": _unit(0),
             },
             {
+                "cluster_id": "cluster:bob:1",
                 "contact_id": "contact:bob",
                 "display_name": "Bob",
                 "emails": ["bob@example.com"],
@@ -64,12 +66,14 @@ def test_match_speakers_blocks_duplicate_auto_label(monkeypatch):
         "_load_voice_profiles",
         lambda: [
             {
+                "cluster_id": "cluster:alice:1",
                 "contact_id": "contact:alice",
                 "display_name": "Alice",
                 "emails": ["alice@example.com"],
                 "centroid": _unit(0),
             },
             {
+                "cluster_id": "cluster:bob:1",
                 "contact_id": "contact:bob",
                 "display_name": "Bob",
                 "emails": ["bob@example.com"],
@@ -106,12 +110,14 @@ def test_rank_candidates_uses_participant_prior_without_hiding_global_profiles()
     query = [0.80, 0.60] + [0.0] * (voice_profiles.VOICE_EMBEDDING_DIM - 2)
     profiles = [
         {
+            "cluster_id": "cluster:participant:1",
             "contact_id": "contact:participant",
             "display_name": "Participant",
             "emails": ["p@example.com"],
             "centroid": [0.79, 0.61] + [0.0] * (voice_profiles.VOICE_EMBEDDING_DIM - 2),
         },
         {
+            "cluster_id": "cluster:global:1",
             "contact_id": "contact:global",
             "display_name": "Global",
             "emails": ["g@example.com"],
@@ -132,6 +138,44 @@ def test_rank_candidates_uses_participant_prior_without_hiding_global_profiles()
     assert candidates[0].is_participant is True
 
 
+def test_rank_candidates_uses_best_cluster_once_per_contact():
+    profiles = [
+        {
+            "cluster_id": "cluster:alice:weak",
+            "contact_id": "contact:alice",
+            "display_name": "Alice",
+            "emails": ["alice@example.com"],
+            "centroid": _unit(1),
+        },
+        {
+            "cluster_id": "cluster:alice:strong",
+            "contact_id": "contact:alice",
+            "display_name": "Alice",
+            "emails": ["alice@example.com"],
+            "centroid": _unit(0),
+        },
+        {
+            "cluster_id": "cluster:bob:strong",
+            "contact_id": "contact:bob",
+            "display_name": "Bob",
+            "emails": ["bob@example.com"],
+            "centroid": _unit(2),
+        },
+    ]
+
+    candidates = voice_profiles._rank_candidates(
+        _unit(0),
+        profiles,
+        participant_contact_ids=set(),
+    )
+
+    assert [candidate.contact_id for candidate in candidates] == [
+        "contact:alice",
+        "contact:bob",
+    ]
+    assert candidates[0].confidence == "high"
+
+
 def test_confirm_speaker_profiles_persists_and_updates_profile(monkeypatch):
     persisted = []
     updated = []
@@ -140,8 +184,8 @@ def test_confirm_speaker_profiles_persists_and_updates_profile(monkeypatch):
     monkeypatch.setattr(
         voice_profiles,
         "_persist_confirmed_observation",
-        lambda session_id, observation, embeddings: persisted.append(
-            (session_id, observation.contact_id, len(embeddings))
+        lambda session_id, observation, embeddings, cluster_id: persisted.append(
+            (session_id, observation.contact_id, len(embeddings), cluster_id)
         ),
     )
     monkeypatch.setattr(
@@ -149,7 +193,8 @@ def test_confirm_speaker_profiles_persists_and_updates_profile(monkeypatch):
         "_upsert_voice_profile",
         lambda contact_id, embedding_model, embeddings: updated.append(
             (contact_id, embedding_model, len(embeddings))
-        ),
+        )
+        or "cluster:alice:1",
     )
     monkeypatch.setattr(
         voice_profiles,
@@ -185,7 +230,7 @@ def test_confirm_speaker_profiles_persists_and_updates_profile(monkeypatch):
         "confirmed_observation_count": 2,
         "rejected_match_count": 1,
     }
-    assert persisted == [("session-1", "contact:alice", 2)]
+    assert persisted == [("session-1", "contact:alice", 2, "cluster:alice:1")]
     assert updated == [("contact:alice", "pyannote_wespeaker_onnx", 2)]
     assert rejected[0]["status"] == "rejected"
 
