@@ -21,24 +21,43 @@ const splitCsv = (value: string | undefined): string[] =>
     .map((item) => item.trim())
     .filter(Boolean);
 
-const getGoogleOAuthClientId = (): string => {
+const MISSING_GOOGLE_CLIENT_ID = "missing-google-client-id";
+const MISSING_GOOGLE_CLIENT_SECRET = "missing-google-client-secret";
+
+const getGoogleOAuthClientId = (required = true): string => {
   const clientId = process.env.GOOGLE_CLIENT_ID?.trim() || splitCsv(process.env.GOOGLE_CLIENT_IDS)[0];
   if (!clientId) {
+    if (!required) {
+      return MISSING_GOOGLE_CLIENT_ID;
+    }
     throw new Error("GOOGLE_CLIENT_ID or GOOGLE_CLIENT_IDS must be configured");
   }
   return clientId;
 };
 
-const getGoogleOAuthClientSecret = (): string => {
+const getGoogleOAuthClientSecret = (required = true): string => {
   const clientSecret = process.env.GOOGLE_CLIENT_SECRET?.trim();
   if (!clientSecret) {
+    if (!required) {
+      return MISSING_GOOGLE_CLIENT_SECRET;
+    }
     throw new Error("GOOGLE_CLIENT_SECRET must be configured");
   }
   return clientSecret;
 };
 
-const googleOAuthClientId = getGoogleOAuthClientId();
-const googleOAuthClientSecret = getGoogleOAuthClientSecret();
+const googleOAuthClientId = getGoogleOAuthClientId(false);
+const googleOAuthClientSecret = getGoogleOAuthClientSecret(false);
+
+function getGoogleOAuthConfigurationError(): Error | undefined {
+  try {
+    getGoogleOAuthClientId();
+    getGoogleOAuthClientSecret();
+    return undefined;
+  } catch (error) {
+    return error instanceof Error ? error : new Error("Google OAuth configuration is invalid");
+  }
+}
 
 type GoogleJWT = JWT & {
   accessToken?: string;
@@ -236,4 +255,30 @@ export const authOptions: NextAuthOptions = {
 
 const handler = NextAuth(authOptions);
 
-export { handler as GET, handler as POST };
+function getAuthConfigurationErrorResponse(): Response | undefined {
+  const error = getGoogleOAuthConfigurationError();
+  if (!error) {
+    return undefined;
+  }
+
+  console.error("NextAuth Google OAuth configuration error", error);
+  return new Response(
+    JSON.stringify({
+      detail: error.message,
+    }),
+    {
+      status: 500,
+      headers: { "content-type": "application/json" },
+    }
+  );
+}
+
+async function authHandler(...args: Parameters<typeof handler>) {
+  const errorResponse = getAuthConfigurationErrorResponse();
+  if (errorResponse) {
+    return errorResponse;
+  }
+  return handler(...args);
+}
+
+export { authHandler as GET, authHandler as POST };
