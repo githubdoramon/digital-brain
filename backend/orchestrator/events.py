@@ -851,7 +851,7 @@ Action item rules:
             use_fast_model=False,
             timeout=MEETING_TRANSCRIPT_SUMMARY_TIMEOUT_SECONDS,
             temperature=0.2,
-            reasoning_effort="high",
+            reasoning_effort="medium",
             response_format={"type": "json_object"},
         )
     except (LLMUnavailableError, RuntimeError, ValueError, json.JSONDecodeError) as exc:
