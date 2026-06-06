@@ -18,8 +18,8 @@ All API endpoints require authentication via Google OAuth JWT tokens.
 Set these environment variables:
 
 ```bash
-# Required: Your Google OAuth Client ID (same as frontend)
-GOOGLE_CLIENT_ID=your-client-id.apps.googleusercontent.com
+# Required: comma-separated client IDs accepted as token audiences.
+GOOGLE_CLIENT_IDS=web-client-id.apps.googleusercontent.com,desktop-client-id.apps.googleusercontent.com
 
 # Required: Comma-separated list of allowed emails
 # Empty or missing is rejected at startup unless DEV_BYPASS_AUTH is enabled locally
@@ -67,7 +67,7 @@ documented in `backend/env.template`.
 pip install -r requirements.txt
 
 # Set environment variables (copy from env.template)
-export GOOGLE_CLIENT_ID=...
+export GOOGLE_CLIENT_IDS=...
 export ALLOWED_USERS=...
 
 # Run
@@ -76,7 +76,7 @@ uvicorn app:api --reload
 
 ## Deployment
 
-Make sure to set `GOOGLE_CLIENT_ID` and a non-empty `ALLOWED_USERS` in your deployment environment.
+Make sure to set `GOOGLE_CLIENT_IDS` and a non-empty `ALLOWED_USERS` in your deployment environment.
 
 If you enable Telegram photo ingest, also set:
 

@@ -8,7 +8,7 @@ from fastapi import HTTPException
 os.environ.setdefault("LLM_BASE_URL", "http://localhost:11434/v1")
 os.environ.setdefault("LLM_CHAT_MODEL_FAST", "test-fast")
 os.environ.setdefault("LLM_CHAT_MODEL_SMART", "test-smart")
-os.environ.setdefault("GOOGLE_CLIENT_ID", "test-client-id")
+os.environ.setdefault("GOOGLE_CLIENT_IDS", "test-client-id")
 os.environ.setdefault("ALLOWED_USERS", "user@example.com")
 
 from routes import chat

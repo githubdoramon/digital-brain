@@ -363,7 +363,7 @@ AGENT_TRACE_LEVEL=info                 # debug|info|decision|warning|error
 DATABASE_URL=postgresql://user:pass@localhost/db
 
 # Auth
-GOOGLE_CLIENT_ID=xxx.apps.googleusercontent.com
+GOOGLE_CLIENT_IDS=web-client-id.apps.googleusercontent.com,desktop-client-id.apps.googleusercontent.com
 # Required: non-empty comma-separated allowlist
 ALLOWED_USERS=user@example.com
 

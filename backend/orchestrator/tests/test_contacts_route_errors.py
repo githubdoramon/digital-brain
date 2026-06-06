@@ -5,7 +5,7 @@ import os
 import pytest
 from fastapi import HTTPException
 
-os.environ.setdefault("GOOGLE_CLIENT_ID", "test-client-id")
+os.environ.setdefault("GOOGLE_CLIENT_IDS", "test-client-id")
 os.environ.setdefault("ALLOWED_USERS", "user@example.com")
 
 from routes import contacts

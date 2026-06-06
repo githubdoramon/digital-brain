@@ -12,7 +12,7 @@ import pytest
 # Add parent directory to path for imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-os.environ.setdefault("GOOGLE_CLIENT_ID", "test-client-id")
+os.environ.setdefault("GOOGLE_CLIENT_IDS", "test-client-id")
 os.environ.setdefault("ALLOWED_USERS", "user@example.com")
 
 
