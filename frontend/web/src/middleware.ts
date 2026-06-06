@@ -36,7 +36,10 @@ const SERVICE_KEY_RULES: ServiceKeyRule[] = [
 ];
 
 const BEARER_AUTH_PREFIXES = [
+  "/api/orchestrator/contacts",
   "/api/orchestrator/ingest/meetings/transcript",
+  "/api/orchestrator/meetings/speakers/match",
+  "/api/orchestrator/participants/resolve",
 ];
 
 const authMiddleware = withAuth({
