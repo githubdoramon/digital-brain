@@ -1,3 +1,4 @@
+import json
 from datetime import datetime, timezone
 
 import contacts
@@ -355,6 +356,7 @@ def test_ingest_meeting_transcript_creates_summary_and_named_attendees(monkeypat
     assert captured[0].title == "Partner sync"
     assert captured[0].external_id == "google:calendar-123"
     assert captured[0].raw["source"] == "meeting_transcript_ingest"
+    json.dumps(captured[0].raw)
     assert captured[0].raw["transcript_text"] == "Alex Example: We agreed to send the rollout draft."
     assert captured[0].raw["action_items"] == result["action_items"]
     assert len(result["created_todo_ids"]) == 1

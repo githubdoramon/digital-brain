@@ -72,6 +72,14 @@ def create_events_router(
             )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except Exception:
+            logger.exception(
+                "[meeting_transcript] Ingestion failed upload_id=%s session_id=%s transcript_hash=%s",
+                payload.upload_id,
+                payload.session_id,
+                payload.transcript_hash,
+            )
+            raise
         return {"ok": True, "id": result["event_id"], **result}
 
     @router.post("/ingest/event/external")
