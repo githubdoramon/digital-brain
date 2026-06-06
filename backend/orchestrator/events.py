@@ -395,22 +395,6 @@ def ingest_meeting_transcript(
     start_date = meeting.started_at
     end_date = meeting.ended_at
     transcript_text = _format_meeting_transcript(payload)
-    summary_result = _generate_meeting_transcript_summary(
-        payload,
-        transcript_text,
-        current_user=current_user,
-    )
-    summary = summary_result["summary"]
-    action_items = summary_result["action_items"]
-    logger.info(
-        "[meeting_transcript] Summary generated upload_id=%s session_id=%s transcript_hash=%s "
-        "summary_preview=%s action_items=%s",
-        payload.upload_id,
-        payload.session_id,
-        payload.transcript_hash,
-        _truncate_log_text(summary, SUMMARY_LOG_PREVIEW_CHARS),
-        _truncate_log_text(json.dumps(action_items, ensure_ascii=False), ACTION_ITEMS_LOG_PREVIEW_CHARS),
-    )
 
     external_identifier = _get_transcript_external_identifier(payload)
     event_id = _resolve_meeting_transcript_event_id(
@@ -434,6 +418,29 @@ def ingest_meeting_transcript(
         len(participants),
         unique_contacts,
     )
+    people_context = _build_meeting_transcript_people_context(
+        participants,
+        contact_ids=unique_contacts,
+        current_user=current_user,
+    )
+
+    summary_result = _generate_meeting_transcript_summary(
+        payload,
+        transcript_text,
+        current_user=current_user,
+        people_context=people_context,
+    )
+    summary = summary_result["summary"]
+    action_items = summary_result["action_items"]
+    logger.info(
+        "[meeting_transcript] Summary generated upload_id=%s session_id=%s transcript_hash=%s "
+        "summary_preview=%s action_items=%s",
+        payload.upload_id,
+        payload.session_id,
+        payload.transcript_hash,
+        _truncate_log_text(summary, SUMMARY_LOG_PREVIEW_CHARS),
+        _truncate_log_text(json.dumps(action_items, ensure_ascii=False), ACTION_ITEMS_LOG_PREVIEW_CHARS),
+    )
 
     raw_payload = {
         "source": "meeting_transcript_ingest",
@@ -445,6 +452,7 @@ def ingest_meeting_transcript(
         "speaker_identities": [identity.model_dump() for identity in payload.speaker_identities],
         "transcript": payload.transcript.model_dump(by_alias=True, mode="json"),
         "transcript_text": transcript_text,
+        "people_context": people_context,
         "summary_result": summary_result,
         "action_items": action_items,
         "attendee_contact_ids": unique_contacts,
@@ -473,6 +481,7 @@ def ingest_meeting_transcript(
         action_items,
         event_id=event_id,
         current_user=current_user,
+        current_user_identifiers=people_context.get("current_user_identifiers") or [],
         current_user_contact_id=(contact_cache.get(current_email) or (None, False))[0],
         todo_writer=todo_writer,
     )
@@ -555,14 +564,42 @@ def _speaker_label_map(payload: MeetingTranscriptPayload) -> dict[str, str]:
 
 def _format_meeting_transcript(payload: MeetingTranscriptPayload) -> str:
     labels = _speaker_label_map(payload)
-    lines: list[str] = []
-    for segment in payload.transcript.segments:
+    turns: list[dict[str, str]] = []
+    for segment in _sorted_transcript_segments(payload.transcript.segments):
         text = " ".join(str(segment.text or "").split()).strip()
         if not text:
             continue
         label = labels.get(str(segment.speaker_id or ""), segment.speaker_id or "Unknown speaker")
-        lines.append(f"{label}: {text}")
-    return "\n".join(lines).strip()
+        if turns and turns[-1]["label"] == label:
+            turns[-1]["text"] = _join_transcript_fragments(turns[-1]["text"], text)
+        else:
+            turns.append({"label": label, "text": text})
+    return "\n".join(f"{turn['label']}: {turn['text']}" for turn in turns).strip()
+
+
+def _sorted_transcript_segments(segments: Sequence[Any]) -> list[Any]:
+    indexed_segments = list(enumerate(segments))
+
+    def sort_key(item: tuple[int, Any]) -> tuple[float, int]:
+        index, segment = item
+        started_at = getattr(segment, "started_at", None)
+        if isinstance(started_at, datetime):
+            return started_at.timestamp(), index
+        return float(index), index
+
+    return [segment for _index, segment in sorted(indexed_segments, key=sort_key)]
+
+
+def _join_transcript_fragments(existing: str, incoming: str) -> str:
+    existing_text = existing.strip()
+    incoming_text = incoming.strip()
+    if not existing_text:
+        return incoming_text
+    if not incoming_text:
+        return existing_text
+    if existing_text.endswith(("-", "/", "(", "[", "{")):
+        return f"{existing_text}{incoming_text}"
+    return f"{existing_text} {incoming_text}"
 
 
 def _collect_meeting_transcript_participants(
@@ -659,32 +696,118 @@ def _resolve_transcript_participant_contacts(
     return list(dict.fromkeys(contact_ids)), attendee_contacts_by_domain
 
 
+def _build_meeting_transcript_people_context(
+    participants: Sequence[dict[str, str | None]],
+    *,
+    contact_ids: Sequence[str],
+    current_user: dict,
+) -> dict[str, Any]:
+    all_identifiers: set[str] = set()
+    current_user_identifiers: set[str] = set()
+    contact_entries: list[dict[str, Any]] = []
+
+    def add_terms(target: set[str], *values: Any) -> None:
+        for value in values:
+            if isinstance(value, (list, tuple, set)):
+                add_terms(target, *value)
+                continue
+            cleaned = " ".join(str(value or "").split()).strip()
+            if cleaned:
+                target.add(cleaned)
+
+    current_email = contacts_service.normalize_email(current_user.get("email") or "")
+    add_terms(current_user_identifiers, current_user.get("name"), current_email)
+
+    for participant in participants:
+        add_terms(all_identifiers, participant.get("name"), participant.get("email"))
+
+    for contact_id in contact_ids:
+        contact = contacts_service.get_contact(contact_id)
+        if not contact:
+            continue
+        contact_identifiers: set[str] = set()
+        add_terms(
+            contact_identifiers,
+            contact.get("display_name"),
+            contact.get("aliases") or [],
+            contact.get("emails") or [],
+        )
+        if not contact_identifiers:
+            continue
+
+        all_identifiers.update(contact_identifiers)
+        normalized_emails = {
+            contacts_service.normalize_email(email)
+            for email in contact.get("emails") or []
+            if contacts_service.normalize_email(email)
+        }
+        normalized_names = {normalize_search_text(term) for term in contact_identifiers}
+        if current_email in normalized_emails or normalize_search_text(current_user.get("name") or "") in normalized_names:
+            current_user_identifiers.update(contact_identifiers)
+
+        contact_entries.append(
+            {
+                "contact_id": contact_id,
+                "identifiers": sorted(contact_identifiers, key=lambda item: item.casefold()),
+            }
+        )
+
+    all_identifiers.update(current_user_identifiers)
+    return {
+        "current_user_identifiers": sorted(current_user_identifiers, key=lambda item: item.casefold()),
+        "people_identifiers": sorted(all_identifiers, key=lambda item: item.casefold()),
+        "contacts": contact_entries,
+    }
+
+
+def _format_identifier_lines(identifiers: Sequence[Any]) -> str:
+    return "\n".join(f"- {identifier}" for identifier in identifiers if str(identifier or "").strip())
+
+
+def _format_people_context_contacts(contacts: Sequence[Any]) -> str:
+    lines: list[str] = []
+    for contact in contacts:
+        if not isinstance(contact, dict):
+            continue
+        identifiers = ", ".join(str(item) for item in contact.get("identifiers") or [] if item)
+        if not identifiers:
+            continue
+        lines.append(f"- {contact.get('contact_id')}: {identifiers}")
+    return "\n".join(lines)
+
+
 def _generate_meeting_transcript_summary(
     payload: MeetingTranscriptPayload,
     transcript_text: str,
     *,
     current_user: dict,
+    people_context: dict[str, Any],
 ) -> dict[str, Any]:
     if not transcript_text:
         return _fallback_meeting_transcript_summary(payload, transcript_text)
 
     from llm_helpers import LLMUnavailableError, call_llm_json
 
-    participant_rows = _collect_meeting_transcript_participants(payload)
-    participants = "\n".join(
-        f"- name={participant.get('name') or 'unknown'}; email={participant.get('email') or 'unknown'}"
-        for participant in participant_rows
+    current_user_identifiers = _format_identifier_lines(
+        people_context.get("current_user_identifiers") or []
     )
-    current_user_name = str(current_user.get("name") or "").strip() or "current user"
-    current_user_email = contacts_service.normalize_email(current_user.get("email") or "") or "unknown"
+    people_identifiers = _format_identifier_lines(people_context.get("people_identifiers") or [])
+    resolved_contacts = _format_people_context_contacts(people_context.get("contacts") or [])
+    authenticated_current_email = contacts_service.normalize_email(current_user.get("email") or "") or "unknown"
     prompt = f"""
 Summarize this meeting transcript for a personal memory system and extract action items.
 
 Meeting title: {payload.meeting.title or "Untitled meeting"}
 Meeting description: {payload.meeting.description or ""}
-Current user: name={current_user_name}; email={current_user_email}
-Participants:
-{participants or "- Unknown"}
+Authenticated current user email: {authenticated_current_email}
+Current user identifiers (names, aliases, emails):
+{current_user_identifiers or "- Unknown"}
+
+All known identifiers for people involved (names, aliases, emails):
+{people_identifiers or "- Unknown"}
+
+Resolved contacts:
+{resolved_contacts or "- None"}
 
 Transcript:
 {transcript_text[:MAX_TRANSCRIPT_SUMMARY_INPUT_CHARS]}
@@ -711,7 +834,8 @@ Summary rules:
 Action item rules:
 - Only include action items that are explicit or strongly implied by a concrete commitment in the transcript.
 - Assign action items to the named speaker/participant when the transcript makes the assignee clear.
-- Use the current user's name/email when the current user is the assignee.
+- Use the current user's canonical name/email from the identifier set when the current user is the assignee.
+- Use participant aliases/emails from the identifier sets to disambiguate assignees.
 - Use null for unknown assignee_name, assignee_email, due_date, or evidence fields.
 - Do not create action items for vague discussion topics or suggestions without ownership.
 """.strip()
@@ -720,11 +844,12 @@ Action item rules:
             prompt,
             system_prompt=(
                 "You write accurate meeting summaries and extract only grounded action items. "
-                "Return strict JSON matching the requested shape."
+                "Return strict JSON matching the requested shape. Do not spend tokens on deliberation; "
+                "produce the JSON object directly."
             ),
             use_fast_model=False,
             temperature=0.2,
-            max_tokens=1200,
+            reasoning_effort="high",
             response_format={"type": "json_object"},
         )
     except (LLMUnavailableError, RuntimeError, ValueError, json.JSONDecodeError) as exc:
@@ -770,6 +895,7 @@ def _create_current_user_todos_from_action_items(
     *,
     event_id: str,
     current_user: dict,
+    current_user_identifiers: Sequence[Any],
     current_user_contact_id: str | None,
     todo_writer: Callable[[TodoIn], None] | None,
 ) -> list[str]:
@@ -777,7 +903,13 @@ def _create_current_user_todos_from_action_items(
         return []
 
     current_email = contacts_service.normalize_email(current_user.get("email") or "")
-    current_name = normalize_search_text(current_user.get("name") or "")
+    current_identifier_terms = {
+        normalize_search_text(identifier)
+        for identifier in current_user_identifiers
+        if normalize_search_text(identifier)
+    }
+    current_identifier_terms.add(normalize_search_text(current_user.get("name") or ""))
+    current_identifier_terms = {term for term in current_identifier_terms if term}
     existing_todo_signatures = _get_existing_todo_signatures(event_id)
     created_todo_ids: list[str] = []
 
@@ -785,7 +917,7 @@ def _create_current_user_todos_from_action_items(
         if not _is_current_user_action_item(
             action_item,
             current_email=current_email,
-            current_name=current_name,
+            current_identifier_terms=current_identifier_terms,
         ):
             continue
 
@@ -816,7 +948,7 @@ def _is_current_user_action_item(
     action_item: dict[str, Any],
     *,
     current_email: str | None,
-    current_name: str,
+    current_identifier_terms: set[str],
 ) -> bool:
     assignee_email = contacts_service.normalize_email(action_item.get("assignee_email") or "")
     if current_email and assignee_email == current_email:
@@ -827,7 +959,7 @@ def _is_current_user_action_item(
         return False
     if assignee_name in {"current user", "me", "myself", "you"}:
         return True
-    return bool(current_name and assignee_name == current_name)
+    return assignee_name in current_identifier_terms
 
 
 def _parse_action_item_due_date(value: Any) -> date | None:

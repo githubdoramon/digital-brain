@@ -255,6 +255,48 @@ def test_event_in_normalizes_attendees_alias_and_objects():
     assert event.attendees_emails == ["alex@example.com", "dana@example.com"]
 
 
+def test_format_meeting_transcript_merges_adjacent_fragments_by_speaker():
+    payload = MeetingTranscriptPayload(
+        meeting={
+            "title": "Transcript cleanup",
+            "started_at": "2026-02-26T12:00:00+00:00",
+        },
+        speaker_identities=[
+            {"id": "speaker_1", "label": "Dana Example"},
+            {"id": "speaker_2", "label": "Current User"},
+        ],
+        transcript={
+            "segments": [
+                {
+                    "speaker_id": "speaker_1",
+                    "started_at": "2026-02-26T12:00:03+00:00",
+                    "text": "and the final rollout plan.",
+                },
+                {
+                    "speaker_id": "speaker_1",
+                    "started_at": "2026-02-26T12:00:01+00:00",
+                    "text": "Let's review",
+                },
+                {
+                    "speaker_id": "speaker_1",
+                    "started_at": "2026-02-26T12:00:02+00:00",
+                    "text": "the timeline",
+                },
+                {
+                    "speaker_id": "speaker_2",
+                    "started_at": "2026-02-26T12:00:04+00:00",
+                    "text": "I can send the draft.",
+                },
+            ]
+        },
+    )
+
+    assert events._format_meeting_transcript(payload) == (
+        "Dana Example: Let's review the timeline and the final rollout plan.\n"
+        "Current User: I can send the draft."
+    )
+
+
 def test_ingest_meeting_transcript_creates_summary_and_named_attendees(monkeypatch):
     monkeypatch.setattr("events._get_event_id_by_external_id", lambda _external_id: None)
     monkeypatch.setattr("events._find_matching_meeting_event", lambda *_args, **_kwargs: None)
@@ -283,6 +325,15 @@ def test_ingest_meeting_transcript_creates_summary_and_named_attendees(monkeypat
         return f"contact:{email.split('@', 1)[0]}", False
 
     monkeypatch.setattr("events.contacts_service.ensure_contact_for_email", fake_ensure_contact_for_email)
+    monkeypatch.setattr(
+        "events.contacts_service.get_contact",
+        lambda contact_id: {
+            "contact_id": contact_id,
+            "display_name": "Current User" if contact_id == "contact:me" else "Alex Example",
+            "aliases": ["Me"] if contact_id == "contact:me" else ["Alex"],
+            "emails": ["me@example.com"] if contact_id == "contact:me" else ["alex.work@example.com"],
+        },
+    )
 
     captured = []
     monkeypatch.setattr("events.ingest_event", lambda event: captured.append(event))
@@ -358,6 +409,8 @@ def test_ingest_meeting_transcript_creates_summary_and_named_attendees(monkeypat
     assert captured[0].raw["source"] == "meeting_transcript_ingest"
     json.dumps(captured[0].raw)
     assert captured[0].raw["transcript_text"] == "Alex Example: We agreed to send the rollout draft."
+    assert "Me" in captured[0].raw["people_context"]["current_user_identifiers"]
+    assert "Alex" in captured[0].raw["people_context"]["people_identifiers"]
     assert captured[0].raw["action_items"] == result["action_items"]
     assert len(result["created_todo_ids"]) == 1
     assert created_todos[0].todo_id == result["created_todo_ids"][0]
@@ -400,6 +453,15 @@ def test_ingest_meeting_transcript_replaces_existing_calendar_summary(monkeypatc
     monkeypatch.setattr(
         "events.contacts_service.ensure_contact_for_email",
         lambda email, **_kwargs: (f"contact:{email.split('@', 1)[0]}", False),
+    )
+    monkeypatch.setattr(
+        "events.contacts_service.get_contact",
+        lambda contact_id: {
+            "contact_id": contact_id,
+            "display_name": "Current User" if contact_id == "contact:me" else "Dana Example",
+            "aliases": ["Me"] if contact_id == "contact:me" else ["Dana"],
+            "emails": ["me@example.com"] if contact_id == "contact:me" else ["dana@example.com"],
+        },
     )
 
     captured = []
@@ -467,6 +529,15 @@ def test_ingest_meeting_transcript_only_creates_current_user_todos(monkeypatch):
         "events.contacts_service.ensure_contact_for_email",
         lambda email, **_kwargs: (f"contact:{email.split('@', 1)[0]}", False),
     )
+    monkeypatch.setattr(
+        "events.contacts_service.get_contact",
+        lambda contact_id: {
+            "contact_id": contact_id,
+            "display_name": "Current User" if contact_id == "contact:me" else "Dana Example",
+            "aliases": ["Me"] if contact_id == "contact:me" else ["Dana"],
+            "emails": ["me@example.com"] if contact_id == "contact:me" else ["dana@example.com"],
+        },
+    )
 
     captured_events = []
     created_todos: list[TodoIn] = []
@@ -501,7 +572,11 @@ def test_generate_meeting_transcript_summary_parses_action_items(monkeypatch):
         assert '"action_items"' in prompt
         assert "assignee_name" in prompt
         assert "current user" in prompt.lower()
+        assert "Ramon Alias" in prompt
+        assert "dana.alias@example.com" in prompt
         assert kwargs["response_format"] == {"type": "json_object"}
+        assert "max_tokens" not in kwargs
+        assert kwargs["reasoning_effort"] == "high"
         return {
             "summary": "The team agreed to prepare the rollout draft.",
             "action_items": [
@@ -532,6 +607,26 @@ def test_generate_meeting_transcript_summary_parses_action_items(monkeypatch):
         payload,
         "Current User: I will prepare the draft.",
         current_user={"name": "Current User", "email": "me@example.com"},
+        people_context={
+            "current_user_identifiers": ["Current User", "Ramon Alias", "me@example.com"],
+            "people_identifiers": [
+                "Current User",
+                "Ramon Alias",
+                "me@example.com",
+                "Dana Example",
+                "dana.alias@example.com",
+            ],
+            "contacts": [
+                {
+                    "contact_id": "contact:me",
+                    "identifiers": ["Current User", "Ramon Alias", "me@example.com"],
+                },
+                {
+                    "contact_id": "contact:dana",
+                    "identifiers": ["Dana Example", "dana.alias@example.com"],
+                },
+            ],
+        },
     )
 
     assert result == {
