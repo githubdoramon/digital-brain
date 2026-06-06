@@ -1,5 +1,7 @@
 """Authentication middleware for Google OAuth JWT validation."""
 
+import base64
+import json
 import os
 
 from fastapi import Header, HTTPException, status
@@ -49,6 +51,20 @@ ALLOWED_USERS = set() if DEV_BYPASS_AUTH else get_allowed_users()
 ORCHESTRATOR_API_KEY = os.environ.get("ORCHESTRATOR_API_KEY")
 
 
+def _decode_unverified_jwt_payload(token: str) -> dict:
+    try:
+        parts = token.split(".")
+        if len(parts) < 2:
+            return {}
+        payload = parts[1]
+        padded = payload + ("=" * (-len(payload) % 4))
+        decoded = base64.urlsafe_b64decode(padded.encode("utf-8"))
+        data = json.loads(decoded)
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
 def require_service_api_key(
     x_service_api_key: str = Header(default="", alias="x-service-api-key"),
 ) -> None:
@@ -92,7 +108,16 @@ def verify_google_token(token: str) -> dict:
 
         raise last_error or ValueError("No Google OAuth client IDs configured")
     except ValueError as e:
-        logger.warning("Invalid authentication token", extra={"error": str(e)})
+        payload = _decode_unverified_jwt_payload(token)
+        logger.warning(
+            "Invalid authentication token",
+            extra={
+                "error": str(e),
+                "token_aud": payload.get("aud"),
+                "token_email": payload.get("email"),
+                "configured_google_client_ids": len(GOOGLE_CLIENT_IDS),
+            },
+        )
         # Invalid token
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
