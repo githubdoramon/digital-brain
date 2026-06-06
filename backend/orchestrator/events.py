@@ -36,6 +36,7 @@ MAX_EVENT_EMBED_CHARS = 6000
 # GPT-OSS has a 128k token window. 300k transcript chars is a conservative direct-pass cap
 # that leaves room for instructions, participant context, and structured JSON output.
 MAX_TRANSCRIPT_SUMMARY_INPUT_CHARS = 300_000
+MEETING_TRANSCRIPT_SUMMARY_TIMEOUT_SECONDS = 600
 SUMMARY_LOG_PREVIEW_CHARS = 3000
 ACTION_ITEMS_LOG_PREVIEW_CHARS = 5000
 
@@ -848,6 +849,7 @@ Action item rules:
                 "produce the JSON object directly."
             ),
             use_fast_model=False,
+            timeout=MEETING_TRANSCRIPT_SUMMARY_TIMEOUT_SECONDS,
             temperature=0.2,
             reasoning_effort="high",
             response_format={"type": "json_object"},

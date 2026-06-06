@@ -576,6 +576,7 @@ def test_generate_meeting_transcript_summary_parses_action_items(monkeypatch):
         assert "dana.alias@example.com" in prompt
         assert kwargs["response_format"] == {"type": "json_object"}
         assert "max_tokens" not in kwargs
+        assert kwargs["timeout"] == events.MEETING_TRANSCRIPT_SUMMARY_TIMEOUT_SECONDS
         assert kwargs["reasoning_effort"] == "high"
         return {
             "summary": "The team agreed to prepare the rollout draft.",
