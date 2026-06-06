@@ -381,7 +381,10 @@ TAVILY_API_KEY=xxx
 ```bash
 NEXTAUTH_SECRET=random-string
 NEXTAUTH_URL=http://localhost:3000
+# NextAuth uses the web OAuth client. GOOGLE_CLIENT_ID is preferred; if omitted,
+# the frontend falls back to the first GOOGLE_CLIENT_IDS entry for compatibility.
 GOOGLE_CLIENT_ID=xxx.apps.googleusercontent.com
+# GOOGLE_CLIENT_IDS=web-client-id.apps.googleusercontent.com,mobile-client-id.apps.googleusercontent.com
 GOOGLE_CLIENT_SECRET=xxx
 BACKEND_API_BASE=http://localhost:8000
 ALLOWED_USERS=user@example.com

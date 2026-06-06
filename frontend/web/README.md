@@ -14,7 +14,8 @@ npm install
 
 # Configure environment
 cp env.template .env.local
-# Edit .env.local with your Google OAuth credentials and a non-empty ALLOWED_USERS
+# Edit .env.local with your Google OAuth credentials and a non-empty ALLOWED_USERS.
+# Set GOOGLE_CLIENT_ID to the web OAuth client, or put it first in GOOGLE_CLIENT_IDS.
 
 # Run dev server
 npm run dev

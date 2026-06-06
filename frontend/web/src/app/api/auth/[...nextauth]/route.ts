@@ -15,6 +15,31 @@ const getAllowedUsers = (): Set<string> => {
   return users;
 };
 
+const splitCsv = (value: string | undefined): string[] =>
+  (value ?? "")
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean);
+
+const getGoogleOAuthClientId = (): string => {
+  const clientId = process.env.GOOGLE_CLIENT_ID?.trim() || splitCsv(process.env.GOOGLE_CLIENT_IDS)[0];
+  if (!clientId) {
+    throw new Error("GOOGLE_CLIENT_ID or GOOGLE_CLIENT_IDS must be configured");
+  }
+  return clientId;
+};
+
+const getGoogleOAuthClientSecret = (): string => {
+  const clientSecret = process.env.GOOGLE_CLIENT_SECRET?.trim();
+  if (!clientSecret) {
+    throw new Error("GOOGLE_CLIENT_SECRET must be configured");
+  }
+  return clientSecret;
+};
+
+const googleOAuthClientId = getGoogleOAuthClientId();
+const googleOAuthClientSecret = getGoogleOAuthClientSecret();
+
 type GoogleJWT = JWT & {
   accessToken?: string;
   refreshToken?: string;
@@ -74,8 +99,8 @@ async function refreshGoogleToken(token: GoogleJWT): Promise<GoogleJWT> {
         "Content-Type": "application/x-www-form-urlencoded",
       },
       body: new URLSearchParams({
-        client_id: process.env.GOOGLE_CLIENT_ID ?? "",
-        client_secret: process.env.GOOGLE_CLIENT_SECRET ?? "",
+        client_id: googleOAuthClientId,
+        client_secret: googleOAuthClientSecret,
         grant_type: "refresh_token",
         refresh_token: token.refreshToken,
       }),
@@ -112,8 +137,8 @@ async function refreshGoogleToken(token: GoogleJWT): Promise<GoogleJWT> {
 export const authOptions: NextAuthOptions = {
   providers: [
     GoogleProvider({
-      clientId: process.env.GOOGLE_CLIENT_ID!,
-      clientSecret: process.env.GOOGLE_CLIENT_SECRET!,
+      clientId: googleOAuthClientId,
+      clientSecret: googleOAuthClientSecret,
       authorization: {
         params: {
           scope: "openid email profile",

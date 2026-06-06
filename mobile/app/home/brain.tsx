@@ -16,13 +16,12 @@ import {
   TextInput,
   View,
 } from 'react-native';
-import * as FileSystem from 'expo-file-system/legacy';
 import { useBottomTabBarHeight } from '@react-navigation/bottom-tabs';
 import { useFocusEffect } from '@react-navigation/native';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { API_BASE_URL, apiFetch } from '@/api/client';
+import { apiFetch } from '@/api/client';
 import { useAuth } from '@/auth/AuthContext';
 import { AppPressable as Pressable } from '@/components/AppPressable';
 import { GeneratedFilesRow } from '@/components/chat/GeneratedFilesRow';
@@ -61,8 +60,9 @@ import {
   savePendingRun,
   StoredChatSession,
 } from '@/chat/session';
+import { downloadGeneratedFile } from '@/chat/generatedFileDownloads';
 import { loadThreadHistory, restoreChatHistory } from '@/chat/threads';
-import { generatedFileLabel, type GeneratedFile } from '@/chat/generatedFiles';
+import type { GeneratedFile } from '@/chat/generatedFiles';
 import { routeForLinkedItem, type LinkedItem } from '@/chat/linkedItems';
 import type {
   CommandResolvedMeta,
@@ -1130,7 +1130,7 @@ export function ChatConversationScreen({
   tabBarHeight = 0,
 }: ChatConversationScreenProps) {
   const router = useRouter();
-  const { token, signOut, email, name, photo, isLoading: isAuthLoading } = useAuth();
+  const { token, refreshToken, signOut, email, name, photo, isLoading: isAuthLoading } = useAuth();
   const { showError, showSuccess } = useAppNotice();
   const { pickImages, imagePickerSheet } = useSingleImagePicker();
   const insets = useSafeAreaInsets();
@@ -2350,45 +2350,24 @@ export function ChatConversationScreen({
         showError('Session expired. Sign in again.');
         return;
       }
-      const path = file.mobile_download_url?.trim() || file.download_url?.trim();
-      if (!path) {
-        showError('Download link unavailable.');
-        return;
-      }
-      const documentDirectory = FileSystem.documentDirectory;
-      if (!documentDirectory) {
-        showError('Download failed: storage unavailable.');
-        return;
-      }
-
-      const safeName = (file.filename || `${file.artifact_id || 'generated'}.pdf`).replace(
-        /[\\/:*?"<>|]/g,
-        '_',
-      );
-      const endpoint = path.startsWith('http') ? path : `${API_BASE_URL}${path}`;
-      const destination = `${documentDirectory}${safeName}`;
 
       try {
-        const result = await FileSystem.downloadAsync(endpoint, destination, {
-          headers: {
-            Authorization: `Bearer ${token}`,
-          },
-        });
-        if (result.status < 200 || result.status >= 300) {
-          throw new Error(`Download failed with status ${result.status}.`);
+        const result = await downloadGeneratedFile(file, token, refreshToken);
+        if (result.fallbackWarning) {
+          showError(result.fallbackWarning);
         }
-        showSuccess(`Downloaded ${generatedFileLabel(file)}.`);
-        const openUri =
-          Platform.OS === 'android'
-            ? await FileSystem.getContentUriAsync(result.uri).catch(() => result.uri)
-            : result.uri;
-        void Linking.openURL(openUri).catch(() => undefined);
+        showSuccess(
+          result.savedToDownloads
+            ? `Saved ${result.label} to Downloads.`
+            : `Downloaded ${result.label}.`,
+        );
+        void Linking.openURL(result.openUri).catch(() => undefined);
       } catch (error) {
         const message = error instanceof Error ? error.message : 'Failed to download this file.';
         showError(message);
       }
     },
-    [showError, showSuccess, token],
+    [refreshToken, showError, showSuccess, token],
   );
 
   const scrollToBottom = useCallback(
