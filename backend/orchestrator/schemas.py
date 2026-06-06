@@ -207,6 +207,129 @@ class MeetingParticipantsResolveIn(BaseModel):
         populate_by_name = True
 
 
+class VoiceMatchParticipant(BaseModel):
+    model_config = ConfigDict(populate_by_name=True, extra="allow")
+
+    contact_id: str | None = Field(
+        default=None,
+        alias="contactId",
+        validation_alias=AliasChoices("contactId", "contact_id"),
+    )
+    email: str | None = None
+    name: str | None = None
+    source: str | None = None
+
+
+class VoiceObservationWindow(BaseModel):
+    model_config = ConfigDict(populate_by_name=True, extra="allow")
+
+    id: str | None = None
+    started_at: datetime | None = Field(default=None, alias="started_at")
+    ended_at: datetime | None = Field(default=None, alias="ended_at")
+    duration_ms: int | None = Field(
+        default=None,
+        alias="duration_ms",
+        validation_alias=AliasChoices("duration_ms", "durationMs"),
+    )
+    channel: str | None = None
+    speaker_index: int | None = Field(
+        default=None,
+        alias="speaker_index",
+        validation_alias=AliasChoices("speaker_index", "speakerIndex"),
+    )
+    word_count: int | None = Field(
+        default=None,
+        alias="word_count",
+        validation_alias=AliasChoices("word_count", "wordCount"),
+    )
+
+
+class VoiceSpeakerObservation(BaseModel):
+    model_config = ConfigDict(populate_by_name=True, extra="allow")
+
+    speaker_id: str = Field(alias="speaker_id")
+    embeddings: list[list[float]] = Field(default_factory=list)
+    embedding_model: str = Field(alias="embedding_model")
+    embedding_dim: int = Field(alias="embedding_dim")
+    windows: list[VoiceObservationWindow] = Field(default_factory=list)
+    context: dict[str, Any] = Field(default_factory=dict)
+
+
+class SpeakerVoiceMatchIn(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    session_id: str | None = Field(
+        default=None,
+        alias="session_id",
+        validation_alias=AliasChoices("session_id", "sessionId"),
+    )
+    participants: list[VoiceMatchParticipant] = Field(default_factory=list)
+    speaker_observations: list[VoiceSpeakerObservation] = Field(
+        default_factory=list,
+        alias="speaker_observations",
+        validation_alias=AliasChoices("speaker_observations", "speakerObservations"),
+    )
+
+
+class SpeakerVoiceMatchCandidate(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    contact_id: str = Field(alias="contact_id")
+    name: str | None = None
+    email: str | None = None
+    score: float
+    margin: float | None = None
+    confidence: str
+    source: str = "voice_profile"
+    is_participant: bool = Field(default=False, alias="is_participant")
+
+
+class SpeakerVoiceMatchAssignment(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    speaker_id: str = Field(alias="speaker_id")
+    action: str
+    candidate: SpeakerVoiceMatchCandidate | None = None
+    alternates: list[SpeakerVoiceMatchCandidate] = Field(default_factory=list)
+    reason: str | None = None
+
+
+class SpeakerVoiceMatchOut(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    status: str = "done"
+    assignments: list[SpeakerVoiceMatchAssignment] = Field(default_factory=list)
+    retry_after_ms: int | None = Field(default=None, alias="retry_after_ms")
+
+
+class ConfirmedSpeakerVoiceObservation(BaseModel):
+    model_config = ConfigDict(populate_by_name=True, extra="allow")
+
+    speaker_id: str = Field(alias="speaker_id")
+    contact_id: str = Field(alias="contact_id")
+    embeddings: list[list[float]] = Field(default_factory=list)
+    embedding_model: str = Field(alias="embedding_model")
+    embedding_dim: int = Field(alias="embedding_dim")
+    windows: list[VoiceObservationWindow] = Field(default_factory=list)
+    source: str = "confirmed_assignment"
+
+
+class SpeakerVoiceConfirmIn(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    session_id: str | None = Field(
+        default=None,
+        alias="session_id",
+        validation_alias=AliasChoices("session_id", "sessionId"),
+    )
+    observations: list[ConfirmedSpeakerVoiceObservation] = Field(default_factory=list)
+    rejected_matches: list[dict[str, Any]] = Field(
+        default_factory=list,
+        alias="rejected_matches",
+        validation_alias=AliasChoices("rejected_matches", "rejectedMatches"),
+    )
+
+
 class ContactRelationshipIn(BaseModel):
     relationship_id: str
     from_contact_id: str

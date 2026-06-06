@@ -10,6 +10,7 @@ import contacts as contacts_service
 import event_photos as event_photos_service
 import events as events_service
 import todos as todos_service
+import voice_profiles as voice_profiles_service
 from auth import get_current_user, require_service_api_key
 from commands.event import confirm_event_command as confirm_event_command_impl
 from db import get_conn
@@ -22,6 +23,8 @@ from schemas import (
     MeetingIn,
     MeetingParticipantsResolveIn,
     MeetingTranscriptPayload,
+    SpeakerVoiceConfirmIn,
+    SpeakerVoiceMatchIn,
 )
 
 logger = get_runtime_logger(__name__)
@@ -107,6 +110,21 @@ def create_events_router(
                 authenticated_user_email=user.get("email"),
             )
         }
+
+    @router.post("/meetings/speakers/match")
+    def match_meeting_speakers(
+        payload: SpeakerVoiceMatchIn,
+        user: dict = Depends(get_current_user),
+    ):
+        return voice_profiles_service.match_speakers(payload, current_user=user)
+
+    @router.post("/meetings/speakers/confirm")
+    def confirm_meeting_speakers(
+        payload: SpeakerVoiceConfirmIn,
+        user: dict = Depends(get_current_user),
+    ):
+        del user
+        return {"ok": True, **voice_profiles_service.confirm_speaker_profiles(payload)}
 
     @router.get("/events/search")
     @router.get("/mobile/events/search")
