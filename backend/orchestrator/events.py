@@ -830,6 +830,7 @@ Return valid JSON only with this shape:
 Summary rules:
 - Include actual discussion topics, important context, decisions, and follow-ups when present.
 - Always output content in English, even if original language of transcript is not English.
+- If possible, identify who mentioned key points or decisions.
 - Do not invent facts.
 
 Action item rules:
@@ -839,6 +840,7 @@ Action item rules:
 - Use participant aliases/emails from the identifier sets to disambiguate assignees.
 - Use null for unknown assignee_name, assignee_email, due_date, or evidence fields.
 - Do not create action items for vague discussion topics or suggestions without ownership.
+- Every action with a clear assignee must have the format "<Assignee name>: action item content".
 """.strip()
     try:
         generated = call_llm_json(
