@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 
 import contact_groups as contact_groups_service
 import contacts as contacts_service
@@ -39,6 +39,7 @@ def _search_mobile_contacts(
     contact_ids: list[str] | None,
     place_ids: list[str] | None,
     event_ids: list[str] | None,
+    include_voice_profile: bool = False,
 ) -> list[dict[str, Any]]:
     filters = [
         """
@@ -132,7 +133,10 @@ def _search_mobile_contacts(
     if not matched_contact_ids:
         return []
 
-    contacts = contacts_service._load_contacts(contact_ids=matched_contact_ids)
+    contacts = contacts_service._load_contacts(
+        contact_ids=matched_contact_ids,
+        include_voice_profile=include_voice_profile,
+    )
     order = {contact_id: index for index, contact_id in enumerate(matched_contact_ids)}
     contacts.sort(key=lambda item: order.get(str(item.get("contact_id")), len(order)))
     return contacts
@@ -143,6 +147,10 @@ def _raise_http_for_llm_unavailable(exc: Exception) -> None:
         status_code=503,
         detail="The LLM service is currently unavailable. Please try again shortly.",
     ) from exc
+
+
+def _is_mobile_request(request: Request) -> bool:
+    return request.url.path.startswith("/mobile/")
 
 
 def create_contacts_router(
@@ -158,12 +166,14 @@ def create_contacts_router(
     @router.get("/contacts")
     @router.get("/mobile/contacts")
     def list_contacts(
+        request: Request,
         user: dict = Depends(get_current_user),
         query: str | None = Query(default=None),
         contact_ids: list[str] | None = Query(default=None),
         place_ids: list[str] | None = Query(default=None),
         event_ids: list[str] | None = Query(default=None),
     ):
+        include_voice_profile = not _is_mobile_request(request)
         clean_contact_ids = _clean_id_list(contact_ids)
         clean_place_ids = _clean_id_list(place_ids)
         clean_event_ids = _clean_id_list(event_ids)
@@ -174,9 +184,10 @@ def create_contacts_router(
                     contact_ids=clean_contact_ids,
                     place_ids=clean_place_ids,
                     event_ids=clean_event_ids,
+                    include_voice_profile=include_voice_profile,
                 )
             }
-        return {"contacts": contacts_service.list_contacts()}
+        return {"contacts": contacts_service.list_contacts(include_voice_profile=include_voice_profile)}
 
     @router.get("/contact-groups")
     @router.get("/mobile/contact-groups")
@@ -259,8 +270,11 @@ def create_contacts_router(
 
     @router.get("/contacts/{contact_id}")
     @router.get("/mobile/contacts/{contact_id}")
-    def get_contact(contact_id: str, user: dict = Depends(get_current_user)):
-        contact = contacts_service.get_contact(contact_id)
+    def get_contact(contact_id: str, request: Request, user: dict = Depends(get_current_user)):
+        contact = contacts_service.get_contact(
+            contact_id,
+            include_voice_profile=not _is_mobile_request(request),
+        )
         if contact is None or contacts_service.is_external_placeholder(contact.get("display_name")):
             raise HTTPException(status_code=404, detail="Contact not found")
         return contact

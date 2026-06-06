@@ -17,6 +17,54 @@ type Contact = {
   relationships: ContactRelationship[];
   external_id?: string | null;
   avatar_url?: string | null;
+  voice_profile?: ContactVoiceProfile | null;
+};
+
+type ContactVoiceCluster = {
+  cluster_id: string;
+  embedding_model: string;
+  observation_count: number;
+  confirmed_observation_count: number;
+  last_observed_at: string | null;
+  created_at: string | null;
+  updated_at: string | null;
+};
+
+type ContactVoiceObservation = {
+  observation_id: string;
+  cluster_id: string | null;
+  session_id: string | null;
+  speaker_id: string;
+  embedding_model: string;
+  source: string;
+  confirmed_at: string | null;
+  created_at: string | null;
+};
+
+type ContactVoiceMatchEvent = {
+  match_event_id: string;
+  session_id: string | null;
+  speaker_id: string;
+  suggested_contact_id: string | null;
+  corrected_contact_id: string | null;
+  score: number | null;
+  margin: number | null;
+  status: string;
+  created_at: string | null;
+};
+
+type ContactVoiceProfile = {
+  embedding_model: string;
+  observation_count: number;
+  confirmed_observation_count: number;
+  cluster_count: number;
+  cluster_observation_count: number;
+  last_observed_at: string | null;
+  created_at: string | null;
+  updated_at: string | null;
+  clusters: ContactVoiceCluster[];
+  recent_observations: ContactVoiceObservation[];
+  recent_match_events: ContactVoiceMatchEvent[];
 };
 
 type ContactRelationship = {
@@ -73,6 +121,18 @@ function resolveAvatarUrl(url: string | null | undefined): string | null {
   return `/api/orchestrator${url}`;
 }
 
+function formatDateTime(value: string | null | undefined): string {
+  if (!value) return "-";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleString();
+}
+
+function formatScore(value: number | null | undefined): string {
+  if (value == null) return "-";
+  return value.toFixed(3);
+}
+
 const RELATIONSHIP_SUGGESTIONS = [
   "Spouse",
   "Partner",
@@ -107,11 +167,121 @@ function generateRelationshipId(): string {
   return `rel-${Date.now()}-${Math.floor(Math.random() * 1_000_000)}`;
 }
 
+function VoiceProfileSummary({ profile }: { profile: ContactVoiceProfile | null | undefined }) {
+  if (!profile) {
+    return <span style={{ color: "#999" }}>None</span>;
+  }
+
+  return (
+    <div style={{ display: "grid", gap: "8px", minWidth: "260px" }}>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: "6px" }}>
+        <span
+          style={{
+            background: "#ecfdf5",
+            color: "#047857",
+            padding: "4px 8px",
+            borderRadius: "4px",
+            fontSize: "0.75rem",
+            fontWeight: 600,
+          }}
+        >
+          {profile.cluster_count} clusters
+        </span>
+        <span
+          style={{
+            background: "#eff6ff",
+            color: "#1d4ed8",
+            padding: "4px 8px",
+            borderRadius: "4px",
+            fontSize: "0.75rem",
+            fontWeight: 600,
+          }}
+        >
+          {profile.confirmed_observation_count} confirmed
+        </span>
+      </div>
+      <div style={{ color: "#4b5563", fontSize: "0.78rem" }}>
+        <div>Model: {profile.embedding_model}</div>
+        <div>Last observed: {formatDateTime(profile.last_observed_at)}</div>
+      </div>
+      <details>
+        <summary
+          style={{
+            cursor: "pointer",
+            color: "#0b6bcb",
+            fontSize: "0.78rem",
+            fontWeight: 600,
+          }}
+        >
+          Debug details
+        </summary>
+        <div style={{ display: "grid", gap: "10px", marginTop: "8px", fontSize: "0.75rem" }}>
+          <div>
+            <div style={{ color: "#374151", fontWeight: 700, marginBottom: "4px" }}>Clusters</div>
+            {profile.clusters.length === 0 ? (
+              <div style={{ color: "#9ca3af" }}>No cluster rows.</div>
+            ) : (
+              profile.clusters.map((cluster) => (
+                <div key={cluster.cluster_id} style={{ color: "#4b5563", marginBottom: "4px" }}>
+                  <div style={{ fontFamily: "monospace" }}>{cluster.cluster_id}</div>
+                  <div>
+                    confirmed {cluster.confirmed_observation_count}, observed {cluster.observation_count},
+                    last {formatDateTime(cluster.last_observed_at)}
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
+
+          <div>
+            <div style={{ color: "#374151", fontWeight: 700, marginBottom: "4px" }}>Recent observations</div>
+            {profile.recent_observations.length === 0 ? (
+              <div style={{ color: "#9ca3af" }}>No recent observations.</div>
+            ) : (
+              profile.recent_observations.map((observation) => (
+                <div key={observation.observation_id} style={{ color: "#4b5563", marginBottom: "4px" }}>
+                  <div>
+                    speaker {observation.speaker_id}, source {observation.source}
+                  </div>
+                  <div>
+                    session {observation.session_id || "-"}, confirmed{" "}
+                    {formatDateTime(observation.confirmed_at || observation.created_at)}
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
+
+          <div>
+            <div style={{ color: "#374151", fontWeight: 700, marginBottom: "4px" }}>Recent match events</div>
+            {profile.recent_match_events.length === 0 ? (
+              <div style={{ color: "#9ca3af" }}>No rejected/corrected match events.</div>
+            ) : (
+              profile.recent_match_events.map((event) => (
+                <div key={`${event.match_event_id}-${event.suggested_contact_id}-${event.corrected_contact_id}`} style={{ color: "#4b5563", marginBottom: "4px" }}>
+                  <div>
+                    {event.status}, score {formatScore(event.score)}, margin {formatScore(event.margin)}
+                  </div>
+                  <div>
+                    speaker {event.speaker_id}, session {event.session_id || "-"}
+                  </div>
+                  <div>{formatDateTime(event.created_at)}</div>
+                </div>
+              ))
+            )}
+          </div>
+        </div>
+      </details>
+    </div>
+  );
+}
+
 export default function ContactsPage() {
   const [contacts, setContacts] = useState<Contact[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [status, setStatus] = useState<Status>({ kind: "idle" });
   const [searchQuery, setSearchQuery] = useState("");
+  const [showVoiceOnly, setShowVoiceOnly] = useState(false);
   const [isSubmitting, setSubmitting] = useState(false);
   
   // Modal state
@@ -154,7 +324,7 @@ export default function ContactsPage() {
 
   const filteredContacts = useMemo(() => {
     const query = normalizeText(searchQuery.trim());
-    const matches =
+    const textMatches =
       query === ""
         ? contacts
         : contacts.filter((contact) => {
@@ -165,6 +335,9 @@ export default function ContactsPage() {
             const commentMatch = normalizeText(contact.comments || "").includes(query);
             return nameMatch || aliasMatch || commentMatch;
           });
+    const matches = showVoiceOnly
+      ? textMatches.filter((contact) => Boolean(contact.voice_profile))
+      : textMatches;
 
     return [...matches].sort((a, b) => {
       const aNormalized = normalizeText(a.display_name);
@@ -176,7 +349,21 @@ export default function ContactsPage() {
       if (!aExternal && bExternal) return -1;
       return aNormalized.localeCompare(bNormalized);
     });
-  }, [contacts, searchQuery]);
+  }, [contacts, searchQuery, showVoiceOnly]);
+
+  const voiceProfileStats = useMemo(() => {
+    return contacts.reduce(
+      (acc, contact) => {
+        const profile = contact.voice_profile;
+        if (!profile) return acc;
+        acc.contacts += 1;
+        acc.clusters += profile.cluster_count;
+        acc.confirmedObservations += profile.confirmed_observation_count;
+        return acc;
+      },
+      { contacts: 0, clusters: 0, confirmedObservations: 0 }
+    );
+  }, [contacts]);
 
   // Load contacts on mount
   useEffect(() => {
@@ -593,21 +780,72 @@ export default function ContactsPage() {
           </Link>
         </div>
 
-        <input
-          type="search"
-          value={searchQuery}
-          onChange={(event) => setSearchQuery(event.target.value)}
-          placeholder="Search by name, alias, or notes"
-          aria-label="Search contacts by name, alias, or notes"
-          style={{
-            border: "1px solid #d0d0d0",
-            borderRadius: "8px",
-            padding: "10px 12px",
-            fontSize: "0.95rem",
-            minWidth: "220px",
-            maxWidth: "320px",
-          }}
-        />
+        <div style={{ display: "flex", gap: "12px", flexWrap: "wrap", alignItems: "center" }}>
+          <label
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: "8px",
+              border: "1px solid #d0d0d0",
+              borderRadius: "8px",
+              padding: "10px 12px",
+              color: "#374151",
+              fontSize: "0.9rem",
+              background: showVoiceOnly ? "#eff6ff" : "#fff",
+            }}
+          >
+            <input
+              type="checkbox"
+              checked={showVoiceOnly}
+              onChange={(event) => setShowVoiceOnly(event.target.checked)}
+            />
+            Voice profiles only
+          </label>
+          <input
+            type="search"
+            value={searchQuery}
+            onChange={(event) => setSearchQuery(event.target.value)}
+            placeholder="Search by name, alias, or notes"
+            aria-label="Search contacts by name, alias, or notes"
+            style={{
+              border: "1px solid #d0d0d0",
+              borderRadius: "8px",
+              padding: "10px 12px",
+              fontSize: "0.95rem",
+              minWidth: "220px",
+              maxWidth: "320px",
+            }}
+          />
+        </div>
+      </div>
+
+      <div
+        style={{
+          display: "grid",
+          gap: "8px",
+          gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
+        }}
+      >
+        <div style={{ border: "1px solid #e5e7eb", borderRadius: "8px", padding: "12px 14px" }}>
+          <div style={{ color: "#6b7280", fontSize: "0.8rem", fontWeight: 600 }}>Voice contacts</div>
+          <div style={{ color: "#111827", fontSize: "1.4rem", fontWeight: 700 }}>
+            {voiceProfileStats.contacts}
+          </div>
+        </div>
+        <div style={{ border: "1px solid #e5e7eb", borderRadius: "8px", padding: "12px 14px" }}>
+          <div style={{ color: "#6b7280", fontSize: "0.8rem", fontWeight: 600 }}>Voice clusters</div>
+          <div style={{ color: "#111827", fontSize: "1.4rem", fontWeight: 700 }}>
+            {voiceProfileStats.clusters}
+          </div>
+        </div>
+        <div style={{ border: "1px solid #e5e7eb", borderRadius: "8px", padding: "12px 14px" }}>
+          <div style={{ color: "#6b7280", fontSize: "0.8rem", fontWeight: 600 }}>
+            Confirmed voice observations
+          </div>
+          <div style={{ color: "#111827", fontSize: "1.4rem", fontWeight: 700 }}>
+            {voiceProfileStats.confirmedObservations}
+          </div>
+        </div>
       </div>
 
       {/* Contacts List */}
@@ -700,6 +938,16 @@ export default function ContactsPage() {
                     }}
                   >
                     Relationships
+                  </th>
+                  <th
+                    style={{
+                      padding: "16px 20px",
+                      textAlign: "left",
+                      fontWeight: 600,
+                      fontSize: "0.9rem",
+                    }}
+                  >
+                    Voice
                   </th>
                   <th
                     style={{
@@ -858,6 +1106,9 @@ export default function ContactsPage() {
                       ) : (
                         <span style={{ color: "#999" }}>None</span>
                       )}
+                    </td>
+                    <td style={{ padding: "16px 20px", color: "#555", verticalAlign: "top" }}>
+                      <VoiceProfileSummary profile={contact.voice_profile} />
                     </td>
                     <td style={{ padding: "16px 20px", color: "#555", fontSize: "0.9rem" }}>
                       {contact.emails[0] || "-"}

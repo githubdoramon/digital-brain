@@ -228,11 +228,15 @@ def ingest_contact(contact: ContactIn) -> None:
         conn.commit()
 
 
-def list_contacts() -> list[dict[str, Any]]:
-    return _load_contacts()
+def list_contacts(*, include_voice_profile: bool = False) -> list[dict[str, Any]]:
+    return _load_contacts(include_voice_profile=include_voice_profile)
 
 
-def _load_contacts(contact_ids: Sequence[str] | None = None) -> list[dict[str, Any]]:
+def _load_contacts(
+    contact_ids: Sequence[str] | None = None,
+    *,
+    include_voice_profile: bool = False,
+) -> list[dict[str, Any]]:
     filters = [
         """
         (display_name IS NULL OR LOWER(display_name) NOT LIKE %s)
@@ -264,6 +268,11 @@ def _load_contacts(contact_ids: Sequence[str] | None = None) -> list[dict[str, A
         relationships_map = (
             _collect_contact_relationships(selected_contact_ids) if selected_contact_ids else {}
         )
+        voice_profiles_map = (
+            _collect_contact_voice_profiles(selected_contact_ids)
+            if include_voice_profile and selected_contact_ids
+            else {}
+        )
         contacts: list[dict[str, Any]] = []
         for row in rows:
             row = dict(row)
@@ -285,10 +294,12 @@ def _load_contacts(contact_ids: Sequence[str] | None = None) -> list[dict[str, A
                     "relationships": relationships_map.get(contact_id, []),
                 }
             )
+            if include_voice_profile:
+                contacts[-1]["voice_profile"] = voice_profiles_map.get(contact_id)
         return contacts
 
 
-def get_contact(contact_id: str) -> dict[str, Any] | None:
+def get_contact(contact_id: str, *, include_voice_profile: bool = False) -> dict[str, Any] | None:
     with get_conn() as conn, conn.cursor() as cur:
         cur.execute(
             """
@@ -304,7 +315,8 @@ def get_contact(contact_id: str) -> dict[str, Any] | None:
         row = dict(row)
         relationships_map = _collect_contact_relationships([contact_id])
         external_id = row["external_id"]
-        return {
+        voice_profiles_map = _collect_contact_voice_profiles([contact_id]) if include_voice_profile else {}
+        contact = {
             "contact_id": row["contact_id"],
             "display_name": row["display_name"],
             "aliases": row["aliases"] or [],
@@ -318,6 +330,9 @@ def get_contact(contact_id: str) -> dict[str, Any] | None:
             "avatar_url": _avatar_url(contact_id, external_id),
             "relationships": relationships_map.get(contact_id, []),
         }
+        if include_voice_profile:
+            contact["voice_profile"] = voice_profiles_map.get(contact_id)
+        return contact
 
 
 def get_contact_by_email(email: str) -> dict[str, Any] | None:
@@ -2067,6 +2082,213 @@ def _collect_contact_relationships(
         )
 
     return dict(relationships_map)
+
+
+def _isoformat_timestamp(value: Any) -> str | None:
+    return value.isoformat() if value else None
+
+
+def _collect_contact_voice_profiles(
+    contact_ids: Iterable[str],
+) -> dict[str, dict[str, Any]]:
+    contact_list = [str(contact_id) for contact_id in contact_ids if str(contact_id).strip()]
+    if not contact_list:
+        return {}
+
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT
+              vp.contact_id,
+              vp.embedding_model,
+              vp.observation_count,
+              vp.confirmed_observation_count,
+              vp.last_observed_at,
+              vp.created_at,
+              vp.updated_at,
+              COALESCE(cluster_counts.cluster_count, 0) AS cluster_count,
+              COALESCE(cluster_counts.cluster_observation_count, 0) AS cluster_observation_count
+            FROM voice_profiles vp
+            LEFT JOIN (
+              SELECT
+                contact_id,
+                COUNT(*) AS cluster_count,
+                SUM(confirmed_observation_count) AS cluster_observation_count
+              FROM voice_profile_clusters
+              WHERE contact_id = ANY(%s)
+              GROUP BY contact_id
+            ) cluster_counts ON cluster_counts.contact_id = vp.contact_id
+            WHERE vp.contact_id = ANY(%s)
+            """,
+            (contact_list, contact_list),
+        )
+        profile_rows = [dict(row) for row in cur.fetchall()]
+
+        cur.execute(
+            """
+            SELECT
+              cluster_id,
+              contact_id,
+              embedding_model,
+              observation_count,
+              confirmed_observation_count,
+              last_observed_at,
+              created_at,
+              updated_at
+            FROM voice_profile_clusters
+            WHERE contact_id = ANY(%s)
+            ORDER BY contact_id, confirmed_observation_count DESC, updated_at DESC
+            """,
+            (contact_list,),
+        )
+        cluster_rows = [dict(row) for row in cur.fetchall()]
+
+        cur.execute(
+            """
+            SELECT
+              observation_id,
+              contact_id,
+              cluster_id,
+              session_id,
+              speaker_id,
+              embedding_model,
+              source,
+              confirmed_at,
+              created_at,
+              ROW_NUMBER() OVER (
+                PARTITION BY contact_id
+                ORDER BY COALESCE(confirmed_at, created_at) DESC
+              ) AS row_number
+            FROM voice_observations
+            WHERE contact_id = ANY(%s)
+            ORDER BY contact_id, COALESCE(confirmed_at, created_at) DESC
+            """,
+            (contact_list,),
+        )
+        observation_rows = [dict(row) for row in cur.fetchall()]
+
+        cur.execute(
+            """
+            WITH contact_events AS (
+              SELECT suggested_contact_id AS contact_id, speaker_match_events.*
+              FROM speaker_match_events
+              WHERE suggested_contact_id = ANY(%s)
+              UNION ALL
+              SELECT corrected_contact_id AS contact_id, speaker_match_events.*
+              FROM speaker_match_events
+              WHERE corrected_contact_id = ANY(%s)
+            )
+            SELECT
+              match_event_id,
+              contact_id,
+              session_id,
+              speaker_id,
+              suggested_contact_id,
+              corrected_contact_id,
+              score,
+              margin,
+              status,
+              created_at,
+              ROW_NUMBER() OVER (
+                PARTITION BY contact_id
+                ORDER BY created_at DESC
+              ) AS row_number
+            FROM contact_events
+            ORDER BY contact_id, created_at DESC
+            """,
+            (contact_list, contact_list),
+        )
+        match_event_rows = [dict(row) for row in cur.fetchall()]
+
+    voice_profiles: dict[str, dict[str, Any]] = {}
+    for row in profile_rows:
+        contact_id = str(row["contact_id"])
+        voice_profiles[contact_id] = {
+            "embedding_model": row["embedding_model"],
+            "observation_count": int(row["observation_count"] or 0),
+            "confirmed_observation_count": int(row["confirmed_observation_count"] or 0),
+            "cluster_count": int(row["cluster_count"] or 0),
+            "cluster_observation_count": int(row["cluster_observation_count"] or 0),
+            "last_observed_at": _isoformat_timestamp(row["last_observed_at"]),
+            "created_at": _isoformat_timestamp(row["created_at"]),
+            "updated_at": _isoformat_timestamp(row["updated_at"]),
+            "clusters": [],
+            "recent_observations": [],
+            "recent_match_events": [],
+        }
+
+    for row in cluster_rows:
+        contact_id = str(row["contact_id"])
+        profile = voice_profiles.setdefault(
+            contact_id,
+            {
+                "embedding_model": row["embedding_model"],
+                "observation_count": 0,
+                "confirmed_observation_count": 0,
+                "cluster_count": 0,
+                "cluster_observation_count": 0,
+                "last_observed_at": None,
+                "created_at": None,
+                "updated_at": None,
+                "clusters": [],
+                "recent_observations": [],
+                "recent_match_events": [],
+            },
+        )
+        profile["clusters"].append(
+            {
+                "cluster_id": row["cluster_id"],
+                "embedding_model": row["embedding_model"],
+                "observation_count": int(row["observation_count"] or 0),
+                "confirmed_observation_count": int(row["confirmed_observation_count"] or 0),
+                "last_observed_at": _isoformat_timestamp(row["last_observed_at"]),
+                "created_at": _isoformat_timestamp(row["created_at"]),
+                "updated_at": _isoformat_timestamp(row["updated_at"]),
+            }
+        )
+
+    for row in observation_rows:
+        if int(row["row_number"] or 0) > 5:
+            continue
+        contact_id = str(row["contact_id"])
+        profile = voice_profiles.get(contact_id)
+        if profile is None:
+            continue
+        profile["recent_observations"].append(
+            {
+                "observation_id": row["observation_id"],
+                "cluster_id": row["cluster_id"],
+                "session_id": row["session_id"],
+                "speaker_id": row["speaker_id"],
+                "embedding_model": row["embedding_model"],
+                "source": row["source"],
+                "confirmed_at": _isoformat_timestamp(row["confirmed_at"]),
+                "created_at": _isoformat_timestamp(row["created_at"]),
+            }
+        )
+
+    for row in match_event_rows:
+        if int(row["row_number"] or 0) > 5:
+            continue
+        contact_id = str(row["contact_id"])
+        profile = voice_profiles.get(contact_id)
+        if profile is None:
+            continue
+        profile["recent_match_events"].append(
+            {
+                "match_event_id": row["match_event_id"],
+                "session_id": row["session_id"],
+                "speaker_id": row["speaker_id"],
+                "suggested_contact_id": row["suggested_contact_id"],
+                "corrected_contact_id": row["corrected_contact_id"],
+                "score": float(row["score"]) if row["score"] is not None else None,
+                "margin": float(row["margin"]) if row["margin"] is not None else None,
+                "status": row["status"],
+                "created_at": _isoformat_timestamp(row["created_at"]),
+            }
+        )
+
+    return voice_profiles
 
 
 # ---------------------------------------------------------------------------
