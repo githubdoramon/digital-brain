@@ -185,6 +185,28 @@ class MeetingTranscriptPayload(BaseModel):
     transcript: MeetingTranscriptBody
 
 
+class MeetingParticipantCandidate(BaseModel):
+    email: str
+    name: str | None = None
+
+
+class MeetingParticipantsResolveIn(BaseModel):
+    session_id: str | None = Field(
+        default=None,
+        alias="sessionId",
+        validation_alias=AliasChoices("sessionId", "session_id"),
+    )
+    current_user_email: str | None = Field(
+        default=None,
+        alias="currentUserEmail",
+        validation_alias=AliasChoices("currentUserEmail", "current_user_email"),
+    )
+    participants: list[MeetingParticipantCandidate] = Field(default_factory=list)
+
+    class Config:
+        populate_by_name = True
+
+
 class ContactRelationshipIn(BaseModel):
     relationship_id: str
     from_contact_id: str

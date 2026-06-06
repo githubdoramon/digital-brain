@@ -31,6 +31,7 @@ __all__ = [
     "list_contacts",
     "merge_contacts",
     "normalize_email",
+    "resolve_meeting_participants",
     # Smart contact lookup functions
     "search_contacts",
     "search_contacts_by_company",
@@ -987,6 +988,129 @@ def ensure_contact_for_email(
     )
     ingest_contact(contact)
     return contact_id, True
+
+
+def _string_list(values: Iterable[Any] | None) -> list[str]:
+    cleaned: list[str] = []
+    for value in values or []:
+        if value is None:
+            continue
+        text = str(value).strip()
+        if text and text not in cleaned:
+            cleaned.append(text)
+    return cleaned
+
+
+def _participant_candidate_email(candidate: Any) -> str | None:
+    if isinstance(candidate, dict):
+        return normalize_email(str(candidate.get("email") or ""))
+    return normalize_email(str(getattr(candidate, "email", "") or ""))
+
+
+def _participant_candidate_name(candidate: Any) -> str | None:
+    value = (
+        candidate.get("name")
+        if isinstance(candidate, dict)
+        else getattr(candidate, "name", None)
+    )
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
+def _participant_result_from_contact(
+    contact: dict[str, Any],
+    *,
+    fallback_email: str,
+    fallback_name: str | None,
+    is_current_user: bool,
+) -> dict[str, Any]:
+    emails = _merge_emails(contact.get("emails") or [], [fallback_email])
+    aliases = _string_list(contact.get("aliases") or [])
+    display_name = str(contact.get("display_name") or "").strip()
+    return {
+        "contact_id": str(contact.get("contact_id") or "").strip() or None,
+        "name": (
+            display_name
+            or fallback_name
+            or _display_name_from_email(fallback_email)
+        ),
+        "aliases": aliases,
+        "emails": emails or [fallback_email],
+        "is_current_user": is_current_user,
+    }
+
+
+def resolve_meeting_participants(
+    participants: Sequence[Any],
+    *,
+    current_user_email: str | None = None,
+    authenticated_user_email: str | None = None,
+) -> list[dict[str, Any]]:
+    current_user_emails = _merge_emails(
+        [current_user_email], [authenticated_user_email]
+    )
+    for email in list(current_user_emails):
+        contact = get_contact_by_email(email)
+        if contact:
+            current_user_emails = _merge_emails(
+                current_user_emails, contact.get("emails") or []
+            )
+
+    results: list[dict[str, Any]] = []
+    result_index_by_key: dict[str, int] = {}
+
+    for candidate in participants:
+        email = _participant_candidate_email(candidate)
+        if not email:
+            continue
+        name = _participant_candidate_name(candidate)
+        contact = get_contact_by_email(email)
+
+        if contact:
+            contact_id = str(contact.get("contact_id") or "").strip()
+            key = f"contact:{contact_id}" if contact_id else f"email:{email}"
+            is_current_user = bool(
+                set(_merge_emails(contact.get("emails") or [], [email]))
+                & set(current_user_emails)
+            )
+            item = _participant_result_from_contact(
+                contact,
+                fallback_email=email,
+                fallback_name=name,
+                is_current_user=is_current_user,
+            )
+        else:
+            key = f"email:{email}"
+            item = {
+                "contact_id": None,
+                "name": name or _display_name_from_email(email),
+                "aliases": [],
+                "emails": [email],
+                "is_current_user": email in current_user_emails,
+            }
+
+        existing_index = result_index_by_key.get(key)
+        if existing_index is None:
+            result_index_by_key[key] = len(results)
+            results.append(item)
+            continue
+
+        existing = results[existing_index]
+        existing["emails"] = _merge_emails(
+            existing.get("emails") or [], item.get("emails") or []
+        )
+        existing["aliases"] = _string_list(
+            [*(existing.get("aliases") or []), *(item.get("aliases") or [])]
+        )
+        existing["is_current_user"] = bool(
+            existing.get("is_current_user") or item.get("is_current_user")
+        )
+        if not existing.get("name") and item.get("name"):
+            existing["name"] = item["name"]
+
+    return results
 
 
 def delete_contact(contact_id: str) -> bool:
