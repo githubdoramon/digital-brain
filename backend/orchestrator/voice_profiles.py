@@ -5,6 +5,8 @@ from collections.abc import Sequence
 from typing import Any
 from uuid import uuid4
 
+from psycopg.types.json import Jsonb
+
 import contacts as contacts_service
 from db import get_conn
 from observability.logger import get_runtime_logger
@@ -455,7 +457,7 @@ def _persist_confirmed_observation(
                     observation.speaker_id,
                     observation.embedding_model,
                     list(embedding),
-                    metadata,
+                    Jsonb(metadata),
                     observation.source or "confirmed_assignment",
                 ),
             )
@@ -731,7 +733,7 @@ def _persist_match_event(
                 score,
                 margin,
                 status,
-                metadata,
+                Jsonb(metadata),
             ),
         )
         conn.commit()

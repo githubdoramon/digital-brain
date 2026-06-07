@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import pytest
+from psycopg.types.json import Jsonb
 
 import voice_profiles
 from schemas import (
     ConfirmedSpeakerVoiceObservation,
     SpeakerVoiceConfirmIn,
     SpeakerVoiceMatchIn,
+    VoiceObservationWindow,
     VoiceSpeakerObservation,
 )
 
@@ -341,6 +343,63 @@ def test_confirmed_contact_name_lookup_does_not_require_created_at(monkeypatch):
     assert "created_at" not in connection.cursor_instance.query
     assert "ORDER BY contact_id ASC" in connection.cursor_instance.query
     assert connection.cursor_instance.params == ("Alice",)
+
+
+def test_persist_confirmed_observation_wraps_window_metadata_as_jsonb(monkeypatch):
+    class FakeCursor:
+        params = ()
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def execute(self, _query, params):
+            self.params = params
+
+    class FakeConnection:
+        cursor_instance = FakeCursor()
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def cursor(self):
+            return self.cursor_instance
+
+        def commit(self):
+            return None
+
+    connection = FakeConnection()
+    monkeypatch.setattr(voice_profiles, "get_conn", lambda: connection)
+
+    voice_profiles._persist_confirmed_observation(
+        "session-1",
+        ConfirmedSpeakerVoiceObservation(
+            speaker_id="speaker_1",
+            contact_id="contact:alice",
+            embeddings=[_unit(0)],
+            embedding_model="pyannote_wespeaker_onnx",
+            embedding_dim=voice_profiles.VOICE_EMBEDDING_DIM,
+            windows=[
+                VoiceObservationWindow(
+                    id="window-1",
+                    duration_ms=6000,
+                    channel="remote_party",
+                    speaker_index=1,
+                    word_count=12,
+                )
+            ],
+        ),
+        [_unit(0)],
+        "cluster:alice:1",
+        "contact:alice",
+    )
+
+    assert isinstance(connection.cursor_instance.params[7], Jsonb)
 
 
 def test_confirm_speaker_profiles_skips_duplicate_session_speaker_contact(monkeypatch):
