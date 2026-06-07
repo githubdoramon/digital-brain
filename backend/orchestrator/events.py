@@ -74,7 +74,7 @@ def _format_external_event_id(external_type: str, external_id: str) -> str:
         raise ValueError("externalType cannot be blank")
     if not normalized_id:
         raise ValueError("externalId cannot be blank")
-    if normalized_type not in {"google"}:
+    if normalized_type not in {"google", "hyprnote"}:
         raise ValueError(f"Unsupported externalType: {external_type}")
     return f"{normalized_type}:{normalized_id}"
 

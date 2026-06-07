@@ -36,10 +36,13 @@ const SERVICE_KEY_RULES: ServiceKeyRule[] = [
 ];
 
 const BEARER_AUTH_PREFIXES = [
-  "/api/orchestrator/contacts",
   "/api/orchestrator/ingest/meetings/transcript",
   "/api/orchestrator/meetings/speakers/match",
   "/api/orchestrator/participants/resolve",
+];
+
+const HYBRID_AUTH_PREFIXES = [
+  "/api/orchestrator/contacts",
 ];
 
 const authMiddleware = withAuth({
@@ -102,6 +105,15 @@ export default function middleware(request: NextRequest, event: NextFetchEvent) 
         headers: { "content-type": "application/json" },
       }
     );
+  }
+
+  if (HYBRID_AUTH_PREFIXES.some((prefix) => pathname.startsWith(prefix))) {
+    const authHeader = request.headers.get("authorization");
+    if (authHeader?.toLowerCase().startsWith("bearer ")) {
+      return NextResponse.next();
+    }
+
+    return authMiddleware(request as NextRequestWithAuth, event);
   }
 
   return authMiddleware(request as NextRequestWithAuth, event);

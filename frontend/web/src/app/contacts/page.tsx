@@ -364,6 +364,7 @@ export default function ContactsPage() {
       { contacts: 0, clusters: 0, confirmedObservations: 0 }
     );
   }, [contacts]);
+  const hasInitialLoadError = status.kind === "error" && !isLoading && contacts.length === 0;
 
   // Load contacts on mount
   useEffect(() => {
@@ -780,84 +781,89 @@ export default function ContactsPage() {
           </Link>
         </div>
 
-        <div style={{ display: "flex", gap: "12px", flexWrap: "wrap", alignItems: "center" }}>
-          <label
-            style={{
-              display: "flex",
-              alignItems: "center",
-              gap: "8px",
-              border: "1px solid #d0d0d0",
-              borderRadius: "8px",
-              padding: "10px 12px",
-              color: "#374151",
-              fontSize: "0.9rem",
-              background: showVoiceOnly ? "#eff6ff" : "#fff",
-            }}
-          >
+        {!hasInitialLoadError && (
+          <div style={{ display: "flex", gap: "12px", flexWrap: "wrap", alignItems: "center" }}>
+            <label
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: "8px",
+                border: "1px solid #d0d0d0",
+                borderRadius: "8px",
+                padding: "10px 12px",
+                color: "#374151",
+                fontSize: "0.9rem",
+                background: showVoiceOnly ? "#eff6ff" : "#fff",
+              }}
+            >
+              <input
+                type="checkbox"
+                checked={showVoiceOnly}
+                onChange={(event) => setShowVoiceOnly(event.target.checked)}
+              />
+              Voice profiles only
+            </label>
             <input
-              type="checkbox"
-              checked={showVoiceOnly}
-              onChange={(event) => setShowVoiceOnly(event.target.checked)}
+              type="search"
+              value={searchQuery}
+              onChange={(event) => setSearchQuery(event.target.value)}
+              placeholder="Search by name, alias, or notes"
+              aria-label="Search contacts by name, alias, or notes"
+              style={{
+                border: "1px solid #d0d0d0",
+                borderRadius: "8px",
+                padding: "10px 12px",
+                fontSize: "0.95rem",
+                minWidth: "220px",
+                maxWidth: "320px",
+              }}
             />
-            Voice profiles only
-          </label>
-          <input
-            type="search"
-            value={searchQuery}
-            onChange={(event) => setSearchQuery(event.target.value)}
-            placeholder="Search by name, alias, or notes"
-            aria-label="Search contacts by name, alias, or notes"
-            style={{
-              border: "1px solid #d0d0d0",
-              borderRadius: "8px",
-              padding: "10px 12px",
-              fontSize: "0.95rem",
-              minWidth: "220px",
-              maxWidth: "320px",
-            }}
-          />
-        </div>
+          </div>
+        )}
       </div>
 
-      <div
-        style={{
-          display: "grid",
-          gap: "8px",
-          gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
-        }}
-      >
-        <div style={{ border: "1px solid #e5e7eb", borderRadius: "8px", padding: "12px 14px" }}>
-          <div style={{ color: "#6b7280", fontSize: "0.8rem", fontWeight: 600 }}>Voice contacts</div>
-          <div style={{ color: "#111827", fontSize: "1.4rem", fontWeight: 700 }}>
-            {voiceProfileStats.contacts}
+      {!hasInitialLoadError && (
+        <div
+          style={{
+            display: "grid",
+            gap: "8px",
+            gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
+          }}
+        >
+          <div style={{ border: "1px solid #e5e7eb", borderRadius: "8px", padding: "12px 14px" }}>
+            <div style={{ color: "#6b7280", fontSize: "0.8rem", fontWeight: 600 }}>Voice contacts</div>
+            <div style={{ color: "#111827", fontSize: "1.4rem", fontWeight: 700 }}>
+              {voiceProfileStats.contacts}
+            </div>
+          </div>
+          <div style={{ border: "1px solid #e5e7eb", borderRadius: "8px", padding: "12px 14px" }}>
+            <div style={{ color: "#6b7280", fontSize: "0.8rem", fontWeight: 600 }}>Voice clusters</div>
+            <div style={{ color: "#111827", fontSize: "1.4rem", fontWeight: 700 }}>
+              {voiceProfileStats.clusters}
+            </div>
+          </div>
+          <div style={{ border: "1px solid #e5e7eb", borderRadius: "8px", padding: "12px 14px" }}>
+            <div style={{ color: "#6b7280", fontSize: "0.8rem", fontWeight: 600 }}>
+              Confirmed voice observations
+            </div>
+            <div style={{ color: "#111827", fontSize: "1.4rem", fontWeight: 700 }}>
+              {voiceProfileStats.confirmedObservations}
+            </div>
           </div>
         </div>
-        <div style={{ border: "1px solid #e5e7eb", borderRadius: "8px", padding: "12px 14px" }}>
-          <div style={{ color: "#6b7280", fontSize: "0.8rem", fontWeight: 600 }}>Voice clusters</div>
-          <div style={{ color: "#111827", fontSize: "1.4rem", fontWeight: 700 }}>
-            {voiceProfileStats.clusters}
-          </div>
-        </div>
-        <div style={{ border: "1px solid #e5e7eb", borderRadius: "8px", padding: "12px 14px" }}>
-          <div style={{ color: "#6b7280", fontSize: "0.8rem", fontWeight: 600 }}>
-            Confirmed voice observations
-          </div>
-          <div style={{ color: "#111827", fontSize: "1.4rem", fontWeight: 700 }}>
-            {voiceProfileStats.confirmedObservations}
-          </div>
-        </div>
-      </div>
+      )}
 
       {/* Contacts List */}
-      <div
-        style={{
-          border: "1px solid #e2e2e2",
-          borderRadius: "12px",
-          background: "#fff",
-          boxShadow: "0 4px 12px rgba(15, 23, 42, 0.04)",
-          overflow: "hidden",
-        }}
-      >
+      {!hasInitialLoadError && (
+        <div
+          style={{
+            border: "1px solid #e2e2e2",
+            borderRadius: "12px",
+            background: "#fff",
+            boxShadow: "0 4px 12px rgba(15, 23, 42, 0.04)",
+            overflow: "hidden",
+          }}
+        >
         {isLoading ? (
           <div style={{ padding: "48px", textAlign: "center", color: "#666" }}>
             Loading contacts...
@@ -1168,7 +1174,8 @@ export default function ContactsPage() {
             </table>
           </div>
         )}
-      </div>
+        </div>
+      )}
 
       {/* Modal */}
       {showModal && (

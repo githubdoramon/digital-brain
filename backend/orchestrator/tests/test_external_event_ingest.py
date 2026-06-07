@@ -422,6 +422,76 @@ def test_ingest_meeting_transcript_creates_summary_and_named_attendees(monkeypat
     assert ("me@example.com", "Current User") in ensure_calls
 
 
+def test_ingest_meeting_transcript_uses_hyprnote_session_external_id(monkeypatch):
+    existing_event_id = "hyprnote:session-123:event"
+    monkeypatch.setattr(
+        "events._get_event_id_by_external_id",
+        lambda external_id: existing_event_id
+        if external_id == "hyprnote:session-123"
+        else None,
+    )
+    monkeypatch.setattr("events._find_matching_meeting_event", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr("events._get_event_by_id", lambda _event_id: None)
+    monkeypatch.setattr("events._create_coworker_relationships", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        "events._generate_meeting_transcript_summary",
+        lambda _payload, _transcript_text, **_kwargs: {
+            "summary": "Local meeting summary",
+            "action_items": [],
+        },
+    )
+    monkeypatch.setattr(
+        "events.contacts_service.ensure_contact_for_email",
+        lambda email, **_kwargs: (f"contact:{email.split('@', 1)[0]}", False),
+    )
+    monkeypatch.setattr(
+        "events.contacts_service.get_contact",
+        lambda _contact_id: {
+            "contact_id": "contact:me",
+            "display_name": "Current User",
+            "aliases": ["Me"],
+            "emails": ["me@example.com"],
+        },
+    )
+
+    captured: list[EventIn] = []
+    monkeypatch.setattr("events.ingest_event", lambda event: captured.append(event))
+
+    payload = MeetingTranscriptPayload(
+        upload_id="upload-123",
+        session_id="session-123",
+        transcript_hash="hash-123",
+        meeting={
+            "original_id": "session-123",
+            "provider": "hyprnote",
+            "title": "Ad hoc call",
+            "started_at": "2026-02-26T11:00:00+00:00",
+            "ended_at": "2026-02-26T11:30:00+00:00",
+        },
+        participants=[],
+        speaker_identities=[],
+        transcript={
+            "segments": [
+                {
+                    "speaker_id": "speaker_1",
+                    "started_at": "2026-02-26T11:00:01+00:00",
+                    "ended_at": "2026-02-26T11:00:02+00:00",
+                    "text": "We talked about the rollout.",
+                }
+            ]
+        },
+    )
+
+    result = events.ingest_meeting_transcript(
+        payload,
+        current_user={"name": "Current User", "email": "me@example.com"},
+    )
+
+    assert result["event_id"] == existing_event_id
+    assert captured[0].id == existing_event_id
+    assert captured[0].external_id == "hyprnote:session-123"
+
+
 def test_ingest_meeting_transcript_replaces_existing_calendar_summary(monkeypatch):
     existing_event_id = "google:calendar-456:event"
     start = datetime(2026, 2, 26, 12, 0, tzinfo=timezone.utc)
