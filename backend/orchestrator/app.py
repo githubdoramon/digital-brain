@@ -9,6 +9,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 import conversations
+import meeting_transcript_jobs
 from db import get_conn
 from db_migrations import run_pending_migrations
 from llm_helpers import warm_fast_model
@@ -126,7 +127,11 @@ async def lifespan(_app: FastAPI):
     except Exception:
         logger.exception("Fast-model warmup failed; continuing startup")
 
-    yield
+    meeting_transcript_jobs.start_worker()
+    try:
+        yield
+    finally:
+        meeting_transcript_jobs.stop_worker()
 
 
 api = FastAPI(title="Personal Memory Orchestrator", version="0.3.1", lifespan=lifespan)

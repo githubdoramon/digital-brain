@@ -11,6 +11,7 @@ import { extractAssetCapturedAt } from '@/chat/mediaAttachments';
 import {
   EventDetailsForm,
   EventDraftEditorScreen,
+  type EventActionItem,
 } from '@/components/event-draft/EventDraftEditorScreen';
 import {
   EMPTY_EVENT_DRAFT,
@@ -40,6 +41,7 @@ type EventDetail = {
   } | null;
   types?: string[] | null;
   external_id?: string | null;
+  action_items?: EventActionItem[] | null;
   photos?: EventPhoto[] | null;
 };
 
@@ -290,6 +292,13 @@ function EventDetailView({ eventId, editable }: EventDetailViewProps) {
   const subtitle = formatDateRange(event?.start_date, event?.end_date);
 
   const photos = React.useMemo(() => event?.photos || [], [event?.photos]);
+  const actionItems = React.useMemo(
+    () =>
+      Array.isArray(event?.action_items)
+        ? event.action_items.filter((item) => item?.task)
+        : [],
+    [event?.action_items],
+  );
 
   const handleSave = React.useCallback(
     async (nextDraft: EventDraft) => {
@@ -490,6 +499,7 @@ function EventDetailView({ eventId, editable }: EventDetailViewProps) {
       availableContacts={availableContacts}
       availablePlaces={availablePlaces}
       photos={photos}
+      actionItems={actionItems}
       photoToken={token}
       isUploadingPhoto={isUploadingPhoto}
       onAddPhoto={eventId ? handleAddPhoto : undefined}

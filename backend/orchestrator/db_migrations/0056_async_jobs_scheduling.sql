@@ -1,0 +1,7 @@
+ALTER TABLE async_jobs
+    ADD COLUMN IF NOT EXISTS revision INTEGER NOT NULL DEFAULT 1,
+    ADD COLUMN IF NOT EXISTS attempts INTEGER NOT NULL DEFAULT 0,
+    ADD COLUMN IF NOT EXISTS next_run_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+
+CREATE INDEX IF NOT EXISTS idx_async_jobs_due
+    ON async_jobs (job_type, status, next_run_at);

@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Respon
 import contacts as contacts_service
 import event_photos as event_photos_service
 import events as events_service
-import todos as todos_service
+import meeting_transcript_jobs
 import voice_profiles as voice_profiles_service
 from auth import get_current_user, require_service_api_key
 from commands.event import confirm_event_command as confirm_event_command_impl
@@ -20,7 +20,6 @@ from schemas import (
     EventCommandResult,
     EventIn,
     ExternalEventPayload,
-    MeetingIn,
     MeetingParticipantsResolveIn,
     MeetingTranscriptPayload,
     SpeakerVoiceConfirmIn,
@@ -71,38 +70,27 @@ def create_events_router(
         events_service.ingest_event(e)
         return {"ok": True, "id": e.id}
 
-    @router.post("/ingest/events/notes")
-    def ingest_meeting_notes(
-        meetings: list[MeetingIn],
-        _: None = Depends(require_service_api_key),
-    ):
-        logger.debug("[meeting_notes] Ingestion request received with %d meeting(s)", len(meetings))
-        ids = events_service.ingest_meeting_notes(meetings, todo_writer=todos_service.ingest_todo)
-        logger.debug("[meeting_notes] Ingestion completed with %d event id(s)", len(ids))
-        return {"ok": True, "ids": ids}
-
     @router.post("/ingest/meetings/transcript")
     def ingest_meeting_transcript(
         payload: MeetingTranscriptPayload,
         user: dict = Depends(get_current_user),
     ):
         try:
-            result = events_service.ingest_meeting_transcript(
+            job = meeting_transcript_jobs.enqueue_transcript(
                 payload,
                 current_user=user,
-                todo_writer=todos_service.ingest_todo,
             )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         except Exception:
             logger.exception(
-                "[meeting_transcript] Ingestion failed upload_id=%s session_id=%s transcript_hash=%s",
+                "[meeting_transcript] Queueing failed upload_id=%s session_id=%s transcript_hash=%s",
                 payload.upload_id,
                 payload.session_id,
                 payload.transcript_hash,
             )
             raise
-        return {"ok": True, "id": result["event_id"], **result}
+        return {"ok": True, "queued": True, **job}
 
     @router.post("/ingest/event/external")
     def ingest_external_event(
@@ -258,7 +246,9 @@ def create_events_router(
         events = events_service.get_events([event_id])
         if not events:
             raise HTTPException(status_code=404, detail="Event not found")
-        return events[0]
+        event = events[0]
+        event["action_items"] = events_service.get_event_action_items(event_id)
+        return event
 
     @router.post("/mobile/events/{event_id}/photos")
     async def upload_event_photo(

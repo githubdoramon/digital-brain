@@ -19,7 +19,6 @@ from schemas import (
     ContactRelationshipIn,
     EventIn,
     ExternalEventPayload,
-    MeetingIn,
     MeetingTranscriptPayload,
     TodoIn,
 )
@@ -276,111 +275,6 @@ def ingest_external_event(payload: ExternalEventPayload) -> str:
     return normalized_event_id
 
 
-def ingest_meeting_notes(
-    meetings: Sequence[MeetingIn],
-    *,
-    todo_writer: Callable[[TodoIn], None] | None = None,
-) -> list[str]:
-    event_ids: list[str] = []
-    contact_cache: dict[str, tuple[str | None, bool]] = {}
-
-    current_user = _load_current_user_from_env()
-
-    user_tokens = _build_user_tokens(current_user)
-    for meeting in meetings:
-        attendee_emails = meeting.attendees_emails or []
-        unique_contacts, attendee_contacts_by_domain = _resolve_attendee_contacts(
-            attendee_emails,
-            contact_cache=contact_cache,
-            current_user=current_user,
-        )
-        _create_coworker_relationships(attendee_contacts_by_domain)
-
-        normalized_meeting_id: str | None = None
-        provided_meeting_id = getattr(meeting, "id", None)
-        if provided_meeting_id is not None:
-            normalized_meeting_id = str(provided_meeting_id).strip() or None
-
-        start_date = meeting.date
-        title = meeting.title.strip()
-        if not title:
-            title = normalized_meeting_id or "Untitled meeting"
-        tags = list(dict.fromkeys(meeting.tags or []))
-        summary = meeting.content or ""
-
-        event_id: str | None = None
-        existing_event = False
-
-        if normalized_meeting_id:
-            candidate = f"meeting:{normalized_meeting_id}"
-            if _event_exists(candidate):
-                event_id = candidate
-                existing_event = True
-
-        if not event_id:
-            matched = _find_matching_meeting_event(title, start_date)
-            if matched:
-                event_id = matched
-                existing_event = True
-
-        if not event_id:
-            event_id = f"meeting:{meeting.date.strftime('%Y%m%dT%H%M%S')}-{_slugify(title)}-{uuid4().hex[:8]}"
-
-        raw_payload = {
-            "content": meeting.content,
-            "link": meeting.link,
-            "attendees": attendee_emails,
-            "attendee_contact_ids": unique_contacts,
-            "source": "meeting_ingest",
-            "existing_event": None,
-        }
-
-        if normalized_meeting_id:
-            raw_payload["external_meeting_id"] = normalized_meeting_id
-
-        event = EventIn(
-            id=event_id,
-            startDate=start_date,
-            people=unique_contacts,
-            tags=tags,
-            types=["meeting"],
-            title=title,
-            summary=summary,
-            raw=raw_payload,
-            externalId=None,
-        )
-
-        existing_event = _get_event_by_id(event_id)
-        if existing_event:
-            event = _merge_event(existing_event, event)
-
-        ingest_event(event)
-        event_ids.append(event_id)
-
-        if not todo_writer or not user_tokens:
-            continue
-
-        existing_todo_signatures = _get_existing_todo_signatures(event_id)
-        steps = _extract_next_steps(meeting.content, user_tokens=user_tokens)
-
-        for step in steps:
-            normalized_step = _normalize_todo_description(step)
-            if not normalized_step or normalized_step in existing_todo_signatures:
-                continue
-            existing_todo_signatures.add(normalized_step)
-            todo = TodoIn(
-                todo_id=f"todo:{event_id}:{uuid4().hex[:8]}",
-                description=step,
-                status="pending",
-                contact_ids=[],
-                event_ids=[event_id],
-                place_ids=[],
-            )
-            todo_writer(todo)
-
-    return event_ids
-
-
 def ingest_meeting_transcript(
     payload: MeetingTranscriptPayload,
     *,
@@ -432,7 +326,12 @@ def ingest_meeting_transcript(
         people_context=people_context,
     )
     summary = summary_result["summary"]
-    action_items = summary_result["action_items"]
+    action_items = _annotate_action_items_for_current_user(
+        summary_result["action_items"],
+        current_user=current_user,
+        current_user_identifiers=people_context.get("current_user_identifiers") or [],
+    )
+    summary_result = {**summary_result, "action_items": action_items}
     logger.info(
         "[meeting_transcript] Summary generated upload_id=%s session_id=%s transcript_hash=%s "
         "summary_preview=%s action_items=%s",
@@ -839,7 +738,6 @@ Action item rules:
 - Use participant aliases/emails from the identifier sets to disambiguate assignees.
 - Use null for unknown assignee_name, assignee_email, due_date, or evidence fields.
 - Do not create action items for vague discussion topics or suggestions without ownership.
-- Every action with a clear assignee must have the format "<Assignee name>: action item content".
 """.strip()
     try:
         generated = call_llm_json(
@@ -906,6 +804,10 @@ def _create_current_user_todos_from_action_items(
         return []
 
     current_email = contacts_service.normalize_email(current_user.get("email") or "")
+    current_emails = _current_user_email_set(
+        current_user,
+        current_user_identifiers=current_user_identifiers,
+    )
     current_identifier_terms = {
         normalize_search_text(identifier)
         for identifier in current_user_identifiers
@@ -919,7 +821,7 @@ def _create_current_user_todos_from_action_items(
     for action_item in action_items:
         if not _is_current_user_action_item(
             action_item,
-            current_email=current_email,
+            current_emails=current_emails or ({current_email} if current_email else set()),
             current_identifier_terms=current_identifier_terms,
         ):
             continue
@@ -947,14 +849,63 @@ def _create_current_user_todos_from_action_items(
     return created_todo_ids
 
 
+def _current_user_email_set(
+    current_user: dict,
+    *,
+    current_user_identifiers: Sequence[Any],
+) -> set[str]:
+    emails: set[str] = set()
+    current_email = contacts_service.normalize_email(current_user.get("email") or "")
+    if current_email:
+        emails.add(current_email)
+    for identifier in current_user_identifiers:
+        text = str(identifier or "").strip()
+        if "@" not in text:
+            continue
+        normalized = contacts_service.normalize_email(text)
+        if normalized:
+            emails.add(normalized)
+    return emails
+
+
+def _annotate_action_items_for_current_user(
+    action_items: Sequence[dict[str, Any]],
+    *,
+    current_user: dict,
+    current_user_identifiers: Sequence[Any],
+) -> list[dict[str, Any]]:
+    current_emails = _current_user_email_set(
+        current_user,
+        current_user_identifiers=current_user_identifiers,
+    )
+    current_identifier_terms = {
+        normalize_search_text(identifier)
+        for identifier in current_user_identifiers
+        if normalize_search_text(identifier)
+    }
+    current_identifier_terms.add(normalize_search_text(current_user.get("name") or ""))
+    current_identifier_terms = {term for term in current_identifier_terms if term}
+
+    annotated: list[dict[str, Any]] = []
+    for action_item in action_items:
+        item = dict(action_item)
+        item["belongs_to_current_user"] = _is_current_user_action_item(
+            item,
+            current_emails=current_emails,
+            current_identifier_terms=current_identifier_terms,
+        )
+        annotated.append(item)
+    return annotated
+
+
 def _is_current_user_action_item(
     action_item: dict[str, Any],
     *,
-    current_email: str | None,
+    current_emails: set[str],
     current_identifier_terms: set[str],
 ) -> bool:
     assignee_email = contacts_service.normalize_email(action_item.get("assignee_email") or "")
-    if current_email and assignee_email == current_email:
+    if assignee_email and assignee_email in current_emails:
         return True
 
     assignee_name = normalize_search_text(action_item.get("assignee_name") or "")
@@ -1320,133 +1271,48 @@ def get_events(ids: list[str]) -> list[dict[str, Any]]:
     ]
 
 
-def _build_user_tokens(user: dict | None) -> list[str]:
-    if not user:
+def get_event_action_items(event_id: str | None) -> list[dict[str, Any]]:
+    event = _get_event_by_id(event_id)
+    if not event:
         return []
-    tokens: list[str] = []
-    email = user.get("email") if user else None
-    if email and "@" in email:
-        local = email.split("@", 1)[0]
-        if local:
-            tokens.append(local.lower())
-    name = user.get("name") if user else None
-    if name:
-        parts = [p.strip().lower() for p in re.split(r"\s+", name) if p.strip()]
-        tokens.extend(parts)
-        normalized_name = normalize_search_text(name)
-        if normalized_name:
-            tokens.append(normalized_name)
-    return [token for token in tokens if token]
+    return _extract_event_action_items(event.get("raw"))
 
 
-def _clean_next_step_text(text: str) -> str:
-    cleaned = re.sub(r"^[*_`~\s]+|[*_`~\s]+$", "", text or "")
-    cleaned = re.sub(r"\s+", " ", cleaned)
-    return cleaned.strip(" :-")
-
-
-def _extract_list_item(line: str) -> tuple[int, str] | None:
-    match = re.match(r"^(\s*)(?:[-*+o•◦▪‣]|\d+[.)])\s+(.+)$", line)
-    if not match:
-        return None
-    indent = len(match.group(1).expandtabs(2))
-    text = _clean_next_step_text(match.group(2))
-    if not text:
-        return None
-    return indent, text
-
-
-def _matches_user_token(text: str, user_tokens: Sequence[str]) -> bool:
-    normalized_text = normalize_search_text(_clean_next_step_text(text))
-    if not normalized_text:
-        return False
-    for token in user_tokens:
-        normalized_token = normalize_search_text(token)
-        if not normalized_token:
-            continue
-        if normalized_text == normalized_token:
-            return True
-    return False
-
-
-def _looks_like_person_label(text: str) -> bool:
-    cleaned = _clean_next_step_text(text)
-    if not cleaned or len(cleaned) > 40:
-        return False
-    if re.search(r"[.!?]", cleaned):
-        return False
-    words = [word for word in re.split(r"\s+", cleaned) if word]
-    if not words or len(words) > 4:
-        return False
-    return all(re.match(r"^[A-Z][A-Za-z'\-]*$|^[A-Z]{2,}$", word) for word in words)
-
-
-def _extract_next_steps(content: str | None, *, user_tokens: Sequence[str] | None = None) -> list[str]:
-    if not content:
+def _extract_event_action_items(raw: Any) -> list[dict[str, Any]]:
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except json.JSONDecodeError:
+            return []
+    if not isinstance(raw, dict):
         return []
-    lines = content.splitlines()
-    steps: list[str] = []
-    in_section = False
-    current_group_indent: int | None = None
-    current_group_is_user = False
-    last_captured_index: int | None = None
-    normalized_user_tokens = [normalize_search_text(token) for token in (user_tokens or []) if token]
-    for raw_line in lines:
-        line = raw_line.rstrip()
-        stripped = line.strip()
-        if not stripped:
-            last_captured_index = None
-            continue
-        is_heading = stripped.startswith("#")
-        if is_heading and "next steps" in normalize_search_text(stripped):
-            in_section = True
-            current_group_indent = None
-            current_group_is_user = False
-            last_captured_index = None
-            continue
-        if not in_section:
-            continue
-        if is_heading:
-            break
 
-        list_item = _extract_list_item(line)
-        if not list_item:
-            if _matches_user_token(stripped, normalized_user_tokens) or _looks_like_person_label(stripped):
-                current_group_indent = -1
-                current_group_is_user = _matches_user_token(stripped, normalized_user_tokens)
-                last_captured_index = None
-                continue
-            if last_captured_index is not None:
-                continuation = _clean_next_step_text(stripped)
-                if continuation:
-                    steps[last_captured_index] = f"{steps[last_captured_index]} {continuation}".strip()
-            continue
+    raw_items = raw.get("action_items")
+    if not isinstance(raw_items, list):
+        summary_result = raw.get("summary_result")
+        if isinstance(summary_result, dict):
+            raw_items = summary_result.get("action_items")
+    if not isinstance(raw_items, list):
+        return []
 
-        indent, text = list_item
-        is_user_label = _matches_user_token(text, normalized_user_tokens)
-        is_person_label = is_user_label or _looks_like_person_label(text)
-        if is_person_label:
-            current_group_indent = indent
-            current_group_is_user = is_user_label
-            last_captured_index = None
+    action_items: list[dict[str, Any]] = []
+    for item in raw_items:
+        if not isinstance(item, dict):
             continue
-
-        normalized_text = normalize_search_text(text)
-        if current_group_indent is not None:
-            if current_group_is_user:
-                steps.append(text)
-                last_captured_index = len(steps) - 1
-            else:
-                last_captured_index = None
+        task = _clean_optional_text(item.get("task"))
+        if not task:
             continue
-
-        if normalized_user_tokens and not any(token and token in normalized_text for token in normalized_user_tokens):
-            last_captured_index = None
-            continue
-
-        steps.append(text)
-        last_captured_index = len(steps) - 1
-    return steps
+        action_items.append(
+            {
+                "task": task,
+                "assignee_name": _clean_optional_text(item.get("assignee_name")),
+                "assignee_email": contacts_service.normalize_email(item.get("assignee_email") or ""),
+                "due_date": _clean_optional_text(item.get("due_date")),
+                "evidence": _clean_optional_text(item.get("evidence")),
+                "belongs_to_current_user": bool(item.get("belongs_to_current_user")),
+            }
+        )
+    return action_items
 
 
 def _normalize_todo_description(text: str | None) -> str:
@@ -1476,22 +1342,6 @@ def _get_existing_todo_signatures(event_id: str | None) -> set[str]:
         if signature:
             signatures.add(signature)
     return signatures
-
-
-def _event_exists(event_id: str) -> bool:
-    if not event_id:
-        return False
-    with get_conn() as conn, conn.cursor() as cur:
-        cur.execute(
-            """
-            SELECT 1
-            FROM events
-            WHERE id = %s
-            LIMIT 1
-            """,
-            (event_id,),
-        )
-        return cur.fetchone() is not None
 
 
 def _get_event_id_by_external_id(external_id: str | None) -> str | None:

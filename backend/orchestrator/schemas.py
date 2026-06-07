@@ -105,30 +105,6 @@ class ExternalEventPayload(BaseModel):
         populate_by_name = True
 
 
-class MeetingIn(BaseModel):
-    id: str | None = None
-    title: str
-    content: str | None = None
-    date: datetime
-    link: str | None = None
-    attendees_emails: list[str] | None = Field(
-        default=None,
-        alias="attendeesEmails",
-        validation_alias=AliasChoices(
-            "attendeesEmails",
-            "attendees_emails",
-            "attendees",
-            "attendeeEmails",
-        ),
-    )
-    tags: list[str] | None = Field(default_factory=list)
-
-    @field_validator("attendees_emails", mode="before")
-    @classmethod
-    def _normalize_attendees(cls, value: Any) -> list[str] | None:
-        return EventIn._normalize_attendee_emails(value)
-
-
 class MeetingTranscriptMeeting(BaseModel):
     model_config = ConfigDict(populate_by_name=True, extra="allow")
 

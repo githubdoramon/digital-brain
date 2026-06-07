@@ -56,6 +56,7 @@ type EventDetailsFormProps = {
   doneLabel?: string;
   deleteLabel?: string;
   photos?: EventPhoto[];
+  actionItems?: EventActionItem[];
   photoToken?: string | null;
   isUploadingPhoto?: boolean;
   onAddPhoto?: () => void;
@@ -68,6 +69,15 @@ type EventDetailsFormProps = {
 
 type DraftEditorScreenProps = {
   sessionId: string;
+};
+
+export type EventActionItem = {
+  task: string;
+  assignee_name?: string | null;
+  assignee_email?: string | null;
+  due_date?: string | null;
+  evidence?: string | null;
+  belongs_to_current_user?: boolean | null;
 };
 
 function listToInput(value: string[]) {
@@ -113,6 +123,14 @@ function readOnlyText(value: string, fallback: string) {
 function readOnlyList(values: string[], fallback: string) {
   const filtered = values.map((value) => value.trim()).filter(Boolean);
   return filtered.length ? filtered : [fallback];
+}
+
+function formatActionItemMeta(item: EventActionItem): string {
+  const parts = [
+    item.assignee_name || item.assignee_email || null,
+    item.due_date ? `Due ${item.due_date}` : null,
+  ].filter(Boolean);
+  return parts.length > 0 ? parts.join(' • ') : 'Unassigned';
 }
 
 function sameDraftText(left: string | null | undefined, right: string | null | undefined) {
@@ -164,6 +182,7 @@ export function EventDetailsForm({
   doneLabel = 'Done',
   deleteLabel = 'Delete',
   photos = [],
+  actionItems = [],
   photoToken,
   isUploadingPhoto = false,
   onAddPhoto,
@@ -590,6 +609,40 @@ export function EventDetailsForm({
               <Text style={styles.readText}>{readOnlyText(summary, 'No summary provided.')}</Text>
             )}
           </Card>
+
+          {!editable && actionItems.length > 0 ? (
+            <Card style={styles.card}>
+              <Text style={styles.label}>Action items</Text>
+              <View style={styles.actionItemList}>
+                {actionItems.map((item, index) => (
+                  <View key={`${item.task}:${index}`} style={styles.actionItemRow}>
+                    <View style={styles.actionItemIcon}>
+                      <Ionicons
+                        name={
+                          item.belongs_to_current_user
+                            ? 'person-check-outline'
+                            : 'checkmark-circle-outline'
+                        }
+                        size={17}
+                        color={
+                          item.belongs_to_current_user
+                            ? theme.colors.accentDeep
+                            : theme.colors.mutedInk
+                        }
+                      />
+                    </View>
+                    <View style={styles.actionItemBody}>
+                      <Text style={styles.actionItemTask}>{item.task}</Text>
+                      <Text style={styles.actionItemMeta}>{formatActionItemMeta(item)}</Text>
+                      {item.evidence ? (
+                        <Text style={styles.actionItemEvidence}>{item.evidence}</Text>
+                      ) : null}
+                    </View>
+                  </View>
+                ))}
+              </View>
+            </Card>
+          ) : null}
 
           <Card style={styles.card}>
             <Text style={styles.label}>When</Text>
@@ -1100,6 +1153,40 @@ const styles = StyleSheet.create({
     color: theme.colors.ink,
     fontSize: 14,
     lineHeight: 20,
+  },
+  actionItemList: {
+    gap: 12,
+  },
+  actionItemRow: {
+    flexDirection: 'row',
+    gap: 10,
+  },
+  actionItemIcon: {
+    width: 24,
+    minHeight: 24,
+    alignItems: 'center',
+    paddingTop: 1,
+  },
+  actionItemBody: {
+    flex: 1,
+    gap: 3,
+  },
+  actionItemTask: {
+    color: theme.colors.ink,
+    fontSize: 14,
+    lineHeight: 20,
+    fontWeight: '600',
+  },
+  actionItemMeta: {
+    color: theme.colors.mutedInk,
+    fontSize: 12,
+    lineHeight: 16,
+  },
+  actionItemEvidence: {
+    color: theme.colors.mutedInk,
+    fontSize: 12,
+    lineHeight: 17,
+    fontStyle: 'italic',
   },
   deleteSection: {
     padding: 16,
