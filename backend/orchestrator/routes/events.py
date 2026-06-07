@@ -44,6 +44,23 @@ def _parse_optional_datetime(value: str | None) -> datetime | None:
     return datetime.fromisoformat(normalized)
 
 
+def _speaker_voice_confirm_summary(payload: SpeakerVoiceConfirmIn) -> list[dict[str, Any]]:
+    return [
+        {
+            "speaker_id": observation.speaker_id,
+            "contact_id": observation.contact_id,
+            "email": observation.email,
+            "has_name": bool(observation.name),
+            "embedding_count": len(observation.embeddings),
+            "window_count": len(observation.windows),
+            "embedding_model": observation.embedding_model,
+            "embedding_dim": observation.embedding_dim,
+            "source": observation.source,
+        }
+        for observation in payload.observations
+    ]
+
+
 def create_events_router(
 ) -> APIRouter:
     router = APIRouter()
@@ -123,8 +140,36 @@ def create_events_router(
         payload: SpeakerVoiceConfirmIn,
         user: dict = Depends(get_current_user),
     ):
-        del user
-        return {"ok": True, **voice_profiles_service.confirm_speaker_profiles(payload)}
+        user_email = user.get("email")
+        speaker_ids = [observation.speaker_id for observation in payload.observations]
+        logger.info(
+            "[voice_profiles] confirm request session_id=%s observations=%d rejected=%d user=%s speakers=%s",
+            payload.session_id,
+            len(payload.observations),
+            len(payload.rejected_matches),
+            user_email,
+            speaker_ids,
+        )
+        try:
+            result = voice_profiles_service.confirm_speaker_profiles(payload)
+        except Exception:
+            logger.exception(
+                "[voice_profiles] confirm failed session_id=%s observations=%d rejected=%d user=%s summary=%s",
+                payload.session_id,
+                len(payload.observations),
+                len(payload.rejected_matches),
+                user_email,
+                _speaker_voice_confirm_summary(payload),
+            )
+            raise
+        logger.info(
+            "[voice_profiles] confirm complete session_id=%s confirmed=%d rejected=%d user=%s",
+            payload.session_id,
+            result.get("confirmed_observation_count", 0),
+            result.get("rejected_match_count", 0),
+            user_email,
+        )
+        return {"ok": True, **result}
 
     @router.get("/events/search")
     @router.get("/mobile/events/search")

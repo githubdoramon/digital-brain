@@ -183,6 +183,11 @@ def test_confirm_speaker_profiles_persists_and_updates_profile(monkeypatch):
 
     monkeypatch.setattr(
         voice_profiles,
+        "_has_confirmed_speaker_contact_observations",
+        lambda session_id, speaker_id, contact_id: False,
+    )
+    monkeypatch.setattr(
+        voice_profiles,
         "_persist_confirmed_observation",
         lambda session_id, observation, embeddings, cluster_id, contact_id: persisted.append(
             (session_id, contact_id, len(embeddings), cluster_id)
@@ -246,6 +251,11 @@ def test_confirm_speaker_profiles_resolves_contact_by_email(monkeypatch):
     )
     monkeypatch.setattr(
         voice_profiles,
+        "_has_confirmed_speaker_contact_observations",
+        lambda session_id, speaker_id, contact_id: False,
+    )
+    monkeypatch.setattr(
+        voice_profiles,
         "_persist_confirmed_observation",
         lambda session_id, observation, embeddings, cluster_id, contact_id: persisted.append(
             (session_id, contact_id, len(embeddings), cluster_id)
@@ -282,6 +292,98 @@ def test_confirm_speaker_profiles_resolves_contact_by_email(monkeypatch):
     }
     assert persisted == [("session-1", "contact:alice", 2, "cluster:alice:1")]
     assert updated == [("contact:alice", "pyannote_wespeaker_onnx", 2)]
+
+
+def test_confirmed_contact_name_lookup_does_not_require_created_at(monkeypatch):
+    class FakeCursor:
+        query = ""
+        params = ()
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def execute(self, query, params):
+            self.query = query
+            self.params = params
+
+        def fetchone(self):
+            return {"contact_id": "contact:alice"}
+
+    class FakeConnection:
+        cursor_instance = FakeCursor()
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def cursor(self):
+            return self.cursor_instance
+
+    connection = FakeConnection()
+    monkeypatch.setattr(voice_profiles, "get_conn", lambda: connection)
+
+    contact_id = voice_profiles._resolve_confirmed_contact_id(
+        ConfirmedSpeakerVoiceObservation(
+            speaker_id="speaker_1",
+            name="Alice",
+            embeddings=[],
+            embedding_model="pyannote_wespeaker_onnx",
+            embedding_dim=voice_profiles.VOICE_EMBEDDING_DIM,
+        )
+    )
+
+    assert contact_id == "contact:alice"
+    assert "created_at" not in connection.cursor_instance.query
+    assert "ORDER BY contact_id ASC" in connection.cursor_instance.query
+    assert connection.cursor_instance.params == ("Alice",)
+
+
+def test_confirm_speaker_profiles_skips_duplicate_session_speaker_contact(monkeypatch):
+    updated = []
+    persisted = []
+
+    monkeypatch.setattr(
+        voice_profiles,
+        "_has_confirmed_speaker_contact_observations",
+        lambda session_id, speaker_id, contact_id: True,
+    )
+    monkeypatch.setattr(
+        voice_profiles,
+        "_upsert_voice_profile",
+        lambda contact_id, embedding_model, embeddings: updated.append(contact_id),
+    )
+    monkeypatch.setattr(
+        voice_profiles,
+        "_persist_confirmed_observation",
+        lambda session_id, observation, embeddings, cluster_id, contact_id: persisted.append(contact_id),
+    )
+
+    result = voice_profiles.confirm_speaker_profiles(
+        SpeakerVoiceConfirmIn(
+            session_id="session-1",
+            observations=[
+                ConfirmedSpeakerVoiceObservation(
+                    speaker_id="speaker_1",
+                    contact_id="contact:alice",
+                    embeddings=[_unit(0), _unit(0)],
+                    embedding_model="pyannote_wespeaker_onnx",
+                    embedding_dim=voice_profiles.VOICE_EMBEDDING_DIM,
+                )
+            ],
+        )
+    )
+
+    assert result == {
+        "confirmed_observation_count": 0,
+        "rejected_match_count": 0,
+    }
+    assert updated == []
+    assert persisted == []
 
 
 @pytest.mark.parametrize("embedding_dim", [0, 255, 257])

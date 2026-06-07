@@ -124,15 +124,53 @@ def confirm_speaker_profiles(payload: SpeakerVoiceConfirmIn) -> dict[str, Any]:
     rejected_count = 0
 
     for observation in payload.observations:
-        contact_id = _resolve_confirmed_contact_id(observation)
-        if not contact_id:
-            continue
-        embeddings = _valid_embeddings(observation.embeddings, observation.embedding_dim)
-        if not embeddings:
-            continue
-        cluster_id = _upsert_voice_profile(contact_id, observation.embedding_model, embeddings)
-        _persist_confirmed_observation(payload.session_id, observation, embeddings, cluster_id, contact_id)
-        confirmed_count += len(embeddings)
+        try:
+            contact_id = _resolve_confirmed_contact_id(observation)
+            if not contact_id:
+                logger.info(
+                    "[voice_profiles] skipped speaker confirmation without contact session_id=%s speaker_id=%s email=%s has_name=%s",
+                    payload.session_id,
+                    observation.speaker_id,
+                    observation.email,
+                    bool(observation.name),
+                )
+                continue
+            embeddings = _valid_embeddings(observation.embeddings, observation.embedding_dim)
+            if not embeddings:
+                logger.info(
+                    "[voice_profiles] skipped speaker confirmation without valid embeddings session_id=%s speaker_id=%s contact_id=%s embedding_count=%d embedding_dim=%s",
+                    payload.session_id,
+                    observation.speaker_id,
+                    contact_id,
+                    len(observation.embeddings),
+                    observation.embedding_dim,
+                )
+                continue
+            if _has_confirmed_speaker_contact_observations(payload.session_id, observation.speaker_id, contact_id):
+                logger.info(
+                    "[voice_profiles] skipped duplicate speaker confirmation session_id=%s speaker_id=%s contact_id=%s",
+                    payload.session_id,
+                    observation.speaker_id,
+                    contact_id,
+                )
+                continue
+            cluster_id = _upsert_voice_profile(contact_id, observation.embedding_model, embeddings)
+            _persist_confirmed_observation(payload.session_id, observation, embeddings, cluster_id, contact_id)
+            confirmed_count += len(embeddings)
+        except Exception:
+            logger.exception(
+                "[voice_profiles] speaker confirmation failed session_id=%s speaker_id=%s contact_id=%s email=%s embedding_count=%d window_count=%d embedding_model=%s embedding_dim=%s source=%s",
+                payload.session_id,
+                observation.speaker_id,
+                observation.contact_id,
+                observation.email,
+                len(observation.embeddings),
+                len(observation.windows),
+                observation.embedding_model,
+                observation.embedding_dim,
+                observation.source,
+            )
+            raise
 
     for rejected in payload.rejected_matches:
         speaker_id = str(rejected.get("speaker_id") or rejected.get("speakerId") or "").strip()
@@ -205,7 +243,7 @@ def _resolve_confirmed_contact_id(observation: ConfirmedSpeakerVoiceObservation)
             SELECT contact_id
             FROM contacts
             WHERE unaccent(lower(display_name)) = unaccent(lower(%s))
-            ORDER BY created_at ASC
+            ORDER BY contact_id ASC
             LIMIT 1
             """,
             (name,),
@@ -357,6 +395,30 @@ def _coerce_vector(value: Any) -> list[float]:
     return []
 
 
+def _has_confirmed_speaker_contact_observations(
+    session_id: str | None,
+    speaker_id: str,
+    contact_id: str,
+) -> bool:
+    if not session_id:
+        return False
+
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT 1
+            FROM voice_observations
+            WHERE session_id = %s
+              AND speaker_id = %s
+              AND contact_id = %s
+              AND confirmed_at IS NOT NULL
+            LIMIT 1
+            """,
+            (session_id, speaker_id, contact_id),
+        )
+        return cur.fetchone() is not None
+
+
 def _persist_confirmed_observation(
     session_id: str | None,
     observation: ConfirmedSpeakerVoiceObservation,
@@ -386,7 +448,7 @@ def _persist_confirmed_observation(
                 ON CONFLICT (observation_id) DO NOTHING
                 """,
                 (
-                    f"voice-observation:{session_id or 'unknown'}:{observation.speaker_id}:{uuid4().hex[:12]}",
+                    _observation_id(session_id, observation, contact_id, index),
                     contact_id,
                     cluster_id,
                     session_id,
@@ -398,6 +460,18 @@ def _persist_confirmed_observation(
                 ),
             )
         conn.commit()
+
+
+def _observation_id(
+    session_id: str | None,
+    observation: ConfirmedSpeakerVoiceObservation,
+    contact_id: str,
+    index: int,
+) -> str:
+    window = observation.windows[index] if index < len(observation.windows) else None
+    window_id = str(window.id or "") if window else ""
+    stable_window_id = window_id or f"window-index:{index}"
+    return f"voice-observation:{session_id or 'unknown'}:{observation.speaker_id}:{contact_id}:{stable_window_id}"
 
 
 def _upsert_voice_profile(
