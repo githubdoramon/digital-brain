@@ -184,8 +184,8 @@ def test_confirm_speaker_profiles_persists_and_updates_profile(monkeypatch):
     monkeypatch.setattr(
         voice_profiles,
         "_persist_confirmed_observation",
-        lambda session_id, observation, embeddings, cluster_id: persisted.append(
-            (session_id, observation.contact_id, len(embeddings), cluster_id)
+        lambda session_id, observation, embeddings, cluster_id, contact_id: persisted.append(
+            (session_id, contact_id, len(embeddings), cluster_id)
         ),
     )
     monkeypatch.setattr(
@@ -233,6 +233,55 @@ def test_confirm_speaker_profiles_persists_and_updates_profile(monkeypatch):
     assert persisted == [("session-1", "contact:alice", 2, "cluster:alice:1")]
     assert updated == [("contact:alice", "pyannote_wespeaker_onnx", 2)]
     assert rejected[0]["status"] == "rejected"
+
+
+def test_confirm_speaker_profiles_resolves_contact_by_email(monkeypatch):
+    persisted = []
+    updated = []
+
+    monkeypatch.setattr(
+        voice_profiles.contacts_service,
+        "ensure_contact_for_email",
+        lambda email, display_name=None: ("contact:alice", False),
+    )
+    monkeypatch.setattr(
+        voice_profiles,
+        "_persist_confirmed_observation",
+        lambda session_id, observation, embeddings, cluster_id, contact_id: persisted.append(
+            (session_id, contact_id, len(embeddings), cluster_id)
+        ),
+    )
+    monkeypatch.setattr(
+        voice_profiles,
+        "_upsert_voice_profile",
+        lambda contact_id, embedding_model, embeddings: updated.append(
+            (contact_id, embedding_model, len(embeddings))
+        )
+        or "cluster:alice:1",
+    )
+
+    result = voice_profiles.confirm_speaker_profiles(
+        SpeakerVoiceConfirmIn(
+            session_id="session-1",
+            observations=[
+                ConfirmedSpeakerVoiceObservation(
+                    speaker_id="speaker_1",
+                    email="alice@example.com",
+                    name="Alice",
+                    embeddings=[_unit(0), _unit(0)],
+                    embedding_model="pyannote_wespeaker_onnx",
+                    embedding_dim=voice_profiles.VOICE_EMBEDDING_DIM,
+                )
+            ],
+        )
+    )
+
+    assert result == {
+        "confirmed_observation_count": 2,
+        "rejected_match_count": 0,
+    }
+    assert persisted == [("session-1", "contact:alice", 2, "cluster:alice:1")]
+    assert updated == [("contact:alice", "pyannote_wespeaker_onnx", 2)]
 
 
 @pytest.mark.parametrize("embedding_dim", [0, 255, 257])

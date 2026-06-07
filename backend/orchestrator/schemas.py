@@ -306,7 +306,9 @@ class ConfirmedSpeakerVoiceObservation(BaseModel):
     model_config = ConfigDict(populate_by_name=True, extra="allow")
 
     speaker_id: str = Field(alias="speaker_id")
-    contact_id: str = Field(alias="contact_id")
+    contact_id: str | None = Field(default=None, alias="contact_id")
+    email: str | None = None
+    name: str | None = None
     embeddings: list[list[float]] = Field(default_factory=list)
     embedding_model: str = Field(alias="embedding_model")
     embedding_dim: int = Field(alias="embedding_dim")

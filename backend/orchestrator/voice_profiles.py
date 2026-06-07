@@ -124,14 +124,14 @@ def confirm_speaker_profiles(payload: SpeakerVoiceConfirmIn) -> dict[str, Any]:
     rejected_count = 0
 
     for observation in payload.observations:
-        contact_id = observation.contact_id.strip()
+        contact_id = _resolve_confirmed_contact_id(observation)
         if not contact_id:
             continue
         embeddings = _valid_embeddings(observation.embeddings, observation.embedding_dim)
         if not embeddings:
             continue
         cluster_id = _upsert_voice_profile(contact_id, observation.embedding_model, embeddings)
-        _persist_confirmed_observation(payload.session_id, observation, embeddings, cluster_id)
+        _persist_confirmed_observation(payload.session_id, observation, embeddings, cluster_id, contact_id)
         confirmed_count += len(embeddings)
 
     for rejected in payload.rejected_matches:
@@ -179,6 +179,39 @@ def _resolve_participant_contact_ids(participants: Sequence[VoiceMatchParticipan
             if resolved:
                 contact_ids.add(resolved)
     return contact_ids
+
+
+def _resolve_confirmed_contact_id(observation: ConfirmedSpeakerVoiceObservation) -> str | None:
+    contact_id = str(observation.contact_id or "").strip()
+    if contact_id:
+        return contact_id
+
+    email = contacts_service.normalize_email(observation.email or "")
+    if email:
+        resolved, _created = contacts_service.ensure_contact_for_email(
+            email,
+            display_name=observation.name,
+        )
+        if resolved:
+            return resolved
+
+    name = str(observation.name or "").strip()
+    if not name:
+        return None
+
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT contact_id
+            FROM contacts
+            WHERE unaccent(lower(display_name)) = unaccent(lower(%s))
+            ORDER BY created_at ASC
+            LIMIT 1
+            """,
+            (name,),
+        )
+        row = cur.fetchone()
+    return str(row["contact_id"]) if row else None
 
 
 def _load_voice_profiles() -> list[dict[str, Any]]:
@@ -329,6 +362,7 @@ def _persist_confirmed_observation(
     observation: ConfirmedSpeakerVoiceObservation,
     embeddings: Sequence[Sequence[float]],
     cluster_id: str | None,
+    contact_id: str,
 ) -> None:
     with get_conn() as conn, conn.cursor() as cur:
         for index, embedding in enumerate(embeddings):
@@ -353,7 +387,7 @@ def _persist_confirmed_observation(
                 """,
                 (
                     f"voice-observation:{session_id or 'unknown'}:{observation.speaker_id}:{uuid4().hex[:12]}",
-                    observation.contact_id,
+                    contact_id,
                     cluster_id,
                     session_id,
                     observation.speaker_id,
