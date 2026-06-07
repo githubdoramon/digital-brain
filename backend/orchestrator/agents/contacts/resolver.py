@@ -103,6 +103,20 @@ _FIRST_PERSON_PARTICIPANT_PATTERN = re.compile(
     re.IGNORECASE,
 )
 _SELF_REFERENTIAL_PERSON_PATTERN = re.compile(r"^(?:i|me|myself|we|us|ourselves)$", re.IGNORECASE)
+_EXPLICIT_NEW_CONTACT_MARKERS = (
+    "new contact",
+    "new contacts",
+    "new person",
+    "new people",
+    "not in the database",
+    "not in database",
+    "not in memory"
+    "wont find in the database",
+    "won't find in the database",
+    "doesnt exist",
+    "doesn't exist",
+    "none of these",
+)
 _LEADING_TEMPORAL_FIRST_PERSON_PATTERN = re.compile(
     r"^(?:today|yesterday|tomorrow|tonight|this\s+(?:morning|afternoon|evening)|last\s+night)\s+i\b",
     re.IGNORECASE,
@@ -1021,6 +1035,46 @@ def _format_disambiguation_history_for_prompt(
         return ""
 
     return "Disambiguation history (chronological, oldest first):\n" + "\n".join(lines) + "\n\n"
+
+
+def _extract_explicit_new_contact_names(
+    *,
+    text: str,
+    people: list[str],
+    conversation_messages: list[dict[str, str]] | None = None,
+) -> set[str]:
+    """Return normalized people mentions the user explicitly labelled as new contacts."""
+    normalized_people = {
+        normalize_search_text(person): person
+        for person in people
+        if normalize_search_text(person)
+        and not _SELF_REFERENTIAL_PERSON_PATTERN.match(str(person).strip())
+    }
+    if not normalized_people:
+        return set()
+
+    fragments = [text or ""]
+    fragments.extend(
+        str(entry.get("content") or "")
+        for entry in (conversation_messages or [])
+        if str(entry.get("role") or "").strip().lower() == "user"
+    )
+    combined = "\n".join(fragment for fragment in fragments if fragment)
+    if not combined:
+        return set()
+
+    forced_new: set[str] = set()
+    for segment in re.split(r"[\n.!?;]+", combined):
+        normalized_segment = normalize_search_text(segment)
+        if not normalized_segment:
+            continue
+        if not any(marker in normalized_segment for marker in _EXPLICIT_NEW_CONTACT_MARKERS):
+            continue
+        for normalized_person in normalized_people:
+            if normalized_person and normalized_person in normalized_segment:
+                forced_new.add(normalized_person)
+
+    return forced_new
 
 
 def _normalize_entity_for_match(value: str) -> str:
@@ -2299,8 +2353,40 @@ def _resolve_people_mentions(
     # Cache to avoid re-resolving the same person text multiple times
     # This is especially useful for nested relationships like "my daughter" and "my daughter's doctor"
     resolution_cache: dict[str, dict[str, Any]] = {}
+    explicit_new_contact_names = _extract_explicit_new_contact_names(
+        text=full_text,
+        people=people,
+        conversation_messages=conversation_messages,
+    )
 
     for person_text in people:
+        normalized_person_text = normalize_search_text(person_text)
+        if normalized_person_text in explicit_new_contact_names:
+            new_contact = {
+                "original_text": person_text,
+                "display_name": person_text,
+            }
+            new_contacts.append(new_contact)
+            resolution_cache[person_text] = {
+                "status": "new",
+                "contact_id": None,
+                "display_name": person_text,
+                "matched_via": "explicit_new_contact",
+                "confidence": "high",
+                "resolution_path": None,
+            }
+            trace.trace_contact_resolution_outcome(
+                "explicit_new_contact",
+                {
+                    "person_text": person_text,
+                },
+            )
+            logger.info(
+                "[contact_resolver] '%s' explicitly marked as new contact",
+                person_text,
+            )
+            continue
+
         # Check cache first
         if person_text in resolution_cache:
             logger.debug("[contact_resolver] Using cached resolution for: '%s'", person_text)

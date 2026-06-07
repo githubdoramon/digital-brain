@@ -128,6 +128,7 @@ The LLM router prompt instructs the model to set `pre_resolve_contacts=true` onl
 - Pre-resolution and agent `resolve_contacts` tool calls run the resolver in `minimal` mode.
 - `minimal` mode stops after mention extraction, deterministic selector resolution, direct contact resolution, and ambiguity detection; it skips profession inference and relationship-suggestion enrichment.
 - The resolver now attempts a deterministic short-circuit before LLM extraction for straightforward cases like exact names, `my <relationship>` phrases, and deterministic group selectors.
+- Explicit user statements that a named person is a new contact or absent from the database are treated as hard signals before fuzzy matching, so weak single-candidate matches cannot replace the new contact.
 - Contact-resolution prompt context is tiered: hard user rules are loaded first, while soft user facts are deferred to ambiguity/disambiguation prompts.
 
 ## Clarification Behavior

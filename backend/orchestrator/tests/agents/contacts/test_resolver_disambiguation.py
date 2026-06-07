@@ -386,6 +386,23 @@ def test_resolve_people_marks_new_contact_from_llm_flag(monkeypatch):
     assert new == [{"original_text": "Julia", "display_name": "Julia"}]
 
 
+def test_resolve_people_honors_explicit_new_contact_before_fuzzy_match(monkeypatch):
+    def fail_resolve_contact(*_args, **_kwargs):
+        raise AssertionError("explicit new contact should bypass fuzzy resolution")
+
+    monkeypatch.setattr(resolver, "resolve_contact", fail_resolve_contact)
+
+    resolved, new, ambiguous, _cache = resolver._resolve_people_mentions(
+        people=["Taylor Reed"],
+        user_email="user@example.com",
+        full_text="Met Taylor Reed at the neighborhood party. Taylor Reed is a new contact.",
+    )
+
+    assert resolved == []
+    assert ambiguous == []
+    assert new == [{"original_text": "Taylor Reed", "display_name": "Taylor Reed"}]
+
+
 def test_resolve_contacts_keeps_current_text_even_with_history(monkeypatch):
     captured = {}
 
