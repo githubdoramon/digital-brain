@@ -464,7 +464,6 @@ def ingest_meeting_transcript(
         startDate=start_date,
         endDate=end_date,
         people=unique_contacts,
-        tags=["transcript"],
         types=["meeting"],
         title=title,
         summary=summary,
