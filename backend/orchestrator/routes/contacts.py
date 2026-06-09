@@ -15,6 +15,7 @@ from observability.logger import get_runtime_logger
 from schemas import (
     ContactCommandConfirmation,
     ContactCommandResult,
+    ContactEnsureIn,
     ContactGroupIn,
     ContactGroupOut,
     ContactIn,
@@ -159,9 +160,18 @@ def create_contacts_router(
 
     @router.post("/ingest/contact")
     @router.post("/mobile/ingest/contact")
-    def ingest_contact(c: ContactIn, user: dict = Depends(get_current_user)):
-        contacts_service.ingest_contact(c)
-        return {"ok": True}
+    def ingest_contact(c: ContactIn | ContactEnsureIn, user: dict = Depends(get_current_user)):
+        if isinstance(c, ContactIn):
+            contacts_service.ingest_contact(c)
+            return {"ok": True, "contact_id": c.contact_id, "created": False}
+
+        contact_id, created = contacts_service.ensure_contact_for_email(
+            c.email,
+            display_name=c.display_name,
+        )
+        if not contact_id:
+            raise HTTPException(status_code=400, detail="Valid contact email is required")
+        return {"ok": True, "contact_id": contact_id, "created": created}
 
     @router.get("/contacts")
     @router.get("/mobile/contacts")

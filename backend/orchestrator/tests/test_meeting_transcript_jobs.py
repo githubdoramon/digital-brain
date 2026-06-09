@@ -75,6 +75,7 @@ def test_process_due_once_retries_failed_job(monkeypatch):
             },
         },
     )
+    monkeypatch.setattr(meeting_transcript_jobs, "_find_existing_transcript_event", lambda payload: None)
 
     def fail_ingest(*_args, **_kwargs):
         raise RuntimeError("temporary LLM outage")
@@ -108,6 +109,7 @@ def test_process_due_once_marks_success(monkeypatch):
             },
         },
     )
+    monkeypatch.setattr(meeting_transcript_jobs, "_find_existing_transcript_event", lambda payload: None)
     monkeypatch.setattr(
         meeting_transcript_jobs.events_service,
         "ingest_meeting_transcript",
@@ -123,6 +125,89 @@ def test_process_due_once_marks_success(monkeypatch):
     assert marked[0][0] == ("async_job:test",)
     assert marked[0][1]["revision"] == 4
     assert marked[0][1]["result"] == {"event_id": "event:test"}
+
+
+def test_process_due_once_skips_unchanged_transcript_hash(monkeypatch):
+    marked = []
+    ingest_calls = []
+
+    monkeypatch.setattr(
+        meeting_transcript_jobs.async_jobs,
+        "claim_due_job",
+        lambda job_type: {
+            "job_id": "async_job:test",
+            "revision": 5,
+            "payload": {
+                "transcript": _payload().model_dump(by_alias=True, mode="json"),
+                "current_user": {"email": "user@example.test"},
+            },
+        },
+    )
+    monkeypatch.setattr(
+        meeting_transcript_jobs,
+        "_find_existing_transcript_event",
+        lambda payload: {"id": "event:test", "raw": {"transcript_hash": "hash-1"}},
+    )
+    monkeypatch.setattr(
+        meeting_transcript_jobs.events_service,
+        "ingest_meeting_transcript",
+        lambda *_args, **_kwargs: ingest_calls.append(True),
+    )
+    monkeypatch.setattr(
+        meeting_transcript_jobs.async_jobs,
+        "mark_succeeded",
+        lambda *args, **kwargs: marked.append((args, kwargs)),
+    )
+
+    assert meeting_transcript_jobs.process_due_once() is True
+    assert ingest_calls == []
+    assert marked[0][0] == ("async_job:test",)
+    assert marked[0][1]["revision"] == 5
+    assert marked[0][1]["status_message"] == "Skipped unchanged transcript"
+    assert marked[0][1]["result"] == {
+        "event_id": "event:test",
+        "skipped": True,
+        "reason": "unchanged_transcript_hash",
+        "transcript_hash": "hash-1",
+    }
+
+
+def test_process_due_once_regenerates_when_transcript_hash_differs(monkeypatch):
+    marked = []
+
+    monkeypatch.setattr(
+        meeting_transcript_jobs.async_jobs,
+        "claim_due_job",
+        lambda job_type: {
+            "job_id": "async_job:test",
+            "revision": 6,
+            "payload": {
+                "transcript": _payload().model_dump(by_alias=True, mode="json"),
+                "current_user": {"email": "user@example.test"},
+            },
+        },
+    )
+    monkeypatch.setattr(
+        meeting_transcript_jobs,
+        "_find_existing_transcript_event",
+        lambda payload: {"id": "event:test", "raw": {"transcript_hash": "old-hash"}},
+    )
+    monkeypatch.setattr(
+        meeting_transcript_jobs.events_service,
+        "ingest_meeting_transcript",
+        lambda *_args, **_kwargs: {"event_id": "event:test", "summary": "Updated"},
+    )
+    monkeypatch.setattr(
+        meeting_transcript_jobs.async_jobs,
+        "mark_succeeded",
+        lambda *args, **kwargs: marked.append((args, kwargs)),
+    )
+
+    assert meeting_transcript_jobs.process_due_once() is True
+    assert marked[0][0] == ("async_job:test",)
+    assert marked[0][1]["revision"] == 6
+    assert marked[0][1]["status_message"] == "Completed"
+    assert marked[0][1]["result"] == {"event_id": "event:test", "summary": "Updated"}
 
 
 def test_transcript_route_acknowledges_queue(monkeypatch):

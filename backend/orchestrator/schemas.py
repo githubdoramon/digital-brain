@@ -20,6 +20,11 @@ class ContactIn(BaseModel):
     relationships: list[ContactRelationshipIn] | None = []
 
 
+class ContactEnsureIn(BaseModel):
+    email: str
+    display_name: str | None = None
+
+
 class PlaceIn(BaseModel):
     place_id: str
     name: str | None = None

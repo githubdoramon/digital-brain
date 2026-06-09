@@ -114,6 +114,24 @@ def process_due_once(
     payload = dict(job.get("payload") or {})
     try:
         transcript = MeetingTranscriptPayload.model_validate(payload.get("transcript") or {})
+        skipped_result = _unchanged_transcript_result(transcript)
+        if skipped_result is not None:
+            async_jobs.mark_succeeded(
+                job_id,
+                result=skipped_result,
+                status_message="Skipped unchanged transcript",
+                revision=revision,
+            )
+            logger.info(
+                "[meeting_transcript_jobs] skipped unchanged transcript job_id=%s revision=%s "
+                "event_id=%s transcript_hash=%s",
+                job_id,
+                revision,
+                skipped_result.get("event_id"),
+                transcript.transcript_hash,
+            )
+            return True
+
         result = events_service.ingest_meeting_transcript(
             transcript,
             current_user=dict(payload.get("current_user") or {}),
@@ -161,3 +179,40 @@ def _worker_loop() -> None:
             time.sleep(0)
         else:
             _STOP_EVENT.wait(POLL_SECONDS)
+
+
+def _unchanged_transcript_result(payload: MeetingTranscriptPayload) -> dict[str, Any] | None:
+    incoming_hash = str(payload.transcript_hash or "").strip()
+    if not incoming_hash:
+        return None
+
+    event = _find_existing_transcript_event(payload)
+    if not event:
+        return None
+
+    raw = event.get("raw") if isinstance(event, dict) else None
+    if not isinstance(raw, dict):
+        return None
+
+    stored_hash = str(raw.get("transcript_hash") or "").strip()
+    if not stored_hash or stored_hash != incoming_hash:
+        return None
+
+    return {
+        "event_id": event.get("id"),
+        "skipped": True,
+        "reason": "unchanged_transcript_hash",
+        "transcript_hash": incoming_hash,
+    }
+
+
+def _find_existing_transcript_event(payload: MeetingTranscriptPayload) -> dict[str, Any] | None:
+    title = (payload.meeting.title or "").strip() or "Untitled meeting"
+    external_identifier = events_service._get_transcript_external_identifier(payload)
+    event_id = events_service._resolve_meeting_transcript_event_id(
+        title=title,
+        start_date=payload.meeting.started_at,
+        external_identifier=external_identifier,
+        session_id=payload.session_id,
+    )
+    return events_service._get_event_by_id(event_id)

@@ -46,7 +46,7 @@ All endpoints require `Authorization: Bearer <google-id-token>` header.
 - `POST /ingest/place` - Ingest place
 
 ### Meetings
-- `POST /ingest/meetings/transcript` - Queue a meeting transcript payload using bearer-token auth; acknowledges receipt immediately, debounces/replaces newer payloads for the same meeting for 30 seconds, then asynchronously updates the matching meeting, stores an LLM-generated discussion summary plus structured action items, exposes those action items on event detail reads, and creates todos for action items assigned to the current user
+- `POST /ingest/meetings/transcript` - Queue a meeting transcript payload using bearer-token auth; acknowledges receipt immediately, debounces/replaces newer payloads for the same meeting for 30 seconds, skips regeneration when the transcript hash is unchanged, then asynchronously updates the matching meeting, stores an LLM-generated discussion summary plus structured action items, exposes those action items on event detail reads, and creates todos for action items assigned to the current user
 - `POST /ingest/meetings` - Upsert external meetings (e.g., Google Calendar) using the expanded `EventIn` payload plus `externalType`/`externalId`
 - `POST /ingest/meetings/update` - Apply updates for an external meeting using the same payload as above
 
