@@ -1103,10 +1103,10 @@ Event description: "{message}"\n
 
 Extract the following information:
 1. **What happened**: A brief title (5-10 words) and detailed summary
-2. **When**: Parse event start date/time. Time is optional. Return ISO date (YYYY-MM-DD) when only date is known, or ISO datetime when time is known.
-   - If the user says the event just happened (for example: "I just had lunch", "just now", "10 minutes ago"), infer an immediate past datetime instead of asking for clarification.
+2. **When**: Parse event start date and time. Time is optional. Return ISO date (YYYY-MM-DD) when only date is known, or ISO datetime when time is known.
+   - If the user says the event just happened (for example: "I just had lunch", "just now", "10 minutes ago"), infer an immediate past datetime instead of asking for clarification. But if the sentence doesn't imply it is happening now, ask for clarification.
 3. **End**: Parse optional end date/time if present. Return null if not mentioned.
-4. **Where**: Location/place name (if mentioned)
+4. **Where**: Location/place name (if mentioned) - only one. Be aware that more than once place might be mentioned, and you should only extract the one where the event took place (For example, "I will start running from the Bakery to my house now", the event is taking place at the Bakery, the starting point, the "from").
 5. **Documents**: References to documents/files (if mentioned)
 6. **Tags**: Relevant tags for categorization. Consider major categories like: {tag_examples}, etc.
 7. **Event types**: Choose from: generic, meeting, communication, task, creation, consumption, travel, personal, system, financial, observation, interaction, education, celebration, purchase, health
