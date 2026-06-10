@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import os
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from typing import Any, Literal
 
 from agent.router import IntentRouter
@@ -74,6 +74,29 @@ def _normalized_text_set(values: list[str] | None) -> set[str]:
 def _normalize_optional_text(value: Any) -> str | None:
     text = normalize_search_text(str(value or ""))
     return text or None
+
+
+def _normalize_eval_datetime(value: Any) -> str | None:
+    raw_value = str(value or "").strip()
+    if not raw_value:
+        return None
+    normalized_value = raw_value.replace("Z", "+00:00")
+    try:
+        parsed = datetime.fromisoformat(normalized_value)
+    except ValueError:
+        try:
+            parsed_date = date.fromisoformat(normalized_value)
+        except ValueError:
+            return raw_value
+        return parsed_date.isoformat()
+
+    if parsed.tzinfo is not None:
+        parsed = parsed.astimezone(timezone.utc).replace(tzinfo=None)
+    return parsed.isoformat(timespec="seconds")
+
+
+def _eval_datetimes_match(expected: Any, actual: Any) -> bool:
+    return _normalize_eval_datetime(expected) == _normalize_eval_datetime(actual)
 
 
 def _normalize_relationship_value(value: Any) -> str:
@@ -282,12 +305,15 @@ def _score_event_extraction_case(case: EvalCase, output: dict[str, Any]) -> dict
     passed = True
 
     expected_when = case.expected.get("when")
-    if expected_when is not None and str(output.get("when") or "") != str(expected_when):
+    if expected_when is not None and not _eval_datetimes_match(expected_when, output.get("when")):
         passed = False
         notes.append(f"Expected when '{expected_when}' but got '{output.get('when')}'")
 
     expected_end_when = case.expected.get("end_when")
-    if expected_end_when is not None and str(output.get("end_when") or "") != str(expected_end_when):
+    if expected_end_when is not None and not _eval_datetimes_match(
+        expected_end_when,
+        output.get("end_when"),
+    ):
         passed = False
         notes.append(
             f"Expected end_when '{expected_end_when}' but got '{output.get('end_when')}'"

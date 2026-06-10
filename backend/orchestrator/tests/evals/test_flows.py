@@ -99,3 +99,53 @@ def test_score_contact_resolution_case_rejects_absent_mentions_present():
 
     assert score["passed"] is False
     assert "Unexpected mentions present: i" in score["notes"]
+
+
+def test_score_event_extraction_accepts_utc_timezone_suffix_for_expected_naive_datetime():
+    case = EvalCase(
+        case_id="event-datetime",
+        title="Event datetime",
+        input={},
+        expected={"when": "2026-06-02T09:00:00", "end_when": "2026-06-02T10:00:00"},
+    )
+
+    score = flows._score_event_extraction_case(
+        case,
+        {
+            "when": "2026-06-02T09:00:00+00:00",
+            "end_when": "2026-06-02T10:00:00Z",
+        },
+    )
+
+    assert score["passed"] is True
+    assert score["notes"] == []
+
+
+def test_score_event_extraction_still_rejects_different_datetime():
+    case = EvalCase(
+        case_id="event-datetime-different",
+        title="Event datetime different",
+        input={},
+        expected={"when": "2026-06-02T09:00:00"},
+    )
+
+    score = flows._score_event_extraction_case(
+        case,
+        {"when": "2026-06-02T10:00:00+00:00"},
+    )
+
+    assert score["passed"] is False
+    assert "Expected when '2026-06-02T09:00:00'" in score["notes"][0]
+
+
+def test_score_event_extraction_accepts_matching_date_only_values():
+    case = EvalCase(
+        case_id="event-date",
+        title="Event date",
+        input={},
+        expected={"when": "2026-06-02"},
+    )
+
+    score = flows._score_event_extraction_case(case, {"when": "2026-06-02"})
+
+    assert score["passed"] is True

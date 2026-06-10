@@ -11,6 +11,7 @@ type EvalFlowsResponse = {
 
 const DEFAULT_MODELS = [
   "gemma4:26b",
+  "gemma4:12b",
   "qwen3.5:27b",
   "qwen3.5:0.8b",
   "gemma4:e2b",
