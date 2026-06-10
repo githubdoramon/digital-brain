@@ -666,6 +666,26 @@ def test_fast_extract_people_captures_direct_object_and_not_literal_i():
     assert people == ["user", "Rita"]
 
 
+def test_fast_extract_people_collapses_relationship_appositive_name():
+    people, selectors, applied = resolver._fast_extract_people_from_text(
+        "I had lunch with my wife Dana Lewis after the school meeting"
+    )
+
+    assert applied is True
+    assert selectors == []
+    assert people == ["user", "Dana Lewis"]
+
+
+def test_fast_extract_people_keeps_relationship_and_separate_name():
+    people, selectors, applied = resolver._fast_extract_people_from_text(
+        "I had lunch with my wife and Dana Lewis after the school meeting"
+    )
+
+    assert applied is True
+    assert selectors == []
+    assert people == ["user", "my wife", "Dana Lewis"]
+
+
 def test_participant_filter_can_clear_people_list(monkeypatch):
     monkeypatch.setattr(
         resolver,

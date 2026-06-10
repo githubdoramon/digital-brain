@@ -488,7 +488,7 @@ class IntentRouter:
         context = ""
         if conversation_history:
             recent = conversation_history[-3:]  # Last 3 messages for context
-            context = "\n".join(f"{msg['role']}: {msg['content'][:200]}" for msg in recent)
+            context = "\n".join(f"{msg['role']}: {msg['content'][:400]}" for msg in recent)
             context = f"\nRECENT CONTEXT:\n{context}\n"
 
         return f"""Classify the user's intent based on their question and context.
@@ -496,9 +496,9 @@ class IntentRouter:
 QUESTION: {question}
 {context}
 INTENT TYPES:
-- memory_search: Qualitative recall over the personal memory graph: events, contacts, documents (personal or related to contacts), places, todos, notes, and the links/connections between them. Pick this when the user wants content that could already exist in their stored graph.
-- data_query: Quantitative questions over the memory graph — counts, distinct counts, time-bucketed breakdowns ("how many meetings last month", "how many people did I meet this week", "events grouped by type"). Pick this whenever the answer is a number or ranked breakdown rather than a description.
-- contact_lookup: Finding people, relationships, and professions and their information, like phone, email, description, and more.
+- memory_search: Qualitative recall over the personal memory graph: events, documents (personal or related to contacts), places, todos, notes, and the links/connections between them. Pick this when the user wants content that could already exist in their stored graph.
+- data_query: Quantitative questions over the memory graph — counts, distinct counts, time-bucketed breakdowns ("how many meetings last month", "how many people did I meet this week", "events grouped by type", "list me all contacts with email @example.com"). Pick this whenever the answer is a number or ranked breakdown rather than a description.
+- contact_lookup: Finding people, how they relate to each other, their relationships, professionss and contact's information, like phone, email, description, and more. Pick this when the question is about people's information.
 - web_search: External information from the internet that is NOT expected to live in the user's personal memory graph. Do NOT pick this for personal or contact related documents or information. This is a personal graph, so questions are usually related to it (but not always).
 - home_control: Smart home/Home Assistant actions and management
 - skill_execution: Running skill scripts

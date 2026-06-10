@@ -66,6 +66,21 @@ async def _emit_progress(
         await result
 
 
+def _latency_exclusion_reason(output: dict[str, Any]) -> str | None:
+    route_source = str(output.get("route_source") or "").strip().lower()
+    if route_source and route_source != "llm":
+        return f"router_{route_source}"
+
+    extraction_metadata = output.get("extraction_metadata")
+    if isinstance(extraction_metadata, dict):
+        llm_extraction_ran = bool(extraction_metadata.get("llm_extraction_ran"))
+        source = str(extraction_metadata.get("source") or "deterministic").strip().lower()
+        if not llm_extraction_ran:
+            return f"contact_resolution_{source or 'deterministic'}"
+
+    return None
+
+
 async def run_eval_flow(
     *,
     flow_id: str,
@@ -120,15 +135,19 @@ async def run_eval_flow(
     case_results: list[dict[str, Any]] = []
     total_attempts = 0
     passed_attempts = 0
-    durations: list[float] = []
+    latency_durations: list[float] = []
     measured_attempts = 0
     discarded_attempts = 0
+    latency_excluded_attempts = 0
+    shortcut_attempts = 0
 
     with use_llm_keep_alive(EVAL_LLM_KEEP_ALIVE if llm_model else None):
         for case in flow.cases:
             attempts: list[dict[str, Any]] = []
-            case_durations: list[float] = []
+            case_latency_durations: list[float] = []
             case_passed_attempts = 0
+            case_latency_excluded_attempts = 0
+            case_shortcut_attempts = 0
             summary_variants: set[str] = set()
 
             for attempt_index in range(1, normalized_repetitions + 1):
@@ -152,6 +171,8 @@ async def run_eval_flow(
                 score = flow.score_case(case, output)
                 summary = flow.summarize_output(output)
                 discarded = bool(effective_discard_first_attempt and attempt_index == 1)
+                latency_exclusion_reason = None if discarded else _latency_exclusion_reason(output)
+                latency_excluded = bool(latency_exclusion_reason)
                 if not discarded:
                     summary_variants.add(json.dumps(summary, sort_keys=True, default=str))
 
@@ -163,6 +184,8 @@ async def run_eval_flow(
                     "summary": summary,
                     "output": output,
                     "discarded": discarded,
+                    "latency_excluded": latency_excluded,
+                    "latency_exclusion_reason": latency_exclusion_reason,
                 }
                 attempts.append(attempt)
                 total_attempts += 1
@@ -171,13 +194,22 @@ async def run_eval_flow(
                     continue
 
                 measured_attempts += 1
-                case_durations.append(duration_ms)
-                durations.append(duration_ms)
+                if latency_excluded:
+                    latency_excluded_attempts += 1
+                    case_latency_excluded_attempts += 1
+                    shortcut_attempts += 1
+                    case_shortcut_attempts += 1
+                else:
+                    case_latency_durations.append(duration_ms)
+                    latency_durations.append(duration_ms)
                 if attempt["passed"]:
                     case_passed_attempts += 1
                     passed_attempts += 1
 
-            measured_case_attempts = len(case_durations)
+            measured_case_attempts = normalized_repetitions - sum(
+                1 for attempt in attempts if attempt["discarded"]
+            )
+            latency_case_attempts = len(case_latency_durations)
             case_results.append(
                 {
                     "case_id": case.case_id,
@@ -190,11 +222,16 @@ async def run_eval_flow(
                         "attempts": measured_case_attempts,
                         "total_attempts": normalized_repetitions,
                         "discarded_attempts": normalized_repetitions - measured_case_attempts,
+                        "latency_attempts": latency_case_attempts,
+                        "latency_excluded_attempts": case_latency_excluded_attempts,
+                        "shortcut_attempts": case_shortcut_attempts,
                         "passed_attempts": case_passed_attempts,
                         "pass_rate": (case_passed_attempts / measured_case_attempts)
                         if measured_case_attempts
                         else 0.0,
-                        "avg_duration_ms": mean(case_durations) if case_durations else 0.0,
+                        "avg_duration_ms": mean(case_latency_durations)
+                        if case_latency_durations
+                        else 0.0,
                         "variant_count": len(summary_variants),
                     },
                     "attempts": attempts,
@@ -238,9 +275,12 @@ async def run_eval_flow(
             "total_attempts": total_attempts,
             "measured_attempts": measured_attempts,
             "discarded_attempts": discarded_attempts,
+            "latency_attempts": len(latency_durations),
+            "latency_excluded_attempts": latency_excluded_attempts,
+            "shortcut_attempts": shortcut_attempts,
             "passed_attempts": passed_attempts,
             "pass_rate": (passed_attempts / measured_attempts) if measured_attempts else 0.0,
-            "avg_duration_ms": mean(durations) if durations else 0.0,
+            "avg_duration_ms": mean(latency_durations) if latency_durations else 0.0,
             "total_duration_ms": total_duration_ms,
         },
         "cases": case_results,

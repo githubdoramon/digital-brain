@@ -157,6 +157,85 @@ async def test_run_eval_flow_can_keep_first_attempt_when_requested(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_run_eval_flow_excludes_shortcuts_from_latency(monkeypatch):
+    async def execute_case(case, run_config: EvalRunConfig):
+        return {"route_source": "rule", "intent": "memory_search"}
+
+    fake_flow = EvalFlowDefinition(
+        flow_id="fake-shortcut",
+        label="Fake Shortcut",
+        description="Fake shortcut flow for tests",
+        cases=[EvalCase(case_id="case-1", title="Case 1", input={}, expected={})],
+        execute_case=execute_case,
+        score_case=lambda case, output: {"passed": True, "notes": []},
+        summarize_output=lambda output: {"intent": output["intent"]},
+    )
+
+    monkeypatch.setitem(registry._FLOW_MAP, "fake-shortcut", fake_flow)
+    monkeypatch.setattr(registry, "warm_chat_model", lambda _model, timeout=None, keep_alive=None: True)
+
+    result = await registry.run_eval_flow(
+        flow_id="fake-shortcut",
+        llm_model="test-model",
+        repetitions=1,
+        user_email="user@example.com",
+        discard_first_attempt=False,
+    )
+
+    assert result["summary"]["measured_attempts"] == 1
+    assert result["summary"]["passed_attempts"] == 1
+    assert result["summary"]["latency_attempts"] == 0
+    assert result["summary"]["latency_excluded_attempts"] == 1
+    assert result["summary"]["shortcut_attempts"] == 1
+    assert result["summary"]["avg_duration_ms"] == 0.0
+    assert result["cases"][0]["metrics"]["latency_excluded_attempts"] == 1
+    assert result["cases"][0]["attempts"][0]["latency_excluded"] is True
+    assert result["cases"][0]["attempts"][0]["latency_exclusion_reason"] == "router_rule"
+
+
+@pytest.mark.asyncio
+async def test_run_eval_flow_excludes_contact_fast_path_from_latency(monkeypatch):
+    async def execute_case(case, run_config: EvalRunConfig):
+        return {
+            "status": "success",
+            "people_mentioned": ["Dana Lewis"],
+            "extraction_metadata": {
+                "fast_path_applied": True,
+                "llm_extraction_ran": False,
+                "source": "fast_path",
+            },
+        }
+
+    fake_flow = EvalFlowDefinition(
+        flow_id="fake-contact-shortcut",
+        label="Fake Contact Shortcut",
+        description="Fake contact shortcut flow for tests",
+        cases=[EvalCase(case_id="case-1", title="Case 1", input={}, expected={})],
+        execute_case=execute_case,
+        score_case=lambda case, output: {"passed": True, "notes": []},
+        summarize_output=lambda output: {"people_mentioned": output["people_mentioned"]},
+    )
+
+    monkeypatch.setitem(registry._FLOW_MAP, "fake-contact-shortcut", fake_flow)
+    monkeypatch.setattr(registry, "warm_chat_model", lambda _model, timeout=None, keep_alive=None: True)
+
+    result = await registry.run_eval_flow(
+        flow_id="fake-contact-shortcut",
+        llm_model="test-model",
+        repetitions=1,
+        user_email="user@example.com",
+        discard_first_attempt=False,
+    )
+
+    assert result["summary"]["latency_attempts"] == 0
+    assert result["summary"]["latency_excluded_attempts"] == 1
+    assert (
+        result["cases"][0]["attempts"][0]["latency_exclusion_reason"]
+        == "contact_resolution_fast_path"
+    )
+
+
+@pytest.mark.asyncio
 async def test_run_eval_flow_includes_request_options_and_case_schemas(monkeypatch):
     async def execute_case(case, run_config: EvalRunConfig):
         return {

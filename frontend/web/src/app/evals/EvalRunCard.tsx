@@ -15,7 +15,15 @@ function formatDuration(value: number): string {
   return `${Math.round(value)} ms`;
 }
 
+function formatLatencyReason(value?: string | null): string {
+  if (!value) return "non-LLM shortcut";
+  return value.replace(/_/g, " ");
+}
+
 export function EvalRunCard({ run, runKey }: EvalRunCardProps) {
+  const latencyAttempts = run.summary.latency_attempts ?? run.summary.measured_attempts;
+  const latencyExcludedAttempts = run.summary.latency_excluded_attempts ?? 0;
+
   return (
     <article
       style={{
@@ -44,8 +52,13 @@ export function EvalRunCard({ run, runKey }: EvalRunCardProps) {
             {run.summary.passed_attempts}/{run.summary.measured_attempts} passing measured attempts across {run.repetitions} repetitions
           </div>
           <div style={{ color: "#526070", fontSize: "0.9rem" }}>
-            Avg {formatDuration(run.summary.avg_duration_ms)} - Total {formatDuration(run.summary.total_duration_ms)}
+            Model-path avg {formatDuration(run.summary.avg_duration_ms)} across {latencyAttempts} attempts - Total {formatDuration(run.summary.total_duration_ms)}
           </div>
+          {latencyExcludedAttempts > 0 ? (
+            <div style={{ color: "#7c3aed", fontSize: "0.9rem" }}>
+              Excluded {latencyExcludedAttempts} shortcut attempts from latency averages
+            </div>
+          ) : null}
           {typeof run.timeout_seconds === "number" ? (
             <div style={{ color: "#526070", fontSize: "0.9rem" }}>
               Eval timeout {run.timeout_seconds}s per LLM call
@@ -99,8 +112,14 @@ export function EvalRunCard({ run, runKey }: EvalRunCardProps) {
                 </div>
                 <div style={{ display: "flex", gap: 14, flexWrap: "wrap", color: "#526070", fontSize: "0.9rem" }}>
                   <span>{formatPercent(caseResult.metrics.pass_rate)} pass</span>
-                  <span>{formatDuration(caseResult.metrics.avg_duration_ms)} avg</span>
+                  <span>
+                    {formatDuration(caseResult.metrics.avg_duration_ms)} model avg
+                    {typeof caseResult.metrics.latency_attempts === "number" ? ` (${caseResult.metrics.latency_attempts})` : ""}
+                  </span>
                   <span>{caseResult.metrics.discarded_attempts} discarded</span>
+                  {(caseResult.metrics.latency_excluded_attempts ?? 0) > 0 ? (
+                    <span>{caseResult.metrics.latency_excluded_attempts} shortcut</span>
+                  ) : null}
                   <span>{caseResult.metrics.variant_count} variants</span>
                 </div>
               </div>
@@ -155,6 +174,11 @@ export function EvalRunCard({ run, runKey }: EvalRunCardProps) {
                     {attempt.discarded ? (
                       <div style={{ color: "#7c3aed", fontSize: "0.85rem", marginBottom: 8 }}>
                         Excluded from pass rate and latency averages to reduce first-load bias.
+                      </div>
+                    ) : null}
+                    {!attempt.discarded && attempt.latency_excluded ? (
+                      <div style={{ color: "#7c3aed", fontSize: "0.85rem", marginBottom: 8 }}>
+                        Excluded from latency averages: {formatLatencyReason(attempt.latency_exclusion_reason)}.
                       </div>
                     ) : null}
                     {attempt.notes.length > 0 ? (

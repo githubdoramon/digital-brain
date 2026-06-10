@@ -557,7 +557,7 @@ EVAL_FLOWS: list[EvalFlowDefinition] = [
             EvalCase(
                 case_id="router-data-query-roster",
                 title="Data query roster without list all shortcut",
-                input={"question": "Give me the roster of meetings I had last month."},
+                input={"question": "How many meetings I had last month?"},
                 expected={"intent": "data_query", "pre_resolve_contacts": False},
                 response_json_schema=ROUTER_RESPONSE_SCHEMA,
             ),

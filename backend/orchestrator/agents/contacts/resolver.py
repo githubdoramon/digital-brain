@@ -131,8 +131,17 @@ _SHORT_CIRCUIT_RELATIONSHIP_PATTERN = re.compile(
     re.IGNORECASE,
 )
 _SHORT_CIRCUIT_NAME_TOKEN = r"[A-ZÀ-ÖØ-Þ][A-Za-zÀ-ÖØ-öø-ÿ'-]*"
+_SHORT_CIRCUIT_FULL_NAME = (
+    rf"(?:Dr\.|Mr\.|Mrs\.|Ms\.|Prof\.)?\s*{_SHORT_CIRCUIT_NAME_TOKEN}"
+    rf"(?:\s+{_SHORT_CIRCUIT_NAME_TOKEN}){{1,2}}"
+)
 _SHORT_CIRCUIT_NAME_PATTERN = re.compile(
     rf"\b(?:Dr\.|Mr\.|Mrs\.|Ms\.|Prof\.)?\s*{_SHORT_CIRCUIT_NAME_TOKEN}(?:\s+{_SHORT_CIRCUIT_NAME_TOKEN}){{0,2}}\b"
+)
+_RELATIONSHIP_APPOSITIVE_NAME_PATTERN = re.compile(
+    r"\b(?P<relationship>(?i:(?:my|our)\s+(?:best\s+)?(?:"
+    + "|".join(_SHORT_CIRCUIT_RELATIONSHIP_TERMS)
+    + rf")))\s+(?P<name>{_SHORT_CIRCUIT_FULL_NAME})\b",
 )
 _BLOCKED_RELATIONSHIP_TERMS = {
     "attendee",
@@ -574,6 +583,24 @@ def _extract_shared_possessive_relationship_mentions(text: str) -> list[str]:
     return mentions
 
 
+def _extract_relationship_appositive_names(text: str) -> tuple[list[str], set[str]]:
+    """Collapse mentions like "my wife Dana Lewis" to the explicit named person."""
+    names: list[str] = []
+    relationship_mentions: set[str] = set()
+    seen_names: set[str] = set()
+    for match in _RELATIONSHIP_APPOSITIVE_NAME_PATTERN.finditer(text):
+        relationship = str(match.group("relationship") or "").strip()
+        name = str(match.group("name") or "").strip()
+        relationship_key = normalize_search_text(relationship)
+        name_key = normalize_search_text(name)
+        if relationship_key:
+            relationship_mentions.add(relationship_key)
+        if name_key and name_key not in seen_names:
+            seen_names.add(name_key)
+            names.append(name)
+    return names, relationship_mentions
+
+
 def _should_scope_bare_family_mentions_to_user(text: str, people: list[str]) -> bool:
     normalized_people = {normalize_search_text(person) for person in people}
     if "user" in normalized_people:
@@ -667,6 +694,17 @@ def _extract_direct_object_people(text: str) -> list[str]:
         if _looks_like_list_person_mention(candidate):
             mentions.append(candidate)
     return mentions
+
+
+def _has_capitalized_name_tokens(candidate: str) -> bool:
+    tokens = [token for token in str(candidate or "").replace(".", " ").split() if token]
+    if not tokens:
+        return False
+    ignored_titles = {"Dr", "Mr", "Mrs", "Ms", "Prof"}
+    name_tokens = [token for token in tokens if token.rstrip(".") not in ignored_titles]
+    if not name_tokens:
+        return False
+    return all(re.match(_SHORT_CIRCUIT_NAME_TOKEN + r"$", token) for token in name_tokens)
 
 
 def _merge_people_mentions(*batches: list[str]) -> list[str]:
@@ -768,6 +806,9 @@ def _fast_extract_people_from_text(
     seen: set[str] = set()
     inferred_user = False
     explicit_people_count = 0
+    appositive_names, appositive_relationship_mentions = _extract_relationship_appositive_names(
+        raw_text
+    )
 
     def _append_person(value: str) -> bool:
         cleaned = str(value or "").strip(" .,!?;:\"'")
@@ -792,7 +833,13 @@ def _fast_extract_people_from_text(
         inferred_user = _append_person("user") or inferred_user
 
     for match in _SHORT_CIRCUIT_RELATIONSHIP_PATTERN.finditer(raw_text):
+        if normalize_search_text(match.group(0)) in appositive_relationship_mentions:
+            continue
         if _append_person(match.group(0)):
+            explicit_people_count += 1
+
+    for candidate in appositive_names:
+        if _append_person(candidate):
             explicit_people_count += 1
 
     for candidate in _extract_shared_possessive_relationship_mentions(raw_text):
@@ -827,6 +874,8 @@ def _fast_extract_people_from_text(
         if candidate_norm in {"i", "we", "who", "when", "where", "what", "why", "how"}:
             continue
         if candidate_norm.startswith(("my ", "our ")):
+            continue
+        if not _has_capitalized_name_tokens(candidate):
             continue
         if _append_person(candidate):
             explicit_people_count += 1
@@ -2152,6 +2201,20 @@ def resolve_contacts_from_text(
                 "selector_kinds": [selector.get("kind") for selector in llm_selector_mentions],
             },
         )
+    extraction_metadata = {
+        "fast_path_applied": fast_path_applied,
+        "llm_extraction_ran": should_run_llm_extraction,
+        "llm_fallback_reasons": fallback_reasons,
+        "source": (
+            "fast_path_with_llm_fallback"
+            if fast_path_applied and should_run_llm_extraction
+            else "fast_path"
+            if fast_path_applied
+            else "llm"
+            if should_run_llm_extraction
+            else "deterministic"
+        ),
+    }
     people = _normalize_bare_family_mentions_for_user(effective_text, people)
     if request_context.get("participant_focus") and people:
         conversation_block = ""
@@ -2223,6 +2286,7 @@ def resolve_contacts_from_text(
             "resolved_contacts": [],
             "new_contacts": [],
             "ambiguous_contacts": [],
+            "extraction_metadata": extraction_metadata,
         }
 
     # Step 2: Resolve each person (DB lookup or mark as new)
@@ -2263,6 +2327,7 @@ def resolve_contacts_from_text(
             "suggested_relationships": [],
             "group_upsert_candidates": group_upsert_candidates,
             "group_confirmation_candidates": group_confirmation_candidates,
+            "extraction_metadata": extraction_metadata,
         }
         if ambiguous_contacts:
             result["status"] = "need_user_input"
@@ -2319,6 +2384,7 @@ def resolve_contacts_from_text(
         "suggested_relationships": suggested_relationships,
         "group_upsert_candidates": group_upsert_candidates,
         "group_confirmation_candidates": group_confirmation_candidates,
+        "extraction_metadata": extraction_metadata,
     }
     if ambiguous_contacts:
         result["status"] = "need_user_input"

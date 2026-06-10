@@ -43,6 +43,9 @@ export type EvalRunResult = {
     total_attempts: number;
     measured_attempts: number;
     discarded_attempts: number;
+    latency_attempts?: number;
+    latency_excluded_attempts?: number;
+    shortcut_attempts?: number;
     passed_attempts: number;
     pass_rate: number;
     avg_duration_ms: number;
@@ -59,6 +62,9 @@ export type EvalRunResult = {
       attempts: number;
       total_attempts: number;
       discarded_attempts: number;
+      latency_attempts?: number;
+      latency_excluded_attempts?: number;
+      shortcut_attempts?: number;
       passed_attempts: number;
       pass_rate: number;
       avg_duration_ms: number;
@@ -69,6 +75,8 @@ export type EvalRunResult = {
       duration_ms: number;
       passed: boolean;
       discarded: boolean;
+      latency_excluded?: boolean;
+      latency_exclusion_reason?: string | null;
       notes: string[];
       summary: Record<string, unknown>;
       output: Record<string, unknown>;
