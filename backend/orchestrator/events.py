@@ -685,7 +685,8 @@ def _generate_meeting_transcript_summary(
     if not transcript_text:
         return _fallback_meeting_transcript_summary(payload, transcript_text)
 
-    from llm_helpers import LLMUnavailableError, call_llm_json
+    from llm_helpers import LLMUnavailableError, build_json_schema_response_format, call_llm_json
+    from llm_json_schemas import MEETING_TRANSCRIPT_SUMMARY_RESPONSE_SCHEMA
 
     current_user_identifiers = _format_identifier_lines(
         people_context.get("current_user_identifiers") or []
@@ -711,19 +712,7 @@ Resolved contacts:
 Transcript:
 {transcript_text[:MAX_TRANSCRIPT_SUMMARY_INPUT_CHARS]}
 
-Return valid JSON only with this shape:
-{{
-  "summary": "compact useful summary text",
-  "action_items": [
-    {{
-      "task": "specific task grounded in the transcript",
-      "assignee_name": "person name, current user, or null",
-      "assignee_email": "email if known, otherwise null",
-      "due_date": "ISO date if explicitly stated, otherwise null",
-      "evidence": "short transcript-grounded reason"
-    }}
-  ]
-}}
+Return valid JSON only, matching the supplied response schema.
 
 Summary rules:
 - Include actual discussion topics, important context, decisions, and follow-ups when present.
@@ -744,14 +733,17 @@ Action item rules:
             prompt,
             system_prompt=(
                 "You write accurate meeting summaries and extract only grounded action items. "
-                "Return strict JSON matching the requested shape. Do not spend tokens on deliberation; "
+                "Return schema-valid JSON. Do not spend tokens on deliberation; "
                 "produce the JSON object directly."
             ),
             use_fast_model=False,
             timeout=MEETING_TRANSCRIPT_SUMMARY_TIMEOUT_SECONDS,
             temperature=0.2,
             reasoning_effort="medium",
-            response_format={"type": "json_object"},
+            response_format=build_json_schema_response_format(
+                name="meeting_transcript_summary",
+                schema=MEETING_TRANSCRIPT_SUMMARY_RESPONSE_SCHEMA,
+            ),
         )
     except (LLMUnavailableError, RuntimeError, ValueError, json.JSONDecodeError) as exc:
         logger.warning("[meeting_transcript] LLM summary unavailable: %s", exc)

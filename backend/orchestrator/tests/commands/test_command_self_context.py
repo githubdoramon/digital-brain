@@ -3,7 +3,7 @@ from commands.handlers import event as event_handler
 
 
 def test_contact_extraction_uses_self_context_instead_of_raw_user_line(monkeypatch):
-    captured: dict[str, str] = {}
+    captured: dict[str, object] = {}
 
     monkeypatch.setattr(
         "prompts.context.get_self_context",
@@ -14,8 +14,9 @@ def test_contact_extraction_uses_self_context_instead_of_raw_user_line(monkeypat
         lambda *_args, **_kwargs: "Contact resolution rules:\n- Sage means Patricia.",
     )
 
-    def fake_call_llm_json(prompt: str, **_kwargs):
+    def fake_call_llm_json(prompt: str, **kwargs):
         captured["prompt"] = prompt
+        captured["kwargs"] = kwargs
         return {
             "need_user_input": None,
             "main_contact_name": "Sage",
@@ -41,17 +42,20 @@ def test_contact_extraction_uses_self_context_instead_of_raw_user_line(monkeypat
         existing_extraction={"contacts": [{"contact_name": "Sage"}]},
     )
 
-    prompt = captured["prompt"]
+    prompt = str(captured["prompt"])
     assert "You are assisting Alex." in prompt
     assert "Contact resolution rules:" in prompt
     assert "Sage means Patricia." in prompt
     assert "Existing contact extraction from earlier turns" in prompt
     assert '"content": "Which Sage?"' in prompt
     assert '"contact_name": "Sage"' in prompt
-    assert '"contacts": [' in prompt
-    assert '"relationships": [' in prompt
-    assert '"reciprocal_type":' in prompt
-    assert '"contact_place_links": [' in prompt
+    response_format = captured["kwargs"]["response_format"]  # type: ignore[index]
+    assert response_format["type"] == "json_schema"
+    schema = response_format["json_schema"]["schema"]
+    assert "contacts" in schema["properties"]
+    assert "relationships" in schema["properties"]
+    assert "reciprocal_type" in schema["properties"]["relationships"]["items"]["properties"]
+    assert "contact_place_links" in schema["properties"]
     assert "Father/Daughter" in prompt
     assert "User: alex@example.com" not in prompt
 

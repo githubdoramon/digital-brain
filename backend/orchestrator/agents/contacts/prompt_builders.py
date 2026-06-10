@@ -39,10 +39,7 @@ Pronoun resolution rules:
 - Resolve possessive pronouns only when the referent is crystal clear and creates a valid person reference.
 - If a possessive pronoun cannot be resolved confidently, omit that ambiguous reference.
 
-Return ONLY valid JSON:
-{{
-  \"people\": [\"person1\", \"my daughter\", \"person2's doctor\"]
-}}"""
+Return ONLY a JSON object matching the supplied response schema."""
     return append_clarification_guidelines(prompt)
 
 
@@ -67,17 +64,7 @@ Text: \"{text}\"
 - Only return a selector when the text explicitly refers to a plural or collective set such as \"everyone\", \"all\", \"team\", \"people\", \"staff\", or \"employees\".
 - Do NOT return vague crowd references like \"lots of people\", \"many people\", \"some people\", \"a bunch of people\", or \"the people there\". Those are not resolvable selectors.
 
-Return ONLY valid JSON:
-{{
-  \"selectors\": [
-    {{
-      \"kind\": \"group\",
-      \"value\": \"soccer team\",
-      \"raw\": \"my soccer team\",
-      \"deterministic\": false
-    }}
-  ]
-}}"""
+Return ONLY a JSON object matching the supplied response schema."""
     return append_clarification_guidelines(prompt)
 
 
@@ -102,13 +89,7 @@ Rules:
 4. If no candidate matches, return an empty list.
 5. Set collective_reference=true only when the phrase implies multiple people.
 
-Return ONLY valid JSON:
-{{
-  \"candidate_numbers\": [1, 2],
-  \"collective_reference\": true or false,
-  \"confidence\": \"high\" | \"medium\" | \"low\",
-  \"reasoning\": \"brief explanation\"
-}}"""
+Return ONLY a JSON object matching the supplied response schema."""
     return append_clarification_guidelines(prompt)
 
 
@@ -149,14 +130,7 @@ CRITICAL RULES:
 
 Analyze which candidate is most likely based on the context.
 
-Return ONLY a valid JSON, nothing more, no other text or explanation:
-{{
-    \"decision\": \"resolved\" | \"cannot_decide\",
-    \"candidate_number\": 1 or 2 or null,
-    \"new_contact\": true or false,
-    \"confidence\": \"high\" | \"medium\" | \"low\",
-    \"reasoning\": \"brief explanation\"
-}}"""
+Return ONLY a JSON object matching the supplied response schema, with no other text."""
     return append_clarification_guidelines(prompt)
 
 
@@ -169,10 +143,7 @@ Person in the text you should infer the profession for: \"{person_text}\"
 CRITICAL: Only return profession for the person in context if EXPLICITLY stated or STRONGLY implied (e.g., \"Dr.\" prefix).
 Otherwise return null.
 
-Return ONLY a valid JSON, nothing more, no other text or explanation:
-{{
-    \"profession\": str or null
-}}"""
+Return ONLY a JSON object matching the supplied response schema, with no other text."""
     return append_clarification_guidelines(prompt)
 
 
@@ -193,16 +164,7 @@ Rules:
 - Do NOT include self-relations.
 - Do NOT include duplicate pairs.
 
-Return ONLY valid JSON:
-{{
-  \"relationships\": [
-    {{
-      \"person_text\": str,
-      \"anchor_text\": str,
-      \"relationship_hint\": str
-    }}
-  ]
-}}"""
+Return ONLY a JSON object matching the supplied response schema."""
     return append_clarification_guidelines(prompt)
 
 
@@ -233,9 +195,5 @@ Rules:
 - NEVER return self-relations (no \"self\", \"same person\", or equivalent).
 - Prefer more offical term over general term WHEN POSSIBLE (e.g., \"Orthopedist\" over \"bone doctor\").
 
-Return ONLY a valid JSON:
-{{
-    \"type\": str or null,
-    \"other_type\": str or null
-}}"""
+Return ONLY a JSON object matching the supplied response schema."""
     return append_clarification_guidelines(prompt)

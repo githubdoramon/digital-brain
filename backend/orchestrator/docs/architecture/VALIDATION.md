@@ -74,6 +74,16 @@ Tool contracts in `tools/registry.py` now carry stronger usage guidance:
 
 This reduces dependence on one giant global prompt.
 
+## Structured JSON Outputs
+
+Runtime LLM calls that expect machine-readable JSON should enforce the shape through
+`response_format` built by `llm_helpers.build_json_schema_response_format()`. Shared response
+schemas live in `llm_json_schemas.py` so evals and production flows can use the same contracts.
+
+Prompts may still describe task behavior and field semantics, but they should not duplicate the
+full output JSON object as a schema copy. This keeps schema enforcement in the transport layer and
+prevents eval-only structured output behavior from drifting away from normal runtime flows.
+
 ## Runtime Interaction with Limits
 
 Validation outcomes feed no-progress and escalation logic:

@@ -88,6 +88,7 @@ def _call_llm_json_response(
     *,
     system_prompt: str,
     timeout: int,
+    response_format: dict[str, Any] | None = None,
 ) -> Any:
     from llm_helpers import call_llm_json
 
@@ -97,6 +98,7 @@ def _call_llm_json_response(
         model=get_smart_model(),
         use_fast_model=False,
         timeout=timeout,
+        response_format=response_format,
     )
 
 
@@ -828,21 +830,26 @@ def _suggest_document_date(content: str, fallback: str | None) -> datetime | Non
     excerpt = cleaned[:MAX_DATE_PROMPT_CHARS]
     system_prompt = (
         "You extract dates from documents. Find the primary date the document was written or refers to. "
-        'Respond with JSON like {"date": "YYYY-MM-DD"} or {"date": null} if unsure.'
+        "Respond with a JSON object matching the supplied response schema."
     )
     user_prompt = (
         f"Document excerpt:\n{excerpt}\n\n"
         "If a clear date is present, respond with it in ISO-8601 (YYYY-MM-DD or YYYY-MM-DDTHH:MM)."
     )
     try:
-        raw_content = _call_llm_text(
+        from llm_helpers import build_json_schema_response_format
+        from llm_json_schemas import DOCUMENT_DATE_RESPONSE_SCHEMA
+
+        parsed = _call_llm_json_response(
             user_prompt,
             system_prompt=system_prompt,
             timeout=OLLAMA_TIMEOUT,
-        ).strip()
-        if not raw_content:
-            return None
-        candidate = _parse_date_response(raw_content)
+            response_format=build_json_schema_response_format(
+                name="document_date",
+                schema=DOCUMENT_DATE_RESPONSE_SCHEMA,
+            ),
+        )
+        candidate = _parse_date_response(json.dumps(parsed, ensure_ascii=False))
         if candidate:
             return candidate
     except Exception as exc:
@@ -1098,14 +1105,21 @@ def _translate_tags_to_english(tags: Sequence[str]) -> list[str]:
         return normalized
     prompt = (
         "Translate each of the following labels into concise English (1-3 words). If a tag is already in English, just return the exact same tag. "
-        'Respond with JSON like {"tags": ["tag", ...]} in the same order.'
+        "Respond with a JSON object matching the supplied response schema, preserving the same order."
     )
     user_prompt = json.dumps({"tags": normalized}, ensure_ascii=False)
     try:
+        from llm_helpers import build_json_schema_response_format
+        from llm_json_schemas import TAG_SUGGESTION_RESPONSE_SCHEMA
+
         parsed = _call_llm_json_response(
             user_prompt,
             system_prompt=prompt,
             timeout=OLLAMA_TIMEOUT,
+            response_format=build_json_schema_response_format(
+                name="document_tag_translation",
+                schema=TAG_SUGGESTION_RESPONSE_SCHEMA,
+            ),
         )
         logger.debug("[documents] parsed=%s", parsed)
         if isinstance(parsed, dict) and isinstance(parsed.get("tags"), list):

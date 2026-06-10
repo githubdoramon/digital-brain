@@ -43,7 +43,17 @@ from agents.contacts.prompt_builders import (
     build_relationship_pairs_prompt,
     build_relationship_types_prompt,
 )
-from llm_helpers import LLMUnavailableError, call_llm_json
+from llm_helpers import LLMUnavailableError, build_json_schema_response_format, call_llm_json
+from llm_json_schemas import (
+    COLLECTIVE_SELECTOR_RESPONSE_SCHEMA,
+    CONTACT_DISAMBIGUATION_RESPONSE_SCHEMA,
+    EVENT_PARTICIPANT_FILTER_RESPONSE_SCHEMA,
+    NESTED_RELATIONSHIP_SELECTION_RESPONSE_SCHEMA,
+    PEOPLE_EXTRACTION_RESPONSE_SCHEMA,
+    PROFESSION_INFERENCE_RESPONSE_SCHEMA,
+    RELATIONSHIP_PAIRS_RESPONSE_SCHEMA,
+    RELATIONSHIP_TYPES_RESPONSE_SCHEMA,
+)
 from observability import trace
 from observability.logger import get_runtime_logger
 from search_normalization import normalize_search_text
@@ -249,7 +259,7 @@ def _call_contact_resolution_llm_json(prompt: str, **kwargs: Any) -> dict[str, A
     if timeout_override:
         kwargs["timeout"] = timeout_override
     if request_options_override:
-        kwargs.update({key: value for key, value in request_options_override.items() if key not in kwargs})
+        kwargs.update(request_options_override)
     if model_override:
         logger.debug(
             "[contact_resolver] Using model override for LLM call: %s",
@@ -258,6 +268,10 @@ def _call_contact_resolution_llm_json(prompt: str, **kwargs: Any) -> dict[str, A
     if timeout_override:
         logger.debug("[contact_resolver] Using timeout override for LLM call: %ss", timeout_override)
     return call_llm_json(prompt, **kwargs)
+
+
+def _schema_response_format(name: str, schema: dict[str, Any]) -> dict[str, Any]:
+    return build_json_schema_response_format(name=name, schema=schema)
 
 
 def _build_request_context(
@@ -1311,7 +1325,15 @@ def _filter_event_participants_via_llm(
         user_facts_block=user_facts_block,
     )
     result = _call_contact_resolution_llm_json(
-        prompt, timeout=45, temperature=0.1, top_p=0.9, use_fast_model=True
+        prompt,
+        timeout=45,
+        temperature=0.1,
+        top_p=0.9,
+        use_fast_model=True,
+        response_format=_schema_response_format(
+            "event_participant_filter",
+            EVENT_PARTICIPANT_FILTER_RESPONSE_SCHEMA,
+        ),
     )
     return parse_event_participant_filter_result(people=people, result=result)
 
@@ -1463,7 +1485,15 @@ def _extract_collective_selectors_via_llm(
         conversation_block=conversation_block,
     )
     result = _call_contact_resolution_llm_json(
-        prompt, timeout=30, temperature=0.1, top_p=0.9, use_fast_model=True
+        prompt,
+        timeout=30,
+        temperature=0.1,
+        top_p=0.9,
+        use_fast_model=True,
+        response_format=_schema_response_format(
+            "collective_selector_extraction",
+            COLLECTIVE_SELECTOR_RESPONSE_SCHEMA,
+        ),
     )
     raw_selectors = result.get("selectors", [])
     llm_collective_selectors: list[dict[str, str]] = []
@@ -1548,7 +1578,15 @@ def extract_people_from_text(
         try:
             # Use low temperature for consistent structured output
             result = _call_contact_resolution_llm_json(
-                prompt, timeout=60, temperature=0.1, top_p=0.9, use_fast_model=True
+                prompt,
+                timeout=60,
+                temperature=0.1,
+                top_p=0.9,
+                use_fast_model=True,
+                response_format=_schema_response_format(
+                    "people_extraction",
+                    PEOPLE_EXTRACTION_RESPONSE_SCHEMA,
+                ),
             )
             people = result.get("people", [])
 
@@ -3364,7 +3402,15 @@ def _llm_match_nested_relationship_candidates(
 
     try:
         llm_result = _call_contact_resolution_llm_json(
-            prompt, timeout=60, temperature=0.1, top_p=0.9, use_fast_model=True
+            prompt,
+            timeout=60,
+            temperature=0.1,
+            top_p=0.9,
+            use_fast_model=True,
+            response_format=_schema_response_format(
+                "nested_relationship_selection",
+                NESTED_RELATIONSHIP_SELECTION_RESPONSE_SCHEMA,
+            ),
         )
     except Exception:
         return {
@@ -3713,7 +3759,15 @@ def _llm_disambiguate_contact(
     try:
         # Use low temperature for consistent disambiguation
         llm_response = _call_contact_resolution_llm_json(
-            prompt, timeout=60, temperature=0.1, top_p=0.9, use_fast_model=True
+            prompt,
+            timeout=60,
+            temperature=0.1,
+            top_p=0.9,
+            use_fast_model=True,
+            response_format=_schema_response_format(
+                "contact_disambiguation",
+                CONTACT_DISAMBIGUATION_RESPONSE_SCHEMA,
+            ),
         )
 
         decision = llm_response.get("decision")
@@ -3772,7 +3826,15 @@ def _infer_profession_from_text(person_text: str, full_text: str) -> Optional[st
     try:
         # Use low temperature for consistent profession inference
         result = _call_contact_resolution_llm_json(
-            prompt, timeout=20, temperature=0.1, top_p=0.9, use_fast_model=True
+            prompt,
+            timeout=20,
+            temperature=0.1,
+            top_p=0.9,
+            use_fast_model=True,
+            response_format=_schema_response_format(
+                "profession_inference",
+                PROFESSION_INFERENCE_RESPONSE_SCHEMA,
+            ),
         )
         return result.get("profession")
     except Exception:
@@ -3871,7 +3933,15 @@ def _infer_relationship_pairs(people: list[str], full_text: str) -> list[dict[st
 
     try:
         result = _call_contact_resolution_llm_json(
-            prompt, timeout=60, temperature=0.1, top_p=0.9, use_fast_model=True
+            prompt,
+            timeout=60,
+            temperature=0.1,
+            top_p=0.9,
+            use_fast_model=True,
+            response_format=_schema_response_format(
+                "relationship_pairs",
+                RELATIONSHIP_PAIRS_RESPONSE_SCHEMA,
+            ),
         )
     except Exception:
         return []
@@ -3930,7 +4000,15 @@ def _infer_relationship_types(
 
     try:
         result = _call_contact_resolution_llm_json(
-            prompt, timeout=20, temperature=0.1, top_p=0.9, use_fast_model=True
+            prompt,
+            timeout=20,
+            temperature=0.1,
+            top_p=0.9,
+            use_fast_model=True,
+            response_format=_schema_response_format(
+                "relationship_types",
+                RELATIONSHIP_TYPES_RESPONSE_SCHEMA,
+            ),
         )
     except Exception:
         return None

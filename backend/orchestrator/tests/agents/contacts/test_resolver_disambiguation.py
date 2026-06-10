@@ -478,8 +478,9 @@ def test_extract_people_restores_named_possessive_coworker_group(monkeypatch):
 def test_llm_disambiguation_prompt_includes_aliases_and_match_hints(monkeypatch):
     captured = {}
 
-    def fake_call_llm_json(prompt, **_kwargs):
+    def fake_call_llm_json(prompt, **kwargs):
         captured["prompt"] = prompt
+        captured["kwargs"] = kwargs
         return {
             "decision": "cannot_decide",
             "candidate_number": None,
@@ -512,8 +513,9 @@ def test_llm_disambiguation_prompt_includes_aliases_and_match_hints(monkeypatch)
 def test_llm_disambiguation_prompt_includes_chronological_history(monkeypatch):
     captured = {}
 
-    def fake_call_llm_json(prompt, **_kwargs):
+    def fake_call_llm_json(prompt, **kwargs):
         captured["prompt"] = prompt
+        captured["kwargs"] = kwargs
         return {
             "decision": "cannot_decide",
             "candidate_number": None,
@@ -546,7 +548,10 @@ def test_llm_disambiguation_prompt_includes_chronological_history(monkeypatch):
     assert "- assistant: I found multiple matching contacts. Please choose." in prompt
     assert "- user: None of these. It is a new contact, named Julia" in prompt
     assert "Treat the latest user message as the clarification answer" in prompt
-    assert '"new_contact": true or false' in prompt
+    response_format = captured["kwargs"]["response_format"]
+    assert response_format["type"] == "json_schema"
+    assert response_format["json_schema"]["name"] == "contact_disambiguation"
+    assert "new_contact" in response_format["json_schema"]["schema"]["properties"]
 
 
 def test_resolve_contact_uses_any_search_for_role_queries(monkeypatch):

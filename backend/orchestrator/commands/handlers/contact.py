@@ -34,12 +34,13 @@ from commands.handlers.clarification_utils import (
 )
 from commands.parser import ParsedCommand
 from commands.registry import CommandRegistry
+from llm_helpers import build_json_schema_response_format
+from llm_json_schemas import CONTACT_UPDATE_RESPONSE_SCHEMA
 from observability.logger import get_runtime_logger
 from search_normalization import normalize_search_text
 from ui_dsl import (
     build_need_user_input,
     build_need_user_input_prompt_guidance,
-    need_user_input_json_property_template,
     normalize_need_user_input,
 )
 
@@ -230,7 +231,6 @@ def _llm_extract_contact_changes(
     from user_fact_rules import RuleScope
 
     need_user_input_guidance = build_need_user_input_prompt_guidance(exclude_people=False)
-    need_user_input_template = need_user_input_json_property_template(indent=4)
     self_context = get_self_context(user_email) if user_email else None
     self_context_block = f"\n{self_context}\n" if self_context else ""
     user_facts_ctx = (
@@ -265,50 +265,25 @@ If the statement is ambiguous, missing a required person, or contains an ambiguo
 
 {need_user_input_guidance}
 
-Return ONLY valid JSON in this exact format:
-{{
-{need_user_input_template}
-    "contacts": [
-        {{
-            "contact_name": "name",
-            "birthday": "YYYY-MM-DD or null",
-            "comments": "comment or null",
-            "profession": "profession or null",
-            "aliases": ["alias"],
-            "emails": ["email@example.com"],
-            "phones": ["+351..."],
-            "links": ["https://..."],
-            "tags": ["tag"]
-        }}
-    ],
-    "relationships": [
-        {{
-            "from_contact_name": "name",
-            "to_contact_name": "name",
-            "relationship_type": "specific Title Case relationship from from_contact_name's perspective",
-            "reciprocal_type": "specific Title Case relationship from to_contact_name's perspective"
-        }}
-    ],
-    "contact_place_links": [
-        {{
-            "contact_name": "name",
-            "place_text": "place or address",
-            "place_role": "home/work/other or null"
-        }}
-    ],
-    "summary": "one-sentence explanation"
-}}
+Return ONLY a JSON object matching the supplied response schema.
 
 Relationship type rules:
 - Prefer specific Title Case labels when context supports them: Husband/Wife, Father/Daughter, Father/Son, Mother/Daughter, Mother/Son, Brother/Sister.
 - Avoid generic labels like spouse/spouse or parent/child when the sentence gives enough information for a specific pair.
 - If the reciprocal side is unknown, use a reasonable generic Title Case reciprocal such as Child, Parent, Sibling, Spouse, or Partner.
 """
+    request_options = {
+        "response_format": build_json_schema_response_format(
+            name="contact_update_extraction",
+            schema=CONTACT_UPDATE_RESPONSE_SCHEMA,
+        )
+    }
+    request_options.update(dict(llm_request_options or {}))
     extracted = call_llm_json(
         prompt,
         timeout=timeout or 45,
         model=model,
-        **dict(llm_request_options or {}),
+        **request_options,
     )
     extracted["need_user_input"] = normalize_need_user_input(extracted.get("need_user_input"))
     return extracted

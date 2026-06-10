@@ -642,12 +642,19 @@ def test_ingest_meeting_transcript_only_creates_current_user_todos(monkeypatch):
 
 def test_generate_meeting_transcript_summary_parses_action_items(monkeypatch):
     def fake_call_llm_json(prompt, **kwargs):
-        assert '"action_items"' in prompt
+        assert "action item" in prompt.lower()
         assert "assignee_name" in prompt
         assert "current user" in prompt.lower()
         assert "Ramon Alias" in prompt
         assert "dana.alias@example.com" in prompt
-        assert kwargs["response_format"] == {"type": "json_object"}
+        assert kwargs["response_format"]["type"] == "json_schema"
+        assert kwargs["response_format"]["json_schema"]["name"] == "meeting_transcript_summary"
+        assert kwargs["response_format"]["json_schema"]["strict"] is True
+        assert kwargs["response_format"]["json_schema"]["schema"]["required"] == [
+            "summary",
+            "action_items",
+        ]
+        assert "action_items" in kwargs["response_format"]["json_schema"]["schema"]["properties"]
         assert "max_tokens" not in kwargs
         assert kwargs["timeout"] == events.MEETING_TRANSCRIPT_SUMMARY_TIMEOUT_SECONDS
         assert kwargs["reasoning_effort"] == "medium"

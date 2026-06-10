@@ -9,7 +9,12 @@ from commands.handlers.contact import _llm_extract_contact_changes
 from commands.handlers.event import _extract_event_entities_with_llm
 from contact_resolution_service import resolve_contacts_request
 from evals.types import EvalCase, EvalFlowDefinition, EvalRunConfig
-from llm_helpers import LLM_TIMEOUT
+from llm_helpers import LLM_TIMEOUT, build_json_schema_response_format
+from llm_json_schemas import (
+    CONTACT_UPDATE_RESPONSE_SCHEMA,
+    EVENT_EXTRACTION_RESPONSE_SCHEMA,
+    TAG_SUGGESTION_RESPONSE_SCHEMA,
+)
 from observability.logger import get_runtime_logger
 from search_normalization import normalize_search_text
 from tags_manager import _suggest_tags
@@ -27,7 +32,7 @@ ROUTER_RESPONSE_SCHEMA = {
         "reasoning": {"type": "string"},
     },
     "required": ["intent", "confidence", "constraints", "pre_resolve_contacts", "reasoning"],
-    "additionalProperties": True,
+    "additionalProperties": False,
 }
 
 CONTACT_RESOLUTION_RESPONSE_SCHEMA = {
@@ -41,43 +46,7 @@ CONTACT_RESOLUTION_RESPONSE_SCHEMA = {
         "new_contacts": {"type": "array", "items": {"type": "object"}},
     },
     "required": ["status"],
-    "additionalProperties": True,
-}
-
-EVENT_EXTRACTION_RESPONSE_SCHEMA = {
-    "type": "object",
-    "properties": {
-        "title": {"type": ["string", "null"]},
-        "summary": {"type": ["string", "null"]},
-        "when": {"type": ["string", "null"]},
-        "end_when": {"type": ["string", "null"]},
-        "where": {"type": ["string", "null"]},
-        "tags": {"type": "array", "items": {"type": "string"}},
-        "types": {"type": "array", "items": {"type": "string"}},
-        "need_user_input": {"type": ["object", "null"]},
-    },
-    "required": ["title", "summary", "when", "end_when", "where", "tags", "types"],
-    "additionalProperties": True,
-}
-
-CONTACT_UPDATE_RESPONSE_SCHEMA = {
-    "type": "object",
-    "properties": {
-        "contacts": {"type": "array", "items": {"type": "object"}},
-        "relationships": {"type": "array", "items": {"type": "object"}},
-        "need_user_input": {"type": ["object", "null"]},
-    },
-    "required": ["contacts", "relationships"],
-    "additionalProperties": True,
-}
-
-TAG_SUGGESTION_RESPONSE_SCHEMA = {
-    "type": "object",
-    "properties": {
-        "tags": {"type": "array", "items": {"type": "string"}},
-    },
-    "required": ["tags"],
-    "additionalProperties": True,
+    "additionalProperties": False,
 }
 
 
@@ -124,10 +93,11 @@ def _build_llm_request_options(case: EvalCase, run_config: EvalRunConfig) -> dic
     response_json_schema = case.response_json_schema
     response_format = None
     if request_options.strict_json_schema and response_json_schema:
-        response_format = {
-            "type": "json_schema",
-            "json_schema": response_json_schema,
-        }
+        response_format = build_json_schema_response_format(
+            name=f"eval_{case.case_id}",
+            schema=response_json_schema,
+            strict=True,
+        )
     return {
         "stream": request_options.stream,
         "temperature": request_options.temperature,

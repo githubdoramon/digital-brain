@@ -32,11 +32,7 @@ Task:
 - The current user may remain as "user" only when they are actually part of the event.
 - You MUST choose only from the provided candidate list; do not invent new people.
 
-Return ONLY valid JSON:
-{{
-  "participants": ["person1", "user"],
-  "excluded": ["person2"]
-}}"""
+Return ONLY a JSON object matching the supplied response schema."""
     return append_clarification_guidelines(prompt)
 
 

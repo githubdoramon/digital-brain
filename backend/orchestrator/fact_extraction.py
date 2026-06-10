@@ -86,8 +86,8 @@ When existing facts are provided, compare new candidates against them:
 - DELETE: Existing fact is now contradicted or explicitly retracted
 - NOOP: Information is already captured — do nothing
 
-Return a JSON object: {"facts": [...]} with an array of fact operations.
-If no facts should be extracted, return: {"facts": []}
+Return a JSON object matching the supplied response schema.
+If no facts should be extracted, return an empty facts array.
 """.replace("{categories_placeholder}", _CATEGORIES_LIST).replace(
     "{rule_scopes_placeholder}", _RULE_SCOPE_LIST
 ).replace("{rule_types_placeholder}", _RULE_TYPE_LIST)
@@ -153,7 +153,8 @@ def _run_extraction(
     )
 
     # Call LLM for extraction
-    from llm_helpers import call_llm_json
+    from llm_helpers import build_json_schema_response_format, call_llm_json
+    from llm_json_schemas import FACT_EXTRACTION_RESPONSE_SCHEMA
 
     try:
         result = call_llm_json(
@@ -162,6 +163,10 @@ def _run_extraction(
             temperature=0.0,
             use_fast_model=True,
             timeout=60,
+            response_format=build_json_schema_response_format(
+                name="fact_extraction",
+                schema=FACT_EXTRACTION_RESPONSE_SCHEMA,
+            ),
         )
     except (json.JSONDecodeError, RuntimeError) as exc:
         logger.warning("[fact_extraction] LLM returned unparseable response: %s", exc)

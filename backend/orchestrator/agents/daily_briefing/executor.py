@@ -26,7 +26,8 @@ from agents.daily_briefing.validators import (
     validate_summary,
 )
 from db import get_conn
-from llm_helpers import call_llm, call_llm_json
+from llm_helpers import build_json_schema_response_format, call_llm, call_llm_json
+from llm_json_schemas import DAILY_BRIEFING_RESEARCH_PLAN_RESPONSE_SCHEMA
 from search_normalization import normalize_search_text
 from tools.handlers.memory import _synthesize_memory_summary
 
@@ -1363,8 +1364,7 @@ def _plan_event_research(
     )
     prompt = (
         "Decide whether this event needs external web research and propose the smallest useful scope.\n"
-        "Return strict JSON with keys: should_research (bool), reason (string), targets (array up to 3).\n"
-        "Each target item must be: {\"query\": string, \"why\": string}.\n"
+        "Return a JSON object matching the supplied response schema.\n"
         "Only allow targets that could materially improve preparation for this exact event.\n"
         "Reject generic prep work, broad learning, and low-confidence fishing.\n"
         "If uncertain, set should_research=false.\n\n"
@@ -1380,10 +1380,14 @@ def _plan_event_research(
         planned_raw = call_llm_json(
             prompt,
             system_prompt=(
-                "You are a strict research planner. Return JSON only."
+                "You are a strict research planner. Return schema-valid JSON only."
             ),
             temperature=0,
             use_fast_model=False,
+            response_format=build_json_schema_response_format(
+                name="daily_briefing_research_plan",
+                schema=DAILY_BRIEFING_RESEARCH_PLAN_RESPONSE_SCHEMA,
+            ),
         )
         planned: dict[str, Any] = planned_raw if isinstance(planned_raw, dict) else {}
     except Exception:

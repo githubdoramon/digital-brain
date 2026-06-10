@@ -110,6 +110,29 @@ def _maybe_attach_keep_alive(payload: dict[str, Any]) -> None:
     payload["keep_alive"] = get_fast_keep_alive()
 
 
+def build_json_schema_response_format(
+    *,
+    name: str,
+    schema: dict[str, Any],
+    strict: bool = True,
+) -> dict[str, Any]:
+    """Build an OpenAI-compatible structured-output response_format payload."""
+    normalized_name = "".join(
+        character if character.isalnum() or character in {"_", "-"} else "_"
+        for character in str(name or "").strip()
+    ).strip("_")
+    if not normalized_name:
+        normalized_name = "json_response"
+    return {
+        "type": "json_schema",
+        "json_schema": {
+            "name": normalized_name[:64],
+            "strict": bool(strict),
+            "schema": schema,
+        },
+    }
+
+
 def build_chat_payload(
     messages: list[dict[str, Any]],
     *,

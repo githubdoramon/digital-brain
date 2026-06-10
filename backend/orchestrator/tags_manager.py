@@ -6,6 +6,8 @@ from collections.abc import Iterable, Sequence
 from typing import Any, Literal
 
 from llm_config import get_smart_model
+from llm_helpers import build_json_schema_response_format
+from llm_json_schemas import TAG_SUGGESTION_RESPONSE_SCHEMA
 from observability.logger import get_runtime_logger
 
 logger = get_runtime_logger(__name__)
@@ -253,7 +255,7 @@ def _suggest_tags(
         f"{subject_instruction} "
         'Blend specific tags (e.g., "Form 1040", "Dr. Smith", "Project Apollo") with broader ones (e.g., "Taxes", "Travel", "Contracts", "Blood test"). '
         f"Here are example sub-tags for each major category: {subtag_examples}. "
-        'Respond ONLY with JSON in the shape {"tags": ["tag", ...]} and do not include any prose or numbering.'
+        "Respond ONLY with a JSON object matching the supplied response schema."
     )
     user_prompt = (
         f"Existing tags: {existing}\n"
@@ -264,12 +266,19 @@ def _suggest_tags(
     )
 
     try:
+        request_options = {
+            "response_format": build_json_schema_response_format(
+                name="tag_suggestion",
+                schema=TAG_SUGGESTION_RESPONSE_SCHEMA,
+            )
+        }
+        request_options.update(dict(llm_request_options or {}))
         raw_content = _call_llm_text(
             user_prompt,
             system_prompt=system_prompt,
             timeout=timeout or OLLAMA_TIMEOUT,
             model=model,
-            llm_request_options=llm_request_options,
+            llm_request_options=request_options,
         ).strip()
         if not raw_content:
             return []

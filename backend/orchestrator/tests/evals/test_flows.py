@@ -45,7 +45,11 @@ def test_contact_resolution_eval_forwards_request_options(monkeypatch):
         "reasoning_effort": "none",
         "response_format": {
             "type": "json_schema",
-            "json_schema": {"type": "object", "properties": {"status": {"type": "string"}}},
+            "json_schema": {
+                "name": "eval_contact-case",
+                "strict": True,
+                "schema": {"type": "object", "properties": {"status": {"type": "string"}}},
+            },
         },
     }
 

@@ -33,7 +33,14 @@ from commands.handlers.clarification_utils import (
 from commands.parser import ParsedCommand
 from commands.registry import CommandRegistry
 from db import fetch_event_people, get_conn
-from llm_helpers import LLMUnavailableError
+from llm_helpers import LLMUnavailableError, build_json_schema_response_format
+from llm_json_schemas import (
+    EVENT_EXTRACTION_RESPONSE_SCHEMA,
+    EVENT_FIELD_INFERENCE_RESPONSE_SCHEMA,
+    EVENT_FOLLOWUP_STRATEGY_RESPONSE_SCHEMA,
+    EVENT_MATCH_INTENT_RESPONSE_SCHEMA,
+    EVENT_RELATIONSHIP_SUGGESTION_RESPONSE_SCHEMA,
+)
 from location_inference import geocode_place_name, infer_current_place
 from observability.logger import get_runtime_logger
 from search_normalization import normalize_search_text
@@ -43,7 +50,6 @@ from ui_dsl.clarification import (
     clarification_fields_from_ambiguous_contacts,
     default_clarification_details_field,
     derive_clarification_questions_from_fields,
-    need_user_input_json_property_template,
     normalize_clarification_fields,
     normalize_need_user_input,
 )
@@ -274,14 +280,17 @@ Important rules:
 - Corrections like saying the previous match was wrong usually mean create_new unless the user clearly says to keep updating the same matched event.
 - Do not infer create_new just because the user mentions a time, place, or person.
 
-Return ONLY valid JSON:
-{{
-  "intent": "neutral",
-  "confidence": "high"
-}}"""
+Return ONLY a JSON object matching the supplied response schema."""
 
     try:
-        result = call_llm_json(prompt, timeout=15)
+        result = call_llm_json(
+            prompt,
+            timeout=15,
+            response_format=build_json_schema_response_format(
+                name="event_match_intent",
+                schema=EVENT_MATCH_INTENT_RESPONSE_SCHEMA,
+            ),
+        )
     except Exception as exc:
         logger.warning("[handle_event] Event match intent classification failed: %s", exc)
         return "neutral"
@@ -358,15 +367,17 @@ Rules:
 - Prefer create_new when the user clearly says this is a different/new event.
 - Do not rely on exact trigger phrases; reason from meaning.
 
-Return ONLY valid JSON:
-{{
-  "action": "patch_existing",
-  "fields": ["when"],
-  "confidence": "high"
-}}"""
+Return ONLY a JSON object matching the supplied response schema."""
 
     try:
-        result = call_llm_json(prompt, timeout=20)
+        result = call_llm_json(
+            prompt,
+            timeout=20,
+            response_format=build_json_schema_response_format(
+                name="event_followup_strategy",
+                schema=EVENT_FOLLOWUP_STRATEGY_RESPONSE_SCHEMA,
+            ),
+        )
     except Exception as exc:
         logger.warning("[handle_event] Follow-up strategy classification failed: %s", exc)
         return {"action": "patch_existing", "fields": []}
@@ -678,14 +689,17 @@ Rules:
 - If user clarifies people/participants, include "who".
 - If unsure, return an empty list with low confidence.
 
-Return ONLY valid JSON with this exact shape:
-{{
-  "fields": ["where"],
-  "confidence": "high"
-}}"""
+Return ONLY a JSON object matching the supplied response schema."""
 
     try:
-        classification = call_llm_json(prompt, timeout=20)
+        classification = call_llm_json(
+            prompt,
+            timeout=20,
+            response_format=build_json_schema_response_format(
+                name="event_field_inference",
+                schema=EVENT_FIELD_INFERENCE_RESPONSE_SCHEMA,
+            ),
+        )
     except Exception as exc:
         logger.warning(
             "[handle_event] Failed to infer follow-up target fields: %s",
@@ -1071,7 +1085,6 @@ def _extract_event_entities_with_llm(
     clarification_context = _format_clarification_history(clarification_messages)
     conversation_json = _format_conversation_json(message, clarification_messages)
     need_user_input_guidance = build_need_user_input_prompt_guidance(exclude_people=True)
-    need_user_input_template = need_user_input_json_property_template(indent=4)
     conversation_context = (
         f"Conversation messages (JSON array, most recent last):\n{conversation_json}\n\n"
     )
@@ -1109,27 +1122,23 @@ Never drop previously confirmed facts from the existing extraction or clarificat
 Assistant questions are prompts only and are NOT facts; only treat user-provided details as facts.
 If you think there are not enough information to build a valuable event, return a clarification to the user.
 
-Return ONLY valid JSON in this exact format:
-{{
-{need_user_input_template}
-    "title": "Brief title",
-    "summary": "Detailed description",
-    "when": "ISO 8601 date/datetime or null",
-    "end_when": "ISO 8601 datetime or null",
-    "where": "Location name or null",
-    "documents": [],
-    "tags": ["tag1", "tag2"],
-    "types": ["generic"]
-}}"""
+Return ONLY a JSON object matching the supplied response schema."""
     extraction_prompt = append_clarification_guidelines(extraction_prompt)
 
     try:
         logger.info("[event_extraction] Calling LLM for extraction...")
+        request_options = {
+            "response_format": build_json_schema_response_format(
+                name="event_extraction",
+                schema=EVENT_EXTRACTION_RESPONSE_SCHEMA,
+            )
+        }
+        request_options.update(dict(llm_request_options or {}))
         extracted = call_llm_json(
             extraction_prompt,
             timeout=timeout or 60,
             model=model,
-            **dict(llm_request_options or {}),
+            **request_options,
         )
 
         logger.debug("[event_extraction] Raw LLM response")
@@ -2421,23 +2430,18 @@ Common relationship types:
 - Professional: colleague, manager, employee, client, vendor, doctor, patient, lawyer, therapist, teacher, student
 - Social: friend, neighbor, acquaintance
 
-Return ONLY valid JSON with suggested relationships. If no clear relationships, return empty array:
-{{
-    "relationships": [
-        {{
-            "from_person": "exact name from list",
-            "to_person": "exact name from list",
-            "relationship_type": "type",
-            "reciprocal_type": "type from other perspective",
-            "confidence": "high|medium|low",
-            "reasoning": "brief explanation"
-        }}
-    ]
-}}"""
+Return ONLY a JSON object matching the supplied response schema. If no clear relationships exist, return an empty relationships array."""
 
     try:
         logger.info("[relationship_suggestion] Calling LLM for relationship analysis...")
-        result = call_llm_json(prompt, timeout=15)
+        result = call_llm_json(
+            prompt,
+            timeout=15,
+            response_format=build_json_schema_response_format(
+                name="event_relationship_suggestion",
+                schema=EVENT_RELATIONSHIP_SUGGESTION_RESPONSE_SCHEMA,
+            ),
+        )
         llm_suggestions = result.get("relationships", [])
 
         logger.debug(
