@@ -1547,7 +1547,7 @@ def test_contact_resolution_timeout_override_replaces_inner_timeout(monkeypatch)
 
     assert captured["timeout"] == 120
     assert captured["use_fast_model"] is True
-    assert captured["reasoning_effort"] == "low"
+    assert captured["reasoning_effort"] == "none"
 
 
 def test_extract_people_normalizes_object_items(monkeypatch):

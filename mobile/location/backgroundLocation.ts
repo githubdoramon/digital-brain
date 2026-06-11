@@ -18,6 +18,7 @@ const BACKGROUND_LOCATION_DRAIN_TASK = 'digitalbrain.background-location-drain';
 const BACKGROUND_DISTANCE_INTERVAL_METERS = 50;
 const BACKGROUND_TIME_INTERVAL_MS = 5 * 60 * 1000;
 const BACKGROUND_DRAIN_MIN_INTERVAL_MINUTES = 15;
+const ANDROID_FOREGROUND_SERVICE_POLICY = 'restart_only_on_option_change';
 
 type BackgroundLocationSample = {
   coords?: {
@@ -99,7 +100,6 @@ function buildBackgroundLocationTaskOptions(): Location.LocationTaskOptions {
     foregroundService: {
       notificationTitle: 'Digital Brain location updates',
       notificationBody: 'Location updates are used to keep your context accurate.',
-      killServiceOnDestroy: false,
     },
   };
 
@@ -685,6 +685,7 @@ export async function getBackgroundLocationDebugStatus(): Promise<BackgroundLoca
       queued_location_count: queueSummary.queueSize,
       oldest_queued_captured_at: queueSummary.oldestCapturedAt,
       newest_queued_captured_at: queueSummary.newestCapturedAt,
+      android_foreground_service_policy: ANDROID_FOREGROUND_SERVICE_POLICY,
     },
     recordInHistory: false,
   });
@@ -701,6 +702,7 @@ export async function getBackgroundLocationDebugStatus(): Promise<BackgroundLoca
         background_location_available: androidTaskDiagnostics.backgroundLocationAvailable,
         registered_tasks: androidTaskDiagnostics.registeredTasks,
         location_task_options: androidTaskDiagnostics.locationTaskOptions,
+        android_foreground_service_policy: ANDROID_FOREGROUND_SERVICE_POLICY,
       },
       recordInHistory: false,
     });
@@ -734,7 +736,11 @@ export async function syncBackgroundLocationTracking(enabled: boolean): Promise<
     drainTaskDefined: TaskManager.isTaskDefined(BACKGROUND_LOCATION_DRAIN_TASK),
   }));
   reportLocationDebugEvent('background_tracking_sync_requested', {
-    payload: { enabled, task_registration: taskRegistration },
+    payload: {
+      enabled,
+      task_registration: taskRegistration,
+      android_foreground_service_policy: ANDROID_FOREGROUND_SERVICE_POLICY,
+    },
   });
   const alreadyStarted = await Location.hasStartedLocationUpdatesAsync(BACKGROUND_LOCATION_TASK);
 
@@ -780,9 +786,8 @@ export async function syncBackgroundLocationTracking(enabled: boolean): Promise<
       () => null,
     )) as Record<string, unknown> | null;
     const optionsChanged = !areLocationTaskOptionsEqual(currentTaskOptions, taskOptions);
-    const shouldRefreshAndroidForegroundService = Platform.OS === 'android';
 
-    if (!optionsChanged && !shouldRefreshAndroidForegroundService) {
+    if (!optionsChanged) {
       await ensureBackgroundDrainTaskRegistered().catch((error) => {
         reportLocationDebugEvent('background_drain_task_register_error', {
           error,
@@ -792,6 +797,7 @@ export async function syncBackgroundLocationTracking(enabled: boolean): Promise<
         payload: {
           platform: Platform.OS,
           location_task_options: currentTaskOptions,
+          android_foreground_service_policy: ANDROID_FOREGROUND_SERVICE_POLICY,
         },
         recordInHistory: false,
       });
@@ -801,9 +807,10 @@ export async function syncBackgroundLocationTracking(enabled: boolean): Promise<
     reportLocationDebugEvent('background_tracking_restart_requested', {
       payload: {
         platform: Platform.OS,
-        reason: optionsChanged ? 'task_options_changed' : 'android_foreground_service_refresh',
+        reason: 'task_options_changed',
         current_task_options: currentTaskOptions,
         desired_task_options: taskOptions as Record<string, unknown>,
+        android_foreground_service_policy: ANDROID_FOREGROUND_SERVICE_POLICY,
       },
       recordInHistory: false,
     });
@@ -819,6 +826,7 @@ export async function syncBackgroundLocationTracking(enabled: boolean): Promise<
       payload: {
         platform: Platform.OS,
         task_options: taskOptions as Record<string, unknown>,
+        android_foreground_service_policy: ANDROID_FOREGROUND_SERVICE_POLICY,
       },
       recordInHistory: false,
     });
@@ -843,6 +851,7 @@ export async function syncBackgroundLocationTracking(enabled: boolean): Promise<
     payload: {
       platform: Platform.OS,
       task_options: taskOptions as Record<string, unknown>,
+      android_foreground_service_policy: ANDROID_FOREGROUND_SERVICE_POLICY,
     },
     recordInHistory: false,
   });
