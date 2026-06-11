@@ -10,6 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 import conversations
 import meeting_transcript_jobs
+import proposed_event_jobs
 from db import get_conn
 from db_migrations import run_pending_migrations
 from llm_helpers import warm_configured_chat_models
@@ -25,6 +26,7 @@ from routes.events import create_events_router
 from routes.generated_pdfs import create_generated_pdfs_router
 from routes.news import create_news_router
 from routes.places import create_places_router
+from routes.proposed_events import create_proposed_events_router
 from routes.system import create_system_router
 from routes.todos import create_todos_router
 from routes.user import create_user_router
@@ -129,9 +131,11 @@ async def lifespan(_app: FastAPI):
         logger.exception("Chat-model warmup failed; continuing startup")
 
     meeting_transcript_jobs.start_worker()
+    proposed_event_jobs.start_worker()
     try:
         yield
     finally:
+        proposed_event_jobs.stop_worker()
         meeting_transcript_jobs.stop_worker()
 
 
@@ -142,6 +146,7 @@ api.include_router(create_news_router())
 api.include_router(create_chat_router())
 api.include_router(create_contacts_router())
 api.include_router(create_places_router())
+api.include_router(create_proposed_events_router())
 api.include_router(create_todos_router())
 api.include_router(create_events_router())
 api.include_router(create_documents_router())

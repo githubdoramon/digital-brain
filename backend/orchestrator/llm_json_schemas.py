@@ -212,6 +212,27 @@ PROFESSION_INFERENCE_RESPONSE_SCHEMA: dict[str, Any] = {
     "additionalProperties": False,
 }
 
+PROPOSED_EVENT_ENRICHMENT_RESPONSE_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "suggested_title": {"type": "string"},
+        "suggested_summary": {"type": "string"},
+        "suggested_contact_ids": STRING_ARRAY_SCHEMA,
+        "confidence": {"type": "string", "enum": ["medium", "high"]},
+        "reason": {"type": "string"},
+        "recurrence_hint": {"type": ["string", "null"]},
+    },
+    "required": [
+        "suggested_title",
+        "suggested_summary",
+        "suggested_contact_ids",
+        "confidence",
+        "reason",
+        "recurrence_hint",
+    ],
+    "additionalProperties": False,
+}
+
 RELATIONSHIP_PAIRS_RESPONSE_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {

@@ -116,6 +116,11 @@ function RootLayoutNav({ loaded }: { loaded: boolean }) {
         return;
       }
 
+      if (data?.kind === 'proposed_events_ready') {
+        router.push('/settings/proposed-events' as never);
+        return;
+      }
+
       if (data?.kind === 'document_download') {
         const fileUri = typeof data.fileUri === 'string' ? data.fileUri : null;
         const mimeType = typeof data.mimeType === 'string' ? data.mimeType : '*/*';
@@ -214,6 +219,12 @@ function RootLayoutNav({ loaded }: { loaded: boolean }) {
       />
       <Stack.Screen
         name="settings/notifications"
+        options={{
+          headerShown: false,
+        }}
+      />
+      <Stack.Screen
+        name="settings/proposed-events/index"
         options={{
           headerShown: false,
         }}

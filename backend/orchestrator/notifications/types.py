@@ -3,11 +3,13 @@ from __future__ import annotations
 EMERGENCY_STOCK_NOTIFICATION_TYPE = "emergency-stock"
 DAILY_BRIEFING_NOTIFICATION_TYPE = "daily-briefing"
 CHAT_REPLY_NOTIFICATION_TYPE = "chat-reply"
+PROPOSED_EVENTS_READY_NOTIFICATION_TYPE = "proposed-events-ready"
 
 NOTIFICATION_TYPE_TITLES: dict[str, str] = {
     CHAT_REPLY_NOTIFICATION_TYPE: "Chat replies",
     DAILY_BRIEFING_NOTIFICATION_TYPE: "Daily briefing ready",
     EMERGENCY_STOCK_NOTIFICATION_TYPE: "Emergency stock alerts",
+    PROPOSED_EVENTS_READY_NOTIFICATION_TYPE: "Proposed events ready",
 }
 
 

@@ -451,6 +451,21 @@ export default function SettingsScreen() {
         <Card style={[styles.card, styles.navCard]}>
           <Pressable
             style={styles.navRow}
+            onPress={() => router.push('/settings/proposed-events' as never)}
+          >
+            <View style={styles.textBlock}>
+              <Text style={styles.rowTitle}>Proposed events</Text>
+              <Text style={styles.rowSubtitle}>
+                Review places where your Brain found gaps in the day.
+              </Text>
+            </View>
+            <Ionicons name="chevron-forward" size={20} color={theme.colors.mutedInk} />
+          </Pressable>
+        </Card>
+
+        <Card style={[styles.card, styles.navCard]}>
+          <Pressable
+            style={styles.navRow}
             onPress={() => router.push('/settings/notifications')}
           >
             <View style={styles.textBlock}>
