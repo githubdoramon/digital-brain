@@ -276,7 +276,9 @@ Relationship type rules:
         "response_format": build_json_schema_response_format(
             name="contact_update_extraction",
             schema=CONTACT_UPDATE_RESPONSE_SCHEMA,
-        )
+        ),
+        "use_fast_model": False,
+        "reasoning_effort": "high",
     }
     request_options.update(dict(llm_request_options or {}))
     extracted = call_llm_json(

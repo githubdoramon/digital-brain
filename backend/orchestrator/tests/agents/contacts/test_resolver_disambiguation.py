@@ -1546,6 +1546,52 @@ def test_contact_resolution_timeout_override_replaces_inner_timeout(monkeypatch)
         resolver._call_contact_resolution_llm_json("prompt", timeout=60, use_fast_model=True)
 
     assert captured["timeout"] == 120
+    assert captured["use_fast_model"] is True
+    assert captured["reasoning_effort"] == "low"
+
+
+def test_extract_people_normalizes_object_items(monkeypatch):
+    def fake_call_llm_json(_prompt, **_kwargs):
+        return {
+            "people": [
+                {"name": "Jordan Example", "confidence": 0.95},
+                {"value": "user"},
+            ]
+        }
+
+    monkeypatch.setattr(resolver, "call_llm_json", fake_call_llm_json)
+
+    people = resolver.extract_people_from_text("I met Jordan Example")
+
+    assert people == ["Jordan Example", "user"]
+
+
+def test_collective_selector_extraction_normalizes_direct_list(monkeypatch):
+    def fake_call_llm_json(_prompt, **_kwargs):
+        return [
+            {
+                "kind": "company",
+                "value": "ExampleCo",
+                "raw": "ExampleCo",
+                "deterministic": False,
+            }
+        ]
+
+    monkeypatch.setattr(resolver, "call_llm_json", fake_call_llm_json)
+
+    selectors = resolver._extract_collective_selectors_via_llm(
+        text="I met everyone at ExampleCo",
+        conversation_block="",
+    )
+
+    assert selectors == [
+        {
+            "kind": "company",
+            "value": "ExampleCo",
+            "raw": "ExampleCo",
+            "deterministic": "false",
+        }
+    ]
 
 
 def test_nested_relationship_fallback_uses_top_level_contact_id(monkeypatch):

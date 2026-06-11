@@ -49,6 +49,8 @@ def test_contact_extraction_uses_self_context_instead_of_raw_user_line(monkeypat
     assert "Existing contact extraction from earlier turns" in prompt
     assert '"content": "Which Sage?"' in prompt
     assert '"contact_name": "Sage"' in prompt
+    assert captured["kwargs"]["use_fast_model"] is False
+    assert captured["kwargs"]["reasoning_effort"] == "high"
     response_format = captured["kwargs"]["response_format"]  # type: ignore[index]
     assert response_format["type"] == "json_schema"
     schema = response_format["json_schema"]["schema"]
@@ -61,7 +63,7 @@ def test_contact_extraction_uses_self_context_instead_of_raw_user_line(monkeypat
 
 
 def test_event_extraction_uses_self_context_instead_of_raw_user_line(monkeypatch):
-    captured: dict[str, str] = {}
+    captured: dict[str, object] = {}
 
     monkeypatch.setattr("prompts.context.get_time_context", lambda: "Current test time")
     monkeypatch.setattr(
@@ -72,6 +74,7 @@ def test_event_extraction_uses_self_context_instead_of_raw_user_line(monkeypatch
 
     def fake_call_llm_json(prompt: str, **_kwargs):
         captured["prompt"] = prompt
+        captured["kwargs"] = _kwargs
         return {
             "need_user_input": None,
             "title": "Lunch with Sage",
@@ -94,10 +97,12 @@ def test_event_extraction_uses_self_context_instead_of_raw_user_line(monkeypatch
     prompt = captured["prompt"]
     assert "You are assisting Alex." in prompt
     assert "- User: alex@example.com" not in prompt
+    assert captured["kwargs"]["use_fast_model"] is False
+    assert captured["kwargs"]["reasoning_effort"] == "high"
 
 
 def test_event_follow_up_field_inference_uses_self_context(monkeypatch):
-    captured: dict[str, str] = {}
+    captured: dict[str, object] = {}
 
     monkeypatch.setattr("prompts.context.get_time_context", lambda: "Current test time")
     monkeypatch.setattr(
@@ -108,6 +113,7 @@ def test_event_follow_up_field_inference_uses_self_context(monkeypatch):
 
     def fake_call_llm_json(prompt: str, **_kwargs):
         captured["prompt"] = prompt
+        captured["kwargs"] = _kwargs
         return {"fields": ["where"], "confidence": "high"}
 
     monkeypatch.setattr("llm_helpers.call_llm_json", fake_call_llm_json)
@@ -119,9 +125,11 @@ def test_event_follow_up_field_inference_uses_self_context(monkeypatch):
     )
 
     assert fields == ["where"]
-    prompt = captured["prompt"]
+    prompt = str(captured["prompt"])
     assert "You are assisting Alex." in prompt
     assert "- User: alex@example.com" not in prompt
+    assert captured["kwargs"]["use_fast_model"] is False
+    assert captured["kwargs"]["reasoning_effort"] == "high"
 
 
 def test_event_extraction_infers_immediate_past_time(monkeypatch):

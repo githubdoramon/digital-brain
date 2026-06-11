@@ -255,7 +255,7 @@ def _call_contact_resolution_llm_json(prompt: str, **kwargs: Any) -> dict[str, A
     timeout_override = _CONTACT_RESOLUTION_TIMEOUT_OVERRIDE.get()
     request_options_override = _CONTACT_RESOLUTION_REQUEST_OPTIONS_OVERRIDE.get()
     kwargs.setdefault("use_fast_model", True)
-    kwargs.setdefault("reasoning_effort", "none")
+    kwargs.setdefault("reasoning_effort", "low")
     if model_override and "model" not in kwargs:
         kwargs["model"] = model_override
     if timeout_override:
@@ -1340,6 +1340,42 @@ def _filter_event_participants_via_llm(
     return parse_event_participant_filter_result(people=people, result=result)
 
 
+def _coerce_people_extraction_result(result: Any) -> list[str]:
+    """Normalize common non-strict people extraction shapes from local models."""
+    raw_people = result.get("people", []) if isinstance(result, dict) else result
+    if not isinstance(raw_people, list):
+        return []
+
+    people: list[str] = []
+    for item in raw_people:
+        if isinstance(item, str):
+            value = item
+        elif isinstance(item, dict):
+            value = str(
+                item.get("name")
+                or item.get("value")
+                or item.get("person")
+                or item.get("text")
+                or ""
+            )
+        else:
+            value = ""
+        value = value.strip()
+        if value:
+            people.append(value)
+    return people
+
+
+def _coerce_collective_selector_result(result: Any) -> list[Any]:
+    """Normalize common selector response shapes before selector validation."""
+    if isinstance(result, list):
+        return result
+    if not isinstance(result, dict):
+        return []
+    raw_selectors = result.get("selectors", result.get("collective_selectors", []))
+    return raw_selectors if isinstance(raw_selectors, list) else []
+
+
 _EXPLICIT_COLLECTIVE_SELECTOR_PATTERN = re.compile(
     r"\b(?:everyone|everybody|all|team|teams|people|folks|staff|employees|employee|"
     r"coworkers|coworker|co-workers|co-worker|colleagues|group|groups|department|"
@@ -1497,7 +1533,11 @@ def _extract_collective_selectors_via_llm(
             COLLECTIVE_SELECTOR_RESPONSE_SCHEMA,
         ),
     )
-    raw_selectors = result.get("selectors", [])
+    raw_selectors = _coerce_collective_selector_result(result)
+    logger.info(
+        "[contact_resolver] LLM collective selector extraction normalized selector_count=%d",
+        len(raw_selectors),
+    )
     llm_collective_selectors: list[dict[str, str]] = []
     if isinstance(raw_selectors, list):
         for selector in raw_selectors:
@@ -1590,7 +1630,11 @@ def extract_people_from_text(
                     PEOPLE_EXTRACTION_RESPONSE_SCHEMA,
                 ),
             )
-            people = result.get("people", [])
+            people = _coerce_people_extraction_result(result)
+            logger.info(
+                "[contact_resolver] LLM people extraction normalized people_count=%d",
+                len(people),
+            )
 
             # Validate extraction: check for unresolved pronouns
             invalid_extractions = []
