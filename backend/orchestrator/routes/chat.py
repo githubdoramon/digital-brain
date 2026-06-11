@@ -26,6 +26,7 @@ from commands.event import (
 )
 from db import get_conn
 from llm_helpers import LLMUnavailableError
+from notifications.chat_replies import send_chat_reply_notification
 from observability.logger import get_runtime_logger
 from schemas import (
     AskIn,
@@ -44,6 +45,30 @@ logger = get_runtime_logger(__name__)
 
 ASK_RUNS_TTL_SECONDS = 1800
 _ask_runs: dict[str, dict[str, Any]] = {}
+
+
+def _send_reply_ready_notification(
+    *,
+    user_email: str,
+    thread_id: str,
+    bundle: dict[str, Any],
+    is_main_session: bool,
+) -> None:
+    try:
+        send_chat_reply_notification(
+            user_email=user_email,
+            thread_id=thread_id,
+            answer=str(bundle.get("answer") or ""),
+            is_main_session=is_main_session,
+        )
+    except Exception as exc:
+        logger.warning(
+            "[ask/stream] failed to send reply notification user=%s thread=%s: %s",
+            user_email,
+            thread_id,
+            exc,
+            exc_info=exc,
+        )
 
 
 def _llm_unavailable_message() -> str:
@@ -287,6 +312,7 @@ def create_chat_router() -> APIRouter:
             raise HTTPException(status_code=400, detail="Authenticated user email missing")
         staged_media_attachments, command_user_metadata = _prepare_command_media(payload, user_email)
         run_id = _create_ask_run(user_email, payload.thread_id or payload.session_id)
+        is_main_session_request = not (payload.thread_id or payload.session_id)
 
         from commands import parse_command
         from commands.storage import get_pending_event
@@ -380,6 +406,13 @@ def create_chat_router() -> APIRouter:
                             result=bundle,
                             error=None,
                         )
+                        if disconnect_event.is_set():
+                            _send_reply_ready_notification(
+                                user_email=user_email,
+                                thread_id=command_thread_id,
+                                bundle=bundle,
+                                is_main_session=is_main_session_request,
+                            )
                         return {"type": "done", "bundle": bundle}
                     except ValueError as exc:
                         _touch_ask_run(
@@ -590,6 +623,14 @@ def create_chat_router() -> APIRouter:
                                 result=event.get("bundle"),
                                 error=None,
                             )
+                            if disconnect_event.is_set():
+                                await asyncio.to_thread(
+                                    _send_reply_ready_notification,
+                                    user_email=user_email,
+                                    thread_id=ctx.session_id,
+                                    bundle=event.get("bundle") or {},
+                                    is_main_session=is_main_session_request,
+                                )
 
                         if not disconnect_event.is_set():
                             await queue.put(event)

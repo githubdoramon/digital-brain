@@ -249,6 +249,7 @@ User Question → Intent Router → Conversational Profile Dispatch → Tool Vis
 ### Conversation API
 - `POST /ask` – Ask a question (returns answer + state)
 - `POST /ask/stream` – Streaming responses
+- Mobile `/ask/stream` sends a `chat-reply` push notification only when the stream disconnected before completion; notification data includes `threadId` and `isMainSession` so taps route to `/home` or `/chat/[threadId]`.
 - `GET /threads` – List threads
 - `POST /threads` – Create thread
 - `GET /threads/{id}` – Get thread

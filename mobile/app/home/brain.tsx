@@ -287,7 +287,10 @@ function shouldKeepPendingRun(error: unknown): boolean {
   if (!(error instanceof Error)) {
     return false;
   }
-  const typedError = error as Error & { isReconnectable?: boolean };
+  const typedError = error as Error & { errorCode?: string; isReconnectable?: boolean };
+  if (typedError.errorCode === 'stream_backgrounded') {
+    return true;
+  }
   if (typedError.isReconnectable === true) {
     return true;
   }
