@@ -258,6 +258,21 @@ def warm_fast_model(*, timeout: Optional[int] = None) -> bool:
     )
 
 
+def warm_configured_chat_models(*, timeout: Optional[int] = None) -> list[str]:
+    """Warm each configured chat model once using the shared Ollama keep-alive."""
+    warmed_models: list[str] = []
+    seen_models: set[str] = set()
+    keep_alive = get_chat_keep_alive()
+    for use_fast_model in (True, False):
+        model = resolve_chat_model(use_fast_model=use_fast_model)
+        if model in seen_models:
+            continue
+        seen_models.add(model)
+        if warm_chat_model(model, timeout=timeout, keep_alive=keep_alive):
+            warmed_models.append(model)
+    return warmed_models
+
+
 def _raise_for_llm_error(data: dict[str, Any]) -> None:
     if "error" in data:
         error_msg = data.get("error", {})

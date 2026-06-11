@@ -73,6 +73,45 @@ def test_warm_fast_model_uses_ollama_chat_endpoint(monkeypatch):
     assert kwargs["timeout"] == 12
 
 
+def test_warm_configured_chat_models_warms_fast_and_smart(monkeypatch):
+    monkeypatch.setenv("LLM_BASE_URL", "http://localhost:11434/v1")
+    monkeypatch.setenv("LLM_CHAT_MODEL_FAST", "fast-model")
+    monkeypatch.setenv("LLM_CHAT_MODEL_SMART", "smart-model")
+    monkeypatch.setenv("OLLAMA_CHAT_KEEP_ALIVE", "24h")
+
+    calls = []
+
+    def fake_warm_chat_model(model, *, timeout=None, keep_alive=None):
+        calls.append((model, timeout, keep_alive))
+        return True
+
+    monkeypatch.setattr(llm_helpers, "warm_chat_model", fake_warm_chat_model)
+
+    warmed = llm_helpers.warm_configured_chat_models(timeout=12)
+
+    assert warmed == ["fast-model", "smart-model"]
+    assert calls == [("fast-model", 12, "24h"), ("smart-model", 12, "24h")]
+
+
+def test_warm_configured_chat_models_dedupes_same_model(monkeypatch):
+    monkeypatch.setenv("LLM_BASE_URL", "http://localhost:11434/v1")
+    monkeypatch.setenv("LLM_CHAT_MODEL_FAST", "same-model")
+    monkeypatch.setenv("LLM_CHAT_MODEL_SMART", "same-model")
+
+    calls = []
+
+    def fake_warm_chat_model(model, *, timeout=None, keep_alive=None):
+        calls.append(model)
+        return True
+
+    monkeypatch.setattr(llm_helpers, "warm_chat_model", fake_warm_chat_model)
+
+    warmed = llm_helpers.warm_configured_chat_models()
+
+    assert warmed == ["same-model"]
+    assert calls == ["same-model"]
+
+
 def test_warm_chat_model_uses_requested_model(monkeypatch):
     monkeypatch.setenv("LLM_BASE_URL", "http://localhost:11434/v1")
 

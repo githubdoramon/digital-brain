@@ -12,7 +12,7 @@ import conversations
 import meeting_transcript_jobs
 from db import get_conn
 from db_migrations import run_pending_migrations
-from llm_helpers import warm_fast_model
+from llm_helpers import warm_configured_chat_models
 from observability.log_stream import configure_logging, install_stdout_logger
 from observability.logger import get_runtime_logger
 from routes.automation import create_automation_router
@@ -123,9 +123,10 @@ async def lifespan(_app: FastAPI):
         pass
 
     try:
-        warm_fast_model()
+        warmed_models = warm_configured_chat_models()
+        logger.info("Warmed configured chat models: %s", ", ".join(warmed_models) or "none")
     except Exception:
-        logger.exception("Fast-model warmup failed; continuing startup")
+        logger.exception("Chat-model warmup failed; continuing startup")
 
     meeting_transcript_jobs.start_worker()
     try:

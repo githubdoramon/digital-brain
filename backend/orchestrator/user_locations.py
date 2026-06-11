@@ -41,19 +41,13 @@ def _normalize_timestamp(value: Any) -> datetime | None:
 def _should_skip_location_update(
     *,
     existing: dict[str, Any] | None,
-    lat: float,
-    lon: float,
     captured_at: datetime,
 ) -> bool:
     if not existing:
         return False
 
     existing_captured_at = _normalize_timestamp(existing.get("captured_at"))
-    if existing_captured_at and captured_at <= existing_captured_at:
-        return True
-
-    moved_meters = _distance_meters(existing, {"lat": lat, "lon": lon})
-    return moved_meters < LOCATION_DEDUPE_MIN_DISTANCE_METERS
+    return bool(existing_captured_at and captured_at <= existing_captured_at)
 
 
 def _build_skip_reason(
@@ -73,7 +67,7 @@ def _build_skip_reason(
     moved_meters = _distance_meters(existing, {"lat": lat, "lon": lon})
     if moved_meters >= LOCATION_DEDUPE_MIN_DISTANCE_METERS:
         return "significant_movement"
-    return "movement_below_threshold"
+    return "newer_capture_within_movement_threshold"
 
 
 def upsert_user_location(
@@ -159,8 +153,6 @@ def upsert_user_location(
 
     if _should_skip_location_update(
         existing=existing,
-        lat=lat,
-        lon=lon,
         captured_at=resolved_captured_at,
     ):
         skip_reason = _build_skip_reason(

@@ -83,6 +83,15 @@ function buildLogLines(events: LocationDebugEvent[]): string[] {
   return lines;
 }
 
+function getLatestLocationDebugEvent(events: LocationDebugEvent[]): LocationDebugEvent | undefined {
+  return events.reduce<LocationDebugEvent | undefined>((latest, event) => {
+    if (!latest) {
+      return event;
+    }
+    return Date.parse(event.at) > Date.parse(latest.at) ? event : latest;
+  }, undefined);
+}
+
 export function buildLocationDebugLogText(
   current: LocationDebugSnapshot = snapshot,
   options?: { backgroundOnly?: boolean },
@@ -91,7 +100,7 @@ export function buildLocationDebugLogText(
   const filteredEvents = options?.backgroundOnly
     ? eventLog.filter(isBackgroundRelevantLocationEvent)
     : eventLog;
-  const lastRelevantEvent = filteredEvents[0];
+  const lastRelevantEvent = getLatestLocationDebugEvent(filteredEvents);
   const lines = [
     options?.backgroundOnly ? 'Digital Brain Mobile Background Location Debug Log' : 'Digital Brain Mobile Location Debug Log',
     `Generated: ${new Date().toISOString()}`,

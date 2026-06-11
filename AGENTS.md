@@ -285,7 +285,7 @@ User Question → Intent Router → Conversational Profile Dispatch → Tool Vis
 - `PUT /mobile/settings/notifications/{notification_type}` – Update channels for one notification type
 - `POST /mobile/devices/register` – Register Expo push token for mobile device
 - `DELETE /mobile/devices/unregister` – Unregister Expo push token for mobile device
-- `POST /mobile/location` – Append a user location history entry when movement exceeds the dedupe threshold
+- `POST /mobile/location` – Append newer user location history entries; reject stale/duplicate captures
 - `GET /mobile/location` – Read the latest user location
 
 ### Daily Briefings
