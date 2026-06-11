@@ -116,7 +116,7 @@ sequenceDiagram
 - Resolved place context can be persisted in assistant message metadata and reinjected for deictic follow-ups (for example "Who else lives here?") so place-aware tools use stable `place_id` references.
 - Orchestrator startup auto-applies ordered SQL migrations from `backend/orchestrator/db_migrations/`; `backend/db/init.sql` remains bootstrap-only for fresh Postgres initialization.
 - Controller tracks recovery metrics in state metadata (`tool_visibility_escalations_count`, `clarification_requests_count`).
-- Adaptive model routing is always enabled (`agent/model_routing.py`) and selects model/timeout per step.
+- Adaptive model routing is always enabled (`agent/model_routing.py`): routing, contact resolution, and tagging use the fast chat model with reasoning effort `none`; main agent turns use the smart chat model starting at low effort and escalating effort/timeout as complexity, step count, tool count, or low routing confidence increase. Daily briefing generation and meeting transcript summarization use the smart chat model with high effort.
 - Planner/verifier checks are runtime-enforced (`agent/planning_policy.py`) before final answer completion.
 - Tool execution coordinator supports parallel batches for independent read-only tool calls.
 - Tool-result reinjection is budget-aware: inspected entities (for example `get_events(action=by_ids)` and `get_document`) stay raw when the prompt budget allows, while broad retrieval results are compacted only when the assembled prompt would otherwise exceed the estimated budget.

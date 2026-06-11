@@ -15,6 +15,7 @@ class LLMCallPolicy:
     timeout: int
     profile: str
     rationale: str
+    reasoning_effort: str
 
 
 def _parse_int(value: str | None, default: int) -> int:
@@ -51,7 +52,6 @@ def select_llm_call_policy(
     default_timeout: int,
 ) -> LLMCallPolicy:
     """Choose model + timeout for the next agent LLM call."""
-    fast_model = os.getenv("LLM_CHAT_MODEL_FAST", "").strip() or default_model
     smart_model = os.getenv("LLM_CHAT_MODEL_SMART", "").strip() or default_model
     complexity_threshold = _parse_int(os.getenv("AGENT_MODEL_ROUTING_COMPLEXITY_THRESHOLD"), 3)
     step_threshold = _parse_int(os.getenv("AGENT_MODEL_ROUTING_STEP_THRESHOLD"), 4)
@@ -67,18 +67,23 @@ def select_llm_call_policy(
     if tools_count >= 8:
         complexity += 1
 
-    if complexity >= complexity_threshold:
-        return LLMCallPolicy(
-            model=smart_model,
-            timeout=max(default_timeout, default_timeout + timeout_boost_seconds),
-            profile="smart",
-            rationale=f"complexity={complexity}",
-        )
+    if complexity >= complexity_threshold + 2:
+        reasoning_effort = "high"
+    elif complexity >= complexity_threshold:
+        reasoning_effort = "medium"
+    else:
+        reasoning_effort = "low"
 
-    reduced_timeout = max(30, int(default_timeout * 0.85))
+    timeout = default_timeout
+    if reasoning_effort in {"medium", "high"}:
+        timeout = max(default_timeout, default_timeout + timeout_boost_seconds)
+    if reasoning_effort == "high":
+        timeout = max(timeout, default_timeout + (timeout_boost_seconds * 2))
+
     return LLMCallPolicy(
-        model=fast_model,
-        timeout=reduced_timeout,
-        profile="fast",
+        model=smart_model,
+        timeout=timeout,
+        profile="smart",
         rationale=f"complexity={complexity}",
+        reasoning_effort=reasoning_effort,
     )

@@ -30,9 +30,10 @@ def test_select_llm_call_policy_prefers_smart_for_complex_questions(monkeypatch)
     assert policy.profile == "smart"
     assert policy.model == "smart-model"
     assert policy.timeout >= 60
+    assert policy.reasoning_effort in {"medium", "high"}
 
 
-def test_select_llm_call_policy_prefers_fast_for_simple_questions(monkeypatch):
+def test_select_llm_call_policy_starts_smart_at_low_effort(monkeypatch):
     monkeypatch.setenv("LLM_CHAT_MODEL_FAST", "fast-model")
     monkeypatch.setenv("LLM_CHAT_MODEL_SMART", "smart-model")
     monkeypatch.setenv("AGENT_MODEL_ROUTING_COMPLEXITY_THRESHOLD", "4")
@@ -47,6 +48,7 @@ def test_select_llm_call_policy_prefers_fast_for_simple_questions(monkeypatch):
         default_timeout=60,
     )
 
-    assert policy.profile == "fast"
-    assert policy.model == "fast-model"
-    assert policy.timeout <= 60
+    assert policy.profile == "smart"
+    assert policy.model == "smart-model"
+    assert policy.reasoning_effort == "low"
+    assert policy.timeout == 60

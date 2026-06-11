@@ -7,11 +7,11 @@ import requests
 import llm_helpers
 
 
-def test_build_chat_payload_attaches_keep_alive_only_for_fast_model(monkeypatch):
+def test_build_chat_payload_attaches_keep_alive_for_configured_chat_models(monkeypatch):
     monkeypatch.setenv("LLM_BASE_URL", "http://localhost:11434/v1")
     monkeypatch.setenv("LLM_CHAT_MODEL_FAST", "fast-model")
     monkeypatch.setenv("LLM_CHAT_MODEL_SMART", "smart-model")
-    monkeypatch.setenv("OLLAMA_FAST_KEEP_ALIVE", "-1")
+    monkeypatch.setenv("OLLAMA_CHAT_KEEP_ALIVE", "-1")
 
     fast_payload = llm_helpers.build_chat_payload(
         [{"role": "user", "content": "hi"}],
@@ -24,8 +24,10 @@ def test_build_chat_payload_attaches_keep_alive_only_for_fast_model(monkeypatch)
 
     assert fast_payload["model"] == "fast-model"
     assert fast_payload["keep_alive"] == -1
+    assert fast_payload["reasoning_effort"] == "none"
     assert smart_payload["model"] == "smart-model"
-    assert "keep_alive" not in smart_payload
+    assert smart_payload["keep_alive"] == -1
+    assert smart_payload["reasoning_effort"] == "low"
 
 
 def test_build_chat_payload_uses_keep_alive_override_for_any_model(monkeypatch):
@@ -47,7 +49,7 @@ def test_warm_fast_model_uses_ollama_chat_endpoint(monkeypatch):
     monkeypatch.setenv("LLM_BASE_URL", "http://localhost:11434/v1")
     monkeypatch.setenv("LLM_CHAT_MODEL_FAST", "fast-model")
     monkeypatch.setenv("LLM_CHAT_MODEL_SMART", "smart-model")
-    monkeypatch.setenv("OLLAMA_FAST_KEEP_ALIVE", "24h")
+    monkeypatch.setenv("OLLAMA_CHAT_KEEP_ALIVE", "24h")
 
     response = MagicMock()
     response.json.return_value = {"done": True, "done_reason": "load"}

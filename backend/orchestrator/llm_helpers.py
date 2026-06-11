@@ -18,7 +18,7 @@ import httpx
 import requests
 
 from llm_config import (
-    get_fast_keep_alive,
+    get_chat_keep_alive,
     get_ollama_api_base_url,
     is_ollama_base_url,
     resolve_chat_model,
@@ -99,15 +99,38 @@ def _maybe_attach_keep_alive(payload: dict[str, Any]) -> None:
     if not model_name:
         return
 
+    configured_models: set[str] = set()
+    for use_fast_model in (True, False):
+        try:
+            configured_models.add(resolve_chat_model(use_fast_model=use_fast_model))
+        except RuntimeError:
+            continue
+
+    if model_name not in configured_models:
+        return
+
+    payload["keep_alive"] = get_chat_keep_alive()
+
+
+def _default_reasoning_effort(resolved_model: str) -> str | None:
+    """Return the repository default reasoning effort for configured chat models."""
+    model_name = str(resolved_model or "").strip()
+    if not model_name:
+        return None
+
     try:
-        fast_model = resolve_chat_model(use_fast_model=True)
+        if model_name == resolve_chat_model(use_fast_model=True):
+            return "none"
     except RuntimeError:
-        return
+        pass
 
-    if model_name != fast_model:
-        return
+    try:
+        if model_name == resolve_chat_model(use_fast_model=False):
+            return "low"
+    except RuntimeError:
+        pass
 
-    payload["keep_alive"] = get_fast_keep_alive()
+    return None
 
 
 def build_json_schema_response_format(
@@ -164,7 +187,10 @@ def build_chat_payload(
     if top_p is not None:
         payload["top_p"] = top_p
 
-    normalized_reasoning_effort = str(reasoning_effort or "").strip().lower()
+    normalized_reasoning_effort = str(
+        reasoning_effort if reasoning_effort is not None else _default_reasoning_effort(resolved_model)
+        or ""
+    ).strip().lower()
     if normalized_reasoning_effort:
         payload["reasoning_effort"] = normalized_reasoning_effort
         payload["reasoning"] = {"effort": normalized_reasoning_effort}
@@ -228,7 +254,7 @@ def warm_fast_model(*, timeout: Optional[int] = None) -> bool:
     return warm_chat_model(
         resolve_chat_model(use_fast_model=True),
         timeout=timeout,
-        keep_alive=get_fast_keep_alive(),
+        keep_alive=get_chat_keep_alive(),
     )
 
 
@@ -924,6 +950,7 @@ def call_llm_with_tools(
     max_tokens: Optional[int] = None,
     temperature: Optional[float] = None,
     top_p: Optional[float] = None,
+    reasoning_effort: Optional[str] = None,
     tool_choice: Optional[str | dict[str, Any]] = None,
     max_steps: int = 6,
     max_tool_calls: int = 12,
@@ -945,6 +972,7 @@ def call_llm_with_tools(
             max_tokens=max_tokens,
             temperature=temperature,
             top_p=top_p,
+            reasoning_effort=reasoning_effort,
             tools=tools,
             tool_choice=tool_choice,
         )

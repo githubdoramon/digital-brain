@@ -739,7 +739,7 @@ Action item rules:
             use_fast_model=False,
             timeout=MEETING_TRANSCRIPT_SUMMARY_TIMEOUT_SECONDS,
             temperature=0.2,
-            reasoning_effort="medium",
+            reasoning_effort="high",
             response_format=build_json_schema_response_format(
                 name="meeting_transcript_summary",
                 schema=MEETING_TRANSCRIPT_SUMMARY_RESPONSE_SCHEMA,

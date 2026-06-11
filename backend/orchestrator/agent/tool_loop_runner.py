@@ -16,6 +16,7 @@ def run_profiled_tool_loop(
     tools: list[dict[str, Any]],
     tool_handlers: dict[str, Callable[[dict[str, Any]], dict[str, Any]]],
     profile: BoundedRuntimeProfile,
+    reasoning_effort: str | None = None,
 ) -> dict[str, Any]:
     """Run a bounded tool loop using a shared runtime profile."""
     call_kwargs: dict[str, Any] = {
@@ -26,6 +27,7 @@ def run_profiled_tool_loop(
         "timeout": profile.timeout_seconds,
         "temperature": profile.temperature,
         "top_p": profile.top_p,
+        "reasoning_effort": reasoning_effort,
         "max_steps": profile.max_steps,
         "max_tool_calls": profile.max_tool_calls,
     }

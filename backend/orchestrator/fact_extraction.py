@@ -161,7 +161,8 @@ def _run_extraction(
             prompt,
             system_prompt=EXTRACTION_SYSTEM_PROMPT,
             temperature=0.0,
-            use_fast_model=True,
+            use_fast_model=False,
+            reasoning_effort="high",
             timeout=60,
             response_format=build_json_schema_response_format(
                 name="fact_extraction",

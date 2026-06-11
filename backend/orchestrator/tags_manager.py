@@ -5,7 +5,7 @@ import os
 from collections.abc import Iterable, Sequence
 from typing import Any, Literal
 
-from llm_config import get_smart_model
+from llm_config import get_fast_model
 from llm_helpers import build_json_schema_response_format
 from llm_json_schemas import TAG_SUGGESTION_RESPONSE_SCHEMA
 from observability.logger import get_runtime_logger
@@ -152,8 +152,8 @@ def _call_llm_text(
     return call_llm(
         prompt,
         system_prompt=system_prompt,
-        model=model or get_smart_model(),
-        use_fast_model=False,
+        model=model or get_fast_model(),
+        use_fast_model=True,
         timeout=timeout,
         **dict(llm_request_options or {}),
     )
@@ -270,7 +270,8 @@ def _suggest_tags(
             "response_format": build_json_schema_response_format(
                 name="tag_suggestion",
                 schema=TAG_SUGGESTION_RESPONSE_SCHEMA,
-            )
+            ),
+            "reasoning_effort": "none",
         }
         request_options.update(dict(llm_request_options or {}))
         raw_content = _call_llm_text(

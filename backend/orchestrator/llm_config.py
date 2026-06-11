@@ -6,7 +6,10 @@ from urllib.parse import urlparse, urlunparse
 LLM_BASE_URL = os.getenv("LLM_BASE_URL", "").strip()
 LLM_CHAT_MODEL_FAST = os.getenv("LLM_CHAT_MODEL_FAST", "").strip()
 LLM_CHAT_MODEL_SMART = os.getenv("LLM_CHAT_MODEL_SMART", "").strip()
-OLLAMA_FAST_KEEP_ALIVE = os.getenv("OLLAMA_FAST_KEEP_ALIVE", "-1").strip()
+OLLAMA_CHAT_KEEP_ALIVE = os.getenv(
+    "OLLAMA_CHAT_KEEP_ALIVE",
+    os.getenv("OLLAMA_FAST_KEEP_ALIVE", "-1"),
+).strip()
 
 
 def get_fast_model() -> str:
@@ -23,11 +26,19 @@ def get_smart_model() -> str:
     return model
 
 
-def get_fast_keep_alive() -> str | int:
-    value = os.getenv("OLLAMA_FAST_KEEP_ALIVE", OLLAMA_FAST_KEEP_ALIVE).strip() or "-1"
+def get_chat_keep_alive() -> str | int:
+    value = os.getenv(
+        "OLLAMA_CHAT_KEEP_ALIVE",
+        os.getenv("OLLAMA_FAST_KEEP_ALIVE", OLLAMA_CHAT_KEEP_ALIVE),
+    ).strip() or "-1"
     if value.lstrip("-").isdigit():
         return int(value)
     return value
+
+
+def get_fast_keep_alive() -> str | int:
+    """Backward-compatible alias for the shared chat keep-alive setting."""
+    return get_chat_keep_alive()
 
 
 def resolve_chat_model(*, model: str | None = None, use_fast_model: bool | None = None) -> str:

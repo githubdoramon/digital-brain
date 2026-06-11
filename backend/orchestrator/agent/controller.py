@@ -31,7 +31,7 @@ from agent.agent_interfaces import (
     build_default_conversational_interface,
 )
 from agents.registry import build_conversational_profile_registry, choose_profile_interface
-from llm_config import get_fast_model
+from llm_config import get_smart_model
 from location_inference import infer_current_place
 from observability import trace
 from observability.logger import get_runtime_logger
@@ -117,7 +117,7 @@ class AgentController:
 
         # LLM configuration
         self.llm_base_url = os.getenv("LLM_BASE_URL", "")
-        self.llm_model = get_fast_model()
+        self.llm_model = get_smart_model()
         self.llm_api_key = os.getenv("LLM_API_KEY", "")
         self.llm_timeout = int(os.getenv("LLM_TIMEOUT", "120"))
         self.router_restriction_mode = os.getenv("ROUTER_RESTRICTION_MODE", "conservative").strip()
@@ -1240,6 +1240,7 @@ class AgentController:
                 "model": policy.model,
                 "timeout": policy.timeout,
                 "rationale": policy.rationale,
+                "reasoning_effort": policy.reasoning_effort,
             },
         )
 
@@ -1351,11 +1352,13 @@ class AgentController:
         policy = self._active_llm_policy
         model = policy.model if policy else (self.llm_model or None)
         timeout = policy.timeout if policy else self.llm_timeout
+        reasoning_effort = policy.reasoning_effort if policy else "low"
         return call_llm_with_tools(
             messages,
             tools,
             model=model,
             timeout=timeout,
+            reasoning_effort=reasoning_effort,
         )
 
     async def _stream_llm(
@@ -1367,11 +1370,13 @@ class AgentController:
         policy = self._active_llm_policy
         model = policy.model if policy else (self.llm_model or None)
         timeout = policy.timeout if policy else self.llm_timeout
+        reasoning_effort = policy.reasoning_effort if policy else "low"
         async for chunk in stream_llm_with_tools(
             messages,
             tools,
             model=model,
             timeout=timeout,
+            reasoning_effort=reasoning_effort,
         ):
             yield chunk
 

@@ -254,6 +254,8 @@ def _call_contact_resolution_llm_json(prompt: str, **kwargs: Any) -> dict[str, A
     model_override = _CONTACT_RESOLUTION_MODEL_OVERRIDE.get()
     timeout_override = _CONTACT_RESOLUTION_TIMEOUT_OVERRIDE.get()
     request_options_override = _CONTACT_RESOLUTION_REQUEST_OPTIONS_OVERRIDE.get()
+    kwargs.setdefault("use_fast_model", True)
+    kwargs.setdefault("reasoning_effort", "none")
     if model_override and "model" not in kwargs:
         kwargs["model"] = model_override
     if timeout_override:

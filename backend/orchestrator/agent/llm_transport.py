@@ -18,6 +18,7 @@ def call_llm_with_tools(
     *,
     model: str | None,
     timeout: int,
+    reasoning_effort: str | None = None,
 ) -> dict[str, Any]:
     """Make a synchronous chat-completions call with tool definitions."""
     data = call_llm_chat(
@@ -26,6 +27,7 @@ def call_llm_with_tools(
         tool_choice="auto",
         model=model,
         timeout=timeout,
+        reasoning_effort=reasoning_effort,
     )
 
     if data.get("choices"):
@@ -43,6 +45,7 @@ async def stream_llm_with_tools(
     *,
     model: str | None,
     timeout: int,
+    reasoning_effort: str | None = None,
 ) -> AsyncGenerator[dict[str, Any], None]:
     """Stream chat-completions chunks and normalize tool-call deltas."""
     accumulated_tool_calls: dict[int, dict[str, Any]] = {}
@@ -71,6 +74,7 @@ async def stream_llm_with_tools(
         tool_choice="auto",
         model=model,
         timeout=timeout,
+        reasoning_effort=reasoning_effort,
     ):
         line = line.strip()
         if not line or line == "data: [DONE]":

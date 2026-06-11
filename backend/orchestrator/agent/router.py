@@ -149,7 +149,8 @@ class IntentRouter:
         )
         self.llm_timeout = int(os.getenv("INTENT_ROUTER_TIMEOUT", str(llm_timeout)))
         self.enable_llm_routing = enable_llm_routing
-        self.llm_request_options = dict(llm_request_options or {})
+        self.llm_request_options = {"reasoning_effort": "none"}
+        self.llm_request_options.update(dict(llm_request_options or {}))
         self.rule_high_confidence_threshold = float(
             os.getenv("INTENT_ROUTER_RULE_HIGH_CONFIDENCE", "0.85")
         )

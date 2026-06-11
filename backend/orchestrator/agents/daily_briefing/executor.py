@@ -1162,6 +1162,7 @@ def _research_event_debug(
             tools=tools,
             tool_handlers=tool_handlers,
             profile=runtime,
+            reasoning_effort="high",
         )
         content = (result.get("content") or "").strip()
         tool_calls_made = result.get("tool_calls", 0)
@@ -1384,6 +1385,7 @@ def _plan_event_research(
             ),
             temperature=0,
             use_fast_model=False,
+            reasoning_effort="high",
             response_format=build_json_schema_response_format(
                 name="daily_briefing_research_plan",
                 schema=DAILY_BRIEFING_RESEARCH_PLAN_RESPONSE_SCHEMA,
@@ -1620,6 +1622,7 @@ def _synthesise_event_summary_from_current_context(
             system_prompt=system_prompt,
             temperature=0.1,
             use_fast_model=False,
+            reasoning_effort="high",
         )
         if str(result or "").strip().upper().startswith("NO_MEANINGFUL_PREP"):
             return _build_event_prep(
@@ -1982,6 +1985,7 @@ def _generate_event_sections_markdown(
         ),
         temperature=0.1,
         use_fast_model=False,
+        reasoning_effort="high",
     ).strip()
 
 
@@ -2560,6 +2564,7 @@ def _generate_article_brief_summary(
             system_prompt=system_prompt,
             temperature=0.3,
             use_fast_model=False,
+            reasoning_effort="high",
         )
     except Exception:
         logger.warning("[briefing] LLM article summary generation failed for '%s'", title, exc_info=True)

@@ -339,14 +339,14 @@ frontend/web/src/
 LLM_BASE_URL=http://localhost:11434    # Ollama or OpenAI-compatible
 LLM_CHAT_MODEL_FAST=mistral
 LLM_CHAT_MODEL_SMART=gpt-4o
-OLLAMA_FAST_KEEP_ALIVE=-1
+OLLAMA_CHAT_KEEP_ALIVE=-1             # Applied to both configured chat models
 LLM_API_KEY=                           # Optional
 LLM_TIMEOUT=120
 LLM_CHAT_MODEL_FAST=mistral            # Optional fast profile override
 LLM_CHAT_MODEL_SMART=gpt-4o            # Optional smart profile override
 
 # Adaptive Model Routing (always enabled)
-AGENT_MODEL_ROUTING_COMPLEXITY_THRESHOLD=3
+AGENT_MODEL_ROUTING_COMPLEXITY_THRESHOLD=3  # Smart model starts low, escalates effort
 AGENT_MODEL_ROUTING_STEP_THRESHOLD=4
 AGENT_MODEL_ROUTING_TIMEOUT_BOOST_SECONDS=30
 
