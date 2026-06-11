@@ -10,19 +10,26 @@ EXPO_PUSH_URL = "https://exp.host/--/api/v2/push/send"
 EXPO_BATCH_SIZE = 100
 
 
-def send_push_notification(title: str, message: str, tokens: list[str]) -> dict[str, Any]:
+def send_push_notification(
+    title: str,
+    message: str,
+    tokens: list[str],
+    data: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     if not tokens:
         return {"sent": 0, "success": 0, "errors": [], "tickets": []}
 
-    payloads = [
-        {
+    payloads = []
+    for token in tokens:
+        payload: dict[str, Any] = {
             "to": token,
             "title": title,
             "body": message,
             "sound": "default",
         }
-        for token in tokens
-    ]
+        if data:
+            payload["data"] = data
+        payloads.append(payload)
 
     errors: list[str] = []
     tickets: list[dict[str, Any]] = []

@@ -102,7 +102,19 @@ function RootLayoutNav({ loaded }: { loaded: boolean }) {
         kind?: string;
         fileUri?: string;
         mimeType?: string;
+        threadId?: string;
+        isMainSession?: boolean;
       };
+
+      if (data?.kind === 'chat_reply') {
+        const threadId = typeof data.threadId === 'string' ? data.threadId.trim() : '';
+        if (data.isMainSession || !threadId) {
+          router.push('/home');
+          return;
+        }
+        router.push(`/chat/${encodeURIComponent(threadId)}`);
+        return;
+      }
 
       if (data?.kind === 'document_download') {
         const fileUri = typeof data.fileUri === 'string' ? data.fileUri : null;

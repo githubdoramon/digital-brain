@@ -65,6 +65,7 @@ Escalation policy:
 ## Conversational Profile Dispatch
 
 - `/ask` and `/ask/stream` are generic endpoints: controller selects conversational profile after routing.
+- Mobile `/ask/stream` continues execution after client disconnect. When the run later completes, the backend sends a `chat-reply` push notification with `threadId` and `isMainSession` data so the app can deep-link to `/home` for the main chat or `/chat/[threadId]` for a secondary thread.
 - Current mapping:
   - `MEMORY_SEARCH`, `DATA_QUERY`, `CONTACT_LOOKUP` -> `memory_expert`
   - all other intents -> `main`

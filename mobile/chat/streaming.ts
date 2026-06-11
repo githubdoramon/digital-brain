@@ -1,4 +1,5 @@
 import { fetch as expoFetch } from 'expo/fetch';
+import { AppState } from 'react-native';
 
 import { apiFetch, API_BASE_URL } from '@/api/client';
 import type { GeneratedFile } from '@/chat/generatedFiles';
@@ -275,16 +276,48 @@ export async function askWithStreaming({
     media_attachments: mediaAttachments && mediaAttachments.length > 0 ? mediaAttachments : undefined,
   };
 
-  const streamResponse = await expoFetch(`${API_BASE_URL}/mobile/ask/stream`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-    },
-    body: JSON.stringify(payload),
+  const abortController = new AbortController();
+  let backgroundAborted = false;
+  let abortListenerRemoved = false;
+  const backgroundAbortSubscription = AppState.addEventListener('change', (nextState) => {
+    if (nextState === 'active') return;
+    backgroundAborted = true;
+    abortController.abort();
   });
 
+  const cleanupBackgroundAbortListener = () => {
+    if (abortListenerRemoved) return;
+    abortListenerRemoved = true;
+    backgroundAbortSubscription.remove();
+  };
+
+  const buildBackgroundAbortError = () =>
+    buildStreamRequestError('Stream paused while the app is in the background', {
+      isReconnectable: false,
+      errorCode: 'stream_backgrounded',
+    });
+
+  let streamResponse: Awaited<ReturnType<typeof expoFetch>>;
+  try {
+    streamResponse = await expoFetch(`${API_BASE_URL}/mobile/ask/stream`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+      body: JSON.stringify(payload),
+      signal: abortController.signal,
+    });
+  } catch (error) {
+    cleanupBackgroundAbortListener();
+    if (backgroundAborted) {
+      throw buildBackgroundAbortError();
+    }
+    throw error;
+  }
+
   if (!streamResponse.ok) {
+    cleanupBackgroundAbortListener();
     const rawErrorBody = await streamResponse.text();
     let detail = rawErrorBody || `Request failed with ${streamResponse.status}`;
     try {
@@ -316,6 +349,7 @@ export async function askWithStreaming({
   }
   const reader = streamResponse.body?.getReader();
   if (!reader) {
+    cleanupBackgroundAbortListener();
     return (await apiFetch('/mobile/ask', {
       method: 'POST',
       body: JSON.stringify(payload),
@@ -442,6 +476,10 @@ export async function askWithStreaming({
       }
     }
   } catch (error) {
+    cleanupBackgroundAbortListener();
+    if (backgroundAborted) {
+      throw buildBackgroundAbortError();
+    }
     if (runId && shouldTryRunPolling(error)) {
       callbacks?.onStatus?.('Reconnecting...');
       return waitForRunCompletion(runId, token, callbacks);
@@ -450,6 +488,7 @@ export async function askWithStreaming({
   }
 
   if (!doneBundle) {
+    cleanupBackgroundAbortListener();
     if (runId) {
       callbacks?.onStatus?.('Reconnecting...');
       return waitForRunCompletion(runId, token, callbacks);
@@ -459,5 +498,6 @@ export async function askWithStreaming({
     });
   }
 
+  cleanupBackgroundAbortListener();
   return doneBundle;
 }

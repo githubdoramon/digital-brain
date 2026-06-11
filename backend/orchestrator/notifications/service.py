@@ -40,6 +40,7 @@ def send_notification_to_user(
     user_email: str,
     title: str,
     message: str,
+    data: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     subscription = get_subscription(user_email, notification_type)
     results: dict[str, Any] = {
@@ -55,7 +56,7 @@ def send_notification_to_user(
     if "push" in channels:
         tokens = fetch_push_tokens(user_email)
         if tokens:
-            push_result = send_push_notification(title, message, tokens)
+            push_result = send_push_notification(title, message, tokens, data=data)
             results["sent"]["push"] += push_result.get("success", 0)
             errors = push_result.get("errors") or []
             results["errors"].extend([f"push:{user_email}:{err}" for err in errors])
