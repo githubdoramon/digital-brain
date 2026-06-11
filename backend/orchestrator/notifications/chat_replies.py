@@ -64,4 +64,4 @@ def _preview_message(answer: str | None) -> str:
         return _DEFAULT_BODY
     if len(compact) <= _MAX_PREVIEW_LENGTH:
         return compact
-    return compact[: _MAX_PREVIEW_LENGTH - 1].rstrip() + "..."
+    return compact[: _MAX_PREVIEW_LENGTH - 3].rstrip() + "..."
