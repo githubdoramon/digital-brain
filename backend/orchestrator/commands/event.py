@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from collections.abc import Callable
 from copy import deepcopy
-from datetime import datetime
+from datetime import datetime, tzinfo
 from typing import Any
 from uuid import uuid4
 
@@ -22,7 +22,11 @@ from chat_media import (
     load_staged_chat_media_attachment,
     merge_staged_chat_media_attachments,
 )
-from commands.event_datetime import parse_event_datetime
+from commands.event_datetime import (
+    DEFAULT_EVENT_TIMEZONE,
+    event_timezone_from_context,
+    parse_event_datetime,
+)
 from observability.logger import get_runtime_logger
 from schemas import (
     ContactIn,
@@ -172,7 +176,11 @@ def _string_list_from_modification(raw: Any) -> list[str]:
     return values
 
 
-def _normalize_event_modifications(raw: Any) -> dict[str, Any]:
+def _normalize_event_modifications(
+    raw: Any,
+    *,
+    default_tz: tzinfo = DEFAULT_EVENT_TIMEZONE,
+) -> dict[str, Any]:
     if not isinstance(raw, dict):
         return {}
 
@@ -197,7 +205,7 @@ def _normalize_event_modifications(raw: Any) -> dict[str, Any]:
         else:
             when_text = str(when_raw).strip()
             try:
-                normalized["when"] = parse_event_datetime(when_text)
+                normalized["when"] = parse_event_datetime(when_text, default_tz=default_tz)
             except ValueError as exc:
                 raise HTTPException(
                     status_code=400,
@@ -210,7 +218,7 @@ def _normalize_event_modifications(raw: Any) -> dict[str, Any]:
         else:
             end_when_text = str(end_when_raw).strip()
             try:
-                normalized["end_when"] = parse_event_datetime(end_when_text)
+                normalized["end_when"] = parse_event_datetime(end_when_text, default_tz=default_tz)
             except ValueError as exc:
                 raise HTTPException(
                     status_code=400,
@@ -363,7 +371,11 @@ def confirm_event_command(
     extracted = command_data["extracted"]
     resolution = command_data["resolution"]
     media_attachments = _get_command_media_attachments(command_data)
-    normalized_modifications = _normalize_event_modifications(payload.modifications)
+    command_timezone = event_timezone_from_context(command_data)
+    normalized_modifications = _normalize_event_modifications(
+        payload.modifications,
+        default_tz=command_timezone,
+    )
     group_confirmations = payload.group_confirmations or {}
     if not group_confirmations:
         raw_group_confirmations = normalized_modifications.get("group_confirmations")

@@ -2,8 +2,28 @@ from __future__ import annotations
 
 from datetime import datetime, timezone, tzinfo
 from typing import Any
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 DEFAULT_EVENT_TIMEZONE = timezone.utc
+
+
+def resolve_event_timezone(timezone_name: Any) -> tzinfo:
+    name = str(timezone_name or "").strip()
+    if not name:
+        return DEFAULT_EVENT_TIMEZONE
+    try:
+        return ZoneInfo(name)
+    except ZoneInfoNotFoundError:
+        return DEFAULT_EVENT_TIMEZONE
+
+
+def event_timezone_from_context(context: dict[str, Any] | None) -> tzinfo:
+    if not isinstance(context, dict):
+        return DEFAULT_EVENT_TIMEZONE
+    client_context = context.get("client_context")
+    if not isinstance(client_context, dict):
+        return DEFAULT_EVENT_TIMEZONE
+    return resolve_event_timezone(client_context.get("timezone"))
 
 
 def normalize_event_datetime(

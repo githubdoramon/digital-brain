@@ -17,7 +17,11 @@ import events as events_service
 import places as places_service
 import retrieval
 from chat_media import merge_staged_chat_media_attachments, summarize_staged_chat_media_attachments
-from commands.event_datetime import normalize_event_datetime, parse_event_datetime
+from commands.event_datetime import (
+    event_timezone_from_context,
+    normalize_event_datetime,
+    parse_event_datetime,
+)
 from commands.handlers.clarification_utils import (
     build_clarification_result,
     build_clarification_storage_payload,
@@ -1050,13 +1054,20 @@ def _extract_event_entities_with_llm(
     """
     from llm_helpers import call_llm_json
     from prompts.clarification import append_clarification_guidelines
-    from prompts.context import get_self_context, get_time_context, get_user_facts_context
+    from prompts.context import (
+        get_location_context,
+        get_self_context,
+        get_time_context,
+        get_user_facts_context,
+    )
     from tags_manager import MAJOR_TAGS
 
     logger.info("[event_extraction] Starting extraction for: '%s'", message)
 
     # Get current time context
     time_context = get_time_context()
+    client_timezone = event_timezone_from_context(context)
+    location_context = get_location_context(context.get("client_context"))
     user_email = str(context.get("user_email") or "").strip()
     self_context = get_self_context(user_email) if user_email else None
 
@@ -1097,11 +1108,13 @@ def _extract_event_entities_with_llm(
 
     self_context_block = f"\n{self_context}\n" if self_context else ""
     user_facts_block = f"\n{user_facts_ctx}\n" if user_facts_ctx else ""
+    location_context_block = f"\n{location_context}\n" if location_context else ""
     extraction_prompt = f"""You are extracting structured information from a user's event description to create a memory entry.
 
 Current context:
 - Date/time: {time_context}\n
 {self_context_block}
+{location_context_block}
 {user_facts_block}\n
 Event description: "{message}"\n
 
@@ -1110,6 +1123,9 @@ Event description: "{message}"\n
 Extract the following information:
 1. **What happened**: A brief title (5-10 words) and detailed summary
 2. **When**: Parse event start date and time. Time is optional. Return ISO date (YYYY-MM-DD) when only date is known, or ISO datetime when time is known.
+   - Interpret user-provided clock times as the user's local wall time in the client timezone when available.
+   - Do not convert a stated local clock time to UTC. If the user says "10am" in a +01:00 timezone, return 10:00 with that local offset, not 09:00Z or 10:00Z.
+   - Include a numeric offset in ISO datetimes when the timezone is known.
    - If the user says the event just happened (for example: "I just had lunch", "just now", "10 minutes ago"), infer an immediate past datetime instead of asking for clarification. But if the sentence doesn't imply it is happening now, ask for clarification.
 3. **End**: Parse optional end date/time if present. Return null if not mentioned.
 4. **Where**: Location/place name (if mentioned) - only one. Be aware that more than once place might be mentioned, and you should only extract the one where the event took place (For example, "I will start running from the Bakery to my house now", the event is taking place at the Bakery, the starting point, the "from").
@@ -1173,7 +1189,7 @@ Return ONLY a JSON object matching the supplied response schema."""
             if not raw:
                 return None
             try:
-                parsed = parse_event_datetime(raw)
+                parsed = parse_event_datetime(raw, default_tz=client_timezone)
                 logger.debug("[event_extraction] Parsed %s: %s", field_name, parsed)
                 return parsed
             except (ValueError, AttributeError) as exc:
@@ -1193,6 +1209,10 @@ Return ONLY a JSON object matching the supplied response schema."""
         if when is None:
             inferred_recent_when = _infer_recent_event_datetime(message)
             if inferred_recent_when is not None:
+                inferred_recent_when = normalize_event_datetime(
+                    inferred_recent_when,
+                    default_tz=client_timezone,
+                )
                 logger.info(
                     "[event_extraction] Inferred immediate-past event time from message: %s",
                     inferred_recent_when.isoformat(),
@@ -3014,6 +3034,7 @@ def handle_event(parsed: ParsedCommand, context: dict) -> dict[str, Any]:
                     "resolution": resolution,
                     "contact_result": contact_result,
                     "user_email": user_email,
+                    "client_context": context.get("client_context"),
                     "requested_field_ids": requested_field_ids,
                     "relationship_suggestions": previous_relationship_suggestions,
                     "media_attachments": media_attachments,
@@ -3342,6 +3363,7 @@ def handle_event(parsed: ParsedCommand, context: dict) -> dict[str, Any]:
             "extracted": extracted,
             "resolution": resolution,
             "user_email": user_email,
+            "client_context": context.get("client_context"),
             "relationship_suggestions": relationship_suggestions,
             "original_message": original_message_to_store,
             "thread_id": context.get("thread_id"),
