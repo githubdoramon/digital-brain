@@ -34,6 +34,7 @@ LLM_TIMEOUT = int(os.getenv("LLM_TIMEOUT", "120"))
 LLM_MAX_RETRIES = int(os.getenv("LLM_MAX_RETRIES", "3"))
 LLM_RETRY_BASE_DELAY = float(os.getenv("LLM_RETRY_BASE_DELAY", "1.0"))
 LLM_WARM_KEEP_ALIVE = os.getenv("LLM_WARM_KEEP_ALIVE", "15m")
+LLM_WARMUP_TIMEOUT = int(os.getenv("LLM_WARMUP_TIMEOUT", "180"))
 _LLM_KEEP_ALIVE_OVERRIDE: ContextVar[str | int | None] = ContextVar(
     "llm_keep_alive_override", default=None
 )
@@ -236,7 +237,7 @@ def warm_chat_model(
         f"{get_ollama_api_base_url(base_url)}/api/chat",
         headers=get_llm_headers(),
         json=payload,
-        timeout=timeout or min(LLM_TIMEOUT, 30),
+        timeout=timeout or LLM_WARMUP_TIMEOUT,
     )
     response.raise_for_status()
     data = response.json()
@@ -268,8 +269,17 @@ def warm_configured_chat_models(*, timeout: Optional[int] = None) -> list[str]:
         if model in seen_models:
             continue
         seen_models.add(model)
-        if warm_chat_model(model, timeout=timeout, keep_alive=keep_alive):
-            warmed_models.append(model)
+        try:
+            if warm_chat_model(model, timeout=timeout, keep_alive=keep_alive):
+                warmed_models.append(model)
+        except Exception as exc:
+            logger.warning(
+                "[llm_helpers] Chat model warmup failed model=%s timeout=%s: %s",
+                model,
+                timeout or LLM_WARMUP_TIMEOUT,
+                exc,
+                exc_info=exc,
+            )
     return warmed_models
 
 

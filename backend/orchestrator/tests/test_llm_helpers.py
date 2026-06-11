@@ -135,6 +135,45 @@ def test_warm_chat_model_uses_requested_model(monkeypatch):
     assert kwargs["timeout"] == 9
 
 
+def test_warm_chat_model_uses_configured_default_timeout(monkeypatch):
+    monkeypatch.setenv("LLM_BASE_URL", "http://localhost:11434/v1")
+    monkeypatch.setattr(llm_helpers, "LLM_WARMUP_TIMEOUT", 180)
+
+    response = MagicMock()
+    response.json.return_value = {"done": True, "done_reason": "load"}
+    response.raise_for_status = MagicMock()
+
+    mock_post = MagicMock(return_value=response)
+    monkeypatch.setattr(llm_helpers.requests, "post", mock_post)
+
+    warmed = llm_helpers.warm_chat_model("large-model", keep_alive="20m")
+
+    assert warmed is True
+    _, kwargs = mock_post.call_args
+    assert kwargs["timeout"] == 180
+
+
+def test_warm_configured_chat_models_continues_after_model_failure(monkeypatch):
+    monkeypatch.setenv("LLM_BASE_URL", "http://localhost:11434/v1")
+    monkeypatch.setenv("LLM_CHAT_MODEL_FAST", "fast-model")
+    monkeypatch.setenv("LLM_CHAT_MODEL_SMART", "smart-model")
+
+    calls = []
+
+    def fake_warm_chat_model(model, *, timeout=None, keep_alive=None):
+        calls.append(model)
+        if model == "fast-model":
+            raise requests.Timeout("timed out")
+        return True
+
+    monkeypatch.setattr(llm_helpers, "warm_chat_model", fake_warm_chat_model)
+
+    warmed = llm_helpers.warm_configured_chat_models()
+
+    assert warmed == ["smart-model"]
+    assert calls == ["fast-model", "smart-model"]
+
+
 def test_is_llm_unavailable_error_recognizes_retryable_http_errors():
     response = MagicMock()
     response.status_code = 503

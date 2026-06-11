@@ -206,6 +206,19 @@ function buildStreamRequestError(
   return error;
 }
 
+async function requestCompletionNotification(runId: string, token: string | null | undefined) {
+  if (!token) return;
+  await expoFetch(
+    `${API_BASE_URL}/mobile/ask/runs/${encodeURIComponent(runId)}/notify-on-completion`,
+    {
+      method: 'POST',
+      headers: {
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+    },
+  );
+}
+
 export async function waitForRunCompletion(
   runId: string,
   token: string | null | undefined,
@@ -277,12 +290,23 @@ export async function askWithStreaming({
   };
 
   const abortController = new AbortController();
+  let runId: string | null = null;
   let backgroundAborted = false;
+  let backgroundAbortStarted = false;
   let abortListenerRemoved = false;
   const backgroundAbortSubscription = AppState.addEventListener('change', (nextState) => {
     if (nextState === 'active') return;
+    if (backgroundAbortStarted) return;
+    backgroundAbortStarted = true;
     backgroundAborted = true;
-    abortController.abort();
+    const abortStream = () => {
+      abortController.abort();
+    };
+    if (!runId) {
+      abortStream();
+      return;
+    }
+    void requestCompletionNotification(runId, token).finally(abortStream);
   });
 
   const cleanupBackgroundAbortListener = () => {
@@ -340,7 +364,7 @@ export async function askWithStreaming({
   const headerThreadId = streamResponse.headers.get('x-ask-thread-id')?.trim() || null;
 
   let doneBundle: AskResponse | null = null;
-  let runId: string | null = headerRunId;
+  runId = headerRunId;
   if (runId) {
     callbacks?.onRunId?.(runId);
   }

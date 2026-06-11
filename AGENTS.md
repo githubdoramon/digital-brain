@@ -343,6 +343,7 @@ LLM_CHAT_MODEL_SMART=gpt-4o
 OLLAMA_CHAT_KEEP_ALIVE=-1             # Applied to both configured chat models
 LLM_API_KEY=                           # Optional
 LLM_TIMEOUT=120
+LLM_WARMUP_TIMEOUT=180                 # Startup Ollama model warmup timeout
 LLM_CHAT_MODEL_FAST=mistral            # Optional fast profile override
 LLM_CHAT_MODEL_SMART=gpt-4o            # Optional smart profile override
 

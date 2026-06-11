@@ -99,7 +99,6 @@ function buildBackgroundLocationTaskOptions(): Location.LocationTaskOptions {
     foregroundService: {
       notificationTitle: 'Digital Brain location updates',
       notificationBody: 'Location updates are used to keep your context accurate.',
-      notificationColor: '#e45c4d',
       killServiceOnDestroy: false,
     },
   };

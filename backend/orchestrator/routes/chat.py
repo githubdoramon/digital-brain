@@ -45,6 +45,45 @@ logger = get_runtime_logger(__name__)
 
 ASK_RUNS_TTL_SECONDS = 1800
 _ask_runs: dict[str, dict[str, Any]] = {}
+_detached_ask_tasks: set[asyncio.Task[Any]] = set()
+
+
+def _track_detached_ask_task(task: asyncio.Task[Any], *, run_id: str, thread_id: str | None) -> None:
+    _detached_ask_tasks.add(task)
+    logger.info(
+        "[ask/stream] tracking detached producer run=%s thread=%s active_detached=%s",
+        run_id,
+        thread_id,
+        len(_detached_ask_tasks),
+    )
+
+    def _discard(done_task: asyncio.Task[Any]) -> None:
+        _detached_ask_tasks.discard(done_task)
+        if done_task.cancelled():
+            logger.info("[ask/stream] detached producer cancelled run=%s thread=%s", run_id, thread_id)
+            return
+        try:
+            exc = done_task.exception()
+        except asyncio.CancelledError:
+            logger.info("[ask/stream] detached producer cancelled run=%s thread=%s", run_id, thread_id)
+            return
+        if exc:
+            logger.warning(
+                "[ask/stream] detached producer failed run=%s thread=%s: %s",
+                run_id,
+                thread_id,
+                exc,
+                exc_info=exc,
+            )
+        else:
+            logger.info("[ask/stream] detached producer finished run=%s thread=%s", run_id, thread_id)
+
+    task.add_done_callback(_discard)
+
+
+def _ask_run_wants_completion_notification(run_id: str) -> bool:
+    run = _ask_runs.get(run_id) or {}
+    return bool(run.get("notify_on_completion"))
 
 
 def _send_reply_ready_notification(
@@ -148,6 +187,28 @@ def create_chat_router() -> APIRouter:
             result=run.get("result"),
             error=run.get("error"),
         )
+
+    @router.post("/ask/runs/{run_id}/notify-on-completion")
+    @router.post("/mobile/ask/runs/{run_id}/notify-on-completion")
+    def notify_on_ask_run_completion(run_id: str, user: dict = Depends(get_current_user)):
+        user_email = user.get("email")
+        if not user_email:
+            raise HTTPException(status_code=400, detail="Authenticated user email missing")
+
+        run = _ask_runs.get(run_id)
+        if not run:
+            raise HTTPException(status_code=404, detail="Run not found")
+        if run.get("user_email") != user_email:
+            raise HTTPException(status_code=403, detail="Run does not belong to user")
+
+        _touch_ask_run(run_id, notify_on_completion=True)
+        logger.info(
+            "[ask/stream] completion notification requested run=%s thread=%s user=%s",
+            run_id,
+            run.get("thread_id"),
+            user_email,
+        )
+        return {"run_id": run_id, "notify_on_completion": True}
 
     @router.post("/ask", response_model=AskOut)
     @router.post("/mobile/ask", response_model=AskOut)
@@ -406,7 +467,19 @@ def create_chat_router() -> APIRouter:
                             result=bundle,
                             error=None,
                         )
-                        if disconnect_event.is_set():
+                        should_notify = (
+                            disconnect_event.is_set()
+                            or _ask_run_wants_completion_notification(run_id)
+                        )
+                        logger.info(
+                            "[ask/stream] command completion notification check run=%s thread=%s disconnected=%s requested=%s notify=%s",
+                            run_id,
+                            command_thread_id,
+                            disconnect_event.is_set(),
+                            _ask_run_wants_completion_notification(run_id),
+                            should_notify,
+                        )
+                        if should_notify:
                             _send_reply_ready_notification(
                                 user_email=user_email,
                                 thread_id=command_thread_id,
@@ -478,6 +551,11 @@ def create_chat_router() -> APIRouter:
                             user_email,
                         )
                         _touch_ask_run(run_id, status_message="Disconnected, still processing...")
+                        _track_detached_ask_task(
+                            producer_task,
+                            run_id=run_id,
+                            thread_id=payload.thread_id or payload.session_id,
+                        )
                     else:
                         with suppress(asyncio.CancelledError):
                             await producer_task
@@ -623,7 +701,19 @@ def create_chat_router() -> APIRouter:
                                 result=event.get("bundle"),
                                 error=None,
                             )
-                            if disconnect_event.is_set():
+                            should_notify = (
+                                disconnect_event.is_set()
+                                or _ask_run_wants_completion_notification(run_id)
+                            )
+                            logger.info(
+                                "[ask/stream] completion notification check run=%s thread=%s disconnected=%s requested=%s notify=%s",
+                                run_id,
+                                ctx.session_id,
+                                disconnect_event.is_set(),
+                                _ask_run_wants_completion_notification(run_id),
+                                should_notify,
+                            )
+                            if should_notify:
                                 await asyncio.to_thread(
                                     _send_reply_ready_notification,
                                     user_email=user_email,
@@ -701,6 +791,11 @@ def create_chat_router() -> APIRouter:
                             "[ask/stream] execution continues after disconnect session=%s user=%s",
                             ctx.session_id,
                             user_email,
+                        )
+                        _track_detached_ask_task(
+                            producer_task,
+                            run_id=run_id,
+                            thread_id=ctx.session_id,
                         )
                     else:
                         with suppress(asyncio.CancelledError):
@@ -853,6 +948,7 @@ def _create_ask_run(user_email: str, thread_id: str | None) -> str:
         "thread_id": thread_id,
         "status": "running",
         "updated_at": datetime.utcnow(),
+        "notify_on_completion": False,
         "status_message": "Starting request...",
         "result": None,
         "error": None,
