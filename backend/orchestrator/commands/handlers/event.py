@@ -1206,13 +1206,23 @@ Return ONLY a JSON object matching the supplied response schema."""
         end_when = _parse_optional_datetime(extracted.get("end_when"), "end_when")
 
         need_user_input = normalize_need_user_input(extracted.get("need_user_input"))
+        has_explicit_client_timezone = bool(
+            str(
+                ((context.get("client_context") or {}) if isinstance(context, dict) else {}).get(
+                    "timezone"
+                )
+                or ""
+            ).strip()
+        )
+
         if when is None:
             inferred_recent_when = _infer_recent_event_datetime(message)
             if inferred_recent_when is not None:
-                inferred_recent_when = normalize_event_datetime(
-                    inferred_recent_when,
-                    default_tz=client_timezone,
-                )
+                if has_explicit_client_timezone:
+                    inferred_recent_when = normalize_event_datetime(
+                        inferred_recent_when,
+                        default_tz=client_timezone,
+                    )
                 logger.info(
                     "[event_extraction] Inferred immediate-past event time from message: %s",
                     inferred_recent_when.isoformat(),
