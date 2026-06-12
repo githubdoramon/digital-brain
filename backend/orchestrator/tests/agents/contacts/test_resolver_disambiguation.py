@@ -3,7 +3,7 @@
 import sys
 import types
 
-from agents.contacts import resolver
+from agents.contacts import prompt_builders, resolver
 from llm_helpers import LLMUnavailableError
 
 
@@ -1564,6 +1564,18 @@ def test_extract_people_normalizes_object_items(monkeypatch):
     people = resolver.extract_people_from_text("I met Jordan Example")
 
     assert people == ["Jordan Example", "user"]
+
+
+def test_people_extraction_prompt_forbids_alternate_properties():
+    prompt = prompt_builders.build_people_extraction_prompt(
+        text="I met Jordan Example",
+        conversation_block="",
+        user_facts_block="",
+    )
+
+    assert 'The object MUST contain exactly one property: "people".' in prompt
+    assert 'Do NOT use alternate property names such as "people_references"' in prompt
+    assert 'Do NOT wrap people in objects like {"name": "..."}.' in prompt
 
 
 def test_collective_selector_extraction_normalizes_direct_list(monkeypatch):

@@ -39,6 +39,16 @@ Pronoun resolution rules:
 - Resolve possessive pronouns only when the referent is crystal clear and creates a valid person reference.
 - If a possessive pronoun cannot be resolved confidently, omit that ambiguous reference.
 
+OUTPUT CONTRACT:
+- Return exactly one top-level JSON object.
+- The object MUST contain exactly one property: \"people\".
+- \"people\" MUST be an array of strings.
+- Do NOT use alternate property names such as \"people_references\", \"persons\", \"contacts\", \"names\", or \"results\".
+- Do NOT wrap people in objects like {{\"name\": \"...\"}}.
+- Do NOT include markdown fences, explanations, reasoning, or any extra keys.
+- Valid example: {{\"people\": [\"John Smith\", \"my daughter\"]}}
+- Invalid example: {{\"people_references\": [{{\"name\": \"John Smith\"}}]}}
+
 Return ONLY a JSON object matching the supplied response schema."""
     return append_clarification_guidelines(prompt)
 

@@ -2219,6 +2219,56 @@ def _dedupe_contacts(contacts: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return deduped
 
 
+def _contact_count_from_resolution(resolution: dict[str, Any] | None) -> int:
+    if not isinstance(resolution, dict):
+        return 0
+    return len(resolution.get("contacts", [])) + len(
+        resolution.get("new_entities", {}).get("contacts", [])
+    )
+
+
+def _restore_previous_resolution_contacts_if_missing(
+    resolution: dict[str, Any],
+    contact_result: dict[str, Any],
+    previous_resolution: dict[str, Any],
+    previous_contact_result: dict[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    current_count = _contact_count_from_resolution(resolution)
+    previous_count = _contact_count_from_resolution(previous_resolution)
+    if current_count > 0 or previous_count == 0:
+        return resolution, contact_result
+
+    restored_resolution = deepcopy(resolution)
+    restored_resolution["contacts"] = _dedupe_contacts(
+        list(previous_resolution.get("contacts", [])) + list(resolution.get("contacts", []))
+    )
+
+    restored_new_entities = dict(restored_resolution.get("new_entities", {}))
+    restored_new_entities["contacts"] = _dedupe_contacts(
+        list(previous_resolution.get("new_entities", {}).get("contacts", []))
+        + list(resolution.get("new_entities", {}).get("contacts", []))
+    )
+    restored_resolution["new_entities"] = restored_new_entities
+
+    restored_name_replacements = dict(previous_resolution.get("name_replacements", {}))
+    restored_name_replacements.update(resolution.get("name_replacements", {}))
+    restored_resolution["name_replacements"] = restored_name_replacements
+
+    restored_contact_result = deepcopy(contact_result)
+    if not restored_contact_result.get("resolved_contacts"):
+        restored_contact_result["resolved_contacts"] = list(
+            previous_contact_result.get("resolved_contacts", [])
+        )
+    if not restored_contact_result.get("new_contacts"):
+        restored_contact_result["new_contacts"] = list(previous_contact_result.get("new_contacts", []))
+
+    logger.warning(
+        "[handle_event] Contact retry returned no participants; restored %d prior contacts",
+        previous_count,
+    )
+    return restored_resolution, restored_contact_result
+
+
 def _resolve_contacts_with_agent(
     message: str,
     user_email: str,
@@ -2906,6 +2956,13 @@ def handle_event(parsed: ParsedCommand, context: dict) -> dict[str, Any]:
         extracted = extraction_future.result()
         if contact_future:
             resolution, contact_result = contact_future.result()
+            if clarification_context and previous_resolution:
+                resolution, contact_result = _restore_previous_resolution_contacts_if_missing(
+                    resolution,
+                    contact_result,
+                    previous_resolution,
+                    previous_contact_result,
+                )
         else:
             resolution = resolution or previous_resolution
             contact_result = contact_result or previous_contact_result
@@ -3079,7 +3136,31 @@ def handle_event(parsed: ParsedCommand, context: dict) -> dict[str, Any]:
             inferred_name = str(inferred_location.get("place_name") or "").strip()
         if inferred_name and isinstance(inferred_location, dict):
             resolution["inferred_location"] = inferred_location
-        if inferred_name and isinstance(inferred_location, dict):
+        if (
+            inferred_name
+            and isinstance(inferred_location, dict)
+            and _should_autofill_inferred_place(inferred_location)
+        ):
+            extracted["where"] = inferred_name
+            where = inferred_name
+            where_source = "inferred_location"
+            inferred_place_id = str(inferred_location.get("place_id") or "").strip()
+            if inferred_place_id:
+                resolution["matched_place"] = {
+                    "place_id": inferred_place_id,
+                    "name": inferred_name,
+                    "confidence": inferred_location.get("confidence") or "high",
+                    "matched_via": inferred_location.get("source") or "inferred_location",
+                }
+            logger.info(
+                "[handle_event] Autofilled inferred place: %s "
+                "(source=%s confidence=%s distance_m=%s)",
+                inferred_name,
+                inferred_location.get("source") or "unknown",
+                inferred_location.get("confidence") or "unknown",
+                inferred_location.get("distance_m"),
+            )
+        elif inferred_name and isinstance(inferred_location, dict):
             logger.info(
                 "[handle_event] Deferred inferred place autofill: %s "
                 "(source=%s confidence=%s distance_m=%s)",

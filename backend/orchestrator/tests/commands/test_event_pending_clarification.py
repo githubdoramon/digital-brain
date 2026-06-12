@@ -228,7 +228,7 @@ def test_handle_event_surfaces_proposed_contact_groups(monkeypatch):
     clear_pending_event(context["event_pending_key"])
 
 
-def test_handle_event_defers_inferred_place_without_explicit_where(monkeypatch):
+def test_handle_event_autofills_high_confidence_inferred_place_when_where_missing(monkeypatch):
     def fake_extract_event_entities(
         event_message,
         context,
@@ -298,8 +298,8 @@ def test_handle_event_defers_inferred_place_without_explicit_where(monkeypatch):
 
     result = handle_event(parsed, context)
     assert result.get("type") == "event_confirmation"
-    assert result.get("extracted", {}).get("where") is None
-    assert result.get("resolution", {}).get("matched_place") is None
+    assert result.get("extracted", {}).get("where") == "Home"
+    assert result.get("resolution", {}).get("matched_place", {}).get("place_id") == "plc_home"
     assert result.get("resolution", {}).get("inferred_location", {}).get("place_id") == "plc_home"
 
 
@@ -377,6 +377,143 @@ def test_handle_event_skips_low_confidence_inferred_known_place(monkeypatch):
     assert result.get("extracted", {}).get("where") is None
     assert result.get("resolution", {}).get("matched_place") is None
     assert result.get("resolution", {}).get("inferred_location", {}).get("place_id") == "plc_home"
+
+
+def test_handle_event_restores_previous_contacts_when_clarification_retry_loses_people(monkeypatch):
+    clarification_id = "event:clarification:people123"
+    store_command_data(
+        clarification_id,
+        {
+            "original_message": "met with Alex and Sam",
+            "thread_id": "thread-people",
+            "extracted": {
+                "title": "Met with Alex and Sam",
+                "summary": "Caught up together.",
+                "when": "2026-04-21T09:00:00",
+                "end_when": None,
+                "where": None,
+                "documents": [],
+                "tags": ["Personal"],
+                "types": ["personal"],
+                "need_user_input": None,
+            },
+            "resolution": {
+                "contacts": [
+                    {
+                        "contact_id": "contact:sam",
+                        "display_name": "Sam Example",
+                        "query": "Sam",
+                        "confidence": "high",
+                    }
+                ],
+                "new_entities": {"contacts": [], "places": [], "documents": []},
+                "name_replacements": {},
+                "proposed_contact_groups": [],
+            },
+            "contact_result": {
+                "resolved_contacts": [
+                    {
+                        "original_text": "Sam",
+                        "contact_id": "contact:sam",
+                        "display_name": "Sam Example",
+                        "matched_via": "direct_match",
+                        "confidence": "high",
+                    }
+                ],
+                "ambiguous_contacts": [
+                    {
+                        "original_text": "Alex",
+                        "candidates": [
+                            {
+                                "contact_id": "contact:alex",
+                                "display_name": "Alex Carter",
+                            }
+                        ],
+                    }
+                ],
+                "suggested_relationships": [],
+            },
+            "clarification_messages": [
+                {"role": "user", "content": "met with Alex and Sam"},
+                {
+                    "role": "assistant",
+                    "content": "I found multiple matching contacts. Please choose who you meant.",
+                },
+            ],
+            "requested_field_ids": ["who"],
+        },
+    )
+
+    def fake_extract(*_args, **_kwargs):
+        return {
+            "title": "Met with Alex and Sam",
+            "summary": "Caught up together.",
+            "when": "2026-04-21T09:00:00",
+            "end_when": None,
+            "where": None,
+            "documents": [],
+            "tags": ["Personal"],
+            "types": ["personal"],
+            "need_user_input": None,
+        }
+
+    def fake_resolve(*_args, **_kwargs):
+        return (
+            {
+                "contacts": [],
+                "new_entities": {"contacts": [], "places": [], "documents": []},
+                "name_replacements": {},
+                "proposed_contact_groups": [],
+            },
+            {
+                "resolved_contacts": [],
+                "new_contacts": [],
+                "ambiguous_contacts": [],
+                "suggested_relationships": [],
+            },
+        )
+
+    monkeypatch.setattr("commands.handlers.event._extract_event_entities_with_llm", fake_extract)
+    monkeypatch.setattr("commands.handlers.event._resolve_contacts_with_agent", fake_resolve)
+    monkeypatch.setattr("commands.handlers.event.infer_current_place", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        "commands.handlers.event.places_service.find_best_place_match", lambda *a, **k: None
+    )
+    monkeypatch.setattr("commands.handlers.event.geocode_place_name", lambda *a, **k: None)
+
+    result = handle_event(
+        ParsedCommand(
+            command="event",
+            args=(
+                "met with Alex and Sam\n\n"
+                "Additional details: Who did you mean by 'Alex'?: Alex Carter "
+                f"[clarification_id:{clarification_id}]"
+            ),
+            raw_message="/event follow-up",
+        ),
+        {"user_email": "user@example.com", "thread_id": "thread-people"},
+    )
+
+    assert result.get("type") == "event_confirmation"
+    assert result.get("extracted", {}).get("who") == ["Sam Example", "Alex Carter"]
+    assert result.get("resolution", {}).get("contacts") == [
+        {
+            "contact_id": "contact:sam",
+            "display_name": "Sam Example",
+            "query": "Sam",
+            "confidence": "high",
+        },
+        {
+            "contact_id": "contact:alex",
+            "display_name": "Alex Carter",
+            "query": "Alex",
+            "confidence": "high",
+        },
+    ]
+
+    preview_id = result.get("preview_id")
+    if preview_id:
+        delete_command_data(preview_id)
 
 
 def test_handle_event_preserves_original_preview_before_match_merge(monkeypatch):
