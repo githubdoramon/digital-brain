@@ -109,7 +109,7 @@ function RootLayoutNav({ loaded }: { loaded: boolean }) {
       if (data?.kind === 'chat_reply') {
         const threadId = typeof data.threadId === 'string' ? data.threadId.trim() : '';
         if (data.isMainSession || !threadId) {
-          router.push('/home');
+          router.push('/home/brain');
           return;
         }
         router.push(`/chat/${encodeURIComponent(threadId)}`);

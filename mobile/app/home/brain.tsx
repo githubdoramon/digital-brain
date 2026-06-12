@@ -1372,14 +1372,10 @@ export function ChatConversationScreen({
         onProgressChip: setProgressChip,
       });
 
-      const restored = await restoreChatHistory(
-        token,
-        {
-          threadId: pendingRun.threadId,
-          pendingEventId,
-        },
-        { preferStoredThread: true },
-      );
+      const restored = await restoreChatHistory(token, {
+        threadId: pendingRun.threadId,
+        pendingEventId,
+      });
       setThreadId(restored.threadId);
       setPendingEventId(restored.pendingEventId);
       if (restored.messages.length > 0) {
@@ -1424,14 +1420,10 @@ export function ChatConversationScreen({
 
       void (async () => {
         try {
-          const restored = await restoreChatHistory(
-            token,
-            {
-              threadId,
-              pendingEventId,
-            },
-            { preferStoredThread: true },
-          );
+          const restored = await restoreChatHistory(token, {
+            threadId,
+            pendingEventId,
+          });
           setThreadId(restored.threadId);
           setPendingEventId(restored.pendingEventId);
           if (restored.messages.length > 0) {
