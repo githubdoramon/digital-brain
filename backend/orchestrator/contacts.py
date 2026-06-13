@@ -1461,6 +1461,20 @@ def _score_contacts(
                         match_reason = f"all query name parts match: {name}"
                     continue
 
+                if aliases and len(query_parts) >= 2:
+                    for alias in aliases:
+                        alias_tokens = [part for part in alias.split() if part]
+                        if not alias_tokens:
+                            continue
+                        if all(part in query_parts for part in alias_tokens):
+                            remaining_parts = [part for part in query_parts if part not in alias_tokens]
+                            if remaining_parts and all(part in name_parts for part in remaining_parts):
+                                score = 97
+                                if score > best_score:
+                                    best_score = score
+                                    match_reason = f"alias+name parts match: {alias} + {display_name}"
+                                break
+
                 for qpart in query_lower.split():
                     for npart in name.split():
                         if qpart == npart:

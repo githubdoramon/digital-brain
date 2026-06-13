@@ -879,8 +879,19 @@ def _resolve_ambiguous_contacts_from_answer(
     resolved: list[dict[str, Any]] = []
     remaining: list[dict[str, Any]] = []
     answer_lower = answer.lower()
+    collective_covered = any(
+        phrase in answer_lower
+        for phrase in (
+            "mentioned on the sentence already",
+            "mentioned in the sentence already",
+            "the ones i mentioned",
+            "already told you",
+            "already covered",
+        )
+    )
 
     for item in ambiguous_contacts:
+        original_text = str(item.get("original_text") or "").strip()
         candidates = item.get("candidates", [])
         matches = [
             candidate
@@ -891,10 +902,20 @@ def _resolve_ambiguous_contacts_from_answer(
             candidate = matches[0]
             resolved.append(
                 {
-                    "original_text": item.get("original_text"),
+                    "original_text": original_text,
                     "contact_id": candidate.get("contact_id"),
                     "display_name": candidate.get("display_name"),
                     "matched_via": "clarification",
+                    "confidence": "high",
+                }
+            )
+        elif collective_covered and re.fullmatch(r".+\'s\s+family", original_text, flags=re.IGNORECASE):
+            resolved.append(
+                {
+                    "original_text": original_text,
+                    "contact_id": None,
+                    "display_name": original_text,
+                    "matched_via": "clarification_collective_covered",
                     "confidence": "high",
                 }
             )
@@ -2853,7 +2874,7 @@ def handle_event(parsed: ParsedCommand, context: dict) -> dict[str, Any]:
                 previous_resolution["contacts"] = resolved_entries
                 resolution = previous_resolution
                 contact_result = previous_contact_result
-                skip_contact_resolution = _should_skip_contact_resolution(
+                skip_contact_resolution = not remaining_contacts or _should_skip_contact_resolution(
                     raw_message,
                     ambiguous_contacts,
                 )

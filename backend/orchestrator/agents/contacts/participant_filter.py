@@ -32,6 +32,14 @@ Task:
 - The current user may remain as "user" only when they are actually part of the event.
 - You MUST choose only from the provided candidate list; do not invent new people.
 
+OUTPUT CONTRACT:
+- Return exactly one top-level JSON object.
+- The response_format schema is authoritative; follow it exactly.
+- The object MUST contain exactly two properties: "participants" and "excluded".
+- Both properties MUST be arrays of strings chosen only from the provided candidate list.
+- If everyone is a participant, return all names in "participants" and [] in "excluded".
+- Do NOT return clarification payloads, markdown fences, nested people objects, or extra keys.
+
 Return ONLY a JSON object matching the supplied response schema."""
     return append_clarification_guidelines(prompt)
 

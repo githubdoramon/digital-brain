@@ -1339,6 +1339,30 @@ def test_resolve_ambiguous_contacts_from_answer_supports_exclusion_intent():
     assert remaining == ambiguous_contacts
 
 
+def test_resolve_ambiguous_contacts_from_answer_marks_collective_as_already_covered():
+    ambiguous_contacts = [
+        {
+            "original_text": "Marcela's family",
+            "candidates": [],
+        },
+        {
+            "original_text": "Bia Fanti",
+            "candidates": [
+                {"contact_id": "contact:bia", "display_name": "Beatriz Queiroz Fanti"}
+            ],
+        },
+    ]
+
+    resolved, remaining = event_handler._resolve_ambiguous_contacts_from_answer(
+        ambiguous_contacts,
+        "The ones mentioned on the sentence already. Beatriz Queiroz Fanti.",
+    )
+
+    assert len(resolved) == 2
+    assert resolved[0]["matched_via"] == "clarification_collective_covered"
+    assert remaining == []
+
+
 def test_replace_generic_terms_avoids_partial_name_duplication():
     replaced = event_handler._replace_generic_terms_in_text(
         "Robin / Dana",

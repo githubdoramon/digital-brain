@@ -1900,3 +1900,134 @@ def test_suggest_missing_relationships_caches_null_profession_results(monkeypatc
 
     assert len(suggestions) == 2
     assert profession_calls == ["Alice", "Bob", "Cara"]
+
+
+def test_safe_single_low_score_match_stays_ambiguous(monkeypatch):
+    monkeypatch.setattr(
+        resolver.contacts_service,
+        "search_contacts",
+        lambda *_args, **_kwargs: [
+            {
+                "contact_id": "contact:guilherme",
+                "display_name": "Guilherme Vergueiro Fanti",
+                "match_score": 88,
+                "match_reason": "name part match: fanti",
+                "aliases": ["Gui"],
+            }
+        ],
+    )
+
+    result = resolver.resolve_contact("Rafael Fanti", "user@example.com")
+
+    assert result["status"] == "candidates"
+    assert result["candidates"][0]["display_name"] == "Guilherme Vergueiro Fanti"
+
+
+def test_alias_plus_surname_match_resolves_uniquely(monkeypatch):
+    monkeypatch.setattr(
+        resolver.contacts_service,
+        "search_contacts",
+        lambda *_args, **_kwargs: [
+            {
+                "contact_id": "contact:bia",
+                "display_name": "Beatriz Queiroz Fanti",
+                "match_score": 97,
+                "match_reason": "alias+name parts match: bia + beatriz queiroz fanti",
+                "aliases": ["Bia"],
+            },
+            {
+                "contact_id": "contact:rafael",
+                "display_name": "Rafael Queiroz Fanti",
+                "match_score": 88,
+                "match_reason": "name part match: fanti",
+                "aliases": [],
+            },
+        ],
+    )
+
+    result = resolver.resolve_contact("Bia Fanti", "user@example.com")
+
+    assert result["status"] == "resolved"
+    assert result["matched_via"] == "alias_plus_name_match"
+    assert result["display_name"] == "Beatriz Queiroz Fanti"
+
+
+def test_participant_focus_with_explicit_presence_bypasses_llm_filter(monkeypatch):
+    monkeypatch.setattr(
+        resolver,
+        "_fast_extract_people_from_text",
+        lambda *_args, **_kwargs: ([], [], False),
+    )
+    monkeypatch.setattr(
+        resolver,
+        "extract_people_from_text",
+        lambda *_args, **_kwargs: (["Dana Lewis", "Alex Carter"], []),
+    )
+    monkeypatch.setattr(
+        resolver,
+        "_filter_event_participants_via_llm",
+        lambda **_kwargs: (_ for _ in ()).throw(AssertionError("LLM filter should not run")),
+    )
+    monkeypatch.setattr(
+        resolver,
+        "_resolve_collective_selectors",
+        lambda *_args, **_kwargs: ([], [], []),
+    )
+    monkeypatch.setattr(
+        resolver,
+        "_resolve_people_mentions",
+        lambda people, *_args, **_kwargs: (
+            [
+                {
+                    "original_text": person,
+                    "contact_id": f"contact:{idx}",
+                    "display_name": person,
+                    "matched_via": "direct_match",
+                    "confidence": "high",
+                    "resolution_path": None,
+                }
+                for idx, person in enumerate(people, start=1)
+            ],
+            [],
+            [],
+            {},
+        ),
+    )
+
+    result = resolver.resolve_contacts_from_text(
+        "Dana Lewis and Alex Carter just arrived and are here.",
+        "user@example.com",
+        mode=resolver.MINIMAL_RESOLUTION_MODE,
+        participant_focus=True,
+    )
+
+    assert result["people_mentioned"] == ["Dana Lewis", "Alex Carter"]
+
+
+def test_collective_zero_candidate_resolution_does_not_become_ambiguous(monkeypatch):
+    monkeypatch.setattr(
+        resolver,
+        "resolve_contact",
+        lambda person_text, *_args, **_kwargs: {
+            "status": "candidates",
+            "candidates": [],
+        }
+        if person_text == "Marcela's family"
+        else {
+            "status": "resolved",
+            "contact_id": "contact:denise",
+            "display_name": "Denise Queiroz",
+            "matched_via": "direct_match",
+            "confidence": "high",
+        },
+    )
+
+    resolved, new, ambiguous, _cache = resolver._resolve_people_mentions(
+        ["Marcela's family", "Denise Queiroz"],
+        "user@example.com",
+        "Marcela's family just arrived. Denise Queiroz is here.",
+    )
+
+    assert new == []
+    assert ambiguous == []
+    assert [item["display_name"] for item in resolved] == ["Denise Queiroz"]

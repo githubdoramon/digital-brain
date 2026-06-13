@@ -21,6 +21,7 @@ Design principles:
 """
 
 import inspect
+import json
 import os
 import re
 from concurrent.futures import ThreadPoolExecutor
@@ -43,7 +44,13 @@ from agents.contacts.prompt_builders import (
     build_relationship_pairs_prompt,
     build_relationship_types_prompt,
 )
-from llm_helpers import LLMUnavailableError, build_json_schema_response_format, call_llm_json
+from llm_helpers import (
+    LLMUnavailableError,
+    build_json_schema_response_format,
+    call_llm,
+    call_llm_json,
+    parse_llm_json_content,
+)
 from llm_json_schemas import (
     COLLECTIVE_SELECTOR_RESPONSE_SCHEMA,
     CONTACT_DISAMBIGUATION_RESPONSE_SCHEMA,
@@ -269,11 +276,118 @@ def _call_contact_resolution_llm_json(prompt: str, **kwargs: Any) -> dict[str, A
         )
     if timeout_override:
         logger.debug("[contact_resolver] Using timeout override for LLM call: %ss", timeout_override)
-    return call_llm_json(prompt, **kwargs)
+    try:
+        return call_llm_json(prompt, **kwargs)
+    except Exception as exc:
+        response_format = kwargs.get("response_format") or {}
+        json_schema = response_format.get("json_schema") if isinstance(response_format, dict) else None
+        schema_name = str((json_schema or {}).get("name") or "structured_output").strip()
+        schema = (json_schema or {}).get("schema") if isinstance(json_schema, dict) else None
+        if not isinstance(schema, dict):
+            raise
+
+        logger.warning(
+            "[contact_resolver] Structured output parse failed for %s; attempting compact repair",
+            schema_name,
+            exc_info=exc,
+        )
+        raw_content = call_llm(prompt, **kwargs)
+        repair_prompt = _build_contact_resolution_repair_prompt(
+            schema_name=schema_name,
+            schema=schema,
+            raw_content=raw_content,
+        )
+        repaired_content = call_llm(
+            repair_prompt,
+            use_fast_model=True,
+            timeout=min(int(kwargs.get("timeout") or 60), 20),
+            temperature=0.0,
+            top_p=0.1,
+            reasoning_effort="none",
+            response_format=response_format,
+        )
+        return parse_llm_json_content(repaired_content)
 
 
 def _schema_response_format(name: str, schema: dict[str, Any]) -> dict[str, Any]:
     return build_json_schema_response_format(name=name, schema=schema)
+
+
+def _build_contact_resolution_repair_prompt(
+    *,
+    schema_name: str,
+    schema: dict[str, Any],
+    raw_content: str,
+) -> str:
+    required = schema.get("required") or []
+    return (
+        "Rewrite the following model output into valid JSON that matches the expected schema exactly.\n\n"
+        f"Schema name: {schema_name}\n"
+        f"Required top-level keys: {json.dumps(required)}\n"
+        f"Schema: {json.dumps(schema, ensure_ascii=True)}\n\n"
+        "Rules:\n"
+        "- Return exactly one JSON object.\n"
+        "- Do not include markdown fences or explanations.\n"
+        "- Preserve the original intent as much as possible.\n"
+        "- If the original output is unusable for a field, use the safest schema-valid fallback.\n\n"
+        f"Original output:\n{raw_content}"
+    )
+
+
+def _coerce_contact_disambiguation_result(result: Any) -> dict[str, Any]:
+    if not isinstance(result, dict):
+        return {}
+
+    decision = result.get("decision")
+    if not decision:
+        if result.get("resolved") is True or str(result.get("status") or "").strip().lower() == "resolved":
+            decision = "resolved"
+        else:
+            decision = "cannot_decide"
+
+    candidate_number = result.get("candidate_number")
+    if candidate_number is None:
+        candidate_number = result.get("candidate_id")
+
+    confidence = result.get("confidence")
+    if confidence is None:
+        confidence_score = result.get("confidence_score")
+        if isinstance(confidence_score, (int, float)):
+            confidence = "high" if confidence_score >= 0.85 else "medium" if confidence_score >= 0.6 else "low"
+        else:
+            confidence = "low"
+
+    reasoning = result.get("reasoning")
+    if reasoning is None:
+        nested_resolution = result.get("resolution")
+        if isinstance(nested_resolution, dict):
+            reasoning = nested_resolution.get("reasoning")
+
+    normalized: dict[str, Any] = {
+        "decision": str(decision or "cannot_decide").strip().lower(),
+        "candidate_number": candidate_number,
+        "new_contact": bool(result.get("new_contact") is True),
+        "confidence": str(confidence or "low").strip().lower() or "low",
+        "reasoning": str(reasoning or "").strip() or "No reliable structured reasoning returned.",
+    }
+    try:
+        normalized["candidate_number"] = (
+            int(normalized["candidate_number"]) if normalized["candidate_number"] is not None else None
+        )
+    except (TypeError, ValueError):
+        normalized["candidate_number"] = None
+    return normalized
+
+
+def _coerce_relationship_pairs_result(result: Any) -> dict[str, Any]:
+    if isinstance(result, list):
+        return {"relationships": []}
+    if not isinstance(result, dict):
+        return {"relationships": []}
+    relationships = result.get("relationships")
+    if not isinstance(relationships, list):
+        relationships = []
+    return {"relationships": relationships}
 
 
 def _build_request_context(
@@ -1337,7 +1451,23 @@ def _filter_event_participants_via_llm(
             EVENT_PARTICIPANT_FILTER_RESPONSE_SCHEMA,
         ),
     )
+    if not isinstance(result, dict):
+        return [], []
     return parse_event_participant_filter_result(people=people, result=result)
+
+
+_EXPLICIT_PARTICIPANT_CUE_PATTERN = re.compile(
+    r"\b(just arrived|arrived|is also here|is here|are here|are with us|joined us|came along|came over|is present|are present)\b",
+    re.IGNORECASE,
+)
+
+
+def _deterministic_participant_filter(text: str, people: list[str]) -> tuple[list[str], list[str]] | None:
+    if not people:
+        return None
+    if not _EXPLICIT_PARTICIPANT_CUE_PATTERN.search(str(text or "")):
+        return None
+    return list(people), []
 
 
 def _coerce_people_extraction_result(result: Any) -> list[str]:
@@ -2046,15 +2176,32 @@ def resolve_contact(
         return result
 
     elif len(matches) == 1:
-        # Single match - resolved!
         match = matches[0]
-        result["status"] = "resolved"
-        result["confidence"] = "high" if match.get("match_score", 0) > 90 else "medium"
-        result["contact_id"] = match["contact_id"]
-        result["display_name"] = match["display_name"]
-        result["matched_via"] = "direct_match"
+        if _is_safe_single_contact_match(match, search_name):
+            result["status"] = "resolved"
+            result["confidence"] = "high"
+            result["contact_id"] = match["contact_id"]
+            result["display_name"] = match["display_name"]
+            result["matched_via"] = "direct_match"
+            logger.info(
+                "[contact_resolver] Single match: %s (score: %s)",
+                match["display_name"],
+                match.get("match_score"),
+            )
+            return result
+
+        result["candidates"] = [
+            {
+                "contact_id": match["contact_id"],
+                "display_name": match["display_name"],
+                "match_score": match.get("match_score", 0),
+                "match_reason": match.get("match_reason"),
+                "aliases": match.get("aliases") or [],
+            }
+        ]
+        result["status"] = "candidates"
         logger.info(
-            "[contact_resolver] Single match: %s (score: %s)",
+            "[contact_resolver] Single low-confidence match kept ambiguous: %s (score: %s)",
             match["display_name"],
             match.get("match_score"),
         )
@@ -2071,6 +2218,19 @@ def resolve_contact(
             logger.info(
                 "[contact_resolver] Unique multi-token name match: %s",
                 unique_multi_token_match["display_name"],
+            )
+            return result
+
+        unique_alias_plus_name_match = _select_unique_alias_plus_name_match(matches, search_name)
+        if unique_alias_plus_name_match is not None:
+            result["status"] = "resolved"
+            result["confidence"] = "high"
+            result["contact_id"] = unique_alias_plus_name_match["contact_id"]
+            result["display_name"] = unique_alias_plus_name_match["display_name"]
+            result["matched_via"] = "alias_plus_name_match"
+            logger.info(
+                "[contact_resolver] Unique alias+name match: %s",
+                unique_alias_plus_name_match["display_name"],
             )
             return result
 
@@ -2316,12 +2476,16 @@ def resolve_contacts_from_text(
         )
         user_facts_block = f"{user_facts_context}\n\n" if user_facts_context else ""
         try:
-            filtered_people, excluded_people = _filter_event_participants_via_llm(
-                text=effective_text,
-                people=people,
-                conversation_block=conversation_block,
-                user_facts_block=user_facts_block,
-            )
+            deterministic_participants = _deterministic_participant_filter(effective_text, people)
+            if deterministic_participants is not None:
+                filtered_people, excluded_people = deterministic_participants
+            else:
+                filtered_people, excluded_people = _filter_event_participants_via_llm(
+                    text=effective_text,
+                    people=people,
+                    conversation_block=conversation_block,
+                    user_facts_block=user_facts_block,
+                )
             if filtered_people or excluded_people:
                 filtered_people = _restore_participant_collective_mentions(
                     text=effective_text,
@@ -2597,6 +2761,22 @@ def _resolve_people_mentions(
                     "[contact_resolver] Auto-resolved group mention '%s' to %s related contacts",
                     person_text,
                     len(resolution["candidates"]),
+                )
+                continue
+
+            if not resolution.get("candidates") and _POSSESSIVE_COLLECTIVE_PATTERN.fullmatch(
+                str(person_text or "").strip()
+            ):
+                trace.trace_contact_resolution_outcome(
+                    "collective_left_unresolved",
+                    {
+                        "person_text": person_text,
+                        "candidate_count": 0,
+                    },
+                )
+                logger.info(
+                    "[contact_resolver] Leaving possessive collective mention '%s' unresolved without clarification",
+                    person_text,
                 )
                 continue
 
@@ -2960,8 +3140,71 @@ def _select_unique_exact_contact_match(
         return exact_matches[0]
     if len(exact_matches) > 1:
         return None
-    if len(matches) == 1:
-        return matches[0]
+    return None
+
+
+def _has_exact_name_or_alias_match(match: dict[str, Any], target_text: str) -> bool:
+    target_norm = normalize_search_text(target_text)
+    if not target_norm:
+        return False
+    display_norm = normalize_search_text(str(match.get("display_name") or ""))
+    if display_norm == target_norm:
+        return True
+    for alias in match.get("aliases") or []:
+        if normalize_search_text(str(alias or "")) == target_norm:
+            return True
+    return False
+
+
+def _is_alias_plus_name_tokens_match(match: dict[str, Any], target_text: str) -> bool:
+    query_tokens = [token for token in re.findall(r"[a-z0-9']+", normalize_search_text(target_text)) if token]
+    if len(query_tokens) < 2:
+        return False
+
+    display_tokens = set(
+        re.findall(r"[a-z0-9']+", normalize_search_text(str(match.get("display_name") or "")))
+    )
+    if not display_tokens:
+        return False
+
+    alias_norms = [
+        normalize_search_text(str(alias or ""))
+        for alias in (match.get("aliases") or [])
+        if str(alias or "").strip()
+    ]
+    for alias_norm in alias_norms:
+        alias_tokens = [token for token in re.findall(r"[a-z0-9']+", alias_norm) if token]
+        if not alias_tokens:
+            continue
+        if all(token in query_tokens for token in alias_tokens):
+            remaining = [token for token in query_tokens if token not in alias_tokens]
+            if remaining and all(token in display_tokens for token in remaining):
+                return True
+    return False
+
+
+def _is_safe_single_contact_match(match: dict[str, Any], target_text: str) -> bool:
+    if _has_exact_name_or_alias_match(match, target_text):
+        return True
+    if _is_alias_plus_name_tokens_match(match, target_text):
+        return True
+
+    score = float(match.get("match_score") or 0)
+    reason = str(match.get("match_reason") or "").strip().lower()
+    if score >= 97:
+        return True
+    if score >= 94 and reason.startswith("all query name parts match:"):
+        return True
+    return score >= 95 and reason.startswith("query contains name:")
+
+
+def _select_unique_alias_plus_name_match(
+    matches: list[dict[str, Any]],
+    target_text: str,
+) -> dict[str, Any] | None:
+    matching_candidates = [match for match in matches if _is_alias_plus_name_tokens_match(match, target_text)]
+    if len(matching_candidates) == 1:
+        return matching_candidates[0]
     return None
 
 
@@ -3711,6 +3954,15 @@ def _llm_disambiguate_contact(
             "confidence": str,
         }
     """
+    if not candidates:
+        return {
+            "resolved": False,
+            "new_contact": False,
+            "contact_id": None,
+            "display_name": None,
+            "confidence": "low",
+        }
+
     def _build_relationship_summary(candidate: dict[str, Any]) -> str:
         contact_id = str(candidate.get("contact_id") or "").strip()
         if not contact_id:
@@ -3816,6 +4068,7 @@ def _llm_disambiguate_contact(
             ),
         )
 
+        llm_response = _coerce_contact_disambiguation_result(llm_response)
         decision = llm_response.get("decision")
         candidate_number = llm_response.get("candidate_number")
         new_contact = bool(llm_response.get("new_contact") is True)
@@ -3992,6 +4245,7 @@ def _infer_relationship_pairs(people: list[str], full_text: str) -> list[dict[st
     except Exception:
         return []
 
+    result = _coerce_relationship_pairs_result(result)
     relationships = result.get("relationships", [])
     logger.debug("[contact_resolver_inner] Relationships: %s", relationships)
     pairs: list[dict[str, str]] = []

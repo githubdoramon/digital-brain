@@ -13,7 +13,8 @@ def build_people_extraction_prompt(
 
 Text: \"{text}\"
 
-{conversation_block}{user_facts_block}\n
+{conversation_block}{user_facts_block}
+
 IMPORTANT CONTEXT USAGE:
 - Focus on the current Text above.
 - Use Conversation messages only to resolve references inside this Text.
@@ -41,6 +42,7 @@ Pronoun resolution rules:
 
 OUTPUT CONTRACT:
 - Return exactly one top-level JSON object.
+- The response_format schema is authoritative; follow it exactly.
 - The object MUST contain exactly one property: \"people\".
 - \"people\" MUST be an array of strings.
 - Do NOT use alternate property names such as \"people_references\", \"persons\", \"contacts\", \"names\", or \"results\".
@@ -73,6 +75,14 @@ Text: \"{text}\"
 - Do NOT infer a collective selector from a singular organization mention like \"I was fired from Acme\" or \"I met Pat at Acme\".
 - Only return a selector when the text explicitly refers to a plural or collective set such as \"everyone\", \"all\", \"team\", \"people\", \"staff\", or \"employees\".
 - Do NOT return vague crowd references like \"lots of people\", \"many people\", \"some people\", \"a bunch of people\", or \"the people there\". Those are not resolvable selectors.
+
+OUTPUT CONTRACT:
+- Return exactly one top-level JSON object.
+- The response_format schema is authoritative; follow it exactly.
+- The object MUST contain exactly one property: \"selectors\".
+- \"selectors\" MUST be an array.
+- Each selector item MUST contain exactly: \"kind\", \"value\", \"raw\", \"deterministic\".
+- Do NOT return a bare array, markdown fences, explanations, or any extra keys.
 
 Return ONLY a JSON object matching the supplied response schema."""
     return append_clarification_guidelines(prompt)
@@ -125,20 +135,28 @@ Event context (use only if it is relevant): \"{event_context}\"
 
 Interpretation hints:
 - Treat the latest user message as the clarification answer to the latest assistant question.
-- If context explicitly indicates the person is not in the candidate list and is a new person, set \"new_contact\": true. Examples: the user says they met someone for the first time, or explicitly says it is a new contact.
+- If context explicitly indicates the person is not in the candidate list and is a new person, set \"new_contact\": true.
 - If context explicitly says the person should not be added to the event or was not part of it, prefer \"cannot_decide\" with \"new_contact\": false.
 - Do not ignore explicit user clarification even if name similarity exists.
 - When candidate relationship evidence conflicts with weak name/alias similarity, prefer the relationship evidence.
 
 CRITICAL RULES:
-1. You MUST choose from the candidates above or say \"cannot_decide\"
-2. You MUST NOT invent or suggest any person not in the list
-3. If there is a perfect match between person you are trying to find and a candidate in the list, return \"resolved\" and the candidate number.
-4. If additional context is needed, consider the Event context provided.
-5. If context is not enough, return \"cannot_decide\"
-6. Set \"new_contact\" to true ONLY when you are certain the mention refers to a new contact not present in candidates; otherwise false.
+- Choose ONLY from the candidates above or say \"cannot_decide\".
+- Do NOT invent a person, candidate, or extra fields.
+- If there is a perfect match, return decision=\"resolved\" and the candidate number.
+- If context is not enough, return decision=\"cannot_decide\".
+- Set \"new_contact\" to true ONLY when you are certain the mention refers to a new contact not present in candidates.
 
-Analyze which candidate is most likely based on the context.
+OUTPUT CONTRACT:
+- Return exactly one top-level JSON object.
+- The response_format schema is authoritative; follow it exactly.
+- The object MUST contain exactly these properties: \"decision\", \"candidate_number\", \"new_contact\", \"confidence\", \"reasoning\".
+- Allowed decision values: \"resolved\" or \"cannot_decide\".
+- If decision=\"resolved\", candidate_number MUST be an integer from the candidate list.
+- If decision=\"cannot_decide\", candidate_number MUST be null.
+- Do NOT use alternate keys such as \"resolved\", \"status\", \"candidate_id\", \"resolution\", or \"clarification\".
+- Do NOT include markdown fences, extra nesting, or extra keys.
+- Valid example: {{\"decision\":\"resolved\",\"candidate_number\":1,\"new_contact\":false,\"confidence\":\"high\",\"reasoning\":\"Alias and context match.\"}}
 
 Return ONLY a JSON object matching the supplied response schema, with no other text."""
     return append_clarification_guidelines(prompt)
@@ -173,6 +191,15 @@ Rules:
 - Prefer specific types over general terms WHEN POSSIBLE (e.g., \"Electric Engineer\" over \"Engineer\", \"Orthopedist\" over \"Doctor\").
 - Do NOT include self-relations.
 - Do NOT include duplicate pairs.
+
+OUTPUT CONTRACT:
+- Return exactly one top-level JSON object.
+- The response_format schema is authoritative; follow it exactly.
+- The object MUST contain exactly one property: \"relationships\".
+- \"relationships\" MUST be an array.
+- Each relationship item MUST contain exactly: \"person_text\", \"anchor_text\", \"relationship_hint\".
+- If there are no relationships, return {{\"relationships\": []}}.
+- Do NOT return a bare array, empty object, markdown fences, or extra keys.
 
 Return ONLY a JSON object matching the supplied response schema."""
     return append_clarification_guidelines(prompt)
