@@ -2903,8 +2903,8 @@ def _should_accept_llm_disambiguation(
     if confidence != "high":
         return False
 
-    if len(candidates) <= 1:
-        return True
+    if len(candidates) == 1:
+        return _is_safe_single_contact_match(candidates[0], person_text)
 
     strictness = _get_disambiguation_strictness()
     if strictness == "lenient":
