@@ -5,16 +5,10 @@ from typing import Any
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Response
 
+import daily_briefing_jobs
 import daily_briefings
-from async_jobs import enqueue_job, mark_failed, mark_running, mark_succeeded
 from auth import get_current_user, require_service_api_key
-from notifications import DAILY_BRIEFING_NOTIFICATION_TYPE, send_notification_to_user
-from observability.logger import get_runtime_logger
 from schemas import DailyBriefingEventSummaryDebugIn, DailyBriefingIn, DailyBriefingOut
-
-logger = get_runtime_logger(__name__)
-
-_JOB_TYPE_DAILY_BRIEFING = "daily_briefing"
 
 
 def create_daily_briefing_router(
@@ -123,57 +117,6 @@ def create_daily_briefing_router(
     return router
 
 
-def _run_daily_briefing_job(
-    *,
-    job_id: str,
-    date_value: str,
-    timezone: str,
-    user_email: str,
-) -> None:
-    if not mark_running(job_id):
-        logger.info("[briefing.job] Skipping run; job already active/completed: %s", job_id)
-        return
-
-    from agents.daily_briefing.executor import handle_daily_briefing_request
-
-    logger.info(
-        "[briefing.job] Starting job=%s user=%s date=%s tz=%s",
-        job_id,
-        user_email,
-        date_value,
-        timezone,
-    )
-    try:
-        result = handle_daily_briefing_request(
-            {
-                "date": date_value,
-                "timezone": timezone,
-                "user_email": user_email,
-            }
-        )
-        if result.get("status") == "error":
-            error_message = str(result.get("message") or "Daily briefing generation failed")
-            mark_failed(job_id, error=error_message, status_message="Daily briefing failed")
-            logger.warning("[briefing.job] Job failed job=%s error=%s", job_id, error_message)
-            return
-
-        mark_succeeded(
-            job_id,
-            result={"briefing_id": result.get("briefing_id")},
-            status_message="Daily briefing ready",
-        )
-        _notify_daily_briefing_ready(user_email=user_email, result=result)
-        logger.info(
-            "[briefing.job] Job completed job=%s briefing_id=%s",
-            job_id,
-            result.get("briefing_id"),
-        )
-    except Exception as exc:
-        error_message = str(exc)
-        mark_failed(job_id, error=error_message, status_message="Daily briefing failed")
-        logger.exception("[briefing.job] Unexpected failure job=%s", job_id)
-
-
 def _enqueue_daily_briefing_job(
     *,
     user_email: str,
@@ -181,33 +124,22 @@ def _enqueue_daily_briefing_job(
     timezone: str,
     background_tasks: BackgroundTasks,
 ) -> dict[str, Any]:
-    dedupe_key = _build_daily_briefing_dedupe_key(briefing_date=briefing_date, timezone=timezone)
-    queued = enqueue_job(
-        job_type=_JOB_TYPE_DAILY_BRIEFING,
+    queued = daily_briefing_jobs.enqueue_daily_briefing_job(
         user_email=user_email,
-        dedupe_key=dedupe_key,
-        payload={
-            "date": briefing_date.isoformat(),
-            "timezone": timezone,
-            "user_email": user_email,
-        },
-        status_message="Queued for generation",
+        briefing_date=briefing_date,
+        timezone_name=timezone,
     )
     job_id = str(queued.get("job_id") or "")
     should_schedule = bool(queued.get("should_schedule"))
     if should_schedule and job_id:
         background_tasks.add_task(
-            _run_daily_briefing_job,
+            daily_briefing_jobs.run_daily_briefing_job,
             job_id=job_id,
             date_value=briefing_date.isoformat(),
-            timezone=timezone,
+            timezone_name=timezone,
             user_email=user_email,
         )
     return queued
-
-
-def _build_daily_briefing_dedupe_key(*, briefing_date: date, timezone: str) -> str:
-    return f"{briefing_date.isoformat()}::{timezone}"
 
 
 def _parse_iso_date(value: str | None) -> date:
@@ -262,19 +194,3 @@ def _pending_briefing_response(
         "markdown": "",
         "news_items": [],
     }
-
-
-def _notify_daily_briefing_ready(*, user_email: str, result: dict[str, Any]) -> None:
-    summary = str(result.get("summary") or "").strip()
-    message = summary or "Your daily briefing is ready."
-    if len(message) > 220:
-        message = f"{message[:217].rstrip()}..."
-    try:
-        send_notification_to_user(
-            notification_type=DAILY_BRIEFING_NOTIFICATION_TYPE,
-            user_email=user_email,
-            title="Daily briefing ready",
-            message=message,
-        )
-    except Exception:
-        logger.warning("[briefing.job] Failed to send push notification user=%s", user_email)

@@ -44,7 +44,7 @@ export type QueuedBackgroundLocationEntry = {
   lastAttemptAt?: string;
 };
 
-type DrainTrigger = 'location_task' | 'background_task_worker' | 'manual';
+export type DrainTrigger = 'location_task' | 'background_task_worker' | 'manual';
 
 let pendingDrainTrigger: DrainTrigger | null = null;
 

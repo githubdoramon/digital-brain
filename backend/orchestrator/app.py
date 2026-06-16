@@ -9,6 +9,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 import conversations
+import daily_briefing_jobs
 import meeting_transcript_jobs
 import proposed_event_jobs
 from db import get_conn
@@ -131,11 +132,13 @@ async def lifespan(_app: FastAPI):
         logger.exception("Chat-model warmup failed; continuing startup")
 
     meeting_transcript_jobs.start_worker()
+    daily_briefing_jobs.start_worker()
     proposed_event_jobs.start_worker()
     try:
         yield
     finally:
         proposed_event_jobs.stop_worker()
+        daily_briefing_jobs.stop_worker()
         meeting_transcript_jobs.stop_worker()
 
 

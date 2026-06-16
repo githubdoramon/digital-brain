@@ -5,6 +5,7 @@ import { Platform } from 'react-native';
 
 import { getStoredGoogleIdTokenDiagnostics } from '@/auth/backgroundToken';
 import {
+  type DrainTrigger,
   drainQueuedBackgroundLocations,
   enqueueBackgroundLocationEntry,
   getQueuedBackgroundLocationSummary,
@@ -15,10 +16,11 @@ import { getLocationRuntimeState } from '@/location/runtimeState';
 
 const BACKGROUND_LOCATION_TASK = 'digitalbrain.background-location';
 const BACKGROUND_LOCATION_DRAIN_TASK = 'digitalbrain.background-location-drain';
-const BACKGROUND_DISTANCE_INTERVAL_METERS = 50;
+const BACKGROUND_DISTANCE_INTERVAL_METERS = 5;
 const BACKGROUND_TIME_INTERVAL_MS = 5 * 60 * 1000;
 const BACKGROUND_DRAIN_MIN_INTERVAL_MINUTES = 15;
-const ANDROID_FOREGROUND_SERVICE_POLICY = 'restart_only_on_option_change';
+const ANDROID_LOCATION_MODE = 'continuous_capture_scheduled_drain';
+const IOS_LOCATION_MODE = 'continuous_background_updates';
 
 type BackgroundLocationSample = {
   coords?: {
@@ -36,6 +38,8 @@ type BackgroundBatchContext = {
   batchFirstCapturedAt: string | null;
   batchLastCapturedAt: string | null;
   executionContext: string;
+  drainAfterQueue?: boolean;
+  drainTrigger?: DrainTrigger;
 };
 
 type PostedBackgroundLocation = {
@@ -65,6 +69,10 @@ type AndroidTaskDiagnostics = {
   registeredTasks: Record<string, unknown>[];
   locationTaskOptions: Record<string, unknown> | null;
 };
+
+function getLocationMode(): string {
+  return Platform.OS === 'android' ? ANDROID_LOCATION_MODE : IOS_LOCATION_MODE;
+}
 
 function stableStringify(value: unknown): string {
   if (Array.isArray(value)) {
@@ -415,7 +423,9 @@ async function queueBackgroundLocation(sample: BackgroundLocationSample, context
     recordInHistory: false,
   });
 
-  await drainQueuedBackgroundLocations('location_task');
+  if (context.drainAfterQueue ?? true) {
+    await drainQueuedBackgroundLocations(context.drainTrigger ?? 'location_task');
+  }
 }
 
 if (!TaskManager.isTaskDefined(BACKGROUND_LOCATION_DRAIN_TASK)) {
@@ -571,6 +581,8 @@ if (!TaskManager.isTaskDefined(BACKGROUND_LOCATION_TASK)) {
           batchFirstCapturedAt,
           batchLastCapturedAt,
           executionContext,
+          drainAfterQueue: Platform.OS !== 'android',
+          drainTrigger: 'location_task',
         });
       } catch (taskError) {
         const errorPayload = buildDebugErrorPayload(taskError);
@@ -610,6 +622,9 @@ if (!TaskManager.isTaskDefined(BACKGROUND_LOCATION_TASK)) {
 }
 
 export type BackgroundLocationDebugStatus = {
+  locationMode: string;
+  configuredDistanceIntervalMeters: number;
+  configuredTimeIntervalMs: number;
   foregroundPermission: string;
   backgroundPermission: string;
   locationServicesEnabled: boolean | null;
@@ -682,10 +697,12 @@ export async function getBackgroundLocationDebugStatus(): Promise<BackgroundLoca
       provider_status: providerStatus,
       registered_tasks: registeredTasks,
       location_task_options: locationTaskOptions,
+      configured_distance_interval_meters: BACKGROUND_DISTANCE_INTERVAL_METERS,
+      configured_time_interval_ms: BACKGROUND_TIME_INTERVAL_MS,
       queued_location_count: queueSummary.queueSize,
       oldest_queued_captured_at: queueSummary.oldestCapturedAt,
       newest_queued_captured_at: queueSummary.newestCapturedAt,
-      android_foreground_service_policy: ANDROID_FOREGROUND_SERVICE_POLICY,
+      location_mode: getLocationMode(),
     },
     recordInHistory: false,
   });
@@ -702,13 +719,18 @@ export async function getBackgroundLocationDebugStatus(): Promise<BackgroundLoca
         background_location_available: androidTaskDiagnostics.backgroundLocationAvailable,
         registered_tasks: androidTaskDiagnostics.registeredTasks,
         location_task_options: androidTaskDiagnostics.locationTaskOptions,
-        android_foreground_service_policy: ANDROID_FOREGROUND_SERVICE_POLICY,
+        configured_distance_interval_meters: BACKGROUND_DISTANCE_INTERVAL_METERS,
+        configured_time_interval_ms: BACKGROUND_TIME_INTERVAL_MS,
+        location_mode: getLocationMode(),
       },
       recordInHistory: false,
     });
   }
 
   return {
+    locationMode: getLocationMode(),
+    configuredDistanceIntervalMeters: BACKGROUND_DISTANCE_INTERVAL_METERS,
+    configuredTimeIntervalMs: BACKGROUND_TIME_INTERVAL_MS,
     foregroundPermission: foregroundPermission.status,
     backgroundPermission: backgroundPermission.status,
     locationServicesEnabled,
@@ -739,7 +761,9 @@ export async function syncBackgroundLocationTracking(enabled: boolean): Promise<
     payload: {
       enabled,
       task_registration: taskRegistration,
-      android_foreground_service_policy: ANDROID_FOREGROUND_SERVICE_POLICY,
+      location_mode: getLocationMode(),
+      configured_distance_interval_meters: BACKGROUND_DISTANCE_INTERVAL_METERS,
+      configured_time_interval_ms: BACKGROUND_TIME_INTERVAL_MS,
     },
   });
   const alreadyStarted = await Location.hasStartedLocationUpdatesAsync(BACKGROUND_LOCATION_TASK);
@@ -797,7 +821,9 @@ export async function syncBackgroundLocationTracking(enabled: boolean): Promise<
         payload: {
           platform: Platform.OS,
           location_task_options: currentTaskOptions,
-          android_foreground_service_policy: ANDROID_FOREGROUND_SERVICE_POLICY,
+          location_mode: getLocationMode(),
+          configured_distance_interval_meters: BACKGROUND_DISTANCE_INTERVAL_METERS,
+          configured_time_interval_ms: BACKGROUND_TIME_INTERVAL_MS,
         },
         recordInHistory: false,
       });
@@ -810,7 +836,9 @@ export async function syncBackgroundLocationTracking(enabled: boolean): Promise<
         reason: 'task_options_changed',
         current_task_options: currentTaskOptions,
         desired_task_options: taskOptions as Record<string, unknown>,
-        android_foreground_service_policy: ANDROID_FOREGROUND_SERVICE_POLICY,
+        location_mode: getLocationMode(),
+        configured_distance_interval_meters: BACKGROUND_DISTANCE_INTERVAL_METERS,
+        configured_time_interval_ms: BACKGROUND_TIME_INTERVAL_MS,
       },
       recordInHistory: false,
     });
@@ -826,7 +854,9 @@ export async function syncBackgroundLocationTracking(enabled: boolean): Promise<
       payload: {
         platform: Platform.OS,
         task_options: taskOptions as Record<string, unknown>,
-        android_foreground_service_policy: ANDROID_FOREGROUND_SERVICE_POLICY,
+        location_mode: getLocationMode(),
+        configured_distance_interval_meters: BACKGROUND_DISTANCE_INTERVAL_METERS,
+        configured_time_interval_ms: BACKGROUND_TIME_INTERVAL_MS,
       },
       recordInHistory: false,
     });
@@ -851,7 +881,9 @@ export async function syncBackgroundLocationTracking(enabled: boolean): Promise<
     payload: {
       platform: Platform.OS,
       task_options: taskOptions as Record<string, unknown>,
-      android_foreground_service_policy: ANDROID_FOREGROUND_SERVICE_POLICY,
+      location_mode: getLocationMode(),
+      configured_distance_interval_meters: BACKGROUND_DISTANCE_INTERVAL_METERS,
+      configured_time_interval_ms: BACKGROUND_TIME_INTERVAL_MS,
     },
     recordInHistory: false,
   });

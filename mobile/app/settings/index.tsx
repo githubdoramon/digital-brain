@@ -69,7 +69,7 @@ function formatBuildTimestamp(value: string | null | undefined): string {
   return parsed.toLocaleString();
 }
 
-function formatDebugPayload(payload: Record<string, unknown> | undefined): string {
+function formatDebugPayload(payload: unknown): string {
   if (!payload) {
     return 'none';
   }
@@ -567,15 +567,18 @@ export default function SettingsScreen() {
 
         <Card style={[styles.card, styles.versionCard]}>
           <Text style={styles.versionLabel}>Background location sync</Text>
+          <Text style={styles.versionValue}>Location mode: {backgroundStatus?.locationMode ?? 'unknown'}</Text>
+          <Text style={styles.versionValue}>Capture distance interval: {backgroundStatus?.configuredDistanceIntervalMeters ?? 'unknown'}m</Text>
+          <Text style={styles.versionValue}>Capture time interval: {backgroundStatus?.configuredTimeIntervalMs ?? 'unknown'}ms</Text>
           <Text style={styles.versionValue}>Foreground permission: {backgroundStatus?.foregroundPermission ?? 'unknown'}</Text>
           <Text style={styles.versionValue}>Background permission: {backgroundStatus?.backgroundPermission ?? 'unknown'}</Text>
           <Text style={styles.versionValue}>Location services enabled: {backgroundStatus?.locationServicesEnabled == null ? 'unknown' : backgroundStatus.locationServicesEnabled ? 'yes' : 'no'}</Text>
           <Text style={styles.versionValue}>Background location available: {backgroundStatus?.backgroundLocationAvailable == null ? 'unknown' : backgroundStatus.backgroundLocationAvailable ? 'yes' : 'no'}</Text>
           <Text style={styles.versionValue}>TaskManager available: {backgroundStatus?.taskManagerAvailable == null ? 'unknown' : backgroundStatus.taskManagerAvailable ? 'yes' : 'no'}</Text>
           <Text style={styles.versionValue}>Background task defined: {backgroundStatus?.taskDefined ? 'yes' : 'no'}</Text>
-          <Text style={styles.versionValue}>Background task started: {backgroundStatus?.taskStarted ? 'yes' : 'no'}</Text>
-          <Text style={styles.versionValue}>Fallback drain task defined: {backgroundStatus?.drainTaskDefined ? 'yes' : 'no'}</Text>
-          <Text style={styles.versionValue}>Fallback drain task registered: {backgroundStatus?.drainTaskRegistered ? 'yes' : 'no'}</Text>
+          <Text style={styles.versionValue}>Continuous location task started: {backgroundStatus?.taskStarted ? 'yes' : 'no'}</Text>
+          <Text style={styles.versionValue}>Scheduled drain task defined: {backgroundStatus?.drainTaskDefined ? 'yes' : 'no'}</Text>
+          <Text style={styles.versionValue}>Scheduled drain task registered: {backgroundStatus?.drainTaskRegistered ? 'yes' : 'no'}</Text>
           <Text style={styles.versionValue}>Background worker status: {backgroundStatus?.backgroundTaskStatus ?? 'unknown'}</Text>
           <Text style={styles.versionValue}>Provider status: {formatDebugPayload(backgroundStatus?.providerStatus ?? undefined)}</Text>
           <Text style={styles.versionValue}>Registered tasks: {formatDebugPayload(backgroundStatus?.registeredTasks ?? undefined)}</Text>

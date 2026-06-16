@@ -23,6 +23,8 @@ UNKNOWN_PLACE_MIN_STAY_MINUTES = 30
 PROPOSAL_TTL_DAYS = 7
 HISTORY_LOOKBACK_DAYS = 90
 MAX_HISTORY_EVENTS = 12
+DAILY_SCAN_UTC_HOUR = 15
+DAILY_SCAN_UTC_MINUTE = 20
 HOME_TERMS = {"home", "house", "my home", "apartment", "flat", "residence"}
 
 
@@ -52,6 +54,14 @@ def analyze_user_day(
     start_utc = day_start.astimezone(timezone.utc)
     end_utc = day_end.astimezone(timezone.utc)
 
+    logger.info(
+        "[proposed_events] analyze_start user=%s date=%s timezone=%s window_utc=%s..%s",
+        user_email,
+        target_date.isoformat(),
+        getattr(tz, "key", "UTC"),
+        start_utc.isoformat(),
+        end_utc.isoformat(),
+    )
     expire_pending(user_email=user_email)
     rows = _fetch_locations(user_email=user_email, start_at=start_utc, end_at=end_utc)
     ignores = _fetch_ignores(user_email)
@@ -59,6 +69,7 @@ def analyze_user_day(
 
     created = 0
     skipped = 0
+    skip_reasons: dict[str, int] = {}
     proposals: list[dict[str, Any]] = []
     for segment in segments:
         if _has_overlapping_event(
@@ -67,6 +78,7 @@ def analyze_user_day(
             user_email=user_email,
         ):
             skipped += 1
+            skip_reasons["overlapping_event"] = skip_reasons.get("overlapping_event", 0) + 1
             continue
         candidate = _build_candidate(
             user_email=user_email,
@@ -77,20 +89,39 @@ def analyze_user_day(
         )
         if not candidate:
             skipped += 1
+            reason = _segment_skip_reason(segment, ignores)
+            skip_reasons[reason] = skip_reasons.get(reason, 0) + 1
             continue
         proposal = _insert_proposal(candidate)
         if proposal:
             created += 1
             proposals.append(proposal)
+        else:
+            skipped += 1
+            skip_reasons["duplicate_proposal"] = skip_reasons.get("duplicate_proposal", 0) + 1
 
-    return {
+    result = {
         "created": created,
         "skipped": skipped,
+        "skip_reasons": skip_reasons,
         "proposal_count": len(proposals),
         "proposals": proposals,
         "date": target_date.isoformat(),
         "timezone": getattr(tz, "key", "UTC"),
+        "location_count": len(rows),
+        "segment_count": len(segments),
     }
+    logger.info(
+        "[proposed_events] analyze_complete user=%s date=%s locations=%s segments=%s created=%s skipped=%s skip_reasons=%s",
+        user_email,
+        target_date.isoformat(),
+        len(rows),
+        len(segments),
+        created,
+        skipped,
+        json.dumps(skip_reasons, sort_keys=True),
+    )
+    return result
 
 
 def list_proposals(user_email: str, *, include_resolved: bool = False) -> list[dict[str, Any]]:
@@ -296,15 +327,49 @@ def list_users_for_daily_scan() -> list[dict[str, Any]]:
 def should_run_daily_scan(user_email: str, *, now_utc: datetime | None = None) -> dict[str, Any] | None:
     timezone_name = _latest_timezone(user_email)
     tz = _resolve_timezone(timezone_name)
-    now = (now_utc or datetime.now(timezone.utc)).astimezone(tz)
-    if (now.hour, now.minute) < (20, 30):
+    now_utc_value = now_utc or datetime.now(timezone.utc)
+    if now_utc_value.tzinfo is None:
+        now_utc_value = now_utc_value.replace(tzinfo=timezone.utc)
+    now_utc_value = now_utc_value.astimezone(timezone.utc)
+    if (now_utc_value.hour, now_utc_value.minute) < (
+        DAILY_SCAN_UTC_HOUR,
+        DAILY_SCAN_UTC_MINUTE,
+    ):
         return None
+    now = now_utc_value.astimezone(tz)
     target_date = now.date()
     dedupe_key = f"proposed-events:{target_date.isoformat()}:{getattr(tz, 'key', 'UTC')}"
     return {
         "target_date": target_date,
         "timezone": getattr(tz, "key", "UTC"),
         "dedupe_key": dedupe_key,
+    }
+
+
+def describe_daily_scan_eligibility(
+    user_email: str,
+    *,
+    now_utc: datetime | None = None,
+) -> dict[str, Any]:
+    timezone_name = _latest_timezone(user_email)
+    tz = _resolve_timezone(timezone_name)
+    now_utc_value = now_utc or datetime.now(timezone.utc)
+    if now_utc_value.tzinfo is None:
+        now_utc_value = now_utc_value.replace(tzinfo=timezone.utc)
+    now_utc_value = now_utc_value.astimezone(timezone.utc)
+    now = now_utc_value.astimezone(tz)
+    due = (now_utc_value.hour, now_utc_value.minute) >= (
+        DAILY_SCAN_UTC_HOUR,
+        DAILY_SCAN_UTC_MINUTE,
+    )
+    return {
+        "user_email": user_email,
+        "timezone": getattr(tz, "key", "UTC"),
+        "utc_now": now_utc_value.isoformat(),
+        "local_now": now.isoformat(),
+        "due": due,
+        "reason": "due" if due else "before_15_20_utc",
+        "target_date": now.date().isoformat(),
     }
 
 
@@ -367,6 +432,25 @@ def _build_candidate(
     return _enrich_candidate_with_history(candidate, segment=segment, timezone_name=timezone_name)
 
 
+def _segment_skip_reason(segment: StaySegment, ignores: set[tuple[str, str]]) -> str:
+    duration_minutes = int((segment.end_at - segment.start_at).total_seconds() // 60)
+    if duration_minutes < MIN_STAY_MINUTES:
+        return "short_stay"
+    normalized_name = normalize_search_text(segment.place_name or "")
+    if normalized_name in HOME_TERMS:
+        return "home_like_place"
+    if normalized_name and ("place_name", normalized_name) in ignores:
+        return "ignored_place_name"
+    if segment.place_id and ("place_id", segment.place_id) in ignores:
+        return "ignored_place_id"
+    if ("location_signature", segment.signature) in ignores:
+        return "ignored_location_signature"
+    is_known_place = bool(segment.place_id or segment.place_name)
+    if not is_known_place and duration_minutes < UNKNOWN_PLACE_MIN_STAY_MINUTES:
+        return "unknown_place_short_stay"
+    return "candidate_filtered"
+
+
 def _insert_proposal(candidate: dict[str, Any]) -> dict[str, Any] | None:
     with get_conn() as conn, conn.cursor() as cur:
         cur.execute(
@@ -424,7 +508,28 @@ def _insert_proposal(candidate: dict[str, Any]) -> dict[str, Any] | None:
         )
         row = cur.fetchone()
         conn.commit()
-    return _serialize_proposal(dict(row)) if row else None
+    if not row:
+        logger.info(
+            "[proposed_events] proposal_duplicate user=%s date=%s start=%s end=%s place_id=%s signature=%s",
+            candidate.get("user_email"),
+            candidate.get("local_date"),
+            _iso(candidate.get("start_at")),
+            _iso(candidate.get("end_at")),
+            candidate.get("place_id"),
+            candidate.get("ignored_signature"),
+        )
+        return None
+    logger.info(
+        "[proposed_events] proposal_created user=%s proposal_id=%s title=%s confidence=%s start=%s end=%s place_id=%s",
+        candidate.get("user_email"),
+        row.get("proposal_id"),
+        row.get("suggested_title"),
+        row.get("confidence"),
+        _iso(row.get("start_at")),
+        _iso(row.get("end_at")),
+        row.get("place_id"),
+    )
+    return _serialize_proposal(dict(row))
 
 
 def _enrich_candidate_with_history(
@@ -450,9 +555,21 @@ def _enrich_candidate_with_history(
                 allowed_contact_ids.add(contact_id)
 
     if not context["linked_contacts"] and not context["recent_events"]:
+        logger.info(
+            "[proposed_events] enrichment_skipped_no_history place_id=%s place_name=%s",
+            candidate.get("place_id"),
+            candidate.get("place_name"),
+        )
         return candidate
 
     try:
+        logger.info(
+            "[proposed_events] enrichment_start place_id=%s place_name=%s linked_contacts=%s recent_events=%s",
+            candidate.get("place_id"),
+            candidate.get("place_name"),
+            len(context["linked_contacts"]),
+            len(context["recent_events"]),
+        )
         enriched = call_llm_json(
             _build_enrichment_prompt(candidate, context),
             system_prompt=(
@@ -473,6 +590,13 @@ def _enrich_candidate_with_history(
         logger.warning("[proposed_events] LLM enrichment unavailable: %s", exc)
         return _apply_deterministic_history_enrichment(candidate, context, allowed_contact_ids)
 
+    logger.info(
+        "[proposed_events] enrichment_complete place_id=%s title=%s confidence=%s suggested_contacts=%s",
+        candidate.get("place_id"),
+        enriched.get("suggested_title"),
+        enriched.get("confidence"),
+        len(enriched.get("suggested_contact_ids") or []),
+    )
     return _apply_llm_enrichment(candidate, enriched, context, allowed_contact_ids)
 
 

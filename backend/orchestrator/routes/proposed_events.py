@@ -47,6 +47,11 @@ def create_proposed_events_router() -> APIRouter:
             )
         }
 
+    @router.get("/mobile/proposed-events/status")
+    def read_mobile_proposed_events_status(user: dict = Depends(get_current_user)):
+        email = _user_email(user)
+        return proposed_event_jobs.get_scheduler_status(email)
+
     @router.post("/mobile/proposed-events/run")
     def run_mobile_proposed_events(
         payload: ProposedEventRunIn,
