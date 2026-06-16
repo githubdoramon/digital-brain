@@ -209,6 +209,7 @@ function TimelineMap({
   selectedLocationId?: number | null;
   onSelectLocation: (location: TimelineLocation) => void;
 }) {
+  console.log(GOOGLE_MAPS_API_KEY, process.env)
   const { maps, error } = useGoogleMaps(GOOGLE_MAPS_API_KEY);
   const mapElementRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<GoogleMap | null>(null);
