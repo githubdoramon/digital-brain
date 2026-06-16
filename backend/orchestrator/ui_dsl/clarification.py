@@ -136,7 +136,10 @@ def normalize_clarification_fields(raw_fields: Any) -> list[dict[str, Any]]:
         if kind not in SUPPORTED_CLARIFICATION_FIELD_KINDS:
             kind = "text"
 
-        field_id = normalize_clarification_field_id(item.get("id"), f"field_{idx + 1}")
+        raw_identifier = item.get("id")
+        if raw_identifier in (None, ""):
+            raw_identifier = item.get("name")
+        field_id = normalize_clarification_field_id(raw_identifier, f"field_{idx + 1}")
         if field_id in seen_ids:
             field_id = f"{field_id}_{idx + 1}"
         seen_ids.add(field_id)

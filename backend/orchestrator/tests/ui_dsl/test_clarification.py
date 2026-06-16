@@ -43,6 +43,20 @@ def test_normalize_clarification_fields_sanitizes_invalid_kind_and_options():
     assert fields[2]["kind"] == "text"
 
 
+def test_normalize_clarification_fields_falls_back_to_name_key_for_id():
+    fields = normalize_clarification_fields(
+        [
+            {
+                "name": "when",
+                "kind": "datetime",
+                "label": "When did this happen?",
+            }
+        ]
+    )
+
+    assert fields[0]["id"] == "when"
+
+
 def test_infer_clarification_fields_from_questions_generates_targeted_fields():
     questions = ["When exactly was it?", "Where did this happen?"]
     partial_extraction = {"when": None, "where": None}

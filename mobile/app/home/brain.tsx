@@ -1302,10 +1302,15 @@ export function ChatConversationScreen({
   }, [threadId, pendingEventId, isBootstrapping, isAuthLoading, isMainChat]);
 
   const resumePendingRun = useCallback(async () => {
-    if (!isMainChat) return;
     if (!token) return;
     const pendingRun = await loadPendingRun();
     if (!pendingRun?.runId) return;
+    if (!isMainChat) {
+      const activeThreadId = initialThreadId ?? threadId;
+      if (!activeThreadId || pendingRun.threadId !== activeThreadId) {
+        return;
+      }
+    }
 
     setForceScrollNext(true);
     setMessages((prev) => {
@@ -1372,10 +1377,14 @@ export function ChatConversationScreen({
         onProgressChip: setProgressChip,
       });
 
-      const restored = await restoreChatHistory(token, {
-        threadId: pendingRun.threadId,
-        pendingEventId,
-      });
+      const restored = isMainChat
+        ? await restoreChatHistory(token, {
+            threadId: pendingRun.threadId,
+            pendingEventId,
+          })
+        : pendingRun.threadId
+          ? await loadThreadHistory(token, pendingRun.threadId)
+          : { threadId: null, pendingEventId: null, messages: [] };
       setThreadId(restored.threadId);
       setPendingEventId(restored.pendingEventId);
       if (restored.messages.length > 0) {
@@ -1403,7 +1412,7 @@ export function ChatConversationScreen({
       );
       await clearPendingRun();
     }
-  }, [isMainChat, pendingEventId, token]);
+  }, [initialThreadId, isMainChat, pendingEventId, threadId, token]);
 
   useEffect(() => {
     if (!isMainChat) return;
@@ -1412,7 +1421,6 @@ export function ChatConversationScreen({
   }, [allowed, isAuthLoading, isBootstrapping, isMainChat, resumePendingRun, token]);
 
   useEffect(() => {
-    if (!isMainChat) return;
     if (!token || !allowed || isAuthLoading || isBootstrapping) return;
 
     const subscription = AppState.addEventListener('change', (nextState) => {
@@ -1420,10 +1428,14 @@ export function ChatConversationScreen({
 
       void (async () => {
         try {
-          const restored = await restoreChatHistory(token, {
-            threadId,
-            pendingEventId,
-          });
+          const restored = isMainChat
+            ? await restoreChatHistory(token, {
+                threadId,
+                pendingEventId,
+              })
+            : threadId
+              ? await loadThreadHistory(token, threadId)
+              : { threadId: null, pendingEventId: null, messages: [] };
           setThreadId(restored.threadId);
           setPendingEventId(restored.pendingEventId);
           if (restored.messages.length > 0) {
@@ -1626,7 +1638,7 @@ export function ChatConversationScreen({
         callbacks: {
           onSessionInfo: (threadIdFromStream) => {
             setThreadId((prev) => threadIdFromStream ?? prev);
-            if (isMainChat && activeRunId) {
+            if (activeRunId) {
               void savePendingRun({
                 runId: activeRunId,
                 pendingMessageId: pendingId,
@@ -1638,15 +1650,13 @@ export function ChatConversationScreen({
           },
           onRunId: (runIdFromStream) => {
             activeRunId = runIdFromStream;
-            if (isMainChat) {
-              void savePendingRun({
-                runId: runIdFromStream,
-                pendingMessageId: pendingId,
-                threadId: threadId,
-                question: outboundText,
-                startedAt: Date.now(),
-              });
-            }
+            void savePendingRun({
+              runId: runIdFromStream,
+              pendingMessageId: pendingId,
+              threadId: isMainChat ? threadId : (threadId ?? initialThreadId),
+              question: outboundText,
+              startedAt: Date.now(),
+            });
           },
           onStatus: (statusMessage) => {
             lastStatus = statusMessage;
@@ -1670,9 +1680,7 @@ export function ChatConversationScreen({
         },
       });
 
-      if (isMainChat) {
-        await clearPendingRun();
-      }
+      await clearPendingRun();
 
       setThreadId((prev) => response.thread_id ?? prev);
       const commandResult = response.command_result as CommandResult | undefined;
@@ -1719,9 +1727,7 @@ export function ChatConversationScreen({
     } catch (error) {
       const authExpired = (error as Error & { authExpired?: boolean }).authExpired;
       if (authExpired) {
-        if (isMainChat) {
-          await clearPendingRun();
-        }
+        await clearPendingRun();
         await signOut();
         if (outboundMediaAttachments.length > 0) {
           setComposerMediaAttachments(outboundMediaAttachments);
@@ -1743,9 +1749,7 @@ export function ChatConversationScreen({
       const requestError = backendErrorDetails(error);
       const keepPendingRun = Boolean(activeRunId) && shouldKeepPendingRun(error);
       if (!keepPendingRun) {
-        if (isMainChat) {
-          await clearPendingRun();
-        }
+        await clearPendingRun();
         if (outboundMediaAttachments.length > 0) {
           setComposerMediaAttachments(outboundMediaAttachments);
         }

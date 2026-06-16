@@ -1297,9 +1297,7 @@ def test_event_clarification_follow_up_strips_structured_contact_disambiguation_
     )
 
     assert result["type"] == "event_confirmation"
-    assert "Rita Lake" in captured["contact_message"]
-    assert "Who did you mean by 'Rita'?" not in captured["contact_message"]
-    assert "- Rita Lake" in captured["contact_message"]
+    assert captured["contact_message"] == "today's physiotherapy at 9h went well. Rita was the Phisioterapist"
 
     delete_command_data(result["preview_id"])
     delete_command_data(clarification_id)
@@ -1361,6 +1359,125 @@ def test_resolve_ambiguous_contacts_from_answer_marks_collective_as_already_cove
     assert len(resolved) == 2
     assert resolved[0]["matched_via"] == "clarification_collective_covered"
     assert remaining == []
+
+
+def test_when_clarification_does_not_rerun_contact_resolution(monkeypatch):
+    clarification_id = "event:clarification:when1234"
+    store_command_data(
+        clarification_id,
+        {
+            "original_message": "starting a trail at Marinha beach with Lucas Britto and Bia",
+            "thread_id": "thread-when",
+            "requested_fields": [
+                {
+                    "id": "when",
+                    "kind": "datetime",
+                    "label": "When did the trail start?",
+                    "required": True,
+                }
+            ],
+            "requested_field_ids": ["when"],
+            "clarification_messages": [
+                {
+                    "role": "user",
+                    "content": "starting a trail at Marinha beach with Lucas Britto and Bia",
+                },
+                {"role": "assistant", "content": "When did the trail start?"},
+            ],
+            "extracted": {
+                "title": "Trail at Marinha Beach",
+                "summary": "Started a trail with friends.",
+                "when": None,
+                "end_when": None,
+                "where": "Marinha beach",
+                "documents": [],
+                "tags": ["Health"],
+                "types": ["health"],
+            },
+            "resolution": {
+                "contacts": [
+                    {
+                        "contact_id": "contact:lucas",
+                        "display_name": "Lucas Brito",
+                        "query": "Lucas Britto",
+                        "confidence": "high",
+                    },
+                    {
+                        "contact_id": "contact:bia",
+                        "display_name": "Beatriz Queiroz Fanti",
+                        "query": "Bia",
+                        "confidence": "high",
+                    },
+                ],
+                "new_entities": {"contacts": [], "places": [], "documents": []},
+                "name_replacements": {},
+                "proposed_contact_groups": [],
+            },
+            "contact_result": {
+                "resolved_contacts": [
+                    {
+                        "original_text": "Lucas Britto",
+                        "contact_id": "contact:lucas",
+                        "display_name": "Lucas Brito",
+                        "matched_via": "clarification",
+                        "confidence": "high",
+                    },
+                    {
+                        "original_text": "Bia",
+                        "contact_id": "contact:bia",
+                        "display_name": "Beatriz Queiroz Fanti",
+                        "matched_via": "clarification",
+                        "confidence": "high",
+                    },
+                ],
+                "ambiguous_contacts": [],
+                "suggested_relationships": [],
+            },
+            "relationship_suggestions": [],
+            "media_attachments": [],
+        },
+    )
+
+    monkeypatch.setattr(
+        "commands.handlers.event._extract_event_entities_with_llm",
+        lambda *_args, **_kwargs: {
+            "need_user_input": None,
+            "title": "Trail at Marinha Beach",
+            "summary": "Started a trail with friends.",
+            "when": "2026-06-13T11:32:00+01:00",
+            "end_when": None,
+            "where": "Marinha beach",
+            "documents": [],
+            "tags": ["Health"],
+            "types": ["health"],
+        },
+    )
+    monkeypatch.setattr(
+        "commands.handlers.event._resolve_contacts_with_agent",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("contact resolution should be skipped")),
+    )
+    monkeypatch.setattr("commands.handlers.event.infer_current_place", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        "commands.handlers.event.places_service.find_best_place_match", lambda *a, **k: None
+    )
+    monkeypatch.setattr("commands.handlers.event.geocode_place_name", lambda *a, **k: None)
+
+    result = handle_event(
+        ParsedCommand(
+            command="event",
+            args=(
+                "starting a trail at Marinha beach with Lucas Britto and Bia\n\n"
+                "Additional details: When did the trail start?: 2026-06-13T11:32 "
+                f"[clarification_id:{clarification_id}]"
+            ),
+            raw_message="/event follow-up",
+        ),
+        {"user_email": "user@example.com", "thread_id": "thread-when"},
+    )
+
+    assert result["type"] == "event_confirmation"
+    assert result["resolution"]["contacts"][0]["display_name"] == "Lucas Brito"
+    assert result["resolution"]["contacts"][1]["display_name"] == "Beatriz Queiroz Fanti"
 
 
 def test_replace_generic_terms_avoids_partial_name_duplication():

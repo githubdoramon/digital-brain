@@ -2827,10 +2827,7 @@ def handle_event(parsed: ParsedCommand, context: dict) -> dict[str, Any]:
             clarification_messages.append({"role": "user", "content": clarification_detail})
         original_message_to_store = original_message
         event_message = original_message
-        contact_message = _build_contact_context_message(
-            original_message,
-            clarification_messages,
-        )
+        contact_message = original_message
         previous_contact_result = clarification_context.get("contact_result") or {}
         previous_resolution = clarification_context.get("resolution") or {}
         previous_relationship_suggestions = list(
@@ -2874,10 +2871,7 @@ def handle_event(parsed: ParsedCommand, context: dict) -> dict[str, Any]:
                 previous_resolution["contacts"] = resolved_entries
                 resolution = previous_resolution
                 contact_result = previous_contact_result
-                skip_contact_resolution = not remaining_contacts or _should_skip_contact_resolution(
-                    raw_message,
-                    ambiguous_contacts,
-                )
+                skip_contact_resolution = True
 
         if raw_message and previous_resolution.get("proposed_contact_groups"):
             updated_groups, changed = _apply_group_confirmation_from_answer(
@@ -2921,7 +2915,7 @@ def handle_event(parsed: ParsedCommand, context: dict) -> dict[str, Any]:
                         original_message,
                         clarification_messages,
                     )
-                    contact_message = event_message
+                    contact_message = original_message
                     event_match_message = event_message
                     existing_event_id = str(clarification_context.get("existing_event_id") or "").strip()
                     if existing_event_id:
@@ -2942,7 +2936,7 @@ def handle_event(parsed: ParsedCommand, context: dict) -> dict[str, Any]:
                         original_message,
                         clarification_messages,
                     )
-                    contact_message = event_message
+                    contact_message = original_message
                     event_match_message = event_message
                     logger.info("[handle_event] Follow-up requested creating a new event")
 
