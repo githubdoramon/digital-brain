@@ -73,14 +73,6 @@ def analyze_user_day(
     skip_reasons: dict[str, int] = {}
     proposals: list[dict[str, Any]] = []
     for segment in segments:
-        if _has_overlapping_event(
-            start_at=segment.start_at,
-            end_at=segment.end_at,
-            user_email=user_email,
-        ):
-            skipped += 1
-            skip_reasons["overlapping_event"] = skip_reasons.get("overlapping_event", 0) + 1
-            continue
         candidate = _build_candidate(
             user_email=user_email,
             segment=segment,
@@ -92,6 +84,14 @@ def analyze_user_day(
             skipped += 1
             reason = _segment_skip_reason(segment, ignores)
             skip_reasons[reason] = skip_reasons.get(reason, 0) + 1
+            continue
+        if _has_overlapping_event(
+            start_at=segment.start_at,
+            end_at=segment.end_at,
+            user_email=user_email,
+        ):
+            skipped += 1
+            skip_reasons["overlapping_event"] = skip_reasons.get("overlapping_event", 0) + 1
             continue
         proposal = _insert_proposal(candidate)
         if proposal:
@@ -1025,19 +1025,38 @@ def _nearest_known_place(lat: float, lon: float, accuracy_m: Any) -> dict[str, A
 
 
 def _has_overlapping_event(*, start_at: datetime, end_at: datetime, user_email: str) -> bool:
+    return bool(_find_overlapping_events(start_at=start_at, end_at=end_at, user_email=user_email, limit=1))
+
+
+def _find_overlapping_events(
+    *,
+    start_at: datetime,
+    end_at: datetime,
+    user_email: str,
+    limit: int = 5,
+) -> list[dict[str, Any]]:
     _ = user_email
     with get_conn() as conn, conn.cursor() as cur:
         cur.execute(
             """
-            SELECT 1
+            SELECT e.id,
+                   e.title,
+                   e.summary,
+                   e.start_date,
+                   e.end_date,
+                   e.types,
+                   e.tags,
+                   e.raw
             FROM events e
             WHERE e.start_date < %s
               AND COALESCE(e.end_date, e.start_date + INTERVAL '30 minutes') > %s
-            LIMIT 1
+            ORDER BY e.start_date ASC, e.id ASC
+            LIMIT %s
             """,
-            (end_at, start_at),
+            (end_at, start_at, max(1, limit)),
         )
-        return cur.fetchone() is not None
+        rows = [dict(row) for row in cur.fetchall()]
+    return [_serialize_overlap_event(row) for row in rows]
 
 
 def _suggest_contacts_for_place(place_id: str | None) -> list[str]:
@@ -1161,21 +1180,47 @@ def _serialize_location(row: dict[str, Any]) -> dict[str, Any]:
     return output
 
 
+def _serialize_overlap_event(row: dict[str, Any]) -> dict[str, Any]:
+    output = {
+        "id": row.get("id"),
+        "title": row.get("title"),
+        "summary": row.get("summary"),
+        "start_at": _iso(row.get("start_date")),
+        "end_at": _iso(row.get("end_date")),
+        "types": row.get("types") or [],
+        "tags": row.get("tags") or [],
+    }
+    raw = row.get("raw")
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except json.JSONDecodeError:
+            raw = {}
+    if isinstance(raw, dict):
+        output["source"] = raw.get("source")
+        output["external_id"] = raw.get("external_id")
+    return output
+
+
 def _serialize_timeline_segment(
     segment: StaySegment,
     *,
     ignores: set[tuple[str, str]],
     user_email: str,
 ) -> dict[str, Any]:
-    overlaps_event = _has_overlapping_event(
-        start_at=segment.start_at,
-        end_at=segment.end_at,
-        user_email=user_email,
-    )
-    skip_reason = "overlapping_event" if overlaps_event else _segment_skip_reason(segment, ignores)
+    skip_reason = _segment_skip_reason(segment, ignores)
     would_propose = skip_reason == "candidate_filtered"
+    overlapping_events: list[dict[str, Any]] = []
+    overlaps_event = False
     if would_propose:
-        skip_reason = "eligible_candidate"
+        overlapping_events = _find_overlapping_events(
+            start_at=segment.start_at,
+            end_at=segment.end_at,
+            user_email=user_email,
+        )
+        overlaps_event = bool(overlapping_events)
+        skip_reason = "overlapping_event" if overlaps_event else "eligible_candidate"
+        would_propose = not overlaps_event
     duration_minutes = int((segment.end_at - segment.start_at).total_seconds() // 60)
     return {
         "start_at": segment.start_at.isoformat(),
@@ -1190,6 +1235,7 @@ def _serialize_timeline_segment(
         "lon": segment.lon,
         "signature": segment.signature,
         "overlaps_event": overlaps_event,
+        "overlapping_events": overlapping_events,
         "skip_reason": skip_reason,
         "would_propose": would_propose,
         "first_sample_id": segment.samples[0].get("id") if segment.samples else None,

@@ -371,6 +371,17 @@ export type TimelineSegment = {
   lon: number;
   signature: string;
   overlaps_event: boolean;
+  overlapping_events?: Array<{
+    id?: string | null;
+    title?: string | null;
+    summary?: string | null;
+    start_at?: string | null;
+    end_at?: string | null;
+    types?: string[];
+    tags?: string[];
+    source?: string | null;
+    external_id?: string | null;
+  }>;
   skip_reason: string;
   would_propose: boolean;
   first_sample_id?: number | null;

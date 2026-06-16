@@ -522,7 +522,8 @@ export default function TimelinePage() {
   }
 
   const eligibleCount = timeline?.segments.filter((segment) => segment.would_propose).length ?? 0;
-  const overlapCount = timeline?.segments.filter((segment) => segment.overlaps_event).length ?? 0;
+  const overlapCount =
+    timeline?.segments.filter((segment) => segment.skip_reason === "overlapping_event").length ?? 0;
   const currentTimezone = timeline?.timezone ?? timezone;
   const selectedLocationId = selectedLocation?.id ?? null;
 
@@ -661,6 +662,21 @@ export default function TimelinePage() {
                     {segment.duration_minutes} min · {segment.sample_count} samples
                   </p>
                   <code>{segment.signature}</code>
+                  {segment.overlapping_events && segment.overlapping_events.length > 0 ? (
+                    <div className="overlap-evidence">
+                      <span>Overlaps</span>
+                      {segment.overlapping_events.map((event) => (
+                        <div key={event.id || `${event.start_at}-${event.title}`}>
+                          <strong>{event.title || event.id || "Untitled event"}</strong>
+                          <p>
+                            {formatTime(event.start_at, currentTimezone)} to{" "}
+                            {formatTime(event.end_at, currentTimezone)}
+                            {event.id ? ` · ${event.id}` : ""}
+                          </p>
+                        </div>
+                      ))}
+                    </div>
+                  ) : null}
                 </div>
                 <span className={`status-pill${segment.would_propose ? " good" : ""}`}>{statusLabel(segment)}</span>
               </button>
@@ -990,6 +1006,34 @@ export default function TimelinePage() {
           background: #f3f5f7;
           padding: 3px 5px;
           border-radius: 5px;
+        }
+
+        .overlap-evidence {
+          display: grid;
+          gap: 6px;
+          margin-top: 10px;
+          padding: 9px 10px;
+          border-left: 3px solid #f59e0b;
+          border-radius: 6px;
+          background: #fffbeb;
+        }
+
+        .overlap-evidence > span {
+          color: #92400e;
+          font-size: 0.72rem;
+          font-weight: 900;
+          text-transform: uppercase;
+        }
+
+        .overlap-evidence strong {
+          color: #713f12;
+          font-size: 0.86rem;
+        }
+
+        .overlap-evidence p {
+          margin: 2px 0 0;
+          color: #92400e;
+          font-size: 0.78rem;
         }
 
         .status-pill {
