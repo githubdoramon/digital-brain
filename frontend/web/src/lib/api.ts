@@ -436,6 +436,10 @@ export type ProposedEventsEnqueueResult = {
   [key: string]: unknown;
 };
 
+export type ClientConfig = {
+  googleMapsApiKey: string;
+};
+
 /**
  * Stream responses from the /ask/stream SSE endpoint.
  * Returns the final bundle when streaming completes.
@@ -658,4 +662,15 @@ export async function enqueueProposedEventsForDay(
     targetDate,
     timezone,
   });
+}
+
+export async function getClientConfig(): Promise<ClientConfig> {
+  const response = await fetch("/api/client-config", {
+    method: "GET",
+    cache: "no-store",
+  });
+  if (!response.ok) {
+    throw new Error(`Failed to load client configuration: ${response.statusText}`);
+  }
+  return (await response.json()) as ClientConfig;
 }

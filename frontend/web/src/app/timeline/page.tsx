@@ -7,11 +7,11 @@ import {
   TimelineProposal,
   TimelineSegment,
   enqueueProposedEventsForDay,
+  getClientConfig,
   getDailyTimeline,
   runProposedEventsForDay,
 } from "@/lib/api";
 
-const GOOGLE_MAPS_API_KEY = process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY;
 const GOOGLE_MAPS_SCRIPT_ID = "digital-brain-google-maps";
 const DEFAULT_CENTER = { lat: 39.5, lng: -8.0 };
 
@@ -145,57 +145,85 @@ function pointInfoHtml(location: TimelineLocation, index: number, timezone: stri
   `;
 }
 
-function useGoogleMaps(apiKey?: string) {
+function useGoogleMaps() {
   const [maps, setMaps] = useState<GoogleMapsApi | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [loadingConfig, setLoadingConfig] = useState(true);
 
   useEffect(() => {
-    if (!apiKey) {
-      setError("Set NEXT_PUBLIC_GOOGLE_MAPS_API_KEY to render the Google map.");
-      return;
-    }
+    let cancelled = false;
 
-    if (window.google?.maps) {
-      setMaps(window.google.maps);
-      return;
-    }
+    async function loadMaps() {
+      setLoadingConfig(true);
+      try {
+        const config = await getClientConfig();
+        if (cancelled) {
+          return;
+        }
+        const apiKey = config.googleMapsApiKey?.trim();
+        if (!apiKey) {
+          setError("Set NEXT_PUBLIC_GOOGLE_MAPS_API_KEY in the frontend container environment.");
+          return;
+        }
 
-    const existingScript = document.getElementById(GOOGLE_MAPS_SCRIPT_ID) as HTMLScriptElement | null;
-    const script =
-      existingScript ||
-      Object.assign(document.createElement("script"), {
-        id: GOOGLE_MAPS_SCRIPT_ID,
-        src: `https://maps.googleapis.com/maps/api/js?key=${encodeURIComponent(apiKey)}`,
-        async: true,
-        defer: true,
-      });
+        if (window.google?.maps) {
+          setMaps(window.google.maps);
+          setError(null);
+          return;
+        }
 
-    function handleLoad() {
-      if (window.google?.maps) {
-        setMaps(window.google.maps);
-        setError(null);
-      } else {
-        setError("Google Maps loaded without the expected API object.");
+        const existingScript = document.getElementById(GOOGLE_MAPS_SCRIPT_ID) as HTMLScriptElement | null;
+        const script =
+          existingScript ||
+          Object.assign(document.createElement("script"), {
+            id: GOOGLE_MAPS_SCRIPT_ID,
+            src: `https://maps.googleapis.com/maps/api/js?key=${encodeURIComponent(apiKey)}`,
+            async: true,
+            defer: true,
+          });
+
+        function handleLoad() {
+          if (cancelled) {
+            return;
+          }
+          if (window.google?.maps) {
+            setMaps(window.google.maps);
+            setError(null);
+          } else {
+            setError("Google Maps loaded without the expected API object.");
+          }
+        }
+
+        function handleError() {
+          if (!cancelled) {
+            setError("Google Maps failed to load. Check the API key, billing, and allowed origins.");
+          }
+        }
+
+        script.addEventListener("load", handleLoad);
+        script.addEventListener("error", handleError);
+        if (!existingScript) {
+          document.head.appendChild(script);
+        }
+      } catch (err) {
+        if (!cancelled) {
+          setError(err instanceof Error ? err.message : "Failed to load client configuration.");
+        }
+      } finally {
+        if (!cancelled) {
+          setLoadingConfig(false);
+        }
       }
     }
 
-    function handleError() {
-      setError("Google Maps failed to load. Check the API key, billing, and allowed origins.");
-    }
-
-    script.addEventListener("load", handleLoad);
-    script.addEventListener("error", handleError);
-    if (!existingScript) {
-      document.head.appendChild(script);
-    }
+    void loadMaps();
 
     return () => {
-      script.removeEventListener("load", handleLoad);
-      script.removeEventListener("error", handleError);
+      cancelled = true;
     };
-  }, [apiKey]);
+  }, []);
 
-  return { maps, error };
+  return { maps, error, loadingConfig };
 }
 
 function TimelineMap({
@@ -209,8 +237,7 @@ function TimelineMap({
   selectedLocationId?: number | null;
   onSelectLocation: (location: TimelineLocation) => void;
 }) {
-  console.log(GOOGLE_MAPS_API_KEY, process.env)
-  const { maps, error } = useGoogleMaps(GOOGLE_MAPS_API_KEY);
+  const { maps, error, loadingConfig } = useGoogleMaps();
   const mapElementRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<GoogleMap | null>(null);
   const markersRef = useRef<GoogleMarker[]>([]);
@@ -319,10 +346,10 @@ function TimelineMap({
     );
   }
 
-  if (!maps) {
+  if (loadingConfig || !maps) {
     return (
       <div className="map-shell empty-map">
-        <div>Loading Google Maps...</div>
+        <div>{loadingConfig ? "Loading map configuration..." : "Loading Google Maps..."}</div>
       </div>
     );
   }
