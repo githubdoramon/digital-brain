@@ -12,7 +12,7 @@ import {
   View,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { useRouter } from 'expo-router';
+import { useLocalSearchParams, useRouter } from 'expo-router';
 import Ionicons from '@expo/vector-icons/Ionicons';
 
 import { apiFetch } from '@/api/client';
@@ -100,6 +100,7 @@ function buildFallbackBriefingItemId(url: string): string {
 export default function DailyScreen() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
+  const params = useLocalSearchParams<{ expandBriefing?: string }>();
   const { email, name, photo, token, isLoading: authLoading, refreshToken } = useAuth();
   const [expanded, setExpanded] = React.useState(false);
   const [briefing, setBriefing] = React.useState<DailyBriefing | null>(null);
@@ -119,6 +120,13 @@ export default function DailyScreen() {
       UIManager.setLayoutAnimationEnabledExperimental(true);
     }
   }, []);
+
+  React.useEffect(() => {
+    if (params.expandBriefing === '1') {
+      setExpanded(true);
+      router.setParams({ expandBriefing: undefined });
+    }
+  }, [params.expandBriefing, router]);
 
   const loadBriefing = React.useCallback((options: { showLoading?: boolean } = {}) => {
     let isMounted = true;

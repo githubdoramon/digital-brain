@@ -121,6 +121,14 @@ function RootLayoutNav({ loaded }: { loaded: boolean }) {
         return;
       }
 
+      if (data?.kind === 'daily_briefing_ready') {
+        router.push({
+          pathname: '/home',
+          params: { expandBriefing: '1' },
+        });
+        return;
+      }
+
       if (data?.kind === 'document_download') {
         const fileUri = typeof data.fileUri === 'string' ? data.fileUri : null;
         const mimeType = typeof data.mimeType === 'string' ? data.mimeType : '*/*';

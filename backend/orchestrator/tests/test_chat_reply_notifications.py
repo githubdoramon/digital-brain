@@ -71,6 +71,36 @@ def test_push_notification_includes_data_payload(monkeypatch):
     assert payload["data"] == {"kind": "chat_reply", "threadId": "thread:abc"}
 
 
+def test_daily_briefing_notification_uses_deep_link_data(monkeypatch):
+    import daily_briefing_jobs
+
+    sent = Mock(return_value={"sent": {"push": 1, "email": 0}, "errors": []})
+    monkeypatch.setattr(daily_briefing_jobs, "send_notification_to_user", sent)
+
+    daily_briefing_jobs._notify_daily_briefing_ready(
+        user_email="user@example.com",
+        result={
+            "briefing_id": "briefing:test",
+            "date": "2026-06-16",
+            "timezone": "Europe/Lisbon",
+            "summary": "Three events and two todos today.",
+        },
+    )
+
+    sent.assert_called_once_with(
+        notification_type="daily-briefing",
+        user_email="user@example.com",
+        title="Daily briefing ready",
+        message="Three events and two todos today.",
+        data={
+            "kind": "daily_briefing_ready",
+            "briefingId": "briefing:test",
+            "date": "2026-06-16",
+            "timezone": "Europe/Lisbon",
+        },
+    )
+
+
 def test_chat_reply_notification_type_is_registered():
     from notifications.types import CHAT_REPLY_NOTIFICATION_TYPE, list_notification_types
 

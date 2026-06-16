@@ -56,7 +56,7 @@ This document captures behavior and quality rules for the daily briefing profile
 - Mobile briefing fetch is non-blocking: when a daily briefing is missing, the API enqueues generation and returns `pending` immediately (HTTP 202).
 - Clients poll the same daily endpoint until status becomes `ready`.
 - Service endpoint `/agents/daily-briefing/run` also queues work and returns immediately.
-- After a successful generation, a notification is dispatched using the `daily-briefing` notification type and the stored per-channel user subscription preferences.
+- After a successful generation, a notification is dispatched using the `daily-briefing` notification type and the stored per-channel user subscription preferences. Push payloads use `kind=daily_briefing_ready` so mobile opens `/home` with the full briefing component already expanded.
 
 ## Feedback Loop
 

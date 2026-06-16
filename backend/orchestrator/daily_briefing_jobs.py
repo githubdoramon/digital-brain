@@ -303,6 +303,12 @@ def _notify_daily_briefing_ready(*, user_email: str, result: dict[str, Any]) -> 
             user_email=user_email,
             title="Daily briefing ready",
             message=message,
+            data={
+                "kind": "daily_briefing_ready",
+                "briefingId": result.get("briefing_id") or "",
+                "date": result.get("date") or "",
+                "timezone": result.get("timezone") or "",
+            },
         )
         logger.info(
             "[briefing.job] Notification result user=%s sent=%s errors=%s",
