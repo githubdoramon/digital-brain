@@ -24,7 +24,7 @@ PROPOSAL_TTL_DAYS = 7
 HISTORY_LOOKBACK_DAYS = 90
 MAX_HISTORY_EVENTS = 12
 DAILY_SCAN_UTC_HOUR = 15
-DAILY_SCAN_UTC_MINUTE = 20
+DAILY_SCAN_UTC_MINUTE = 50
 HOME_TERMS = {"home", "house", "my home", "apartment", "flat", "residence"}
 
 
@@ -368,7 +368,7 @@ def describe_daily_scan_eligibility(
         "utc_now": now_utc_value.isoformat(),
         "local_now": now.isoformat(),
         "due": due,
-        "reason": "due" if due else "before_15_20_utc",
+        "reason": "due" if due else "before_15_50_utc",
         "target_date": now.date().isoformat(),
     }
 
