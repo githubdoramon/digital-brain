@@ -1,5 +1,6 @@
 "use client";
 
+import type { ReactNode } from "react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   DailyTimeline,
@@ -257,6 +258,47 @@ function useGoogleMaps() {
   return { maps, error, loadingConfig };
 }
 
+function MapFrame({ children, empty = false }: { children: ReactNode; empty?: boolean }) {
+  return (
+    <div className={`map-shell${empty ? " empty-map" : ""}`}>
+      {children}
+      <style jsx>{`
+        .map-shell {
+          position: relative;
+          min-height: 620px;
+          height: 68vh;
+          overflow: hidden;
+          border: 1px solid rgba(17, 24, 39, 0.18);
+          border-radius: 8px;
+          background: #d7e4e7;
+        }
+
+        .empty-map {
+          display: grid;
+          place-items: center;
+          padding: 28px;
+          color: #4b5563;
+          font-weight: 750;
+          text-align: center;
+        }
+
+        .empty-map p {
+          margin: 8px 0 0;
+          color: #667085;
+          font-weight: 600;
+        }
+
+        @media (max-width: 980px) {
+          .map-shell {
+            min-height: 520px;
+            height: 64vh;
+          }
+        }
+      `}</style>
+    </div>
+  );
+}
+
 function TimelineMap({
   locations,
   timezone,
@@ -392,27 +434,33 @@ function TimelineMap({
 
   if (error || mapRenderError) {
     return (
-      <div className="map-shell empty-map">
+      <MapFrame empty>
         <div>
           <strong>Google Maps is not rendering.</strong>
           <p>{error || mapRenderError}</p>
         </div>
-      </div>
+      </MapFrame>
     );
   }
 
   if (loadingConfig || !maps) {
     return (
-      <div className="map-shell empty-map">
+      <MapFrame empty>
         <div>{loadingConfig ? "Loading map configuration..." : "Loading Google Maps..."}</div>
-      </div>
+      </MapFrame>
     );
   }
 
   return (
-    <div className="map-shell">
+    <MapFrame>
       <div ref={mapElementRef} className="google-map" />
-    </div>
+      <style jsx>{`
+        .google-map {
+          width: 100%;
+          height: 100%;
+        }
+      `}</style>
+    </MapFrame>
   );
 }
 
@@ -801,36 +849,6 @@ export default function TimelinePage() {
           align-items: stretch;
         }
 
-        .map-shell {
-          position: relative;
-          min-height: 620px;
-          height: 68vh;
-          overflow: hidden;
-          border: 1px solid rgba(17, 24, 39, 0.18);
-          border-radius: 8px;
-          background: #d7e4e7;
-        }
-
-        .google-map {
-          width: 100%;
-          height: 100%;
-        }
-
-        .empty-map {
-          display: grid;
-          place-items: center;
-          padding: 28px;
-          color: #4b5563;
-          font-weight: 750;
-          text-align: center;
-        }
-
-        .empty-map p {
-          margin: 8px 0 0;
-          color: #667085;
-          font-weight: 600;
-        }
-
         .point-panel {
           min-width: 0;
           overflow: hidden;
@@ -1002,11 +1020,6 @@ export default function TimelinePage() {
           .map-layout,
           .data-grid {
             grid-template-columns: 1fr;
-          }
-
-          .map-shell {
-            min-height: 520px;
-            height: 64vh;
           }
         }
 
