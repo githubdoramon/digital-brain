@@ -52,6 +52,19 @@ def create_proposed_events_router() -> APIRouter:
         email = _user_email(user)
         return proposed_event_jobs.get_scheduler_status(email)
 
+    @router.get("/proposed-events/timeline")
+    def read_proposed_events_timeline(
+        target_date: date = Query(..., alias="date"),
+        timezone: str | None = None,
+        user: dict = Depends(get_current_user),
+    ):
+        email = _user_email(user)
+        return proposed_events_service.get_day_timeline(
+            user_email=email,
+            target_date=target_date,
+            timezone_name=timezone,
+        )
+
     @router.post("/mobile/proposed-events/run")
     def run_mobile_proposed_events(
         payload: ProposedEventRunIn,

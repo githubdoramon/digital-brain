@@ -343,6 +343,98 @@ export type LogEntry = {
   service?: LogService;
 };
 
+export type TimelineLocation = {
+  id: number;
+  lat: number;
+  lon: number;
+  accuracy_m?: number | null;
+  captured_at: string;
+  source?: string | null;
+  timezone?: string | null;
+  place_id?: string | null;
+  place_name?: string | null;
+  city?: string | null;
+  country?: string | null;
+};
+
+export type TimelineSegment = {
+  start_at: string;
+  end_at: string;
+  duration_minutes: number;
+  sample_count: number;
+  place_id?: string | null;
+  place_name?: string | null;
+  city?: string | null;
+  country?: string | null;
+  lat: number;
+  lon: number;
+  signature: string;
+  overlaps_event: boolean;
+  skip_reason: string;
+  would_propose: boolean;
+  first_sample_id?: number | null;
+  last_sample_id?: number | null;
+};
+
+export type TimelineProposal = {
+  proposal_id: string;
+  status: string;
+  source: string;
+  local_date: string;
+  timezone?: string | null;
+  start_at: string;
+  end_at: string;
+  duration_minutes: number;
+  place_id?: string | null;
+  place_name?: string | null;
+  city?: string | null;
+  country?: string | null;
+  lat?: number | null;
+  lon?: number | null;
+  confidence: string;
+  reason?: string | null;
+  suggested_title?: string | null;
+  suggested_summary?: string | null;
+  suggested_contact_ids?: string[];
+  evidence?: Record<string, unknown>;
+  accepted_event_id?: string | null;
+  expires_at?: string | null;
+};
+
+export type DailyTimeline = {
+  date: string;
+  timezone: string;
+  window: {
+    local_start: string;
+    local_end: string;
+    utc_start: string;
+    utc_end: string;
+  };
+  location_count: number;
+  segment_count: number;
+  locations: TimelineLocation[];
+  segments: TimelineSegment[];
+  proposals: TimelineProposal[];
+};
+
+export type ProposedEventsRunResult = {
+  ok: boolean;
+  created?: number;
+  skipped?: number;
+  skip_reasons?: Record<string, number>;
+  proposal_count?: number;
+  proposals?: TimelineProposal[];
+  date?: string;
+  timezone?: string;
+  location_count?: number;
+  segment_count?: number;
+};
+
+export type ProposedEventsEnqueueResult = {
+  ok: boolean;
+  [key: string]: unknown;
+};
+
 /**
  * Stream responses from the /ask/stream SSE endpoint.
  * Returns the final bundle when streaming completes.
@@ -537,4 +629,32 @@ export async function getSystemLogs(
   }
   const payload = (await response.json()) as { entries?: LogEntry[] };
   return (payload.entries ?? []).map((entry) => ({ ...entry, service }));
+}
+
+export async function getDailyTimeline(date: string, timezone?: string): Promise<DailyTimeline> {
+  const params = new URLSearchParams({ date });
+  if (timezone) {
+    params.set("timezone", timezone);
+  }
+  return api.get<DailyTimeline>(`/proposed-events/timeline?${params.toString()}`);
+}
+
+export async function runProposedEventsForDay(
+  targetDate: string,
+  timezone?: string
+): Promise<ProposedEventsRunResult> {
+  return api.post<ProposedEventsRunResult>("/mobile/proposed-events/run", {
+    targetDate,
+    timezone,
+  });
+}
+
+export async function enqueueProposedEventsForDay(
+  targetDate: string,
+  timezone?: string
+): Promise<ProposedEventsEnqueueResult> {
+  return api.post<ProposedEventsEnqueueResult>("/mobile/proposed-events/enqueue", {
+    targetDate,
+    timezone,
+  });
 }

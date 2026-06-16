@@ -9,16 +9,16 @@ import async_jobs
 import proposed_events
 from notifications import PROPOSED_EVENTS_READY_NOTIFICATION_TYPE, send_notification_to_user
 from observability.logger import get_runtime_logger
+from scheduled_jobs import PROPOSED_EVENTS_DAILY
 
 logger = get_runtime_logger(__name__)
 
-JOB_TYPE = "proposed_events_daily"
-POLL_SECONDS = 60
-RETRY_SECONDS = 300
+JOB_TYPE = PROPOSED_EVENTS_DAILY.job_type
+POLL_SECONDS = PROPOSED_EVENTS_DAILY.poll_seconds
+RETRY_SECONDS = PROPOSED_EVENTS_DAILY.retry_seconds or 300
 
 _WORKER_THREAD: threading.Thread | None = None
 _STOP_EVENT = threading.Event()
-_LAST_SCHEDULER_LOG_MINUTE: str | None = None
 
 
 def enqueue_daily_scan(
@@ -27,6 +27,7 @@ def enqueue_daily_scan(
     target_date: date,
     timezone_name: str,
     replace_existing: bool = False,
+    log_existing: bool = True,
 ) -> dict[str, Any]:
     dedupe_key = f"proposed-events:{target_date.isoformat()}:{timezone_name}"
     existing = async_jobs.get_job(
@@ -35,14 +36,15 @@ def enqueue_daily_scan(
         dedupe_key=dedupe_key,
     )
     if existing and not replace_existing:
-        logger.info(
-            "[proposed_event_jobs] daily_scan_already_exists user=%s date=%s timezone=%s status=%s job_id=%s",
-            user_email,
-            target_date.isoformat(),
-            timezone_name,
-            existing.get("status"),
-            existing.get("job_id"),
-        )
+        if log_existing:
+            logger.info(
+                "[proposed_event_jobs] daily_scan_already_exists user=%s date=%s timezone=%s status=%s job_id=%s",
+                user_email,
+                target_date.isoformat(),
+                timezone_name,
+                existing.get("status"),
+                existing.get("job_id"),
+            )
         return {
             "job_id": existing.get("job_id"),
             "status": existing.get("status"),
@@ -150,40 +152,31 @@ def process_due_once() -> bool:
 
 
 def enqueue_due_daily_scans(*, now_utc: datetime | None = None) -> int:
-    global _LAST_SCHEDULER_LOG_MINUTE
     resolved_now = now_utc or datetime.now(timezone.utc)
     enqueued = 0
     users = proposed_events.list_users_for_daily_scan()
-    due_count = 0
-    not_due_count = 0
-    scheduler_minute = resolved_now.strftime("%Y-%m-%dT%H:%M")
-    should_log_summary = scheduler_minute != _LAST_SCHEDULER_LOG_MINUTE
     for user in users:
         user_email = str(user.get("user_email") or "").strip()
         if not user_email:
             continue
         schedule = proposed_events.should_run_daily_scan(user_email, now_utc=resolved_now)
         if not schedule:
-            not_due_count += 1
             continue
-        due_count += 1
         job = enqueue_daily_scan(
             user_email=user_email,
             target_date=schedule["target_date"],
             timezone_name=schedule["timezone"],
+            log_existing=False,
         )
         if job.get("created"):
             enqueued += 1
-    if should_log_summary:
+    if enqueued:
         logger.info(
-            "[proposed_event_jobs] scheduler_tick users=%s due=%s not_due=%s enqueued=%s now_utc=%s",
+            "[proposed_event_jobs] scheduler_enqueued users=%s enqueued=%s now_utc=%s",
             len(users),
-            due_count,
-            not_due_count,
             enqueued,
             resolved_now.isoformat(),
         )
-        _LAST_SCHEDULER_LOG_MINUTE = scheduler_minute
     return enqueued
 
 
@@ -228,6 +221,15 @@ def get_scheduler_status(user_email: str | None = None) -> dict[str, Any]:
         "now_utc": now_utc.isoformat(),
         "user_count": len(users),
         "users": eligible,
+    }
+
+
+def get_worker_status() -> dict[str, Any]:
+    return {
+        "job_type": JOB_TYPE,
+        "worker_alive": bool(_WORKER_THREAD and _WORKER_THREAD.is_alive()),
+        "poll_seconds": POLL_SECONDS,
+        "retry_seconds": RETRY_SECONDS,
     }
 
 

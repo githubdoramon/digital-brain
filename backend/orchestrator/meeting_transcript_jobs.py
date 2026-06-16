@@ -9,15 +9,16 @@ import contacts as contacts_service
 import events as events_service
 import todos as todos_service
 from observability.logger import get_runtime_logger
+from scheduled_jobs import MEETING_TRANSCRIPT
 from schemas import MeetingTranscriptPayload, TodoIn
 from search_normalization import normalize_search_text
 
 logger = get_runtime_logger(__name__)
 
-JOB_TYPE = "meeting_transcript"
+JOB_TYPE = MEETING_TRANSCRIPT.job_type
 DEBOUNCE_SECONDS = 30
-RETRY_SECONDS = 60
-POLL_SECONDS = 2
+RETRY_SECONDS = MEETING_TRANSCRIPT.retry_seconds or 60
+POLL_SECONDS = MEETING_TRANSCRIPT.poll_seconds
 
 _WORKER_THREAD: threading.Thread | None = None
 _STOP_EVENT = threading.Event()
@@ -99,6 +100,16 @@ def stop_worker(timeout: float = 5.0) -> None:
     thread = _WORKER_THREAD
     if thread and thread.is_alive():
         thread.join(timeout=timeout)
+
+
+def get_worker_status() -> dict[str, Any]:
+    return {
+        "job_type": JOB_TYPE,
+        "worker_alive": bool(_WORKER_THREAD and _WORKER_THREAD.is_alive()),
+        "poll_seconds": POLL_SECONDS,
+        "retry_seconds": RETRY_SECONDS,
+        "debounce_seconds": DEBOUNCE_SECONDS,
+    }
 
 
 def process_due_once(

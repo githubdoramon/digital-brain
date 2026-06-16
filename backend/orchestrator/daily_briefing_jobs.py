@@ -9,18 +9,18 @@ import async_jobs
 from db import get_conn
 from notifications import DAILY_BRIEFING_NOTIFICATION_TYPE, send_notification_to_user
 from observability.logger import get_runtime_logger
+from scheduled_jobs import DAILY_BRIEFING
 
 logger = get_runtime_logger(__name__)
 
-JOB_TYPE = "daily_briefing"
-POLL_SECONDS = 60
-RETRY_SECONDS = 300
-DAILY_BRIEFING_UTC_HOUR = 5
-DAILY_BRIEFING_UTC_MINUTE = 0
+JOB_TYPE = DAILY_BRIEFING.job_type
+POLL_SECONDS = DAILY_BRIEFING.poll_seconds
+RETRY_SECONDS = DAILY_BRIEFING.retry_seconds or 300
+DAILY_BRIEFING_UTC_HOUR = DAILY_BRIEFING.time_utc.hour if DAILY_BRIEFING.time_utc else 0
+DAILY_BRIEFING_UTC_MINUTE = DAILY_BRIEFING.time_utc.minute if DAILY_BRIEFING.time_utc else 0
 
 _WORKER_THREAD: threading.Thread | None = None
 _STOP_EVENT = threading.Event()
-_LAST_SCHEDULER_LOG_MINUTE: str | None = None
 
 
 def enqueue_daily_briefing_job(
@@ -29,6 +29,7 @@ def enqueue_daily_briefing_job(
     briefing_date: date,
     timezone_name: str,
     replace_existing: bool = False,
+    log_existing: bool = True,
 ) -> dict[str, Any]:
     dedupe_key = build_daily_briefing_dedupe_key(
         briefing_date=briefing_date,
@@ -40,14 +41,15 @@ def enqueue_daily_briefing_job(
         dedupe_key=dedupe_key,
     )
     if existing and not replace_existing:
-        logger.info(
-            "[briefing.job] daily_job_already_exists user=%s date=%s timezone=%s status=%s job_id=%s",
-            user_email,
-            briefing_date.isoformat(),
-            timezone_name,
-            existing.get("status"),
-            existing.get("job_id"),
-        )
+        if log_existing:
+            logger.info(
+                "[briefing.job] daily_job_already_exists user=%s date=%s timezone=%s status=%s job_id=%s",
+                user_email,
+                briefing_date.isoformat(),
+                timezone_name,
+                existing.get("status"),
+                existing.get("job_id"),
+            )
         return {
             "job_id": existing.get("job_id"),
             "status": existing.get("status"),
@@ -134,20 +136,11 @@ def process_due_once() -> bool:
 
 
 def enqueue_due_daily_briefings(*, now_utc: datetime | None = None) -> int:
-    global _LAST_SCHEDULER_LOG_MINUTE
     resolved_now = _as_utc(now_utc or datetime.now(timezone.utc))
-    scheduler_minute = resolved_now.strftime("%Y-%m-%dT%H:%M")
-    should_log_summary = scheduler_minute != _LAST_SCHEDULER_LOG_MINUTE
     if (resolved_now.hour, resolved_now.minute) < (
         DAILY_BRIEFING_UTC_HOUR,
         DAILY_BRIEFING_UTC_MINUTE,
     ):
-        if should_log_summary:
-            logger.info(
-                "[briefing.job] scheduler_tick users=0 due=0 enqueued=0 now_utc=%s reason=before_05_00_utc",
-                resolved_now.isoformat(),
-            )
-            _LAST_SCHEDULER_LOG_MINUTE = scheduler_minute
         return 0
 
     users = list_users_for_daily_briefing()
@@ -161,18 +154,17 @@ def enqueue_due_daily_briefings(*, now_utc: datetime | None = None) -> int:
             user_email=user_email,
             briefing_date=resolved_now.date(),
             timezone_name=timezone_name,
+            log_existing=False,
         )
         if job.get("created"):
             enqueued += 1
-    if should_log_summary:
+    if enqueued:
         logger.info(
-            "[briefing.job] scheduler_tick users=%s due=%s enqueued=%s now_utc=%s",
-            len(users),
+            "[briefing.job] scheduler_enqueued users=%s enqueued=%s now_utc=%s",
             len(users),
             enqueued,
             resolved_now.isoformat(),
         )
-        _LAST_SCHEDULER_LOG_MINUTE = scheduler_minute
     return enqueued
 
 
@@ -215,6 +207,15 @@ def list_users_for_daily_briefing() -> list[dict[str, Any]]:
 
 def build_daily_briefing_dedupe_key(*, briefing_date: date, timezone_name: str) -> str:
     return f"{briefing_date.isoformat()}::{timezone_name}"
+
+
+def get_worker_status() -> dict[str, Any]:
+    return {
+        "job_type": JOB_TYPE,
+        "worker_alive": bool(_WORKER_THREAD and _WORKER_THREAD.is_alive()),
+        "poll_seconds": POLL_SECONDS,
+        "retry_seconds": RETRY_SECONDS,
+    }
 
 
 def _worker_loop() -> None:

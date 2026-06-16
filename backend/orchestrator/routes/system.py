@@ -9,6 +9,7 @@ from fastapi.responses import StreamingResponse
 import action_logs
 import devices
 import immich_client
+import scheduled_jobs
 from auth import get_current_user, require_service_api_key
 from notifications.channels.push import send_push_notification
 from observability.log_stream import LOG_LEVELS, get_log_buffer
@@ -94,6 +95,11 @@ def create_system_router() -> APIRouter:
             limit=limit,
         )
         return {"entries": [entry.to_dict() for entry in entries]}
+
+    @router.get("/system/jobs")
+    @router.get("/mobile/system/jobs")
+    def list_system_jobs(_: dict = Depends(get_current_user)):
+        return {"jobs": scheduled_jobs.list_scheduled_job_statuses()}
 
     @router.get("/system/notifications/devices", response_model=UserDeviceListOut)
     def list_notification_devices(user: dict = Depends(get_current_user)):

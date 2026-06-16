@@ -24,6 +24,7 @@ const primaryItems: NavItem[] = [
   { href: "/contacts", label: "Contacts" },
   { href: "/documents", label: "Documents" },
   { href: "/todos", label: "Todos" },
+  { href: "/timeline", label: "Timeline" },
 ];
 
 const secondaryItems: NavItem[] = [

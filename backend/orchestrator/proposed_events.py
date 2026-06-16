@@ -13,6 +13,7 @@ from db import get_conn
 from llm_helpers import build_json_schema_response_format, call_llm_json
 from llm_json_schemas import PROPOSED_EVENT_ENRICHMENT_RESPONSE_SCHEMA
 from observability.logger import get_runtime_logger
+from scheduled_jobs import PROPOSED_EVENTS_DAILY
 from schemas import EventIn
 from search_normalization import normalize_search_text
 
@@ -23,8 +24,8 @@ UNKNOWN_PLACE_MIN_STAY_MINUTES = 30
 PROPOSAL_TTL_DAYS = 7
 HISTORY_LOOKBACK_DAYS = 90
 MAX_HISTORY_EVENTS = 12
-DAILY_SCAN_UTC_HOUR = 15
-DAILY_SCAN_UTC_MINUTE = 50
+DAILY_SCAN_UTC_HOUR = PROPOSED_EVENTS_DAILY.time_utc.hour if PROPOSED_EVENTS_DAILY.time_utc else 0
+DAILY_SCAN_UTC_MINUTE = PROPOSED_EVENTS_DAILY.time_utc.minute if PROPOSED_EVENTS_DAILY.time_utc else 0
 HOME_TERMS = {"home", "house", "my home", "apartment", "flat", "residence"}
 
 
@@ -122,6 +123,38 @@ def analyze_user_day(
         json.dumps(skip_reasons, sort_keys=True),
     )
     return result
+
+
+def get_day_timeline(
+    *,
+    user_email: str,
+    target_date: date,
+    timezone_name: str | None = None,
+) -> dict[str, Any]:
+    tz = _resolve_timezone(timezone_name or _latest_timezone(user_email))
+    day_start = datetime.combine(target_date, time.min, tzinfo=tz)
+    day_end = day_start + timedelta(days=1)
+    start_utc = day_start.astimezone(timezone.utc)
+    end_utc = day_end.astimezone(timezone.utc)
+
+    rows = _fetch_locations(user_email=user_email, start_at=start_utc, end_at=end_utc)
+    ignores = _fetch_ignores(user_email)
+    segments = _build_stay_segments(rows, day_end=end_utc)
+    return {
+        "date": target_date.isoformat(),
+        "timezone": getattr(tz, "key", "UTC"),
+        "window": {
+            "local_start": day_start.isoformat(),
+            "local_end": day_end.isoformat(),
+            "utc_start": start_utc.isoformat(),
+            "utc_end": end_utc.isoformat(),
+        },
+        "location_count": len(rows),
+        "segment_count": len(segments),
+        "locations": [_serialize_location(row) for row in rows],
+        "segments": [_serialize_timeline_segment(segment, ignores=ignores, user_email=user_email) for segment in segments],
+        "proposals": _fetch_day_proposals(user_email=user_email, target_date=target_date),
+    }
 
 
 def list_proposals(user_email: str, *, include_resolved: bool = False) -> list[dict[str, Any]]:
@@ -862,6 +895,48 @@ def _fetch_locations(*, user_email: str, start_at: datetime, end_at: datetime) -
     return [_enrich_location(row) for row in rows]
 
 
+def _fetch_day_proposals(*, user_email: str, target_date: date) -> list[dict[str, Any]]:
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT
+                pe.proposal_id,
+                pe.status,
+                pe.source,
+                pe.local_date,
+                pe.timezone,
+                pe.start_at,
+                pe.end_at,
+                pe.duration_minutes,
+                pe.place_id,
+                pe.place_name,
+                pe.city,
+                pe.country,
+                pe.lat,
+                pe.lon,
+                pe.confidence,
+                pe.reason,
+                pe.suggested_title,
+                pe.suggested_summary,
+                pe.suggested_contact_ids,
+                pe.evidence,
+                pe.accepted_event_id,
+                pe.expires_at,
+                pe.created_at,
+                pe.updated_at,
+                p.name AS canonical_place_name
+            FROM proposed_events pe
+            LEFT JOIN places p ON p.place_id = pe.place_id
+            WHERE pe.user_email = %s
+              AND pe.local_date = %s
+            ORDER BY pe.start_at ASC, pe.created_at ASC
+            """,
+            (user_email, target_date),
+        )
+        rows = [dict(row) for row in cur.fetchall()]
+    return [_serialize_proposal(row) for row in rows]
+
+
 def _enrich_location(row: dict[str, Any]) -> dict[str, Any]:
     matched = _nearest_known_place(float(row["lat"]), float(row["lon"]), row.get("accuracy_m"))
     if matched:
@@ -1072,6 +1147,54 @@ def _iso(value: Any) -> str | None:
     if value is None:
         return None
     return str(value)
+
+
+def _serialize_location(row: dict[str, Any]) -> dict[str, Any]:
+    output = dict(row)
+    for key in ("captured_at", "updated_at"):
+        value = output.get(key)
+        if hasattr(value, "isoformat"):
+            output[key] = value.isoformat()
+    for key in ("lat", "lon", "accuracy_m"):
+        if output.get(key) is not None:
+            output[key] = float(output[key])
+    return output
+
+
+def _serialize_timeline_segment(
+    segment: StaySegment,
+    *,
+    ignores: set[tuple[str, str]],
+    user_email: str,
+) -> dict[str, Any]:
+    overlaps_event = _has_overlapping_event(
+        start_at=segment.start_at,
+        end_at=segment.end_at,
+        user_email=user_email,
+    )
+    skip_reason = "overlapping_event" if overlaps_event else _segment_skip_reason(segment, ignores)
+    would_propose = skip_reason == "candidate_filtered"
+    if would_propose:
+        skip_reason = "eligible_candidate"
+    duration_minutes = int((segment.end_at - segment.start_at).total_seconds() // 60)
+    return {
+        "start_at": segment.start_at.isoformat(),
+        "end_at": segment.end_at.isoformat(),
+        "duration_minutes": duration_minutes,
+        "sample_count": len(segment.samples),
+        "place_id": segment.place_id,
+        "place_name": segment.place_name,
+        "city": segment.city,
+        "country": segment.country,
+        "lat": segment.lat,
+        "lon": segment.lon,
+        "signature": segment.signature,
+        "overlaps_event": overlaps_event,
+        "skip_reason": skip_reason,
+        "would_propose": would_propose,
+        "first_sample_id": segment.samples[0].get("id") if segment.samples else None,
+        "last_sample_id": segment.samples[-1].get("id") if segment.samples else None,
+    }
 
 
 def _parse_datetime(value: Any) -> datetime | None:
