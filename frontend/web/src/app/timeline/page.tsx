@@ -13,6 +13,7 @@ import {
 } from "@/lib/api";
 
 const GOOGLE_MAPS_SCRIPT_ID = "digital-brain-google-maps";
+const GOOGLE_MAPS_CALLBACK = "__digitalBrainGoogleMapsReady";
 const DEFAULT_CENTER = { lat: 39.5, lng: -8.0 };
 
 type GoogleLatLng = { lat: number; lng: number };
@@ -49,6 +50,8 @@ type GoogleMapsApi = {
 declare global {
   interface Window {
     google?: { maps: GoogleMapsApi };
+    gm_authFailure?: () => void;
+    __digitalBrainGoogleMapsReady?: () => void;
   }
 }
 
@@ -152,6 +155,8 @@ function useGoogleMaps() {
 
   useEffect(() => {
     let cancelled = false;
+    const previousReady = window[GOOGLE_MAPS_CALLBACK];
+    const previousAuthFailure = window.gm_authFailure;
 
     async function loadMaps() {
       setLoadingConfig(true);
@@ -172,17 +177,18 @@ function useGoogleMaps() {
           return;
         }
 
-        const existingScript = document.getElementById(GOOGLE_MAPS_SCRIPT_ID) as HTMLScriptElement | null;
-        const script =
-          existingScript ||
-          Object.assign(document.createElement("script"), {
-            id: GOOGLE_MAPS_SCRIPT_ID,
-            src: `https://maps.googleapis.com/maps/api/js?key=${encodeURIComponent(apiKey)}`,
-            async: true,
-            defer: true,
-          });
+        window.gm_authFailure = () => {
+          if (!cancelled) {
+            setError(
+              "Google Maps rejected the API key. Check Maps JavaScript API enablement, billing, and HTTP referrer restrictions for this domain."
+            );
+            setLoadingConfig(false);
+          }
+          previousAuthFailure?.();
+        };
 
-        function handleLoad() {
+        const existingScript = document.getElementById(GOOGLE_MAPS_SCRIPT_ID) as HTMLScriptElement | null;
+        window[GOOGLE_MAPS_CALLBACK] = () => {
           if (cancelled) {
             return;
           }
@@ -192,15 +198,35 @@ function useGoogleMaps() {
           } else {
             setError("Google Maps loaded without the expected API object.");
           }
-        }
+          setLoadingConfig(false);
+          previousReady?.();
+        };
 
         function handleError() {
           if (!cancelled) {
             setError("Google Maps failed to load. Check the API key, billing, and allowed origins.");
+            setLoadingConfig(false);
           }
         }
 
-        script.addEventListener("load", handleLoad);
+        if (existingScript && window.google?.maps) {
+          setMaps(window.google.maps);
+          setError(null);
+          setLoadingConfig(false);
+          return;
+        }
+
+        const script =
+          existingScript ||
+          Object.assign(document.createElement("script"), {
+            id: GOOGLE_MAPS_SCRIPT_ID,
+            src: `https://maps.googleapis.com/maps/api/js?key=${encodeURIComponent(
+              apiKey
+            )}&v=weekly&loading=async&callback=${GOOGLE_MAPS_CALLBACK}`,
+            async: true,
+            defer: true,
+          });
+
         script.addEventListener("error", handleError);
         if (!existingScript) {
           document.head.appendChild(script);
@@ -220,6 +246,11 @@ function useGoogleMaps() {
 
     return () => {
       cancelled = true;
+      if (window[GOOGLE_MAPS_CALLBACK] === previousReady) {
+        return;
+      }
+      window[GOOGLE_MAPS_CALLBACK] = previousReady;
+      window.gm_authFailure = previousAuthFailure;
     };
   }, []);
 
@@ -238,6 +269,7 @@ function TimelineMap({
   onSelectLocation: (location: TimelineLocation) => void;
 }) {
   const { maps, error, loadingConfig } = useGoogleMaps();
+  const [mapRenderError, setMapRenderError] = useState<string | null>(null);
   const mapElementRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<GoogleMap | null>(null);
   const markersRef = useRef<GoogleMarker[]>([]);
@@ -335,12 +367,35 @@ function TimelineMap({
     }
   }, [locations, maps, onSelectLocation, selectedLocationId, timezone]);
 
-  if (error) {
+  useEffect(() => {
+    if (!maps || !mapElementRef.current || error) {
+      return;
+    }
+
+    const node = mapElementRef.current;
+    const checkForGoogleError = () => {
+      if (node.querySelector(".gm-err-container")) {
+        setTimeout(() => {
+          if (node.querySelector(".gm-err-container")) {
+            setMapRenderError(
+              "Google Maps rendered an internal error. Check that the key allows this exact domain, Maps JavaScript API is enabled, and billing is active."
+            );
+          }
+        }, 0);
+      }
+    };
+    const observer = new MutationObserver(checkForGoogleError);
+    observer.observe(node, { childList: true, subtree: true });
+    checkForGoogleError();
+    return () => observer.disconnect();
+  }, [error, maps]);
+
+  if (error || mapRenderError) {
     return (
       <div className="map-shell empty-map">
         <div>
-          <strong>Google Maps is not configured.</strong>
-          <p>{error}</p>
+          <strong>Google Maps is not rendering.</strong>
+          <p>{error || mapRenderError}</p>
         </div>
       </div>
     );
