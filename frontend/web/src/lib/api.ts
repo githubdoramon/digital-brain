@@ -381,6 +381,11 @@ export type TimelineSegment = {
     tags?: string[];
     source?: string | null;
     external_id?: string | null;
+    overlap_decision?: {
+      blocks_proposal: boolean;
+      confidence: "low" | "medium" | "high";
+      reason: string;
+    };
   }>;
   skip_reason: string;
   would_propose: boolean;

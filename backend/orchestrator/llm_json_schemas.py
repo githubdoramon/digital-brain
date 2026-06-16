@@ -233,6 +233,17 @@ PROPOSED_EVENT_ENRICHMENT_RESPONSE_SCHEMA: dict[str, Any] = {
     "additionalProperties": False,
 }
 
+PROPOSED_EVENT_OVERLAP_RESPONSE_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "blocks_proposal": {"type": "boolean"},
+        "confidence": {"type": "string", "enum": ["low", "medium", "high"]},
+        "reason": {"type": "string"},
+    },
+    "required": ["blocks_proposal", "confidence", "reason"],
+    "additionalProperties": False,
+}
+
 RELATIONSHIP_PAIRS_RESPONSE_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {

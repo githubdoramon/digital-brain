@@ -673,6 +673,12 @@ export default function TimelinePage() {
                             {formatTime(event.end_at, currentTimezone)}
                             {event.id ? ` · ${event.id}` : ""}
                           </p>
+                          {event.overlap_decision ? (
+                            <p>
+                              {event.overlap_decision.confidence} confidence ·{" "}
+                              {event.overlap_decision.reason}
+                            </p>
+                          ) : null}
                         </div>
                       ))}
                     </div>

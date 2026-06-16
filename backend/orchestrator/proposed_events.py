@@ -11,7 +11,10 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 import events as events_service
 from db import get_conn
 from llm_helpers import build_json_schema_response_format, call_llm_json
-from llm_json_schemas import PROPOSED_EVENT_ENRICHMENT_RESPONSE_SCHEMA
+from llm_json_schemas import (
+    PROPOSED_EVENT_ENRICHMENT_RESPONSE_SCHEMA,
+    PROPOSED_EVENT_OVERLAP_RESPONSE_SCHEMA,
+)
 from observability.logger import get_runtime_logger
 from scheduled_jobs import PROPOSED_EVENTS_DAILY
 from schemas import EventIn
@@ -27,6 +30,8 @@ MAX_HISTORY_EVENTS = 12
 DAILY_SCAN_UTC_HOUR = PROPOSED_EVENTS_DAILY.time_utc.hour if PROPOSED_EVENTS_DAILY.time_utc else 0
 DAILY_SCAN_UTC_MINUTE = PROPOSED_EVENTS_DAILY.time_utc.minute if PROPOSED_EVENTS_DAILY.time_utc else 0
 HOME_TERMS = {"home", "house", "my home", "apartment", "flat", "residence"}
+ALL_DAY_EVENT_MIN_HOURS = 18
+OVERLAP_DISAMBIGUATION_TIMEOUT_SECONDS = 45
 
 
 @dataclass
@@ -73,6 +78,15 @@ def analyze_user_day(
     skip_reasons: dict[str, int] = {}
     proposals: list[dict[str, Any]] = []
     for segment in segments:
+        reason = _segment_skip_reason(segment, ignores)
+        if reason != "candidate_filtered":
+            skipped += 1
+            skip_reasons[reason] = skip_reasons.get(reason, 0) + 1
+            continue
+        if _find_blocking_overlapping_events(segment=segment, user_email=user_email):
+            skipped += 1
+            skip_reasons["overlapping_event"] = skip_reasons.get("overlapping_event", 0) + 1
+            continue
         candidate = _build_candidate(
             user_email=user_email,
             segment=segment,
@@ -84,14 +98,6 @@ def analyze_user_day(
             skipped += 1
             reason = _segment_skip_reason(segment, ignores)
             skip_reasons[reason] = skip_reasons.get(reason, 0) + 1
-            continue
-        if _has_overlapping_event(
-            start_at=segment.start_at,
-            end_at=segment.end_at,
-            user_email=user_email,
-        ):
-            skipped += 1
-            skip_reasons["overlapping_event"] = skip_reasons.get("overlapping_event", 0) + 1
             continue
         proposal = _insert_proposal(candidate)
         if proposal:
@@ -1024,8 +1030,25 @@ def _nearest_known_place(lat: float, lon: float, accuracy_m: Any) -> dict[str, A
     return nearest
 
 
-def _has_overlapping_event(*, start_at: datetime, end_at: datetime, user_email: str) -> bool:
-    return bool(_find_overlapping_events(start_at=start_at, end_at=end_at, user_email=user_email, limit=1))
+def _find_blocking_overlapping_events(
+    *,
+    segment: StaySegment,
+    user_email: str,
+    limit: int = 5,
+) -> list[dict[str, Any]]:
+    overlapping_events = _find_overlapping_events(
+        start_at=segment.start_at,
+        end_at=segment.end_at,
+        user_email=user_email,
+        limit=limit,
+    )
+    blocking_events: list[dict[str, Any]] = []
+    for event in overlapping_events:
+        decision = _event_blocks_location_segment(segment, event)
+        event["overlap_decision"] = decision
+        if decision["blocks_proposal"]:
+            blocking_events.append(event)
+    return blocking_events
 
 
 def _find_overlapping_events(
@@ -1046,8 +1069,13 @@ def _find_overlapping_events(
                    e.end_date,
                    e.types,
                    e.tags,
+                   e.place_id,
+                   p.name AS place_name,
+                   p.city AS place_city,
+                   p.country AS place_country,
                    e.raw
             FROM events e
+            LEFT JOIN places p ON p.place_id = e.place_id
             WHERE e.start_date < %s
               AND COALESCE(e.end_date, e.start_date + INTERVAL '30 minutes') > %s
             ORDER BY e.start_date ASC, e.id ASC
@@ -1056,7 +1084,125 @@ def _find_overlapping_events(
             (end_at, start_at, max(1, limit)),
         )
         rows = [dict(row) for row in cur.fetchall()]
-    return [_serialize_overlap_event(row) for row in rows]
+    return [_serialize_overlap_event(row) for row in rows if _event_blocks_location_gap(row)]
+
+
+def _event_blocks_location_segment(segment: StaySegment, event: dict[str, Any]) -> dict[str, Any]:
+    event_place_id = str(event.get("place_id") or "").strip()
+    if event_place_id and segment.place_id and event_place_id == segment.place_id:
+        return {
+            "blocks_proposal": True,
+            "confidence": "high",
+            "reason": "The overlapping event is linked to the same known place.",
+        }
+
+    if _normalized_text_overlap(segment.place_name, event.get("title"), event.get("summary"), event.get("place_name")):
+        return {
+            "blocks_proposal": True,
+            "confidence": "medium",
+            "reason": "The overlapping event text references the same place or activity.",
+        }
+
+    try:
+        decision = call_llm_json(
+            _build_overlap_disambiguation_prompt(segment, event),
+            system_prompt=(
+                "You decide whether an existing calendar/memory event should block creating a "
+                "location-derived proposed event. Return schema-valid JSON only."
+            ),
+            use_fast_model=False,
+            reasoning_effort="high",
+            timeout=OVERLAP_DISAMBIGUATION_TIMEOUT_SECONDS,
+            temperature=0.0,
+            response_format=build_json_schema_response_format(
+                name="proposed_event_overlap_decision",
+                schema=PROPOSED_EVENT_OVERLAP_RESPONSE_SCHEMA,
+            ),
+        )
+    except Exception as exc:
+        logger.warning("[proposed_events] overlap_disambiguation_unavailable event_id=%s error=%s", event.get("id"), exc)
+        return {
+            "blocks_proposal": True,
+            "confidence": "low",
+            "reason": "Overlap disambiguation failed; conservatively treated the timed event as blocking.",
+        }
+
+    blocks = bool(decision.get("blocks_proposal"))
+    confidence = str(decision.get("confidence") or "low").strip().lower()
+    if confidence not in {"low", "medium", "high"}:
+        confidence = "low"
+    reason = " ".join(str(decision.get("reason") or "").split()).strip()
+    return {
+        "blocks_proposal": blocks,
+        "confidence": confidence,
+        "reason": reason or "LLM overlap disambiguation completed.",
+    }
+
+
+def _normalized_text_overlap(*values: Any) -> bool:
+    normalized_values = [normalize_search_text(value or "") for value in values]
+    first = normalized_values[0] if normalized_values else ""
+    if not first or len(first) < 3:
+        return False
+    candidates = [value for value in normalized_values[1:] if value]
+    return any(first in value or value in first for value in candidates)
+
+
+def _build_overlap_disambiguation_prompt(segment: StaySegment, event: dict[str, Any]) -> str:
+    payload = {
+        "location_stay": {
+            "start_at": segment.start_at.isoformat(),
+            "end_at": segment.end_at.isoformat(),
+            "duration_minutes": int((segment.end_at - segment.start_at).total_seconds() // 60),
+            "place_id": segment.place_id,
+            "place_name": segment.place_name,
+            "city": segment.city,
+            "country": segment.country,
+            "signature": segment.signature,
+        },
+        "overlapping_event": {
+            "id": event.get("id"),
+            "title": event.get("title"),
+            "summary": event.get("summary"),
+            "start_at": event.get("start_at"),
+            "end_at": event.get("end_at"),
+            "place_id": event.get("place_id"),
+            "place_name": event.get("place_name"),
+            "city": event.get("place_city"),
+            "country": event.get("place_country"),
+            "types": event.get("types") or [],
+            "tags": event.get("tags") or [],
+            "source": event.get("source"),
+        },
+        "decision_rules": [
+            "Return blocks_proposal=true only if the overlapping event likely represents the same real-world activity as the location stay.",
+            "Unrelated broad calendar context, travel area labels, reminders, holidays, and vague all-day style labels should not block.",
+            "If the location stay is a specific venue and the event title is only a broad region or unrelated topic, return false.",
+            "Prefer false when the evidence does not connect the event to the stay's place/activity.",
+        ],
+    }
+    return json.dumps(payload, ensure_ascii=False, default=str)
+
+
+def _event_blocks_location_gap(row: dict[str, Any]) -> bool:
+    raw = row.get("raw")
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except json.JSONDecodeError:
+            raw = {}
+    if isinstance(raw, dict):
+        all_day_value = raw.get("all_day") or raw.get("is_all_day") or raw.get("allDay")
+        if all_day_value is True or str(all_day_value).strip().lower() == "true":
+            return False
+
+    start_at = _parse_datetime(row.get("start_date"))
+    end_at = _parse_datetime(row.get("end_date"))
+    if start_at and end_at:
+        duration_hours = (end_at - start_at).total_seconds() / 3600
+        if duration_hours >= ALL_DAY_EVENT_MIN_HOURS:
+            return False
+    return True
 
 
 def _suggest_contacts_for_place(place_id: str | None) -> list[str]:
@@ -1187,6 +1333,10 @@ def _serialize_overlap_event(row: dict[str, Any]) -> dict[str, Any]:
         "summary": row.get("summary"),
         "start_at": _iso(row.get("start_date")),
         "end_at": _iso(row.get("end_date")),
+        "place_id": row.get("place_id"),
+        "place_name": row.get("place_name"),
+        "place_city": row.get("place_city"),
+        "place_country": row.get("place_country"),
         "types": row.get("types") or [],
         "tags": row.get("tags") or [],
     }
@@ -1213,9 +1363,8 @@ def _serialize_timeline_segment(
     overlapping_events: list[dict[str, Any]] = []
     overlaps_event = False
     if would_propose:
-        overlapping_events = _find_overlapping_events(
-            start_at=segment.start_at,
-            end_at=segment.end_at,
+        overlapping_events = _find_blocking_overlapping_events(
+            segment=segment,
             user_email=user_email,
         )
         overlaps_event = bool(overlapping_events)
