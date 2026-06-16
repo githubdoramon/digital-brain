@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   DailyTimeline,
   TimelineLocation,
@@ -11,24 +11,46 @@ import {
   runProposedEventsForDay,
 } from "@/lib/api";
 
-const TILE_SIZE = 256;
-const MAP_HEIGHT = 520;
-const MIN_ZOOM = 11;
-const MAX_ZOOM = 16;
+const GOOGLE_MAPS_API_KEY = process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY;
+const GOOGLE_MAPS_SCRIPT_ID = "digital-brain-google-maps";
+const DEFAULT_CENTER = { lat: 39.5, lng: -8.0 };
 
-type ProjectedPoint = {
-  id: string;
-  x: number;
-  y: number;
-  location: TimelineLocation;
+type GoogleLatLng = { lat: number; lng: number };
+type GoogleMap = {
+  fitBounds: (bounds: GoogleLatLngBounds, padding?: number) => void;
+  setCenter: (center: GoogleLatLng) => void;
+  setZoom: (zoom: number) => void;
+};
+type GoogleLatLngBounds = {
+  extend: (point: GoogleLatLng) => void;
+  isEmpty: () => boolean;
+};
+type GoogleMarker = {
+  setMap: (map: GoogleMap | null) => void;
+  addListener: (eventName: string, handler: () => void) => void;
+};
+type GooglePolyline = {
+  setMap: (map: GoogleMap | null) => void;
+};
+type GoogleInfoWindow = {
+  setContent: (content: string) => void;
+  open: (options: { anchor: GoogleMarker; map: GoogleMap }) => void;
+};
+type GoogleMapsApi = {
+  Map: new (element: HTMLElement, options: Record<string, unknown>) => GoogleMap;
+  LatLngBounds: new () => GoogleLatLngBounds;
+  Marker: new (options: Record<string, unknown>) => GoogleMarker;
+  Polyline: new (options: Record<string, unknown>) => GooglePolyline;
+  InfoWindow: new () => GoogleInfoWindow;
+  Size: new (width: number, height: number) => unknown;
+  SymbolPath: { CIRCLE: number };
 };
 
-type TileSpec = {
-  key: string;
-  url: string;
-  x: number;
-  y: number;
-};
+declare global {
+  interface Window {
+    google?: { maps: GoogleMapsApi };
+  }
+}
 
 function todayLocalDate(): string {
   const now = new Date();
@@ -43,20 +65,10 @@ function getBrowserTimezone(): string {
   return Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
 }
 
-function clamp(value: number, min: number, max: number): number {
-  return Math.min(max, Math.max(min, value));
-}
-
-function lonToTileX(lon: number, zoom: number): number {
-  return ((lon + 180) / 360) * 2 ** zoom;
-}
-
-function latToTileY(lat: number, zoom: number): number {
-  const radians = (lat * Math.PI) / 180;
-  return ((1 - Math.log(Math.tan(radians) + 1 / Math.cos(radians)) / Math.PI) / 2) * 2 ** zoom;
-}
-
-function formatTime(value: string, timezone: string): string {
+function formatTime(value: string | null | undefined, timezone: string): string {
+  if (!value) {
+    return "Not recorded";
+  }
   const parsed = new Date(value);
   if (Number.isNaN(parsed.getTime())) {
     return value;
@@ -64,11 +76,15 @@ function formatTime(value: string, timezone: string): string {
   return parsed.toLocaleTimeString([], {
     hour: "2-digit",
     minute: "2-digit",
+    second: "2-digit",
     timeZone: timezone,
   });
 }
 
-function formatDateTime(value: string, timezone: string): string {
+function formatDateTime(value: string | null | undefined, timezone: string): string {
+  if (!value) {
+    return "Not recorded";
+  }
   const parsed = new Date(value);
   if (Number.isNaN(parsed.getTime())) {
     return value;
@@ -78,11 +94,14 @@ function formatDateTime(value: string, timezone: string): string {
     day: "2-digit",
     hour: "2-digit",
     minute: "2-digit",
+    second: "2-digit",
     timeZone: timezone,
   });
 }
 
-function formatPlaceName(item: Pick<TimelineLocation | TimelineSegment | TimelineProposal, "place_name" | "city" | "country">): string {
+function formatPlaceName(
+  item: Pick<TimelineLocation | TimelineSegment | TimelineProposal, "place_name" | "city" | "country">
+): string {
   const name = item.place_name || "Unknown place";
   const area = [item.city, item.country].filter(Boolean).join(", ");
   return area ? `${name} · ${area}` : name;
@@ -95,133 +114,221 @@ function statusLabel(segment: TimelineSegment): string {
   return segment.skip_reason.replaceAll("_", " ");
 }
 
-function buildMapState(locations: TimelineLocation[]) {
-  if (locations.length === 0) {
-    return null;
-  }
-
-  const lats = locations.map((item) => item.lat);
-  const lons = locations.map((item) => item.lon);
-  const minLat = Math.min(...lats);
-  const maxLat = Math.max(...lats);
-  const minLon = Math.min(...lons);
-  const maxLon = Math.max(...lons);
-  const centerLat = (minLat + maxLat) / 2;
-  const centerLon = (minLon + maxLon) / 2;
-  const latSpan = Math.max(0.004, maxLat - minLat);
-  const lonSpan = Math.max(0.004, maxLon - minLon);
-  const zoom = clamp(Math.floor(Math.log2(360 / Math.max(latSpan * 1.8, lonSpan * 1.8))), MIN_ZOOM, MAX_ZOOM);
-  const centerTileX = lonToTileX(centerLon, zoom);
-  const centerTileY = latToTileY(centerLat, zoom);
-
-  return { centerTileX, centerTileY, zoom };
+function escapeHtml(value: string): string {
+  return value
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;");
 }
 
-function TimelineMap({ locations, segments, timezone }: { locations: TimelineLocation[]; segments: TimelineSegment[]; timezone: string }) {
-  const mapState = useMemo(() => buildMapState(locations), [locations]);
-  const containerRef = useRef<HTMLDivElement | null>(null);
-  const [width, setWidth] = useState(912);
+function pointInfoHtml(location: TimelineLocation, index: number, timezone: string): string {
+  const place = escapeHtml(formatPlaceName(location));
+  const captured = escapeHtml(formatDateTime(location.captured_at, timezone));
+  const uploaded = escapeHtml(formatDateTime(location.updated_at, timezone));
+  const source = escapeHtml(location.source || "unknown");
+  const accuracy = location.accuracy_m == null ? "unknown" : `${Math.round(location.accuracy_m)} m`;
+  const coords = `${location.lat.toFixed(6)}, ${location.lon.toFixed(6)}`;
+  return `
+    <div style="min-width:220px;max-width:300px;color:#172033;font-family:system-ui,-apple-system,BlinkMacSystemFont,sans-serif">
+      <div style="font-size:12px;font-weight:800;color:#256b5b;text-transform:uppercase;letter-spacing:.06em">Point ${index + 1}</div>
+      <div style="font-size:15px;font-weight:800;margin:4px 0 8px">${place}</div>
+      <div style="display:grid;gap:5px;font-size:12px;line-height:1.35">
+        <div><strong>Captured:</strong> ${captured}</div>
+        <div><strong>Uploaded:</strong> ${uploaded}</div>
+        <div><strong>Accuracy:</strong> ${escapeHtml(accuracy)}</div>
+        <div><strong>Source:</strong> ${source}</div>
+        <div><strong>Coords:</strong> ${escapeHtml(coords)}</div>
+      </div>
+    </div>
+  `;
+}
+
+function useGoogleMaps(apiKey?: string) {
+  const [maps, setMaps] = useState<GoogleMapsApi | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    const node = containerRef.current;
-    if (!node) {
+    if (!apiKey) {
+      setError("Set NEXT_PUBLIC_GOOGLE_MAPS_API_KEY to render the Google map.");
       return;
     }
-    const resize = () => setWidth(Math.max(320, node.clientWidth));
-    resize();
-    const observer = new ResizeObserver(resize);
-    observer.observe(node);
-    return () => observer.disconnect();
-  }, []);
 
-  const { tiles, points, path } = useMemo(() => {
-    if (!mapState) {
-      return { tiles: [] as TileSpec[], points: [] as ProjectedPoint[], path: "" };
+    if (window.google?.maps) {
+      setMaps(window.google.maps);
+      return;
     }
 
-    const centerPixelX = mapState.centerTileX * TILE_SIZE;
-    const centerPixelY = mapState.centerTileY * TILE_SIZE;
-    const topLeftX = centerPixelX - width / 2;
-    const topLeftY = centerPixelY - MAP_HEIGHT / 2;
-    const tileCount = 2 ** mapState.zoom;
-    const minTileX = Math.floor(topLeftX / TILE_SIZE) - 1;
-    const maxTileX = Math.floor((topLeftX + width) / TILE_SIZE) + 1;
-    const minTileY = Math.floor(topLeftY / TILE_SIZE) - 1;
-    const maxTileY = Math.floor((topLeftY + MAP_HEIGHT) / TILE_SIZE) + 1;
+    const existingScript = document.getElementById(GOOGLE_MAPS_SCRIPT_ID) as HTMLScriptElement | null;
+    const script =
+      existingScript ||
+      Object.assign(document.createElement("script"), {
+        id: GOOGLE_MAPS_SCRIPT_ID,
+        src: `https://maps.googleapis.com/maps/api/js?key=${encodeURIComponent(apiKey)}`,
+        async: true,
+        defer: true,
+      });
 
-    const nextTiles: TileSpec[] = [];
-    for (let tileX = minTileX; tileX <= maxTileX; tileX += 1) {
-      for (let tileY = minTileY; tileY <= maxTileY; tileY += 1) {
-        const wrappedX = ((tileX % tileCount) + tileCount) % tileCount;
-        nextTiles.push({
-          key: `${mapState.zoom}-${tileX}-${tileY}`,
-          url: `https://tile.openstreetmap.org/${mapState.zoom}/${wrappedX}/${tileY}.png`,
-          x: tileX * TILE_SIZE - topLeftX,
-          y: tileY * TILE_SIZE - topLeftY,
-        });
+    function handleLoad() {
+      if (window.google?.maps) {
+        setMaps(window.google.maps);
+        setError(null);
+      } else {
+        setError("Google Maps loaded without the expected API object.");
       }
     }
 
-    const nextPoints = locations.map((location, index) => {
-      const pixelX = lonToTileX(location.lon, mapState.zoom) * TILE_SIZE;
-      const pixelY = latToTileY(location.lat, mapState.zoom) * TILE_SIZE;
-      return {
-        id: `${location.id}-${index}`,
-        x: pixelX - topLeftX,
-        y: pixelY - topLeftY,
-        location,
-      };
+    function handleError() {
+      setError("Google Maps failed to load. Check the API key, billing, and allowed origins.");
+    }
+
+    script.addEventListener("load", handleLoad);
+    script.addEventListener("error", handleError);
+    if (!existingScript) {
+      document.head.appendChild(script);
+    }
+
+    return () => {
+      script.removeEventListener("load", handleLoad);
+      script.removeEventListener("error", handleError);
+    };
+  }, [apiKey]);
+
+  return { maps, error };
+}
+
+function TimelineMap({
+  locations,
+  timezone,
+  selectedLocationId,
+  onSelectLocation,
+}: {
+  locations: TimelineLocation[];
+  timezone: string;
+  selectedLocationId?: number | null;
+  onSelectLocation: (location: TimelineLocation) => void;
+}) {
+  const { maps, error } = useGoogleMaps(GOOGLE_MAPS_API_KEY);
+  const mapElementRef = useRef<HTMLDivElement | null>(null);
+  const mapRef = useRef<GoogleMap | null>(null);
+  const markersRef = useRef<GoogleMarker[]>([]);
+  const polylineRef = useRef<GooglePolyline | null>(null);
+  const infoWindowRef = useRef<GoogleInfoWindow | null>(null);
+
+  useEffect(() => {
+    if (!maps || !mapElementRef.current || mapRef.current) {
+      return;
+    }
+
+    mapRef.current = new maps.Map(mapElementRef.current, {
+      center: DEFAULT_CENTER,
+      zoom: 7,
+      clickableIcons: false,
+      fullscreenControl: true,
+      mapTypeControl: true,
+      streetViewControl: false,
+      styles: [
+        { featureType: "poi.business", stylers: [{ visibility: "off" }] },
+        { featureType: "transit", stylers: [{ visibility: "off" }] },
+      ],
+    });
+    infoWindowRef.current = new maps.InfoWindow();
+  }, [maps]);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!maps || !map) {
+      return;
+    }
+
+    markersRef.current.forEach((marker) => marker.setMap(null));
+    markersRef.current = [];
+    polylineRef.current?.setMap(null);
+    polylineRef.current = null;
+
+    if (locations.length === 0) {
+      map.setCenter(DEFAULT_CENTER);
+      map.setZoom(7);
+      return;
+    }
+
+    const path = locations.map((location) => ({ lat: location.lat, lng: location.lon }));
+    const bounds = new maps.LatLngBounds();
+    path.forEach((point) => bounds.extend(point));
+
+    polylineRef.current = new maps.Polyline({
+      path,
+      geodesic: true,
+      strokeColor: "#155e75",
+      strokeOpacity: 0.92,
+      strokeWeight: 4,
+      icons: [
+        {
+          icon: {
+            path: "M 0,-1 0,1",
+            strokeColor: "#ffffff",
+            strokeOpacity: 0.9,
+            strokeWeight: 2,
+          },
+          offset: "0",
+          repeat: "22px",
+        },
+      ],
+      map,
     });
 
-    const nextPath = nextPoints.map((point) => `${point.x},${point.y}`).join(" ");
-    return { tiles: nextTiles, points: nextPoints, path: nextPath };
-  }, [locations, mapState, width]);
+    locations.forEach((location, index) => {
+      const isSelected = location.id === selectedLocationId;
+      const marker = new maps.Marker({
+        position: { lat: location.lat, lng: location.lon },
+        map,
+        title: `${formatTime(location.captured_at, timezone)} · ${formatPlaceName(location)}`,
+        icon: {
+          path: maps.SymbolPath.CIRCLE,
+          scale: isSelected ? 8 : 5,
+          fillColor: isSelected ? "#dc2626" : "#0f766e",
+          fillOpacity: 0.96,
+          strokeColor: "#ffffff",
+          strokeWeight: 2,
+        },
+        zIndex: isSelected ? 1000 : index,
+      });
+      marker.addListener("click", () => {
+        onSelectLocation(location);
+        infoWindowRef.current?.setContent(pointInfoHtml(location, index, timezone));
+        infoWindowRef.current?.open({ anchor: marker, map });
+      });
+      markersRef.current.push(marker);
+    });
 
-  if (!mapState) {
+    if (!bounds.isEmpty()) {
+      map.fitBounds(bounds, 72);
+    }
+  }, [locations, maps, onSelectLocation, selectedLocationId, timezone]);
+
+  if (error) {
     return (
-      <div className="empty-map">
-        <div>No location samples for this day.</div>
+      <div className="map-shell empty-map">
+        <div>
+          <strong>Google Maps is not configured.</strong>
+          <p>{error}</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (!maps) {
+    return (
+      <div className="map-shell empty-map">
+        <div>Loading Google Maps...</div>
       </div>
     );
   }
 
   return (
-    <div ref={containerRef} className="map-stage">
-      {tiles.map((tile) => (
-        // eslint-disable-next-line @next/next/no-img-element
-        <img key={tile.key} src={tile.url} alt="" className="map-tile" style={{ left: tile.x, top: tile.y }} />
-      ))}
-      <svg className="map-overlay" viewBox={`0 0 ${width} ${MAP_HEIGHT}`} preserveAspectRatio="none" aria-hidden="true">
-        <polyline points={path} fill="none" stroke="rgba(10, 28, 43, 0.82)" strokeWidth="4" strokeLinejoin="round" strokeLinecap="round" />
-        {segments.map((segment, index) => {
-          const point = points.find((candidate) => candidate.location.id === segment.first_sample_id);
-          if (!point) {
-            return null;
-          }
-          return (
-            <circle
-              key={`${segment.signature}-${index}`}
-              cx={point.x}
-              cy={point.y}
-              r={segment.would_propose ? 12 : 8}
-              fill={segment.would_propose ? "rgba(18, 184, 134, 0.84)" : "rgba(245, 158, 11, 0.84)"}
-              stroke="#fff"
-              strokeWidth="3"
-            />
-          );
-        })}
-      </svg>
-      {points.map((point, index) => (
-        <div
-          key={point.id}
-          className="time-pin"
-          style={{ left: point.x, top: point.y }}
-          title={`${formatTime(point.location.captured_at, timezone)} · ${formatPlaceName(point.location)}`}
-        >
-          {index + 1}
-        </div>
-      ))}
-      <div className="map-attribution">© OpenStreetMap contributors</div>
+    <div className="map-shell">
+      <div ref={mapElementRef} className="google-map" />
     </div>
   );
 }
@@ -234,6 +341,7 @@ export default function TimelinePage() {
   const [actionLoading, setActionLoading] = useState<"run" | "enqueue" | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [selectedLocation, setSelectedLocation] = useState<TimelineLocation | null>(null);
 
   const loadTimeline = useCallback(async () => {
     setLoading(true);
@@ -241,6 +349,7 @@ export default function TimelinePage() {
     try {
       const nextTimeline = await getDailyTimeline(date, timezone);
       setTimeline(nextTimeline);
+      setSelectedLocation(nextTimeline.locations[0] ?? null);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load timeline");
     } finally {
@@ -283,14 +392,16 @@ export default function TimelinePage() {
 
   const eligibleCount = timeline?.segments.filter((segment) => segment.would_propose).length ?? 0;
   const overlapCount = timeline?.segments.filter((segment) => segment.overlaps_event).length ?? 0;
+  const currentTimezone = timeline?.timezone ?? timezone;
+  const selectedLocationId = selectedLocation?.id ?? null;
 
   return (
     <div className="timeline-page">
-      <section className="timeline-hero">
+      <section className="timeline-header">
         <div>
           <p className="eyebrow">Location diagnostics</p>
           <h1>Daily timeline</h1>
-          <p className="hero-copy">Plot location samples in capture order, inspect stay segments, and compare them with proposed-event output.</p>
+          <p className="hero-copy">Google Maps trace of captured samples, stay segments, and proposed-event output.</p>
         </div>
         <div className="control-panel" aria-label="Timeline controls">
           <label>
@@ -333,7 +444,7 @@ export default function TimelinePage() {
         </div>
         <div>
           <span>{timeline?.proposals.length ?? 0}</span>
-          <p>Stored proposals</p>
+          <p>Proposals</p>
         </div>
         <div>
           <span>{overlapCount}</span>
@@ -341,27 +452,91 @@ export default function TimelinePage() {
         </div>
       </section>
 
-      <TimelineMap locations={timeline?.locations ?? []} segments={timeline?.segments ?? []} timezone={timeline?.timezone ?? timezone} />
+      <section className="map-layout">
+        <TimelineMap
+          locations={timeline?.locations ?? []}
+          timezone={currentTimezone}
+          selectedLocationId={selectedLocationId}
+          onSelectLocation={setSelectedLocation}
+        />
+        <aside className="point-panel">
+          <div className="panel-heading">
+            <h2>Selected Point</h2>
+            <span>{selectedLocation ? `#${selectedLocation.id}` : "None"}</span>
+          </div>
+          {selectedLocation ? (
+            <div className="point-detail">
+              <strong>{formatPlaceName(selectedLocation)}</strong>
+              <dl>
+                <div>
+                  <dt>Captured</dt>
+                  <dd>{formatDateTime(selectedLocation.captured_at, currentTimezone)}</dd>
+                </div>
+                <div>
+                  <dt>Uploaded</dt>
+                  <dd>{formatDateTime(selectedLocation.updated_at, currentTimezone)}</dd>
+                </div>
+                <div>
+                  <dt>Accuracy</dt>
+                  <dd>{selectedLocation.accuracy_m == null ? "Unknown" : `${Math.round(selectedLocation.accuracy_m)} m`}</dd>
+                </div>
+                <div>
+                  <dt>Source</dt>
+                  <dd>{selectedLocation.source || "Unknown"}</dd>
+                </div>
+                <div>
+                  <dt>Coordinates</dt>
+                  <dd>{selectedLocation.lat.toFixed(6)}, {selectedLocation.lon.toFixed(6)}</dd>
+                </div>
+              </dl>
+            </div>
+          ) : (
+            <p className="empty-text">Click any marker to inspect capture and upload details.</p>
+          )}
+        </aside>
+      </section>
 
       <section className="data-grid">
         <div className="diagnostic-panel">
           <div className="panel-heading">
             <h2>Stay Segments</h2>
-            <span>{timeline?.window.local_start ? `${formatDateTime(timeline.window.local_start, timeline.timezone)} → ${formatDateTime(timeline.window.local_end, timeline.timezone)}` : ""}</span>
+            <span>
+              {timeline?.window.local_start
+                ? `${formatDateTime(timeline.window.local_start, currentTimezone)} to ${formatDateTime(
+                    timeline.window.local_end,
+                    currentTimezone
+                  )}`
+                : ""}
+            </span>
           </div>
           <div className="segment-list">
             {(timeline?.segments ?? []).map((segment, index) => (
-              <div key={`${segment.signature}-${segment.start_at}`} className={`segment-row${segment.would_propose ? " eligible" : ""}`}>
+              <button
+                type="button"
+                key={`${segment.signature}-${segment.start_at}`}
+                className={`segment-row${segment.would_propose ? " eligible" : ""}`}
+                onClick={() => {
+                  const match = timeline?.locations.find((location) => location.id === segment.first_sample_id);
+                  if (match) {
+                    setSelectedLocation(match);
+                  }
+                }}
+              >
                 <div className="segment-index">{index + 1}</div>
                 <div>
                   <strong>{formatPlaceName(segment)}</strong>
-                  <p>{formatTime(segment.start_at, timeline?.timezone ?? timezone)} to {formatTime(segment.end_at, timeline?.timezone ?? timezone)} · {segment.duration_minutes} min · {segment.sample_count} samples</p>
+                  <p>
+                    {formatTime(segment.start_at, currentTimezone)} to {formatTime(segment.end_at, currentTimezone)} ·{" "}
+                    {segment.duration_minutes} min · {segment.sample_count} samples
+                  </p>
                   <code>{segment.signature}</code>
                 </div>
                 <span className={`status-pill${segment.would_propose ? " good" : ""}`}>{statusLabel(segment)}</span>
-              </div>
+              </button>
             ))}
-            {timeline && timeline.segments.length === 0 ? <p className="empty-text">No stay segments were built. At least two samples are needed.</p> : null}
+            {timeline && timeline.segments.length === 0 ? (
+              <p className="empty-text">No stay segments were built. At least two samples are needed.</p>
+            ) : null}
           </div>
         </div>
 
@@ -375,13 +550,18 @@ export default function TimelinePage() {
               <div key={proposal.proposal_id} className="proposal-row">
                 <div>
                   <strong>{proposal.suggested_title || formatPlaceName(proposal)}</strong>
-                  <p>{formatTime(proposal.start_at, timeline?.timezone ?? timezone)} to {formatTime(proposal.end_at, timeline?.timezone ?? timezone)} · {proposal.duration_minutes} min</p>
+                  <p>
+                    {formatTime(proposal.start_at, currentTimezone)} to {formatTime(proposal.end_at, currentTimezone)} ·{" "}
+                    {proposal.duration_minutes} min
+                  </p>
                   <p>{proposal.reason || proposal.suggested_summary || "No reason stored."}</p>
                 </div>
                 <span className="status-pill good">{proposal.status}</span>
               </div>
             ))}
-            {timeline && timeline.proposals.length === 0 ? <p className="empty-text">No proposals stored for this local date.</p> : null}
+            {timeline && timeline.proposals.length === 0 ? (
+              <p className="empty-text">No proposals stored for this local date.</p>
+            ) : null}
           </div>
         </div>
       </section>
@@ -390,13 +570,13 @@ export default function TimelinePage() {
         .timeline-page {
           display: flex;
           flex-direction: column;
-          gap: 20px;
-          color: #12202f;
+          gap: 18px;
+          color: #172033;
         }
 
-        .timeline-hero {
+        .timeline-header {
           display: grid;
-          grid-template-columns: minmax(0, 1fr) 360px;
+          grid-template-columns: minmax(0, 1fr) 390px;
           gap: 24px;
           align-items: end;
           border-bottom: 1px solid rgba(31, 41, 55, 0.12);
@@ -405,7 +585,7 @@ export default function TimelinePage() {
 
         .eyebrow {
           margin: 0 0 8px;
-          color: #28705d;
+          color: #256b5b;
           font-size: 0.78rem;
           font-weight: 800;
           letter-spacing: 0.08em;
@@ -414,46 +594,52 @@ export default function TimelinePage() {
 
         h1 {
           margin: 0;
-          font-size: 2.6rem;
+          font-size: 2.45rem;
           line-height: 1;
         }
 
         .hero-copy {
-          max-width: 620px;
-          margin: 12px 0 0;
-          color: #566477;
+          max-width: 680px;
+          margin: 10px 0 0;
+          color: #5f6b7a;
           font-size: 1rem;
-          line-height: 1.5;
+          line-height: 1.45;
+        }
+
+        .control-panel,
+        .diagnostic-panel,
+        .point-panel,
+        .metric-strip div {
+          border: 1px solid rgba(45, 55, 72, 0.13);
+          border-radius: 8px;
+          background: #fff;
+          box-shadow: 0 10px 24px rgba(15, 23, 42, 0.045);
         }
 
         .control-panel {
           display: grid;
           gap: 10px;
           padding: 14px;
-          border: 1px solid rgba(45, 55, 72, 0.14);
-          border-radius: 8px;
-          background: #fff;
-          box-shadow: 0 10px 30px rgba(15, 23, 42, 0.06);
         }
 
         label {
           display: grid;
           gap: 6px;
-          color: #566477;
-          font-size: 0.78rem;
-          font-weight: 700;
+          color: #5f6b7a;
+          font-size: 0.76rem;
+          font-weight: 800;
           text-transform: uppercase;
         }
 
         input {
           width: 100%;
-          border: 1px solid rgba(45, 55, 72, 0.18);
+          border: 1px solid rgba(45, 55, 72, 0.2);
           border-radius: 6px;
           padding: 10px 11px;
-          color: #12202f;
+          color: #172033;
           font: inherit;
           text-transform: none;
-          background: #f9faf8;
+          background: #fbfcfd;
         }
 
         .button-row {
@@ -462,26 +648,26 @@ export default function TimelinePage() {
           gap: 8px;
         }
 
-        button {
+        .button-row button {
           border: 0;
           border-radius: 6px;
           padding: 10px 8px;
           color: #fff;
           font: inherit;
           font-weight: 800;
-          background: #19324a;
+          background: #172033;
           cursor: pointer;
         }
 
-        button:nth-child(2) {
-          background: #16715d;
+        .button-row button:nth-child(2) {
+          background: #0f766e;
         }
 
-        button:nth-child(3) {
-          background: #7a4f14;
+        .button-row button:nth-child(3) {
+          background: #9a5b08;
         }
 
-        button:disabled {
+        .button-row button:disabled {
           opacity: 0.58;
           cursor: wait;
         }
@@ -509,96 +695,62 @@ export default function TimelinePage() {
         }
 
         .metric-strip div {
-          padding: 14px;
-          border: 1px solid rgba(45, 55, 72, 0.12);
-          border-radius: 8px;
-          background: #fff;
+          padding: 13px 14px;
         }
 
         .metric-strip span {
           display: block;
-          font-size: 1.7rem;
+          font-size: 1.55rem;
           font-weight: 900;
         }
 
         .metric-strip p {
           margin: 3px 0 0;
           color: #667085;
-          font-size: 0.84rem;
-          font-weight: 700;
+          font-size: 0.82rem;
+          font-weight: 750;
         }
 
-        .map-stage,
-        .empty-map {
-          position: relative;
-          height: ${MAP_HEIGHT}px;
-          overflow: hidden;
-          border: 1px solid rgba(17, 24, 39, 0.16);
-          border-radius: 8px;
-          background: #dbe8e2;
-          box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.45);
-        }
-
-        .empty-map {
+        .map-layout {
           display: grid;
-          place-items: center;
-          color: #566477;
-          font-weight: 800;
+          grid-template-columns: minmax(0, 1fr) 310px;
+          gap: 14px;
+          align-items: stretch;
         }
 
-        .map-tile {
-          position: absolute;
-          width: ${TILE_SIZE}px;
-          height: ${TILE_SIZE}px;
-          user-select: none;
+        .map-shell {
+          position: relative;
+          min-height: 620px;
+          height: 68vh;
+          overflow: hidden;
+          border: 1px solid rgba(17, 24, 39, 0.18);
+          border-radius: 8px;
+          background: #d7e4e7;
         }
 
-        .map-overlay {
-          position: absolute;
-          inset: 0;
+        .google-map {
           width: 100%;
           height: 100%;
-          filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.18));
         }
 
-        .time-pin {
-          position: absolute;
+        .empty-map {
           display: grid;
-          width: 26px;
-          height: 26px;
           place-items: center;
-          border: 2px solid #fff;
-          border-radius: 999px;
-          color: #fff;
-          font-size: 0.72rem;
-          font-weight: 900;
-          background: #19324a;
-          box-shadow: 0 5px 12px rgba(15, 23, 42, 0.28);
-          transform: translate(-50%, -50%);
+          padding: 28px;
+          color: #4b5563;
+          font-weight: 750;
+          text-align: center;
         }
 
-        .map-attribution {
-          position: absolute;
-          right: 8px;
-          bottom: 8px;
-          padding: 4px 7px;
-          border-radius: 5px;
-          color: #475569;
-          font-size: 0.72rem;
-          background: rgba(255, 255, 255, 0.82);
+        .empty-map p {
+          margin: 8px 0 0;
+          color: #667085;
+          font-weight: 600;
         }
 
-        .data-grid {
-          display: grid;
-          grid-template-columns: minmax(0, 1.25fr) minmax(280px, 0.75fr);
-          gap: 16px;
-        }
-
-        .diagnostic-panel {
+        .point-panel {
           min-width: 0;
-          border: 1px solid rgba(45, 55, 72, 0.12);
-          border-radius: 8px;
-          background: #fff;
+          overflow: hidden;
         }
 
         .panel-heading {
@@ -618,13 +770,60 @@ export default function TimelinePage() {
         .panel-heading span {
           color: #667085;
           font-size: 0.78rem;
-          font-weight: 700;
+          font-weight: 750;
+        }
+
+        .point-detail {
+          padding: 16px;
+        }
+
+        .point-detail strong {
+          display: block;
+          margin-bottom: 14px;
+          overflow-wrap: anywhere;
+        }
+
+        dl {
+          display: grid;
+          gap: 12px;
+          margin: 0;
+        }
+
+        dl div {
+          display: grid;
+          gap: 3px;
+        }
+
+        dt {
+          color: #667085;
+          font-size: 0.72rem;
+          font-weight: 850;
+          text-transform: uppercase;
+        }
+
+        dd {
+          margin: 0;
+          color: #172033;
+          font-size: 0.9rem;
+          overflow-wrap: anywhere;
+        }
+
+        .data-grid {
+          display: grid;
+          grid-template-columns: minmax(0, 1.12fr) minmax(300px, 0.88fr);
+          gap: 14px;
+        }
+
+        .diagnostic-panel {
+          min-width: 0;
+          overflow: hidden;
         }
 
         .segment-list,
         .proposal-list {
           display: grid;
-          gap: 0;
+          max-height: 620px;
+          overflow: auto;
         }
 
         .segment-row,
@@ -633,8 +832,18 @@ export default function TimelinePage() {
           grid-template-columns: 32px minmax(0, 1fr) auto;
           gap: 12px;
           align-items: start;
+          width: 100%;
           padding: 14px 16px;
+          border: 0;
           border-bottom: 1px solid rgba(45, 55, 72, 0.08);
+          border-radius: 0;
+          color: inherit;
+          text-align: left;
+          background: #fff;
+        }
+
+        .segment-row:hover {
+          background: #f8fafb;
         }
 
         .proposal-row {
@@ -642,7 +851,7 @@ export default function TimelinePage() {
         }
 
         .segment-row.eligible {
-          background: rgba(18, 184, 134, 0.07);
+          background: rgba(15, 118, 110, 0.08);
         }
 
         .segment-index {
@@ -654,7 +863,7 @@ export default function TimelinePage() {
           color: #fff;
           font-size: 0.75rem;
           font-weight: 900;
-          background: #19324a;
+          background: #172033;
         }
 
         strong {
@@ -705,18 +914,20 @@ export default function TimelinePage() {
           font-weight: 700;
         }
 
-        @media (max-width: 860px) {
-          .timeline-hero,
+        @media (max-width: 980px) {
+          .timeline-header,
+          .map-layout,
           .data-grid {
             grid-template-columns: 1fr;
           }
 
-          .metric-strip {
-            grid-template-columns: repeat(2, 1fr);
+          .map-shell {
+            min-height: 520px;
+            height: 64vh;
           }
         }
 
-        @media (max-width: 560px) {
+        @media (max-width: 680px) {
           h1 {
             font-size: 2rem;
           }

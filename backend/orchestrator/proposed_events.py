@@ -882,7 +882,7 @@ def _fetch_locations(*, user_email: str, start_at: datetime, end_at: datetime) -
     with get_conn() as conn, conn.cursor() as cur:
         cur.execute(
             """
-            SELECT id, lat, lon, accuracy_m, captured_at, source, timezone, place_name, city, country
+            SELECT id, lat, lon, accuracy_m, captured_at, source, timezone, place_name, city, country, updated_at
             FROM user_location_history
             WHERE user_email = %s
               AND captured_at >= %s

@@ -349,6 +349,7 @@ export type TimelineLocation = {
   lon: number;
   accuracy_m?: number | null;
   captured_at: string;
+  updated_at?: string | null;
   source?: string | null;
   timezone?: string | null;
   place_id?: string | null;
