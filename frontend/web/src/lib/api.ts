@@ -402,6 +402,7 @@ export type TimelineProposal = {
   start_at: string;
   end_at: string;
   duration_minutes: number;
+  duration_label?: string | null;
   place_id?: string | null;
   place_name?: string | null;
   city?: string | null;

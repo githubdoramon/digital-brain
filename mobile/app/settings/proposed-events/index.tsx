@@ -32,6 +32,7 @@ type ProposedEvent = {
   start_at: string;
   end_at: string;
   duration_minutes: number;
+  duration_label?: string | null;
   place_id?: string | null;
   place_name?: string | null;
   city?: string | null;
@@ -266,7 +267,7 @@ export default function ProposedEventsScreen() {
                   <Text style={styles.proposalTitle}>{proposal.suggested_title || placeLabel(proposal)}</Text>
                   <Text style={styles.proposalMeta}>{formatTimeRange(proposal.start_at, proposal.end_at)}</Text>
                   <Text style={styles.proposalMeta}>
-                    {proposal.duration_minutes} min · {proposal.confidence} confidence
+                    {proposal.duration_label || `${proposal.duration_minutes} min`} · {proposal.confidence} confidence
                   </Text>
                 </View>
                 <Ionicons
@@ -293,7 +294,7 @@ export default function ProposedEventsScreen() {
                     placeholder="Event title"
                     placeholderTextColor={theme.colors.mutedInk}
                   />
-                  <Text style={styles.fieldLabel}>Notes</Text>
+                  <Text style={styles.fieldLabel}>Summary</Text>
                   <TextInput
                     value={draftSummaryById[proposal.proposal_id] ?? proposal.suggested_summary ?? ''}
                     onChangeText={(value) =>
@@ -312,7 +313,12 @@ export default function ProposedEventsScreen() {
                       Suggested people: {proposal.suggested_contact_ids.join(', ')}
                     </Text>
                   ) : null}
-                  <Text style={styles.reasonText}>{proposal.reason}</Text>
+                  {proposal.reason ? (
+                    <>
+                      <Text style={styles.fieldLabel}>Why suggested</Text>
+                      <Text style={styles.reasonText}>{proposal.reason}</Text>
+                    </>
+                  ) : null}
                   <View style={styles.actions}>
                     <Button
                       label="Create event"

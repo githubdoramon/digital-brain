@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta, timezone
 from math import atan2, cos, radians, sin, sqrt
@@ -443,8 +444,18 @@ def _build_candidate(
     confidence = "high" if is_known_place and duration_minutes >= 30 else "medium"
     contacts = _suggest_contacts_for_place(segment.place_id)
     place_label = segment.place_name or "Unknown place"
-    title = f"Visited {place_label}"
-    reason = f"Stayed around {duration_minutes} minutes with no event during that time."
+    duration_label = _humanize_duration_minutes(duration_minutes)
+    time_context = _build_time_context(segment.start_at, segment.end_at, timezone_name)
+    title = f"Overnight stay at {place_label}" if time_context["likely_overnight_sleep"] else f"Visited {place_label}"
+    suggested_summary = (
+        f"Stayed overnight at {place_label}."
+        if time_context["likely_overnight_sleep"]
+        else f"Spent {duration_label} at {place_label}."
+    )
+    reason = (
+        f"Location samples show a {duration_label} stay with no blocking event. "
+        f"{time_context['interpretation_hint']}"
+    ).strip()
     candidate = {
         "proposal_id": f"proposed_event:{uuid4().hex}",
         "user_email": user_email,
@@ -462,7 +473,7 @@ def _build_candidate(
         "confidence": confidence,
         "reason": reason,
         "suggested_title": title,
-        "suggested_summary": reason,
+        "suggested_summary": suggested_summary,
         "suggested_contact_ids": contacts,
         "ignored_signature": segment.signature,
         "evidence": {
@@ -470,6 +481,8 @@ def _build_candidate(
             "first_captured_at": segment.start_at.isoformat(),
             "last_captured_at": segment.samples[-1]["captured_at"].isoformat(),
             "source": "user_location_history",
+            "duration_label": duration_label,
+            "time_context": time_context,
         },
         "expires_at": datetime.now(timezone.utc) + timedelta(days=PROPOSAL_TTL_DAYS),
     }
@@ -907,6 +920,8 @@ def _build_enrichment_prompt(candidate: dict[str, Any], context: dict[str, Any])
             "start_at": _iso(candidate.get("start_at")),
             "end_at": _iso(candidate.get("end_at")),
             "duration_minutes": candidate.get("duration_minutes"),
+            "duration_label": (candidate.get("evidence") or {}).get("duration_label"),
+            "time_context": (candidate.get("evidence") or {}).get("time_context"),
             "place_id": candidate.get("place_id"),
             "place_name": candidate.get("place_name"),
             "city": candidate.get("city"),
@@ -926,9 +941,16 @@ def _build_enrichment_prompt(candidate: dict[str, Any], context: dict[str, Any])
                 "Use 'Visited <place>' only when the likely activity is unclear.",
             ],
             "summary": [
-                "Explain the evidence in one or two concise sentences: duration, timing, venue context, and any matching history.",
+                "Write what likely happened, not why you believe it happened.",
+                "Use natural time phrasing from duration_label; avoid raw minute phrasing like '75 minutes' unless under one hour.",
+                "For whole-night stays, prefer a sleep/overnight-stay summary unless stronger evidence says otherwise.",
                 "Do not overstate public web snippets as proof of what the user did.",
-                "When evidence is weak, say the proposal is based on a stay at/near the place, not a confirmed activity.",
+                "When evidence is weak, keep the summary generic and factual, such as an overnight stay or a visit at/near the place.",
+            ],
+            "reason": [
+                "Explain why this proposal was generated and how confident the inference is.",
+                "Mention location duration, timing, place context, recurrence, contacts, or lack of blocking calendar events as evidence.",
+                "Keep reasoning out of suggested_summary so the user can edit the event notes without editing diagnostic text.",
             ],
             "people": [
                 "Only return contact IDs present in linked_contacts_for_place or recent_same_place_events.people.",
@@ -956,8 +978,14 @@ def _apply_llm_enrichment(
     allowed_contact_ids: set[str],
 ) -> dict[str, Any]:
     title = " ".join(str(enriched.get("suggested_title") or "").split()).strip()
-    summary = " ".join(str(enriched.get("suggested_summary") or "").split()).strip()
-    reason = " ".join(str(enriched.get("reason") or "").split()).strip()
+    summary = _normalize_generated_event_text(
+        enriched.get("suggested_summary"),
+        duration_minutes=candidate.get("duration_minutes"),
+    )
+    reason = _normalize_generated_event_text(
+        enriched.get("reason"),
+        duration_minutes=candidate.get("duration_minutes"),
+    )
     confidence = str(enriched.get("confidence") or candidate.get("confidence") or "medium").strip().lower()
     if confidence not in {"medium", "high"}:
         confidence = str(candidate.get("confidence") or "medium")
@@ -988,6 +1016,24 @@ def _apply_llm_enrichment(
     )
     _maybe_update_known_place_description(candidate, context, place_summary)
     return candidate
+
+
+def _normalize_generated_event_text(value: Any, *, duration_minutes: Any) -> str:
+    text = " ".join(str(value or "").split()).strip()
+    if not text:
+        return ""
+    try:
+        minutes = int(duration_minutes)
+    except (TypeError, ValueError):
+        return text
+    if minutes >= 60:
+        text = re.sub(
+            rf"\b{minutes}\s+minutes?\b",
+            _humanize_duration_minutes(minutes),
+            text,
+            flags=re.IGNORECASE,
+        )
+    return text
 
 
 def _place_intelligence_evidence(
@@ -1518,6 +1564,59 @@ def _iso(value: Any) -> str | None:
     return str(value)
 
 
+def _humanize_duration_minutes(minutes: int) -> str:
+    clean_minutes = max(0, int(minutes))
+    if clean_minutes < 60:
+        return f"{clean_minutes} minute{'s' if clean_minutes != 1 else ''}"
+
+    hours = clean_minutes // 60
+    remainder = clean_minutes % 60
+    if remainder == 0:
+        return f"{hours} hour{'s' if hours != 1 else ''}"
+    if remainder <= 5:
+        return f"about {hours} hour{'s' if hours != 1 else ''}"
+    if remainder < 15:
+        return f"a bit more than {hours} hour{'s' if hours != 1 else ''}"
+    if remainder == 15:
+        return f"{hours} hour{'s' if hours != 1 else ''} and 15 minutes"
+    if remainder < 30:
+        return f"about {hours} and a half hours"
+    if remainder == 30:
+        return f"{hours} and a half hour{'s' if hours != 1 else ''}"
+    if remainder < 45:
+        return f"more than {hours} and a half hour{'s' if hours != 1 else ''}"
+    if remainder == 45:
+        return f"{hours} hour{'s' if hours != 1 else ''} and 45 minutes"
+    return f"almost {hours + 1} hours"
+
+
+def _build_time_context(start_at: datetime, end_at: datetime, timezone_name: str | None) -> dict[str, Any]:
+    tz = _resolve_timezone(timezone_name)
+    local_start = start_at.astimezone(tz)
+    local_end = end_at.astimezone(tz)
+    duration_minutes = int((end_at - start_at).total_seconds() // 60)
+    spans_midnight = local_start.date() != local_end.date()
+    starts_evening_or_night = local_start.hour >= 20 or local_start.hour <= 4
+    ends_morning = 4 <= local_end.hour <= 11
+    likely_overnight_sleep = duration_minutes >= 240 and spans_midnight and starts_evening_or_night and ends_morning
+    if likely_overnight_sleep:
+        hint = "Because this spans the night into morning, treat it as an overnight stay or sleep unless other evidence says otherwise."
+    elif local_start.hour in {11, 12, 13, 14} and 30 <= duration_minutes <= 150:
+        hint = "Midday timing and duration may fit lunch or a daytime visit when venue context supports it."
+    elif local_start.hour in {18, 19, 20, 21} and 45 <= duration_minutes <= 240:
+        hint = "Evening timing and duration may fit dinner or an evening visit when venue context supports it."
+    else:
+        hint = "Use the timing as context, but do not over-infer the activity."
+    return {
+        "local_start": local_start.isoformat(),
+        "local_end": local_end.isoformat(),
+        "duration_label": _humanize_duration_minutes(duration_minutes),
+        "spans_midnight": spans_midnight,
+        "likely_overnight_sleep": likely_overnight_sleep,
+        "interpretation_hint": hint,
+    }
+
+
 def _serialize_location(row: dict[str, Any]) -> dict[str, Any]:
     output = dict(row)
     for key in ("captured_at", "updated_at"):
@@ -1619,4 +1718,7 @@ def _serialize_proposal(row: dict[str, Any]) -> dict[str, Any]:
             output[key] = value.isoformat()
     if output.get("canonical_place_name") and not output.get("place_name"):
         output["place_name"] = output["canonical_place_name"]
+    duration_minutes = output.get("duration_minutes")
+    if duration_minutes is not None:
+        output["duration_label"] = _humanize_duration_minutes(int(duration_minutes))
     return output

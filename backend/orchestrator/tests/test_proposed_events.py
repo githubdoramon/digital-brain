@@ -190,11 +190,31 @@ def test_timed_events_block_location_gaps():
     )
 
 
+def test_duration_humanization_and_overnight_context():
+    assert proposed_events._humanize_duration_minutes(75) == "1 hour and 15 minutes"
+    assert proposed_events._humanize_duration_minutes(66) == "a bit more than 1 hour"
+    assert (
+        proposed_events._normalize_generated_event_text("You stayed 75 minutes at Cafe Alpha.", duration_minutes=75)
+        == "You stayed 1 hour and 15 minutes at Cafe Alpha."
+    )
+
+    start = datetime(2026, 6, 16, 22, 30, tzinfo=timezone.utc)
+    end = datetime(2026, 6, 17, 7, 15, tzinfo=timezone.utc)
+    context = proposed_events._build_time_context(start, end, "UTC")
+
+    assert context["likely_overnight_sleep"] is True
+    assert "overnight stay or sleep" in context["interpretation_hint"]
+
+
 def test_enrichment_prompt_includes_place_context():
     candidate = {
         "start_at": datetime(2026, 6, 16, 12, 0, tzinfo=timezone.utc),
         "end_at": datetime(2026, 6, 16, 13, 0, tzinfo=timezone.utc),
         "duration_minutes": 60,
+        "evidence": {
+            "duration_label": "1 hour",
+            "time_context": {"likely_overnight_sleep": False},
+        },
         "place_id": "place:cafe-alpha",
         "place_name": "Cafe Alpha",
         "city": "Example City",
@@ -220,8 +240,24 @@ def test_enrichment_prompt_includes_place_context():
     prompt = json.loads(proposed_events._build_enrichment_prompt(candidate, context))
 
     assert prompt["task"]["goal"] == "Create a reviewable proposed event from passive location evidence."
+    assert prompt["event_candidate"]["duration_label"] == "1 hour"
     assert prompt["place_context"]["web_search"]["results"][0]["snippet"] == "A small cafe."
     assert "Use 'Visited <place>' only when the likely activity is unclear." in prompt["decision_guidance"]["title"]
+    assert "Write what likely happened, not why you believe it happened." in prompt["decision_guidance"]["summary"]
+    assert "Keep reasoning out of suggested_summary so the user can edit the event notes without editing diagnostic text." in prompt["decision_guidance"]["reason"]
+
+
+def test_serialized_proposal_includes_duration_label():
+    result = proposed_events._serialize_proposal(
+        {
+            "proposal_id": "proposal:1",
+            "duration_minutes": 75,
+            "start_at": datetime(2026, 6, 16, 12, tzinfo=timezone.utc),
+            "end_at": datetime(2026, 6, 16, 13, 15, tzinfo=timezone.utc),
+        }
+    )
+
+    assert result["duration_label"] == "1 hour and 15 minutes"
 
 
 def test_llm_enrichment_appends_known_place_description(monkeypatch):

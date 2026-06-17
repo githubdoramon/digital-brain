@@ -719,9 +719,10 @@ export default function TimelinePage() {
                   <strong>{proposal.suggested_title || formatPlaceName(proposal)}</strong>
                   <p>
                     {formatTime(proposal.start_at, currentTimezone)} to {formatTime(proposal.end_at, currentTimezone)} ·{" "}
-                    {proposal.duration_minutes} min
+                    {proposal.duration_label || `${proposal.duration_minutes} min`}
                   </p>
-                  <p>{proposal.reason || proposal.suggested_summary || "No reason stored."}</p>
+                  {proposal.suggested_summary ? <p>{proposal.suggested_summary}</p> : null}
+                  {proposal.reason ? <p>Why suggested: {proposal.reason}</p> : null}
                 </div>
                 <span className="status-pill good">{proposal.status}</span>
               </div>
