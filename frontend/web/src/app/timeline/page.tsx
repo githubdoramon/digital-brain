@@ -118,6 +118,16 @@ function statusLabel(segment: TimelineSegment): string {
   return segment.skip_reason.replaceAll("_", " ");
 }
 
+function formatSkipReasons(skipReasons?: Record<string, number>): string {
+  if (!skipReasons || Object.keys(skipReasons).length === 0) {
+    return "no skip reasons";
+  }
+  return Object.entries(skipReasons)
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([reason, count]) => `${reason}: ${count}`)
+    .join(", ");
+}
+
 function escapeHtml(value: string): string {
   return value
     .replaceAll("&", "&amp;")
@@ -498,7 +508,11 @@ export default function TimelinePage() {
     setError(null);
     try {
       const result = await runProposedEventsForDay(date, timezone);
-      setNotice(`Run finished: ${result.created ?? 0} created, ${result.skipped ?? 0} skipped.`);
+      setNotice(
+        `Run finished: ${result.created ?? 0} created, ${result.skipped ?? 0} skipped (${formatSkipReasons(
+          result.skip_reasons
+        )}).`
+      );
       await loadTimeline();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to run proposed-events job");
@@ -572,11 +586,11 @@ export default function TimelinePage() {
         </div>
         <div>
           <span>{eligibleCount}</span>
-          <p>Eligible stays</p>
+          <p>Eligible now</p>
         </div>
         <div>
           <span>{timeline?.proposals.length ?? 0}</span>
-          <p>Proposals</p>
+          <p>Stored proposals</p>
         </div>
         <div>
           <span>{overlapCount}</span>

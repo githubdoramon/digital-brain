@@ -11,6 +11,7 @@ from search_normalization import normalize_search_text
 
 __all__ = [
     "add_place_alias",
+    "append_place_description_note",
     "delete_place",
     "find_best_place_match",
     "get_place",
@@ -323,6 +324,42 @@ def add_place_alias(place_id: str, alias: str) -> bool:
         )
         conn.commit()
         return True
+
+
+def append_place_description_note(place_id: str, note: str) -> bool:
+    clean_place_id = str(place_id or "").strip()
+    clean_note = " ".join(str(note or "").split()).strip()
+    if not clean_place_id or not clean_note:
+        return False
+
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT description
+            FROM places
+            WHERE place_id = %s
+            """,
+            (clean_place_id,),
+        )
+        row = cur.fetchone()
+        if not row:
+            return False
+
+        existing_description = " ".join(str(row.get("description") or "").split()).strip()
+        if _canonical_place_text(clean_note) in _canonical_place_text(existing_description):
+            return False
+
+        next_description = clean_note if not existing_description else f"{existing_description}\n\n{clean_note}"
+        cur.execute(
+            """
+            UPDATE places
+            SET description = %s
+            WHERE place_id = %s
+            """,
+            (next_description, clean_place_id),
+        )
+        conn.commit()
+        return cur.rowcount > 0
 
 
 def upsert_contact_place(

@@ -221,6 +221,9 @@ PROPOSED_EVENT_ENRICHMENT_RESPONSE_SCHEMA: dict[str, Any] = {
         "confidence": {"type": "string", "enum": ["medium", "high"]},
         "reason": {"type": "string"},
         "recurrence_hint": {"type": ["string", "null"]},
+        "place_category": {"type": ["string", "null"]},
+        "place_summary": {"type": ["string", "null"]},
+        "proposed_place_name": {"type": ["string", "null"]},
     },
     "required": [
         "suggested_title",
@@ -229,6 +232,9 @@ PROPOSED_EVENT_ENRICHMENT_RESPONSE_SCHEMA: dict[str, Any] = {
         "confidence",
         "reason",
         "recurrence_hint",
+        "place_category",
+        "place_summary",
+        "proposed_place_name",
     ],
     "additionalProperties": False,
 }

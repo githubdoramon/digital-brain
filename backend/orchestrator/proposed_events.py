@@ -9,6 +9,8 @@ from uuid import uuid4
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import events as events_service
+import places as places_service
+import web_tools
 from db import get_conn
 from llm_helpers import build_json_schema_response_format, call_llm_json
 from llm_json_schemas import (
@@ -32,6 +34,9 @@ DAILY_SCAN_UTC_MINUTE = PROPOSED_EVENTS_DAILY.time_utc.minute if PROPOSED_EVENTS
 HOME_TERMS = {"home", "house", "my home", "apartment", "flat", "residence"}
 ALL_DAY_EVENT_MIN_HOURS = 18
 OVERLAP_DISAMBIGUATION_TIMEOUT_SECONDS = 45
+PLACE_WEB_SEARCH_MAX_RESULTS = 3
+PLACE_DESCRIPTION_MIN_CHARS = 80
+PLACE_DESCRIPTION_MAX_CHARS = 600
 
 
 @dataclass
@@ -593,11 +598,20 @@ def _enrich_candidate_with_history(
             if contact_id:
                 allowed_contact_ids.add(contact_id)
 
-    if not context["linked_contacts"] and not context["recent_events"]:
+    place_web_search = context["place_context"].get("web_search") if isinstance(context.get("place_context"), dict) else None
+    place_web_results = place_web_search.get("results") if isinstance(place_web_search, dict) else []
+    has_place_evidence = bool(place_web_results)
+    if not context["linked_contacts"] and not context["recent_events"] and not has_place_evidence:
         logger.info(
             "[proposed_events] enrichment_skipped_no_history place_id=%s place_name=%s",
             candidate.get("place_id"),
             candidate.get("place_name"),
+        )
+        candidate["evidence"]["place_intelligence"] = _place_intelligence_evidence(
+            context=context,
+            place_category="",
+            place_summary="",
+            proposed_place_name="",
         )
         return candidate
 
@@ -612,9 +626,13 @@ def _enrich_candidate_with_history(
         enriched = call_llm_json(
             _build_enrichment_prompt(candidate, context),
             system_prompt=(
-                "You enrich proposed personal memory events using only provided evidence. "
-                "Use the smart model reasoning to infer likely title, people, recurrence, and summary, "
-                "but never invent contacts or facts. Return schema-valid JSON only."
+                "You are a careful personal-memory analyst. Your job is to turn a location stay into a useful "
+                "event proposal using only the evidence in the JSON payload. Distinguish observed facts from "
+                "reasonable hypotheses. Use public place context only to understand what kind of venue this is; "
+                "do not claim the user did anything unless the location, duration, timing, history, or contacts "
+                "support it. Prefer specific, human event titles over generic 'Visited ...' titles when evidence "
+                "supports a likely activity. If you have to return any time related information, also prefer human "
+                "friendly ones (2 hours instead of 120 minutes for example). Return schema-valid JSON only."
             ),
             use_fast_model=False,
             reasoning_effort="high",
@@ -644,10 +662,96 @@ def _build_history_context(*, segment: StaySegment, timezone_name: str) -> dict[
     recent_events = _recent_events_for_place(segment=segment)
     recurrence = _build_recurrence_summary(segment=segment, events=recent_events, timezone_name=timezone_name)
     return {
+        "place_context": _build_place_context(segment),
         "linked_contacts": linked_contacts,
         "recent_events": recent_events,
         "recurrence": recurrence,
     }
+
+
+def _build_place_context(segment: StaySegment) -> dict[str, Any]:
+    existing_place = places_service.get_place(segment.place_id) if segment.place_id else None
+    place_snapshot = _place_snapshot(existing_place, segment)
+    search_query = _place_search_query(place_snapshot)
+    web_context = _search_place_web_context(search_query) if _should_search_place_context(place_snapshot) else None
+    return {
+        "known_place": bool(existing_place),
+        "place": place_snapshot,
+        "web_search": web_context,
+    }
+
+
+def _place_snapshot(existing_place: dict[str, Any] | None, segment: StaySegment) -> dict[str, Any]:
+    source = existing_place or {}
+    return {
+        "place_id": source.get("place_id") or segment.place_id,
+        "name": source.get("name") or segment.place_name,
+        "aliases": source.get("aliases") or [],
+        "description": source.get("description"),
+        "address": source.get("address"),
+        "city": source.get("city") or segment.city,
+        "country": source.get("country") or segment.country,
+        "lat": source.get("lat") if source.get("lat") is not None else segment.lat,
+        "lon": source.get("lon") if source.get("lon") is not None else segment.lon,
+    }
+
+
+def _should_search_place_context(place: dict[str, Any]) -> bool:
+    name = str(place.get("name") or "").strip()
+    if not name:
+        return False
+    description = " ".join(str(place.get("description") or "").split()).strip()
+    return len(description) < PLACE_DESCRIPTION_MIN_CHARS
+
+
+def _place_search_query(place: dict[str, Any]) -> str:
+    parts = [
+        str(place.get("name") or "").strip(),
+        str(place.get("city") or "").strip(),
+        str(place.get("country") or "").strip(),
+    ]
+    query = " ".join(part for part in parts if part)
+    if query:
+        return query
+    lat = place.get("lat")
+    lon = place.get("lon")
+    if lat is not None and lon is not None:
+        return f"place near {float(lat):.5f}, {float(lon):.5f}"
+    return ""
+
+
+def _search_place_web_context(query: str) -> dict[str, Any] | None:
+    if not query:
+        return None
+    try:
+        result = web_tools.internet_search(query, max_results=PLACE_WEB_SEARCH_MAX_RESULTS)
+    except Exception as exc:
+        logger.warning("[proposed_events] place_web_search_failed query=%r error=%s", query, exc)
+        return {"query": query, "results": [], "error": "search_failed"}
+
+    if result.get("error"):
+        error = result.get("error")
+        code = error.get("code") if isinstance(error, dict) else "search_error"
+        logger.info("[proposed_events] place_web_search_unavailable query=%r error=%s", query, code)
+        return {"query": query, "results": [], "error": code}
+
+    results: list[dict[str, Any]] = []
+    for item in result.get("results") or []:
+        if not isinstance(item, dict):
+            continue
+        title = " ".join(str(item.get("title") or "").split()).strip()
+        url = " ".join(str(item.get("url") or "").split()).strip()
+        snippet = " ".join(str(item.get("summary") or item.get("snippet") or "").split()).strip()
+        if not any((title, url, snippet)):
+            continue
+        results.append(
+            {
+                "title": title[:160] or None,
+                "url": url[:300] or None,
+                "snippet": snippet[:500] or None,
+            }
+        )
+    return {"query": query, "results": results[:PLACE_WEB_SEARCH_MAX_RESULTS]}
 
 
 def _linked_contacts_for_place(place_id: str | None) -> list[dict[str, Any]]:
@@ -791,7 +895,15 @@ def _build_recurrence_summary(
 
 def _build_enrichment_prompt(candidate: dict[str, Any], context: dict[str, Any]) -> str:
     prompt_payload = {
-        "candidate": {
+        "task": {
+            "goal": "Create a reviewable proposed event from passive location evidence.",
+            "audience": "The current user that generated the data.",
+            "quality_bar": (
+                "The proposal should feel like a thoughtful memory suggestion, not raw telemetry. "
+                "Use a natural title and a summary that explains why this event is plausible."
+            ),
+        },
+        "event_candidate": {
             "start_at": _iso(candidate.get("start_at")),
             "end_at": _iso(candidate.get("end_at")),
             "duration_minutes": candidate.get("duration_minutes"),
@@ -803,16 +915,36 @@ def _build_enrichment_prompt(candidate: dict[str, Any], context: dict[str, Any])
             "current_suggested_summary": candidate.get("suggested_summary"),
             "current_suggested_contact_ids": candidate.get("suggested_contact_ids"),
         },
+        "place_context": context["place_context"],
         "linked_contacts_for_place": context["linked_contacts"],
         "recent_same_place_events": context["recent_events"],
         "recurrence": context["recurrence"],
-        "rules": [
-            "Only return contact IDs present in linked_contacts_for_place or recent_same_place_events.people.",
-            "Use null recurrence_hint when history is too thin.",
-            "Prefer a specific recurring title over generic 'Visited ...' only when evidence supports it.",
-            "Keep suggested_summary concise and evidence-grounded.",
-            "Confidence must remain medium unless recurrence/contact evidence is strong.",
-        ],
+        "decision_guidance": {
+            "title": [
+                "Prefer an activity-level title when the venue type, stay duration, timing, or history supports it.",
+                "Examples of good shape: 'Lunch at Example Cafe', 'Visit to Example Clinic', 'Shopping at Example Market'.",
+                "Use 'Visited <place>' only when the likely activity is unclear.",
+            ],
+            "summary": [
+                "Explain the evidence in one or two concise sentences: duration, timing, venue context, and any matching history.",
+                "Do not overstate public web snippets as proof of what the user did.",
+                "When evidence is weak, say the proposal is based on a stay at/near the place, not a confirmed activity.",
+            ],
+            "people": [
+                "Only return contact IDs present in linked_contacts_for_place or recent_same_place_events.people.",
+                "Do not infer a person just because the venue name contains a personal name.",
+            ],
+            "confidence": [
+                "Use high only when there is strong recurrence, linked-contact, same-place history, or a very clear venue/activity signal.",
+                "Use medium when the proposal is plausible but mostly based on one stay and public place context.",
+            ],
+            "place": [
+                "If public place context clarifies the venue, return a short neutral place_summary and place_category.",
+                "For unknown places, proposed_place_name may identify the likely public venue, but use null if uncertain.",
+                "Do not include claims that are not supported by the provided place context or web snippets.",
+            ],
+            "recurrence": "Use null recurrence_hint when history is too thin.",
+        },
     }
     return json.dumps(prompt_payload, ensure_ascii=False, default=str)
 
@@ -840,12 +972,78 @@ def _apply_llm_enrichment(
     if contact_ids:
         candidate["suggested_contact_ids"] = contact_ids
     candidate["confidence"] = confidence
+    place_category = " ".join(str(enriched.get("place_category") or "").split()).strip()
+    place_summary = " ".join(str(enriched.get("place_summary") or "").split()).strip()
+    proposed_place_name = " ".join(str(enriched.get("proposed_place_name") or "").split()).strip()
     candidate["evidence"]["llm_enrichment"] = {
         "used": True,
         "recurrence_hint": enriched.get("recurrence_hint"),
         "recent_event_ids": [event.get("id") for event in context["recent_events"]],
     }
+    candidate["evidence"]["place_intelligence"] = _place_intelligence_evidence(
+        context=context,
+        place_category=place_category,
+        place_summary=place_summary,
+        proposed_place_name=proposed_place_name,
+    )
+    _maybe_update_known_place_description(candidate, context, place_summary)
     return candidate
+
+
+def _place_intelligence_evidence(
+    *,
+    context: dict[str, Any],
+    place_category: str,
+    place_summary: str,
+    proposed_place_name: str,
+) -> dict[str, Any]:
+    place_context = context.get("place_context") if isinstance(context.get("place_context"), dict) else {}
+    web_search = place_context.get("web_search") if isinstance(place_context.get("web_search"), dict) else {}
+    web_results = web_search.get("results") if isinstance(web_search, dict) else []
+    source_urls = [
+        str(item.get("url") or "").strip()
+        for item in (web_results or [])
+        if isinstance(item, dict) and str(item.get("url") or "").strip()
+    ][:PLACE_WEB_SEARCH_MAX_RESULTS]
+    return {
+        "known_place": bool(place_context.get("known_place")),
+        "web_search_query": web_search.get("query") if isinstance(web_search, dict) else None,
+        "web_result_count": len(web_results or []) if isinstance(web_results, list) else 0,
+        "source_urls": source_urls,
+        "place_category": place_category or None,
+        "place_summary": place_summary or None,
+        "proposed_place_name": proposed_place_name or None,
+    }
+
+
+def _maybe_update_known_place_description(
+    candidate: dict[str, Any],
+    context: dict[str, Any],
+    place_summary: str,
+) -> None:
+    place_id = str(candidate.get("place_id") or "").strip()
+    if not place_id or not place_summary:
+        return
+    if len(place_summary) > PLACE_DESCRIPTION_MAX_CHARS:
+        place_summary = place_summary[:PLACE_DESCRIPTION_MAX_CHARS].rsplit(" ", 1)[0].strip()
+    if len(place_summary) < PLACE_DESCRIPTION_MIN_CHARS:
+        return
+
+    place_context = context.get("place_context") if isinstance(context.get("place_context"), dict) else {}
+    if not place_context.get("known_place"):
+        return
+
+    place_intelligence = candidate["evidence"].get("place_intelligence")
+    if not isinstance(place_intelligence, dict) or int(place_intelligence.get("web_result_count") or 0) <= 0:
+        return
+
+    try:
+        updated = places_service.append_place_description_note(place_id, place_summary)
+    except Exception as exc:
+        logger.warning("[proposed_events] place_description_append_failed place_id=%s error=%s", place_id, exc)
+        return
+    if updated:
+        candidate["evidence"].setdefault("place_intelligence", {})["description_appended"] = True
 
 
 def _apply_deterministic_history_enrichment(
@@ -870,6 +1068,12 @@ def _apply_deterministic_history_enrichment(
         "fallback": "deterministic_history",
         "recent_event_ids": [event.get("id") for event in context["recent_events"]],
     }
+    candidate["evidence"]["place_intelligence"] = _place_intelligence_evidence(
+        context=context,
+        place_category="",
+        place_summary="",
+        proposed_place_name="",
+    )
     return candidate
 
 

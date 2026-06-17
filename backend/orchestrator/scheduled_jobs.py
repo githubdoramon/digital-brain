@@ -30,7 +30,7 @@ PROPOSED_EVENTS_DAILY = ScheduledJobSpec(
     label="Proposed events",
     worker_module="proposed_event_jobs",
     schedule_kind="daily_utc",
-    time_utc=time(hour=15, minute=50),
+    time_utc=time(hour=23, minute=59),
     poll_seconds=60,
     retry_seconds=300,
     description=(

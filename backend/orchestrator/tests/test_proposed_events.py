@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import json
 from datetime import datetime, timedelta, timezone
 
+import places
 import proposed_events
 
 
@@ -186,3 +188,186 @@ def test_timed_events_block_location_gaps():
         )
         is True
     )
+
+
+def test_enrichment_prompt_includes_place_context():
+    candidate = {
+        "start_at": datetime(2026, 6, 16, 12, 0, tzinfo=timezone.utc),
+        "end_at": datetime(2026, 6, 16, 13, 0, tzinfo=timezone.utc),
+        "duration_minutes": 60,
+        "place_id": "place:cafe-alpha",
+        "place_name": "Cafe Alpha",
+        "city": "Example City",
+        "country": "Example Country",
+        "suggested_title": "Visited Cafe Alpha",
+        "suggested_summary": "Stayed around 60 minutes.",
+        "suggested_contact_ids": [],
+    }
+    context = {
+        "place_context": {
+            "known_place": True,
+            "place": {"place_id": "place:cafe-alpha", "name": "Cafe Alpha"},
+            "web_search": {
+                "query": "Cafe Alpha Example City Example Country",
+                "results": [{"title": "Cafe Alpha", "snippet": "A small cafe."}],
+            },
+        },
+        "linked_contacts": [],
+        "recent_events": [],
+        "recurrence": {"same_place_event_count": 0},
+    }
+
+    prompt = json.loads(proposed_events._build_enrichment_prompt(candidate, context))
+
+    assert prompt["task"]["goal"] == "Create a reviewable proposed event from passive location evidence."
+    assert prompt["place_context"]["web_search"]["results"][0]["snippet"] == "A small cafe."
+    assert "Use 'Visited <place>' only when the likely activity is unclear." in prompt["decision_guidance"]["title"]
+
+
+def test_llm_enrichment_appends_known_place_description(monkeypatch):
+    appended: dict[str, str] = {}
+
+    def fake_append(place_id: str, note: str) -> bool:
+        appended["place_id"] = place_id
+        appended["note"] = note
+        return True
+
+    monkeypatch.setattr(proposed_events.places_service, "append_place_description_note", fake_append)
+    candidate = {
+        "place_id": "place:cafe-alpha",
+        "suggested_title": "Visited Cafe Alpha",
+        "suggested_summary": "Stayed around 60 minutes.",
+        "reason": "Location stay.",
+        "confidence": "medium",
+        "suggested_contact_ids": [],
+        "evidence": {},
+    }
+    context = {
+        "place_context": {
+            "known_place": True,
+            "place": {"place_id": "place:cafe-alpha", "name": "Cafe Alpha", "description": "User note: good pastries."},
+            "web_search": {"query": "Cafe Alpha", "results": [{"url": "https://example.test/cafe-alpha"}]},
+        },
+        "linked_contacts": [],
+        "recent_events": [],
+    }
+    enriched = {
+        "suggested_title": "Coffee at Cafe Alpha",
+        "suggested_summary": "A 60 minute stay at Cafe Alpha around midday suggests a coffee or lunch stop.",
+        "suggested_contact_ids": [],
+        "confidence": "medium",
+        "reason": "The stay duration and venue context support a cafe visit.",
+        "recurrence_hint": None,
+        "place_category": "cafe",
+        "place_summary": (
+            "Cafe Alpha is a public cafe in Example City, useful context for interpreting "
+            "midday stays as coffee, snack, or lunch visits."
+        ),
+        "proposed_place_name": None,
+    }
+
+    result = proposed_events._apply_llm_enrichment(candidate, enriched, context, allowed_contact_ids=set())
+
+    assert result["suggested_title"] == "Coffee at Cafe Alpha"
+    assert appended["place_id"] == "place:cafe-alpha"
+    assert "public cafe" in appended["note"]
+    assert result["evidence"]["place_intelligence"]["description_appended"] is True
+
+
+def test_web_place_evidence_can_trigger_enrichment_without_history(monkeypatch):
+    captured_prompts: list[dict] = []
+    segment = _segment(minutes=45)
+
+    def fake_context(*_args, **_kwargs):
+        return {
+            "place_context": {
+                "known_place": False,
+                "place": {"name": "Cafe Alpha", "city": "Example City"},
+                "web_search": {
+                    "query": "Cafe Alpha Example City",
+                    "results": [{"title": "Cafe Alpha", "snippet": "Neighborhood cafe and bakery."}],
+                },
+            },
+            "linked_contacts": [],
+            "recent_events": [],
+            "recurrence": {"same_place_event_count": 0},
+        }
+
+    def fake_call(prompt: str, **_kwargs):
+        captured_prompts.append(json.loads(prompt))
+        return {
+            "suggested_title": "Cafe stop at Cafe Alpha",
+            "suggested_summary": "The stay lines up with a cafe visit based on venue context.",
+            "suggested_contact_ids": [],
+            "confidence": "medium",
+            "reason": "The place context explains the likely activity without prior history.",
+            "recurrence_hint": None,
+            "place_category": "cafe",
+            "place_summary": "Cafe Alpha appears to be a neighborhood cafe and bakery.",
+            "proposed_place_name": "Cafe Alpha",
+        }
+
+    monkeypatch.setattr(proposed_events, "_build_history_context", fake_context)
+    monkeypatch.setattr(proposed_events, "call_llm_json", fake_call)
+    candidate = {
+        "place_id": None,
+        "place_name": "Cafe Alpha",
+        "suggested_title": "Visited Cafe Alpha",
+        "suggested_summary": "Stayed around 45 minutes.",
+        "reason": "Location stay.",
+        "confidence": "medium",
+        "suggested_contact_ids": [],
+        "evidence": {},
+    }
+
+    result = proposed_events._enrich_candidate_with_history(
+        candidate,
+        segment=segment,
+        timezone_name="UTC",
+    )
+
+    assert result["suggested_title"] == "Cafe stop at Cafe Alpha"
+    assert result["evidence"]["place_intelligence"]["proposed_place_name"] == "Cafe Alpha"
+    assert captured_prompts[0]["place_context"]["web_search"]["results"][0]["snippet"] == "Neighborhood cafe and bakery."
+
+
+def test_place_description_append_preserves_existing_text(monkeypatch):
+    state = {"description": "User note: good pastries."}
+
+    class FakeCursor:
+        rowcount = 0
+
+        def execute(self, query, params):
+            if query.strip().startswith("SELECT"):
+                self._row = {"description": state["description"]}
+                return
+            state["description"] = params[0]
+            self.rowcount = 1
+
+        def fetchone(self):
+            return self._row
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+    class FakeConn:
+        def cursor(self):
+            return FakeCursor()
+
+        def commit(self):
+            return None
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+    monkeypatch.setattr(places, "get_conn", lambda: FakeConn())
+
+    assert places.append_place_description_note("place:cafe-alpha", "Cafe Alpha is a neighborhood cafe.") is True
+    assert state["description"] == "User note: good pastries.\n\nCafe Alpha is a neighborhood cafe."
+    assert places.append_place_description_note("place:cafe-alpha", "Cafe Alpha is a neighborhood cafe.") is False
