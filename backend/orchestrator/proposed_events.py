@@ -27,6 +27,7 @@ logger = get_runtime_logger(__name__)
 
 MIN_STAY_MINUTES = 15
 UNKNOWN_PLACE_MIN_STAY_MINUTES = 30
+PRE_SLEEP_ACTIVITY_MIN_MINUTES = 180
 PROPOSAL_TTL_DAYS = 7
 HISTORY_LOOKBACK_DAYS = 90
 MAX_HISTORY_EVENTS = 12
@@ -89,29 +90,31 @@ def analyze_user_day(
             skipped += 1
             skip_reasons[reason] = skip_reasons.get(reason, 0) + 1
             continue
-        if _find_blocking_overlapping_events(segment=segment, user_email=user_email):
-            skipped += 1
-            skip_reasons["overlapping_event"] = skip_reasons.get("overlapping_event", 0) + 1
-            continue
-        candidate = _build_candidate(
-            user_email=user_email,
-            segment=segment,
-            local_date=target_date,
-            timezone_name=getattr(tz, "key", "UTC"),
-            ignores=ignores,
-        )
-        if not candidate:
-            skipped += 1
-            reason = _segment_skip_reason(segment, ignores)
-            skip_reasons[reason] = skip_reasons.get(reason, 0) + 1
-            continue
-        proposal = _insert_proposal(candidate)
-        if proposal:
-            created += 1
-            proposals.append(proposal)
-        else:
-            skipped += 1
-            skip_reasons["duplicate_proposal"] = skip_reasons.get("duplicate_proposal", 0) + 1
+        candidate_segments = _proposal_candidate_segments(segment, timezone_name=getattr(tz, "key", "UTC"))
+        for candidate_segment in candidate_segments:
+            if _find_blocking_overlapping_events(segment=candidate_segment, user_email=user_email):
+                skipped += 1
+                skip_reasons["overlapping_event"] = skip_reasons.get("overlapping_event", 0) + 1
+                continue
+            candidate = _build_candidate(
+                user_email=user_email,
+                segment=candidate_segment,
+                local_date=target_date,
+                timezone_name=getattr(tz, "key", "UTC"),
+                ignores=ignores,
+            )
+            if not candidate:
+                skipped += 1
+                reason = _segment_skip_reason(candidate_segment, ignores)
+                skip_reasons[reason] = skip_reasons.get(reason, 0) + 1
+                continue
+            proposal = _insert_proposal(candidate)
+            if proposal:
+                created += 1
+                proposals.append(proposal)
+            else:
+                skipped += 1
+                skip_reasons["duplicate_proposal"] = skip_reasons.get("duplicate_proposal", 0) + 1
 
     result = {
         "created": created,
@@ -416,6 +419,62 @@ def describe_daily_scan_eligibility(
         "reason": "due" if due else "before_15_50_utc",
         "target_date": now.date().isoformat(),
     }
+
+
+def _proposal_candidate_segments(segment: StaySegment, *, timezone_name: str) -> list[StaySegment]:
+    split_at = _activity_sleep_split_at(segment, timezone_name=timezone_name)
+    if split_at is None:
+        return [segment]
+
+    candidate_segments: list[StaySegment] = []
+    activity_minutes = int((split_at - segment.start_at).total_seconds() // 60)
+    if activity_minutes >= PRE_SLEEP_ACTIVITY_MIN_MINUTES:
+        candidate_segments.append(_copy_segment_window(segment, start_at=segment.start_at, end_at=split_at))
+    sleep_segment = _copy_segment_window(segment, start_at=split_at, end_at=segment.end_at)
+    candidate_segments.append(sleep_segment)
+    return candidate_segments
+
+
+def _activity_sleep_split_at(segment: StaySegment, *, timezone_name: str) -> datetime | None:
+    tz = _resolve_timezone(timezone_name)
+    local_start = segment.start_at.astimezone(tz)
+    local_end = segment.end_at.astimezone(tz)
+    if local_start.date() == local_end.date():
+        return None
+    if not (4 <= local_end.hour <= 11):
+        return None
+    split_local = datetime.combine(local_start.date(), time(hour=22), tzinfo=tz)
+    split_at = split_local.astimezone(segment.start_at.tzinfo or timezone.utc)
+    if not (segment.start_at < split_at < segment.end_at):
+        return None
+
+    activity_minutes = int((split_at - segment.start_at).total_seconds() // 60)
+    sleep_minutes = int((segment.end_at - split_at).total_seconds() // 60)
+    if activity_minutes < MIN_STAY_MINUTES or sleep_minutes < 240:
+        return None
+    return split_at
+
+
+def _copy_segment_window(segment: StaySegment, *, start_at: datetime, end_at: datetime) -> StaySegment:
+    samples = [
+        sample
+        for sample in segment.samples
+        if start_at <= _parse_datetime(sample.get("captured_at")) <= end_at
+    ]
+    if not samples:
+        samples = segment.samples
+    return StaySegment(
+        start_at=start_at,
+        end_at=end_at,
+        samples=samples,
+        place_id=segment.place_id,
+        place_name=segment.place_name,
+        city=segment.city,
+        country=segment.country,
+        lat=segment.lat,
+        lon=segment.lon,
+        signature=segment.signature,
+    )
 
 
 def _build_candidate(
@@ -1597,10 +1656,17 @@ def _build_time_context(start_at: datetime, end_at: datetime, timezone_name: str
     duration_minutes = int((end_at - start_at).total_seconds() // 60)
     spans_midnight = local_start.date() != local_end.date()
     starts_evening_or_night = local_start.hour >= 20 or local_start.hour <= 4
+    starts_after_midnight = 0 <= local_start.hour <= 2
     ends_morning = 4 <= local_end.hour <= 11
-    likely_overnight_sleep = duration_minutes >= 240 and spans_midnight and starts_evening_or_night and ends_morning
+    day_window_clipped_overnight = duration_minutes >= 240 and starts_after_midnight and ends_morning
+    likely_overnight_sleep = duration_minutes >= 240 and ends_morning and (
+        (spans_midnight and starts_evening_or_night) or day_window_clipped_overnight
+    )
     if likely_overnight_sleep:
-        hint = "Because this spans the night into morning, treat it as an overnight stay or sleep unless other evidence says otherwise."
+        hint = (
+            "Because this covers the overnight sleep window into morning, treat it as an overnight stay "
+            "or sleep unless other evidence says otherwise."
+        )
     elif local_start.hour in {11, 12, 13, 14} and 30 <= duration_minutes <= 150:
         hint = "Midday timing and duration may fit lunch or a daytime visit when venue context supports it."
     elif local_start.hour in {18, 19, 20, 21} and 45 <= duration_minutes <= 240:
@@ -1612,6 +1678,7 @@ def _build_time_context(start_at: datetime, end_at: datetime, timezone_name: str
         "local_end": local_end.isoformat(),
         "duration_label": _humanize_duration_minutes(duration_minutes),
         "spans_midnight": spans_midnight,
+        "day_window_clipped_overnight": day_window_clipped_overnight,
         "likely_overnight_sleep": likely_overnight_sleep,
         "interpretation_hint": hint,
     }

@@ -205,6 +205,73 @@ def test_duration_humanization_and_overnight_context():
     assert context["likely_overnight_sleep"] is True
     assert "overnight stay or sleep" in context["interpretation_hint"]
 
+    clipped_start = datetime(2026, 6, 16, 0, 4, tzinfo=timezone.utc)
+    clipped_end = datetime(2026, 6, 16, 9, 42, tzinfo=timezone.utc)
+    clipped_context = proposed_events._build_time_context(clipped_start, clipped_end, "UTC")
+
+    assert clipped_context["spans_midnight"] is False
+    assert clipped_context["day_window_clipped_overnight"] is True
+    assert clipped_context["likely_overnight_sleep"] is True
+
+
+def test_long_afternoon_to_morning_stay_splits_activity_and_sleep():
+    start = datetime(2026, 6, 16, 16, 0, tzinfo=timezone.utc)
+    end = datetime(2026, 6, 17, 10, 0, tzinfo=timezone.utc)
+    segment = proposed_events.StaySegment(
+        start_at=start,
+        end_at=end,
+        samples=[
+            {"id": 1, "captured_at": start},
+            {"id": 2, "captured_at": datetime(2026, 6, 16, 22, 30, tzinfo=timezone.utc)},
+            {"id": 3, "captured_at": end},
+        ],
+        place_id=None,
+        place_name="Example Guesthouse",
+        city="Example City",
+        country="Example Country",
+        lat=1.0,
+        lon=2.0,
+        signature="name:example-guesthouse",
+    )
+
+    parts = proposed_events._proposal_candidate_segments(segment, timezone_name="UTC")
+
+    assert len(parts) == 2
+    assert parts[0].start_at == start
+    assert parts[0].end_at == datetime(2026, 6, 16, 22, 0, tzinfo=timezone.utc)
+    assert parts[1].start_at == datetime(2026, 6, 16, 22, 0, tzinfo=timezone.utc)
+    assert parts[1].end_at == end
+    assert proposed_events._build_time_context(parts[0].start_at, parts[0].end_at, "UTC")["likely_overnight_sleep"] is False
+    assert proposed_events._build_time_context(parts[1].start_at, parts[1].end_at, "UTC")["likely_overnight_sleep"] is True
+
+
+def test_short_pre_sleep_arrival_only_creates_sleep_candidate():
+    start = datetime(2026, 6, 16, 21, 0, tzinfo=timezone.utc)
+    end = datetime(2026, 6, 17, 10, 0, tzinfo=timezone.utc)
+    segment = proposed_events.StaySegment(
+        start_at=start,
+        end_at=end,
+        samples=[
+            {"id": 1, "captured_at": start},
+            {"id": 2, "captured_at": datetime(2026, 6, 16, 22, 30, tzinfo=timezone.utc)},
+            {"id": 3, "captured_at": end},
+        ],
+        place_id=None,
+        place_name="Example Guesthouse",
+        city="Example City",
+        country="Example Country",
+        lat=1.0,
+        lon=2.0,
+        signature="name:example-guesthouse",
+    )
+
+    parts = proposed_events._proposal_candidate_segments(segment, timezone_name="UTC")
+
+    assert len(parts) == 1
+    assert parts[0].start_at == datetime(2026, 6, 16, 22, 0, tzinfo=timezone.utc)
+    assert parts[0].end_at == end
+    assert proposed_events._build_time_context(parts[0].start_at, parts[0].end_at, "UTC")["likely_overnight_sleep"] is True
+
 
 def test_enrichment_prompt_includes_place_context():
     candidate = {
