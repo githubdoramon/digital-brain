@@ -849,7 +849,9 @@ def create_chat_router() -> APIRouter:
 
         from commands.storage import get_pending_event
 
-        pending_event_id = get_pending_event(event_pending_key(user_email, thread_id))
+        pending_event_id = get_pending_event(
+            event_pending_key(user_email, thread_id)
+        ) or conversations.get_active_command_preview_id(thread_id, user_email)
 
         return MainSessionOut(
             thread_id=thread_id,
@@ -881,6 +883,10 @@ def create_chat_router() -> APIRouter:
             **{
                 **{k: v for k, v in thread.items() if k != "messages"},
                 "messages": thread.get("messages", []),
+                "pending_event_id": conversations.get_active_command_preview_id(
+                    thread_id,
+                    user_email,
+                ),
             }
         )
 

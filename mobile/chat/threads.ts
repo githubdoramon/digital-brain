@@ -41,6 +41,7 @@ export type ThreadSummary = {
 };
 
 export type ThreadDetail = ThreadSummary & {
+  pending_event_id?: string | null;
   messages: ThreadMessage[];
 };
 
@@ -133,7 +134,7 @@ export async function loadThreadHistory(token: string, threadId: string): Promis
 
   return {
     threadId: thread.id,
-    pendingEventId: null,
+    pendingEventId: thread.pending_event_id ?? null,
     messages: (thread.messages || []).map(mapThreadMessage),
   };
 }

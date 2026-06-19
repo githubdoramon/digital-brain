@@ -143,7 +143,8 @@ Interpretation hints:
 CRITICAL RULES:
 - Choose ONLY from the candidates above or say \"cannot_decide\".
 - Do NOT invent a person, candidate, or extra fields.
-- If there is a perfect match, return decision=\"resolved\" and the candidate number.
+- If there is a perfect match, return decision=\"resolved\" and the candidate number of the correct candidate from the numbered list.
+- If the user clarified a full or partial candidate name, choose that candidate and return its candidate_number.
 - If context is not enough, return decision=\"cannot_decide\".
 - Set \"new_contact\" to true ONLY when you are certain the mention refers to a new contact not present in candidates.
 

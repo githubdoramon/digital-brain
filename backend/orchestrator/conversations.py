@@ -249,6 +249,109 @@ def get_latest_assistant_metadata(thread_id: str, user_email: str) -> dict[str, 
     return normalized or None
 
 
+def get_active_command_preview_id(thread_id: str, user_email: str) -> str | None:
+    """Return the latest unresolved slash-command preview/clarification id.
+
+    Command preview payloads are persisted on assistant message metadata, while
+    the execution cache is best-effort and process-local. This helper lets
+    clients recover the active draft after app/server restarts from the durable
+    conversation record.
+    """
+    if not thread_id or not user_email:
+        return None
+
+    with get_conn() as conn, conn.cursor(row_factory=dict_row) as cur:
+        cur.execute(
+            """
+            SELECT m.metadata
+            FROM conversation_messages m
+            JOIN conversation_threads t ON t.id = m.thread_id
+            WHERE m.thread_id = %s
+              AND t.user_email = %s
+              AND m.role = 'assistant'
+            ORDER BY m.created_at DESC, m.message_id DESC
+            LIMIT 20
+            """,
+            (thread_id, user_email),
+        )
+        rows = cur.fetchall()
+
+    for row in rows:
+        metadata = _normalize_command_resolved_metadata(row.get("metadata"))
+        if not isinstance(metadata, dict):
+            continue
+        if metadata.get("command_resolved"):
+            continue
+        command_result = metadata.get("command_result")
+        if not isinstance(command_result, dict):
+            continue
+
+        result_type = str(command_result.get("type") or "").strip()
+        if result_type in {"event_confirmation", "contact_confirmation"}:
+            preview_id = str(command_result.get("preview_id") or "").strip()
+            if preview_id:
+                return preview_id
+        if result_type == "need_user_input":
+            clarification_id = str(command_result.get("clarification_id") or "").strip()
+            if clarification_id:
+                return clarification_id
+
+    return None
+
+
+def get_command_exchange_from_metadata(
+    preview_id: str,
+    user_email: str,
+) -> dict[str, Any] | None:
+    """Load a persisted command exchange by preview/clarification id."""
+    if not preview_id or not user_email:
+        return None
+
+    with get_conn() as conn, conn.cursor(row_factory=dict_row) as cur:
+        cur.execute(
+            """
+            SELECT
+                m.thread_id,
+                m.message_id AS assistant_message_id,
+                m.metadata AS assistant_metadata,
+                (
+                    SELECT u.content
+                    FROM conversation_messages u
+                    WHERE u.thread_id = m.thread_id
+                      AND u.role = 'user'
+                      AND (
+                          u.created_at < m.created_at
+                          OR (u.created_at = m.created_at AND u.message_id < m.message_id)
+                      )
+                    ORDER BY u.created_at DESC, u.message_id DESC
+                    LIMIT 1
+                ) AS user_message
+            FROM conversation_messages m
+            JOIN conversation_threads t ON t.id = m.thread_id
+            WHERE t.user_email = %s
+              AND m.role = 'assistant'
+              AND (
+                  m.metadata -> 'command_result' ->> 'preview_id' = %s
+                  OR m.metadata -> 'command_result' ->> 'clarification_id' = %s
+              )
+            ORDER BY m.created_at DESC, m.message_id DESC
+            LIMIT 1
+            """,
+            (user_email, preview_id, preview_id),
+        )
+        row = cur.fetchone()
+
+    if not row:
+        return None
+    metadata = _normalize_command_resolved_metadata(row.get("assistant_metadata"))
+    return {
+        "thread_id": row.get("thread_id"),
+        "assistant_message_id": row.get("assistant_message_id"),
+        "assistant_metadata": metadata,
+        "user_message": row.get("user_message"),
+    }
+
+
 def record_exchange(
     thread_id: str,
     user_email: str,

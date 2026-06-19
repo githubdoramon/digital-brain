@@ -16,6 +16,79 @@ from commands.storage import (
 )
 
 
+def test_event_command_data_falls_back_to_persisted_confirmation(monkeypatch):
+    monkeypatch.setattr("commands.event.get_command_data", lambda _preview_id: None)
+    monkeypatch.setattr(
+        "commands.event.conversations.get_command_exchange_from_metadata",
+        lambda preview_id, user_email: {
+            "thread_id": "thread-123",
+            "assistant_metadata": {
+                "command_result": {
+                    "type": "event_confirmation",
+                    "preview_id": preview_id,
+                    "extracted": {
+                        "title": "Project check-in",
+                        "summary": "Discussed the roadmap.",
+                        "when": "2026-06-01T10:00:00+00:00",
+                    },
+                    "resolution": {"contacts": [], "new_entities": {"contacts": []}},
+                    "relationship_suggestions": [],
+                    "operation": "create",
+                },
+            },
+            "user_message": "/event project check-in",
+        },
+    )
+
+    restored = event_command._get_event_command_data(
+        "event:preview:abc12345",
+        "user@example.com",
+    )
+
+    assert restored is not None
+    assert restored["thread_id"] == "thread-123"
+    assert restored["original_message"] == "/event project check-in"
+    assert restored["extracted"]["title"] == "Project check-in"
+
+
+def test_event_command_data_falls_back_to_persisted_clarification_state(monkeypatch):
+    command_state = {
+        "command_name": "event",
+        "original_message": "Project check-in",
+        "thread_id": "thread-123",
+        "extracted": {"title": "Project check-in"},
+        "resolution": {"contacts": []},
+        "clarification_messages": [{"role": "assistant", "content": "When was it?"}],
+    }
+
+    monkeypatch.setattr("commands.event.get_command_data", lambda _preview_id: None)
+    monkeypatch.setattr(
+        "commands.event.conversations.get_command_exchange_from_metadata",
+        lambda _preview_id, _user_email: {
+            "thread_id": "thread-123",
+            "assistant_metadata": {
+                "command_result": {
+                    "type": "need_user_input",
+                    "clarification_id": "event:clarification:abc12345",
+                    "command_state": command_state,
+                },
+            },
+            "user_message": "/event project check-in",
+        },
+    )
+
+    restored = event_command._get_event_command_data(
+        "event:clarification:abc12345",
+        "user@example.com",
+    )
+
+    assert restored is not None
+    assert restored["thread_id"] == command_state["thread_id"]
+    assert restored["original_message"] == command_state["original_message"]
+    assert restored["extracted"] == command_state["extracted"]
+    assert restored["user_email"] == "user@example.com"
+
+
 def test_handle_event_sets_pending_key_for_clarification(monkeypatch):
     pending_key = "user@example.com:thread-123"
 

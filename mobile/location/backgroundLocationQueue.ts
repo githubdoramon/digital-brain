@@ -11,6 +11,7 @@ import { getLocationRuntimeState } from '@/location/runtimeState';
 
 const BACKGROUND_LOCATION_QUEUE_KEY = 'digitalbrain.backgroundLocationQueue';
 const MAX_QUEUED_BACKGROUND_LOCATIONS = 200;
+const MAX_BACKGROUND_LOCATION_UPLOADS_PER_DRAIN = 50;
 const BACKGROUND_LOCATION_UPLOAD_TIMEOUT_MS = 15_000;
 
 let drainInFlight: Promise<{
@@ -44,7 +45,7 @@ export type QueuedBackgroundLocationEntry = {
   lastAttemptAt?: string;
 };
 
-export type DrainTrigger = 'location_task' | 'background_task_worker' | 'manual';
+export type DrainTrigger = 'background_task_worker' | 'manual';
 
 let pendingDrainTrigger: DrainTrigger | null = null;
 
@@ -128,7 +129,9 @@ async function mutateQueue<T>(
   return result;
 }
 
-export async function enqueueBackgroundLocationEntry(entry: QueuedBackgroundLocationEntry): Promise<void> {
+export async function enqueueBackgroundLocationEntry(
+  entry: QueuedBackgroundLocationEntry,
+): Promise<void> {
   const outcome = await mutateQueue((queue) => {
     if (queue.some((item) => item.id === entry.id)) {
       return {
@@ -192,6 +195,7 @@ async function drainQueuedBackgroundLocationsInner(trigger: DrainTrigger): Promi
       queue_size: initialQueueSize,
       app_state: runtimeState.appState,
       will_attempt_request: initialQueueSize > 0,
+      max_uploads_per_drain: MAX_BACKGROUND_LOCATION_UPLOADS_PER_DRAIN,
     },
     recordInHistory: false,
   });
@@ -219,7 +223,10 @@ async function drainQueuedBackgroundLocationsInner(trigger: DrainTrigger): Promi
   }
 
   let drainedCount = 0;
-  for (const entry of [...queue].sort((first, second) => first.capturedAtMs - second.capturedAtMs)) {
+  const drainBatch = [...queue]
+    .sort((first, second) => first.capturedAtMs - second.capturedAtMs)
+    .slice(0, MAX_BACKGROUND_LOCATION_UPLOADS_PER_DRAIN);
+  for (const entry of drainBatch) {
     const currentRuntimeState = getLocationRuntimeState();
     reportLocationDebugEvent('background_sync_attempt', {
       payload: {
@@ -238,6 +245,7 @@ async function drainQueuedBackgroundLocationsInner(trigger: DrainTrigger): Promi
         captured_at: entry.capturedAt,
         queue_trigger: trigger,
         queue_size: queue.length,
+        max_uploads_per_drain: MAX_BACKGROUND_LOCATION_UPLOADS_PER_DRAIN,
         attempt_count: entry.attemptCount,
         api_base_url: API_BASE_URL,
         request_url: `${API_BASE_URL}/mobile/location`,
@@ -384,6 +392,7 @@ async function drainQueuedBackgroundLocationsInner(trigger: DrainTrigger): Promi
       initial_queue_size: initialQueueSize,
       drained_count: drainedCount,
       remaining_queue_size: queue.length,
+      max_uploads_per_drain: MAX_BACKGROUND_LOCATION_UPLOADS_PER_DRAIN,
       app_state: getLocationRuntimeState().appState,
     },
     recordInHistory: false,

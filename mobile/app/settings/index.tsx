@@ -5,14 +5,7 @@ import * as FileSystem from 'expo-file-system/legacy';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
 import React from 'react';
-import {
-  Animated,
-  Platform,
-  Share,
-  StyleSheet,
-  Text,
-  View,
-} from 'react-native';
+import { Animated, Platform, Share, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { useAuth } from '@/auth/AuthContext';
@@ -103,19 +96,40 @@ function LocationDebugEventRow({ event }: { event: LocationDebugEvent }) {
       <Text style={styles.debugEventMeta}>
         Successes before failure: {event.successCountSincePreviousFailure ?? 0}
       </Text>
-      <Text style={styles.debugEventMeta}>Captured at: {formatBuildTimestamp(getPayloadString(event.payload, 'captured_at'))}</Text>
       <Text style={styles.debugEventMeta}>
-        Batch window: {formatBuildTimestamp(getPayloadString(event.payload, 'batch_first_captured_at'))} - {formatBuildTimestamp(getPayloadString(event.payload, 'batch_last_captured_at'))}
+        Captured at: {formatBuildTimestamp(getPayloadString(event.payload, 'captured_at'))}
       </Text>
-      <Text style={styles.debugEventMeta}>Request URL: {getPayloadString(event.payload, 'request_url')}</Text>
+      <Text style={styles.debugEventMeta}>
+        Batch window:{' '}
+        {formatBuildTimestamp(getPayloadString(event.payload, 'batch_first_captured_at'))} -{' '}
+        {formatBuildTimestamp(getPayloadString(event.payload, 'batch_last_captured_at'))}
+      </Text>
+      <Text style={styles.debugEventMeta}>
+        Request URL: {getPayloadString(event.payload, 'request_url')}
+      </Text>
       <Text style={styles.debugEventMeta}>Status: {getPayloadNumber(event.payload, 'status')}</Text>
-      <Text style={styles.debugEventMeta}>Content-Type: {getPayloadString(event.payload, 'content_type')}</Text>
-      <Text style={styles.debugEventMeta}>App state: {getPayloadString(event.payload, 'app_state')}</Text>
-      <Text style={styles.debugEventMeta}>Token present: {getPayloadBoolean(event.payload, 'token_present')}</Text>
-      <Text style={styles.debugEventMeta}>Token fingerprint: {getPayloadString(event.payload, 'token_fingerprint')}</Text>
-      <Text style={styles.debugEventMeta}>Token expires at: {formatBuildTimestamp(getPayloadString(event.payload, 'token_expires_at'))}</Text>
-      <Text style={styles.debugEventMeta}>Token expires in: {getPayloadNumber(event.payload, 'token_expires_in_seconds')}</Text>
-      <Text style={styles.debugEventMeta}>Token expired: {getPayloadBoolean(event.payload, 'token_is_expired')}</Text>
+      <Text style={styles.debugEventMeta}>
+        Content-Type: {getPayloadString(event.payload, 'content_type')}
+      </Text>
+      <Text style={styles.debugEventMeta}>
+        App state: {getPayloadString(event.payload, 'app_state')}
+      </Text>
+      <Text style={styles.debugEventMeta}>
+        Token present: {getPayloadBoolean(event.payload, 'token_present')}
+      </Text>
+      <Text style={styles.debugEventMeta}>
+        Token fingerprint: {getPayloadString(event.payload, 'token_fingerprint')}
+      </Text>
+      <Text style={styles.debugEventMeta}>
+        Token expires at:{' '}
+        {formatBuildTimestamp(getPayloadString(event.payload, 'token_expires_at'))}
+      </Text>
+      <Text style={styles.debugEventMeta}>
+        Token expires in: {getPayloadNumber(event.payload, 'token_expires_in_seconds')}
+      </Text>
+      <Text style={styles.debugEventMeta}>
+        Token expired: {getPayloadBoolean(event.payload, 'token_is_expired')}
+      </Text>
       <Text style={styles.debugEventMeta}>Message: {event.message ?? 'none'}</Text>
       <Text style={styles.debugEventMeta}>Error: {event.error ?? 'none'}</Text>
       <Text style={styles.debugEventPayload}>Payload: {formatDebugPayload(event.payload)}</Text>
@@ -136,14 +150,21 @@ export default function SettingsScreen() {
   const [locationDebug, setLocationDebug] = React.useState<LocationDebugSnapshot>(() =>
     getLocationDebugSnapshot(),
   );
-  const [backgroundStatus, setBackgroundStatus] = React.useState<BackgroundLocationDebugStatus | null>(null);
+  const [backgroundStatus, setBackgroundStatus] =
+    React.useState<BackgroundLocationDebugStatus | null>(null);
   const [isRefreshingLocationDebug, setIsRefreshingLocationDebug] = React.useState(false);
   const [isExportingLocationDebug, setIsExportingLocationDebug] = React.useState(false);
-  const [locationDebugLogInfo, setLocationDebugLogInfo] = React.useState<{ exists: boolean; sizeBytes: number }>({
+  const [locationDebugLogInfo, setLocationDebugLogInfo] = React.useState<{
+    exists: boolean;
+    sizeBytes: number;
+  }>({
     exists: false,
     sizeBytes: 0,
   });
-  const [eventPhotoDebugInfo, setEventPhotoDebugInfo] = React.useState<{ exists: boolean; sizeBytes: number }>({
+  const [eventPhotoDebugInfo, setEventPhotoDebugInfo] = React.useState<{
+    exists: boolean;
+    sizeBytes: number;
+  }>({
     exists: false,
     sizeBytes: 0,
   });
@@ -163,7 +184,8 @@ export default function SettingsScreen() {
   });
   const [isExportingVoiceDebugLog, setIsExportingVoiceDebugLog] = React.useState(false);
   const [isExportingVoiceDebugAudio, setIsExportingVoiceDebugAudio] = React.useState(false);
-  const appVersion = Application.nativeApplicationVersion ?? Constants.expoConfig?.version ?? 'Unknown';
+  const appVersion =
+    Application.nativeApplicationVersion ?? Constants.expoConfig?.version ?? 'Unknown';
   const buildNumber = Application.nativeBuildVersion ?? 'Unknown';
   const buildTimestamp = formatBuildTimestamp(
     (Constants.expoConfig?.extra as { buildTimestamp?: string } | undefined)?.buildTimestamp,
@@ -191,7 +213,10 @@ export default function SettingsScreen() {
     return unsubscribe;
   }, [refreshLocationDebug]);
 
-  const backgroundEvents = React.useMemo(() => getRelevantBackgroundEvents(locationDebug), [locationDebug]);
+  const backgroundEvents = React.useMemo(
+    () => getRelevantBackgroundEvents(locationDebug),
+    [locationDebug],
+  );
   const lastBackgroundEvent = backgroundEvents[0] ?? null;
   const backgroundFailures = React.useMemo(
     () => (locationDebug.recentFailures ?? []).filter(isBackgroundRelevantLocationEvent),
@@ -201,6 +226,7 @@ export default function SettingsScreen() {
   const exportLocationDebug = React.useCallback(async () => {
     setIsExportingLocationDebug(true);
     try {
+      await getBackgroundLocationDebugStatus();
       const currentSnapshot = await hydrateLocationDebugSnapshot();
       const logText =
         (await readLocationDebugLogText({ backgroundOnly: true })) ||
@@ -214,7 +240,8 @@ export default function SettingsScreen() {
 
       if (Platform.OS === 'android') {
         const initialUri = StorageAccessFramework.getUriForDirectoryInRoot('Download');
-        const permission = await StorageAccessFramework.requestDirectoryPermissionsAsync(initialUri);
+        const permission =
+          await StorageAccessFramework.requestDirectoryPermissionsAsync(initialUri);
         if (!permission.granted || !permission.directoryUri) {
           throw new Error('Downloads access not granted.');
         }
@@ -242,7 +269,8 @@ export default function SettingsScreen() {
       });
       setLocationDebugLogInfo(await getLocationDebugLogInfo());
     } catch (error) {
-      const message = error instanceof Error ? error.message : 'Failed to export background location debug log.';
+      const message =
+        error instanceof Error ? error.message : 'Failed to export background location debug log.';
       showError(message);
     } finally {
       setIsExportingLocationDebug(false);
@@ -266,7 +294,8 @@ export default function SettingsScreen() {
       let exported = false;
       if (Platform.OS === 'android') {
         const initialUri = StorageAccessFramework.getUriForDirectoryInRoot('Download');
-        const permission = await StorageAccessFramework.requestDirectoryPermissionsAsync(initialUri);
+        const permission =
+          await StorageAccessFramework.requestDirectoryPermissionsAsync(initialUri);
         if (!permission.granted || !permission.directoryUri) {
           throw new Error('Downloads access not granted.');
         }
@@ -301,7 +330,8 @@ export default function SettingsScreen() {
         setEventPhotoDebugInfo(await getEventPhotoDebugLogInfo());
       }
     } catch (error) {
-      const message = error instanceof Error ? error.message : 'Failed to export event photo debug log.';
+      const message =
+        error instanceof Error ? error.message : 'Failed to export event photo debug log.';
       showError(message);
     } finally {
       setIsExportingEventPhotoDebug(false);
@@ -325,7 +355,8 @@ export default function SettingsScreen() {
       let exported = false;
       if (Platform.OS === 'android') {
         const initialUri = StorageAccessFramework.getUriForDirectoryInRoot('Download');
-        const permission = await StorageAccessFramework.requestDirectoryPermissionsAsync(initialUri);
+        const permission =
+          await StorageAccessFramework.requestDirectoryPermissionsAsync(initialUri);
         if (!permission.granted || !permission.directoryUri) {
           throw new Error('Downloads access not granted.');
         }
@@ -359,7 +390,8 @@ export default function SettingsScreen() {
         setVoiceDebugInfo(await getVoiceTranscriptionDebugInfo());
       }
     } catch (error) {
-      const message = error instanceof Error ? error.message : 'Failed to export voice transcription debug log.';
+      const message =
+        error instanceof Error ? error.message : 'Failed to export voice transcription debug log.';
       showError(message);
     } finally {
       setIsExportingVoiceDebugLog(false);
@@ -380,7 +412,8 @@ export default function SettingsScreen() {
 
       if (Platform.OS === 'android') {
         const initialUri = StorageAccessFramework.getUriForDirectoryInRoot('Download');
-        const permission = await StorageAccessFramework.requestDirectoryPermissionsAsync(initialUri);
+        const permission =
+          await StorageAccessFramework.requestDirectoryPermissionsAsync(initialUri);
         if (!permission.granted || !permission.directoryUri) {
           throw new Error('Downloads access not granted.');
         }
@@ -421,16 +454,16 @@ export default function SettingsScreen() {
       setVoiceDebugInfo(await getVoiceTranscriptionDebugInfo());
       showSuccess('Cleared voice transcription debug artifacts.');
     } catch (error) {
-      const message = error instanceof Error ? error.message : 'Failed to clear voice transcription debug artifacts.';
+      const message =
+        error instanceof Error
+          ? error.message
+          : 'Failed to clear voice transcription debug artifacts.';
       showError(message);
     }
   }, [showError, showSuccess]);
 
   return (
-    <LinearGradient
-      colors={theme.gradients.sunrise}
-      style={styles.container}
-    >
+    <LinearGradient colors={theme.gradients.sunrise} style={styles.container}>
       <Animated.ScrollView
         onScroll={Animated.event([{ nativeEvent: { contentOffset: { y: scrollY } } }], {
           useNativeDriver: false,
@@ -464,49 +497,38 @@ export default function SettingsScreen() {
         </Card>
 
         <Card style={[styles.card, styles.navCard]}>
-          <Pressable
-            style={styles.navRow}
-            onPress={() => router.push('/settings/notifications')}
-          >
+          <Pressable style={styles.navRow} onPress={() => router.push('/settings/notifications')}>
             <View style={styles.textBlock}>
               <Text style={styles.rowTitle}>Notifications</Text>
+              <Text style={styles.rowSubtitle}>Choose alerts per type and delivery channel.</Text>
+            </View>
+            <Ionicons name="chevron-forward" size={20} color={theme.colors.mutedInk} />
+          </Pressable>
+        </Card>
+
+        <Card style={[styles.card, styles.navCard]}>
+          <Pressable style={styles.navRow} onPress={() => router.push('/settings/about-me')}>
+            <View style={styles.textBlock}>
+              <Text style={styles.rowTitle}>About me</Text>
               <Text style={styles.rowSubtitle}>
-                Choose alerts per type and delivery channel.
+                View and manage what your Brain has learned about you.
               </Text>
             </View>
             <Ionicons name="chevron-forward" size={20} color={theme.colors.mutedInk} />
           </Pressable>
         </Card>
 
-      <Card style={[styles.card, styles.navCard]}>
-        <Pressable
-          style={styles.navRow}
-          onPress={() => router.push('/settings/about-me')}
-        >
-          <View style={styles.textBlock}>
-            <Text style={styles.rowTitle}>About me</Text>
-            <Text style={styles.rowSubtitle}>
-              View and manage what your Brain has learned about you.
-            </Text>
-          </View>
-          <Ionicons name="chevron-forward" size={20} color={theme.colors.mutedInk} />
-        </Pressable>
-      </Card>
-
-      <Card style={[styles.card, styles.navCard]}>
-        <Pressable
-          style={styles.navRow}
-          onPress={() => router.push('/settings/news-topics')}
-        >
-          <View style={styles.textBlock}>
-            <Text style={styles.rowTitle}>News topics</Text>
-            <Text style={styles.rowSubtitle}>
-              Manage tracked topics for your daily briefing news feed.
-            </Text>
-          </View>
-          <Ionicons name="chevron-forward" size={20} color={theme.colors.mutedInk} />
-        </Pressable>
-      </Card>
+        <Card style={[styles.card, styles.navCard]}>
+          <Pressable style={styles.navRow} onPress={() => router.push('/settings/news-topics')}>
+            <View style={styles.textBlock}>
+              <Text style={styles.rowTitle}>News topics</Text>
+              <Text style={styles.rowSubtitle}>
+                Manage tracked topics for your daily briefing news feed.
+              </Text>
+            </View>
+            <Ionicons name="chevron-forward" size={20} color={theme.colors.mutedInk} />
+          </Pressable>
+        </Card>
 
         <Card style={[styles.card, styles.versionCard]}>
           <Text style={styles.versionLabel}>App version</Text>
@@ -517,10 +539,18 @@ export default function SettingsScreen() {
 
         <Card style={[styles.card, styles.versionCard]}>
           <Text style={styles.versionLabel}>Voice transcription debug</Text>
-          <Text style={styles.versionValue}>Log file present: {voiceDebugInfo.logExists ? 'yes' : 'no'}</Text>
-          <Text style={styles.versionValue}>Log file size: {voiceDebugInfo.logSizeBytes} bytes</Text>
-          <Text style={styles.versionValue}>Audio sample present: {voiceDebugInfo.audioExists ? 'yes' : 'no'}</Text>
-          <Text style={styles.versionValue}>Audio sample size: {voiceDebugInfo.audioSizeBytes} bytes</Text>
+          <Text style={styles.versionValue}>
+            Log file present: {voiceDebugInfo.logExists ? 'yes' : 'no'}
+          </Text>
+          <Text style={styles.versionValue}>
+            Log file size: {voiceDebugInfo.logSizeBytes} bytes
+          </Text>
+          <Text style={styles.versionValue}>
+            Audio sample present: {voiceDebugInfo.audioExists ? 'yes' : 'no'}
+          </Text>
+          <Text style={styles.versionValue}>
+            Audio sample size: {voiceDebugInfo.audioSizeBytes} bytes
+          </Text>
           <Button
             label={isExportingVoiceDebugLog ? 'Exporting...' : 'Download voice debug log'}
             onPress={() => {
@@ -552,8 +582,12 @@ export default function SettingsScreen() {
 
         <Card style={[styles.card, styles.versionCard]}>
           <Text style={styles.versionLabel}>Event photo debug</Text>
-          <Text style={styles.versionValue}>Log file present: {eventPhotoDebugInfo.exists ? 'yes' : 'no'}</Text>
-          <Text style={styles.versionValue}>Log file size: {eventPhotoDebugInfo.sizeBytes} bytes</Text>
+          <Text style={styles.versionValue}>
+            Log file present: {eventPhotoDebugInfo.exists ? 'yes' : 'no'}
+          </Text>
+          <Text style={styles.versionValue}>
+            Log file size: {eventPhotoDebugInfo.sizeBytes} bytes
+          </Text>
           <Button
             label={isExportingEventPhotoDebug ? 'Exporting...' : 'Download event photo debug'}
             onPress={() => {
@@ -567,50 +601,171 @@ export default function SettingsScreen() {
 
         <Card style={[styles.card, styles.versionCard]}>
           <Text style={styles.versionLabel}>Background location sync</Text>
-          <Text style={styles.versionValue}>Location mode: {backgroundStatus?.locationMode ?? 'unknown'}</Text>
-          <Text style={styles.versionValue}>Capture distance interval: {backgroundStatus?.configuredDistanceIntervalMeters ?? 'unknown'}m</Text>
-          <Text style={styles.versionValue}>Capture time interval: {backgroundStatus?.configuredTimeIntervalMs ?? 'unknown'}ms</Text>
-          <Text style={styles.versionValue}>Foreground permission: {backgroundStatus?.foregroundPermission ?? 'unknown'}</Text>
-          <Text style={styles.versionValue}>Background permission: {backgroundStatus?.backgroundPermission ?? 'unknown'}</Text>
-          <Text style={styles.versionValue}>Location services enabled: {backgroundStatus?.locationServicesEnabled == null ? 'unknown' : backgroundStatus.locationServicesEnabled ? 'yes' : 'no'}</Text>
-          <Text style={styles.versionValue}>Background location available: {backgroundStatus?.backgroundLocationAvailable == null ? 'unknown' : backgroundStatus.backgroundLocationAvailable ? 'yes' : 'no'}</Text>
-          <Text style={styles.versionValue}>TaskManager available: {backgroundStatus?.taskManagerAvailable == null ? 'unknown' : backgroundStatus.taskManagerAvailable ? 'yes' : 'no'}</Text>
-          <Text style={styles.versionValue}>Background task defined: {backgroundStatus?.taskDefined ? 'yes' : 'no'}</Text>
-          <Text style={styles.versionValue}>Continuous location task started: {backgroundStatus?.taskStarted ? 'yes' : 'no'}</Text>
-          <Text style={styles.versionValue}>Scheduled drain task defined: {backgroundStatus?.drainTaskDefined ? 'yes' : 'no'}</Text>
-          <Text style={styles.versionValue}>Scheduled drain task registered: {backgroundStatus?.drainTaskRegistered ? 'yes' : 'no'}</Text>
-          <Text style={styles.versionValue}>Background worker status: {backgroundStatus?.backgroundTaskStatus ?? 'unknown'}</Text>
-          <Text style={styles.versionValue}>Provider status: {formatDebugPayload(backgroundStatus?.providerStatus ?? undefined)}</Text>
-          <Text style={styles.versionValue}>Registered tasks: {formatDebugPayload(backgroundStatus?.registeredTasks ?? undefined)}</Text>
-          <Text style={styles.versionValue}>Location task options: {formatDebugPayload(backgroundStatus?.locationTaskOptions ?? undefined)}</Text>
-          <Text style={styles.versionValue}>Queued background locations: {backgroundStatus?.queuedLocationCount ?? 0}</Text>
-          <Text style={styles.versionValue}>Oldest queued capture: {formatBuildTimestamp(backgroundStatus?.oldestQueuedCapturedAt)}</Text>
-          <Text style={styles.versionValue}>Newest queued capture: {formatBuildTimestamp(backgroundStatus?.newestQueuedCapturedAt)}</Text>
-          <Text style={styles.versionValue}>Background log file: {locationDebugLogInfo.exists ? 'yes' : 'no'}</Text>
-          <Text style={styles.versionValue}>Background log size: {locationDebugLogInfo.sizeBytes} bytes</Text>
-          <Text style={styles.versionValue}>Background event count: {backgroundEvents.length}</Text>
-          <Text style={styles.versionValue}>Last background event: {lastBackgroundEvent?.eventName ?? 'none'}</Text>
-          <Text style={styles.versionValue}>Last background event at: {formatBuildTimestamp(lastBackgroundEvent?.at)}</Text>
-          <Text style={styles.versionValue}>Last background message: {lastBackgroundEvent?.message ?? 'none'}</Text>
-          <Text style={styles.versionValue}>Last background error: {lastBackgroundEvent?.error ?? 'none'}</Text>
-          <Text style={styles.versionValue}>Last captured at: {formatBuildTimestamp(getPayloadString(lastBackgroundEvent?.payload, 'captured_at'))}</Text>
           <Text style={styles.versionValue}>
-            Last batch window: {formatBuildTimestamp(getPayloadString(lastBackgroundEvent?.payload, 'batch_first_captured_at'))} - {formatBuildTimestamp(getPayloadString(lastBackgroundEvent?.payload, 'batch_last_captured_at'))}
+            Location mode: {backgroundStatus?.locationMode ?? 'unknown'}
           </Text>
-          <Text style={styles.versionValue}>Last request URL: {getPayloadString(lastBackgroundEvent?.payload, 'request_url')}</Text>
-          <Text style={styles.versionValue}>Last status: {getPayloadNumber(lastBackgroundEvent?.payload, 'status')}</Text>
-          <Text style={styles.versionValue}>Last content type: {getPayloadString(lastBackgroundEvent?.payload, 'content_type')}</Text>
-          <Text style={styles.versionValue}>Last app state: {getPayloadString(lastBackgroundEvent?.payload, 'app_state')}</Text>
-          <Text style={styles.versionValue}>Last duration: {getPayloadNumber(lastBackgroundEvent?.payload, 'request_duration_ms')} ms</Text>
-          <Text style={styles.versionValue}>Last token present: {getPayloadBoolean(lastBackgroundEvent?.payload, 'token_present')}</Text>
-          <Text style={styles.versionValue}>Last token fingerprint: {getPayloadString(lastBackgroundEvent?.payload, 'token_fingerprint')}</Text>
-          <Text style={styles.versionValue}>Last token expires at: {formatBuildTimestamp(getPayloadString(lastBackgroundEvent?.payload, 'token_expires_at'))}</Text>
-          <Text style={styles.versionValue}>Last token expires in: {getPayloadNumber(lastBackgroundEvent?.payload, 'token_expires_in_seconds')}</Text>
-          <Text style={styles.versionValue}>Last token expired: {getPayloadBoolean(lastBackgroundEvent?.payload, 'token_is_expired')}</Text>
-          <Text style={styles.versionValue}>Last sample count: {getPayloadNumber(lastBackgroundEvent?.payload, 'sample_count')}</Text>
-          <Text style={styles.versionValue}>Last payload: {formatDebugPayload(lastBackgroundEvent?.payload)}</Text>
-          <Text style={styles.versionValue}>Last success at: {formatBuildTimestamp(locationDebug.lastSuccessAt)}</Text>
-          <Text style={styles.versionValue}>Total successes: {locationDebug.totalSuccessCount ?? 0}</Text>
+          <Text style={styles.versionValue}>
+            Android capture mode: {backgroundStatus?.androidCaptureMode ?? 'unknown'}
+          </Text>
+          <Text style={styles.versionValue}>
+            Capture distance interval:{' '}
+            {backgroundStatus?.configuredDistanceIntervalMeters ?? 'unknown'}m
+          </Text>
+          <Text style={styles.versionValue}>
+            Capture time interval: {backgroundStatus?.configuredTimeIntervalMs ?? 'unknown'}ms
+          </Text>
+          <Text style={styles.versionValue}>
+            Foreground permission: {backgroundStatus?.foregroundPermission ?? 'unknown'}
+          </Text>
+          <Text style={styles.versionValue}>
+            Background permission: {backgroundStatus?.backgroundPermission ?? 'unknown'}
+          </Text>
+          <Text style={styles.versionValue}>
+            Location services enabled:{' '}
+            {backgroundStatus?.locationServicesEnabled == null
+              ? 'unknown'
+              : backgroundStatus.locationServicesEnabled
+                ? 'yes'
+                : 'no'}
+          </Text>
+          <Text style={styles.versionValue}>
+            Background location available:{' '}
+            {backgroundStatus?.backgroundLocationAvailable == null
+              ? 'unknown'
+              : backgroundStatus.backgroundLocationAvailable
+                ? 'yes'
+                : 'no'}
+          </Text>
+          <Text style={styles.versionValue}>
+            TaskManager available:{' '}
+            {backgroundStatus?.taskManagerAvailable == null
+              ? 'unknown'
+              : backgroundStatus.taskManagerAvailable
+                ? 'yes'
+                : 'no'}
+          </Text>
+          <Text style={styles.versionValue}>
+            Background task defined: {backgroundStatus?.taskDefined ? 'yes' : 'no'}
+          </Text>
+          <Text style={styles.versionValue}>
+            Continuous location task started: {backgroundStatus?.taskStarted ? 'yes' : 'no'}
+          </Text>
+          <Text style={styles.versionValue}>
+            Scheduled drain task defined: {backgroundStatus?.drainTaskDefined ? 'yes' : 'no'}
+          </Text>
+          <Text style={styles.versionValue}>
+            Scheduled drain task registered: {backgroundStatus?.drainTaskRegistered ? 'yes' : 'no'}
+          </Text>
+          <Text style={styles.versionValue}>
+            Movement geofence defined: {backgroundStatus?.geofenceTaskDefined ? 'yes' : 'no'}
+          </Text>
+          <Text style={styles.versionValue}>
+            Movement geofence registered: {backgroundStatus?.geofenceTaskRegistered ? 'yes' : 'no'}
+          </Text>
+          <Text style={styles.versionValue}>
+            Background worker status: {backgroundStatus?.backgroundTaskStatus ?? 'unknown'}
+          </Text>
+          <Text style={styles.versionValue}>
+            Provider status: {formatDebugPayload(backgroundStatus?.providerStatus ?? undefined)}
+          </Text>
+          <Text style={styles.versionValue}>
+            Registered tasks: {formatDebugPayload(backgroundStatus?.registeredTasks ?? undefined)}
+          </Text>
+          <Text style={styles.versionValue}>
+            Location task options:{' '}
+            {formatDebugPayload(backgroundStatus?.locationTaskOptions ?? undefined)}
+          </Text>
+          <Text style={styles.versionValue}>
+            Queued background locations: {backgroundStatus?.queuedLocationCount ?? 0}
+          </Text>
+          <Text style={styles.versionValue}>
+            Oldest queued capture: {formatBuildTimestamp(backgroundStatus?.oldestQueuedCapturedAt)}
+          </Text>
+          <Text style={styles.versionValue}>
+            Newest queued capture: {formatBuildTimestamp(backgroundStatus?.newestQueuedCapturedAt)}
+          </Text>
+          <Text style={styles.versionValue}>
+            Background log file: {locationDebugLogInfo.exists ? 'yes' : 'no'}
+          </Text>
+          <Text style={styles.versionValue}>
+            Background log size: {locationDebugLogInfo.sizeBytes} bytes
+          </Text>
+          <Text style={styles.versionValue}>Background event count: {backgroundEvents.length}</Text>
+          <Text style={styles.versionValue}>
+            Last background event: {lastBackgroundEvent?.eventName ?? 'none'}
+          </Text>
+          <Text style={styles.versionValue}>
+            Last background event at: {formatBuildTimestamp(lastBackgroundEvent?.at)}
+          </Text>
+          <Text style={styles.versionValue}>
+            Last background message: {lastBackgroundEvent?.message ?? 'none'}
+          </Text>
+          <Text style={styles.versionValue}>
+            Last background error: {lastBackgroundEvent?.error ?? 'none'}
+          </Text>
+          <Text style={styles.versionValue}>
+            Last captured at:{' '}
+            {formatBuildTimestamp(getPayloadString(lastBackgroundEvent?.payload, 'captured_at'))}
+          </Text>
+          <Text style={styles.versionValue}>
+            Last batch window:{' '}
+            {formatBuildTimestamp(
+              getPayloadString(lastBackgroundEvent?.payload, 'batch_first_captured_at'),
+            )}{' '}
+            -{' '}
+            {formatBuildTimestamp(
+              getPayloadString(lastBackgroundEvent?.payload, 'batch_last_captured_at'),
+            )}
+          </Text>
+          <Text style={styles.versionValue}>
+            Last request URL: {getPayloadString(lastBackgroundEvent?.payload, 'request_url')}
+          </Text>
+          <Text style={styles.versionValue}>
+            Last status: {getPayloadNumber(lastBackgroundEvent?.payload, 'status')}
+          </Text>
+          <Text style={styles.versionValue}>
+            Last content type: {getPayloadString(lastBackgroundEvent?.payload, 'content_type')}
+          </Text>
+          <Text style={styles.versionValue}>
+            Last app state: {getPayloadString(lastBackgroundEvent?.payload, 'app_state')}
+          </Text>
+          <Text style={styles.versionValue}>
+            Last duration: {getPayloadNumber(lastBackgroundEvent?.payload, 'request_duration_ms')}{' '}
+            ms
+          </Text>
+          <Text style={styles.versionValue}>
+            Last token present: {getPayloadBoolean(lastBackgroundEvent?.payload, 'token_present')}
+          </Text>
+          <Text style={styles.versionValue}>
+            Last token fingerprint:{' '}
+            {getPayloadString(lastBackgroundEvent?.payload, 'token_fingerprint')}
+          </Text>
+          <Text style={styles.versionValue}>
+            Last token expires at:{' '}
+            {formatBuildTimestamp(
+              getPayloadString(lastBackgroundEvent?.payload, 'token_expires_at'),
+            )}
+          </Text>
+          <Text style={styles.versionValue}>
+            Last token expires in:{' '}
+            {getPayloadNumber(lastBackgroundEvent?.payload, 'token_expires_in_seconds')}
+          </Text>
+          <Text style={styles.versionValue}>
+            Last token expired:{' '}
+            {getPayloadBoolean(lastBackgroundEvent?.payload, 'token_is_expired')}
+          </Text>
+          <Text style={styles.versionValue}>
+            Last sample count: {getPayloadNumber(lastBackgroundEvent?.payload, 'sample_count')}
+          </Text>
+          <Text style={styles.versionValue}>
+            Last payload: {formatDebugPayload(lastBackgroundEvent?.payload)}
+          </Text>
+          <Text style={styles.versionValue}>
+            Last success at: {formatBuildTimestamp(locationDebug.lastSuccessAt)}
+          </Text>
+          <Text style={styles.versionValue}>
+            Total successes: {locationDebug.totalSuccessCount ?? 0}
+          </Text>
           <Text style={styles.versionValue}>
             Successes since last failure: {locationDebug.successCountSinceLastFailure ?? 0}
           </Text>
@@ -640,21 +795,17 @@ export default function SettingsScreen() {
           )}
           <Text style={styles.versionLabel}>Recent background activity</Text>
           {backgroundEvents.length ? (
-            backgroundEvents.slice(0, 20).map((event) => (
-              <LocationDebugEventRow key={`${event.at}-${event.eventName}`} event={event} />
-            ))
+            backgroundEvents
+              .slice(0, 20)
+              .map((event) => (
+                <LocationDebugEventRow key={`${event.at}-${event.eventName}`} event={event} />
+              ))
           ) : (
             <Text style={styles.versionValue}>No stored background activity yet.</Text>
           )}
         </Card>
 
-
-        <Button
-          label="Sign out"
-          onPress={signOut}
-          variant="primary"
-          style={styles.signOutButton}
-        />
+        <Button label="Sign out" onPress={signOut} variant="primary" style={styles.signOutButton} />
       </Animated.ScrollView>
 
       <CollapsingTopBar

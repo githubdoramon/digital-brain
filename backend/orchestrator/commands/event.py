@@ -65,6 +65,61 @@ def event_pending_key(user_email: str, thread_id: str | None) -> str:
     return f"{user_email}:{resolved_thread}"
 
 
+def _command_data_from_persisted_exchange(
+    preview_id: str,
+    user_email: str,
+) -> dict[str, Any] | None:
+    exchange = conversations.get_command_exchange_from_metadata(preview_id, user_email)
+    if not exchange:
+        return None
+
+    metadata = exchange.get("assistant_metadata")
+    if not isinstance(metadata, dict):
+        return None
+    command_result = metadata.get("command_result")
+    if not isinstance(command_result, dict):
+        return None
+
+    command_state = command_result.get("command_state")
+    if isinstance(command_state, dict):
+        restored = deepcopy(command_state)
+        restored.setdefault("thread_id", exchange.get("thread_id"))
+        restored.setdefault("user_email", user_email)
+        return restored
+
+    if command_result.get("type") != "event_confirmation":
+        return None
+
+    return {
+        "command_name": "event",
+        "extracted": deepcopy(command_result.get("extracted") or {}),
+        "resolution": deepcopy(command_result.get("resolution") or {}),
+        "user_email": user_email,
+        "client_context": None,
+        "relationship_suggestions": deepcopy(
+            command_result.get("relationship_suggestions") or []
+        ),
+        "original_message": exchange.get("user_message") or "",
+        "thread_id": exchange.get("thread_id"),
+        "clarification_messages": [],
+        "requested_field_ids": [],
+        "original_extracted": deepcopy(command_result.get("original_extracted") or {}),
+        "original_resolution": deepcopy(command_result.get("original_resolution") or {}),
+        "operation": command_result.get("operation") or "create",
+        "existing_event_id": command_result.get("existing_event_id"),
+        "matched_event": deepcopy(command_result.get("matched_event")),
+        "candidate_events": deepcopy(command_result.get("candidate_events") or []),
+        "media_attachments": [],
+    }
+
+
+def _get_event_command_data(preview_id: str, user_email: str) -> dict[str, Any] | None:
+    command_data = get_command_data(preview_id)
+    if command_data:
+        return command_data
+    return _command_data_from_persisted_exchange(preview_id, user_email)
+
+
 def handle_pending_event(
     question: str,
     user_email: str,
@@ -87,7 +142,7 @@ def handle_pending_event(
     if not preview_id:
         return None
 
-    command_data = get_command_data(preview_id)
+    command_data = _get_event_command_data(preview_id, user_email)
     if not command_data:
         if not pending_event_id:
             clear_pending_event(key)
@@ -351,7 +406,7 @@ def confirm_event_command(
         raise HTTPException(status_code=400, detail="Authenticated user email missing")
 
     if not payload.confirmed:
-        existing_command_data = get_command_data(payload.preview_id)
+        existing_command_data = _get_event_command_data(payload.preview_id, user_email)
         _delete_command_media_attachments(existing_command_data)
         delete_command_data(payload.preview_id)
         clear_pending_event_by_preview_id(payload.preview_id)
@@ -361,7 +416,7 @@ def confirm_event_command(
             error="Event creation cancelled by user",
         )
 
-    command_data = get_command_data(payload.preview_id)
+    command_data = _get_event_command_data(payload.preview_id, user_email)
     if not command_data:
         raise HTTPException(
             status_code=404,

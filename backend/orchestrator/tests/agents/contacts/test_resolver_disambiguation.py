@@ -44,6 +44,54 @@ def test_llm_disambiguation_requires_context_signal(monkeypatch):
     assert ambiguous[0]["original_text"] == "Gio"
 
 
+def test_single_candidate_disambiguation_accepts_high_confidence_llm(monkeypatch):
+    candidates = [
+        {
+            "contact_id": "contact:sophia-vieira-fanti",
+            "display_name": "Sophia Vieira Fanti",
+            "match_score": 95,
+            "match_reason": "name contains: sophia vieira fanti",
+        }
+    ]
+
+    monkeypatch.setattr(
+        resolver,
+        "resolve_contact",
+        lambda *_args, **_kwargs: {
+            "status": "candidates",
+            "candidates": candidates,
+        },
+    )
+    monkeypatch.setattr(
+        resolver,
+        "_llm_disambiguate_contact",
+        lambda *_args, **_kwargs: {
+            "resolved": True,
+            "contact_id": "contact:sophia-vieira-fanti",
+            "display_name": "Sophia Vieira Fanti",
+            "confidence": "high",
+        },
+    )
+
+    resolved, new, ambiguous, _cache = resolver._resolve_people_mentions(
+        people=["Sophia"],
+        user_email="user@example.com",
+        full_text="Lunch with Sophia.",
+        conversation_messages=[
+            {
+                "role": "assistant",
+                "content": "I found multiple matching contacts. Please choose who you meant.",
+            },
+            {"role": "user", "content": "Sophia Fanti"},
+        ],
+    )
+
+    assert len(resolved) == 1
+    assert resolved[0]["contact_id"] == "contact:sophia-vieira-fanti"
+    assert new == []
+    assert ambiguous == []
+
+
 def test_llm_disambiguation_reraises_llm_unavailable(monkeypatch):
     monkeypatch.setattr(
         resolver,
@@ -508,6 +556,7 @@ def test_llm_disambiguation_prompt_includes_aliases_and_match_hints(monkeypatch)
     assert "Aliases: Gio, Panerai" in prompt
     assert "Match hint: exact name match: gio" in prompt
     assert "prefer the relationship evidence" in prompt
+    assert "candidate number of the correct candidate" in prompt
 
 
 def test_llm_disambiguation_prompt_includes_chronological_history(monkeypatch):

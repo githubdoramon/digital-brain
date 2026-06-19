@@ -1420,6 +1420,32 @@ export function ChatConversationScreen({
     void resumePendingRun();
   }, [allowed, isAuthLoading, isBootstrapping, isMainChat, resumePendingRun, token]);
 
+  const syncLatestThreadState = useCallback(async () => {
+    if (!token || !allowed || isAuthLoading || isBootstrapping) return;
+
+    const restored = isMainChat
+      ? await restoreChatHistory(token, {
+          threadId,
+          pendingEventId,
+        })
+      : threadId
+        ? await loadThreadHistory(token, threadId)
+        : { threadId: null, pendingEventId: null, messages: [] };
+    setThreadId(restored.threadId);
+    setPendingEventId(restored.pendingEventId);
+    if (restored.messages.length > 0) {
+      setMessages(restored.messages);
+    }
+  }, [
+    allowed,
+    isAuthLoading,
+    isBootstrapping,
+    isMainChat,
+    pendingEventId,
+    threadId,
+    token,
+  ]);
+
   useEffect(() => {
     if (!token || !allowed || isAuthLoading || isBootstrapping) return;
 
@@ -1428,19 +1454,7 @@ export function ChatConversationScreen({
 
       void (async () => {
         try {
-          const restored = isMainChat
-            ? await restoreChatHistory(token, {
-                threadId,
-                pendingEventId,
-              })
-            : threadId
-              ? await loadThreadHistory(token, threadId)
-              : { threadId: null, pendingEventId: null, messages: [] };
-          setThreadId(restored.threadId);
-          setPendingEventId(restored.pendingEventId);
-          if (restored.messages.length > 0) {
-            setMessages(restored.messages);
-          }
+          await syncLatestThreadState();
           await resumePendingRun();
         } catch {
           // Ignore foreground sync failures and keep current UI state.
@@ -1451,7 +1465,40 @@ export function ChatConversationScreen({
     return () => {
       subscription.remove();
     };
-  }, [allowed, isAuthLoading, isBootstrapping, isMainChat, pendingEventId, resumePendingRun, threadId, token]);
+  }, [
+    allowed,
+    isAuthLoading,
+    isBootstrapping,
+    resumePendingRun,
+    syncLatestThreadState,
+    token,
+  ]);
+
+  useFocusEffect(
+    useCallback(() => {
+      if (!token || !allowed || isAuthLoading || isBootstrapping) {
+        return () => undefined;
+      }
+
+      void (async () => {
+        try {
+          await syncLatestThreadState();
+          await resumePendingRun();
+        } catch {
+          // Keep the currently rendered conversation if a focus refresh fails.
+        }
+      })();
+
+      return () => undefined;
+    }, [
+      allowed,
+      isAuthLoading,
+      isBootstrapping,
+      resumePendingRun,
+      syncLatestThreadState,
+      token,
+    ]),
+  );
 
   useEffect(() => {
     if (!pendingEventId) {
@@ -1785,6 +1832,7 @@ export function ChatConversationScreen({
     composerMediaAttachments,
     commandsEnabled,
     input,
+    initialThreadId,
     isBootstrapping,
     isMainChat,
     isSending,

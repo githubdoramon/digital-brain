@@ -772,6 +772,7 @@ class ThreadOut(BaseModel):
 
 class ThreadDetailOut(ThreadOut):
     messages: list[ThreadMessageOut] = Field(default_factory=list)
+    pending_event_id: str | None = None
 
 
 class MainSessionOut(BaseModel):

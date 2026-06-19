@@ -2904,7 +2904,7 @@ def _should_accept_llm_disambiguation(
         return False
 
     if len(candidates) == 1:
-        return _is_safe_single_contact_match(candidates[0], person_text)
+        return True
 
     strictness = _get_disambiguation_strictness()
     if strictness == "lenient":

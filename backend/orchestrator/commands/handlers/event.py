@@ -3102,26 +3102,29 @@ def handle_event(parsed: ParsedCommand, context: dict) -> dict[str, Any]:
             [field.get("id") for field in clarification_fields if isinstance(field, dict)]
         )
 
+        clarification_payload = build_clarification_storage_payload(
+            original_message=original_message_to_store,
+            assistant_prompt=(need_user_input or {}).get("prompt")
+            or " ".join(clarification_questions),
+            existing_messages=clarification_messages,
+            requested_fields=clarification_fields,
+            message_key="clarification_messages",
+            extra_payload={
+                "extracted": extracted,
+                "resolution": resolution,
+                "contact_result": contact_result,
+                "user_email": user_email,
+                "client_context": context.get("client_context"),
+                "requested_field_ids": requested_field_ids,
+                "relationship_suggestions": previous_relationship_suggestions,
+                "media_attachments": media_attachments,
+                "thread_id": context.get("thread_id"),
+                "command_name": "event",
+            },
+        )
         store_clarification_preview(
             clarification_preview_id,
-            build_clarification_storage_payload(
-                original_message=original_message_to_store,
-                assistant_prompt=(need_user_input or {}).get("prompt")
-                or " ".join(clarification_questions),
-                existing_messages=clarification_messages,
-                requested_fields=clarification_fields,
-                message_key="clarification_messages",
-                extra_payload={
-                    "extracted": extracted,
-                    "resolution": resolution,
-                    "contact_result": contact_result,
-                    "user_email": user_email,
-                    "client_context": context.get("client_context"),
-                    "requested_field_ids": requested_field_ids,
-                    "relationship_suggestions": previous_relationship_suggestions,
-                    "media_attachments": media_attachments,
-                },
-            ),
+            clarification_payload,
             context.get("event_pending_key"),
         )
         if need_user_input is None:
@@ -3135,6 +3138,7 @@ def handle_event(parsed: ParsedCommand, context: dict) -> dict[str, Any]:
             {
                 "partial_extraction": extracted,
                 "original_message": raw_message,
+                "command_state": clarification_payload,
             },
         )
 
