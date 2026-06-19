@@ -10,8 +10,12 @@ from uuid import uuid4
 
 from db import get_conn
 from embeddings import embed_text
+from observability.logger import get_runtime_logger
 from schemas import ContactIn, ContactRelationshipIn, ExternalPerson
 from search_normalization import normalize_search_text
+from tags_manager import _merge_tag_lists, _normalize_strings, _suggest_contact_tags
+
+logger = get_runtime_logger(__name__)
 
 __all__ = [
     "delete_contact",
@@ -153,6 +157,7 @@ def _generate_contact_embedding(contact: Any) -> list[float]:
 
 
 def ingest_contact(contact: ContactIn) -> None:
+    normalized_tags = _normalize_strings(contact.tags)
     with get_conn() as conn, conn.cursor() as cur:
         effective_comments = contact.comments
         if effective_comments is None:
@@ -174,7 +179,7 @@ def ingest_contact(contact: ContactIn) -> None:
                 "contact_id": contact.contact_id,
                 "display_name": contact.display_name,
                 "aliases": contact.aliases or [],
-                "tags": contact.tags or [],
+                "tags": normalized_tags,
                 "comments": effective_comments,
             }
         )
@@ -214,7 +219,7 @@ def ingest_contact(contact: ContactIn) -> None:
                 contact.emails or [],
                 contact.phones or [],
                 contact.links or [],
-                contact.tags or [],
+                normalized_tags,
                 contact.comments,
                 getattr(contact, "external_id", None),
                 embedding,
@@ -226,6 +231,68 @@ def ingest_contact(contact: ContactIn) -> None:
             getattr(contact, "relationships", []) or [],
         )
         conn.commit()
+    _enqueue_contact_tag_enrichment(contact.contact_id)
+
+
+def _enqueue_contact_tag_enrichment(contact_id: str) -> None:
+    try:
+        import contact_tag_jobs
+
+        contact_tag_jobs.enqueue_contact_tag_enrichment(contact_id)
+    except Exception as exc:
+        logger.warning(
+            "[contacts] Failed to queue tag enrichment for %s: %s",
+            contact_id,
+            exc,
+        )
+
+
+def generate_and_persist_contact_tags(contact_id: str) -> dict[str, Any]:
+    cleaned_contact_id = str(contact_id or "").strip()
+    if not cleaned_contact_id:
+        raise ValueError("contact_id is required")
+
+    contact = get_contact(cleaned_contact_id)
+    if not contact:
+        return {
+            "contact_id": cleaned_contact_id,
+            "updated": False,
+            "reason": "contact_not_found",
+        }
+
+    raw_tags = list(contact.get("tags") or [])
+    existing_tags = _normalize_strings(raw_tags)
+    suggested_tags = _suggest_contact_tags(contact, existing_tags)
+    merged_tags = _merge_tag_lists(existing_tags, suggested_tags)
+    if merged_tags == existing_tags and raw_tags == existing_tags:
+        return {
+            "contact_id": cleaned_contact_id,
+            "updated": False,
+            "reason": "no_new_tags",
+            "tags": existing_tags,
+        }
+
+    embedding_payload = {**contact, "tags": merged_tags}
+    embedding = _generate_contact_embedding(embedding_payload)
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            UPDATE contacts
+            SET tags = %s,
+                comments_embed = %s
+            WHERE contact_id = %s
+            """,
+            (merged_tags, embedding, cleaned_contact_id),
+        )
+        updated = cur.rowcount > 0
+        conn.commit()
+
+    return {
+        "contact_id": cleaned_contact_id,
+        "updated": updated,
+        "tags": merged_tags,
+        "suggested_tags": suggested_tags,
+    }
 
 
 def list_contacts(*, include_voice_profile: bool = False) -> list[dict[str, Any]]:

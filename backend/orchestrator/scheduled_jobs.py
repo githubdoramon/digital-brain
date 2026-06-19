@@ -70,10 +70,58 @@ MEETING_TRANSCRIPT = ScheduledJobSpec(
     trigger_source="POST /ingest/meetings/transcript",
 )
 
+EVENT_TAG_ENRICHMENT = ScheduledJobSpec(
+    job_type="event_tag_enrichment",
+    label="Event tag enrichment",
+    worker_module="event_tag_jobs",
+    schedule_kind="debounced_async",
+    time_utc=None,
+    poll_seconds=2,
+    retry_seconds=60,
+    description=(
+        "Generates and persists event tags after event creation or update so command and "
+        "ingest flows do not block on tagging."
+    ),
+    trigger_source="event persistence",
+)
+
+DOCUMENT_TAG_ENRICHMENT = ScheduledJobSpec(
+    job_type="document_tag_enrichment",
+    label="Document tag enrichment",
+    worker_module="document_tag_jobs",
+    schedule_kind="debounced_async",
+    time_utc=None,
+    poll_seconds=2,
+    retry_seconds=60,
+    description=(
+        "Translates, generates, sanitizes, and persists document tags after document "
+        "creation or metadata update."
+    ),
+    trigger_source="document persistence",
+)
+
+CONTACT_TAG_ENRICHMENT = ScheduledJobSpec(
+    job_type="contact_tag_enrichment",
+    label="Contact tag enrichment",
+    worker_module="contact_tag_jobs",
+    schedule_kind="debounced_async",
+    time_utc=None,
+    poll_seconds=2,
+    retry_seconds=60,
+    description=(
+        "Generates and persists contact tags after contact creation or update using the "
+        "shared tag manager."
+    ),
+    trigger_source="contact persistence",
+)
+
 SCHEDULED_JOBS: tuple[ScheduledJobSpec, ...] = (
     PROPOSED_EVENTS_DAILY,
     DAILY_BRIEFING,
     MEETING_TRANSCRIPT,
+    EVENT_TAG_ENRICHMENT,
+    DOCUMENT_TAG_ENRICHMENT,
+    CONTACT_TAG_ENRICHMENT,
 )
 
 
@@ -138,6 +186,39 @@ def _load_runtime_status() -> dict[str, dict[str, Any]]:
     except Exception as exc:
         status[MEETING_TRANSCRIPT.job_type] = {
             "job_type": MEETING_TRANSCRIPT.job_type,
+            "worker_alive": False,
+            "error": str(exc),
+        }
+    try:
+        import event_tag_jobs
+
+        event_tags = event_tag_jobs.get_worker_status()
+        status[str(event_tags.get("job_type"))] = event_tags
+    except Exception as exc:
+        status[EVENT_TAG_ENRICHMENT.job_type] = {
+            "job_type": EVENT_TAG_ENRICHMENT.job_type,
+            "worker_alive": False,
+            "error": str(exc),
+        }
+    try:
+        import document_tag_jobs
+
+        document_tags = document_tag_jobs.get_worker_status()
+        status[str(document_tags.get("job_type"))] = document_tags
+    except Exception as exc:
+        status[DOCUMENT_TAG_ENRICHMENT.job_type] = {
+            "job_type": DOCUMENT_TAG_ENRICHMENT.job_type,
+            "worker_alive": False,
+            "error": str(exc),
+        }
+    try:
+        import contact_tag_jobs
+
+        contact_tags = contact_tag_jobs.get_worker_status()
+        status[str(contact_tags.get("job_type"))] = contact_tags
+    except Exception as exc:
+        status[CONTACT_TAG_ENRICHMENT.job_type] = {
+            "job_type": CONTACT_TAG_ENRICHMENT.job_type,
             "worker_alive": False,
             "error": str(exc),
         }

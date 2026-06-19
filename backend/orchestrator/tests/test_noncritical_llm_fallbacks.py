@@ -73,6 +73,35 @@ def test_tag_suggestion_returns_empty_when_llm_unavailable(monkeypatch):
     assert tags_manager._suggest_tags("met with team", [], "event") == []
 
 
+def test_tag_response_parser_rejects_stringified_json_fragments():
+    raw = json.dumps(
+        {
+            "tags": [
+                "Microsoft Teams",
+                "Status update",
+                "[\n",
+                '"Work",\n',
+                '{"Work"',
+                '"Microsoft Teams"',
+                "Meeting",
+            ]
+        }
+    )
+
+    assert tags_manager._parse_suggested_tags_response(raw) == [
+        "Microsoft Teams",
+        "Status update",
+        "Meeting",
+    ]
+
+
+def test_tag_list_merge_sanitizes_json_fragments():
+    assert tags_manager._merge_tag_lists(
+        ["Work", "```json", '{"tags": ["Family"]}'],
+        ["Meeting", '"tags": [', "Work"],
+    ) == ["Work", "Meeting"]
+
+
 def test_thread_title_generation_returns_none_when_llm_unavailable(monkeypatch):
     monkeypatch.setattr(
         "llm_helpers.call_llm",

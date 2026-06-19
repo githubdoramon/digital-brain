@@ -67,7 +67,7 @@ _EVENT_FIELD_RULES: dict[str, dict[str, bool]] = {
     "when": {"extractable": True},
     "end_when": {"extractable": True},
     "where": {"extractable": True},
-    "tags": {"extractable": True},
+    "tags": {"extractable": False},
     "types": {"extractable": True},
     "who": {"extractable": False},
 }
@@ -388,7 +388,6 @@ If action is patch_existing, include the smallest set of fields to update from:
 - when
 - end_when
 - where
-- tags
 - types
 - who
 
@@ -669,7 +668,6 @@ def _format_field_inference_extraction_context(existing_extraction: dict[str, An
         f"- when: {when_value!r}\n"
         f"- end_when: {end_when_value!r}\n"
         f"- where: {existing_extraction.get('where')!r}\n"
-        f"- tags: {existing_extraction.get('tags')!r}\n"
         f"- types: {existing_extraction.get('types')!r}\n"
         f"- who: {existing_extraction.get('who')!r}\n"
     )
@@ -712,7 +710,6 @@ Choose only from these fields:
 - when
 - end_when
 - where
-- tags
 - types
 - who
 
@@ -809,7 +806,6 @@ def _format_existing_extraction_for_prompt(existing: dict[str, Any] | None) -> s
         f"- end_when: {end_when_value!r}\n"
         f"- where: {existing.get('where')!r}\n"
         f"- documents: {existing.get('documents')!r}\n"
-        f"- tags: {existing.get('tags')!r}\n"
         f"- types: {existing.get('types')!r}\n"
         "\n"
     )
@@ -1106,7 +1102,6 @@ def _extract_event_entities_with_llm(
         get_time_context,
         get_user_facts_context,
     )
-    from tags_manager import MAJOR_TAGS
 
     logger.info("[event_extraction] Starting extraction for: '%s'", message)
 
@@ -1127,9 +1122,6 @@ def _extract_event_entities_with_llm(
     logger.debug("[event_extraction] Time context: %s", time_context)
     logger.debug("[event_extraction] User: %s", user_email)
     logger.debug("[event_extraction] User facts: %s", "yes" if user_facts_ctx else "none")
-
-    # Build tag context
-    tag_examples = ", ".join(MAJOR_TAGS[:5])  # Show first 5 major tags as examples
 
     target_fields = _normalize_event_field_ids(context.get("event_target_fields"))
     extraction_target_fields = [
@@ -1177,10 +1169,10 @@ Extract the following information:
 3. **End**: Parse optional end date/time if present. Return null if not mentioned.
 4. **Where**: Location/place name (if mentioned) - only one. Be aware that more than once place might be mentioned, and you should only extract the one where the event took place (For example, "I will start running from the Bakery to my house now", the event is taking place at the Bakery, the starting point, the "from").
 5. **Documents**: References to documents/files (if mentioned)
-6. **Tags**: Relevant tags for categorization. Consider major categories like: {tag_examples}, etc.
-7. **Event types**: Choose from: generic, meeting, communication, task, creation, consumption, travel, personal, system, financial, observation, interaction, education, celebration, purchase, health
+6. **Event types**: Choose from: generic, meeting, communication, task, creation, consumption, travel, personal, system, financial, observation, interaction, education, celebration, purchase, health
 
 People extraction is handled separately. Do NOT include any people/person list.
+Do NOT generate tags. Tags are generated asynchronously after the event is saved.
 
 Prefer specific types over general terms WHEN POSSIBLE (e.g., "Electric Engineer" over "Engineer", "Orthopedist" over "Doctor").
 
@@ -1217,7 +1209,6 @@ Return ONLY a JSON object matching the supplied response schema."""
         logger.debug("[event_extraction]   - Summary: %s", extracted.get("summary"))
         logger.debug("[event_extraction]   - When: %s", extracted.get("when"))
         logger.debug("[event_extraction]   - Where: %s", extracted.get("where"))
-        logger.debug("[event_extraction]   - Tags: %s", extracted.get("tags"))
         logger.debug("[event_extraction]   - Types: %s", extracted.get("types"))
         logger.debug(
             "[event_extraction]   - Needs user input: %s",
@@ -1300,7 +1291,7 @@ Return ONLY a JSON object matching the supplied response schema."""
             "where": extracted.get("where"),
             "who": [],
             "documents": extracted.get("documents", []),
-            "tags": extracted.get("tags", []),
+            "tags": [],
             "types": extracted.get("types", ["generic"]),
         }
 
@@ -1609,7 +1600,7 @@ def _merge_existing_event_into_extraction(
     treat that event as the baseline. The user is almost always adding
     details, not renaming or re-dating the event — so we preserve existing
     scalars (title, when, where) and only merge in additive fields
-    (summary, tags, types, participants). The user can still override any
+    (summary, types, participants). The user can still override any
     field explicitly in the editor; on confirm, modifications carry only
     the diff. This prevents the classic failure where the LLM picks the
     wrong Thursday and wipes out the correct stored date.

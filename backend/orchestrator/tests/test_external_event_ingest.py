@@ -181,6 +181,62 @@ def test_merge_event_stays_additive_by_default():
     assert merged.summary == "Old notes\n\nNew notes"
 
 
+def test_generate_and_persist_event_tags_cleans_existing_fragments(monkeypatch):
+    monkeypatch.setattr(
+        "events._get_event_by_id",
+        lambda _event_id: {
+            "id": "event:dirty-tags",
+            "start_date": datetime(2026, 2, 26, 14, 0, tzinfo=timezone.utc),
+            "end_date": None,
+            "place_id": None,
+            "people": [],
+            "tags": ["Work", "```json", '{"tags": ["Meeting"]}'],
+            "types": ["meeting"],
+            "title": "Team sync",
+            "summary": "Discussed project status.",
+            "raw": {},
+            "external_id": None,
+        },
+    )
+    monkeypatch.setattr("events._suggest_event_tags", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr("events._generate_event_embedding", lambda _payload: [0.1, 0.2])
+
+    updates: list[tuple[list[str], list[float], str]] = []
+
+    class FakeCursor:
+        rowcount = 1
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def execute(self, _query, params):
+            updates.append(params)
+
+    class FakeConnection:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def cursor(self):
+            return FakeCursor()
+
+        def commit(self):
+            return None
+
+    monkeypatch.setattr("events.get_conn", lambda: FakeConnection())
+
+    result = events.generate_and_persist_event_tags("event:dirty-tags")
+
+    assert result["updated"] is True
+    assert result["tags"] == ["Work"]
+    assert updates == [(["Work"], [0.1, 0.2], "event:dirty-tags")]
+
+
 def test_resolve_attendee_contacts_groups_all_attendees_by_domain(monkeypatch):
     contact_map = {
         "alice@acme.example": ("contact:alice", False),

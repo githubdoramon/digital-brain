@@ -1068,12 +1068,8 @@ def _ensure_stub_contacts(contact_ids: list[str]) -> None:
 def ingest_event(event: EventIn) -> None:
     types = normalize_event_types(event.types)
     normalized_tags = _normalize_strings(event.tags)
-    title_text = event.title or ""
-    summary_text = event.summary or ""
-    suggested_tags = _suggest_event_tags(title_text, summary_text, normalized_tags)
-    merged_tags = _merge_tag_lists(normalized_tags, suggested_tags)
 
-    embedding_payload = {**event.dict(), "tags": merged_tags, "types": types}
+    embedding_payload = {**event.dict(), "tags": normalized_tags, "types": types}
     emb = _generate_event_embedding(embedding_payload)
     people_ids = list(dict.fromkeys(event.people or []))
     with get_conn() as conn, conn.cursor() as cur:
@@ -1110,7 +1106,7 @@ def ingest_event(event: EventIn) -> None:
                 event.start_date,
                 event.end_date,
                 event.place_id,
-                merged_tags,
+                normalized_tags,
                 types,
                 event.title or "",
                 event.summary or "",
@@ -1136,6 +1132,76 @@ def ingest_event(event: EventIn) -> None:
                 [(event.id, cid) for cid in people_ids],
             )
         conn.commit()
+    _enqueue_event_tag_enrichment(event.id)
+
+
+def _enqueue_event_tag_enrichment(event_id: str) -> None:
+    try:
+        import event_tag_jobs
+
+        event_tag_jobs.enqueue_event_tag_enrichment(event_id)
+    except Exception as exc:
+        logger.warning("[ingest_event] Failed to queue tag enrichment for %s: %s", event_id, exc)
+
+
+def generate_and_persist_event_tags(event_id: str) -> dict[str, Any]:
+    cleaned_event_id = str(event_id or "").strip()
+    if not cleaned_event_id:
+        raise ValueError("event_id is required")
+
+    event = _get_event_by_id(cleaned_event_id)
+    if not event:
+        return {"event_id": cleaned_event_id, "updated": False, "reason": "event_not_found"}
+
+    raw_tags = list(event.get("tags") or [])
+    existing_tags = _normalize_strings(raw_tags)
+    suggested_tags = _suggest_event_tags(
+        event.get("title"),
+        event.get("summary"),
+        existing_tags,
+    )
+    merged_tags = _merge_tag_lists(existing_tags, suggested_tags)
+    if merged_tags == existing_tags and raw_tags == existing_tags:
+        return {
+            "event_id": cleaned_event_id,
+            "updated": False,
+            "reason": "no_new_tags",
+            "tags": existing_tags,
+        }
+
+    embedding_payload = {
+        "id": event.get("id"),
+        "startDate": event.get("start_date"),
+        "endDate": event.get("end_date"),
+        "placeId": event.get("place_id"),
+        "people": event.get("people") or [],
+        "tags": merged_tags,
+        "types": normalize_event_types(event.get("types") or []),
+        "title": event.get("title") or "",
+        "summary": event.get("summary") or "",
+        "raw": event.get("raw") or {},
+        "externalId": event.get("external_id"),
+    }
+    emb = _generate_event_embedding(embedding_payload)
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            UPDATE events
+            SET tags = %s,
+                what_embed = %s
+            WHERE id = %s
+            """,
+            (merged_tags, emb, cleaned_event_id),
+        )
+        updated = cur.rowcount > 0
+        conn.commit()
+
+    return {
+        "event_id": cleaned_event_id,
+        "updated": updated,
+        "tags": merged_tags,
+        "suggested_tags": suggested_tags,
+    }
 
 
 def get_event_by_id(event_id: str | None) -> dict[str, Any] | None:

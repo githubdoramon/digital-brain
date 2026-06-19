@@ -256,10 +256,12 @@ Interpret one or more contact graph updates.
 Supported updates:
 - create or update contacts
 - birth dates
-- emails, phones, aliases, links, tags, profession, notes/comments
+- emails, phones, aliases, links, profession, notes/comments
 - relationship edges between contacts
 - place creation or matching for a contact
 - contact-place role such as home or work
+
+Do NOT generate tags. Tags are generated asynchronously after contacts are saved.
 
 If the statement is ambiguous, missing a required person, or contains an ambiguous numeric date, ask a clarification instead of guessing.
 
@@ -721,7 +723,6 @@ def _apply_contact_fields_to_proposal(
         "emails": _string_list(updates.get("emails")),
         "phones": _string_list(updates.get("phones")),
         "links": _string_list(updates.get("links")),
-        "tags": _string_list(updates.get("tags")),
     }
     meaningful = any(
         normalized_updates.get("birthday")
@@ -1045,7 +1046,6 @@ def _build_proposal(
             "emails": raw_update.get("emails"),
             "phones": raw_update.get("phones"),
             "links": raw_update.get("links"),
-            "tags": raw_update.get("tags"),
         }
         _apply_contact_fields_to_proposal(
             proposal,

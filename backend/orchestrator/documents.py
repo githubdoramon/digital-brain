@@ -27,11 +27,7 @@ from embeddings import embed_text
 from llm_config import get_smart_model
 from observability.logger import get_runtime_logger
 from search_normalization import normalize_search_list, normalize_search_text
-from tags_manager import (
-    _merge_tag_lists,
-    _normalize_strings,
-    _suggest_additional_tags,
-)
+from tags_manager import _merge_tag_lists, _normalize_strings, _suggest_additional_tags
 
 logger = get_runtime_logger(__name__)
 
@@ -228,6 +224,7 @@ def ingest_document(
         raw_metadata=prepared.raw_metadata,
         replace_contact_links=True,
     )
+    _enqueue_document_tag_enrichment(document_id)
     return _row_to_document(row, include_metadata=True, include_content=True)
 
 
@@ -433,6 +430,7 @@ def update_document_metadata(
         raw_metadata=prepared.raw_metadata,
         replace_contact_links=contact_ids is not None,
     )
+    _enqueue_document_tag_enrichment(document_id)
     return _row_to_document(row, include_metadata=True, include_content=True)
 
 
@@ -915,12 +913,7 @@ def _build_document_fields(
     logger.debug("[documents] tags=%s", tags)
     normalized_tags = _normalize_strings(tags)
     logger.debug("[documents] normalized_tags=%s", normalized_tags)
-    english_tags = _normalize_strings(_translate_tags_to_english(normalized_tags))
-    logger.debug("[documents] english_tags=%s", english_tags)
-    suggested_tags = _suggest_additional_tags(content_text, english_tags)
-    logger.debug("[documents] suggested_tags=%s", suggested_tags)
-    merged_tags = _merge_tag_lists(english_tags, suggested_tags)
-    logger.debug("[documents] merged_tags=%s", merged_tags)
+    suggested_tags: list[str] = []
 
     final_description = provided_description
     generated_description: str | None = None
@@ -949,7 +942,7 @@ def _build_document_fields(
             "content": content_text,
             "description": final_description,
             "title": final_title,
-            "tags": merged_tags,
+            "tags": normalized_tags,
             "file_name": file_name,
         },
         raw_metadata=metadata,
@@ -975,7 +968,7 @@ def _build_document_fields(
     return DocumentPrepared(
         title=final_title,
         description=final_description,
-        tags=merged_tags,
+        tags=normalized_tags,
         document_date=final_date,
         embedding=embedding,
         raw_metadata=metadata,
@@ -985,6 +978,93 @@ def _build_document_fields(
         inferred_date=inferred_date,
         chunk_embeddings=chunk_embeddings,
     )
+
+
+def _enqueue_document_tag_enrichment(document_id: str) -> None:
+    try:
+        import document_tag_jobs
+
+        document_tag_jobs.enqueue_document_tag_enrichment(document_id)
+    except Exception as exc:
+        logger.warning(
+            "[documents] Failed to queue tag enrichment for %s: %s",
+            document_id,
+            exc,
+        )
+
+
+def generate_and_persist_document_tags(document_id: str) -> dict[str, Any]:
+    cleaned_document_id = str(document_id or "").strip()
+    if not cleaned_document_id:
+        raise ValueError("document_id is required")
+
+    document = get_document(cleaned_document_id)
+    if not document:
+        return {
+            "document_id": cleaned_document_id,
+            "updated": False,
+            "reason": "document_not_found",
+        }
+
+    raw_tags = list(document.get("tags") or [])
+    normalized_tags = _normalize_strings(raw_tags)
+    english_tags = _normalize_strings(_translate_tags_to_english(normalized_tags))
+    content_text = str(document.get("content") or "").strip()
+    suggested_tags = _suggest_additional_tags(content_text, english_tags)
+    merged_tags = _merge_tag_lists(english_tags, suggested_tags)
+    if merged_tags == normalized_tags and raw_tags == normalized_tags:
+        return {
+            "document_id": cleaned_document_id,
+            "updated": False,
+            "reason": "no_new_tags",
+            "tags": normalized_tags,
+        }
+
+    raw_metadata = document.get("raw_metadata")
+    if not isinstance(raw_metadata, dict):
+        raw_metadata = {}
+    metadata = dict(raw_metadata)
+    metadata["suggested_tags"] = suggested_tags
+    metadata["tags_enriched"] = True
+
+    embedding, chunk_embeddings = _generate_document_embeddings(
+        {
+            "document_id": cleaned_document_id,
+            "content": content_text,
+            "description": document.get("description"),
+            "title": document.get("title"),
+            "tags": merged_tags,
+            "file_name": document.get("file_name"),
+        },
+        raw_metadata=metadata,
+    )
+
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            UPDATE documents
+            SET tags = %s,
+                content_embed = %s,
+                raw_metadata = %s::jsonb,
+                updated_at = NOW()
+            WHERE document_id = %s
+            """,
+            (merged_tags, embedding, json.dumps(metadata), cleaned_document_id),
+        )
+        updated = cur.rowcount > 0
+        _replace_document_chunks(
+            cur,
+            document_id=cleaned_document_id,
+            chunk_embeddings=chunk_embeddings,
+        )
+        conn.commit()
+
+    return {
+        "document_id": cleaned_document_id,
+        "updated": updated,
+        "tags": merged_tags,
+        "suggested_tags": suggested_tags,
+    }
 
 
 def _translate_text_to_english(

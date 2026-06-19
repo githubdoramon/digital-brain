@@ -22,7 +22,6 @@ EVENT_EXTRACTION_RESPONSE_SCHEMA: dict[str, Any] = {
         "end_when": {"type": ["string", "null"]},
         "where": {"type": ["string", "null"]},
         "documents": STRING_ARRAY_SCHEMA,
-        "tags": STRING_ARRAY_SCHEMA,
         "types": STRING_ARRAY_SCHEMA,
     },
     "required": [
@@ -33,7 +32,6 @@ EVENT_EXTRACTION_RESPONSE_SCHEMA: dict[str, Any] = {
         "end_when",
         "where",
         "documents",
-        "tags",
         "types",
     ],
     "additionalProperties": False,
@@ -56,7 +54,6 @@ CONTACT_UPDATE_RESPONSE_SCHEMA: dict[str, Any] = {
                     "emails": STRING_ARRAY_SCHEMA,
                     "phones": STRING_ARRAY_SCHEMA,
                     "links": STRING_ARRAY_SCHEMA,
-                    "tags": STRING_ARRAY_SCHEMA,
                 },
                 "required": [
                     "contact_name",
@@ -67,7 +64,6 @@ CONTACT_UPDATE_RESPONSE_SCHEMA: dict[str, Any] = {
                     "emails",
                     "phones",
                     "links",
-                    "tags",
                 ],
                 "additionalProperties": False,
             },

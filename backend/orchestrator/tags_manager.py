@@ -179,7 +179,7 @@ def _normalize_strings(values: Iterable[str] | None) -> list[str]:
     for item in values:
         if item is None:
             continue
-        candidate = str(item).strip()
+        candidate = _clean_tag_label(item)
         if not candidate:
             continue
         lower = candidate.lower()
@@ -188,6 +188,31 @@ def _normalize_strings(values: Iterable[str] | None) -> list[str]:
         seen.add(lower)
         normalized.append(candidate)
     return normalized
+
+
+def _clean_tag_label(value: Any) -> str | None:
+    if not isinstance(value, str):
+        return None
+    candidate = " ".join(value.split()).strip(" \t\r\n,;")
+    if not candidate:
+        return None
+    if len(candidate) > 64:
+        return None
+    if any(marker in candidate for marker in ("```", "\n", "\r")):
+        return None
+    stripped = candidate.strip()
+    if stripped in {"{", "}", "[", "]", "```json"}:
+        return None
+    if stripped[0] in "{[" or stripped[-1:] in "}]":
+        return None
+    if stripped[0] in {"'", '"'} or stripped[-1:] in {"'", '"'}:
+        return None
+    lowered = stripped.lower()
+    if lowered.startswith(('"tags"', "'tags'", "tags:")):
+        return None
+    if any(token in stripped for token in ('":', '",', "\\n", "{\\", '\\"')):
+        return None
+    return stripped
 
 
 def _parse_suggested_tags_response(raw_content: str) -> list[str]:
@@ -211,17 +236,16 @@ def _parse_suggested_tags_response(raw_content: str) -> list[str]:
         candidate = list(candidate.values())
     if isinstance(candidate, list):
         for item in candidate:
-            if isinstance(item, str):
-                label = item.strip()
-                if label:
-                    parsed_tags.append(label)
-    return parsed_tags
+            label = _clean_tag_label(item)
+            if label:
+                parsed_tags.append(label)
+    return _normalize_strings(parsed_tags)
 
 
 def _suggest_tags(
     content: str,
     tags: Sequence[str],
-    subject: Literal["document", "event"],
+    subject: Literal["document", "event", "contact"],
     *,
     model: str | None = None,
     timeout: int | None = None,
@@ -234,15 +258,24 @@ def _suggest_tags(
     prompt_content = cleaned[:MAX_LABEL_PROMPT_CHARS]
     existing = ", ".join(tags) if tags else "none"
     major_categories = "; ".join(MAJOR_TAGS)
-    subject_excerpt_label = "Event context" if subject == "event" else "Document excerpt"
+    subject_excerpt_label = {
+        "contact": "Contact profile",
+        "event": "Event context",
+    }.get(subject, "Document excerpt")
 
-    subject_instruction = (
-        "Consider who is involved, what happened, where, and the outcome. "
-        "Capture medium (meeting, call, email), purpose (status update, decision, planning), "
-        "and any workstream or project hints."
-        if subject == "event"
-        else "Consider the document type (contract, receipt, medical record, ID, notes) and topic."
-    )
+    if subject == "event":
+        subject_instruction = (
+            "Consider who is involved, what happened, where, and the outcome. "
+            "Capture medium (meeting, call, email), purpose (status update, decision, planning), "
+            "and any workstream or project hints."
+        )
+    elif subject == "contact":
+        subject_instruction = (
+            "Consider the person's role, relationship to the user, organization, domain, "
+            "and any durable context from notes. Avoid tags that merely repeat the person's name."
+        )
+    else:
+        subject_instruction = "Consider the document type (contract, receipt, medical record, ID, notes) and topic."
 
     subtag_examples = "; ".join(
         f"{major}: {', '.join(MAJOR_TAG_KEYWORDS.get(major, [])[:3])}" for major in MAJOR_TAGS
@@ -317,13 +350,41 @@ def _suggest_event_tags(
     )
 
 
+def _suggest_contact_tags(
+    contact: dict[str, Any],
+    tags: Sequence[str],
+) -> list[str]:
+    if not _needs_additional_tags(tags):
+        return []
+
+    parts: list[str] = []
+    for label, value in (
+        ("Name", contact.get("display_name")),
+        ("Aliases", contact.get("aliases")),
+        ("Emails", contact.get("emails")),
+        ("Phones", contact.get("phones")),
+        ("Links", contact.get("links")),
+        ("Notes", contact.get("comments")),
+    ):
+        if isinstance(value, (list, tuple)):
+            text = ", ".join(str(item).strip() for item in value if str(item or "").strip())
+        else:
+            text = str(value or "").strip()
+        if text:
+            parts.append(f"{label}: {text}")
+
+    return _suggest_tags(
+        "\n".join(parts) or "Contact information unavailable",
+        tags,
+        subject="contact",
+    )
+
+
 def _merge_tag_lists(primary: Sequence[str], secondary: Sequence[str]) -> list[str]:
-    merged: list[str] = list(primary or [])
+    merged: list[str] = _normalize_strings(primary)
     seen = {tag.lower() for tag in merged if isinstance(tag, str)}
     for tag in secondary:
-        if not isinstance(tag, str):
-            continue
-        candidate = tag.strip()
+        candidate = _clean_tag_label(tag)
         if not candidate:
             continue
         lowered = candidate.lower()
