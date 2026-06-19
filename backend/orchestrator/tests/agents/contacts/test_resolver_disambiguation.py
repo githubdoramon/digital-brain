@@ -620,9 +620,7 @@ def test_resolve_contact_uses_any_search_for_role_queries(monkeypatch):
     assert captured["kwargs"]["search_by"] == "any"
 
 
-def test_resolve_contacts_short_circuits_simple_relationship_query(monkeypatch):
-    llm_calls = []
-
+def test_resolve_contacts_uses_llm_extraction_for_simple_relationship_query(monkeypatch):
     monkeypatch.setattr(
         resolver.contacts_service,
         "find_self_contact",
@@ -647,8 +645,8 @@ def test_resolve_contacts_short_circuits_simple_relationship_query(monkeypatch):
     )
     monkeypatch.setattr(
         resolver,
-        "call_llm_json",
-        lambda *args, **kwargs: llm_calls.append((args, kwargs)) or {"people": []},
+        "extract_people_from_text",
+        lambda *_args, **_kwargs: ["my daughter"],
     )
 
     result = resolver.resolve_contacts_from_text(
@@ -659,10 +657,9 @@ def test_resolve_contacts_short_circuits_simple_relationship_query(monkeypatch):
 
     assert result["status"] == "success"
     assert any(item["display_name"] == "Emma" for item in result["resolved_contacts"])
-    assert llm_calls == []
 
 
-def test_resolve_contacts_does_not_short_circuit_user_only_fast_path(monkeypatch):
+def test_resolve_contacts_uses_llm_extraction_for_user_only_mentions(monkeypatch):
     captured = {}
 
     def fake_extract_people(text, conversation_messages=None, **kwargs):
@@ -686,7 +683,7 @@ def test_resolve_contacts_does_not_short_circuit_user_only_fast_path(monkeypatch
     assert result["people_mentioned"] == ["gio", "pedro"]
 
 
-def test_resolve_contacts_does_not_short_circuit_partial_multi_person_fast_path(monkeypatch):
+def test_resolve_contacts_uses_llm_extraction_for_partial_multi_person_mentions(monkeypatch):
     captured = {}
 
     def fake_extract_people(text, conversation_messages=None, **kwargs):
@@ -708,46 +705,6 @@ def test_resolve_contacts_does_not_short_circuit_partial_multi_person_fast_path(
 
     assert captured["text"] == "I met John and pedro yesterday"
     assert result["people_mentioned"] == ["John", "pedro"]
-
-
-def test_fast_extract_people_captures_direct_object_and_not_literal_i():
-    people, selectors, applied = resolver._fast_extract_people_from_text(
-        "I met Rita at the physiotherapy session"
-    )
-
-    assert applied is True
-    assert selectors == []
-    assert people == ["user", "Rita"]
-
-
-def test_fast_extract_people_collapses_relationship_appositive_name():
-    people, selectors, applied = resolver._fast_extract_people_from_text(
-        "I had lunch with my wife Dana Lewis after the school meeting"
-    )
-
-    assert applied is True
-    assert selectors == []
-    assert people == ["user", "Dana Lewis"]
-
-
-def test_fast_extract_people_keeps_relationship_and_separate_name():
-    people, selectors, applied = resolver._fast_extract_people_from_text(
-        "I had lunch with my wife and Dana Lewis after the school meeting"
-    )
-
-    assert applied is True
-    assert selectors == []
-    assert people == ["user", "my wife", "Dana Lewis"]
-
-
-def test_fast_extract_people_keeps_lowercase_names_in_explicit_with_list():
-    people, selectors, applied = resolver._fast_extract_people_from_text(
-        "yesterday I went out for lunch at dragao with Marcela, Sophia, Israel, paty and bebel"
-    )
-
-    assert applied is True
-    assert selectors == []
-    assert people == ["user", "Marcela", "Sophia", "Israel", "paty", "bebel"]
 
 
 def test_participant_filter_prompt_treats_forgot_followups_as_additive():
@@ -785,7 +742,7 @@ def test_participant_filter_can_clear_people_list(monkeypatch):
     assert result["people_mentioned"] == []
 
 
-def test_resolve_contacts_group_mentions_bypass_fast_path(monkeypatch):
+def test_resolve_contacts_uses_llm_extraction_for_group_mentions(monkeypatch):
     captured = {}
 
     def fake_extract_people(text, conversation_messages=None, **kwargs):
@@ -898,7 +855,7 @@ def test_resolve_contacts_restores_named_coworker_group_after_llm_extraction(mon
     assert result["people_mentioned"] == ["Alex", "Alex's co workers"]
 
 
-def test_resolve_contacts_collective_selector_bypasses_fast_path(monkeypatch):
+def test_resolve_contacts_uses_llm_extraction_for_collective_selectors(monkeypatch):
     captured = {}
 
     def fake_extract_people(text, conversation_messages=None, **kwargs):
@@ -935,6 +892,11 @@ def test_resolve_contacts_extracts_full_name_list_without_place(monkeypatch):
         captured["people"] = people
         return [], [], [], {}
 
+    monkeypatch.setattr(
+        resolver,
+        "extract_people_from_text",
+        lambda *_args, **_kwargs: ["user", "Dana", "Felix Reed", "Théo", "Morgan Brooks"],
+    )
     monkeypatch.setattr(resolver, "_resolve_people_mentions", fake_resolve_people_mentions)
 
     result = resolver.resolve_contacts_from_text(
@@ -1797,11 +1759,6 @@ def test_normalize_bare_family_mentions_for_user_scopes_mentions():
 def test_resolve_contacts_from_text_resolves_bare_family_mentions_against_user_relationships(monkeypatch):
     monkeypatch.setattr(
         resolver,
-        "_fast_extract_people_from_text",
-        lambda *_args, **_kwargs: ([], [], False),
-    )
-    monkeypatch.setattr(
-        resolver,
         "extract_people_from_text",
         lambda *_args, **_kwargs: ["user", "wife", "daughter"],
     )
@@ -1858,11 +1815,6 @@ def test_resolve_contacts_from_text_resolves_bare_family_mentions_against_user_r
 
 
 def test_resolve_contacts_restores_collective_family_mentions_after_participant_filter(monkeypatch):
-    monkeypatch.setattr(
-        resolver,
-        "_fast_extract_people_from_text",
-        lambda *_args, **_kwargs: ([], [], False),
-    )
     monkeypatch.setattr(
         resolver,
         "extract_people_from_text",
@@ -2024,11 +1976,6 @@ def test_alias_plus_surname_match_resolves_uniquely(monkeypatch):
 
 
 def test_participant_focus_with_explicit_presence_bypasses_llm_filter(monkeypatch):
-    monkeypatch.setattr(
-        resolver,
-        "_fast_extract_people_from_text",
-        lambda *_args, **_kwargs: ([], [], False),
-    )
     monkeypatch.setattr(
         resolver,
         "extract_people_from_text",

@@ -908,157 +908,6 @@ def _count_coordinated_person_like_mentions(text: str) -> int:
     return 0
 
 
-def _should_fallback_to_llm_after_fast_path(
-    text: str,
-    people: list[str],
-    selector_mentions: list[dict[str, str]],
-) -> bool:
-    return bool(_llm_fallback_reasons_after_fast_path(text, people, selector_mentions))
-
-
-def _llm_fallback_reasons_after_fast_path(
-    text: str,
-    people: list[str],
-    selector_mentions: list[dict[str, str]],
-) -> list[str]:
-    reasons: list[str] = []
-    if not people and not selector_mentions:
-        reasons.append("no_fast_path_mentions")
-        return reasons
-
-    raw_text = str(text or "")
-    normalized_people = {normalize_search_text(person) for person in people}
-
-    if _has_first_person_narration(raw_text) and "user" not in normalized_people:
-        reasons.append("missing_user_in_first_person_context")
-
-    if _has_first_person_narration(raw_text) and _has_relationship_language(raw_text):
-        has_relationship_person = any(
-            person.startswith("my ")
-            or normalize_search_text(person) in _USER_SCOPED_FAMILY_RELATIONSHIP_TERMS
-            for person in people
-        )
-        if not has_relationship_person:
-            reasons.append("missing_relationship_mentions_in_first_person_context")
-
-    coordinated_mentions = _count_coordinated_person_like_mentions(raw_text)
-    if coordinated_mentions > len(normalized_people):
-        reasons.append(
-            f"coordinated_mentions_exceed_extracted:{coordinated_mentions}>{len(normalized_people)}"
-        )
-
-    return reasons
-
-
-def _fast_extract_people_from_text(
-    text: str,
-) -> tuple[list[str], list[dict[str, str]], bool]:
-    raw_text = str(text or "").strip()
-    if not _should_attempt_fast_person_extraction(raw_text):
-        return [], [], False
-
-    selector_mentions = _extract_collective_selectors(raw_text)
-    collective_people_mentions = _extract_possessive_collective_mentions(raw_text)
-    if _is_unknown_person_aggregate_question(raw_text):
-        return [], selector_mentions, True
-
-    if selector_mentions or collective_people_mentions:
-        return [], selector_mentions, False
-
-    people: list[str] = []
-    seen: set[str] = set()
-    inferred_user = False
-    explicit_people_count = 0
-    appositive_names, appositive_relationship_mentions = _extract_relationship_appositive_names(
-        raw_text
-    )
-
-    def _append_person(value: str) -> bool:
-        cleaned = str(value or "").strip(" .,!?;:\"'")
-        normalized = normalize_search_text(cleaned)
-        if not normalized or normalized in seen:
-            return False
-        if _is_overly_generic_person_reference(cleaned):
-            return False
-        seen.add(normalized)
-        people.append(cleaned)
-        return True
-
-    if (re.search(r"\b(i|me|my|we|us|our)\b", raw_text, flags=re.IGNORECASE) and re.search(
-        r"\b(meet|met|talk|talked|spoke|speak|chat|chatted|call|called|text|texted|email|emailed|see|saw|visit|visited|watch|watched|go|went|joined|attended|had lunch|had dinner|had drinks|went with|met with)\b",
-        raw_text,
-        flags=re.IGNORECASE,
-    )) or re.match(
-        r"^(had\s+(?:lunch|dinner)\s+with|met\s+with|saw\s+[A-Z]|visited\s+[A-Z]|called\s+[A-Z])",
-        raw_text,
-        flags=re.IGNORECASE,
-    ):
-        inferred_user = _append_person("user") or inferred_user
-
-    for match in _SHORT_CIRCUIT_RELATIONSHIP_PATTERN.finditer(raw_text):
-        if normalize_search_text(match.group(0)) in appositive_relationship_mentions:
-            continue
-        if _append_person(match.group(0)):
-            explicit_people_count += 1
-
-    for candidate in appositive_names:
-        if _append_person(candidate):
-            explicit_people_count += 1
-
-    for candidate in _extract_shared_possessive_relationship_mentions(raw_text):
-        if _append_person(candidate):
-            explicit_people_count += 1
-
-    for candidate in _extract_people_from_with_lists(raw_text):
-        if _append_person(candidate):
-            explicit_people_count += 1
-
-    for candidate in _extract_leading_subject_person(raw_text):
-        if _append_person(candidate):
-            explicit_people_count += 1
-
-    for candidate in _extract_direct_object_people(raw_text):
-        if _append_person(candidate):
-            explicit_people_count += 1
-
-    for match in _SHORT_CIRCUIT_NAME_PATTERN.finditer(raw_text):
-        candidate = str(match.group(0) or "").strip()
-        if not candidate:
-            continue
-        if _PRECEDING_PLACE_PREPOSITION_PATTERN.search(raw_text[: match.start()]):
-            continue
-        candidate_norm = normalize_search_text(candidate)
-        candidate_tokens = [token for token in candidate.replace(".", " ").split() if token]
-        has_title = bool(re.match(r"^(Dr\.|Mr\.|Mrs\.|Ms\.|Prof\.)\s+", candidate))
-        if candidate_tokens and candidate_tokens[-1] == "I":
-            continue
-        if len(candidate_tokens) < 2 and not has_title:
-            continue
-        if candidate_norm in {"i", "we", "who", "when", "where", "what", "why", "how"}:
-            continue
-        if candidate_norm.startswith(("my ", "our ")):
-            continue
-        if not _has_capitalized_name_tokens(candidate):
-            continue
-        if _append_person(candidate):
-            explicit_people_count += 1
-
-    if inferred_user and explicit_people_count == 0 and not selector_mentions:
-        return [], [], False
-
-    if (
-        explicit_people_count == 1
-        and not selector_mentions
-        and _LIKELY_MULTI_PERSON_CONNECTOR_PATTERN.search(raw_text)
-    ):
-        return [], [], False
-
-    if not people and not selector_mentions:
-        return [], [], False
-
-    return people, selector_mentions, True
-
-
 def _merge_collective_selectors(*batches: list[dict[str, str]]) -> list[dict[str, str]]:
     merged: list[dict[str, str]] = []
     seen: set[tuple[str, str]] = set()
@@ -2376,121 +2225,63 @@ def resolve_contacts_from_text(
     # Step 1: Extract people
     logger.info("[contact_resolver] Step 1: Extracting people...")
     effective_text = text
-    people, selector_mentions, fast_path_applied = _fast_extract_people_from_text(effective_text)
-    logger.info(
-        "[contact_resolver] Fast-path extraction applied=%s people=%s selectors=%s",
-        fast_path_applied,
-        people,
-        selector_mentions,
-    )
+    people: list[str] = []
+    selector_mentions: list[dict[str, str]] = []
+    logger.info("[contact_resolver] Running LLM extraction")
     trace.trace_contact_resolution_phase(
-        "fast_path",
-        {
-            "applied": fast_path_applied,
-            "people": people,
-            "selector_kinds": [selector.get("kind") for selector in selector_mentions],
-        },
+        "llm_extraction",
+        {"reason": "llm_only_contact_extraction"},
     )
     llm_selector_mentions: list[dict[str, str]] = []
 
-    fallback_reasons: list[str] = []
-    if fast_path_applied:
-        fallback_reasons = _llm_fallback_reasons_after_fast_path(
+    extract_kwargs: dict[str, Any] = {
+        "conversation_messages": conversation_messages,
+        "user_email": user_email,
+        "user_facts_context": _get_contact_resolution_user_facts_context(
+            user_email,
             effective_text,
-            people,
-            selector_mentions,
-        )
-    should_run_llm_extraction = (not fast_path_applied) or bool(fallback_reasons)
-
-    if should_run_llm_extraction:
-        if fast_path_applied:
-            logger.info(
-                "[contact_resolver] Running LLM extraction after fast path due to: %s",
-                ", ".join(fallback_reasons),
-            )
-            trace.trace_contact_resolution_phase(
-                "llm_fallback",
-                {
-                    "reasons": fallback_reasons,
-                    "people": people,
-                    "selector_kinds": [selector.get("kind") for selector in selector_mentions],
-                },
-            )
-        else:
-            logger.info("[contact_resolver] Running LLM extraction because fast path did not apply")
-            trace.trace_contact_resolution_phase(
-                "llm_fallback",
-                {"reason": "fast_path_not_applied"},
-            )
-    else:
-        logger.info("[contact_resolver] Skipping LLM extraction; fast path considered sufficient")
-        trace.trace_contact_resolution_phase(
-            "llm_skip",
-            {
-                "people": people,
-                "selector_kinds": [selector.get("kind") for selector in selector_mentions],
-            },
-        )
-
-    if should_run_llm_extraction:
-        extract_kwargs: dict[str, Any] = {
-            "conversation_messages": conversation_messages,
-            "user_email": user_email,
-            "user_facts_context": _get_contact_resolution_user_facts_context(
-                user_email,
-                effective_text,
-                include_soft_facts=False,
-                request_context=request_context,
-            ),
-        }
-        try:
-            signature = inspect.signature(extract_people_from_text)
-            if "include_collective_selectors" in signature.parameters:
-                extract_kwargs["include_collective_selectors"] = True
-        except (TypeError, ValueError):
-            pass
-
-        extraction_raw = extract_people_from_text(
-            effective_text,
-            **extract_kwargs,
-        )
-        if (
-            isinstance(extraction_raw, tuple)
-            and len(extraction_raw) == 2
-            and isinstance(extraction_raw[0], list)
-            and isinstance(extraction_raw[1], list)
-        ):
-            people = _merge_people_mentions(people, extraction_raw[0])
-            llm_selector_mentions = extraction_raw[1]
-        else:
-            llm_people = extraction_raw if isinstance(extraction_raw, list) else []
-            people = _merge_people_mentions(people, llm_people)
-            llm_selector_mentions = []
-        logger.info(
-            "[contact_resolver] Post-merge extraction people=%s llm_selectors=%s",
-            people,
-            llm_selector_mentions,
-        )
-        trace.trace_contact_resolution_phase(
-            "merge_result",
-            {
-                "people": people,
-                "selector_kinds": [selector.get("kind") for selector in llm_selector_mentions],
-            },
-        )
-    extraction_metadata = {
-        "fast_path_applied": fast_path_applied,
-        "llm_extraction_ran": should_run_llm_extraction,
-        "llm_fallback_reasons": fallback_reasons,
-        "source": (
-            "fast_path_with_llm_fallback"
-            if fast_path_applied and should_run_llm_extraction
-            else "fast_path"
-            if fast_path_applied
-            else "llm"
-            if should_run_llm_extraction
-            else "deterministic"
+            include_soft_facts=False,
+            request_context=request_context,
         ),
+    }
+    try:
+        signature = inspect.signature(extract_people_from_text)
+        if "include_collective_selectors" in signature.parameters:
+            extract_kwargs["include_collective_selectors"] = True
+    except (TypeError, ValueError):
+        pass
+
+    extraction_raw = extract_people_from_text(
+        effective_text,
+        **extract_kwargs,
+    )
+    if (
+        isinstance(extraction_raw, tuple)
+        and len(extraction_raw) == 2
+        and isinstance(extraction_raw[0], list)
+        and isinstance(extraction_raw[1], list)
+    ):
+        people = _merge_people_mentions(people, extraction_raw[0])
+        llm_selector_mentions = extraction_raw[1]
+    else:
+        llm_people = extraction_raw if isinstance(extraction_raw, list) else []
+        people = _merge_people_mentions(people, llm_people)
+        llm_selector_mentions = []
+    logger.info(
+        "[contact_resolver] LLM extraction people=%s llm_selectors=%s",
+        people,
+        llm_selector_mentions,
+    )
+    trace.trace_contact_resolution_phase(
+        "merge_result",
+        {
+            "people": people,
+            "selector_kinds": [selector.get("kind") for selector in llm_selector_mentions],
+        },
+    )
+    extraction_metadata = {
+        "llm_extraction_ran": True,
+        "source": "llm",
     }
     people = _normalize_bare_family_mentions_for_user(effective_text, people)
     if request_context.get("participant_focus") and people:

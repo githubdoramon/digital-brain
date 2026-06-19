@@ -138,7 +138,6 @@ resolver_module.call_llm_json = mock_call_llm_json
 from agents.contacts.resolver import (  # noqa: E402
     _detect_relational_term,
     _extract_collective_selectors,
-    _fast_extract_people_from_text,
     _parse_nested_relationship,
     _strip_generic_markers,
     extract_people_from_text,
@@ -253,39 +252,11 @@ def test_extract_collective_selectors():
     assert "company" in kinds
 
 
-def test_fast_extract_people_from_text_handles_bare_family_mentions_in_with_list():
-    people, selectors, applied = _fast_extract_people_from_text(
-        "Last Friday I went to the movies at 18h00 with daughter and wife."
-    )
-
-    assert applied is True
-    assert selectors == []
-    assert "user" in people
-    assert "daughter" in people
-    assert "wife" in people
-
-
-def test_fast_extract_people_from_text_includes_leading_named_subject():
-    people, selectors, applied = _fast_extract_people_from_text(
-        "Morgan is going out with Avery and Robin at 20h, to The Tide, at Maple Square."
-    )
-
-    assert applied is True
-    assert selectors == []
-    assert "Morgan" in people
-    assert "Avery" in people
-    assert "Robin" in people
-
-
-def test_resolve_contacts_from_text_merges_llm_people_when_fast_path_is_incomplete():
+def test_resolve_contacts_from_text_uses_llm_people_extraction():
     with (
         patch(
-            "agents.contacts.resolver._fast_extract_people_from_text",
-            return_value=(["user"], [], True),
-        ),
-        patch(
             "agents.contacts.resolver.extract_people_from_text",
-            return_value=["my wife", "my daughter"],
+            return_value=["user", "my wife", "my daughter"],
         ),
         patch(
             "agents.contacts.resolver._resolve_people_mentions",
@@ -359,9 +330,20 @@ def test_resolve_contacts_from_text_email_domain_selector(mock_groups, mock_cont
 
 @patch("agents.contacts.resolver.contacts_service")
 @patch("agents.contacts.resolver.contact_groups_service")
+@patch("agents.contacts.resolver.extract_people_from_text")
 def test_resolve_contacts_from_text_email_domain_shorthand_falls_back_to_company(
-    mock_groups, mock_contacts
+    mock_extract_people, mock_groups, mock_contacts
 ):
+    mock_extract_people.return_value = (
+        [],
+        [
+            {
+                "kind": "email_domain",
+                "value": "acme",
+                "original_text": "@acme",
+            }
+        ],
+    )
     mock_contacts.search_contacts_by_email_domain.return_value = []
     mock_contacts.search_contacts_by_company.return_value = [
         {
@@ -391,9 +373,20 @@ def test_resolve_contacts_from_text_email_domain_shorthand_falls_back_to_company
 
 @patch("agents.contacts.resolver.contacts_service")
 @patch("agents.contacts.resolver.contact_groups_service")
+@patch("agents.contacts.resolver.extract_people_from_text")
 def test_resolve_contacts_from_text_group_selector_requires_confirmation(
-    mock_groups, mock_contacts
+    mock_extract_people, mock_groups, mock_contacts
 ):
+    mock_extract_people.return_value = (
+        [],
+        [
+            {
+                "kind": "group",
+                "value": "soccer team",
+                "original_text": "all people from my soccer team",
+            }
+        ],
+    )
     mock_groups.resolve_group_members.return_value = {"found": False, "contacts": []}
     mock_contacts.search_contacts_by_email_domain.return_value = []
     mock_contacts.search_contacts_by_company.return_value = []
