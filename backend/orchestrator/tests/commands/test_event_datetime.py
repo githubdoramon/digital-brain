@@ -45,6 +45,37 @@ def test_event_extraction_defaults_naive_model_time_to_client_timezone(monkeypat
     assert result["when"].isoformat() == "2026-06-11T10:00:00+01:00"
 
 
+def test_event_extraction_infers_lunch_time_from_date_only(monkeypatch):
+    captured = {}
+
+    def fake_call_llm_json(prompt, *_args, **_kwargs):
+        captured["prompt"] = prompt
+        return {
+            "title": "Lunch at Dragao",
+            "summary": "Had lunch at Dragao.",
+            "when": "2026-06-18",
+            "end_when": None,
+            "where": "Dragao",
+            "documents": [],
+            "tags": ["personal"],
+            "types": ["consumption"],
+            "need_user_input": None,
+        }
+
+    monkeypatch.setattr("llm_helpers.call_llm_json", fake_call_llm_json)
+    monkeypatch.setattr("tags_manager.MAJOR_TAGS", ["work", "personal"])
+    monkeypatch.setattr("user_facts.get_hard_rules_context", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr("user_facts.get_facts_for_context", lambda *_args, **_kwargs: None)
+
+    result = event_handler._extract_event_entities_with_llm(
+        "yesterday I went out for lunch at dragao",
+        {"client_context": {"timezone": "Europe/Lisbon"}},
+    )
+
+    assert "lunch 12:30" in captured["prompt"]
+    assert result["when"].isoformat() == "2026-06-18T12:30:00+01:00"
+
+
 def test_event_modification_datetime_uses_command_timezone():
     event_tz = event_timezone_from_context(
         {"client_context": {"timezone": "Europe/Lisbon"}}

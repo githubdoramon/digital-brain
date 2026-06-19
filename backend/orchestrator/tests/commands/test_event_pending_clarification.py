@@ -1845,6 +1845,15 @@ def test_resolve_contacts_with_agent_skips_selector_name_replacements(monkeypatc
     assert resolution["name_replacements"] == {"Pat": "Owen Park"}
 
 
+def test_replace_generic_terms_does_not_expand_already_full_name():
+    result = event_handler._replace_generic_terms_in_text(
+        "Had lunch with Marcela Queiroz Fanti and Sophia.",
+        {"Marcela": "Marcela Queiroz Fanti", "Sophia": "Sophia Vieira Fanti"},
+    )
+
+    assert result == "Had lunch with Marcela Queiroz Fanti and Sophia Vieira Fanti."
+
+
 def test_find_event_matches_rejects_calendar_day_mismatch(monkeypatch):
     extracted = {
         "title": "Lunch at Dragao with Family",

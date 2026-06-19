@@ -202,6 +202,13 @@ _RELATIVE_PAST_PATTERN = re.compile(
     r"(?P<unit>minute|minutes|hour|hours)\s+ago\b",
     re.IGNORECASE,
 )
+_DATE_ONLY_PATTERN = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+_MEAL_TIME_HINTS = {
+    "breakfast": (8, 30),
+    "brunch": (11, 0),
+    "lunch": (12, 30),
+    "dinner": (19, 30),
+}
 
 
 def _infer_recent_event_datetime(message: str) -> datetime | None:
@@ -222,6 +229,24 @@ def _infer_recent_event_datetime(message: str) -> datetime | None:
     if any(pattern.search(text) for pattern in _IMMEDIATE_PAST_PATTERNS):
         return datetime.now()
 
+    return None
+
+
+def _infer_meal_datetime_for_date_only(
+    *,
+    raw_when: Any,
+    message: str,
+    parsed_when: datetime | None,
+) -> datetime | None:
+    if not isinstance(raw_when, str) or not _DATE_ONLY_PATTERN.fullmatch(raw_when.strip()):
+        return None
+    if parsed_when is None:
+        return None
+
+    normalized_message = str(message or "").lower()
+    for token, (hour, minute) in _MEAL_TIME_HINTS.items():
+        if re.search(rf"\b{re.escape(token)}\b", normalized_message):
+            return parsed_when.replace(hour=hour, minute=minute, second=0, microsecond=0)
     return None
 
 
@@ -1147,6 +1172,7 @@ Extract the following information:
    - Interpret user-provided clock times as the user's local wall time in the client timezone when available.
    - Do not convert a stated local clock time to UTC. If the user says "10am" in a +01:00 timezone, return 10:00 with that local offset, not 09:00Z or 10:00Z.
    - Include a numeric offset in ISO datetimes when the timezone is known.
+   - When the user names a moment that can be used to infer time, use a conventional local time for it instead of date-only midnight: breakfast 08:30, brunch 11:00, lunch 12:30, dinner 19:30, morning 9:00, afternoon 17:00, etc.
    - If the user says the event just happened (for example: "I just had lunch", "just now", "10 minutes ago"), infer an immediate past datetime instead of asking for clarification. But if the sentence doesn't imply it is happening now, ask for clarification.
 3. **End**: Parse optional end date/time if present. Return null if not mentioned.
 4. **Where**: Location/place name (if mentioned) - only one. Be aware that more than once place might be mentioned, and you should only extract the one where the event took place (For example, "I will start running from the Bakery to my house now", the event is taking place at the Bakery, the starting point, the "from").
@@ -1223,7 +1249,8 @@ Return ONLY a JSON object matching the supplied response schema."""
                 )
                 return None
 
-        when = _parse_optional_datetime(extracted.get("when"), "when")
+        raw_when = extracted.get("when")
+        when = _parse_optional_datetime(raw_when, "when")
         end_when = _parse_optional_datetime(extracted.get("end_when"), "end_when")
 
         need_user_input = normalize_need_user_input(extracted.get("need_user_input"))
@@ -1235,6 +1262,18 @@ Return ONLY a JSON object matching the supplied response schema."""
                 or ""
             ).strip()
         )
+
+        inferred_meal_when = _infer_meal_datetime_for_date_only(
+            raw_when=raw_when,
+            message=message,
+            parsed_when=when,
+        )
+        if inferred_meal_when is not None:
+            logger.info(
+                "[event_extraction] Inferred meal event time from date-only value: %s",
+                inferred_meal_when.isoformat(),
+            )
+            when = inferred_meal_when
 
         if when is None:
             inferred_recent_when = _infer_recent_event_datetime(message)
@@ -1476,7 +1515,25 @@ def _replace_generic_terms_in_text(
         escaped = re.escape(generic_term)
         pattern = re.compile(rf"(?<!\w){escaped}(?!\w)", re.IGNORECASE)
         placeholder = f"__EVENT_NAME_REPLACEMENT_{index}__"
-        result = pattern.sub(placeholder, result)
+
+        replacement_suffix = ""
+        if replacement_text.lower().startswith(generic_term.lower()):
+            replacement_suffix = replacement_text[len(generic_term) :].strip()
+
+        def _replace_match(
+            match: re.Match[str],
+            *,
+            current_result: str = result,
+            current_suffix: str = replacement_suffix,
+            current_placeholder: str = placeholder,
+        ) -> str:
+            if current_suffix:
+                following_text = current_result[match.end() :].lstrip()
+                if following_text.lower().startswith(current_suffix.lower()):
+                    return match.group(0)
+            return current_placeholder
+
+        result = pattern.sub(_replace_match, result)
         placeholder_map[placeholder] = replacement_text
 
     for placeholder, replacement_text in placeholder_map.items():

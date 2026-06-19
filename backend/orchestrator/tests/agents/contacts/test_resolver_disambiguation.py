@@ -3,7 +3,7 @@
 import sys
 import types
 
-from agents.contacts import prompt_builders, resolver
+from agents.contacts import participant_filter, prompt_builders, resolver
 from llm_helpers import LLMUnavailableError
 
 
@@ -738,6 +738,28 @@ def test_fast_extract_people_keeps_relationship_and_separate_name():
     assert applied is True
     assert selectors == []
     assert people == ["user", "my wife", "Dana Lewis"]
+
+
+def test_fast_extract_people_keeps_lowercase_names_in_explicit_with_list():
+    people, selectors, applied = resolver._fast_extract_people_from_text(
+        "yesterday I went out for lunch at dragao with Marcela, Sophia, Israel, paty and bebel"
+    )
+
+    assert applied is True
+    assert selectors == []
+    assert people == ["user", "Marcela", "Sophia", "Israel", "paty", "bebel"]
+
+
+def test_participant_filter_prompt_treats_forgot_followups_as_additive():
+    prompt = participant_filter.build_event_participant_filter_prompt(
+        text="Lunch with Marcela, Sophia, Israel, paty and bebel",
+        people=["Marcela", "Sophia", "Israel", "paty", "bebel"],
+        conversation_block='Conversation messages: [{"role":"user","content":"You forgot paty"}]\n\n',
+        user_facts_block="",
+    )
+
+    assert "forgot X" in prompt
+    assert "do NOT remove other participants" in prompt
 
 
 def test_participant_filter_can_clear_people_list(monkeypatch):

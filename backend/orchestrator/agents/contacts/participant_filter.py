@@ -26,6 +26,7 @@ Candidate people extracted from the text:
 Task:
 - Keep ONLY people who are actual participants of the event/request.
 - Exclude people who are merely mentioned as background context, examples, employers, relatives of someone else, or third parties not actually part of the event.
+- Treat the Text as the primary source of who participated. Clarification messages like "you forgot X" or "also X" are additive corrections; they do NOT remove other participants from the Text unless the user explicitly says to remove/exclude them.
 - Keep named possessive collective mentions such as "Morgan Brooks's whole family" or "Dana's co workers" WHEN the text says that collective was present, attended, joined, came along, or otherwise participated. These mentions are needed for later expansion.
 - Treat explicit clarification like "do not add", "should not be added", "was not part of the call", or equivalent as a hard exclusion.
 - If the user says a person was worked with, talked about, or referenced, that alone does NOT make them a participant.

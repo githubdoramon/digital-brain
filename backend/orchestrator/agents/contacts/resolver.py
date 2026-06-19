@@ -216,6 +216,20 @@ _DIRECT_OBJECT_PERSON_PATTERN = re.compile(
     rf"(?=(?:\s+\b(?:at|from|in|on|near|inside|during|around|for|about|to)\b)|[,.!?]|$)",
     re.IGNORECASE,
 )
+_LOWERCASE_LIST_NAME_PATTERN = re.compile(r"^[A-Za-zÀ-ÖØ-öø-ÿ][A-Za-zÀ-ÖØ-öø-ÿ'-]{1,31}$")
+_LOWERCASE_LIST_NAME_STOPWORDS = {
+    "adults",
+    "children",
+    "colleagues",
+    "coworkers",
+    "everyone",
+    "family",
+    "friends",
+    "guests",
+    "kids",
+    "people",
+    "team",
+}
 _CONTACT_RESOLUTION_MODEL_OVERRIDE: ContextVar[str | None] = ContextVar(
     "contact_resolution_model_override", default=None
 )
@@ -790,15 +804,34 @@ def _looks_like_list_person_mention(value: str) -> bool:
     return 1 <= len(tokens) <= 3
 
 
+def _looks_like_lowercase_list_name(value: str) -> bool:
+    candidate = str(value or "").strip(" .,!?;:\"'")
+    if not candidate:
+        return False
+    normalized = normalize_search_text(candidate)
+    if normalized in _LOWERCASE_LIST_NAME_STOPWORDS:
+        return False
+    if normalized in _USER_SCOPED_FAMILY_RELATIONSHIP_TERMS:
+        return False
+    return bool(_LOWERCASE_LIST_NAME_PATTERN.fullmatch(candidate))
+
+
 def _extract_people_from_with_lists(text: str) -> list[str]:
     mentions: list[str] = []
     for match in _LIST_WITH_CONTEXT_PATTERN.finditer(text):
         raw_list = str(match.group("list") or "").strip()
         if not raw_list:
             continue
-        for raw_part in _LIST_SPLIT_PATTERN.split(raw_list):
-            candidate = str(raw_part or "").strip(" .,!?;:\"'")
-            if _looks_like_list_person_mention(candidate):
+        raw_parts = [
+            str(raw_part or "").strip(" .,!?;:\"'")
+            for raw_part in _LIST_SPLIT_PATTERN.split(raw_list)
+        ]
+        raw_parts = [part for part in raw_parts if part]
+        has_explicit_list = len(raw_parts) >= 2
+        for candidate in raw_parts:
+            if _looks_like_list_person_mention(candidate) or (
+                has_explicit_list and _looks_like_lowercase_list_name(candidate)
+            ):
                 mentions.append(candidate)
     return mentions
 
