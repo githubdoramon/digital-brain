@@ -1,3 +1,4 @@
+import commands.contact as contact_command
 from commands.contact import _apply_modifications_to_proposal, confirm_contact_command
 from commands.handlers import contact as contact_handler
 from commands.handlers.contact import handle_contact
@@ -176,10 +177,53 @@ def test_handle_contact_requests_clarification_for_ambiguous_birth_date(monkeypa
     assert result["type"] == "need_user_input"
     prompt = result["need_user_input"]["prompt"]
     assert "birth date" in prompt.lower()
+    assert result["command_state"]["command_name"] == "contact"
+    assert result["command_state"]["thread_id"] == "thread-234"
 
     clarification_id = result["clarification_id"]
     delete_command_data(clarification_id)
     clear_pending_event(context["event_pending_key"])
+
+
+def test_contact_command_data_falls_back_to_persisted_confirmation(monkeypatch):
+    monkeypatch.setattr("commands.contact.get_command_data", lambda _preview_id: None)
+    monkeypatch.setattr(
+        "commands.state.conversations.get_command_exchange_from_metadata",
+        lambda preview_id, user_email: {
+            "thread_id": "thread-contact",
+            "assistant_metadata": {
+                "command_result": {
+                    "type": "contact_confirmation",
+                    "preview_id": preview_id,
+                    "proposal": {
+                        "contacts": [
+                            {
+                                "operation": "create",
+                                "reference": "new_contact:casey",
+                                "display_name": "Casey Example",
+                            }
+                        ],
+                        "relationships": [],
+                        "derived_relationships": [],
+                        "places": [],
+                        "contact_place_links": [],
+                    },
+                },
+            },
+            "user_message": "/contact Casey Example is a new contact",
+        },
+    )
+
+    restored = contact_command._get_contact_command_data(
+        "contact:preview:abc12345",
+        "user@example.com",
+    )
+
+    assert restored is not None
+    assert restored["command_name"] == "contact"
+    assert restored["thread_id"] == "thread-contact"
+    assert restored["original_message"] == "/contact Casey Example is a new contact"
+    assert restored["proposal"]["contacts"][0]["display_name"] == "Casey Example"
 
 
 def test_handle_contact_disambiguation_includes_select_options(monkeypatch):

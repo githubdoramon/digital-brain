@@ -639,6 +639,12 @@ def delete_empty_threads(user_email: str | None = None) -> int:
                       FROM conversation_messages m
                       WHERE m.thread_id = t.id
                   )
+                  AND NOT EXISTS (
+                      SELECT 1
+                      FROM main_sessions ms
+                      WHERE ms.user_email = t.user_email
+                        AND ms.current_thread_id = t.id
+                  )
                 RETURNING 1
                 """,
                 (user_email,),
@@ -652,6 +658,11 @@ def delete_empty_threads(user_email: str | None = None) -> int:
                     FROM conversation_messages m
                     WHERE m.thread_id = t.id
                 )
+                  AND NOT EXISTS (
+                      SELECT 1
+                      FROM main_sessions ms
+                      WHERE ms.current_thread_id = t.id
+                  )
                 RETURNING 1
                 """
             )

@@ -1375,19 +1375,20 @@ def handle_contact(parsed: ParsedCommand, context: dict[str, Any]) -> dict[str, 
             clarification_prompt,
         )
         clarification_preview_id = create_clarification_preview_id("contact")
+        clarification_payload = build_clarification_storage_payload(
+            original_message=original_message,
+            assistant_prompt=_need_user_input_prompt(explicit_need_user_input),
+            existing_messages=conversation_messages,
+            requested_fields=explicit_need_user_input.get("fields") or [],
+            extra_payload={
+                "command_name": "contact",
+                "extracted": extracted,
+                "thread_id": context.get("thread_id"),
+            },
+        )
         store_clarification_preview(
             clarification_preview_id,
-            build_clarification_storage_payload(
-                original_message=original_message,
-                assistant_prompt=_need_user_input_prompt(explicit_need_user_input),
-                existing_messages=conversation_messages,
-                requested_fields=explicit_need_user_input.get("fields") or [],
-                extra_payload={
-                    "command_name": "contact",
-                    "extracted": extracted,
-                    "thread_id": context.get("thread_id"),
-                },
-            ),
+            clarification_payload,
             context.get("event_pending_key"),
         )
         return build_clarification_result(
@@ -1400,6 +1401,7 @@ def handle_contact(parsed: ParsedCommand, context: dict[str, Any]) -> dict[str, 
                 "submission_mode": "ui_submission",
                 "context": {"clarification_id": clarification_preview_id},
             },
+            {"command_state": clarification_payload},
         )
 
     forced_new_contact_names, force_all_ambiguous_new_contacts, latest_clarification_detail = (
@@ -1426,19 +1428,20 @@ def handle_contact(parsed: ParsedCommand, context: dict[str, Any]) -> dict[str, 
             proposal_clarification_prompt,
         )
         clarification_preview_id = create_clarification_preview_id("contact")
+        clarification_payload = build_clarification_storage_payload(
+            original_message=original_message,
+            assistant_prompt=_need_user_input_prompt(proposal_need_user_input),
+            existing_messages=conversation_messages,
+            requested_fields=proposal_need_user_input.get("fields") or [],
+            extra_payload={
+                "command_name": "contact",
+                "extracted": extracted,
+                "thread_id": context.get("thread_id"),
+            },
+        )
         store_clarification_preview(
             clarification_preview_id,
-            build_clarification_storage_payload(
-                original_message=original_message,
-                assistant_prompt=_need_user_input_prompt(proposal_need_user_input),
-                existing_messages=conversation_messages,
-                requested_fields=proposal_need_user_input.get("fields") or [],
-                extra_payload={
-                    "command_name": "contact",
-                    "extracted": extracted,
-                    "thread_id": context.get("thread_id"),
-                },
-            ),
+            clarification_payload,
             context.get("event_pending_key"),
         )
         return build_clarification_result(
@@ -1451,6 +1454,7 @@ def handle_contact(parsed: ParsedCommand, context: dict[str, Any]) -> dict[str, 
                 or _clarification_action_id(clarification_preview_id),
                 "context": {"clarification_id": clarification_preview_id},
             },
+            {"command_state": clarification_payload},
         )
 
     preview_id = f"contact:preview:{uuid4().hex[:8]}"

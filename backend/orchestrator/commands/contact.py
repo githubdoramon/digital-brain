@@ -21,10 +21,38 @@ from schemas import (
 )
 
 from .event import _safe_entity_slug
+from .state import get_recoverable_command_data
 from .storage import clear_pending_event_by_preview_id, delete_command_data, get_command_data
 
 logger = get_runtime_logger(__name__)
 _CONTACT_LIST_FIELDS = ("aliases", "emails", "phones", "links", "tags")
+
+
+def _contact_command_data_from_result(
+    command_result: dict[str, Any],
+    exchange: dict[str, Any],
+    _user_email: str,
+) -> dict[str, Any] | None:
+    if command_result.get("type") != "contact_confirmation":
+        return None
+    proposal = command_result.get("proposal")
+    if not isinstance(proposal, dict):
+        return None
+    return {
+        "command_name": "contact",
+        "proposal": copy.deepcopy(proposal),
+        "original_message": exchange.get("user_message") or "",
+        "thread_id": exchange.get("thread_id"),
+    }
+
+
+def _get_contact_command_data(preview_id: str, user_email: str) -> dict[str, Any] | None:
+    return get_recoverable_command_data(
+        preview_id,
+        user_email,
+        get_cached_data=get_command_data,
+        build_from_command_result=_contact_command_data_from_result,
+    )
 
 
 def _relationship_label(raw_value: Any) -> str:
@@ -649,12 +677,13 @@ def confirm_contact_command(
         raise HTTPException(status_code=400, detail="Authenticated user email missing")
 
     if not payload.confirmed:
+        _get_contact_command_data(payload.preview_id, user_email)
         delete_command_data(payload.preview_id)
         clear_pending_event_by_preview_id(payload.preview_id)
         _persist_contact_resolved(payload.preview_id, "cancelled")
         return ContactCommandResult(success=False, error="Contact update cancelled by user")
 
-    command_data = get_command_data(payload.preview_id)
+    command_data = _get_contact_command_data(payload.preview_id, user_email)
     if not command_data:
         raise HTTPException(
             status_code=404,

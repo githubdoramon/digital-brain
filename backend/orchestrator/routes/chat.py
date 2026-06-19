@@ -1134,6 +1134,8 @@ def _handle_command(
     command_thread_id = command_thread["id"]
     pending_key = event_pending_key(user_email, command_thread_id)
     store_command_thread(pending_key, command_thread_id)
+    if thread_id is None:
+        conversations.set_main_session_thread(user_email, command_thread_id)
 
     registry = get_command_registry()
     context = {
@@ -1148,9 +1150,6 @@ def _handle_command(
     command_result = registry.execute(parsed_cmd, context)
     if command_result.get("type") == "error" and media_attachments:
         delete_staged_chat_media_attachments(media_attachments)
-
-    if thread_id is None:
-        conversations.set_main_session_thread(user_email, command_thread_id)
 
     assistant_metadata, ui_directives = _command_assistant_metadata(command_result)
     try:

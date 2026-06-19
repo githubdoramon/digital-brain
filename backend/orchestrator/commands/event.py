@@ -39,6 +39,7 @@ from schemas import (
 from search_normalization import normalize_search_text
 
 from . import get_command_registry, parse_command
+from .state import ensure_restored_thread_exists, get_recoverable_command_data
 from .storage import (
     clear_pending_event,
     clear_pending_event_by_preview_id,
@@ -65,28 +66,11 @@ def event_pending_key(user_email: str, thread_id: str | None) -> str:
     return f"{user_email}:{resolved_thread}"
 
 
-def _command_data_from_persisted_exchange(
-    preview_id: str,
+def _event_command_data_from_result(
+    command_result: dict[str, Any],
+    exchange: dict[str, Any],
     user_email: str,
 ) -> dict[str, Any] | None:
-    exchange = conversations.get_command_exchange_from_metadata(preview_id, user_email)
-    if not exchange:
-        return None
-
-    metadata = exchange.get("assistant_metadata")
-    if not isinstance(metadata, dict):
-        return None
-    command_result = metadata.get("command_result")
-    if not isinstance(command_result, dict):
-        return None
-
-    command_state = command_result.get("command_state")
-    if isinstance(command_state, dict):
-        restored = deepcopy(command_state)
-        restored.setdefault("thread_id", exchange.get("thread_id"))
-        restored.setdefault("user_email", user_email)
-        return restored
-
     if command_result.get("type") != "event_confirmation":
         return None
 
@@ -114,10 +98,12 @@ def _command_data_from_persisted_exchange(
 
 
 def _get_event_command_data(preview_id: str, user_email: str) -> dict[str, Any] | None:
-    command_data = get_command_data(preview_id)
-    if command_data:
-        return command_data
-    return _command_data_from_persisted_exchange(preview_id, user_email)
+    return get_recoverable_command_data(
+        preview_id,
+        user_email,
+        get_cached_data=get_command_data,
+        build_from_command_result=_event_command_data_from_result,
+    )
 
 
 def handle_pending_event(
@@ -155,8 +141,21 @@ def handle_pending_event(
     )
 
     command_thread_id = command_data.get("thread_id") or thread_id
+    if command_thread_id and command_data.get("thread_id"):
+        try:
+            command_thread_id = ensure_restored_thread_exists(command_data, user_email)
+        except LookupError:
+            logger.warning(
+                "[command_thread] Pending event thread missing; creating replacement thread"
+            )
+            command_thread_id = None
+        except PermissionError as exc:
+            raise HTTPException(
+                status_code=403,
+                detail="Conversation thread does not belong to user",
+            ) from exc
     if command_thread_id:
-        key = event_pending_key(user_email, command_thread_id)
+        key = event_pending_key(user_email, str(command_thread_id))
 
     clarification_id = f"event:clarification:{uuid4().hex[:8]}"
     store_command_data(clarification_id, command_data)
@@ -184,6 +183,8 @@ def handle_pending_event(
         store_command_thread(key, command_thread_id)
     else:
         store_command_thread(key, command_thread_id)
+    if thread_id is None:
+        conversations.set_main_session_thread(user_email, str(command_thread_id))
 
     registry = get_command_registry()
     context = {

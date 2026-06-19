@@ -19,7 +19,7 @@ from commands.storage import (
 def test_event_command_data_falls_back_to_persisted_confirmation(monkeypatch):
     monkeypatch.setattr("commands.event.get_command_data", lambda _preview_id: None)
     monkeypatch.setattr(
-        "commands.event.conversations.get_command_exchange_from_metadata",
+        "commands.state.conversations.get_command_exchange_from_metadata",
         lambda preview_id, user_email: {
             "thread_id": "thread-123",
             "assistant_metadata": {
@@ -63,7 +63,7 @@ def test_event_command_data_falls_back_to_persisted_clarification_state(monkeypa
 
     monkeypatch.setattr("commands.event.get_command_data", lambda _preview_id: None)
     monkeypatch.setattr(
-        "commands.event.conversations.get_command_exchange_from_metadata",
+        "commands.state.conversations.get_command_exchange_from_metadata",
         lambda _preview_id, _user_email: {
             "thread_id": "thread-123",
             "assistant_metadata": {
