@@ -31,10 +31,6 @@ from typing import Any, Optional
 
 import contact_groups as contact_groups_service
 import contacts as contacts_service
-from agents.contacts.participant_filter import (
-    build_event_participant_filter_prompt,
-    parse_event_participant_filter_result,
-)
 from agents.contacts.prompt_builders import (
     build_collective_selector_prompt,
     build_contact_disambiguation_prompt,
@@ -54,7 +50,6 @@ from llm_helpers import (
 from llm_json_schemas import (
     COLLECTIVE_SELECTOR_RESPONSE_SCHEMA,
     CONTACT_DISAMBIGUATION_RESPONSE_SCHEMA,
-    EVENT_PARTICIPANT_FILTER_RESPONSE_SCHEMA,
     NESTED_RELATIONSHIP_SELECTION_RESPONSE_SCHEMA,
     PEOPLE_EXTRACTION_RESPONSE_SCHEMA,
     PROFESSION_INFERENCE_RESPONSE_SCHEMA,
@@ -125,9 +120,17 @@ _EXPLICIT_NEW_CONTACT_MARKERS = (
     "new contacts",
     "new person",
     "new people",
+    "add as new",
+    "create a new contact",
+    "create new contact",
+    "different person",
+    "different contact",
+    "new one",
     "not in the database",
     "not in database",
-    "not in memory"
+    "not in memory",
+    "not that one",
+    "not the one",
     "wont find in the database",
     "won't find in the database",
     "doesnt exist",
@@ -1131,6 +1134,12 @@ def _extract_explicit_new_contact_names(
             continue
         if not any(marker in normalized_segment for marker in _EXPLICIT_NEW_CONTACT_MARKERS):
             continue
+        if len(normalized_people) == 1 and not any(
+            normalized_person and normalized_person in normalized_segment
+            for normalized_person in normalized_people
+        ):
+            forced_new.update(normalized_people)
+            continue
         for normalized_person in normalized_people:
             if normalized_person and normalized_person in normalized_segment:
                 forced_new.add(normalized_person)
@@ -1306,52 +1315,6 @@ def _repair_missing_possessive_collective_mentions(
     return repaired
 
 
-def _filter_event_participants_via_llm(
-    *,
-    text: str,
-    people: list[str],
-    conversation_block: str,
-    user_facts_block: str,
-) -> tuple[list[str], list[str]]:
-    if not people:
-        return [], []
-
-    prompt = build_event_participant_filter_prompt(
-        text=text,
-        people=people,
-        conversation_block=conversation_block,
-        user_facts_block=user_facts_block,
-    )
-    result = _call_contact_resolution_llm_json(
-        prompt,
-        timeout=45,
-        temperature=0.1,
-        top_p=0.9,
-        use_fast_model=True,
-        response_format=_schema_response_format(
-            "event_participant_filter",
-            EVENT_PARTICIPANT_FILTER_RESPONSE_SCHEMA,
-        ),
-    )
-    if not isinstance(result, dict):
-        return [], []
-    return parse_event_participant_filter_result(people=people, result=result)
-
-
-_EXPLICIT_PARTICIPANT_CUE_PATTERN = re.compile(
-    r"\b(just arrived|arrived|is also here|is here|are here|are with us|joined us|came along|came over|is present|are present)\b",
-    re.IGNORECASE,
-)
-
-
-def _deterministic_participant_filter(text: str, people: list[str]) -> tuple[list[str], list[str]] | None:
-    if not people:
-        return None
-    if not _EXPLICIT_PARTICIPANT_CUE_PATTERN.search(str(text or "")):
-        return None
-    return list(people), []
-
-
 def _coerce_people_extraction_result(result: Any) -> list[str]:
     """Normalize common non-strict people extraction shapes from local models."""
     raw_people = result.get("people", []) if isinstance(result, dict) else result
@@ -1409,12 +1372,6 @@ _VAGUE_CROWD_SELECTOR_PATTERN = re.compile(
     r"(?:\s+there)?$"
 )
 
-_PARTICIPATION_CUE_PATTERN = re.compile(
-    r"\b(?:with|along with|were there|was there|there were|there was|went|came|joined|"
-    r"attended|showed up|came along|came over|present|as well)\b"
-)
-
-
 def _selector_has_explicit_collective_intent(
     *,
     text: str,
@@ -1469,60 +1426,6 @@ def _selector_has_explicit_collective_intent(
         selector_tokens.append(f"@{normalized_value}")
 
     return any(token and token in normalized_text for token in selector_tokens)
-
-
-def _collective_mention_has_participation_cue(text: str, mention: str) -> bool:
-    normalized_text = normalize_search_text(text)
-    normalized_mention = normalize_search_text(mention)
-    if not normalized_text or not normalized_mention:
-        return False
-
-    start = normalized_text.find(normalized_mention)
-    if start < 0:
-        return False
-
-    window_start = max(0, start - 80)
-    window_end = min(len(normalized_text), start + len(normalized_mention) + 80)
-    context_window = normalized_text[window_start:window_end]
-    return bool(_PARTICIPATION_CUE_PATTERN.search(context_window))
-
-
-def _restore_participant_collective_mentions(
-    *,
-    text: str,
-    original_people: list[str],
-    filtered_people: list[str],
-) -> list[str]:
-    if not original_people or not filtered_people:
-        return filtered_people
-
-    restored = list(filtered_people)
-    normalized_filtered = {_normalize_entity_for_match(person) for person in restored}
-    original_collectives = [
-        person
-        for person in original_people
-        if _POSSESSIVE_COLLECTIVE_PATTERN.fullmatch(str(person or "").strip())
-    ]
-    for collective in original_collectives:
-        collective_norm = _normalize_entity_for_match(collective)
-        if not collective_norm or collective_norm in normalized_filtered:
-            continue
-
-        owner, _, _group = collective.partition("'s ")
-        owner_norm = _normalize_entity_for_match(owner)
-        if not owner_norm or owner_norm not in normalized_filtered:
-            continue
-        if not _collective_mention_has_participation_cue(text, collective):
-            continue
-
-        logger.info(
-            "[contact_resolver] Restoring participant collective mention '%s' after participant filter",
-            collective,
-        )
-        restored.append(collective)
-        normalized_filtered.add(collective_norm)
-
-    return restored
 
 
 def _extract_collective_selectors_via_llm(
@@ -2284,52 +2187,6 @@ def resolve_contacts_from_text(
         "source": "llm",
     }
     people = _normalize_bare_family_mentions_for_user(effective_text, people)
-    if request_context.get("participant_focus") and people:
-        conversation_block = ""
-        if conversation_messages:
-            conversation_json = _format_conversation_for_prompt(conversation_messages)
-            if conversation_json:
-                conversation_block = (
-                    f"Conversation messages (JSON array, most recent last):\n{conversation_json}\n\n"
-                )
-        user_facts_context = _get_contact_resolution_user_facts_context(
-            user_email,
-            effective_text,
-            include_soft_facts=False,
-            request_context=request_context,
-        )
-        user_facts_block = f"{user_facts_context}\n\n" if user_facts_context else ""
-        try:
-            deterministic_participants = _deterministic_participant_filter(effective_text, people)
-            if deterministic_participants is not None:
-                filtered_people, excluded_people = deterministic_participants
-            else:
-                filtered_people, excluded_people = _filter_event_participants_via_llm(
-                    text=effective_text,
-                    people=people,
-                    conversation_block=conversation_block,
-                    user_facts_block=user_facts_block,
-                )
-            if filtered_people or excluded_people:
-                filtered_people = _restore_participant_collective_mentions(
-                    text=effective_text,
-                    original_people=people,
-                    filtered_people=filtered_people,
-                )
-                logger.info(
-                    "[contact_resolver] Participant filter kept=%s excluded=%s",
-                    filtered_people,
-                    excluded_people,
-                )
-                people = filtered_people
-        except Exception as exc:
-            if isinstance(exc, LLMUnavailableError):
-                raise
-            logger.warning(
-                "[contact_resolver] Participant filter failed; continuing with extracted people: %s",
-                exc,
-                exc_info=exc,
-            )
     logger.info("[contact_resolver] Extracted %s people: %s", len(people), people)
 
     selector_mentions = _merge_collective_selectors(selector_mentions, llm_selector_mentions)
@@ -2604,6 +2461,40 @@ def _resolve_people_mentions(
                 )
                 continue
 
+            candidates = resolution["candidates"]
+            if len(candidates) == 1 and not resolution.get("skip_auto_disambiguation"):
+                candidate = candidates[0]
+                resolved_contact = {
+                    "original_text": person_text,
+                    "contact_id": candidate.get("contact_id"),
+                    "display_name": candidate.get("display_name"),
+                    "matched_via": "single_candidate_match",
+                    "confidence": "high",
+                    "resolution_path": None,
+                }
+                resolved_contacts.append(resolved_contact)
+                resolution_cache[person_text] = {
+                    "status": "resolved",
+                    "contact_id": candidate.get("contact_id"),
+                    "display_name": candidate.get("display_name"),
+                    "matched_via": "single_candidate_match",
+                    "confidence": "high",
+                    "resolution_path": None,
+                    "candidates": candidates,
+                }
+                trace.trace_contact_resolution_outcome(
+                    "single_candidate_resolved",
+                    {
+                        "person_text": person_text,
+                        "contact_id": candidate.get("contact_id"),
+                    },
+                )
+                logger.info(
+                    "[contact_resolver] Single candidate resolved without LLM: %s",
+                    candidate.get("display_name"),
+                )
+                continue
+
             llm_result = {"resolved": False, "new_contact": False}
             if not resolution.get("skip_auto_disambiguation"):
                 llm_result = _llm_disambiguate_contact(
@@ -2726,9 +2617,6 @@ def _should_accept_llm_disambiguation(
     confidence = str(llm_result.get("confidence", "low")).lower()
     if confidence != "high":
         return False
-
-    if len(candidates) == 1:
-        return True
 
     strictness = _get_disambiguation_strictness()
     if strictness == "lenient":

@@ -3,7 +3,7 @@
 import sys
 import types
 
-from agents.contacts import participant_filter, prompt_builders, resolver
+from agents.contacts import prompt_builders, resolver
 from llm_helpers import LLMUnavailableError
 
 
@@ -44,7 +44,7 @@ def test_llm_disambiguation_requires_context_signal(monkeypatch):
     assert ambiguous[0]["original_text"] == "Gio"
 
 
-def test_single_candidate_disambiguation_accepts_high_confidence_llm(monkeypatch):
+def test_single_candidate_resolution_does_not_call_llm_disambiguation(monkeypatch):
     candidates = [
         {
             "contact_id": "contact:sophia-vieira-fanti",
@@ -65,12 +65,9 @@ def test_single_candidate_disambiguation_accepts_high_confidence_llm(monkeypatch
     monkeypatch.setattr(
         resolver,
         "_llm_disambiguate_contact",
-        lambda *_args, **_kwargs: {
-            "resolved": True,
-            "contact_id": "contact:sophia-vieira-fanti",
-            "display_name": "Sophia Vieira Fanti",
-            "confidence": "high",
-        },
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("single-candidate resolution should not call LLM disambiguation")
+        ),
     )
 
     resolved, new, ambiguous, _cache = resolver._resolve_people_mentions(
@@ -88,6 +85,7 @@ def test_single_candidate_disambiguation_accepts_high_confidence_llm(monkeypatch
 
     assert len(resolved) == 1
     assert resolved[0]["contact_id"] == "contact:sophia-vieira-fanti"
+    assert resolved[0]["matched_via"] == "single_candidate_match"
     assert new == []
     assert ambiguous == []
 
@@ -451,6 +449,44 @@ def test_resolve_people_honors_explicit_new_contact_before_fuzzy_match(monkeypat
     assert new == [{"original_text": "Taylor Reed", "display_name": "Taylor Reed"}]
 
 
+def test_single_candidate_resolution_honors_unnamed_new_contact_followup(monkeypatch):
+    monkeypatch.setattr(
+        resolver,
+        "resolve_contact",
+        lambda *_args, **_kwargs: {
+            "status": "candidates",
+            "candidates": [
+                {
+                    "contact_id": "contact:sophia-existing",
+                    "display_name": "Sophia Existing",
+                    "match_score": 95,
+                }
+            ],
+        },
+    )
+    monkeypatch.setattr(
+        resolver,
+        "_llm_disambiguate_contact",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("explicit new-contact follow-up should bypass disambiguation")
+        ),
+    )
+
+    resolved, new, ambiguous, _cache = resolver._resolve_people_mentions(
+        people=["Sophia"],
+        user_email="user@example.com",
+        full_text="Lunch with Sophia.",
+        conversation_messages=[
+            {"role": "assistant", "content": "I found one matching contact."},
+            {"role": "user", "content": "No, create a new contact for this person"},
+        ],
+    )
+
+    assert resolved == []
+    assert ambiguous == []
+    assert new == [{"original_text": "Sophia", "display_name": "Sophia"}]
+
+
 def test_resolve_contacts_keeps_current_text_even_with_history(monkeypatch):
     captured = {}
 
@@ -705,41 +741,6 @@ def test_resolve_contacts_uses_llm_extraction_for_partial_multi_person_mentions(
 
     assert captured["text"] == "I met John and pedro yesterday"
     assert result["people_mentioned"] == ["John", "pedro"]
-
-
-def test_participant_filter_prompt_treats_forgot_followups_as_additive():
-    prompt = participant_filter.build_event_participant_filter_prompt(
-        text="Lunch with Marcela, Sophia, Israel, paty and bebel",
-        people=["Marcela", "Sophia", "Israel", "paty", "bebel"],
-        conversation_block='Conversation messages: [{"role":"user","content":"You forgot paty"}]\n\n',
-        user_facts_block="",
-    )
-
-    assert "forgot X" in prompt
-    assert "do NOT remove other participants" in prompt
-
-
-def test_participant_filter_can_clear_people_list(monkeypatch):
-    monkeypatch.setattr(
-        resolver,
-        "_filter_event_participants_via_llm",
-        lambda **_kwargs: ([], ["user", "Rita"]),
-    )
-    monkeypatch.setattr(
-        resolver,
-        "_resolve_people_mentions",
-        lambda *args, **kwargs: ([], [], [], {}),
-    )
-
-    result = resolver.resolve_contacts_from_text(
-        "I met Rita at the physiotherapy session",
-        "user@example.com",
-        mode=resolver.MINIMAL_RESOLUTION_MODE,
-        participant_focus=True,
-    )
-
-    assert result["status"] == "no_people"
-    assert result["people_mentioned"] == []
 
 
 def test_resolve_contacts_uses_llm_extraction_for_group_mentions(monkeypatch):
@@ -1609,6 +1610,9 @@ def test_people_extraction_prompt_forbids_alternate_properties():
     assert 'The object MUST contain exactly one property: "people".' in prompt
     assert 'Do NOT use alternate property names such as "people_references"' in prompt
     assert 'Do NOT wrap people in objects like {"name": "..."}.' in prompt
+    assert 'When the text says an event happened "with X", "with X and Y"' in prompt
+    assert "Explicit participant lists may contain lowercase nicknames" in prompt
+    assert "If the text explicitly says someone was only discussed" in prompt
 
 
 def test_collective_selector_extraction_normalizes_direct_list(monkeypatch):
@@ -1814,7 +1818,7 @@ def test_resolve_contacts_from_text_resolves_bare_family_mentions_against_user_r
     }
 
 
-def test_resolve_contacts_restores_collective_family_mentions_after_participant_filter(monkeypatch):
+def test_resolve_contacts_preserves_collective_family_mentions_in_participant_mode(monkeypatch):
     monkeypatch.setattr(
         resolver,
         "extract_people_from_text",
@@ -1822,11 +1826,6 @@ def test_resolve_contacts_restores_collective_family_mentions_after_participant_
             ["user", "Morgan Brooks", "Morgan Brooks's whole family"],
             [],
         ),
-    )
-    monkeypatch.setattr(
-        resolver,
-        "_filter_event_participants_via_llm",
-        lambda **_kwargs: (["user", "Morgan Brooks"], ["Morgan Brooks's whole family"]),
     )
     monkeypatch.setattr(
         resolver,
@@ -1975,16 +1974,11 @@ def test_alias_plus_surname_match_resolves_uniquely(monkeypatch):
     assert result["display_name"] == "Beatriz Queiroz Fanti"
 
 
-def test_participant_focus_with_explicit_presence_bypasses_llm_filter(monkeypatch):
+def test_participant_focus_preserves_extracted_people(monkeypatch):
     monkeypatch.setattr(
         resolver,
         "extract_people_from_text",
         lambda *_args, **_kwargs: (["Dana Lewis", "Alex Carter"], []),
-    )
-    monkeypatch.setattr(
-        resolver,
-        "_filter_event_participants_via_llm",
-        lambda **_kwargs: (_ for _ in ()).throw(AssertionError("LLM filter should not run")),
     )
     monkeypatch.setattr(
         resolver,

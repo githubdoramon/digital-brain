@@ -178,16 +178,6 @@ COLLECTIVE_SELECTOR_RESPONSE_SCHEMA: dict[str, Any] = {
     "additionalProperties": False,
 }
 
-EVENT_PARTICIPANT_FILTER_RESPONSE_SCHEMA: dict[str, Any] = {
-    "type": "object",
-    "properties": {
-        "participants": STRING_ARRAY_SCHEMA,
-        "excluded": STRING_ARRAY_SCHEMA,
-    },
-    "required": ["participants", "excluded"],
-    "additionalProperties": False,
-}
-
 CONTACT_DISAMBIGUATION_RESPONSE_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {

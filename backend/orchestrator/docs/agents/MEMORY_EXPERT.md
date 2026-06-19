@@ -17,9 +17,8 @@ When a query is person-referential and memory search lacks `contact_ids`:
 3. If ambiguous, return clarification-needed outcome instead of unfiltered retrieval.
 4. Prevent repetitive identical `resolve_contacts` calls after clarification/no-person outcomes.
 
-Single-candidate fuzzy matches that are not safe enough for deterministic direct resolution may
-still be accepted after high-confidence LLM disambiguation. Multi-candidate ambiguity remains
-conservative and follows `CONTACT_DISAMBIGUATION_STRICTNESS`.
+Single-candidate lookup results resolve directly without LLM disambiguation. Multi-candidate
+ambiguity remains conservative and follows `CONTACT_DISAMBIGUATION_STRICTNESS`.
 
 Controller-side contact-scope lifecycle is centralized in
 `backend/orchestrator/agent/contact_scope.py`, with thin controller wrappers.

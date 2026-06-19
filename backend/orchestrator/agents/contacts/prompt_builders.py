@@ -27,6 +27,12 @@ Extract ONLY people references including:
 - Nested relationships when clear (e.g., \"my daughter's doctor\")
 - The current user as \"user\" IF THEY are an active participant in the event (referred to, for example, as "I", "me", "my", "mine", "myself", "we", "us", "our", "ours")
 
+Event participant extraction:
+- When the text says an event happened "with X", "with X and Y", "along with X", or similar, treat each listed person as an event participant and include every listed name.
+- Explicit participant lists may contain lowercase nicknames; keep them as person references when they are list items.
+- Do NOT drop one listed participant just because another participant is more strongly related to the user.
+- If the text explicitly says someone was only discussed, referenced, not present, not part of the call/event, or should not be added, omit that person.
+
 Normalization rules:
 - If text has \"X's <corporate/professional title>\" where X is an organization/company/team, output ONE person mention formatted as \"<title> at X\".
 - If a proper name and a relationship/profession clearly describe the SAME person in the same clause, return ONLY the proper name.

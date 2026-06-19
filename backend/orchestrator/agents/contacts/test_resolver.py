@@ -710,7 +710,7 @@ def test_resolve_contacts_mixed_results(mock_contacts):
 
 
 @patch("agents.contacts.resolver.contacts_service")
-def test_resolve_contacts_from_text_participant_focus_filters_background_people(mock_contacts):
+def test_resolve_contacts_from_text_participant_focus_preserves_extracted_people(mock_contacts):
     mock_contacts.find_self_contact.return_value = {
         "contact_id": "user-contact-123",
         "display_name": "Test User",
@@ -718,22 +718,20 @@ def test_resolve_contacts_from_text_participant_focus_filters_background_people(
     mock_contacts.get_contact_relationships.return_value = {"relationships": []}
     mock_contacts.search_contacts.side_effect = [
         [{"contact_id": "contact-dana", "display_name": "Dana Lewis", "match_score": 95}],
+        [{"contact_id": "contact-ceo", "display_name": "the company's CEO", "match_score": 95}],
         [{"contact_id": "user-contact-123", "display_name": "Test User", "match_score": 100}],
     ]
 
     with patch("agents.contacts.resolver.extract_people_from_text") as mock_extract:
-        with patch("agents.contacts.resolver._filter_event_participants_via_llm") as mock_filter:
-            mock_extract.return_value = ["Dana Lewis", "the company's CEO", "user"]
-            mock_filter.return_value = (["Dana Lewis", "user"], ["the company's CEO"])
+        mock_extract.return_value = ["Dana Lewis", "the company's CEO", "user"]
 
-            result = resolve_contacts_from_text(
-                "Had a catch-up call with Dana Lewis. The company's CEO was discussed but was not part of the call.",
-                "user@example.com",
-                participant_focus=True,
-            )
+        result = resolve_contacts_from_text(
+            "Had a catch-up call with Dana Lewis. The company's CEO was discussed but was not part of the call.",
+            "user@example.com",
+            participant_focus=True,
+        )
 
-    assert result["people_mentioned"] == ["Dana Lewis", "user"]
-    assert all(contact["display_name"] != "the company's CEO" for contact in result["resolved_contacts"])
+    assert result["people_mentioned"] == ["Dana Lewis", "the company's CEO", "user"]
 
 
 def run_manual_tests():
