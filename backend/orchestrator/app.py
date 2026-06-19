@@ -8,8 +8,8 @@ import fastapi
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-import conversations
 import contact_tag_jobs
+import conversations
 import daily_briefing_jobs
 import document_tag_jobs
 import event_tag_jobs
