@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 
 os.environ.setdefault("LLM_BASE_URL", "http://localhost:11434/v1")
