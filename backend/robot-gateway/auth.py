@@ -20,10 +20,19 @@ def _env_flag(name: str) -> bool:
 
 DEV_BYPASS_AUTH = _env_flag("DEV_BYPASS_AUTH")
 DEV_USER_EMAIL = os.environ.get("DEV_USER_EMAIL", "").strip()
-GOOGLE_CLIENT_ID = os.environ.get("GOOGLE_CLIENT_ID")
 
-if not GOOGLE_CLIENT_ID and not DEV_BYPASS_AUTH:
-    raise ValueError("GOOGLE_CLIENT_ID is not set")
+
+def _split_csv(value: str) -> list[str]:
+    return [item.strip() for item in value.split(",") if item.strip()]
+
+
+def get_google_client_ids() -> list[str]:
+    return list(dict.fromkeys(_split_csv(os.environ.get("GOOGLE_CLIENT_IDS", ""))))
+
+
+GOOGLE_CLIENT_IDS = [] if DEV_BYPASS_AUTH else get_google_client_ids()
+if not GOOGLE_CLIENT_IDS and not DEV_BYPASS_AUTH:
+    raise ValueError("GOOGLE_CLIENT_IDS is not set")
 if DEV_BYPASS_AUTH and not DEV_USER_EMAIL:
     raise ValueError("DEV_USER_EMAIL is required when DEV_BYPASS_AUTH is enabled")
 
@@ -59,9 +68,23 @@ def require_service_api_key(
 
 def verify_google_token(token: str) -> dict:
     try:
-        return id_token.verify_oauth2_token(token, requests.Request(), GOOGLE_CLIENT_ID)
+        last_error: ValueError | None = None
+        request = requests.Request()
+        for client_id in GOOGLE_CLIENT_IDS:
+            try:
+                return id_token.verify_oauth2_token(token, request, client_id)
+            except ValueError as exc:
+                last_error = exc
+
+        raise last_error or ValueError("No Google OAuth client IDs configured")
     except ValueError as exc:
-        logger.warning("Invalid authentication token", extra={"error": str(exc)})
+        logger.warning(
+            "Invalid authentication token",
+            extra={
+                "error": str(exc),
+                "configured_google_client_ids": len(GOOGLE_CLIENT_IDS),
+            },
+        )
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail=f"Invalid authentication token: {exc!s}",

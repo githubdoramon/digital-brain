@@ -55,7 +55,7 @@ jobs:
       LLM_BASE_URL: http://localhost:11434/v1
       LLM_CHAT_MODEL_FAST: ci-test-fast-model
       LLM_CHAT_MODEL_SMART: ci-test-smart-model
-      GOOGLE_CLIENT_ID: ci-test-client-id.apps.googleusercontent.com
+      GOOGLE_CLIENT_IDS: ci-test-client-id.apps.googleusercontent.com
     defaults:
       run:
         working-directory: backend/orchestrator
