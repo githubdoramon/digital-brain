@@ -25,3 +25,9 @@ in `frontend/web/src/lib/api.ts` already handles this base path.
 
 When adding new endpoints for web usage, ensure they are routed through the same
 proxy so the browser never calls the backend directly.
+
+Web-only session requests normally do not send a bearer token from the browser.
+If a web screen calls an endpoint that also supports bearer-token clients, add the
+`/api/orchestrator/...` path to the middleware hybrid auth prefixes so the
+NextAuth session can pass middleware and the proxy route can attach the backend
+authorization header.
