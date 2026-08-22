@@ -92,6 +92,49 @@ def create_events_router(
             raise
         return {"ok": True, "queued": True, **job}
 
+    @router.post("/meetings/{meeting_id}/summary/rerun")
+    def rerun_meeting_summary(
+        meeting_id: str,
+        user: dict = Depends(get_current_user),
+    ):
+        event = events_service.get_event_by_id(meeting_id)
+        if not event:
+            raise HTTPException(status_code=404, detail="Meeting not found")
+
+        raw = event.get("raw") if isinstance(event, dict) else None
+        if not isinstance(raw, dict) or raw.get("source") != "meeting_transcript_ingest":
+            raise HTTPException(status_code=400, detail="Event has no stored meeting transcript")
+
+        stored_payload = {
+            "upload_id": raw.get("upload_id"),
+            "session_id": raw.get("session_id"),
+            "transcript_hash": raw.get("transcript_hash"),
+            "meeting": raw.get("meeting"),
+            "participants": raw.get("participants") or [],
+            "speaker_identities": raw.get("speaker_identities") or [],
+            "transcript": raw.get("transcript"),
+        }
+        try:
+            payload = MeetingTranscriptPayload.model_validate(stored_payload)
+            job = meeting_transcript_jobs.enqueue_transcript(
+                payload,
+                current_user=user,
+                force_regenerate=True,
+            )
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(
+                status_code=400,
+                detail="Stored meeting transcript is not rerunnable: " + str(exc),
+            ) from exc
+
+        return {
+            "ok": True,
+            "queued": True,
+            "rerun": True,
+            "event_id": meeting_id,
+            **job,
+        }
+
     @router.post("/ingest/event/external")
     def ingest_external_event(
         payload: ExternalEventPayload,
@@ -167,6 +210,7 @@ def create_events_router(
         limit: int = Query(default=10, ge=1, le=50),
         offset: int = Query(default=0, ge=0),
         include_future: bool = Query(default=False),
+        meeting_only: bool = Query(default=False),
         contact_ids: list[str] | None = Query(default=None),
         place_ids: list[str] | None = Query(default=None),
         event_ids: list[str] | None = Query(default=None),
@@ -192,6 +236,12 @@ def create_events_router(
 
         if not include_future:
             where_clauses.append("(e.start_date IS NULL OR e.start_date <= NOW())")
+
+        if meeting_only:
+            where_clauses.append(
+                "EXISTS (SELECT 1 FROM unnest(COALESCE(e.types, ARRAY[]::text[])) AS event_type "
+                "WHERE lower(event_type) = 'meeting')"
+            )
 
         if clean_contact_ids:
             where_clauses.append(
@@ -243,10 +293,18 @@ def create_events_router(
     @router.get("/events/{event_id}")
     @router.get("/mobile/events/{event_id}")
     def get_event_detail(event_id: str, user: dict = Depends(get_current_user)):
-        events = events_service.get_events([event_id])
-        if not events:
+        event = events_service.get_event_by_id(event_id)
+        if not event:
             raise HTTPException(status_code=404, detail="Event not found")
-        event = events[0]
+
+        # Keep the enriched people/place/photo representation while including
+        # the raw meeting transcript needed by the meeting detail screen.
+        enriched_events = events_service.get_events([event_id])
+        if enriched_events:
+            enriched = enriched_events[0]
+            event["people"] = enriched.get("people", event.get("people") or [])
+            event["place"] = enriched.get("place")
+            event["photos"] = enriched.get("photos", event.get("photos") or [])
         event["action_items"] = events_service.get_event_action_items(event_id)
         return event
 

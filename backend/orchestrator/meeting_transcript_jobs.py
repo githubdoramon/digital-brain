@@ -29,6 +29,7 @@ def enqueue_transcript(
     *,
     current_user: dict[str, Any],
     debounce_seconds: int = DEBOUNCE_SECONDS,
+    force_regenerate: bool = False,
 ) -> dict[str, Any]:
     user_email = contacts_service.normalize_email(current_user.get("email") or "")
     if not user_email:
@@ -42,6 +43,7 @@ def enqueue_transcript(
         payload={
             "transcript": payload.model_dump(by_alias=True, mode="json"),
             "current_user": current_user,
+            "force_regenerate": force_regenerate,
         },
         status_message="Queued",
         delay_seconds=debounce_seconds,
@@ -125,7 +127,10 @@ def process_due_once(
     payload = dict(job.get("payload") or {})
     try:
         transcript = MeetingTranscriptPayload.model_validate(payload.get("transcript") or {})
-        skipped_result = _unchanged_transcript_result(transcript)
+        skipped_result = _unchanged_transcript_result(
+            transcript,
+            force_regenerate=bool(payload.get("force_regenerate")),
+        )
         if skipped_result is not None:
             async_jobs.mark_succeeded(
                 job_id,
@@ -192,7 +197,14 @@ def _worker_loop() -> None:
             _STOP_EVENT.wait(POLL_SECONDS)
 
 
-def _unchanged_transcript_result(payload: MeetingTranscriptPayload) -> dict[str, Any] | None:
+def _unchanged_transcript_result(
+    payload: MeetingTranscriptPayload,
+    *,
+    force_regenerate: bool = False,
+) -> dict[str, Any] | None:
+    if force_regenerate:
+        return None
+
     incoming_hash = str(payload.transcript_hash or "").strip()
     if not incoming_hash:
         return None

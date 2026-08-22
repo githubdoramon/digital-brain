@@ -711,7 +711,7 @@ def test_generate_meeting_transcript_summary_parses_action_items(monkeypatch):
             "action_items",
         ]
         assert "action_items" in kwargs["response_format"]["json_schema"]["schema"]["properties"]
-        assert "max_tokens" not in kwargs
+        assert kwargs["max_tokens"] == 16_384
         assert kwargs["timeout"] == events.MEETING_TRANSCRIPT_SUMMARY_TIMEOUT_SECONDS
         assert kwargs["reasoning_effort"] == "high"
         return {
@@ -728,7 +728,7 @@ def test_generate_meeting_transcript_summary_parses_action_items(monkeypatch):
             ],
         }
 
-    monkeypatch.setattr("llm_helpers.call_llm_json", fake_call_llm_json)
+    monkeypatch.setattr("llm_helpers.call_llm_json_agentic", fake_call_llm_json)
 
     payload = MeetingTranscriptPayload(
         meeting={
