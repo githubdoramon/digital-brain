@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta, timezone
@@ -10,6 +11,8 @@ from uuid import uuid4
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import events as events_service
+import google_place_cache
+import google_places
 import places as places_service
 import web_tools
 from db import get_conn
@@ -20,7 +23,7 @@ from llm_json_schemas import (
 )
 from observability.logger import get_runtime_logger
 from scheduled_jobs import PROPOSED_EVENTS_DAILY
-from schemas import EventIn
+from schemas import EventIn, PlaceIn
 from search_normalization import normalize_search_text
 
 logger = get_runtime_logger(__name__)
@@ -33,12 +36,16 @@ HISTORY_LOOKBACK_DAYS = 90
 MAX_HISTORY_EVENTS = 12
 DAILY_SCAN_UTC_HOUR = PROPOSED_EVENTS_DAILY.time_utc.hour if PROPOSED_EVENTS_DAILY.time_utc else 0
 DAILY_SCAN_UTC_MINUTE = PROPOSED_EVENTS_DAILY.time_utc.minute if PROPOSED_EVENTS_DAILY.time_utc else 0
+DAILY_SCAN_LOOKBACK_DAYS = 2
 HOME_TERMS = {"home", "house", "my home", "apartment", "flat", "residence"}
 ALL_DAY_EVENT_MIN_HOURS = 18
 OVERLAP_DISAMBIGUATION_TIMEOUT_SECONDS = 45
 PLACE_WEB_SEARCH_MAX_RESULTS = 3
 PLACE_DESCRIPTION_MIN_CHARS = 80
 PLACE_DESCRIPTION_MAX_CHARS = 600
+PLACE_CLUSTER_RADIUS_M = 75.0
+PLACE_QUERY_MAX_POINTS = 3
+PLACE_QUERY_RADIUS_M = 100.0
 
 
 @dataclass
@@ -53,6 +60,7 @@ class StaySegment:
     lat: float
     lon: float
     signature: str
+    known_place_confidence: str | None = None
 
 
 def analyze_user_day(
@@ -79,6 +87,43 @@ def analyze_user_day(
     rows = _fetch_locations(user_email=user_email, start_at=start_utc, end_at=end_utc)
     ignores = _fetch_ignores(user_email)
     segments = _build_stay_segments(rows, day_end=end_utc)
+    result = _analyze_segments(
+        user_email=user_email,
+        timezone_name=getattr(tz, "key", "UTC"),
+        rows=rows,
+        segments=segments,
+        ignores=ignores,
+        local_date=target_date,
+    )
+    result.update(
+        {
+            "date": target_date.isoformat(),
+            "timezone": getattr(tz, "key", "UTC"),
+        }
+    )
+    logger.info(
+        "[proposed_events] analyze_complete user=%s date=%s locations=%s segments=%s created=%s skipped=%s skip_reasons=%s",
+        user_email,
+        target_date.isoformat(),
+        len(rows),
+        len(segments),
+        result["created"],
+        result["skipped"],
+        json.dumps(result["skip_reasons"], sort_keys=True),
+    )
+    return result
+
+
+def _analyze_segments(
+    *,
+    user_email: str,
+    timezone_name: str,
+    rows: list[dict[str, Any]],
+    segments: list[StaySegment],
+    ignores: set[tuple[str, str]],
+    local_date: date | None = None,
+) -> dict[str, Any]:
+    tz = _resolve_timezone(timezone_name)
 
     created = 0
     skipped = 0
@@ -90,7 +135,7 @@ def analyze_user_day(
             skipped += 1
             skip_reasons[reason] = skip_reasons.get(reason, 0) + 1
             continue
-        candidate_segments = _proposal_candidate_segments(segment, timezone_name=getattr(tz, "key", "UTC"))
+        candidate_segments = _proposal_candidate_segments(segment, timezone_name=timezone_name)
         for candidate_segment in candidate_segments:
             if _find_blocking_overlapping_events(segment=candidate_segment, user_email=user_email):
                 skipped += 1
@@ -99,8 +144,8 @@ def analyze_user_day(
             candidate = _build_candidate(
                 user_email=user_email,
                 segment=candidate_segment,
-                local_date=target_date,
-                timezone_name=getattr(tz, "key", "UTC"),
+                local_date=local_date or candidate_segment.start_at.astimezone(tz).date(),
+                timezone_name=timezone_name,
                 ignores=ignores,
             )
             if not candidate:
@@ -116,28 +161,80 @@ def analyze_user_day(
                 skipped += 1
                 skip_reasons["duplicate_proposal"] = skip_reasons.get("duplicate_proposal", 0) + 1
 
-    result = {
+    return {
         "created": created,
         "skipped": skipped,
         "skip_reasons": skip_reasons,
         "proposal_count": len(proposals),
         "proposals": proposals,
-        "date": target_date.isoformat(),
-        "timezone": getattr(tz, "key", "UTC"),
         "location_count": len(rows),
         "segment_count": len(segments),
     }
+
+
+def analyze_user_window(
+    *,
+    user_email: str,
+    target_date: date,
+    timezone_name: str | None = None,
+    lookback_days: int = DAILY_SCAN_LOOKBACK_DAYS,
+) -> dict[str, Any]:
+    tz = _resolve_timezone(timezone_name or _latest_timezone(user_email))
+    scan_dates = daily_scan_dates(target_date, lookback_days=lookback_days)
+    window_start = datetime.combine(scan_dates[-1], time.min, tzinfo=tz)
+    window_end = datetime.combine(target_date + timedelta(days=1), time.min, tzinfo=tz)
+    start_utc = window_start.astimezone(timezone.utc)
+    end_utc = window_end.astimezone(timezone.utc)
     logger.info(
-        "[proposed_events] analyze_complete user=%s date=%s locations=%s segments=%s created=%s skipped=%s skip_reasons=%s",
+        "[proposed_events] analyze_window_start user=%s dates=%s..%s timezone=%s window_utc=%s..%s",
         user_email,
-        target_date.isoformat(),
+        scan_dates[-1].isoformat(),
+        scan_dates[0].isoformat(),
+        getattr(tz, "key", "UTC"),
+        start_utc.isoformat(),
+        end_utc.isoformat(),
+    )
+    expire_pending(user_email=user_email)
+    rows = _fetch_locations(user_email=user_email, start_at=start_utc, end_at=end_utc)
+    ignores = _fetch_ignores(user_email)
+    segments = _build_stay_segments(rows, day_end=end_utc)
+    result = _analyze_segments(
+        user_email=user_email,
+        timezone_name=getattr(tz, "key", "UTC"),
+        rows=rows,
+        segments=segments,
+        ignores=ignores,
+    )
+    result.update(
+        {
+            "date": target_date.isoformat(),
+            "scan_start_date": scan_dates[-1].isoformat(),
+            "scan_end_date": scan_dates[0].isoformat(),
+            "timezone": getattr(tz, "key", "UTC"),
+            "scanned_dates": [scan_date.isoformat() for scan_date in scan_dates],
+        }
+    )
+    logger.info(
+        "[proposed_events] analyze_window_complete user=%s dates=%s..%s locations=%s segments=%s created=%s skipped=%s skip_reasons=%s",
+        user_email,
+        scan_dates[-1].isoformat(),
+        scan_dates[0].isoformat(),
         len(rows),
         len(segments),
-        created,
-        skipped,
-        json.dumps(skip_reasons, sort_keys=True),
+        result["created"],
+        result["skipped"],
+        json.dumps(result["skip_reasons"], sort_keys=True),
     )
     return result
+
+
+def daily_scan_dates(target_date: date, *, lookback_days: int = DAILY_SCAN_LOOKBACK_DAYS) -> list[date]:
+    bounded_lookback_days = max(1, int(lookback_days))
+    return [target_date - timedelta(days=offset) for offset in range(bounded_lookback_days)]
+
+
+def current_local_date(timezone_name: str | None) -> date:
+    return datetime.now(_resolve_timezone(timezone_name)).date()
 
 
 def get_day_timeline(
@@ -274,10 +371,13 @@ def accept_proposal(
     start_at: datetime | None = None,
     end_at: datetime | None = None,
     contact_ids: list[str] | None = None,
+    place_candidate_id: str | None = None,
 ) -> dict[str, Any]:
     proposal = _get_owned_proposal(user_email, proposal_id)
     if proposal.get("status") != "pending":
         raise ValueError("Only pending proposals can be accepted")
+
+    selected_place_id = _materialize_selected_place(proposal, place_candidate_id)
 
     event_id = f"event:proposed:{uuid4().hex[:12]}"
     resolved_contacts = list(
@@ -297,7 +397,7 @@ def accept_proposal(
         id=event_id,
         startDate=start_at or proposal["start_at"],
         endDate=end_at or proposal.get("end_at"),
-        placeId=proposal.get("place_id"),
+        placeId=selected_place_id,
         people=resolved_contacts,
         tags=["proposed-event"],
         types=["personal"],
@@ -318,13 +418,14 @@ def accept_proposal(
             UPDATE proposed_events
             SET status = 'accepted',
                 accepted_event_id = %s,
+                place_id = %s,
                 updated_at = NOW()
             WHERE user_email = %s
               AND proposal_id = %s
               AND status = 'pending'
             RETURNING *
             """,
-            (event_id, user_email, proposal_id),
+            (event_id, selected_place_id, user_email, proposal_id),
         )
         row = cur.fetchone()
         conn.commit()
@@ -333,6 +434,62 @@ def accept_proposal(
     serialized = _serialize_proposal(dict(row))
     serialized["event_id"] = event_id
     return serialized
+
+
+def _materialize_selected_place(proposal: dict[str, Any], place_candidate_id: str | None) -> str | None:
+    existing_place_id = str(proposal.get("place_id") or "").strip() or None
+    selected_id = str(place_candidate_id or "").strip()
+    if not selected_id:
+        return existing_place_id
+
+    evidence = proposal.get("evidence")
+    if isinstance(evidence, str):
+        try:
+            evidence = json.loads(evidence)
+        except json.JSONDecodeError:
+            evidence = {}
+    if not isinstance(evidence, dict):
+        evidence = {}
+    candidates = evidence.get("place_candidates")
+    if not isinstance(candidates, list):
+        raise ValueError("Selected place candidate is not available")
+    candidate = next(
+        (
+            item
+            for item in candidates
+            if isinstance(item, dict)
+            and str(item.get("provider_place_id") or "").strip() == selected_id
+        ),
+        None,
+    )
+    if candidate is None:
+        raise ValueError("Selected place candidate is not available")
+
+    linked_place_id = google_place_cache.get_canonical_place_id(selected_id)
+    if linked_place_id:
+        return linked_place_id
+
+    cached_candidate = google_place_cache.get_candidate(selected_id) or candidate
+    title = str(cached_candidate.get("title") or "").strip()
+    lat = _safe_optional_float(cached_candidate.get("lat"))
+    lon = _safe_optional_float(cached_candidate.get("lon"))
+    if not title or lat is None or lon is None:
+        raise ValueError("Selected place candidate is incomplete")
+
+    internal_place_id = f"plc_{_safe_place_slug(title)}_{uuid4().hex[:6]}"
+    places_service.ingest_place(
+        PlaceIn(
+            place_id=internal_place_id,
+            name=title,
+            address=str(cached_candidate.get("formatted_address") or "").strip() or None,
+            city=str(cached_candidate.get("city") or "").strip() or None,
+            country=str(cached_candidate.get("country") or "").strip() or None,
+            lat=lat,
+            lon=lon,
+        )
+    )
+    google_place_cache.link_canonical_place(selected_id, internal_place_id)
+    return internal_place_id
 
 
 def expire_pending(*, user_email: str | None = None) -> int:
@@ -416,7 +573,7 @@ def describe_daily_scan_eligibility(
         "utc_now": now_utc_value.isoformat(),
         "local_now": now.isoformat(),
         "due": due,
-        "reason": "due" if due else "before_15_50_utc",
+        "reason": "due" if due else "before_daily_cutoff_utc",
         "target_date": now.date().isoformat(),
     }
 
@@ -474,6 +631,7 @@ def _copy_segment_window(segment: StaySegment, *, start_at: datetime, end_at: da
         lat=segment.lat,
         lon=segment.lon,
         signature=segment.signature,
+        known_place_confidence=segment.known_place_confidence,
     )
 
 
@@ -569,6 +727,31 @@ def _segment_skip_reason(segment: StaySegment, ignores: set[tuple[str, str]]) ->
 
 def _insert_proposal(candidate: dict[str, Any]) -> dict[str, Any] | None:
     with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT proposal_id
+            FROM proposed_events
+            WHERE user_email = %(user_email)s
+              AND status <> 'expired'
+              AND local_date = %(local_date)s
+              AND start_at = %(start_at)s
+              AND COALESCE(ignored_signature, '') = COALESCE(%(ignored_signature)s, '')
+            LIMIT 1
+            """,
+            candidate,
+        )
+        if cur.fetchone():
+            logger.info(
+                "[proposed_events] proposal_duplicate user=%s date=%s start=%s end=%s place_id=%s signature=%s",
+                candidate.get("user_email"),
+                candidate.get("local_date"),
+                _iso(candidate.get("start_at")),
+                _iso(candidate.get("end_at")),
+                candidate.get("place_id"),
+                candidate.get("ignored_signature"),
+            )
+            conn.rollback()
+            return None
         cur.execute(
             """
             INSERT INTO proposed_events (
@@ -672,7 +855,8 @@ def _enrich_candidate_with_history(
 
     place_web_search = context["place_context"].get("web_search") if isinstance(context.get("place_context"), dict) else None
     place_web_results = place_web_search.get("results") if isinstance(place_web_search, dict) else []
-    has_place_evidence = bool(place_web_results)
+    place_candidates = context["place_context"].get("place_candidates") if isinstance(context.get("place_context"), dict) else []
+    has_place_evidence = bool(place_web_results or place_candidates)
     if not context["linked_contacts"] and not context["recent_events"] and not has_place_evidence:
         logger.info(
             "[proposed_events] enrichment_skipped_no_history place_id=%s place_name=%s",
@@ -745,12 +929,109 @@ def _build_place_context(segment: StaySegment) -> dict[str, Any]:
     existing_place = places_service.get_place(segment.place_id) if segment.place_id else None
     place_snapshot = _place_snapshot(existing_place, segment)
     search_query = _place_search_query(place_snapshot)
-    web_context = _search_place_web_context(search_query) if _should_search_place_context(place_snapshot) else None
+    is_certain_known_place = bool(segment.place_id and segment.known_place_confidence == "high")
+    google_candidates = []
+    google_search = None
+    if not is_certain_known_place:
+        google_candidates, google_search = _lookup_google_place_candidates(segment)
+    web_context = (
+        _search_place_web_context(search_query)
+        if is_certain_known_place and _should_search_place_context(place_snapshot)
+        else None
+    )
     return {
-        "known_place": bool(existing_place),
+        "known_place": is_certain_known_place,
+        "known_place_confidence": segment.known_place_confidence,
         "place": place_snapshot,
+        "place_candidates": google_candidates,
+        "google_search": google_search,
         "web_search": web_context,
     }
+
+
+def _lookup_google_place_candidates(segment: StaySegment) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    candidates_by_id: dict[str, dict[str, Any]] = {}
+    query_points = _place_query_points(segment)
+    cache_hits = 0
+    live_queries = 0
+    errors: list[str] = []
+    for query_lat, query_lon in query_points:
+        cached = google_place_cache.lookup_search(
+            lat=query_lat,
+            lon=query_lon,
+            tolerance_m=google_place_cache.cache_tolerance_meters(),
+        )
+        if cached is not None:
+            cache_hits += 1
+            results = cached
+        else:
+            live_queries += 1
+            response = google_places.search_nearby(
+                lat=query_lat,
+                lon=query_lon,
+                radius_m=_place_query_radius_m(),
+                max_results=_env_int("GOOGLE_PLACES_MAX_RESULTS", 10),
+            )
+            results = response.get("results") or []
+            if not response.get("available"):
+                error = str(response.get("error") or "unavailable")
+                if error not in errors:
+                    errors.append(error)
+            if response.get("available"):
+                google_place_cache.store_search(
+                    center_lat=query_lat,
+                    center_lon=query_lon,
+                    radius_m=_place_query_radius_m(),
+                    candidates=results,
+                )
+        for result in results:
+            provider_place_id = str(result.get("provider_place_id") or "").strip()
+            if not provider_place_id:
+                continue
+            distance = google_places.distance_to_candidate(segment.lat, segment.lon, result)
+            normalized = dict(result)
+            normalized["distance_m"] = round(distance, 1) if distance is not None else None
+            normalized["fetched_at"] = _iso(result.get("fetched_at"))
+            existing = candidates_by_id.get(provider_place_id)
+            if existing is None or _candidate_sort_key(normalized) < _candidate_sort_key(existing):
+                candidates_by_id[provider_place_id] = normalized
+
+    candidates = sorted(candidates_by_id.values(), key=_candidate_sort_key)
+    max_candidates = max(3, _env_int("GOOGLE_PLACES_MAX_CANDIDATES", 10))
+    return candidates[:max_candidates], {
+        "provider": "google",
+        "query_points": [{"lat": lat, "lon": lon} for lat, lon in query_points],
+        "cache_hits": cache_hits,
+        "live_queries": live_queries,
+        "errors": errors,
+    }
+
+
+def _candidate_sort_key(candidate: dict[str, Any]) -> tuple[float, str]:
+    distance = _safe_optional_float(candidate.get("distance_m"))
+    return (distance if distance is not None else float("inf"), str(candidate.get("title") or ""))
+
+
+def _place_query_points(segment: StaySegment) -> list[tuple[float, float]]:
+    points = [
+        (float(sample["lat"]), float(sample["lon"]))
+        for sample in segment.samples
+        if _safe_optional_float(sample.get("lat")) is not None
+        and _safe_optional_float(sample.get("lon")) is not None
+    ]
+    if not points:
+        return [(segment.lat, segment.lon)]
+
+    selected: list[tuple[float, float]] = [(segment.lat, segment.lon)]
+    while len(selected) < max(1, _env_int("GOOGLE_PLACES_MAX_SEARCH_POINTS", PLACE_QUERY_MAX_POINTS)):
+        next_point = max(
+            points,
+            key=lambda point: min(_distance_meters(point[0], point[1], chosen[0], chosen[1]) for chosen in selected),
+        )
+        if min(_distance_meters(next_point[0], next_point[1], chosen[0], chosen[1]) for chosen in selected) < 20.0:
+            break
+        selected.append(next_point)
+    return selected
 
 
 def _place_snapshot(existing_place: dict[str, Any] | None, segment: StaySegment) -> dict[str, Any]:
@@ -1021,8 +1302,10 @@ def _build_enrichment_prompt(candidate: dict[str, Any], context: dict[str, Any])
             ],
             "place": [
                 "If public place context clarifies the venue, return a short neutral place_summary and place_category.",
-                "For unknown places, proposed_place_name may identify the likely public venue, but use null if uncertain.",
-                "Do not include claims that are not supported by the provided place context or web snippets.",
+                "For unknown places, select only a provider_place_id from place_context.place_candidates; use null when uncertain.",
+                "Rank at most three supplied place candidate IDs for the review UI.",
+                "Use the stay time range, duration, venue types, and candidate distance to assess likely activity, but do not invent a place.",
+                "Do not include claims that are not supported by the provided place context, candidates, or web snippets.",
             ],
             "recurrence": "Use null recurrence_hint when history is too thin.",
         },
@@ -1061,11 +1344,29 @@ def _apply_llm_enrichment(
     candidate["confidence"] = confidence
     place_category = " ".join(str(enriched.get("place_category") or "").split()).strip()
     place_summary = " ".join(str(enriched.get("place_summary") or "").split()).strip()
-    proposed_place_name = " ".join(str(enriched.get("proposed_place_name") or "").split()).strip()
+    place_context = context.get("place_context") if isinstance(context.get("place_context"), dict) else {}
+    valid_candidate_ids = {
+        str(item.get("provider_place_id") or "").strip()
+        for item in (place_context.get("place_candidates") or [])
+        if isinstance(item, dict) and str(item.get("provider_place_id") or "").strip()
+    }
+    selected_candidate_id = str(enriched.get("selected_place_candidate_id") or "").strip()
+    if selected_candidate_id not in valid_candidate_ids:
+        selected_candidate_id = ""
+    ranked_candidate_ids = [
+        candidate_id
+        for candidate_id in (enriched.get("ranked_place_candidate_ids") or [])
+        if str(candidate_id or "").strip() in valid_candidate_ids
+    ]
+    ranked_candidate_ids = list(dict.fromkeys(ranked_candidate_ids))[:3]
+    proposed_place_name = ""
     candidate["evidence"]["llm_enrichment"] = {
         "used": True,
         "recurrence_hint": enriched.get("recurrence_hint"),
         "recent_event_ids": [event.get("id") for event in context["recent_events"]],
+        "selected_place_candidate_id": selected_candidate_id or None,
+        "ranked_place_candidate_ids": ranked_candidate_ids,
+        "place_confidence": enriched.get("place_confidence"),
     }
     candidate["evidence"]["place_intelligence"] = _place_intelligence_evidence(
         context=context,
@@ -1118,6 +1419,8 @@ def _place_intelligence_evidence(
         "place_category": place_category or None,
         "place_summary": place_summary or None,
         "proposed_place_name": proposed_place_name or None,
+        "candidates": place_context.get("place_candidates") or [],
+        "google_search": place_context.get("google_search"),
     }
 
 
@@ -1254,17 +1557,32 @@ def _fetch_day_proposals(*, user_email: str, target_date: date) -> list[dict[str
 
 def _enrich_location(row: dict[str, Any]) -> dict[str, Any]:
     matched = _nearest_known_place(float(row["lat"]), float(row["lon"]), row.get("accuracy_m"))
+    row["known_place_match"] = None
     if matched:
-        row.update(
-            {
-                "place_id": matched.get("place_id"),
-                "place_name": row.get("place_name") or matched.get("name"),
-                "city": row.get("city") or matched.get("city"),
-                "country": row.get("country") or matched.get("country"),
-            }
-        )
+        row["known_place_match"] = {
+            "place_id": matched.get("place_id"),
+            "name": matched.get("name"),
+            "city": matched.get("city"),
+            "country": matched.get("country"),
+            "distance_m": matched.get("distance_m"),
+            "confidence": matched.get("confidence"),
+        }
+        if matched.get("confidence") == "high":
+            row.update(
+                {
+                    "place_id": matched.get("place_id"),
+                    "place_name": matched.get("name") or row.get("place_name"),
+                    "city": matched.get("city") or row.get("city"),
+                    "country": matched.get("country") or row.get("country"),
+                    "known_place_confidence": "high",
+                }
+            )
+        else:
+            row["place_id"] = None
+            row["known_place_confidence"] = None
     else:
         row["place_id"] = None
+        row["known_place_confidence"] = None
     return row
 
 
@@ -1273,34 +1591,58 @@ def _build_stay_segments(rows: list[dict[str, Any]], *, day_end: datetime) -> li
         return []
     segments: list[StaySegment] = []
     current: list[dict[str, Any]] = [rows[0]]
-    current_signature = _location_signature(rows[0])
     for row in rows[1:]:
-        signature = _location_signature(row)
-        if signature == current_signature:
+        if _same_stay_cluster(current, row):
             current.append(row)
             continue
         segments.append(_make_segment(current, next_start=row["captured_at"]))
         current = [row]
-        current_signature = signature
     segments.append(_make_segment(current, next_start=min(day_end, current[-1]["captured_at"])))
     return segments
+
+
+def _same_stay_cluster(current: list[dict[str, Any]], row: dict[str, Any]) -> bool:
+    current_place_ids = {
+        str(item.get("place_id") or "").strip()
+        for item in current
+        if str(item.get("place_id") or "").strip()
+    }
+    row_place_id = str(row.get("place_id") or "").strip()
+    if current_place_ids and row_place_id and row_place_id not in current_place_ids:
+        return False
+    if current_place_ids and row_place_id in current_place_ids:
+        return True
+
+    center_lat = sum(float(item["lat"]) for item in current) / len(current)
+    center_lon = sum(float(item["lon"]) for item in current) / len(current)
+    return _distance_meters(center_lat, center_lon, float(row["lat"]), float(row["lon"])) <= PLACE_CLUSTER_RADIUS_M
 
 
 def _make_segment(rows: list[dict[str, Any]], *, next_start: datetime) -> StaySegment:
     first = rows[0]
     last = rows[-1]
     end_at = max(next_start, last["captured_at"])
+    lat = sum(float(row["lat"]) for row in rows) / len(rows)
+    lon = sum(float(row["lon"]) for row in rows) / len(rows)
+    known_rows = [
+        row
+        for row in rows
+        if row.get("place_id") and row.get("known_place_confidence") == "high"
+    ]
+    place_anchor = known_rows[0] if known_rows else first
+    known_place_confidence = "high" if known_rows else None
     return StaySegment(
         start_at=first["captured_at"],
         end_at=end_at,
         samples=rows,
-        place_id=first.get("place_id"),
-        place_name=first.get("place_name"),
-        city=first.get("city"),
-        country=first.get("country"),
-        lat=float(first["lat"]),
-        lon=float(first["lon"]),
-        signature=_location_signature(first),
+        place_id=place_anchor.get("place_id"),
+        place_name=place_anchor.get("place_name"),
+        city=place_anchor.get("city"),
+        country=place_anchor.get("country"),
+        lat=lat,
+        lon=lon,
+        signature=_location_signature(place_anchor),
+        known_place_confidence=known_place_confidence,
     )
 
 
@@ -1336,6 +1678,17 @@ def _nearest_known_place(lat: float, lon: float, accuracy_m: Any) -> dict[str, A
             nearest_distance = distance
     if nearest is None or nearest_distance is None or nearest_distance > threshold:
         return None
+    distance_m = nearest_distance
+    conservative_accuracy = max(float(accuracy_m or 0.0), 20.0)
+    confidence = (
+        "high"
+        if distance_m <= min(conservative_accuracy, threshold * 0.33)
+        else "medium"
+        if distance_m <= threshold * 0.66
+        else "low"
+    )
+    nearest["distance_m"] = round(distance_m, 1)
+    nearest["confidence"] = confidence
     return nearest
 
 
@@ -1777,6 +2130,32 @@ def _parse_datetime(value: Any) -> datetime | None:
     return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
 
 
+def _safe_optional_float(value: Any) -> float | None:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _safe_place_slug(value: str) -> str:
+    slug = re.sub(r"[^a-z0-9]+", "-", value.strip().lower()).strip("-")
+    return slug[:48] or "place"
+
+
+def _env_int(name: str, default: int) -> int:
+    try:
+        return int(os.getenv(name, default))
+    except (TypeError, ValueError):
+        return default
+
+
+def _place_query_radius_m() -> float:
+    try:
+        return max(25.0, float(os.getenv("GOOGLE_PLACES_SEARCH_RADIUS_M", PLACE_QUERY_RADIUS_M)))
+    except (TypeError, ValueError):
+        return PLACE_QUERY_RADIUS_M
+
+
 def _serialize_proposal(row: dict[str, Any]) -> dict[str, Any]:
     output = dict(row)
     for key in ("local_date", "start_at", "end_at", "expires_at", "created_at", "updated_at"):
@@ -1788,4 +2167,28 @@ def _serialize_proposal(row: dict[str, Any]) -> dict[str, Any]:
     duration_minutes = output.get("duration_minutes")
     if duration_minutes is not None:
         output["duration_label"] = _humanize_duration_minutes(int(duration_minutes))
+    evidence = output.get("evidence")
+    if isinstance(evidence, str):
+        try:
+            evidence = json.loads(evidence)
+        except json.JSONDecodeError:
+            evidence = {}
+    if isinstance(evidence, dict):
+        place_intelligence = evidence.get("place_intelligence")
+        if isinstance(place_intelligence, dict):
+            candidates = [item for item in (place_intelligence.get("candidates") or []) if isinstance(item, dict)]
+            llm_enrichment = evidence.get("llm_enrichment")
+            ranked_ids = (
+                llm_enrichment.get("ranked_place_candidate_ids")
+                if isinstance(llm_enrichment, dict)
+                else []
+            )
+            by_id = {
+                str(item.get("provider_place_id") or "").strip(): item
+                for item in candidates
+                if str(item.get("provider_place_id") or "").strip()
+            }
+            ordered = [by_id[provider_id] for provider_id in ranked_ids if provider_id in by_id]
+            ordered.extend(item for item in candidates if item not in ordered)
+            output["place_candidates"] = ordered[:3]
     return output

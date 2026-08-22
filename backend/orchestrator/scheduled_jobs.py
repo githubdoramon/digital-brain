@@ -30,12 +30,12 @@ PROPOSED_EVENTS_DAILY = ScheduledJobSpec(
     label="Proposed events",
     worker_module="proposed_event_jobs",
     schedule_kind="daily_utc",
-    time_utc=time(hour=23, minute=59),
+    time_utc=time(hour=4, minute=0),
     poll_seconds=60,
     retry_seconds=300,
     description=(
-        "Scans same-day location history in the user's latest captured timezone and proposes "
-        "missing events for 15+ minute stays without overlapping events."
+        "Scans a rolling two-local-day location-history window in the user's latest captured "
+        "timezone and proposes missing events for 15+ minute stays without overlapping events."
     ),
     trigger_source="backend scheduler",
 )

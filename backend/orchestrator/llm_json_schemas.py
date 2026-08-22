@@ -210,6 +210,9 @@ PROPOSED_EVENT_ENRICHMENT_RESPONSE_SCHEMA: dict[str, Any] = {
         "place_category": {"type": ["string", "null"]},
         "place_summary": {"type": ["string", "null"]},
         "proposed_place_name": {"type": ["string", "null"]},
+        "selected_place_candidate_id": {"type": ["string", "null"]},
+        "ranked_place_candidate_ids": {"type": "array", "items": {"type": "string"}, "maxItems": 3},
+        "place_confidence": {"type": "string", "enum": ["low", "medium", "high"]},
     },
     "required": [
         "suggested_title",
@@ -221,6 +224,9 @@ PROPOSED_EVENT_ENRICHMENT_RESPONSE_SCHEMA: dict[str, Any] = {
         "place_category",
         "place_summary",
         "proposed_place_name",
+        "selected_place_candidate_id",
+        "ranked_place_candidate_ids",
+        "place_confidence",
     ],
     "additionalProperties": False,
 }
@@ -363,6 +369,35 @@ DAILY_BRIEFING_RESEARCH_PLAN_RESPONSE_SCHEMA: dict[str, Any] = {
         },
     },
     "required": ["should_research", "reason", "targets"],
+    "additionalProperties": False,
+}
+
+DAILY_BRIEFING_NEWS_CURATION_RESPONSE_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "decisions": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "article_id": {"type": "string"},
+                    "keep": {"type": "boolean"},
+                    "topic_matches": STRING_ARRAY_SCHEMA,
+                    "duplicate_of": {"type": ["string", "null"]},
+                    "reason": {"type": "string"},
+                },
+                "required": [
+                    "article_id",
+                    "keep",
+                    "topic_matches",
+                    "duplicate_of",
+                    "reason",
+                ],
+                "additionalProperties": False,
+            },
+        }
+    },
+    "required": ["decisions"],
     "additionalProperties": False,
 }
 

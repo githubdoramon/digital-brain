@@ -10,6 +10,7 @@ from agents.daily_briefing.executor import (
     _build_briefing_prompt,
     _build_event_research_value_signals,
     _build_event_summary_debug_bundle,
+    _curate_collected_news,
     _enrich_selected_news_summaries,
     _fetch_similar_events,
     _format_context_text,
@@ -691,6 +692,103 @@ class TestSummarizeEvent:
 
 def test_birthday_lookahead_is_seven():
     assert BIRTHDAY_LOOKAHEAD_DAYS == 7
+
+
+class TestCurateCollectedNews:
+    @patch("agents.daily_briefing.executor.call_llm_json")
+    @patch("agents.daily_briefing.executor.news_feeds.list_topics")
+    def test_removes_content_duplicate_and_semantic_topic_mismatch(
+        self,
+        mock_list_topics,
+        mock_call_llm_json,
+    ):
+        mock_list_topics.return_value = [
+            {"label": "AI", "keywords": ["AI", "Gemini", "artificial intelligence"]}
+        ]
+        articles = [
+            _make_news_article(
+                title="Lab releases a new reasoning model",
+                url="https://example.com/model-release",
+                summary="The lab launched a reasoning model for software tasks.",
+                source="Source One",
+                topic_matches=["AI"],
+            ),
+            _make_news_article(
+                title="New coding model arrives",
+                url="https://another.example/reasoning-launch",
+                summary="A new reasoning model from the same lab targets software work.",
+                source="Source Two",
+                topic_matches=["AI"],
+            ),
+            _make_news_article(
+                title="Gemini horoscope for Saturday",
+                url="https://example.com/horoscope",
+                summary="An astrology forecast for people born under Gemini.",
+                source="Daily Example",
+                topic_matches=["AI"],
+            ),
+        ]
+        mock_call_llm_json.return_value = {
+            "decisions": [
+                {
+                    "article_id": "article_1",
+                    "keep": True,
+                    "topic_matches": ["AI"],
+                    "duplicate_of": None,
+                    "reason": "Clearest report of the model launch.",
+                },
+                {
+                    "article_id": "article_2",
+                    "keep": False,
+                    "topic_matches": ["AI"],
+                    "duplicate_of": "article_1",
+                    "reason": "Same underlying model launch.",
+                },
+                {
+                    "article_id": "article_3",
+                    "keep": False,
+                    "topic_matches": [],
+                    "duplicate_of": None,
+                    "reason": "Astrology, not artificial intelligence.",
+                },
+            ]
+        }
+
+        result = _curate_collected_news(articles)
+
+        assert [article["url"] for article in result] == ["https://example.com/model-release"]
+        prompt = mock_call_llm_json.call_args.args[0]
+        assert "same underlying real-world story" in prompt
+        assert "keyword collision" in prompt
+        kwargs = mock_call_llm_json.call_args.kwargs
+        assert kwargs["response_format"]["json_schema"]["name"] == "daily_briefing_news_curation"
+        assert kwargs["use_fast_model"] is False
+        assert kwargs["reasoning_effort"] == "high"
+
+    @patch("agents.daily_briefing.executor.call_llm_json")
+    @patch("agents.daily_briefing.executor.news_feeds.list_topics", return_value=[])
+    def test_incomplete_model_decisions_fall_back_without_dropping_articles(
+        self,
+        _mock_list_topics,
+        mock_call_llm_json,
+    ):
+        articles = [
+            _make_news_article(title="First", url="https://example.com/first"),
+            _make_news_article(title="Second", url="https://example.com/second"),
+        ]
+        mock_call_llm_json.return_value = {
+            "decisions": [
+                {
+                    "article_id": "article_1",
+                    "keep": True,
+                    "topic_matches": [],
+                    "duplicate_of": None,
+                    "reason": "Keep.",
+                }
+            ]
+        }
+
+        assert _curate_collected_news(articles) == articles
 
 
 # ---------------------------------------------------------------------------

@@ -1,10 +1,189 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 
 import places
 import proposed_events
+
+
+def test_daily_scan_dates_returns_current_and_recent_local_dates():
+    assert proposed_events.daily_scan_dates(date(2026, 8, 22)) == [
+        date(2026, 8, 22),
+        date(2026, 8, 21),
+    ]
+    assert proposed_events.daily_scan_dates(date(2026, 8, 22), lookback_days=3) == [
+        date(2026, 8, 22),
+        date(2026, 8, 21),
+        date(2026, 8, 20),
+    ]
+
+
+def test_daily_scan_cutoff_does_not_shift_lisbon_scan_to_next_date(monkeypatch):
+    monkeypatch.setattr(proposed_events, "_latest_timezone", lambda _email: "Europe/Lisbon")
+
+    before_cutoff = proposed_events.should_run_daily_scan(
+        "user@example.test",
+        now_utc=datetime(2026, 8, 22, 3, 59, tzinfo=timezone.utc),
+    )
+    at_cutoff = proposed_events.should_run_daily_scan(
+        "user@example.test",
+        now_utc=datetime(2026, 8, 22, 4, 0, tzinfo=timezone.utc),
+    )
+
+    assert before_cutoff is None
+    assert at_cutoff == {
+        "target_date": date(2026, 8, 22),
+        "timezone": "Europe/Lisbon",
+        "dedupe_key": "proposed-events:2026-08-22:Europe/Lisbon",
+    }
+
+
+def test_analyze_user_window_aggregates_recent_daily_runs(monkeypatch):
+    captured: dict[str, object] = {}
+    monkeypatch.setattr(
+        proposed_events,
+        "_latest_timezone",
+        lambda _email: "Europe/Lisbon",
+    )
+    monkeypatch.setattr(proposed_events, "expire_pending", lambda **_kwargs: 0)
+    monkeypatch.setattr(
+        proposed_events,
+        "_fetch_locations",
+        lambda **kwargs: captured.update(fetch=kwargs) or [],
+    )
+    monkeypatch.setattr(proposed_events, "_fetch_ignores", lambda _email: set())
+    monkeypatch.setattr(
+        proposed_events,
+        "_build_stay_segments",
+        lambda rows, *, day_end: captured.update(day_end=day_end) or [],
+    )
+    monkeypatch.setattr(
+        proposed_events,
+        "_analyze_segments",
+        lambda **kwargs: {
+            "created": 1,
+            "skipped": 2,
+            "skip_reasons": {"short_stay": 2},
+            "proposal_count": 1,
+            "proposals": [{"proposal_id": "proposal:window"}],
+            "location_count": len(kwargs["rows"]),
+            "segment_count": len(kwargs["segments"]),
+        },
+    )
+
+    result = proposed_events.analyze_user_window(
+        user_email="user@example.test",
+        target_date=date(2026, 8, 22),
+        timezone_name="Europe/Lisbon",
+        lookback_days=2,
+    )
+
+    assert result["created"] == 1
+    assert result["skipped"] == 2
+    assert result["skip_reasons"] == {"short_stay": 2}
+    assert result["scan_start_date"] == "2026-08-21"
+    assert result["scan_end_date"] == "2026-08-22"
+    assert result["scanned_dates"] == ["2026-08-22", "2026-08-21"]
+    assert result["location_count"] == 0
+    assert result["segment_count"] == 0
+    assert captured["fetch"]["start_at"].isoformat() == "2026-08-20T23:00:00+00:00"
+    assert captured["fetch"]["end_at"].isoformat() == "2026-08-22T23:00:00+00:00"
+
+
+def test_stay_segments_group_nearby_points_without_following_a_long_chain():
+    start = datetime(2026, 6, 16, 9, 0, tzinfo=timezone.utc)
+    rows = [
+        {"id": 1, "lat": 38.70000, "lon": -9.10000, "captured_at": start, "place_name": "Cafe Alpha"},
+        {
+            "id": 2,
+            "lat": 38.70020,
+            "lon": -9.10000,
+            "captured_at": start + timedelta(minutes=10),
+            "place_name": "Cafe Alpha patio",
+        },
+        {
+            "id": 3,
+            "lat": 38.70170,
+            "lon": -9.10000,
+            "captured_at": start + timedelta(minutes=20),
+            "place_name": "Example School",
+        },
+    ]
+
+    segments = proposed_events._build_stay_segments(
+        rows,
+        day_end=start + timedelta(hours=1),
+    )
+
+    assert len(segments) == 2
+    assert len(segments[0].samples) == 2
+    assert len(segments[1].samples) == 1
+
+
+def test_uncertain_internal_place_match_does_not_bypass_google(monkeypatch):
+    monkeypatch.setattr(
+        proposed_events,
+        "_nearest_known_place",
+        lambda *_args: {
+            "place_id": "plc_existing",
+            "name": "Existing Place",
+            "city": "Example City",
+            "country": "Example Country",
+            "distance_m": 40.0,
+            "confidence": "medium",
+        },
+    )
+
+    result = proposed_events._enrich_location(
+        {
+            "lat": 38.7,
+            "lon": -9.1,
+            "accuracy_m": 60,
+            "place_name": "Old label",
+        }
+    )
+
+    assert result["place_id"] is None
+    assert result["known_place_match"]["place_id"] == "plc_existing"
+    assert result["known_place_match"]["confidence"] == "medium"
+
+
+def test_selected_google_place_is_materialized_only_at_acceptance(monkeypatch):
+    created: dict[str, object] = {}
+    candidate = {
+        "provider_place_id": "ChIJexample",
+        "title": "Example Cafe",
+        "lat": 38.7,
+        "lon": -9.1,
+        "formatted_address": "1 Example Street",
+        "city": "Example City",
+        "country": "Example Country",
+    }
+    monkeypatch.setattr(proposed_events.google_place_cache, "get_canonical_place_id", lambda _id: None)
+    monkeypatch.setattr(proposed_events.google_place_cache, "get_candidate", lambda _id: candidate)
+    monkeypatch.setattr(
+        proposed_events.places_service,
+        "ingest_place",
+        lambda place: created.update(place=place),
+    )
+    monkeypatch.setattr(
+        proposed_events.google_place_cache,
+        "link_canonical_place",
+        lambda provider_id, place_id: created.update(provider_id=provider_id, place_id=place_id),
+    )
+
+    place_id = proposed_events._materialize_selected_place(
+        {
+            "place_id": None,
+            "evidence": {"place_candidates": [candidate]},
+        },
+        "ChIJexample",
+    )
+
+    assert place_id and place_id.startswith("plc_example-cafe_")
+    assert created["provider_id"] == "ChIJexample"
+    assert created["place"].name == "Example Cafe"
 
 
 def _segment(minutes: int) -> proposed_events.StaySegment:
@@ -390,6 +569,14 @@ def test_web_place_evidence_can_trigger_enrichment_without_history(monkeypatch):
                     "query": "Cafe Alpha Example City",
                     "results": [{"title": "Cafe Alpha", "snippet": "Neighborhood cafe and bakery."}],
                 },
+                "place_candidates": [
+                    {
+                        "provider_place_id": "google:cafe-alpha",
+                        "title": "Cafe Alpha",
+                        "primary_type": "cafe",
+                        "distance_m": 18.0,
+                    }
+                ],
             },
             "linked_contacts": [],
             "recent_events": [],
@@ -408,6 +595,9 @@ def test_web_place_evidence_can_trigger_enrichment_without_history(monkeypatch):
             "place_category": "cafe",
             "place_summary": "Cafe Alpha appears to be a neighborhood cafe and bakery.",
             "proposed_place_name": "Cafe Alpha",
+            "selected_place_candidate_id": "google:cafe-alpha",
+            "ranked_place_candidate_ids": ["google:cafe-alpha"],
+            "place_confidence": "high",
         }
 
     monkeypatch.setattr(proposed_events, "_build_history_context", fake_context)
@@ -430,7 +620,9 @@ def test_web_place_evidence_can_trigger_enrichment_without_history(monkeypatch):
     )
 
     assert result["suggested_title"] == "Cafe stop at Cafe Alpha"
-    assert result["evidence"]["place_intelligence"]["proposed_place_name"] == "Cafe Alpha"
+    assert result["evidence"]["place_intelligence"]["proposed_place_name"] is None
+    assert result["evidence"]["llm_enrichment"]["selected_place_candidate_id"] == "google:cafe-alpha"
+    assert result["evidence"]["place_intelligence"]["candidates"][0]["title"] == "Cafe Alpha"
     assert captured_prompts[0]["place_context"]["web_search"]["results"][0]["snippet"] == "Neighborhood cafe and bakery."
 
 

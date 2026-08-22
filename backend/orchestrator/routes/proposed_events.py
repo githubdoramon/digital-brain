@@ -17,6 +17,7 @@ class ProposedEventAcceptIn(BaseModel):
     start_at: datetime | None = Field(default=None, alias="startAt")
     end_at: datetime | None = Field(default=None, alias="endAt")
     contact_ids: list[str] | None = Field(default=None, alias="contactIds")
+    place_candidate_id: str | None = Field(default=None, alias="placeCandidateId")
 
 
 class ProposedEventRunIn(BaseModel):
@@ -71,9 +72,9 @@ def create_proposed_events_router() -> APIRouter:
         user: dict = Depends(get_current_user),
     ):
         email = _user_email(user)
-        target_date = payload.target_date or date.today()
         timezone_name = payload.timezone or "UTC"
-        result = proposed_events_service.analyze_user_day(
+        target_date = payload.target_date or proposed_events_service.current_local_date(timezone_name)
+        result = proposed_events_service.analyze_user_window(
             user_email=email,
             target_date=target_date,
             timezone_name=timezone_name,
@@ -86,8 +87,8 @@ def create_proposed_events_router() -> APIRouter:
         user: dict = Depends(get_current_user),
     ):
         email = _user_email(user)
-        target_date = payload.target_date or date.today()
         timezone_name = payload.timezone or "UTC"
+        target_date = payload.target_date or proposed_events_service.current_local_date(timezone_name)
         job = proposed_event_jobs.enqueue_daily_scan(
             user_email=email,
             target_date=target_date,
@@ -112,6 +113,7 @@ def create_proposed_events_router() -> APIRouter:
                 start_at=payload.start_at,
                 end_at=payload.end_at,
                 contact_ids=payload.contact_ids,
+                place_candidate_id=payload.place_candidate_id,
             )
         except LookupError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc

@@ -2,14 +2,7 @@ import Ionicons from '@expo/vector-icons/Ionicons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
 import React from 'react';
-import {
-  Animated,
-  RefreshControl,
-  StyleSheet,
-  Text,
-  TextInput,
-  View,
-} from 'react-native';
+import { Animated, RefreshControl, StyleSheet, Text, TextInput, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { apiFetch } from '@/api/client';
@@ -42,8 +35,18 @@ type ProposedEvent = {
   suggested_title?: string | null;
   suggested_summary?: string | null;
   suggested_contact_ids?: string[];
+  place_candidates?: PlaceCandidate[];
   accepted_event_id?: string | null;
   event_id?: string | null;
+};
+
+type PlaceCandidate = {
+  provider_place_id: string;
+  title?: string | null;
+  primary_type?: string | null;
+  types?: string[];
+  formatted_address?: string | null;
+  distance_m?: number | null;
 };
 
 function formatTimeRange(startValue: string, endValue: string): string {
@@ -70,8 +73,15 @@ function placeLabel(proposal: ProposedEvent): string {
 
 function todayPayload() {
   const now = new Date();
-  const targetDate = now.toISOString().slice(0, 10);
   const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: timezone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(now);
+  const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  const targetDate = `${values.year}-${values.month}-${values.day}`;
   return { targetDate, timezone };
 }
 
@@ -88,6 +98,7 @@ export default function ProposedEventsScreen() {
   const [activeId, setActiveId] = React.useState<string | null>(null);
   const [draftTitleById, setDraftTitleById] = React.useState<Record<string, string>>({});
   const [draftSummaryById, setDraftSummaryById] = React.useState<Record<string, string>>({});
+  const [selectedPlaceById, setSelectedPlaceById] = React.useState<Record<string, string>>({});
   const [savingId, setSavingId] = React.useState<string | null>(null);
 
   const loadProposals = React.useCallback(async () => {
@@ -162,8 +173,14 @@ export default function ProposedEventsScreen() {
         const body =
           action === 'accept'
             ? JSON.stringify({
-                title: draftTitleById[proposal.proposal_id] || proposal.suggested_title || 'Untitled event',
+                title:
+                  draftTitleById[proposal.proposal_id] ||
+                  proposal.suggested_title ||
+                  'Untitled event',
                 summary: draftSummaryById[proposal.proposal_id] || proposal.suggested_summary || '',
+                ...(selectedPlaceById[proposal.proposal_id]
+                  ? { placeCandidateId: selectedPlaceById[proposal.proposal_id] }
+                  : {}),
               })
             : undefined;
         const response = (await apiFetch(
@@ -193,7 +210,7 @@ export default function ProposedEventsScreen() {
         setSavingId(null);
       }
     },
-    [draftSummaryById, draftTitleById, router, showError, showSuccess, token],
+    [draftSummaryById, draftTitleById, router, selectedPlaceById, showError, showSuccess, token],
   );
 
   const pendingCount = proposals.filter((proposal) => proposal.status === 'pending').length;
@@ -227,7 +244,7 @@ export default function ProposedEventsScreen() {
               {pendingCount === 1 ? '1 possible event' : `${pendingCount} possible events`}
             </Text>
             <Text style={styles.summarySubtitle}>
-              Daily scans run after 20:30 and keep suggestions for 7 days.
+              Daily scans review today and yesterday, and keep suggestions for 7 days.
             </Text>
           </View>
         </Card>
@@ -246,7 +263,8 @@ export default function ProposedEventsScreen() {
           <Card style={styles.emptyCard}>
             <Text style={styles.emptyTitle}>Nothing to review</Text>
             <Text style={styles.emptyText}>
-              When your location history shows a meaningful stay without a matching event, it will appear here.
+              When your location history shows a meaningful stay without a matching event, it will
+              appear here.
             </Text>
           </Card>
         ) : null}
@@ -264,10 +282,15 @@ export default function ProposedEventsScreen() {
                   <Ionicons name="location-outline" size={18} color={theme.colors.accentDeep} />
                 </View>
                 <View style={styles.proposalTitleBlock}>
-                  <Text style={styles.proposalTitle}>{proposal.suggested_title || placeLabel(proposal)}</Text>
-                  <Text style={styles.proposalMeta}>{formatTimeRange(proposal.start_at, proposal.end_at)}</Text>
+                  <Text style={styles.proposalTitle}>
+                    {proposal.suggested_title || placeLabel(proposal)}
+                  </Text>
                   <Text style={styles.proposalMeta}>
-                    {proposal.duration_label || `${proposal.duration_minutes} min`} · {proposal.confidence} confidence
+                    {formatTimeRange(proposal.start_at, proposal.end_at)}
+                  </Text>
+                  <Text style={styles.proposalMeta}>
+                    {proposal.duration_label || `${proposal.duration_minutes} min`} ·{' '}
+                    {proposal.confidence} confidence
                   </Text>
                 </View>
                 <Ionicons
@@ -281,6 +304,63 @@ export default function ProposedEventsScreen() {
                 <View style={styles.editor}>
                   <Text style={styles.fieldLabel}>Place</Text>
                   <Text style={styles.placeText}>{placeLabel(proposal)}</Text>
+                  {proposal.place_candidates?.length ? (
+                    <View>
+                      <Text style={styles.fieldLabel}>Choose the place</Text>
+                      <Text style={styles.placeHint}>
+                        Select the venue that matches your visit. The selected place will be saved
+                        for future location matching.
+                      </Text>
+                      <View style={styles.placeCandidates}>
+                        {proposal.place_candidates.slice(0, 3).map((candidate) => {
+                          const selected =
+                            selectedPlaceById[proposal.proposal_id] === candidate.provider_place_id;
+                          const candidateType = candidate.primary_type?.replaceAll('_', ' ');
+                          return (
+                            <Pressable
+                              key={candidate.provider_place_id}
+                              onPress={() =>
+                                setSelectedPlaceById((current) => ({
+                                  ...current,
+                                  [proposal.proposal_id]: candidate.provider_place_id,
+                                }))
+                              }
+                              style={[
+                                styles.placeCandidate,
+                                selected && styles.placeCandidateSelected,
+                              ]}
+                            >
+                              <View style={styles.placeCandidateCopy}>
+                                <Text style={styles.placeCandidateTitle}>
+                                  {candidate.title || 'Unnamed place'}
+                                </Text>
+                                <Text style={styles.placeCandidateMeta}>
+                                  {[
+                                    candidateType,
+                                    candidate.distance_m != null
+                                      ? `${Math.round(candidate.distance_m)}m away`
+                                      : null,
+                                  ]
+                                    .filter(Boolean)
+                                    .join(' · ')}
+                                </Text>
+                                {candidate.formatted_address ? (
+                                  <Text style={styles.placeCandidateAddress}>
+                                    {candidate.formatted_address}
+                                  </Text>
+                                ) : null}
+                              </View>
+                              <Ionicons
+                                name={selected ? 'checkmark-circle' : 'ellipse-outline'}
+                                size={22}
+                                color={selected ? theme.colors.teal : theme.colors.mutedInk}
+                              />
+                            </Pressable>
+                          );
+                        })}
+                      </View>
+                    </View>
+                  ) : null}
                   <Text style={styles.fieldLabel}>Title</Text>
                   <TextInput
                     value={draftTitleById[proposal.proposal_id] ?? proposal.suggested_title ?? ''}
@@ -296,7 +376,9 @@ export default function ProposedEventsScreen() {
                   />
                   <Text style={styles.fieldLabel}>Summary</Text>
                   <TextInput
-                    value={draftSummaryById[proposal.proposal_id] ?? proposal.suggested_summary ?? ''}
+                    value={
+                      draftSummaryById[proposal.proposal_id] ?? proposal.suggested_summary ?? ''
+                    }
                     onChangeText={(value) =>
                       setDraftSummaryById((current) => ({
                         ...current,
@@ -473,6 +555,48 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: theme.colors.ink,
     fontWeight: '600',
+  },
+  placeHint: {
+    fontSize: 13,
+    color: theme.colors.mutedInk,
+    lineHeight: 18,
+  },
+  placeCandidates: {
+    marginTop: 8,
+    gap: 8,
+  },
+  placeCandidate: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: theme.colors.line,
+    borderRadius: theme.radius.md,
+    backgroundColor: '#fff',
+  },
+  placeCandidateSelected: {
+    borderColor: theme.colors.teal,
+    backgroundColor: theme.colors.paleTeal,
+  },
+  placeCandidateCopy: {
+    flex: 1,
+  },
+  placeCandidateTitle: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: theme.colors.ink,
+  },
+  placeCandidateMeta: {
+    marginTop: 3,
+    fontSize: 12,
+    color: theme.colors.mutedInk,
+    textTransform: 'capitalize',
+  },
+  placeCandidateAddress: {
+    marginTop: 3,
+    fontSize: 12,
+    color: theme.colors.mutedInk,
   },
   input: {
     borderWidth: 1,

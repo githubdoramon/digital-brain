@@ -114,7 +114,7 @@ def process_due_once() -> bool:
             target_date.isoformat(),
             timezone_name,
         )
-        result = proposed_events.analyze_user_day(
+        result = proposed_events.analyze_user_window(
             user_email=str(job["user_email"]),
             target_date=target_date,
             timezone_name=timezone_name,
