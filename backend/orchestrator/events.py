@@ -685,7 +685,11 @@ def _generate_meeting_transcript_summary(
     if not transcript_text:
         return _fallback_meeting_transcript_summary(payload, transcript_text)
 
-    from llm_helpers import LLMUnavailableError, build_json_schema_response_format, call_llm_json
+    from llm_helpers import (
+        LLMUnavailableError,
+        build_json_schema_response_format,
+        call_llm_json_agentic,
+    )
     from llm_json_schemas import MEETING_TRANSCRIPT_SUMMARY_RESPONSE_SCHEMA
 
     current_user_identifiers = _format_identifier_lines(
@@ -728,25 +732,30 @@ Action item rules:
 - Use null for unknown assignee_name, assignee_email, due_date, or evidence fields.
 - Do not create action items for vague discussion topics or suggestions without ownership.
 """.strip()
+    response_format = build_json_schema_response_format(
+        name="meeting_transcript_summary",
+        schema=MEETING_TRANSCRIPT_SUMMARY_RESPONSE_SCHEMA,
+    )
+
     try:
-        generated = call_llm_json(
+        generated = call_llm_json_agentic(
             prompt,
             system_prompt=(
                 "You write accurate meeting summaries and extract only grounded action items. "
-                "Return schema-valid JSON. Do not spend tokens on deliberation; "
-                "produce the JSON object directly."
+                "Return schema-valid JSON. Use your reasoning as needed, then emit the final "
+                "JSON object. Do not stop after reasoning without producing the object."
             ),
             use_fast_model=False,
             timeout=MEETING_TRANSCRIPT_SUMMARY_TIMEOUT_SECONDS,
+            max_tokens=16_384,
             temperature=0.2,
             reasoning_effort="high",
-            response_format=build_json_schema_response_format(
-                name="meeting_transcript_summary",
-                schema=MEETING_TRANSCRIPT_SUMMARY_RESPONSE_SCHEMA,
-            ),
+            response_format=response_format,
+            max_turns=3,
+            result_validator=_is_satisfactory_meeting_summary,
         )
     except (LLMUnavailableError, RuntimeError, ValueError, json.JSONDecodeError) as exc:
-        logger.warning("[meeting_transcript] LLM summary unavailable: %s", exc)
+        logger.warning("[meeting_transcript] LLM summary unavailable after agentic continuation: %s", exc)
         return _fallback_meeting_transcript_summary(payload, transcript_text)
 
     return _normalize_meeting_summary_result(generated, payload, transcript_text)
@@ -781,6 +790,17 @@ def _normalize_meeting_summary_result(
             )
 
     return {"summary": summary, "action_items": action_items}
+
+
+def _is_satisfactory_meeting_summary(result: dict[str, Any]) -> bool:
+    summary = " ".join(str(result.get("summary") or "").split()).strip()
+    action_items = result.get("action_items")
+    if not summary or not isinstance(action_items, list):
+        return False
+    return all(
+        isinstance(item, dict) and " ".join(str(item.get("task") or "").split()).strip()
+        for item in action_items
+    )
 
 
 def _create_current_user_todos_from_action_items(

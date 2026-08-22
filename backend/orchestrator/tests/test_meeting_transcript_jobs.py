@@ -210,6 +210,44 @@ def test_process_due_once_regenerates_when_transcript_hash_differs(monkeypatch):
     assert marked[0][1]["result"] == {"event_id": "event:test", "summary": "Updated"}
 
 
+def test_process_due_once_force_regenerate_bypasses_same_hash_skip(monkeypatch):
+    marked = []
+    ingested = []
+
+    monkeypatch.setattr(
+        meeting_transcript_jobs.async_jobs,
+        "claim_due_job",
+        lambda job_type: {
+            "job_id": "async_job:test",
+            "revision": 7,
+            "payload": {
+                "transcript": _payload().model_dump(by_alias=True, mode="json"),
+                "current_user": {"email": "user@example.test"},
+                "force_regenerate": True,
+            },
+        },
+    )
+    monkeypatch.setattr(
+        meeting_transcript_jobs,
+        "_find_existing_transcript_event",
+        lambda payload: {"id": "event:test", "raw": {"transcript_hash": "hash-1"}},
+    )
+    monkeypatch.setattr(
+        meeting_transcript_jobs.events_service,
+        "ingest_meeting_transcript",
+        lambda *args, **kwargs: ingested.append((args, kwargs)) or {"event_id": "event:test"},
+    )
+    monkeypatch.setattr(
+        meeting_transcript_jobs.async_jobs,
+        "mark_succeeded",
+        lambda *args, **kwargs: marked.append((args, kwargs)),
+    )
+
+    assert meeting_transcript_jobs.process_due_once() is True
+    assert len(ingested) == 1
+    assert marked[0][1]["result"] == {"event_id": "event:test"}
+
+
 def test_transcript_route_acknowledges_queue(monkeypatch):
     app = FastAPI()
     app.include_router(create_events_router())
@@ -241,3 +279,66 @@ def test_transcript_route_acknowledges_queue(monkeypatch):
         "meeting_key": "external:hyprnote:external-1",
         "next_run_at": "2026-01-01T12:00:30+00:00",
     }
+
+
+def test_rerun_meeting_summary_requeues_stored_transcript(monkeypatch):
+    app = FastAPI()
+    app.include_router(create_events_router())
+    app.dependency_overrides[get_current_user] = lambda: {"email": "user@example.test"}
+
+    stored = _payload().model_dump(by_alias=True, mode="json")
+    monkeypatch.setattr(
+        "routes.events.events_service.get_event_by_id",
+        lambda event_id: {"id": event_id, "raw": {"source": "meeting_transcript_ingest", **stored}},
+    )
+    calls = []
+
+    def fake_enqueue(payload, current_user, force_regenerate=False):
+        calls.append((payload, current_user, force_regenerate))
+        return {
+            "job_id": "async_job:rerun",
+            "status": "pending",
+            "revision": 2,
+            "meeting_key": "external:hyprnote:external-1",
+            "next_run_at": "2026-01-01T12:00:30+00:00",
+        }
+
+    monkeypatch.setattr("routes.events.meeting_transcript_jobs.enqueue_transcript", fake_enqueue)
+
+    response = TestClient(app).post("/meetings/event:test/summary/rerun")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "ok": True,
+        "queued": True,
+        "rerun": True,
+        "event_id": "event:test",
+        "job_id": "async_job:rerun",
+        "status": "pending",
+        "revision": 2,
+        "meeting_key": "external:hyprnote:external-1",
+        "next_run_at": "2026-01-01T12:00:30+00:00",
+    }
+    assert calls[0][0].transcript_hash == "hash-1"
+    assert calls[0][1] == {"email": "user@example.test"}
+    assert calls[0][2] is True
+
+
+def test_meeting_detail_includes_stored_transcript_for_web_review(monkeypatch):
+    app = FastAPI()
+    app.include_router(create_events_router())
+    app.dependency_overrides[get_current_user] = lambda: {"email": "user@example.test"}
+
+    monkeypatch.setattr(
+        "routes.events.events_service.get_meeting",
+        lambda _event_id: {
+            "id": "event:test",
+            "title": "Queue Review",
+            "raw": {"source": "meeting_transcript_ingest", "transcript_text": "Alex: We should queue this."},
+        },
+    )
+
+    response = TestClient(app).get("/meetings/event:test")
+
+    assert response.status_code == 200
+    assert response.json()["raw"]["transcript_text"] == "Alex: We should queue this."

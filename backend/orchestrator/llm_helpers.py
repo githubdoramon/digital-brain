@@ -9,7 +9,7 @@ import asyncio
 import json
 import os
 import time
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Callable
 from contextlib import contextmanager
 from contextvars import ContextVar
 from typing import Any, Optional
@@ -961,6 +961,117 @@ def call_llm_json(
     )
 
     return parse_llm_json_content(content)
+
+
+def call_llm_json_agentic(
+    prompt: str,
+    *,
+    system_prompt: Optional[str] = None,
+    model: Optional[str] = None,
+    use_fast_model: Optional[bool] = None,
+    timeout: Optional[int] = None,
+    max_tokens: Optional[int] = None,
+    temperature: Optional[float] = None,
+    top_p: Optional[float] = None,
+    reasoning_effort: Optional[str] = None,
+    response_format: Optional[dict[str, Any]] = None,
+    extra_body: Optional[dict[str, Any]] = None,
+    max_turns: int = 3,
+    max_reasoning_chars: int = 32_000,
+    result_validator: Optional[Callable[[dict[str, Any]], bool]] = None,
+) -> dict[str, Any]:
+    """Run bounded structured-output continuation turns.
+
+    Reasoning-capable local models may finish a turn with reasoning but no
+    assistant content. A normal JSON helper must reject that response, but a
+    structured agent can continue the same task. This helper carries the
+    provider's reasoning-only state into a follow-up turn and also repairs
+    malformed JSON, while keeping a finite stop rule for unavailable or stuck
+    models.
+    """
+    if max_turns < 1:
+        raise ValueError("max_turns must be at least 1")
+
+    messages = _build_messages(prompt, system_prompt=system_prompt)
+    last_failure = "no response"
+
+    def _reasoning_text(message: dict[str, Any]) -> str:
+        value = message.get("reasoning") or message.get("reasoning_content")
+        if isinstance(value, list):
+            parts: list[str] = []
+            for item in value:
+                if isinstance(item, dict):
+                    parts.append(str(item.get("text") or item.get("content") or ""))
+                else:
+                    parts.append(str(item))
+            return "".join(parts).strip()
+        return str(value or "").strip()
+
+    def _compact_state(value: str) -> str:
+        if len(value) <= max_reasoning_chars:
+            return value
+        head_chars = max_reasoning_chars // 4
+        tail_chars = max_reasoning_chars - head_chars
+        return value[:head_chars] + "\n...[middle omitted]...\n" + value[-tail_chars:]
+
+    for turn in range(1, max_turns + 1):
+        data = call_llm_chat(
+            messages,
+            model=model,
+            use_fast_model=use_fast_model,
+            timeout=timeout,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            top_p=top_p,
+            reasoning_effort=reasoning_effort,
+            response_format=response_format,
+            extra_body=extra_body,
+        )
+        message = data.get("choices", [{}])[0].get("message", {})
+        if not isinstance(message, dict):
+            message = {}
+        content = str(message.get("content") or "").strip()
+        reasoning = _reasoning_text(message)
+
+        if content:
+            try:
+                parsed = parse_llm_json_content(content)
+            except json.JSONDecodeError as exc:
+                last_failure = f"invalid JSON: {exc}"
+            else:
+                if isinstance(parsed, dict) and (
+                    result_validator is None or result_validator(parsed)
+                ):
+                    return parsed
+                last_failure = "the response failed task-specific result validation"
+        else:
+            last_failure = "the provider returned reasoning without final content"
+
+        if turn == max_turns:
+            break
+
+        continuation = (
+            "Continue the same task. Your previous turn did not yet provide a satisfactory "
+            "schema-valid JSON object. Do not restart the task or stop after reasoning. "
+            "Review the prior attempt, correct any issue, and emit only the final JSON object "
+            "matching the supplied response schema."
+        )
+        if reasoning:
+            continuation += (
+                "\n\nThe provider exposed the previous turn's reasoning below. Treat it as "
+                "scratch state and continue from it:\n<prior_reasoning>\n"
+                + _compact_state(reasoning)
+                + "\n</prior_reasoning>"
+            )
+        messages = [
+            *messages,
+            {"role": "assistant", "content": content},
+            {"role": "user", "content": continuation},
+        ]
+
+    raise RuntimeError(
+        f"LLM did not produce schema-valid JSON after {max_turns} turns: {last_failure}"
+    )
 
 
 def call_llm_with_tools(

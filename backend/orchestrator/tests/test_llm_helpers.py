@@ -217,3 +217,50 @@ def test_parse_llm_json_content_extracts_balanced_object_from_extra_text():
     )
 
     assert parsed["intent"] == "data_query"
+
+
+def test_call_llm_json_agentic_continues_reasoning_only_response(monkeypatch):
+    responses = [
+        {
+            "choices": [
+                {
+                    "message": {
+                        "role": "assistant",
+                        "content": "",
+                        "reasoning": "I have analyzed the transcript but have not emitted the object yet.",
+                    }
+                }
+            ]
+        },
+        {
+            "choices": [
+                {
+                    "message": {
+                        "role": "assistant",
+                        "content": '{"summary":"Done","action_items":[]}',
+                    }
+                }
+            ]
+        },
+    ]
+    calls = []
+
+    def fake_call_llm_chat(messages, **kwargs):
+        calls.append((messages, kwargs))
+        return responses.pop(0)
+
+    monkeypatch.setattr(llm_helpers, "call_llm_chat", fake_call_llm_chat)
+
+    result = llm_helpers.call_llm_json_agentic(
+        "Summarize the transcript.",
+        system_prompt="Return JSON.",
+        reasoning_effort="high",
+        max_turns=3,
+    )
+
+    assert result == {"summary": "Done", "action_items": []}
+    assert len(calls) == 2
+    continuation_messages = calls[1][0]
+    assert continuation_messages[-2] == {"role": "assistant", "content": ""}
+    assert "prior_reasoning" in continuation_messages[-1]["content"]
+    assert calls[0][1]["reasoning_effort"] == "high"
