@@ -334,7 +334,7 @@ def _cache_ttl_seconds() -> float:
     return _env_float("LOCATION_INFERENCE_CACHE_SECONDS", 300.0)
 
 
-def _read_cache(key: str) -> dict[str, Any] | None | object:
+def _read_cache(key: str) -> dict[str, Any] | object | None:
     now = time.time()
     with _CACHE_LOCK:
         entry = _CACHE.get(key)

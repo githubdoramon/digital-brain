@@ -83,6 +83,7 @@ jobs:
 
       - name: Run linter
         run: |
+          ruff --version
           ruff check .
 
   test-robot-gateway:
