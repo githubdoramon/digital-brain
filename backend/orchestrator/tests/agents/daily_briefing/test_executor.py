@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+from concurrent.futures import ThreadPoolExecutor as RealThreadPoolExecutor
 from datetime import datetime, timezone
 from unittest.mock import MagicMock, patch
 
@@ -10,7 +12,6 @@ from agents.daily_briefing.executor import (
     _build_briefing_prompt,
     _build_event_research_value_signals,
     _build_event_summary_debug_bundle,
-    _curate_collected_news,
     _enrich_selected_news_summaries,
     _fetch_similar_events,
     _format_context_text,
@@ -25,6 +26,13 @@ from agents.daily_briefing.executor import (
     _summarize_event,
     _synthesise_event_summary,
     _synthesise_event_summary_from_current_context,
+)
+from agents.daily_briefing.news_curation import (
+    NEWS_CURATION_BUCKET_MAX_CANDIDATES,
+    NEWS_CURATION_MAX_WORKERS,
+)
+from agents.daily_briefing.news_curation import (
+    curate_collected_news as _curate_collected_news,
 )
 
 # ---------------------------------------------------------------------------
@@ -695,12 +703,228 @@ def test_birthday_lookahead_is_seven():
 
 
 class TestCurateCollectedNews:
-    @patch("agents.daily_briefing.executor.call_llm_json")
-    @patch("agents.daily_briefing.executor.news_feeds.list_topics")
+    def test_partitions_topic_and_general_buckets_and_merges_multi_topic_article(self):
+        topics = [
+            {"label": "AI", "keywords": ["AI"]},
+            {"label": "Climate", "keywords": ["climate"]},
+        ]
+        articles = [
+            _make_news_article(
+                title="AI climate model announced",
+                url="https://example.com/multi",
+                topic_matches=["AI", "Climate"],
+            ),
+            _make_news_article(
+                title="New reasoning model",
+                url="https://example.com/ai",
+                topic_matches=["AI"],
+            ),
+            _make_news_article(
+                title="Storm causes flooding",
+                url="https://example.com/general",
+                topic_matches=[],
+            ),
+        ]
+
+        def curate(prompt, **_kwargs):
+            ids = re.findall(r'"article_id": "(article_\d+)"', prompt)
+            label = "AI" if "bucket for 'AI'" in prompt else "Climate" if "bucket for 'Climate'" in prompt else None
+            return {
+                "decisions": [
+                    {
+                        "article_id": article_id,
+                        "keep": True,
+                        "topic_matches": [label] if label else [],
+                        "duplicate_of": None,
+                        "reason": "Relevant development.",
+                    }
+                    for article_id in ids
+                ]
+            }
+
+        with (
+            patch("agents.daily_briefing.news_curation.news_feeds.list_topics", return_value=topics),
+            patch("agents.daily_briefing.news_curation.call_llm_json_agentic", side_effect=curate) as mock_call,
+        ):
+            result = _curate_collected_news(articles)
+
+        assert mock_call.call_count == 3
+        assert [article["url"] for article in result] == [
+            "https://example.com/multi",
+            "https://example.com/ai",
+            "https://example.com/general",
+        ]
+        assert result[0]["topic_matches"] == ["AI", "Climate"]
+        assert result[-1]["topic_matches"] == []
+
+    def test_caps_each_bucket_before_model_call(self):
+        articles = [
+            _make_news_article(
+                title=f"AI report {index}",
+                url=f"https://example.com/ai/{index}",
+                topic_matches=["AI"],
+            )
+            for index in range(NEWS_CURATION_BUCKET_MAX_CANDIDATES + 5)
+        ]
+
+        def curate(prompt, **_kwargs):
+            ids = re.findall(r'"article_id": "(article_\d+)"', prompt)
+            assert len(ids) == NEWS_CURATION_BUCKET_MAX_CANDIDATES
+            return {
+                "decisions": [
+                    {
+                        "article_id": article_id,
+                        "keep": True,
+                        "topic_matches": ["AI"],
+                        "duplicate_of": None,
+                        "reason": "Relevant.",
+                    }
+                    for article_id in ids
+                ]
+            }
+
+        with (
+            patch(
+                "agents.daily_briefing.news_curation.news_feeds.list_topics",
+                return_value=[{"label": "AI", "keywords": ["AI"]}],
+            ),
+            patch("agents.daily_briefing.news_curation.call_llm_json_agentic", side_effect=curate),
+        ):
+            result = _curate_collected_news(articles)
+
+        assert len(result) == NEWS_CURATION_BUCKET_MAX_CANDIDATES
+
+    def test_limits_parallel_topic_curation_to_five_workers(self):
+        topics = [
+            {"label": f"Topic {index}", "keywords": [f"keyword-{index}"]}
+            for index in range(7)
+        ]
+        articles = [
+            _make_news_article(
+                title=f"Report {index}",
+                url=f"https://example.com/report/{index}",
+                topic_matches=[topic["label"]],
+            )
+            for index, topic in enumerate(topics)
+        ]
+        configured_workers = []
+
+        def executor_factory(*, max_workers):
+            configured_workers.append(max_workers)
+            return RealThreadPoolExecutor(max_workers=max_workers)
+
+        def curate(prompt, **_kwargs):
+            article_id = re.search(r'"article_id": "(article_\d+)"', prompt).group(1)
+            topic_label = re.search(r"bucket for '([^']+)'", prompt).group(1)
+            return {
+                "decisions": [
+                    {
+                        "article_id": article_id,
+                        "keep": True,
+                        "topic_matches": [topic_label],
+                        "duplicate_of": None,
+                        "reason": "Relevant.",
+                    }
+                ]
+            }
+
+        with (
+            patch("agents.daily_briefing.news_curation.news_feeds.list_topics", return_value=topics),
+            patch("agents.daily_briefing.news_curation.ThreadPoolExecutor", side_effect=executor_factory),
+            patch("agents.daily_briefing.news_curation.call_llm_json_agentic", side_effect=curate),
+        ):
+            result = _curate_collected_news(articles)
+
+        assert configured_workers == [NEWS_CURATION_MAX_WORKERS]
+        assert len(result) == len(articles)
+
+    def test_failed_topic_bucket_isolated_from_general_bucket(self):
+        articles = [
+            _make_news_article(title="Gemini horoscope", url="https://example.com/horoscope", topic_matches=["AI"]),
+            _make_news_article(title="Election result", url="https://example.com/general", topic_matches=[]),
+        ]
+
+        def curate(prompt, **_kwargs):
+            ids = re.findall(r'"article_id": "(article_\d+)"', prompt)
+            if "bucket for 'AI'" in prompt:
+                raise TimeoutError("topic model timeout")
+            return {
+                "decisions": [
+                    {
+                        "article_id": article_id,
+                        "keep": True,
+                        "topic_matches": [],
+                        "duplicate_of": None,
+                        "reason": "General headline.",
+                    }
+                    for article_id in ids
+                ]
+            }
+
+        with (
+            patch(
+                "agents.daily_briefing.news_curation.news_feeds.list_topics",
+                return_value=[{"label": "AI", "keywords": ["Gemini"]}],
+            ),
+            patch("agents.daily_briefing.news_curation.call_llm_json_agentic", side_effect=curate),
+        ):
+            result = _curate_collected_news(articles)
+
+        assert [article["url"] for article in result] == ["https://example.com/general"]
+
+    def test_model_cannot_assign_a_different_topic_label(self):
+        article = _make_news_article(title="Climate report", topic_matches=["AI"])
+        with (
+            patch(
+                "agents.daily_briefing.news_curation.news_feeds.list_topics",
+                return_value=[
+                    {"label": "AI", "keywords": ["AI"]},
+                    {"label": "Climate", "keywords": ["climate"]},
+                ],
+            ),
+            patch(
+                "agents.daily_briefing.news_curation.call_llm_json_agentic",
+                return_value={
+                    "decisions": [
+                        {
+                            "article_id": "article_1",
+                            "keep": True,
+                            "topic_matches": ["Climate"],
+                            "duplicate_of": None,
+                            "reason": "Wrong label.",
+                        }
+                    ]
+                },
+            ),
+        ):
+            assert _curate_collected_news([article]) == []
+
+    def test_failed_general_bucket_does_not_bypass_candidate_cap(self):
+        articles = [
+            _make_news_article(
+                title=f"Headline {index}",
+                url=f"https://example.com/general/{index}",
+                topic_matches=[],
+            )
+            for index in range(NEWS_CURATION_BUCKET_MAX_CANDIDATES + 3)
+        ]
+        with (
+            patch("agents.daily_briefing.news_curation.news_feeds.list_topics", return_value=[]),
+            patch(
+                "agents.daily_briefing.news_curation.call_llm_json_agentic",
+                side_effect=TimeoutError("general model timeout"),
+            ),
+        ):
+            result = _curate_collected_news(articles)
+
+        assert len(result) == NEWS_CURATION_BUCKET_MAX_CANDIDATES
+
+    @patch("agents.daily_briefing.news_curation.call_llm_json_agentic")
+    @patch("agents.daily_briefing.news_curation.news_feeds.list_topics")
     def test_removes_content_duplicate_and_semantic_topic_mismatch(
         self,
         mock_list_topics,
-        mock_call_llm_json,
+        mock_call_llm_json_agentic,
     ):
         mock_list_topics.return_value = [
             {"label": "AI", "keywords": ["AI", "Gemini", "artificial intelligence"]}
@@ -728,7 +952,7 @@ class TestCurateCollectedNews:
                 topic_matches=["AI"],
             ),
         ]
-        mock_call_llm_json.return_value = {
+        mock_call_llm_json_agentic.return_value = {
             "decisions": [
                 {
                     "article_id": "article_1",
@@ -757,26 +981,28 @@ class TestCurateCollectedNews:
         result = _curate_collected_news(articles)
 
         assert [article["url"] for article in result] == ["https://example.com/model-release"]
-        prompt = mock_call_llm_json.call_args.args[0]
+        prompt = mock_call_llm_json_agentic.call_args.args[0]
         assert "same underlying real-world story" in prompt
         assert "keyword collision" in prompt
-        kwargs = mock_call_llm_json.call_args.kwargs
+        kwargs = mock_call_llm_json_agentic.call_args.kwargs
         assert kwargs["response_format"]["json_schema"]["name"] == "daily_briefing_news_curation"
         assert kwargs["use_fast_model"] is False
         assert kwargs["reasoning_effort"] == "high"
+        assert kwargs["max_turns"] == 2
+        assert callable(kwargs["result_validator"])
 
-    @patch("agents.daily_briefing.executor.call_llm_json")
-    @patch("agents.daily_briefing.executor.news_feeds.list_topics", return_value=[])
+    @patch("agents.daily_briefing.news_curation.call_llm_json_agentic")
+    @patch("agents.daily_briefing.news_curation.news_feeds.list_topics", return_value=[])
     def test_incomplete_model_decisions_fall_back_without_dropping_articles(
         self,
         _mock_list_topics,
-        mock_call_llm_json,
+        mock_call_llm_json_agentic,
     ):
         articles = [
             _make_news_article(title="First", url="https://example.com/first"),
             _make_news_article(title="Second", url="https://example.com/second"),
         ]
-        mock_call_llm_json.return_value = {
+        mock_call_llm_json_agentic.return_value = {
             "decisions": [
                 {
                     "article_id": "article_1",

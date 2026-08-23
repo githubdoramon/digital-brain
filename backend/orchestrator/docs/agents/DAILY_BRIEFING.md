@@ -19,7 +19,7 @@ This document captures behavior and quality rules for the daily briefing profile
    - If there are no prior occurrences, fallback matching uses the same attendees. If history is still empty, a final freeform prep synthesis may use current context plus targeted research.
    - Per-event prep has a single responsibility: produce one structured prep payload (`key_points`, `action_items`, `suggested_reading`, `prep_focus`). Research runs only in the no-history fallback path.
 3. Gather birthdays and unlinked pending todos.
-4. Aggregate news via `news_feeds.fetch_news()` (Tavily + NewsData + RSS), then story-cluster and persist mention history. Run one model-based editorial pass over the collected set before ranking to remove same-story coverage across outlets and reject topic matches caused by ambiguous or incidental keywords.
+4. Aggregate news via `news_feeds.fetch_news()` (Tavily + NewsData + RSS), then story-cluster and persist mention history. Partition the collected set into one bounded editorial bucket per tracked topic plus a general-news bucket. Each bucket sends at most 28 candidates to the shared structured-output model, with at most five bucket calls in flight. Multi-topic articles may be reviewed in more than one bucket but are merged by stable article identity before ranking, and only controller-approved configured labels survive. Same-story coverage is deduplicated within each bucket and the existing URL/cluster dedupe remains authoritative afterward. A failed tracked-topic bucket fails closed so keyword collisions cannot enter a topic; a failed general bucket retains only its bounded candidates because it has no topic-label collision, with normal deterministic ranking still applied.
 5. Generate final markdown in focused passes:
    - Build event-critical sections (`Day Overview`, `Schedule`, `Event Prep`) deterministically from the structured per-event prep payloads (no second event-summary rewrite pass).
    - Build deterministic sections in code for birthdays and outstanding todos.
@@ -38,10 +38,10 @@ This document captures behavior and quality rules for the daily briefing profile
 
 ## News Relevance and Selection
 
-- News selection is bounded before per-article summary generation to avoid prompt overload; the preceding editorial pass receives every collected candidate with a bounded content excerpt so it can compare the set globally.
-- Before ranking, a structured editorial model pass compares article content across the complete collected set. It keeps one representative of the same underlying story even when outlets, URLs, titles, and wording differ, while preserving genuinely distinct developments or reporting angles.
-- The same pass validates claimed topic labels by semantic subject matter. Keywords are treated only as collection hints, so ambiguous namesakes and incidental mentions are removed from topic sections instead of being accepted as matches.
-- Editorial curation is non-critical: malformed, incomplete, or failed model output falls back to the collected articles and the existing deterministic ranking path.
+- News selection is bounded before per-article summary generation to avoid prompt overload; editorial curation is also bounded per topic/general bucket (28 candidates per request, five concurrent workers).
+- Each structured editorial bucket compares article content within that topic/general set and keeps one representative of the same underlying story when outlets, URLs, titles, and wording differ, while preserving genuinely distinct developments or reporting angles.
+- Tracked-topic buckets validate claimed labels by semantic subject matter. Keywords are treated only as collection hints, so ambiguous namesakes and incidental mentions are removed from topic sections instead of being accepted as matches. Model-authored topic labels are never trusted outside the controller's configured bucket label.
+- Curation failures are isolated: malformed, incomplete, timed-out, or failed tracked-topic buckets fail closed; general-bucket failures retain only the bounded request candidates because general articles have no topic label to validate. URL/cluster deduplication and deterministic ranking still run afterward.
 - Selection includes:
   - dynamic score-threshold selection (instead of strict fixed per-topic/source limits),
   - per-topic hard cap (currently max 10 selected articles per topic label),
@@ -116,5 +116,6 @@ If news validation fails, the executor falls back to `No notable news today.`
 ## Key Files
 
 - Runtime: `backend/orchestrator/agents/daily_briefing/executor.py`
+- News curation: `backend/orchestrator/agents/daily_briefing/news_curation.py`
 - Profile/tool policy: `backend/orchestrator/agents/daily_briefing/profile.py`
 - Validation: `backend/orchestrator/agents/daily_briefing/validators.py`
