@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import re
-from concurrent.futures import ThreadPoolExecutor as RealThreadPoolExecutor
 from datetime import datetime, timezone
 from unittest.mock import MagicMock, patch
 
@@ -29,7 +28,7 @@ from agents.daily_briefing.executor import (
 )
 from agents.daily_briefing.news_curation import (
     NEWS_CURATION_BUCKET_MAX_CANDIDATES,
-    NEWS_CURATION_MAX_WORKERS,
+    NEWS_CURATION_TIMEOUT_SECONDS,
 )
 from agents.daily_briefing.news_curation import (
     curate_collected_news as _curate_collected_news,
@@ -794,7 +793,7 @@ class TestCurateCollectedNews:
 
         assert len(result) == NEWS_CURATION_BUCKET_MAX_CANDIDATES
 
-    def test_limits_parallel_topic_curation_to_five_workers(self):
+    def test_curates_buckets_sequentially_with_five_minute_timeout(self):
         topics = [
             {"label": f"Topic {index}", "keywords": [f"keyword-{index}"]}
             for index in range(7)
@@ -807,15 +806,13 @@ class TestCurateCollectedNews:
             )
             for index, topic in enumerate(topics)
         ]
-        configured_workers = []
+        call_order = []
 
-        def executor_factory(*, max_workers):
-            configured_workers.append(max_workers)
-            return RealThreadPoolExecutor(max_workers=max_workers)
-
-        def curate(prompt, **_kwargs):
+        def curate(prompt, **kwargs):
             article_id = re.search(r'"article_id": "(article_\d+)"', prompt).group(1)
             topic_label = re.search(r"bucket for '([^']+)'", prompt).group(1)
+            call_order.append(topic_label)
+            assert kwargs["timeout"] == NEWS_CURATION_TIMEOUT_SECONDS
             return {
                 "decisions": [
                     {
@@ -830,12 +827,11 @@ class TestCurateCollectedNews:
 
         with (
             patch("agents.daily_briefing.news_curation.news_feeds.list_topics", return_value=topics),
-            patch("agents.daily_briefing.news_curation.ThreadPoolExecutor", side_effect=executor_factory),
             patch("agents.daily_briefing.news_curation.call_llm_json_agentic", side_effect=curate),
         ):
             result = _curate_collected_news(articles)
 
-        assert configured_workers == [NEWS_CURATION_MAX_WORKERS]
+        assert call_order == [topic["label"] for topic in topics]
         assert len(result) == len(articles)
 
     def test_failed_topic_bucket_isolated_from_general_bucket(self):
@@ -988,6 +984,7 @@ class TestCurateCollectedNews:
         assert kwargs["response_format"]["json_schema"]["name"] == "daily_briefing_news_curation"
         assert kwargs["use_fast_model"] is False
         assert kwargs["reasoning_effort"] == "high"
+        assert kwargs["timeout"] == NEWS_CURATION_TIMEOUT_SECONDS
         assert kwargs["max_turns"] == 2
         assert callable(kwargs["result_validator"])
 

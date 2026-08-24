@@ -8,7 +8,7 @@ It extracts entities, checks for existing ones, and asks for confirmation.
 import re
 from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any
 from uuid import uuid4
 
@@ -114,6 +114,9 @@ _GENERIC_PLACE_ALIAS_TERMS = {
 
 _INFERRED_PLACE_AUTO_MATCH_MAX_DISTANCE_M = 60.0
 _INFERRED_PLACE_AUTO_MATCH_CONFIDENCE = {"high"}
+_CURRENT_LOCATION_EVENT_MAX_PAST = timedelta(hours=2)
+_CURRENT_LOCATION_EVENT_MAX_FUTURE = timedelta(minutes=30)
+_CURRENT_LOCATION_MAX_AGE = timedelta(minutes=30)
 _CONTACT_SCOPED_POSSESSIVE_PATTERN = r"(?:'|’|`|´)s"
 
 # Thresholds for deciding whether an /event invocation should update an
@@ -473,6 +476,63 @@ def _extract_client_location(context: dict[str, Any]) -> dict[str, Any] | None:
         return None
     location = client_context.get("location")
     return location if isinstance(location, dict) else None
+
+
+def _event_extraction_client_context(context: dict[str, Any]) -> dict[str, Any] | None:
+    """Keep timezone/locale context without exposing current coordinates to extraction."""
+    client_context = context.get("client_context")
+    if not isinstance(client_context, dict):
+        return None
+    extraction_context = {
+        key: client_context[key]
+        for key in ("timezone", "locale")
+        if client_context.get(key) not in (None, "")
+    }
+    return extraction_context or None
+
+
+def _as_utc_datetime(value: Any) -> datetime | None:
+    if isinstance(value, datetime):
+        parsed = value
+    elif value not in (None, ""):
+        try:
+            parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        except (TypeError, ValueError):
+            return None
+    else:
+        return None
+
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _can_use_current_location_for_event(
+    extracted: dict[str, Any],
+    client_location: dict[str, Any] | None,
+    *,
+    now: datetime | None = None,
+) -> bool:
+    """Allow current location only for a near-now event and a fresh capture."""
+    if not isinstance(client_location, dict):
+        return False
+    if extracted.get("when_granularity") == "date":
+        return False
+
+    now_utc = _as_utc_datetime(now or datetime.now(timezone.utc))
+    captured_at = _as_utc_datetime(client_location.get("captured_at"))
+    event_start = _as_utc_datetime(extracted.get("when"))
+    if now_utc is None or captured_at is None or event_start is None:
+        return False
+    if abs(now_utc - captured_at) > _CURRENT_LOCATION_MAX_AGE:
+        return False
+
+    event_end = _as_utc_datetime(extracted.get("end_when"))
+    if event_end is not None and event_start <= now_utc <= event_end:
+        return True
+
+    starts_in = event_start - now_utc
+    return -_CURRENT_LOCATION_EVENT_MAX_PAST <= starts_in <= _CURRENT_LOCATION_EVENT_MAX_FUTURE
 
 
 def _normalize_role_hint(role_text: str | None) -> str | None:
@@ -1108,7 +1168,7 @@ def _extract_event_entities_with_llm(
     # Get current time context
     time_context = get_time_context()
     client_timezone = event_timezone_from_context(context)
-    location_context = get_location_context(context.get("client_context"))
+    location_context = get_location_context(_event_extraction_client_context(context))
     user_email = str(context.get("user_email") or "").strip()
     self_context = get_self_context(user_email) if user_email else None
 
@@ -1293,6 +1353,17 @@ Return ONLY a JSON object matching the supplied response schema."""
             "documents": extracted.get("documents", []),
             "tags": [],
             "types": extracted.get("types", ["generic"]),
+            "when_granularity": (
+                "date"
+                if (
+                    isinstance(raw_when, str)
+                    and _DATE_ONLY_PATTERN.fullmatch(raw_when.strip())
+                    and inferred_meal_when is None
+                )
+                else "datetime"
+                if when is not None
+                else None
+            ),
         }
 
         if existing_extraction:
@@ -1311,6 +1382,12 @@ Return ONLY a JSON object matching the supplied response schema."""
                     continue
                 if result.get(key) in (None, "", [], ["generic"]) and existing_extraction.get(key):
                     result[key] = existing_extraction[key]
+
+            should_preserve_existing_granularity = (
+                bool(extraction_target_fields) and "when" not in extraction_target_fields
+            ) or (raw_when in (None, "") and existing_extraction.get("when") is not None)
+            if should_preserve_existing_granularity:
+                result["when_granularity"] = existing_extraction.get("when_granularity")
 
         logger.info("[event_extraction] Extraction complete")
         return result
@@ -3202,11 +3279,26 @@ def handle_event(parsed: ParsedCommand, context: dict) -> dict[str, Any]:
 
     where = str(extracted.get("where") or "").strip()
     client_location = _extract_client_location(context)
+    can_use_current_location = _can_use_current_location_for_event(
+        extracted,
+        client_location,
+    )
+    location_disambiguation = client_location if can_use_current_location else None
     inferred_location: dict[str, Any] | None = None
     where_source = "extracted"
     contact_place_hint: dict[str, Any] | None = None
 
-    if not where:
+    if client_location and not can_use_current_location:
+        logger.info(
+            "[handle_event] Suppressed current-location inference and proximity bias "
+            "for non-current or imprecisely timed event start=%s end=%s granularity=%s captured_at=%s",
+            extracted.get("when"),
+            extracted.get("end_when"),
+            extracted.get("when_granularity"),
+            client_location.get("captured_at"),
+        )
+
+    if not where and can_use_current_location:
         inferred_location = infer_current_place(client_location, user_email=user_email)
         inferred_name = ""
         if isinstance(inferred_location, dict):
@@ -3300,7 +3392,7 @@ def handle_event(parsed: ParsedCommand, context: dict) -> dict[str, Any]:
         if not matched_place_id:
             place_match = places_service.find_best_place_match(
                 where,
-                client_location=client_location,
+                client_location=location_disambiguation,
             )
             if place_match:
                 canonical_name = str(place_match.get("name") or where).strip() or where
@@ -3358,9 +3450,9 @@ def handle_event(parsed: ParsedCommand, context: dict) -> dict[str, Any]:
             elif where_source == "extracted" and not contact_place_hint:
                 near_lat = None
                 near_lon = None
-                if isinstance(client_location, dict):
-                    near_lat = client_location.get("lat")
-                    near_lon = client_location.get("lon")
+                if isinstance(location_disambiguation, dict):
+                    near_lat = location_disambiguation.get("lat")
+                    near_lon = location_disambiguation.get("lon")
                 geocoded_place = geocode_place_name(where, near_lat=near_lat, near_lon=near_lon)
                 if isinstance(geocoded_place, dict):
                     resolution["geocoded_place"] = geocoded_place

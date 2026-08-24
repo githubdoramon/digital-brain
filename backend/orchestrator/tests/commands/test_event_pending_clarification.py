@@ -1,4 +1,5 @@
 import re
+from datetime import datetime, timezone
 
 import pytest
 
@@ -302,6 +303,8 @@ def test_handle_event_surfaces_proposed_contact_groups(monkeypatch):
 
 
 def test_handle_event_autofills_high_confidence_inferred_place_when_where_missing(monkeypatch):
+    now = datetime.now(timezone.utc)
+
     def fake_extract_event_entities(
         event_message,
         context,
@@ -311,7 +314,7 @@ def test_handle_event_autofills_high_confidence_inferred_place_when_where_missin
         return {
             "title": "Quick standup",
             "summary": "Team standup",
-            "when": None,
+            "when": now,
             "where": None,
             "tags": ["work"],
             "types": ["meeting"],
@@ -366,7 +369,13 @@ def test_handle_event_autofills_high_confidence_inferred_place_when_where_missin
     context = {
         "user_email": "user@example.com",
         "event_pending_key": "user@example.com:thread-xyz",
-        "client_context": {"location": {"lat": 38.72, "lon": -9.13}},
+        "client_context": {
+            "location": {
+                "lat": 38.72,
+                "lon": -9.13,
+                "captured_at": now.isoformat(),
+            }
+        },
     }
 
     result = handle_event(parsed, context)
@@ -377,6 +386,8 @@ def test_handle_event_autofills_high_confidence_inferred_place_when_where_missin
 
 
 def test_handle_event_skips_low_confidence_inferred_known_place(monkeypatch):
+    now = datetime.now(timezone.utc)
+
     def fake_extract_event_entities(
         event_message,
         context,
@@ -386,7 +397,7 @@ def test_handle_event_skips_low_confidence_inferred_known_place(monkeypatch):
         return {
             "title": "Quick standup",
             "summary": "Team standup",
-            "when": None,
+            "when": now,
             "where": None,
             "tags": ["work"],
             "types": ["meeting"],
@@ -442,7 +453,13 @@ def test_handle_event_skips_low_confidence_inferred_known_place(monkeypatch):
     context = {
         "user_email": "user@example.com",
         "event_pending_key": "user@example.com:thread-xyz",
-        "client_context": {"location": {"lat": 38.72, "lon": -9.13}},
+        "client_context": {
+            "location": {
+                "lat": 38.72,
+                "lon": -9.13,
+                "captured_at": now.isoformat(),
+            }
+        },
     }
 
     result = handle_event(parsed, context)

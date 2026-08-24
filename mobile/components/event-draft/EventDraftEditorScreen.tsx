@@ -25,6 +25,11 @@ import {
 } from '@/components/CollapsingTopBar';
 import { FloatingSaveButton } from '@/components/FloatingSaveButton';
 import { EventPhotoCard } from '@/components/event-draft/EventPhotoCard';
+import {
+  draftDateTimePickerValue,
+  formatDraftDateTime,
+  formatInstantDateTime,
+} from '@/components/event-draft/dateTime';
 import { UiDirectiveDateTimePickerSheet } from '@/components/ui-directive-card/UiDirectiveDateTimePickerSheet';
 import {
   EMPTY_EVENT_DRAFT,
@@ -92,21 +97,12 @@ function inputToList(value: string): string[] {
 }
 
 function formatWhen(value: string) {
-  if (!value.trim()) return 'Not specified';
-  const parsed = new Date(value);
-  if (Number.isNaN(parsed.getTime())) return value;
-  return parsed.toLocaleString(undefined, {
-    year: 'numeric',
-    month: 'short',
-    day: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-  });
+  return formatDraftDateTime(value);
 }
 
 function formatCandidateWhen(value: string | null): string {
   if (!value) return 'No date';
-  return formatWhen(value);
+  return formatInstantDateTime(value);
 }
 
 function floatingOffset(insetBottom: number, keyboardHeight: number) {
@@ -895,7 +891,7 @@ export function EventDetailsForm({
         <UiDirectiveDateTimePickerSheet
           visible
           mode="datetime"
-          value={when || undefined}
+          value={when ? draftDateTimePickerValue(when) : undefined}
           onClose={() => setShowWhenPicker(false)}
           onConfirm={(nextValue) => {
             setWhen(nextValue);
@@ -908,7 +904,7 @@ export function EventDetailsForm({
         <UiDirectiveDateTimePickerSheet
           visible
           mode="datetime"
-          value={endWhen || undefined}
+          value={endWhen ? draftDateTimePickerValue(endWhen) : undefined}
           onClose={() => setShowEndDateTimePicker(false)}
           onConfirm={(nextValue) => {
             setEndWhen(nextValue);

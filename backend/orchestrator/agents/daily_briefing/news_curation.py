@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import logging
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
 
 import news_feeds
@@ -15,11 +14,11 @@ from search_normalization import normalize_search_text
 logger = logging.getLogger(__name__)
 
 NEWS_CURATION_BUCKET_MAX_CANDIDATES = 28
-NEWS_CURATION_MAX_WORKERS = 5
+NEWS_CURATION_TIMEOUT_SECONDS = 300
 
 
 def curate_collected_news(news_articles: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Curate bounded, topic-scoped buckets concurrently.
+    """Curate bounded, topic-scoped buckets sequentially.
 
     Each tracked topic and the general-news pool gets its own request. The
     controller merges multi-topic decisions by article identity and only
@@ -91,28 +90,21 @@ def curate_collected_news(news_articles: list[dict[str, Any]]) -> list[dict[str,
 
     successes: dict[str, dict[str, dict[str, Any]]] = {}
     failed_buckets: set[str] = set()
-    max_workers = min(NEWS_CURATION_MAX_WORKERS, len(bucket_specs))
-    with ThreadPoolExecutor(max_workers=max_workers) as pool:
-        future_map = {
-            pool.submit(_curate_news_bucket, bucket_key, topic_label, candidates, topic_payload): bucket_key
-            for bucket_key, topic_label, candidates in bucket_specs
-        }
-        for future in as_completed(future_map):
-            bucket_key = future_map[future]
-            try:
-                decisions = future.result()
-            except Exception:
-                logger.warning(
-                    "[briefing.news] Editorial curation failed for %s",
-                    bucket_key,
-                    exc_info=True,
-                )
+    for bucket_key, topic_label, candidates in bucket_specs:
+        try:
+            decisions = _curate_news_bucket(bucket_key, topic_label, candidates, topic_payload)
+        except Exception:
+            logger.warning(
+                "[briefing.news] Editorial curation failed for %s",
+                bucket_key,
+                exc_info=True,
+            )
+            failed_buckets.add(bucket_key)
+        else:
+            if decisions is None:
                 failed_buckets.add(bucket_key)
             else:
-                if decisions is None:
-                    failed_buckets.add(bucket_key)
-                else:
-                    successes[bucket_key] = decisions
+                successes[bucket_key] = decisions
 
     merged_matches: dict[str, list[str]] = {}
     kept_general: set[str] = set()
@@ -257,6 +249,7 @@ def _curate_news_bucket(
                 name="daily_briefing_news_curation",
                 schema=DAILY_BRIEFING_NEWS_CURATION_RESPONSE_SCHEMA,
             ),
+            timeout=NEWS_CURATION_TIMEOUT_SECONDS,
             max_turns=2,
             result_validator=lambda value: _validate_news_curation_result(value, set(candidate_ids)),
         )

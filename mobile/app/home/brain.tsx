@@ -83,6 +83,7 @@ import {
 } from '@/contact-draft/draftEditorSession';
 import type { ContactDraftModifications } from '@/contact-draft/types';
 import { LinkedItemsRow } from '@/components/chat/LinkedItemsRow';
+import { formatDraftDateTime, formatInstantDateTime } from '@/components/event-draft/dateTime';
 import {
   clearEventDraftEditSession,
   consumeEventDraftEditResult,
@@ -829,21 +830,7 @@ function isClarificationDirective(directives: UiDirectives | undefined): boolean
 }
 
 function formatEventPreviewWhen(value: string): string {
-  const raw = value.trim();
-  if (!raw) return 'Not specified';
-  const normalized = raw.replace('Z', '+00:00');
-  const parsed = new Date(normalized);
-  if (Number.isNaN(parsed.getTime())) {
-    return raw;
-  }
-  return parsed.toLocaleString('en-US', {
-    month: 'short',
-    day: '2-digit',
-    year: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-    hour12: false,
-  });
+  return formatInstantDateTime(value);
 }
 
 function updateEventPreviewCard(
@@ -857,8 +844,8 @@ function updateEventPreviewCard(
   const body = [
     `Title: ${draft.title.trim() || 'Untitled event'}`,
     `Summary: ${draft.summary.trim() || 'No summary provided.'}`,
-    `When: ${formatEventPreviewWhen(draft.when)}`,
-    `Ends: ${formatEventPreviewWhen(draft.endWhen)}`,
+    `When: ${formatDraftDateTime(draft.when)}`,
+    `Ends: ${formatDraftDateTime(draft.endWhen)}`,
     `Where: ${draft.where.trim() || 'Not specified'}`,
     `Who: ${participants.length > 0 ? participants.join(', ') : 'No participants detected'}`,
     `Tags: ${draft.tags.length > 0 ? draft.tags.join(', ') : 'None'}`,
