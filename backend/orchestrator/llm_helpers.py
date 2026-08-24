@@ -27,6 +27,10 @@ from observability.logger import get_runtime_logger
 
 logger = get_runtime_logger(__name__)
 
+_REASONING_EFFORT_ALIASES = {
+    "high": "x-high",
+}
+
 # LLM Configuration
 LLM_BASE_URL = os.getenv("LLM_BASE_URL")
 LLM_API_KEY = os.getenv("LLM_API_KEY", "")
@@ -192,6 +196,10 @@ def build_chat_payload(
         reasoning_effort if reasoning_effort is not None else _default_reasoning_effort(resolved_model)
         or ""
     ).strip().lower()
+    normalized_reasoning_effort = _REASONING_EFFORT_ALIASES.get(
+        normalized_reasoning_effort,
+        normalized_reasoning_effort,
+    )
     if normalized_reasoning_effort:
         payload["reasoning_effort"] = normalized_reasoning_effort
         payload["reasoning"] = {"effort": normalized_reasoning_effort}

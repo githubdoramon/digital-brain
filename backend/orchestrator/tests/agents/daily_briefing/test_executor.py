@@ -983,7 +983,7 @@ class TestCurateCollectedNews:
         kwargs = mock_call_llm_json_agentic.call_args.kwargs
         assert kwargs["response_format"]["json_schema"]["name"] == "daily_briefing_news_curation"
         assert kwargs["use_fast_model"] is False
-        assert kwargs["reasoning_effort"] == "high"
+        assert kwargs["reasoning_effort"] == "x-high"
         assert kwargs["timeout"] == NEWS_CURATION_TIMEOUT_SECONDS
         assert kwargs["max_turns"] == 2
         assert callable(kwargs["result_validator"])

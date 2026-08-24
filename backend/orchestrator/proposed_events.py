@@ -891,7 +891,7 @@ def _enrich_candidate_with_history(
                 "friendly ones (2 hours instead of 120 minutes for example). Return schema-valid JSON only."
             ),
             use_fast_model=False,
-            reasoning_effort="high",
+            reasoning_effort="x-high",
             timeout=90,
             temperature=0.0,
             response_format=build_json_schema_response_format(
@@ -1773,7 +1773,7 @@ def _event_blocks_location_segment(segment: StaySegment, event: dict[str, Any]) 
                 "location-derived proposed event. Return schema-valid JSON only."
             ),
             use_fast_model=False,
-            reasoning_effort="high",
+            reasoning_effort="x-high",
             timeout=OVERLAP_DISAMBIGUATION_TIMEOUT_SECONDS,
             temperature=0.0,
             response_format=build_json_schema_response_format(

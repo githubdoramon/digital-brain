@@ -45,6 +45,20 @@ def test_build_chat_payload_uses_keep_alive_override_for_any_model(monkeypatch):
     assert payload["keep_alive"] == "180s"
 
 
+def test_build_chat_payload_maps_legacy_high_reasoning_to_x_high(monkeypatch):
+    monkeypatch.setenv("LLM_BASE_URL", "http://localhost:11434/v1")
+    monkeypatch.setenv("LLM_CHAT_MODEL_SMART", "smart-model")
+
+    payload = llm_helpers.build_chat_payload(
+        [{"role": "user", "content": "hi"}],
+        use_fast_model=False,
+        reasoning_effort="high",
+    )
+
+    assert payload["reasoning_effort"] == "x-high"
+    assert payload["reasoning"] == {"effort": "x-high"}
+
+
 def test_warm_fast_model_uses_ollama_chat_endpoint(monkeypatch):
     monkeypatch.setenv("LLM_BASE_URL", "http://localhost:11434/v1")
     monkeypatch.setenv("LLM_CHAT_MODEL_FAST", "fast-model")
@@ -254,7 +268,7 @@ def test_call_llm_json_agentic_continues_reasoning_only_response(monkeypatch):
     result = llm_helpers.call_llm_json_agentic(
         "Summarize the transcript.",
         system_prompt="Return JSON.",
-        reasoning_effort="high",
+        reasoning_effort="x-high",
         max_turns=3,
     )
 
@@ -263,4 +277,4 @@ def test_call_llm_json_agentic_continues_reasoning_only_response(monkeypatch):
     continuation_messages = calls[1][0]
     assert continuation_messages[-2] == {"role": "assistant", "content": ""}
     assert "prior_reasoning" in continuation_messages[-1]["content"]
-    assert calls[0][1]["reasoning_effort"] == "high"
+    assert calls[0][1]["reasoning_effort"] == "x-high"

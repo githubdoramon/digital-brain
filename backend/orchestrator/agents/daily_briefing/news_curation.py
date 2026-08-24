@@ -244,7 +244,7 @@ def _curate_news_bucket(
             ),
             temperature=0,
             use_fast_model=False,
-            reasoning_effort="high",
+            reasoning_effort="x-high",
             response_format=build_json_schema_response_format(
                 name="daily_briefing_news_curation",
                 schema=DAILY_BRIEFING_NEWS_CURATION_RESPONSE_SCHEMA,

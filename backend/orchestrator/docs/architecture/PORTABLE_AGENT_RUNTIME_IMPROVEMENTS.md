@@ -1,472 +1,641 @@
 # Portable Agent Runtime Improvements
 
-This document captures implementation ideas that are portable to Digital Brain
-after reviewing another mature agent runtime. These are not direct feature-copy
-goals. They are architectural patterns that can improve our bounded-agent
-orchestrator, tool execution quality, debugging workflow, and end-user
-experience.
+Status: design backlog; no implementation is implied by this document.
 
-The goal is to keep this list implementation-oriented so each item can later be
-turned into a scoped engineering task.
+This document records selected runtime improvements for Digital Brain after a
+source-level review of the open-source Codex CLI agent runtime. The goal is not
+to reproduce Codex or import coding-agent features. It is to adopt portable
+runtime practices that strengthen Digital Brain's bounded-agent architecture.
 
-## Guiding idea
+Digital Brain remains governed by its core rule:
 
-The most valuable takeaways are runtime patterns, not CLI-specific features.
-Digital Brain should borrow designs that strengthen:
+> The model proposes. The controller validates, executes, and decides.
 
-- bounded execution,
-- predictable tool orchestration,
-- long-term memory quality,
-- observability,
-- and follow-up continuity across sessions and clients.
+Because this is a personal system, the near-term priorities are runtime
+correctness, continuity, debuggability, and maintainability. Broader sandbox and
+approval infrastructure is not part of this backlog unless Digital Brain's
+consequential tool surface grows enough to justify it.
 
-## Suggested implementation order
+Research basis: [`openai/codex`](https://github.com/openai/codex), reviewed on
+2026-08-23 at commit
+[`aec653d`](https://github.com/openai/codex/commit/aec653daa9873bf44517a623fd033722737817a8).
 
-1. Richer tool capability contracts
-2. Explicit prompt assembly and cache-stable prompt prefixing
-3. Prompt ingredient observability
-4. Selective long-term memory and user-fact injection
-5. Stronger session continuity metadata
-6. Interaction-level tracing across LLM and tool phases
-7. Deterministic parallel tool execution improvements
-8. Deferred tool discovery for future scale
+## Relationship to other architecture documents
 
-## 1. Richer tool capability contracts
+This is the future-work document for cross-cutting agent-runtime improvements.
+The following documents describe the system as it exists today:
 
-### What to improve
+- [MAIN_AGENT_FLOW.md](MAIN_AGENT_FLOW.md): current bounded request and streaming
+  flows.
+- [STATE_MANAGEMENT.md](STATE_MANAGEMENT.md): current request-scoped
+  `AgentState` ownership and lifecycle.
+- [ADDING_TOOLS.md](ADDING_TOOLS.md): current tool registration workflow.
+- [TOOL_GROUPS.md](TOOL_GROUPS.md): current tool-group ownership and visibility.
+- [VALIDATION.md](VALIDATION.md): current pre/post validation semantics.
+- [AGENT_LIMITS.md](AGENT_LIMITS.md): current budgets, stop rules, and
+  no-progress handling.
 
-Expand the tool registry so each tool declares more runtime semantics beyond
-schema and handler name.
+Those documents are normative for current behavior. This document is a backlog
+and should be updated as items are accepted, implemented, rejected, or split
+into more detailed designs.
 
-Suggested capabilities:
+## Selected priorities
 
-- `read_only`
-- `concurrency_safe`
-- `destructive`
-- `requires_confirmation`
-- `supports_clarification`
-- `result_budget_policy`
-- `preferred_ui_rendering`
-- `can_stream_progress`
-- `follow_up_context_keys`
+| Order | Improvement | Timing | Primary outcome |
+|---|---|---|---|
+| 1 | Tool contracts as the runtime source of truth | Near term | Remove duplicated tool-policy knowledge and reject invalid registries |
+| 2 | One canonical event-producing turn engine | Near term | Eliminate sync/stream drift and emit prompt manifests plus lifecycle telemetry |
+| 3 | Durable run journal and deterministic reconstruction | Near term | Recover runs and derive privacy-aware interaction traces across restarts |
+| 4 | Model-transcript invariant normalization | Near term | Assemble ordered prompt sections and produce a valid, bounded provider transcript |
+| 5 | Conversation context checkpoints and compaction | Deferred | Bound long-session context without losing goals, evidence, or command state |
+| 6 | Pending-input steering and cancellation | Deferred | Let users safely redirect or cancel an active run |
 
-### Technical rationale
+The ordering is architectural rather than purely user-visible. Later items may
+be prototyped earlier, but they should not introduce a second turn model,
+history representation, or tool-policy source.
 
-Today, some of this behavior exists implicitly across the router, controller,
-validators, and handlers. Making it explicit in the registry would let the
-controller reason about tool behavior generically instead of relying on
-per-tool conditionals and scattered conventions.
+## 1. Tool contracts as the runtime source of truth
 
-That gives us a cleaner foundation for:
+### Objective
 
-- deciding which calls may run in parallel,
-- enforcing confirmation requirements consistently,
-- applying result compaction rules per tool category,
-- deciding whether clarification should be surfaced to the user or retried,
-- and deriving UI behavior from a single source of truth.
+Make each registered tool contract the single authoritative description of its
+model-facing schema and controller-facing runtime behavior.
 
-This would also reduce architectural drift between routing metadata,
-validation behavior, and runtime controller logic.
+### Current situation
 
-### UX impact
+Tool schemas and groups live in the registry, while some execution semantics
+are maintained elsewhere. Examples include static parallel-safe and dedupe-safe
+tool-name collections in the executor. This creates a drift risk when a tool is
+added or its behavior changes.
 
-Users get more predictable assistant behavior:
+The registry and contract builders should also fail closed on duplicate tool or
+parameter names rather than allowing dictionary assignment to hide a collision.
 
-- safer handling of mutating actions,
-- fewer accidental over-fetches or noisy tool calls,
-- better clarification prompts,
-- and more consistent responses across chat, mobile, and slash-command flows.
+### Proposed contract metadata
 
-In practice, the assistant should feel less arbitrary and more trustworthy.
+The exact field names should be settled during implementation, but the contract
+needs to express at least:
 
-## 2. Deterministic parallel tool execution with explicit context merging
+- whether the tool is read-only,
+- whether independent calls may execute concurrently,
+- whether equivalent calls may reuse a prior result,
+- whether retries are safe,
+- whether the operation is idempotent,
+- the side-effect class,
+- the result-budget/compaction policy,
+- the timeout policy,
+- and whether clarification or explicit confirmation may be required.
 
-### What to improve
+Use enums for multi-valued policy fields. Avoid a growing collection of loosely
+related booleans when one closed policy type is clearer.
 
-Keep parallel read-only execution, but formalize how context updates produced by
-those tool calls are merged back into agent state.
+### Runtime shape
 
-### Technical rationale
+The registry should bind three things together:
 
-We already support parallel read-only batches. The next improvement is to make
-the merge strategy explicit and deterministic:
+1. the model-visible specification,
+2. the executable handler,
+3. the controller-visible runtime policy.
 
-- parallel calls should execute against the same parent context snapshot,
-- context mutations should be queued separately from raw results,
-- queued mutations should be replayed in a stable order,
-- and the merge layer should be idempotent and traceable.
+The executor, parallel batch coordinator, dedupe layer, validator, prompt tool
+selection, and diagnostics must read these properties from the same resolved
+contract. They must not maintain separate lists keyed by tool name.
 
-This matters because retrieval tools often enrich context with inspected IDs,
-resolution metadata, or follow-up hints. Without a disciplined merge phase,
-parallelism can create subtle ordering bugs, inconsistent completion checks, or
-state that depends on timing.
+### Startup and CI validation
 
-This is especially relevant for Digital Brain because the controller reasons
-about documents, events, contacts, places, and linked items in the same turn.
+Add a registry-wide validation pass that rejects:
 
-### UX impact
+- duplicate tool names,
+- duplicate parameter names,
+- missing handlers,
+- handlers with incompatible shared-context signatures,
+- invalid group references,
+- contradictory policies such as mutating plus dedupe-safe without an explicit
+  idempotency contract,
+- and tools marked parallel-safe when their handler or policy forbids it.
 
-Users should see faster answers on retrieval-heavy queries without losing
-consistency. The assistant becomes both faster and less likely to produce:
+The validation should run during application startup and in a focused test so a
+bad registry cannot reach production.
 
-- duplicate follow-up questions,
-- inconsistent linked items,
-- or answers that cite stale or partially merged evidence.
+### Acceptance criteria
 
-## 3. A more explicit tool execution lifecycle
+- All current tool execution classifications are expressed in contracts.
+- The executor has no static parallel-safe or dedupe-safe tool-name list.
+- Duplicate registration and duplicate parameters fail with actionable errors.
+- Tool visibility continues to derive from the registry's group ownership.
+- Existing pre/post validation and canonicalization semantics are unchanged.
+- Contract tests cover every production tool.
+- `ADDING_TOOLS.md`, `TOOL_GROUPS.md`, and `VALIDATION.md` are updated with the
+  final contract fields.
 
-### What to improve
+## 2. One canonical event-producing turn engine
 
-Model the full tool execution lifecycle as a first-class pipeline:
+### Objective
 
-1. argument normalization,
-2. schema validation,
-3. tool-specific validation,
-4. policy/permission evaluation,
-5. execution,
-6. post-execution validation,
-7. result shaping/compaction,
-8. state update,
-9. telemetry emission.
+Run synchronous and streaming requests through one bounded state machine and
+represent progress as typed lifecycle events.
 
-### Technical rationale
+### Current situation
 
-Digital Brain already has strong pre/post validation. The improvement is to
-make the full lifecycle more explicit in code and more visible in traces and
-logs.
+The sync and stream paths are expected to preserve behavioral and observability
+parity, but they still own duplicated orchestration logic. Every new repair,
+limit, visibility, validation, or completion rule therefore carries a parity
+risk.
 
-Benefits:
+### Proposed design
 
-- fewer ambiguous failures where the model cannot tell what went wrong,
-- easier reasoning about which layer owns an error,
-- consistent handling of retriable vs clarification-required vs fatal issues,
-- and easier introduction of future policies such as rate limits, approvals, or
-  tool-specific retries.
+Extract a single asynchronous turn engine that owns:
 
-This would be a natural evolution of `tool_executor.py`, validators, and the
-controller repair loop.
-
-### UX impact
-
-Users get better recovery behavior. Instead of generic failures, the assistant
-can more often:
-
-- repair bad arguments automatically,
-- ask a targeted follow-up only when needed,
-- and avoid looping on the same failed call.
-
-That translates into fewer frustrating dead ends in chat.
-
-## 4. Central prompt assembly with explicit precedence
-
-### What to improve
-
-Create a single prompt assembly layer that defines the exact ordering and merge
-rules for all prompt ingredients.
-
-Suggested precedence groups:
-
-1. hard runtime safety rules,
-2. profile/base system prompt,
-3. intent-specific behavioral guidance,
-4. slash-command or flow-specific instructions,
-5. hard user rules from persistent facts,
-6. soft user facts,
-7. conversation/session context,
-8. inspected entity evidence,
-9. dynamic operational hints.
-
-### Technical rationale
-
-Digital Brain already composes many prompt sources: route/profile guidance,
-user facts, linked-items behavior, command-specific extraction rules, tool
-feedback, and context continuity. Right now, understanding the final prompt can
-require reading several modules.
-
-Centralizing prompt assembly would give us:
-
-- a single place to document precedence,
-- fewer accidental prompt conflicts,
-- easier debugging when behavior changes,
-- and a cleaner base for prompt-budget management.
-
-It also prepares us for more advanced prompt caching or prefix stabilization.
-
-### UX impact
-
-Users should see more stable assistant behavior across turns and surfaces.
-Examples:
-
-- fewer regressions where one feature prompt quietly overrides another,
-- better consistency between `/ask`, streaming, and slash-command flows,
-- and more faithful personalization when user facts should matter.
-
-## 5. Cache-stable prompt prefixes and prompt budgeting boundaries
-
-### What to improve
-
-Define a stable boundary between cache-friendly prompt content and dynamic,
-per-turn content.
-
-### Technical rationale
-
-Even without adopting a vendor-specific prompt cache, this separation is useful.
-It forces discipline around what changes every turn versus what should remain
-structurally stable.
-
-For Digital Brain, likely stable sections include:
-
-- profile/system behavior,
-- tool definitions,
-- static safety policies,
-- linked-items protocol,
-- and durable formatting rules.
-
-Dynamic sections include:
-
-- user question,
-- current tool outputs,
-- selected user facts,
-- inferred continuity metadata,
-- and fresh clarification context.
-
-This boundary improves maintainability and makes prompt-size regressions easier
-to detect.
-
-### UX impact
-
-Users benefit indirectly through:
-
-- more stable answer quality across long sessions,
-- less prompt churn that changes behavior unexpectedly,
-- and lower latency/cost if we later add provider-side prompt caching.
-
-## 6. Prompt ingredient observability
-
-### What to improve
-
-Emit structured observability events for prompt construction, especially for
-which instruction or context sources were loaded into a turn.
-
-Suggested event payloads:
-
-- active profile,
-- selected intent,
-- user fact IDs injected,
-- hard-rule scopes applied,
-- command/preview mode flags,
-- continuity metadata carried forward,
-- and major prompt sections included/skipped.
-
-### Technical rationale
-
-Prompt-debugging is one of the hardest parts of agent development. Many bugs are
-not logic bugs; they are prompt-composition bugs. When the model behaves oddly,
-we need to know what context it actually saw.
-
-This is especially important in Digital Brain because behavior may vary based on:
-
-- intent routing confidence,
-- pre-resolved contacts,
-- user fact scopes,
-- slash-command state,
-- linked-item derivation,
-- and follow-up continuity metadata.
-
-Without prompt ingredient observability, these failures are hard to diagnose.
-
-### UX impact
-
-The user-facing effect is faster bug fixing and fewer mysterious regressions.
-Internally, it gives us much better leverage when users report:
-
-- "you forgot my preference",
-- "you asked the same clarification twice",
-- or "you lost the context from the previous step".
-
-## 7. Selective long-term memory and user-fact injection
-
-### What to improve
-
-Move toward a two-stage long-term context injection flow:
-
-1. deterministic shortlist generation,
-2. small selector/ranker pass to choose the few facts or memory snippets that
-   truly matter for this turn.
-
-### Technical rationale
-
-Digital Brain already has persistent `user_facts` and strong retrieval systems.
-The improvement is not more memory; it is sharper memory selection.
-
-Benefits:
-
-- reduces irrelevant personalization noise,
-- protects prompt budget,
-- lowers the chance of one stale fact dominating a turn,
-- and lets us distinguish hard rules from soft hints more cleanly.
-
-This is especially useful for queries where many facts could match loosely but
-only one or two should actually affect the output.
-
-### UX impact
-
-Users should experience personalization that feels more accurate and less
-intrusive:
-
-- the assistant remembers what matters,
-- avoids overfitting on unrelated prior context,
-- and feels less repetitive when recalling long-term preferences.
-
-## 8. Stronger session continuity metadata
-
-### What to improve
-
-Persist more structured per-session and per-turn metadata to support better
-follow-up continuity across web, mobile, and resumed conversations.
-
-Candidates include:
-
-- resolved entity selections,
-- place continuity state,
-- last inspected event/document IDs,
-- pending clarification forms,
-- slash-command draft state,
-- preview/edit confirmation state,
-- and linked-item context from the previous answer.
-
-### Technical rationale
-
-Digital Brain already carries some continuity in assistant metadata and session
-behavior, but many flows still rely on the model reconstructing prior context
-from text alone.
-
-Persisting structured continuity metadata makes follow-ups more deterministic and
-reduces the need for the model to infer what "that event", "this place", or
-"the previous draft" refers to.
-
-This is particularly important for mobile UX, where users often return to a
-session after interruptions and send short deictic follow-ups.
-
-### UX impact
-
-Users get smoother follow-ups with less repetition. The assistant is more likely
-to correctly understand short turns such as:
-
-- "use the same place",
-- "open that document again",
-- "edit the contact draft",
-- or "what about the earlier event?"
-
-This directly improves the feeling of continuity and memory.
-
-## 9. Interaction-level tracing across LLM and tool phases
-
-### What to improve
-
-Introduce end-to-end traces for each interaction, with spans for:
-
-- routing,
-- prompt assembly,
-- pre-resolution,
-- LLM turns,
+- routing/profile inputs already selected for the run,
+- request-scoped state,
+- limit and no-progress decisions,
+- model calls,
 - tool batches,
-- validation/repair loops,
+- clarification exits,
+- repair turns,
 - completion checks,
-- and final response construction.
+- and final verification.
 
-### Technical rationale
+The engine emits typed internal events. A provisional event vocabulary is:
 
-We already log extensively, but traces would make multi-step failures much
-easier to reason about than flat log streams alone.
+- `run_started`
+- `step_started`
+- `model_request_started`
+- `model_output_delta`
+- `model_response_completed`
+- `tool_proposed`
+- `tool_started`
+- `tool_completed`
+- `validation_completed`
+- `state_updated`
+- `clarification_required`
+- `final_candidate`
+- `final_verified`
+- `run_completed`
+- `run_aborted`
 
-Tracing is especially valuable when debugging:
+These are internal runtime events, not automatically the public SSE protocol.
+The existing HTTP response and SSE shapes should be adapters over this stream.
+Public protocol changes require their own compatibility decision.
 
-- why a route escalated,
-- why the controller retried instead of answering,
-- why a streamed turn diverged from sync behavior,
-- or why a final answer used one evidence branch over another.
+### Request-scoped context
 
-It would also improve performance tuning by showing where latency is actually
-spent inside the orchestrator.
+Each run should capture an immutable context snapshot containing the exact:
 
-### UX impact
+- profile and routing decision,
+- visible tool contracts,
+- model-routing policy inputs,
+- limits,
+- user and thread identity,
+- client context,
+- prompt-policy/config versions,
+- and request correlation identifiers.
 
-This mostly improves developer velocity, but the user-visible payoff is real:
+Mutable progress remains controller-owned in `AgentState` or its successor. A
+step must not accidentally mix configuration from different snapshots.
 
-- fewer long-tail failures,
-- faster fixes for strange agent behavior,
-- and better latency tuning for complex retrieval-heavy questions.
+### Event ownership
 
-## 10. Deferred tool discovery for future tool-surface growth
+Events must be emitted by the layer that owns the transition. Observability,
+SSE, persistence, and tests consume events; they do not infer lifecycle state
+by parsing log text.
 
-### What to improve
+Events should carry references or bounded previews by default. They must not
+duplicate full personal prompts, memories, or tool results into operational
+telemetry.
 
-If the available tool inventory grows significantly, move toward a model where
-rare or specialized tools are not always exposed in the first prompt.
+### Prompt manifest
 
-Instead, the model first uses a lightweight discovery mechanism to surface the
-right specialized tool only when needed.
+Prompt-ingredient observability belongs in this engine rather than in scattered
+message-builder logs. Before each model request, emit a typed manifest that
+records:
 
-### Technical rationale
+- profile and prompt-policy version,
+- ordered prompt-section kinds,
+- visible tool names and contract versions,
+- injected hard-rule and soft-fact IDs,
+- activated skill names and versions,
+- included evidence/entity references,
+- included history/checkpoint range,
+- per-section character or token estimates,
+- compaction/omission decisions,
+- and a stable request correlation ID.
 
-This is not urgent today, but it becomes valuable when tool count, tool schema
-size, or provider prompt limits start to create real pressure.
+The manifest is metadata about what the model saw, not a copy of the prompt.
+Use source IDs, hashes, sizes, and bounded redacted previews. Full personal
+content should remain in its authoritative store unless a separate, explicit
+debug policy permits capture.
 
-For Digital Brain, candidates for deferred exposure in the future might include:
+### Lifecycle tracing projection
 
-- niche automation tools,
-- admin/debug-only tools,
-- specialized ingest helpers,
-- or high-schema external integrations.
+Interaction-level tracing should be derived from the same lifecycle events. It
+must not become a parallel hand-authored trace model. Routing, prompt assembly,
+LLM calls, tool batches, validation, repair, completion, and final verification
+should appear as related spans or equivalent structured timing records under
+one run ID.
 
-Deferring them would keep the main prompt lean while preserving extensibility.
+Logs, metrics, development traces, SSE adapters, and the durable journal may
+project different views of the event stream, but they must agree on event IDs,
+ordering, status, and duration ownership.
 
-### UX impact
+### Acceptance criteria
 
-If implemented well, users should notice:
+- Sync and streaming endpoints call the same turn engine.
+- Existing user-visible response semantics remain compatible.
+- Limit, repair, clarification, tool visibility, and verifier behavior have one
+  implementation path.
+- Sync and stream lifecycle logging is structurally equivalent.
+- Every model request emits a privacy-aware prompt manifest with ordered section
+  provenance and budget measurements.
+- Interaction traces are projections of lifecycle events, not separately
+  inferred log sequences.
+- Client disconnect handling is explicit and does not silently cancel a run
+  intended to continue in the background.
+- Deterministic tests can drive the engine without HTTP or a real model.
+- `MAIN_AGENT_FLOW.md`, `STATE_MANAGEMENT.md`, and observability documentation
+  reflect the final lifecycle.
 
-- faster and more focused reasoning on common tasks,
-- fewer irrelevant tool choices by the model,
-- and more reliable behavior as the product grows in capability.
+## 3. Durable run journal and deterministic reconstruction
 
-## 11. Schema-described configuration and policy surfaces
+### Objective
 
-### What to improve
+Persist enough normalized lifecycle information to inspect and reconstruct an
+agent run after a client disconnect, worker restart, or process failure.
 
-Use richer typed schemas and field descriptions for agent-facing and admin-facing
-configuration surfaces where behavior matters at runtime.
+### Dependency
 
-Examples:
+The canonical turn-event model should be defined first. Persistence must record
+that model rather than create a second, database-specific interpretation of a
+run.
 
-- notification policy settings,
-- tool visibility policies,
-- slash-command behavior flags,
-- briefing generation settings,
-- and future plugin/integration definitions.
+### Proposed storage model
 
-### Technical rationale
+Use PostgreSQL rather than a local rollout file. The eventual schema may use a
+run table plus append-only event rows, or an equivalent design with the same
+properties:
 
-Schema-first configuration helps in three ways:
+- stable run, step, and event IDs,
+- monotonic event ordering within a run,
+- explicit terminal states,
+- immutable recorded events,
+- schema/version markers,
+- idempotent append behavior,
+- and queryable timestamps and event kinds.
 
-- stronger validation,
-- self-documenting configuration contracts,
-- and easier reuse in generated docs, UI forms, and diagnostics.
+A minimal run should distinguish:
 
-This aligns well with Digital Brain's architectural preference for explicit
-contracts and validated runtime behavior.
+- created/running,
+- waiting for user input,
+- completed,
+- aborted,
+- failed,
+- and superseded, if supersession is introduced.
 
-### UX impact
+### Reconstruction contract
 
-Users benefit through fewer configuration-related surprises, and internal tools
-benefit from clearer validation errors and easier admin/debug UX.
+Given a run ID, reconstruction should deterministically recover:
 
-## Practical note
+- the latest valid run status,
+- the request/configuration snapshot,
+- step and tool-call order,
+- validation and repair outcomes,
+- inspected evidence references,
+- pending clarification state,
+- final response metadata when completed,
+- and the latest recoverable model-context checkpoint once checkpoints exist.
 
-We should not import CLI-specific ideas that do not match our product shape.
-Examples like terminal UX conventions, shell-specific safety heuristics, or git
-worktree isolation are only worth copying if our product scope expands in that
-direction.
+Reconstruction must not rerun tools or infer missing mutations from prose.
+Interrupted operations should remain explicitly incomplete until a policy marks
+them retryable, failed, or reconciled.
 
-The right approach is to adopt the runtime patterns that strengthen Digital
-Brain's bounded-agent architecture, not to mimic another product's surface area.
+### Privacy and retention
+
+This is a personal-memory system, so replayability must not become uncontrolled
+data duplication.
+
+- Store entity IDs and typed references where raw payloads are unnecessary.
+- Redact or omit secrets, credentials, access tokens, coordinates, and sensitive
+  connector payloads.
+- Keep full prompts/results only when required for a defined recovery or debug
+  capability.
+- Apply an explicit retention policy to high-volume event payloads.
+- Keep application conversation history and operational run telemetry as
+  distinct concepts even when they reference each other.
+
+The journal should persist enough lifecycle and prompt-manifest metadata to
+derive an end-to-end interaction trace after restart. It should not persist a
+second copy of every trace payload when the same view can be reconstructed from
+canonical events.
+
+### Recovery behavior
+
+The first implementation can be diagnostic-only: runs survive restart and can
+be read back, but interrupted execution is not automatically resumed. Automatic
+resume should be added only after tool idempotency and mutation reconciliation
+are trustworthy.
+
+### Acceptance criteria
+
+- Active run status is no longer exclusively process-local.
+- A completed run can be reconstructed into the same ordered lifecycle summary
+  after restart.
+- Pending clarification survives restart without relying on in-memory state.
+- Interrupted tool calls are visible and never presented as completed.
+- Event append is safe under retries and duplicate delivery.
+- Retention and redaction behavior have tests.
+- Migration, operational, and recovery documentation is included.
+
+## 4. Model-transcript invariant normalization
+
+### Objective
+
+Build a provider-independent transcript immediately before every LLM request
+and guarantee that it is structurally valid, bounded, and internally
+consistent.
+
+### Current situation
+
+Digital Brain preserves conversation text and current-turn tool messages, but
+does not yet have one explicit transcript-normalization boundary responsible
+for repairing interrupted or partially persisted tool interactions.
+
+### Required invariants
+
+The normalizer should enforce, as applicable to the selected provider format:
+
+- every tool call has exactly one corresponding result or an explicit
+  controller-generated interrupted result,
+- every tool result references an existing call,
+- call and result ordering is valid,
+- call IDs are unique and stable,
+- duplicate stream fragments are not replayed,
+- unsupported content/media is removed or represented safely,
+- validation errors remain visible to the model,
+- inspected evidence is preserved according to the existing depth-before-
+  breadth budget policy,
+- and the final transcript fits the selected model's context budget.
+
+Synthetic interruption results must be clearly controller-authored and stable.
+They must never claim that an external mutation succeeded.
+
+### Separation of concerns
+
+Keep three representations distinct:
+
+1. durable conversation history intended for the user,
+2. durable run events intended for reconstruction and diagnostics,
+3. the normalized model transcript for the next provider request.
+
+The transcript is derived. It should not become a second uncontrolled source of
+truth.
+
+### Prompt-section assembly
+
+Central prompt assembly belongs at this normalization boundary. Profiles retain
+ownership of their content; the shared assembler owns ordering, provenance,
+budgeting, and provider adaptation.
+
+Use typed section kinds with explicit precedence, provisionally:
+
+1. runtime safety,
+2. profile behavior,
+3. bounded-agent protocol,
+4. deterministic hard user rules,
+5. relevant soft user facts,
+6. time/location/client context,
+7. active skills,
+8. controller-owned agent state,
+9. inspected evidence and active entity scope,
+10. conversation history or checkpoint,
+11. current user input.
+
+This must not become one universal prompt that erases profile boundaries.
+Message builders should produce typed sections; the assembler should apply the
+shared precedence and budget contract. The resulting section manifest is
+emitted by the turn engine before provider conversion.
+
+Stable section ordering should be preserved where practical so provider prompt
+caching can benefit, but cache optimization is measurement-driven. Record input
+tokens, cached tokens when the provider exposes them, prefix changes, and
+latency before introducing cache-specific complexity.
+
+### Provider adapters
+
+Normalize into one internal item model first, then adapt to OpenAI-compatible
+chat messages or other provider formats. Provider-specific limitations should
+not leak into controller state or conversation persistence.
+
+### Acceptance criteria
+
+- Every model request passes through the normalizer.
+- Main and memory-expert builders emit typed prompt sections while retaining
+  profile ownership of their content.
+- Section precedence, provenance, and budget decisions are deterministic and
+  represented in the prompt manifest.
+- Missing-call, missing-result, orphan-result, duplicate-ID, and interrupted-
+  stream cases have regression tests.
+- Raw validation failures remain available for argument repair.
+- Synthetic results are deterministic and visibly marked as interrupted.
+- A transcript invariant failure is observable and fails closed rather than
+  producing a malformed provider request.
+- Normalization does not alter normal completed conversations.
+
+## 5. Deferred: conversation context checkpoints and compaction
+
+### Objective
+
+Bound long-session model context while preserving the structured state needed
+for reliable follow-ups.
+
+### Why it is deferred
+
+Current tool-result budgeting addresses the more immediate large-result risk.
+Conversation-level compaction becomes more valuable after the run journal and
+normalized transcript exist, because those provide an immutable source and a
+safe derived-context boundary.
+
+### Proposed checkpoint contents
+
+A checkpoint should preserve structured fields rather than only a prose
+summary:
+
+- the current user goal,
+- settled constraints and corrections,
+- unresolved questions,
+- selected contacts/places and other entity IDs,
+- inspected evidence and provenance,
+- important negative findings and caveats,
+- execution-plan progress,
+- pending slash-command or clarification state,
+- linked-item continuity,
+- and a bounded conversational summary.
+
+### Safety properties
+
+- Raw history remains immutable and recoverable.
+- Compaction creates a new versioned checkpoint; it does not rewrite history.
+- A generation/version check prevents a checkpoint produced from stale history
+  from replacing a newer one.
+- Recent turns remain available verbatim within a bounded window.
+- Evidence depth is preserved before broad candidate context.
+- The controller can explain which checkpoint and history range formed a model
+  request.
+
+### Triggering and measurement
+
+Compaction should be driven by measured token pressure, not an arbitrary turn
+count. Track:
+
+- tokens before and after,
+- retained recent turns,
+- retained evidence items,
+- checkpoint version,
+- compaction latency,
+- and post-compaction task/evidence completion regressions.
+
+### Acceptance criteria
+
+- Long conversations remain within the configured model budget.
+- Goals, hard corrections, pending confirmations, and evidence references
+  survive compaction tests.
+- Concurrent new messages cannot be overwritten by a stale checkpoint.
+- Resume and follow-up behavior is equivalent before and after compaction for
+  the scenario suite.
+
+## 6. Deferred: pending-input steering and cancellation
+
+### Objective
+
+Allow a user to add relevant instructions to an active run or cancel it without
+starting a conflicting second run.
+
+### Why it is deferred
+
+Steering depends on an explicit run lifecycle, durable run identity, and safe
+event boundaries. It should be layered on the canonical engine and journal,
+not implemented as a separate in-memory message queue.
+
+### Input classes
+
+The controller should distinguish:
+
+- **steer active run**: relevant additional guidance that can be applied at the
+  next safe boundary,
+- **cancel active run**: stop future model/tool work and mark the run aborted,
+- **answer pending clarification**: resume a run waiting for user input,
+- **defer to next turn**: unrelated input that should begin a new run after the
+  current run reaches a terminal state.
+
+The model may help classify ambiguous additions, but the controller owns the
+queue, run identity, and final transition.
+
+### Safe boundaries
+
+Cancellation and steering may be applied:
+
+- before a model request,
+- after a model response is fully assembled,
+- before a tool begins,
+- after a tool returns,
+- or before final verification.
+
+An already-started external mutation cannot be treated as if cancellation
+rolled it back. Its actual outcome must be recorded and reconciled before the
+run terminates.
+
+### Client behavior
+
+Web and mobile should address additions to an explicit active run ID. Reconnect
+must restore queued input and current status from durable state. Duplicate
+delivery must be idempotent.
+
+### Acceptance criteria
+
+- A relevant follow-up can steer a long-running retrieval flow at a safe
+  boundary.
+- Cancellation prevents later model/tool steps and records the exact terminal
+  reason.
+- Clarification answers resume the intended run after process restart.
+- Unrelated messages are deferred without being lost or merged accidentally.
+- Mutation, reconnect, duplicate-delivery, and race scenarios have tests.
+
+## Cross-cutting implementation rules
+
+All selected improvements must preserve these constraints:
+
+- The controller remains the only authority that mutates runtime state.
+- Tool arguments are canonicalized before policy, dedupe, and execution.
+- Validation-required user input remains distinct from empty-result retries.
+- Validation/error payloads remain visible enough for model repair.
+- Tool-result compaction remains field-aware and depth-preserving.
+- Persistent payloads are anonymized in tests and do not leak personal data into
+  logs or fixtures.
+- Prompt manifests and lifecycle traces use identifiers, hashes, sizes, and
+  redacted previews by default rather than copying personal prompt content.
+- New statuses, actions, modes, and event kinds use shared enums.
+- Runtime behavior changes update the applicable architecture documents and
+  `AGENTS.md` in the same work.
+
+## Scenario test matrix
+
+The implementation sequence should build a reusable deterministic model/tool
+harness covering at least:
+
+| Scenario | Contracts | Turn engine | Journal | Transcript | Checkpoint | Steering |
+|---|---:|---:|---:|---:|---:|---:|
+| Invalid tool arguments repaired after visible validation feedback | yes | yes | yes | yes |  |  |
+| Independent reads execute concurrently with deterministic merge | yes | yes | yes |  |  |  |
+| A serial/non-concurrent tool acts as a batch barrier | yes | yes | yes |  |  |  |
+| Equivalent dedupe-safe call reuses prior evidence | yes | yes | yes | yes |  |  |
+| Prompt manifest identifies sections, sources, budgets, and omissions without copying personal content |  | yes | yes | yes |  |  |
+| Interrupted model stream does not create an orphan tool result |  | yes | yes | yes |  |  |
+| Process restart reconstructs completed and interrupted runs |  |  | yes | yes |  |  |
+| Pending clarification survives restart |  | yes | yes | yes |  | yes |
+| Compaction preserves goal, correction, caveat, and evidence |  | yes | yes | yes | yes |  |
+| User steers a retrieval run at a safe boundary |  | yes | yes | yes |  | yes |
+| Cancellation during an external mutation records the real outcome | yes | yes | yes | yes |  | yes |
+
+## Disposition of previously recorded topics
+
+The earlier backlog topics are retained with an explicit treatment rather than
+becoming separate architecture projects:
+
+| Topic | Treatment |
+|---|---|
+| Central prompt assembly and precedence | Incorporated into model-transcript normalization as typed prompt-section assembly |
+| Prompt-ingredient observability | Incorporated into the canonical turn engine as a privacy-aware prompt manifest |
+| Interaction-level tracing | Incorporated as a projection of lifecycle events and the durable journal |
+| Cache-stable prompt prefixes | Preserve stable ordering and measure provider cache behavior; optimize only when evidence justifies it |
+| Selective long-term memory and user-fact injection | Continue the existing bounded relevance/importance/recency approach; improve through retrieval evaluations rather than adding another LLM selector by default |
+| Deferred tool discovery | Keep deferred while confidence-based tool-group visibility and escalation remain adequate |
+| Schema-described configuration and policy surfaces | Adopt incrementally for persisted, user-editable, cross-service, or behavior-critical policies; do not build a generic configuration platform |
+
+This disposition is intentional: prompt assembly, observability, and tracing
+are supporting capabilities of the selected runtime design, while the other
+topics remain measured design principles rather than standalone initiatives.
+
+## Explicitly out of scope for this backlog
+
+- Replacing the bounded controller with autonomous or multi-agent execution.
+- Copying Codex's local JSONL rollout format instead of using PostgreSQL.
+- Adding conversation compaction before there is a durable source and transcript
+  normalization boundary.
+- Automatically resuming arbitrary interrupted mutations.
+- Exposing internal lifecycle events directly as a new public API without a
+  compatibility design.
+- Introducing deferred tool discovery while the current bounded visibility
+  policy remains adequate.
+
+## Maintenance
+
+When work begins on an item:
+
+1. verify the current code paths and related architecture documents,
+2. settle the public and persistence compatibility boundaries,
+3. add deterministic scenario coverage before or alongside the refactor,
+4. update this document with implementation status and links,
+5. update normative current-state documentation when behavior actually changes.
+
+Do not mark an item complete merely because its types or storage schema exist.
+Completion requires the intended runtime path, recovery behavior, observability,
+and regression tests to be active.
