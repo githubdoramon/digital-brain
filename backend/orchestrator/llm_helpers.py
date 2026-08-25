@@ -749,23 +749,62 @@ async def stream_llm_chat(
     logger.info("[llm_helpers] LLM available tools (stream): %s", json.dumps(tools, ensure_ascii=False))
     logger.info("[llm_helpers] LLM tool choice (stream): %s", json.dumps(tool_choice, ensure_ascii=False))
     resolved_timeout = timeout or LLM_TIMEOUT
+    request_url = f"{base_url}/chat/completions"
+    logger.info(
+        "[llm_helpers] LLM outbound request (stream): %s",
+        json.dumps(
+            {
+                "url": request_url,
+                "method": "POST",
+                "timeout_seconds": resolved_timeout,
+                "headers": {
+                    "content-type": "application/json",
+                    "authorization_present": bool(get_llm_headers().get("Authorization")),
+                },
+                "payload": payload,
+            },
+            ensure_ascii=False,
+            default=str,
+        ),
+    )
     timeout_config = httpx.Timeout(resolved_timeout, connect=10.0)
     last_exception: Exception | None = None
+
+    async def _response_error_preview(response: httpx.Response) -> str:
+        try:
+            body = await response.aread()
+        except Exception as exc:  # pragma: no cover - defensive logging path
+            return f"<unable to read error body: {type(exc).__name__}: {exc}>"
+        return body.decode("utf-8", errors="replace").strip().replace("\n", " ")[:2000]
 
     for attempt in range(1, LLM_MAX_RETRIES + 1):
         try:
             async with httpx.AsyncClient(timeout=timeout_config) as client:
                 async with client.stream(
                     "POST",
-                    f"{base_url}/chat/completions",
+                    request_url,
                     headers=get_llm_headers(),
                     json=payload,
                 ) as response:
+                    logger.info(
+                        "[llm_helpers] LLM stream response status=%s attempt=%d/%d",
+                        response.status_code,
+                        attempt,
+                        LLM_MAX_RETRIES,
+                    )
                     if _is_retryable_status(response.status_code):
+                        error_preview = await _response_error_preview(response)
                         last_exception = httpx.HTTPStatusError(
                             f"HTTP {response.status_code}",
                             request=response.request,
                             response=response,
+                        )
+                        logger.warning(
+                            "[llm_helpers] LLM stream request failed status=%s attempt=%d/%d response=%s",
+                            response.status_code,
+                            attempt,
+                            LLM_MAX_RETRIES,
+                            error_preview,
                         )
                         if attempt < LLM_MAX_RETRIES:
                             delay = LLM_RETRY_BASE_DELAY * (2 ** (attempt - 1))
@@ -780,10 +819,22 @@ async def stream_llm_chat(
                             continue
                         response.raise_for_status()
 
+                    if response.status_code >= 400:
+                        error_preview = await _response_error_preview(response)
+                        logger.error(
+                            "[llm_helpers] LLM stream request rejected status=%s response=%s",
+                            response.status_code,
+                            error_preview,
+                        )
                     response.raise_for_status()
                     async for line in response.aiter_lines():
                         yield line
-                    logger.info("[llm_helpers] LLM response (stream): completed")
+                    logger.info(
+                        "[llm_helpers] LLM response (stream): completed status=%s attempt=%d/%d",
+                        response.status_code,
+                        attempt,
+                        LLM_MAX_RETRIES,
+                    )
                     return  # success, stop retrying
 
         except (httpx.ConnectError, httpx.ConnectTimeout, httpx.ReadTimeout) as exc:
@@ -803,6 +854,13 @@ async def stream_llm_chat(
         except httpx.HTTPStatusError as exc:
             if is_llm_unavailable_error(exc):
                 raise _wrap_llm_unavailable(exc) from exc
+            raise
+        except httpx.HTTPError as exc:
+            logger.error(
+                "[llm_helpers] LLM stream transport error type=%s detail=%s",
+                type(exc).__name__,
+                str(exc),
+            )
             raise
 
     if last_exception is None:

@@ -91,34 +91,63 @@ async def stream_llm_with_tools(
                     error_msg = error_msg.get("message", str(error_msg))
                 raise RuntimeError(f"LLM API streaming error: {error_msg}")
 
-            delta = chunk.get("choices", [{}])[0].get("delta", {})
-            finish_reason = chunk.get("choices", [{}])[0].get("finish_reason")
+            choices = chunk.get("choices") or []
+            if not choices or not isinstance(choices[0], dict):
+                logger.warning(
+                    "[llm_transport] Ignoring stream chunk without a valid choice: %s",
+                    json.dumps(chunk, ensure_ascii=False, default=str)[:2000],
+                )
+                continue
+
+            choice = choices[0]
+            delta = choice.get("delta") or {}
+            if not isinstance(delta, dict):
+                logger.warning(
+                    "[llm_transport] Ignoring stream chunk with invalid delta type=%s",
+                    type(delta).__name__,
+                )
+                continue
+            finish_reason = choice.get("finish_reason")
             reasoning_delta = _coerce_text(
                 delta.get("reasoning") or delta.get("reasoning_content")
             )
             if reasoning_delta:
                 accumulated_reasoning += reasoning_delta
 
-            if "tool_calls" in delta:
-                for tc in delta["tool_calls"]:
-                    idx = tc.get("index", 0)
-                    if idx not in accumulated_tool_calls:
-                        accumulated_tool_calls[idx] = {
-                            "id": tc.get("id", ""),
-                            "type": "function",
-                            "function": {"name": "", "arguments": ""},
-                        }
-                    if tc.get("id"):
-                        accumulated_tool_calls[idx]["id"] = tc["id"]
-                    if "function" in tc:
-                        if tc["function"].get("name"):
-                            accumulated_tool_calls[idx]["function"]["name"] = tc["function"][
-                                "name"
-                            ]
-                        if tc["function"].get("arguments"):
-                            accumulated_tool_calls[idx]["function"]["arguments"] += tc[
-                                "function"
-                            ]["arguments"]
+            tool_call_deltas = delta.get("tool_calls") or []
+            if not isinstance(tool_call_deltas, list):
+                logger.warning(
+                    "[llm_transport] Ignoring invalid tool_calls delta type=%s payload=%s",
+                    type(tool_call_deltas).__name__,
+                    json.dumps(tool_call_deltas, ensure_ascii=False, default=str)[:1000],
+                )
+                tool_call_deltas = []
+
+            for tc in tool_call_deltas:
+                if not isinstance(tc, dict):
+                    logger.warning(
+                        "[llm_transport] Ignoring invalid tool-call delta type=%s",
+                        type(tc).__name__,
+                    )
+                    continue
+                idx = tc.get("index", 0)
+                if idx not in accumulated_tool_calls:
+                    accumulated_tool_calls[idx] = {
+                        "id": tc.get("id", ""),
+                        "type": "function",
+                        "function": {"name": "", "arguments": ""},
+                    }
+                if tc.get("id"):
+                    accumulated_tool_calls[idx]["id"] = tc["id"]
+                if "function" in tc:
+                    if tc["function"].get("name"):
+                        accumulated_tool_calls[idx]["function"]["name"] = tc["function"][
+                            "name"
+                        ]
+                    if tc["function"].get("arguments"):
+                        accumulated_tool_calls[idx]["function"]["arguments"] += tc[
+                            "function"
+                        ]["arguments"]
 
             normalized_message: dict[str, Any] = {"content": delta.get("content", "")}
             accumulated_content += str(delta.get("content", "") or "")
@@ -146,3 +175,9 @@ async def stream_llm_with_tools(
             yield normalized
         except json.JSONDecodeError:
             continue
+        except Exception:
+            logger.exception(
+                "[llm_transport] Failed to normalize streamed LLM chunk: %s",
+                line[:2000],
+            )
+            raise
