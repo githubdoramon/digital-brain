@@ -7,6 +7,31 @@ import requests
 import llm_helpers
 
 
+def test_build_chat_payload_merges_system_messages_at_the_start(monkeypatch):
+    monkeypatch.setenv("LLM_BASE_URL", "http://localhost:11434/v1")
+
+    messages = [
+        {"role": "system", "content": "base instructions"},
+        {"role": "user", "content": "hello"},
+        {"role": "system", "content": "runtime context"},
+        {"role": "assistant", "content": "previous answer"},
+        {"role": "system", "content": "validation feedback"},
+    ]
+
+    payload = llm_helpers.build_chat_payload(messages, model="test-model")
+
+    assert payload["messages"] == [
+        {
+            "role": "system",
+            "content": "base instructions\n\nruntime context\n\nvalidation feedback",
+        },
+        {"role": "user", "content": "hello"},
+        {"role": "assistant", "content": "previous answer"},
+    ]
+    assert messages[1]["role"] == "user"
+    assert messages[2]["role"] == "system"
+
+
 def test_build_chat_payload_attaches_keep_alive_for_configured_chat_models(monkeypatch):
     monkeypatch.setenv("LLM_BASE_URL", "http://localhost:11434/v1")
     monkeypatch.setenv("LLM_CHAT_MODEL_FAST", "fast-model")
@@ -55,8 +80,8 @@ def test_build_chat_payload_maps_legacy_high_reasoning_to_x_high(monkeypatch):
         reasoning_effort="high",
     )
 
-    assert payload["reasoning_effort"] == "x-high"
-    assert payload["reasoning"] == {"effort": "x-high"}
+    assert payload["reasoning_effort"] == "xhigh"
+    assert payload["reasoning"] == {"effort": "xhigh"}
 
 
 def test_warm_fast_model_uses_ollama_chat_endpoint(monkeypatch):
@@ -268,7 +293,7 @@ def test_call_llm_json_agentic_continues_reasoning_only_response(monkeypatch):
     result = llm_helpers.call_llm_json_agentic(
         "Summarize the transcript.",
         system_prompt="Return JSON.",
-        reasoning_effort="x-high",
+        reasoning_effort="xhigh",
         max_turns=3,
     )
 
@@ -277,4 +302,4 @@ def test_call_llm_json_agentic_continues_reasoning_only_response(monkeypatch):
     continuation_messages = calls[1][0]
     assert continuation_messages[-2] == {"role": "assistant", "content": ""}
     assert "prior_reasoning" in continuation_messages[-1]["content"]
-    assert calls[0][1]["reasoning_effort"] == "x-high"
+    assert calls[0][1]["reasoning_effort"] == "xhigh"

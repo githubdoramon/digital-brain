@@ -303,7 +303,7 @@ class TestExtractionGating:
         )
 
         assert mock_call_llm_json.call_args.kwargs["use_fast_model"] is False
-        assert mock_call_llm_json.call_args.kwargs["reasoning_effort"] == "x-high"
+        assert mock_call_llm_json.call_args.kwargs["reasoning_effort"] == "xhigh"
 
 
 class TestExtractionPromptBuilding:

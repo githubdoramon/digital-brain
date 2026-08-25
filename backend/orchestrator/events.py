@@ -749,7 +749,7 @@ Action item rules:
             timeout=MEETING_TRANSCRIPT_SUMMARY_TIMEOUT_SECONDS,
             max_tokens=16_384,
             temperature=0.2,
-            reasoning_effort="x-high",
+            reasoning_effort="xhigh",
             response_format=response_format,
             max_turns=3,
             result_validator=_is_satisfactory_meeting_summary,

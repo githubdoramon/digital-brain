@@ -713,7 +713,7 @@ def test_generate_meeting_transcript_summary_parses_action_items(monkeypatch):
         assert "action_items" in kwargs["response_format"]["json_schema"]["schema"]["properties"]
         assert kwargs["max_tokens"] == 16_384
         assert kwargs["timeout"] == events.MEETING_TRANSCRIPT_SUMMARY_TIMEOUT_SECONDS
-        assert kwargs["reasoning_effort"] == "x-high"
+        assert kwargs["reasoning_effort"] == "xhigh"
         return {
             "summary": "The team agreed to prepare the rollout draft.",
             "action_items": [

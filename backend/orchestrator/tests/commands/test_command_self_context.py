@@ -50,7 +50,7 @@ def test_contact_extraction_uses_self_context_instead_of_raw_user_line(monkeypat
     assert '"content": "Which Sage?"' in prompt
     assert '"contact_name": "Sage"' in prompt
     assert captured["kwargs"]["use_fast_model"] is False
-    assert captured["kwargs"]["reasoning_effort"] == "x-high"
+    assert captured["kwargs"]["reasoning_effort"] == "xhigh"
     response_format = captured["kwargs"]["response_format"]  # type: ignore[index]
     assert response_format["type"] == "json_schema"
     schema = response_format["json_schema"]["schema"]
@@ -98,7 +98,7 @@ def test_event_extraction_uses_self_context_instead_of_raw_user_line(monkeypatch
     assert "You are assisting Alex." in prompt
     assert "- User: alex@example.com" not in prompt
     assert captured["kwargs"]["use_fast_model"] is False
-    assert captured["kwargs"]["reasoning_effort"] == "x-high"
+    assert captured["kwargs"]["reasoning_effort"] == "xhigh"
 
 
 def test_event_follow_up_field_inference_uses_self_context(monkeypatch):
@@ -129,7 +129,7 @@ def test_event_follow_up_field_inference_uses_self_context(monkeypatch):
     assert "You are assisting Alex." in prompt
     assert "- User: alex@example.com" not in prompt
     assert captured["kwargs"]["use_fast_model"] is False
-    assert captured["kwargs"]["reasoning_effort"] == "x-high"
+    assert captured["kwargs"]["reasoning_effort"] == "xhigh"
 
 
 def test_event_extraction_infers_immediate_past_time(monkeypatch):

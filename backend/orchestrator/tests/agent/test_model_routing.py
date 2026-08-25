@@ -30,7 +30,7 @@ def test_select_llm_call_policy_prefers_smart_for_complex_questions(monkeypatch)
     assert policy.profile == "smart"
     assert policy.model == "smart-model"
     assert policy.timeout >= 60
-    assert policy.reasoning_effort == "x-high"
+    assert policy.reasoning_effort == "xhigh"
 
 
 def test_select_llm_call_policy_starts_smart_at_low_effort(monkeypatch):

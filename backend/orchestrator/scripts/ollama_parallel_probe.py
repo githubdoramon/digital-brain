@@ -107,7 +107,7 @@ EVENT_EXTRACTION_RESPONSE_FORMAT: dict[str, Any] = {
     },
 }
 
-EFFORTS = ("none", "low", "medium", "x-high")
+EFFORTS = ("none", "low", "medium", "xhigh")
 
 
 @dataclass
@@ -670,7 +670,7 @@ def print_results(
     print("- concurrency_factor near 1.0 means requests likely serialized or contended heavily.")
     print("- concurrency_factor near request_count means responses overlapped well.")
     print("- If warmup is slow but timed requests are fast, the issue is mostly model loading.")
-    print("- If x-high effort is much slower while ps shows all models loaded, the issue is inference contention.")
+    print("- If xhigh effort is much slower while ps shows all models loaded, the issue is inference contention.")
     print(f"\nTotal elapsed: {finished_at - started_at:.2f}s")
 
 

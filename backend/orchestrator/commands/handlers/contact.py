@@ -280,7 +280,7 @@ Relationship type rules:
             schema=CONTACT_UPDATE_RESPONSE_SCHEMA,
         ),
         "use_fast_model": False,
-        "reasoning_effort": "x-high",
+        "reasoning_effort": "xhigh",
     }
     request_options.update(dict(llm_request_options or {}))
     extracted = call_llm_json(

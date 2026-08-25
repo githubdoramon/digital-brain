@@ -319,7 +319,7 @@ Return ONLY a JSON object matching the supplied response schema."""
             prompt,
             timeout=15,
             use_fast_model=False,
-            reasoning_effort="x-high",
+            reasoning_effort="xhigh",
             response_format=build_json_schema_response_format(
                 name="event_match_intent",
                 schema=EVENT_MATCH_INTENT_RESPONSE_SCHEMA,
@@ -407,7 +407,7 @@ Return ONLY a JSON object matching the supplied response schema."""
             prompt,
             timeout=20,
             use_fast_model=False,
-            reasoning_effort="x-high",
+            reasoning_effort="xhigh",
             response_format=build_json_schema_response_format(
                 name="event_followup_strategy",
                 schema=EVENT_FOLLOWUP_STRATEGY_RESPONSE_SCHEMA,
@@ -786,7 +786,7 @@ Return ONLY a JSON object matching the supplied response schema."""
             prompt,
             timeout=20,
             use_fast_model=False,
-            reasoning_effort="x-high",
+            reasoning_effort="xhigh",
             response_format=build_json_schema_response_format(
                 name="event_field_inference",
                 schema=EVENT_FIELD_INFERENCE_RESPONSE_SCHEMA,
@@ -1254,7 +1254,7 @@ Return ONLY a JSON object matching the supplied response schema."""
                 schema=EVENT_EXTRACTION_RESPONSE_SCHEMA,
             ),
             "use_fast_model": False,
-            "reasoning_effort": "x-high",
+            "reasoning_effort": "xhigh",
         }
         request_options.update(dict(llm_request_options or {}))
         extracted = call_llm_json(
@@ -2672,7 +2672,7 @@ Return ONLY a JSON object matching the supplied response schema. If no clear rel
             prompt,
             timeout=15,
             use_fast_model=False,
-            reasoning_effort="x-high",
+            reasoning_effort="xhigh",
             response_format=build_json_schema_response_format(
                 name="event_relationship_suggestion",
                 schema=EVENT_RELATIONSHIP_SUGGESTION_RESPONSE_SCHEMA,

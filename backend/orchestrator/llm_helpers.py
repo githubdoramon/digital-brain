@@ -28,7 +28,7 @@ from observability.logger import get_runtime_logger
 logger = get_runtime_logger(__name__)
 
 _REASONING_EFFORT_ALIASES = {
-    "high": "x-high",
+    "high": "xhigh",
 }
 
 # LLM Configuration
@@ -161,6 +161,48 @@ def build_json_schema_response_format(
     }
 
 
+def _merge_system_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Merge every system message into one message at the start of the transcript.
+
+    Some model chat templates, including Qwen3.8, only accept a system message
+    at index zero. Keep the original order of system content and all non-system
+    messages while making the provider-facing transcript compatible with those
+    templates.
+    """
+    system_messages: list[dict[str, Any]] = []
+    other_messages: list[dict[str, Any]] = []
+
+    for message in messages:
+        if message.get("role") == "system":
+            system_messages.append(message)
+        else:
+            other_messages.append(message)
+
+    if not system_messages:
+        return list(messages)
+
+    contents = [message.get("content") for message in system_messages]
+    if all(content is None or isinstance(content, str) for content in contents):
+        merged_content: Any = "\n\n".join(
+            content for content in contents if isinstance(content, str)
+        )
+    else:
+        merged_blocks: list[Any] = []
+        for content in contents:
+            if merged_blocks:
+                merged_blocks.append({"type": "text", "text": "\n\n"})
+            if isinstance(content, list):
+                merged_blocks.extend(content)
+            elif content is not None:
+                merged_blocks.append(content)
+        merged_content = merged_blocks
+
+    merged_system = dict(system_messages[0])
+    merged_system["role"] = "system"
+    merged_system["content"] = merged_content
+    return [merged_system, *other_messages]
+
+
 def build_chat_payload(
     messages: list[dict[str, Any]],
     *,
@@ -179,7 +221,7 @@ def build_chat_payload(
     resolved_model = resolve_chat_model(model=model, use_fast_model=use_fast_model)
     payload: dict[str, Any] = {
         "model": resolved_model,
-        "messages": messages,
+        "messages": _merge_system_messages(messages),
         "stream": stream,
     }
 
@@ -617,7 +659,10 @@ def _call_llm_raw(
         stream,
         timeout,
     )
-    logger.info("[llm_helpers] LLM input: %s", json.dumps(messages, ensure_ascii=False))
+    logger.info(
+        "[llm_helpers] LLM input: %s",
+        json.dumps(payload.get("messages"), ensure_ascii=False),
+    )
     logger.info("[llm_helpers] LLM available tools: %s", json.dumps(tools, ensure_ascii=False))
     logger.info("[llm_helpers] LLM tool choice: %s", json.dumps(tool_choice, ensure_ascii=False))
 
@@ -697,7 +742,10 @@ async def stream_llm_chat(
         tools=tools,
         tool_choice=tool_choice,
     )
-    logger.info("[llm_helpers] LLM input (stream): %s", json.dumps(messages, ensure_ascii=False))
+    logger.info(
+        "[llm_helpers] LLM input (stream): %s",
+        json.dumps(payload.get("messages"), ensure_ascii=False),
+    )
     logger.info("[llm_helpers] LLM available tools (stream): %s", json.dumps(tools, ensure_ascii=False))
     logger.info("[llm_helpers] LLM tool choice (stream): %s", json.dumps(tool_choice, ensure_ascii=False))
     resolved_timeout = timeout or LLM_TIMEOUT

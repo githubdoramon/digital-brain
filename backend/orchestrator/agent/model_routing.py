@@ -68,16 +68,16 @@ def select_llm_call_policy(
         complexity += 1
 
     if complexity >= complexity_threshold + 2:
-        reasoning_effort = "x-high"
+        reasoning_effort = "xhigh"
     elif complexity >= complexity_threshold:
         reasoning_effort = "medium"
     else:
         reasoning_effort = "low"
 
     timeout = default_timeout
-    if reasoning_effort in {"medium", "x-high"}:
+    if reasoning_effort in {"medium", "xhigh"}:
         timeout = max(default_timeout, default_timeout + timeout_boost_seconds)
-    if reasoning_effort == "x-high":
+    if reasoning_effort == "xhigh":
         timeout = max(timeout, default_timeout + (timeout_boost_seconds * 2))
 
     return LLMCallPolicy(
