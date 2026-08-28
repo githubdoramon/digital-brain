@@ -316,14 +316,27 @@ def ensure_album(
         response = requests.get(f"{cfg.base_url}/api/albums", headers=headers, timeout=timeout)
         response.raise_for_status()
         albums = response.json()
+        matching_albums = [
+            item
+            for item in albums
+            if isinstance(item, dict) and item.get("albumName") == normalized_name
+        ]
+        # Immich does not enforce unique album names. Prefer an existing album
+        # that already contains this asset, then use the newest matching album
+        # when older failed POC attempts left duplicates behind.
         album = next(
             (
                 item
-                for item in albums
-                if isinstance(item, dict) and item.get("albumName") == normalized_name
+                for item in matching_albums
+                if normalized_asset in set(item.get("assetIds") or [])
             ),
             None,
         )
+        if album is None and matching_albums:
+            album = max(
+                matching_albums,
+                key=lambda item: str(item.get("createdAt") or item.get("updatedAt") or ""),
+            )
         if album is None:
             response = requests.post(
                 f"{cfg.base_url}/api/albums",
@@ -337,11 +350,18 @@ def ensure_album(
             response = requests.put(
                 f"{cfg.base_url}/api/albums/{album['id']}/assets",
                 headers=headers,
-                json={"assetIds": [normalized_asset]},
+                # Immich's add-assets endpoint accepts BulkIdsDto, whose field
+                # is `ids`; `assetIds` is only used by album creation.
+                json={"ids": [normalized_asset]},
                 timeout=timeout,
             )
             response.raise_for_status()
             album = {**album, "assetIds": [*(album.get("assetIds") or []), normalized_asset]}
+    except requests.HTTPError as exc:
+        response = exc.response
+        detail = (response.text or "").strip()[:300] if response is not None else ""
+        suffix = f": {detail}" if detail else ""
+        raise ImmichClientError(f"Immich album request failed: {exc}{suffix}") from exc
     except requests.RequestException as exc:
         raise ImmichClientError(f"Immich album request failed: {exc}") from exc
     except (ValueError, TypeError) as exc:
