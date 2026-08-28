@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, Response, status
 
@@ -31,6 +32,14 @@ from schemas import (
 )
 
 logger = get_runtime_logger(__name__)
+
+
+def _parse_location_datetime(value: str) -> datetime:
+    normalized = str(value or "").strip()
+    if normalized.endswith("Z"):
+        normalized = f"{normalized[:-1]}+00:00"
+    parsed = datetime.fromisoformat(normalized)
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
 
 
 def _token_fingerprint(token: str | None) -> str:
@@ -258,6 +267,26 @@ def create_user_router() -> APIRouter:
         if not location:
             raise HTTPException(status_code=404, detail="Location not found")
         return location
+
+    @router.get("/mobile/location/history/nearest")
+    def read_nearest_mobile_location(
+        captured_at: str = Query(...),
+        user: dict = Depends(get_current_user),
+    ):
+        email = user.get("email") or user.get("user_email")
+        if not email:
+            raise HTTPException(status_code=400, detail="User email is missing")
+        try:
+            normalized = _parse_location_datetime(captured_at)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail="captured_at must be ISO 8601") from exc
+        location = user_locations.get_nearest_location(
+            user_email=email,
+            captured_at=normalized,
+        )
+        if not location:
+            raise HTTPException(status_code=404, detail="Location not found near capture time")
+        return {"location": location}
 
     @router.get("/user/facts", response_model=list[UserFactOut])
     @router.get("/mobile/user/facts", response_model=list[UserFactOut])

@@ -9,6 +9,7 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Respon
 import contacts as contacts_service
 import event_photos as event_photos_service
 import events as events_service
+import glasses_captures as glasses_captures_service
 import meeting_transcript_jobs
 import voice_profiles as voice_profiles_service
 from auth import get_current_user, require_service_api_key
@@ -368,6 +369,41 @@ def create_events_router(
             raise HTTPException(status_code=500, detail="Failed to attach event photo") from exc
 
         return {"ok": True, "photo": photo}
+
+    @router.post("/mobile/glasses/captures")
+    async def upload_glasses_capture(
+        file: UploadFile = File(...),
+        capture_id: str = Form(...),
+        captured_at: str | None = Form(default=None),
+        location: str | None = Form(default=None),
+        user: dict = Depends(get_current_user),
+    ):
+        try:
+            parsed_captured_at = _parse_optional_datetime(captured_at)
+            parsed_location = json.loads(location) if location else {}
+        except (ValueError, TypeError, json.JSONDecodeError) as exc:
+            raise HTTPException(status_code=400, detail="captured_at/location is invalid") from exc
+        if not isinstance(parsed_location, dict):
+            raise HTTPException(status_code=400, detail="location must be an object")
+        try:
+            capture = glasses_captures_service.upload_capture(
+                user_email=str(user.get("email") or ""),
+                capture_id=capture_id,
+                # Starlette's UploadFile is backed by a spooled temporary file;
+                # pass that seekable handle through so hashing and the Immich
+                # multipart upload stay bounded for long videos.
+                media_bytes=file.file,
+                filename=file.filename or "glasses-capture.bin",
+                mime_type=file.content_type,
+                captured_at=parsed_captured_at,
+                location=parsed_location,
+            )
+        except glasses_captures_service.GlassesCaptureError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except Exception as exc:
+            logger.exception("[glasses_captures] Upload failed capture_id=%s", capture_id)
+            raise HTTPException(status_code=502, detail="Failed to commit glasses capture") from exc
+        return {"ok": True, "capture": capture}
 
     @router.get("/mobile/events/{event_id}/photos/{asset_id}/thumbnail")
     def get_event_photo_thumbnail(

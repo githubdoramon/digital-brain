@@ -14,6 +14,9 @@ import * as Notifications from 'expo-notifications';
 import { AuthProvider, useAuth } from '@/auth/AuthContext';
 import { TopNoticeProvider } from '@/components/top-notice';
 import { syncBackgroundLocationTracking } from '@/location/backgroundLocation';
+import { registerGlassesCaptureReconciliation } from '@/mentraCapture/backgroundTask';
+import { ensureMentraConnection, subscribeMentraEvents } from '@/mentraCapture/sdk';
+import { reconcileGlassesCaptures } from '@/mentraCapture/sync';
 import { ensureAppStateTracking } from '@/location/runtimeState';
 import { theme } from '@/theme';
 
@@ -52,6 +55,14 @@ export default function RootLayout() {
 
   useEffect(() => {
     ensureAppStateTracking();
+    const unsubscribe = subscribeMentraEvents(() => {
+      void reconcileGlassesCaptures();
+    });
+    void registerGlassesCaptureReconciliation();
+    void ensureMentraConnection()
+      .then(() => reconcileGlassesCaptures())
+      .catch(() => undefined);
+    return unsubscribe;
   }, []);
 
   if (!loaded) {
@@ -251,6 +262,18 @@ function RootLayoutNav({ loaded }: { loaded: boolean }) {
       />
       <Stack.Screen
         name="settings/about"
+        options={{
+          headerShown: false,
+        }}
+      />
+      <Stack.Screen
+        name="settings/image-understanding/index"
+        options={{
+          headerShown: false,
+        }}
+      />
+      <Stack.Screen
+        name="settings/glasses-capture/index"
         options={{
           headerShown: false,
         }}

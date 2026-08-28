@@ -3,9 +3,11 @@ from __future__ import annotations
 import base64
 import hashlib
 import os
+from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any
+from io import BytesIO
+from typing import Any, BinaryIO
 
 import requests
 
@@ -15,6 +17,7 @@ from observability.logger import get_runtime_logger
 logger = get_runtime_logger(__name__)
 
 IMMICH_HTTP_TIMEOUT = int(os.getenv("IMMICH_HTTP_TIMEOUT", "45"))
+UPLOAD_CHUNK_SIZE = 1024 * 1024
 
 
 class ImmichClientError(RuntimeError):
@@ -149,31 +152,65 @@ def fetch_person_thumbnail(
     return response.content, content_type
 
 
-def upload_asset(
-    image_bytes: bytes,
+class _StreamingMultipartBody:
+    def __init__(
+        self,
+        *,
+        prefix: bytes,
+        file_obj: BinaryIO,
+        file_size: int,
+        suffix: bytes,
+    ) -> None:
+        self._prefix = prefix
+        self._file_obj = file_obj
+        self._file_size = file_size
+        self._suffix = suffix
+
+    def __iter__(self) -> Iterator[bytes]:
+        yield self._prefix
+        while True:
+            chunk = self._file_obj.read(UPLOAD_CHUNK_SIZE)
+            if not chunk:
+                break
+            yield chunk
+        yield self._suffix
+
+    def __len__(self) -> int:
+        return len(self._prefix) + self._file_size + len(self._suffix)
+
+
+def _safe_multipart_value(value: str) -> str:
+    return str(value).replace("\r", "").replace("\n", "").replace('"', "'")
+
+
+def upload_asset_stream(
+    file_obj: BinaryIO,
     *,
     filename: str,
     mime_type: str | None,
     taken_at: datetime | None,
     device_asset_id: str,
+    size_bytes: int,
+    checksum_header: str,
     device_id: str | None = None,
     config: ImmichConfig | None = None,
 ) -> dict[str, Any]:
-    if not image_bytes:
+    if size_bytes <= 0:
         raise ImmichClientError("Image payload is empty")
     if not device_asset_id:
         raise ImmichClientError("device_asset_id is required")
+
+    try:
+        file_obj.seek(0)
+    except (AttributeError, OSError) as exc:
+        raise ImmichClientError("Image payload must be seekable for streaming upload") from exc
 
     cfg = config or get_immich_config()
     resolved_device_id = (device_id or cfg.device_id or "digital-brain").strip()
     timestamp = _format_timestamp(taken_at or datetime.now(timezone.utc))
     url = f"{cfg.base_url}/api/assets"
-    headers = {
-        "x-api-key": cfg.api_key,
-        "accept": "application/json",
-        "x-immich-checksum": base64.b64encode(hashlib.sha1(image_bytes).digest()).decode("ascii"),
-    }
-    data = {
+    boundary = f"----digitalbrain-{hashlib.sha256(device_asset_id.encode()).hexdigest()[:24]}"
+    fields = {
         "deviceAssetId": device_asset_id,
         "deviceId": resolved_device_id,
         "fileCreatedAt": timestamp,
@@ -181,17 +218,41 @@ def upload_asset(
         "filename": filename,
         "isFavorite": "false",
     }
-    files = {
-        "assetData": (
-            filename,
-            image_bytes,
-            mime_type or "application/octet-stream",
+    prefix_parts: list[bytes] = []
+    for name, value in fields.items():
+        prefix_parts.append(
+            (
+                f'--{boundary}\r\nContent-Disposition: form-data; '
+                f'name="{_safe_multipart_value(name)}"'
+                f"\r\n\r\n{_safe_multipart_value(value)}\r\n"
+            ).encode("utf-8")
         )
+    prefix_parts.append(
+        (
+            f'--{boundary}\r\nContent-Disposition: form-data; name="assetData"; '
+            f'filename="{_safe_multipart_value(filename)}"\r\n'
+            f"Content-Type: "
+            f"{_safe_multipart_value(mime_type or 'application/octet-stream')}\r\n\r\n"
+        ).encode("utf-8")
+    )
+    suffix = f"\r\n--{boundary}--\r\n".encode("ascii")
+    body = _StreamingMultipartBody(
+        prefix=b"".join(prefix_parts),
+        file_obj=file_obj,
+        file_size=size_bytes,
+        suffix=suffix,
+    )
+    headers = {
+        "x-api-key": cfg.api_key,
+        "accept": "application/json",
+        "content-type": f"multipart/form-data; boundary={boundary}",
+        "content-length": str(len(body)),
+        "x-immich-checksum": checksum_header,
     }
     timeout = cfg.http_timeout or IMMICH_HTTP_TIMEOUT
 
     try:
-        response = requests.post(url, headers=headers, data=data, files=files, timeout=timeout)
+        response = requests.post(url, headers=headers, data=body, timeout=timeout)
     except requests.RequestException as exc:
         raise ImmichClientError(f"Failed to reach Immich upload endpoint: {exc}") from exc
 
@@ -204,6 +265,123 @@ def upload_asset(
     except ValueError as exc:
         raise ImmichClientError("Immich upload returned invalid JSON response") from exc
 
+    return payload if isinstance(payload, dict) else {"raw": payload}
+
+
+def upload_asset(
+    image_bytes: bytes,
+    *,
+    filename: str,
+    mime_type: str | None,
+    taken_at: datetime | None,
+    device_asset_id: str,
+    device_id: str | None = None,
+    config: ImmichConfig | None = None,
+) -> dict[str, Any]:
+    """Upload an in-memory asset, retaining the legacy API for small callers."""
+    if not image_bytes:
+        raise ImmichClientError("Image payload is empty")
+    checksum_header = base64.b64encode(hashlib.sha1(image_bytes).digest()).decode("ascii")
+    return upload_asset_stream(
+        BytesIO(image_bytes),
+        filename=filename,
+        mime_type=mime_type,
+        taken_at=taken_at,
+        device_asset_id=device_asset_id,
+        size_bytes=len(image_bytes),
+        checksum_header=checksum_header,
+        device_id=device_id,
+        config=config,
+    )
+
+
+def ensure_album(
+    album_name: str,
+    asset_id: str,
+    config: ImmichConfig | None = None,
+) -> dict[str, Any]:
+    """Find or create an Immich album and ensure the asset is a member."""
+    normalized_name = str(album_name or "").strip()
+    normalized_asset = str(asset_id or "").strip()
+    if not normalized_name or not normalized_asset:
+        raise ImmichClientError("album_name and asset_id are required")
+    cfg = config or get_immich_config()
+    headers = {
+        "x-api-key": cfg.api_key,
+        "accept": "application/json",
+        "content-type": "application/json",
+    }
+    timeout = cfg.http_timeout or IMMICH_HTTP_TIMEOUT
+    try:
+        response = requests.get(f"{cfg.base_url}/api/albums", headers=headers, timeout=timeout)
+        response.raise_for_status()
+        albums = response.json()
+        album = next(
+            (
+                item
+                for item in albums
+                if isinstance(item, dict) and item.get("albumName") == normalized_name
+            ),
+            None,
+        )
+        if album is None:
+            response = requests.post(
+                f"{cfg.base_url}/api/albums",
+                headers=headers,
+                json={"albumName": normalized_name, "assetIds": [normalized_asset]},
+                timeout=timeout,
+            )
+            response.raise_for_status()
+            album = response.json()
+        elif normalized_asset not in set(album.get("assetIds") or []):
+            response = requests.put(
+                f"{cfg.base_url}/api/albums/{album['id']}/assets",
+                headers=headers,
+                json={"assetIds": [normalized_asset]},
+                timeout=timeout,
+            )
+            response.raise_for_status()
+            album = {**album, "assetIds": [*(album.get("assetIds") or []), normalized_asset]}
+    except requests.RequestException as exc:
+        raise ImmichClientError(f"Immich album request failed: {exc}") from exc
+    except (ValueError, TypeError) as exc:
+        raise ImmichClientError("Immich album returned invalid JSON") from exc
+    if not isinstance(album, dict) or not album.get("id"):
+        raise ImmichClientError("Immich album response did not include an ID")
+    return album
+
+
+def update_asset_location(
+    asset_id: str,
+    *,
+    latitude: float,
+    longitude: float,
+    config: ImmichConfig | None = None,
+) -> dict[str, Any]:
+    """Attach phone-derived coordinates to an Immich asset without rewriting bytes."""
+    normalized_asset = str(asset_id or "").strip()
+    if not normalized_asset:
+        raise ImmichClientError("asset_id is required")
+    if not (-90 <= latitude <= 90 and -180 <= longitude <= 180):
+        raise ImmichClientError("asset location is outside valid bounds")
+    cfg = config or get_immich_config()
+    try:
+        response = requests.put(
+            f"{cfg.base_url}/api/assets/{normalized_asset}",
+            headers={
+                "x-api-key": cfg.api_key,
+                "accept": "application/json",
+                "content-type": "application/json",
+            },
+            json={"latitude": latitude, "longitude": longitude},
+            timeout=cfg.http_timeout or IMMICH_HTTP_TIMEOUT,
+        )
+        response.raise_for_status()
+        payload = response.json()
+    except requests.RequestException as exc:
+        raise ImmichClientError(f"Immich asset location update failed: {exc}") from exc
+    except ValueError as exc:
+        raise ImmichClientError("Immich asset location returned invalid JSON") from exc
     return payload if isinstance(payload, dict) else {"raw": payload}
 
 

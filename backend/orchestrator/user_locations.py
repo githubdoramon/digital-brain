@@ -11,6 +11,7 @@ from observability.logger import get_runtime_logger
 logger = get_runtime_logger(__name__)
 
 LOCATION_DEDUPE_MIN_DISTANCE_METERS = 50.0
+CAPTURE_LOCATION_TOLERANCE_SECONDS = 10 * 60
 
 
 def _distance_meters(first: dict[str, Any], second: dict[str, Any]) -> float:
@@ -260,3 +261,56 @@ def get_last_known_location(user_email: str) -> dict[str, Any] | None:
     if not row:
         return None
     return dict(row)
+
+
+def get_nearest_location(
+    *,
+    user_email: str,
+    captured_at: datetime,
+    tolerance_seconds: int = CAPTURE_LOCATION_TOLERANCE_SECONDS,
+) -> dict[str, Any] | None:
+    """Return the closest historical phone sample to a media capture time."""
+    tolerance = max(0, int(tolerance_seconds))
+    normalized_capture = _normalize_timestamp(captured_at)
+    if normalized_capture is None:
+        return None
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT lat, lon, accuracy_m, captured_at, source
+            FROM user_location_history
+            WHERE user_email = %s
+              AND captured_at BETWEEN %s - (%s * INTERVAL '1 second')
+                                  AND %s + (%s * INTERVAL '1 second')
+            ORDER BY ABS(EXTRACT(EPOCH FROM (captured_at - %s))), captured_at DESC
+            LIMIT 1
+            """,
+            (
+                user_email,
+                normalized_capture,
+                tolerance,
+                normalized_capture,
+                tolerance,
+                normalized_capture,
+            ),
+        )
+        row = cur.fetchone()
+    if not row:
+        return None
+    sample = dict(row)
+    sample_captured_at = _normalize_timestamp(sample.get("captured_at"))
+    if sample_captured_at is None:
+        return None
+    offset_ms = round(abs((sample_captured_at - normalized_capture).total_seconds()) * 1000)
+    return {
+        "lat": sample["lat"],
+        "lon": sample["lon"],
+        "accuracy_m": sample.get("accuracy_m"),
+        "captured_at": normalized_capture.isoformat(),
+        "source": "phone_location_history",
+        "provenance": "phone_location_history",
+        "sample_captured_at": sample_captured_at.isoformat(),
+        "sample_source": sample.get("source") or "unknown",
+        "offset_ms": offset_ms,
+        "tolerance_ms": tolerance * 1000,
+    }

@@ -20,6 +20,8 @@ Personal memory orchestrator with a **bounded agent architecture**. Backend: Fas
 
 **Mobile background location convention**: Android background location uses two separate workers: a capture worker and an upload/drain worker. Keep the location, geofence, and drain task definitions imported from `mobile/index.js`; quiet mode should avoid a foreground-service notification while stationary, geofence/current-place movement should switch to reliable foreground-service capture while moving, and a stationary window should switch back to quiet mode. Android location-task callbacks must only validate/dedupe/update capture mode and enqueue durable samples; they must not call the backend or read auth state. The scheduled drain worker is the only background path that reads auth state and uploads queued samples to the backend, using bounded sequential batches. Preserve mode/geofence/queue/drain/debug logging so exported logs can distinguish capture, enqueue, drain, auth, backend, and OS throttling failures.
 
+**Mobile image understanding convention**: On-device image understanding is owned by the serialized coordinator in `mobile/image-understanding/`. Keep Fast Vision, Balanced VLM, and LiteRT-LM behind `ImageUnderstandingEngine`, use one shared versioned observation schema, never keep two pipelines loaded simultaneously, require strict GPU initialization for LiteRT benchmarks rather than silently falling back to CPU, and release native resources after every run and failure. The user-facing POC runs one fused pipeline: Fast Vision supplies detector/count/OCR evidence, unloads, then Balanced VLM owns the description of the scene, people, actions, setting, and likely event. Detector evidence supports rather than replaces the visual model's interpretation; exact OCR is appended deterministically instead of being regenerated. Do not reject useful visible person descriptions or cautious apparent-role/relationship interpretations, but do not invent identities or unsupported facts. Models remain optional downloads with explicit unload/delete controls; Fast Vision detector and scene-classifier files and Balanced VLM artifacts are app-private, while Fast Vision's optional ML Kit modules are managed by Google Play services. LiteRT remains available only as a hidden benchmark; its parser repairs must stay conservative, syntax-only, and auditable in run history. Selected photos, URIs, EXIF, auth state, and account identifiers must never enter diagnostics, run history, export payloads, backend calls, or upload queues. See `mobile/IMAGE_UNDERSTANDING_POC.md`.
+
 ## Architecture Documentation
 
 Detailed architecture docs live in `backend/orchestrator/docs/architecture/`:
@@ -302,6 +304,7 @@ User Question → Intent Router → Conversational Profile Dispatch → Tool Vis
 - `DELETE /mobile/devices/unregister` – Unregister Expo push token for mobile device
 - `POST /mobile/location` – Append newer user location history entries; reject stale/duplicate captures
 - `GET /mobile/location` – Read the latest user location
+- `GET /mobile/location/history/nearest` – Resolve the nearest eligible historical phone location sample for a media capture timestamp
 
 ### Daily Briefings
 - `GET /mobile/briefings/daily` – Get daily briefing or immediate pending status (auto-enqueues generation)
@@ -533,3 +536,18 @@ HackerNews? If no, anonymize.
 | News feed aggregation | `backend/orchestrator/news_feeds.py` |
 | Daily briefing agent | `backend/orchestrator/agents/daily_briefing/executor.py` |
 | Frontend API client | `frontend/web/src/lib/api.ts` |
+
+## Mobile glasses capture convention
+
+`mobile/mentraCapture/` owns the Android Mentra media queue. Keep capture
+discovery, local durable storage, glasses acknowledgement, network transition,
+backend/Immich upload, and phone cleanup serialized and observable. Configure
+the physical button for maximum-quality medium-compressed photos and 720p30
+audio video with a 15-minute cap. Reconcile immediately on media signals and
+with a best-effort 15-minute background task. Probe the glasses current Wi-Fi
+server before opening its hotspot, use scoped local networking when available,
+and restore the internet path after sync. Never delete a glasses capture before
+a validated local commit; never delete the phone copy before
+`/mobile/glasses/captures` confirms the Immich asset and `Ramon eyes capture`
+album membership. Keep pending files under `Digital Brain/Capture Queue`.
+See `mobile/GLASSES_CAPTURE_PIPELINE.md`.

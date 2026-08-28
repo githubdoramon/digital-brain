@@ -150,7 +150,8 @@ export default ({ config }: ConfigContext): ExpoConfig => {
     googleIosUrlScheme ? { iosUrlScheme: googleIosUrlScheme } : undefined,
   );
   const pluginsWithAsset = withPlugin(pluginsWithGoogleSignin, 'expo-asset');
-  const pluginsWithAudioStudio = withPlugin(pluginsWithAsset, '@siteed/audio-studio', {
+  const pluginsWithMentra = withPlugin(pluginsWithAsset, '@mentra/bluetooth-sdk');
+  const pluginsWithAudioStudio = withPlugin(pluginsWithMentra, '@siteed/audio-studio', {
     enablePhoneStateHandling: false,
     enableNotifications: false,
     enableBackgroundAudio: false,
@@ -168,9 +169,15 @@ export default ({ config }: ConfigContext): ExpoConfig => {
       notificationUsageDescription: 'Digital Brain can show recording controls while capturing audio.',
     },
   });
+  const pluginsWithLiteRt = withPlugin(pluginsWithAudioStudio, 'react-native-litert-lm');
+  const pluginsWithBuildProperties = withPlugin(pluginsWithLiteRt, 'expo-build-properties', {
+    android: {
+      minSdkVersion: 28,
+    },
+  });
 
   return withSystemDebugKeystore({
     ...merged,
-    plugins: withPlugin(pluginsWithAudioStudio, 'expo-background-task'),
+    plugins: withPlugin(pluginsWithBuildProperties, 'expo-background-task'),
   });
 };

@@ -25,7 +25,7 @@ a particular piece.
 | [`backend/orchestrator/`](backend/orchestrator/) | FastAPI orchestrator — memory, agents, tools, LLM routing. Port 8000. | [README](backend/orchestrator/README.md) · architecture docs in [`docs/architecture/`](backend/orchestrator/docs/architecture/) |
 | [`backend/robot-gateway/`](backend/robot-gateway/) | MQTT gateway for physical robots: telemetry ingest, command dispatch. Port 8001. | [README](backend/robot-gateway/README.md) · firmware protocol in [MQTT_PROTOCOL.md](backend/robot-gateway/MQTT_PROTOCOL.md) |
 | [`frontend/web/`](frontend/web/) | Next.js web app — UI + API proxy layer in front of the backend. Port 3000. | [README](frontend/web/README.md) |
-| [`mobile/`](mobile/) | React Native / Expo mobile app — chat, capture, location, notifications. | [`mobile/.env.example`](mobile/.env.example) · [`mobile/app.config.ts`](mobile/app.config.ts) |
+| [`mobile/`](mobile/) | React Native / Expo mobile app — chat, capture, location, notifications, and optional on-device image understanding. | [`mobile/.env.example`](mobile/.env.example) · [`mobile/app.config.ts`](mobile/app.config.ts) · [image understanding POC](mobile/IMAGE_UNDERSTANDING_POC.md) |
 | [`backend/db/init.sql`](backend/db/init.sql) | PostgreSQL + pgvector schema applied at first container boot. Incremental schema lives in [`backend/orchestrator/db_migrations/`](backend/orchestrator/db_migrations/) and runs at orchestrator startup. | — |
 | [`docker-compose.yml`](docker-compose.yml) | Brings up PostgreSQL, orchestrator, frontend, Mosquitto, and the robot gateway together. | — |
 | [`AGENTS.md`](AGENTS.md) | Quick context for anyone (human or AI) hacking on the codebase — conventions, architecture pointers, anonymization rule for tests. | — |

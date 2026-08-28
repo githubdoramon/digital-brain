@@ -1,0 +1,68 @@
+diff --git a/node_modules/react-native-litert-lm/android/build.gradle b/node_modules/react-native-litert-lm/android/build.gradle
+index 58c8f44..ab42304 100644
+--- a/node_modules/react-native-litert-lm/android/build.gradle
++++ b/node_modules/react-native-litert-lm/android/build.gradle
+@@ -19,7 +19,8 @@ android {
+     compileSdk 36
+     
+     defaultConfig {
+-        minSdk 26  // LiteRT-LM requires API 26+
++        // Nitro Modules 0.36.x publishes its Prefab package for API 28.
++        minSdk 28
+         consumerProguardFiles 'consumer-rules.pro'
+         
+         externalNativeBuild {
+diff --git a/node_modules/react-native-litert-lm/android/src/main/java/com/margelo/nitro/dev/litert/litertlm/HybridLiteRTLM.kt b/node_modules/react-native-litert-lm/android/src/main/java/com/margelo/nitro/dev/litert/litertlm/HybridLiteRTLM.kt
+index 22f6b2a..dd90019 100644
+--- a/node_modules/react-native-litert-lm/android/src/main/java/com/margelo/nitro/dev/litert/litertlm/HybridLiteRTLM.kt
++++ b/node_modules/react-native-litert-lm/android/src/main/java/com/margelo/nitro/dev/litert/litertlm/HybridLiteRTLM.kt
+@@ -281,44 +281,17 @@ class HybridLiteRTLM : HybridLiteRTLMSpec() {
+                     // Attempt primary backend
+                     var eng = tryCreateEngine(lmBackend, lmVisionBackend, lmAudioBackend)
+ 
+-                    // Fallback sequence if GPU/NPU fails to initialize (mirrors iOS behavior)
++                    // The Digital Brain POC requires a conclusive backend benchmark. Do not
++                    // silently turn a requested GPU/NPU run into a CPU measurement.
+                     if (eng == null && backend != Backend.CPU) {
+                         val requestedName = if (backend == Backend.GPU) "GPU" else "NPU"
+-                        Log.w(TAG, "$requestedName backend failed — trying fallback chain...")
+-
+-                        // Fallback 1: CPU main + GPU vision + CPU audio
+-                        eng = tryCreateEngine(
+-                            com.google.ai.edge.litertlm.Backend.CPU(),
+-                            if (isMultimodal) com.google.ai.edge.litertlm.Backend.GPU() else null,
+-                            if (isMultimodal) com.google.ai.edge.litertlm.Backend.CPU() else null
++                        throw RuntimeException(
++                            "$requestedName backend initialization failed; strict backend mode prevented CPU fallback."
+                         )
+-
+-                        // Fallback 2: Full CPU for all modalities
+-                        if (eng == null) {
+-                            eng = tryCreateEngine(
+-                                com.google.ai.edge.litertlm.Backend.CPU(),
+-                                if (isMultimodal) com.google.ai.edge.litertlm.Backend.CPU() else null,
+-                                if (isMultimodal) com.google.ai.edge.litertlm.Backend.CPU() else null
+-                            )
+-                        }
+-
+-                        // Fallback 3: Text-only CPU (no vision/audio executors)
+-                        if (eng == null) {
+-                            eng = tryCreateEngine(
+-                                com.google.ai.edge.litertlm.Backend.CPU(),
+-                                null,
+-                                null
+-                            )
+-                        }
+-
+-                        if (eng != null) {
+-                            Log.w(TAG, "$requestedName backend unavailable — fell back to CPU successfully")
+-                            backend = Backend.CPU
+-                        }
+                     }
+ 
+                     engine = eng ?: throw RuntimeException(
+-                        "Failed to create LiteRT-LM engine. Tried primary backend and all CPU fallbacks."
++                        "Failed to create LiteRT-LM engine with the requested backend."
+                     )
+                     Log.i(TAG, "Engine created and initialized successfully")
+     

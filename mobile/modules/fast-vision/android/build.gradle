@@ -1,0 +1,26 @@
+plugins {
+  id 'com.android.library'
+  id 'expo-module-gradle-plugin'
+}
+
+group = 'expo.modules.fastvision'
+version = '0.3.1'
+
+android {
+  namespace "expo.modules.fastvision"
+  defaultConfig {
+    versionCode 1
+    versionName "0.3.1"
+  }
+  lintOptions {
+    abortOnError false
+  }
+}
+
+dependencies {
+  implementation 'com.google.android.gms:play-services-base:18.10.0'
+  implementation 'com.google.android.gms:play-services-mlkit-image-labeling:16.0.8'
+  implementation 'com.google.android.gms:play-services-mlkit-text-recognition:19.0.1'
+  implementation 'com.google.mediapipe:tasks-vision:1.0.0'
+  implementation 'com.google.ai.edge.litert:litert:2.2.0'
+}

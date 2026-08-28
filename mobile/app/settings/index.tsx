@@ -484,6 +484,31 @@ export default function SettingsScreen() {
         <Card style={[styles.card, styles.navCard]}>
           <Pressable
             style={styles.navRow}
+            onPress={() => router.push('/settings/image-understanding' as never)}
+          >
+            <View style={styles.textBlock}>
+              <Text style={styles.rowTitle}>Image understanding POC</Text>
+              <Text style={styles.rowSubtitle}>
+                Compare fast deterministic vision with on-device Gemma 4.
+              </Text>
+            </View>
+            <Ionicons name="scan-outline" size={20} color={theme.colors.mutedInk} />
+          </Pressable>
+          <Pressable
+            style={styles.navRow}
+            onPress={() => router.push('/settings/glasses-capture' as never)}
+          >
+            <View style={styles.textBlock}>
+              <Text style={styles.rowTitle}>Glasses capture</Text>
+              <Text style={styles.rowSubtitle}>Sync photos and videos to Immich</Text>
+            </View>
+            <Ionicons name="chevron-forward" size={20} color={theme.colors.mutedInk} />
+          </Pressable>
+        </Card>
+
+        <Card style={[styles.card, styles.navCard]}>
+          <Pressable
+            style={styles.navRow}
             onPress={() => router.push('/settings/proposed-events' as never)}
           >
             <View style={styles.textBlock}>

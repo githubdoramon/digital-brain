@@ -13,6 +13,7 @@ const BACKGROUND_LOCATION_QUEUE_KEY = 'digitalbrain.backgroundLocationQueue';
 const MAX_QUEUED_BACKGROUND_LOCATIONS = 200;
 const MAX_BACKGROUND_LOCATION_UPLOADS_PER_DRAIN = 50;
 const BACKGROUND_LOCATION_UPLOAD_TIMEOUT_MS = 15_000;
+export const CAPTURE_LOCATION_TOLERANCE_MS = 10 * 60 * 1000;
 
 let drainInFlight: Promise<{
   initialQueueSize: number;
@@ -46,6 +47,14 @@ export type QueuedBackgroundLocationEntry = {
 };
 
 export type DrainTrigger = 'background_task_worker' | 'manual';
+
+export type HistoricalLocationSample = {
+  lat: number;
+  lon: number;
+  accuracy_m?: number;
+  captured_at: string;
+  source: string;
+};
 
 let pendingDrainTrigger: DrainTrigger | null = null;
 
@@ -97,6 +106,41 @@ async function readQueue(): Promise<QueuedBackgroundLocationEntry[]> {
     });
     return [];
   }
+}
+
+/**
+ * Find the closest locally queued location sample without requiring auth or a
+ * network request. The background drain may not have uploaded this sample yet.
+ */
+export async function findNearestQueuedLocation(
+  capturedAt: string,
+  toleranceMs = CAPTURE_LOCATION_TOLERANCE_MS,
+): Promise<(HistoricalLocationSample & { offsetMs: number }) | null> {
+  const targetMs = Date.parse(capturedAt);
+  if (!Number.isFinite(targetMs)) return null;
+  const queue = await readQueue();
+  let closest: (HistoricalLocationSample & { offsetMs: number }) | null = null;
+  for (const entry of queue) {
+    const sampleMs = Number(entry.capturedAtMs) || Date.parse(entry.capturedAt);
+    const offsetMs = Math.abs(sampleMs - targetMs);
+    if (!Number.isFinite(sampleMs) || offsetMs > toleranceMs) continue;
+    const lat = Number(entry.lat);
+    const lon = Number(entry.lon);
+    if (!Number.isFinite(lat) || !Number.isFinite(lon)) continue;
+    if (!closest || offsetMs < closest.offsetMs) {
+      closest = {
+        lat,
+        lon,
+        ...(Number.isFinite(Number(entry.accuracyM))
+          ? { accuracy_m: Number(entry.accuracyM) }
+          : {}),
+        captured_at: entry.capturedAt,
+        source: entry.source || 'unknown',
+        offsetMs,
+      };
+    }
+  }
+  return closest;
 }
 
 async function writeQueue(queue: QueuedBackgroundLocationEntry[]): Promise<void> {
