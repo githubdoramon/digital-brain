@@ -100,6 +100,18 @@ DOCUMENT_TAG_ENRICHMENT = ScheduledJobSpec(
     trigger_source="document persistence",
 )
 
+DOCUMENT_ENHANCEMENT = ScheduledJobSpec(
+    job_type="document_enhancement",
+    label="Document enhancement",
+    worker_module="document_enhancement_jobs",
+    schedule_kind="debounced_async",
+    time_utc=None,
+    poll_seconds=2,
+    retry_seconds=60,
+    description="Completes extraction, metadata generation, embeddings, and tag enrichment after upload.",
+    trigger_source="document upload and web retry",
+)
+
 CONTACT_TAG_ENRICHMENT = ScheduledJobSpec(
     job_type="contact_tag_enrichment",
     label="Contact tag enrichment",
@@ -121,6 +133,7 @@ SCHEDULED_JOBS: tuple[ScheduledJobSpec, ...] = (
     MEETING_TRANSCRIPT,
     EVENT_TAG_ENRICHMENT,
     DOCUMENT_TAG_ENRICHMENT,
+    DOCUMENT_ENHANCEMENT,
     CONTACT_TAG_ENRICHMENT,
 )
 
@@ -208,6 +221,17 @@ def _load_runtime_status() -> dict[str, dict[str, Any]]:
     except Exception as exc:
         status[DOCUMENT_TAG_ENRICHMENT.job_type] = {
             "job_type": DOCUMENT_TAG_ENRICHMENT.job_type,
+            "worker_alive": False,
+            "error": str(exc),
+        }
+    try:
+        import document_enhancement_jobs
+
+        enhancement = document_enhancement_jobs.get_worker_status()
+        status[str(enhancement.get("job_type"))] = enhancement
+    except Exception as exc:
+        status[DOCUMENT_ENHANCEMENT.job_type] = {
+            "job_type": DOCUMENT_ENHANCEMENT.job_type,
             "worker_alive": False,
             "error": str(exc),
         }

@@ -429,6 +429,8 @@ class DocumentOut(BaseModel):
     updated_at: datetime
     snippet: str | None = None
     linked_contacts: list[dict[str, Any]] = Field(default_factory=list)
+    enhancement_status: str = "complete"
+    enhancement_error: str | None = None
 
 
 class DocumentCollection(BaseModel):
@@ -453,6 +455,7 @@ class DocumentSearchIn(BaseModel):
     tags: list[str] | None = Field(default_factory=list)
     contact_ids: list[str] | None = Field(default=None)
     limit: int | None = 20
+    missing_enhancement: bool = False
 
 
 class ToolRunIn(BaseModel):

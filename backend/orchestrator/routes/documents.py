@@ -90,9 +90,22 @@ def create_documents_router(
         limit: int = Query(200, ge=1, le=200),
         offset: int = Query(0, ge=0),
         contact_ids: list[str] | None = Query(default=None),
+        sort_by: str = Query("document_date"),
+        sort_direction: str = Query("desc"),
+        missing_enhancement: bool = Query(False),
         user: dict = Depends(get_current_user),
     ):
-        docs = documents.list_documents(limit=limit, offset=offset, contact_ids=contact_ids)
+        try:
+            docs = documents.list_documents(
+                limit=limit,
+                offset=offset,
+                contact_ids=contact_ids,
+                sort_by=sort_by,
+                sort_direction=sort_direction,
+                missing_enhancement=missing_enhancement,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         return DocumentCollection(documents=docs)
 
     @router.get("/documents/{document_id}", response_model=DocumentDetailOut)
@@ -129,6 +142,22 @@ def create_documents_router(
             raise HTTPException(status_code=404, detail="Document not found")
         return DocumentDetailOut(**document)
 
+    @router.post("/documents/{document_id}/enhance", response_model=DocumentDetailOut)
+    def retry_document_enhancement(document_id: str, user: dict = Depends(get_current_user)):
+        existing = documents.get_document(document_id)
+        if not existing:
+            raise HTTPException(status_code=404, detail="Document not found")
+        user_email = str(user.get("email") or user.get("user_email") or "").strip() or None
+        documents._enqueue_document_enhancement(
+            document_id,
+            user_email=user_email,
+            source="web_retry",
+        )
+        refreshed = documents.get_document(document_id)
+        if not refreshed:
+            raise HTTPException(status_code=404, detail="Document not found")
+        return DocumentDetailOut(**refreshed)
+
     @router.post("/documents/search", response_model=DocumentCollection)
     @router.post("/mobile/documents/search", response_model=DocumentCollection)
     def search_documents_endpoint(payload: DocumentSearchIn, user: dict = Depends(get_current_user)):
@@ -138,6 +167,7 @@ def create_documents_router(
             tags=payload.tags,
             contact_ids=payload.contact_ids,
             limit=limit,
+            missing_enhancement=payload.missing_enhancement,
         )
         return DocumentCollection(documents=docs)
 

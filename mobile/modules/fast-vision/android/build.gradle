@@ -17,10 +17,27 @@ android {
   }
 }
 
+// LiteRT 2.2.0 publishes Kotlin metadata 2.3.0 while Expo SDK 55 currently
+// compiles app modules with Kotlin 2.1.x. Fast Vision only consumes LiteRT's
+// Java-compatible Interpreter API, so skip metadata validation for this module
+// rather than changing the app-wide Kotlin toolchain.
+tasks.withType(org.jetbrains.kotlin.gradle.tasks.KotlinCompile).configureEach {
+  kotlinOptions {
+    freeCompilerArgs += ['-Xskip-metadata-version-check']
+  }
+}
+
 dependencies {
   implementation 'com.google.android.gms:play-services-base:18.10.0'
   implementation 'com.google.android.gms:play-services-mlkit-image-labeling:16.0.8'
   implementation 'com.google.android.gms:play-services-mlkit-text-recognition:19.0.1'
-  implementation 'com.google.mediapipe:tasks-vision:1.0.0'
+  // The Mentra SDK already provides the full protobuf runtime. MediaPipe's
+  // protobuf-javalite transitively ships the same com.google.protobuf classes,
+  // which makes the app fail duplicate-class checks. The full runtime exposes
+  // the APIs used by MediaPipe, so keep one protobuf implementation at app
+  // level.
+  implementation('com.google.mediapipe:tasks-vision:1.0.0') {
+    exclude group: 'com.google.protobuf', module: 'protobuf-javalite'
+  }
   implementation 'com.google.ai.edge.litert:litert:2.2.0'
 }

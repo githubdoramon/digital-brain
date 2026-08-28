@@ -7,6 +7,7 @@ import shutil
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
+from enum import Enum
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
@@ -34,6 +35,13 @@ logger = get_runtime_logger(__name__)
 
 class DocumentProcessingError(RuntimeError):
     """Raised when an uploaded document cannot be processed."""
+
+
+class DocumentEnhancementStatus(str, Enum):
+    PENDING = "pending"
+    PROCESSING = "processing"
+    COMPLETE = "complete"
+    FAILED = "failed"
 
 
 DOCUMENT_STORAGE_DIR = Path(
@@ -157,81 +165,43 @@ def ingest_document(
 
     document_id = f"doc:{uuid4().hex}"
     stored = _store_upload(upload, document_id)
-
-    extraction = _extract_and_normalize_document(stored.path, stored.mime_type)
-    content_text = extraction["normalized_content"]
-    if not content_text:
-        fallback = filter(None, [description, provided_title, stored.file_name, document_id])
-        content_text = " ".join(fallback)
-
     base_raw_metadata = {
         "original_filename": upload.filename,
         "provided_mime_type": upload.content_type,
         "stored_mime_type": stored.mime_type,
         "file_size": stored.size,
+        "title_provided": bool(provided_title),
+        "description_provided": bool((description or "").strip()),
     }
-    if extraction.get("raw_extracted_text"):
-        base_raw_metadata["raw_extracted_text"] = extraction["raw_extracted_text"]
-    if extraction.get("parser_used"):
-        base_raw_metadata["parser_used"] = extraction["parser_used"]
-    if extraction.get("parser_warnings"):
-        base_raw_metadata["parser_warnings"] = extraction["parser_warnings"]
-    if extraction.get("normalized_sections"):
-        base_raw_metadata["normalized_sections"] = extraction["normalized_sections"]
-    if extraction.get("normalization_metadata"):
-        base_raw_metadata["normalization_metadata"] = extraction["normalization_metadata"]
-    content_text, base_raw_metadata = prepare_document_content_for_storage(
-        content_text,
-        document_id=document_id,
-        raw_metadata=base_raw_metadata,
-    )
+    placeholder_title = provided_title or _derive_title_from_filename(stored.file_name) or document_id
+    try:
+        row = _create_document_placeholder(
+            document_id=document_id,
+            title=placeholder_title,
+            tags=_normalize_strings(tags if tags is not None else []),
+            description=(description or "").strip() or None,
+            contact_ids=contact_ids,
+            stored=stored,
+            document_date=document_date,
+            raw_metadata=base_raw_metadata,
+        )
+    except Exception:
+        _remove_stored_upload(stored.path)
+        raise
 
-    tags_input = tags if tags is not None else []
-
-    prepared = _build_document_fields(
-        document_id=document_id,
-        content_text=content_text,
-        tags=tags_input,
-        provided_title=provided_title,
-        provided_description=(description or "").strip(),
-        document_date=document_date,
-        file_name=stored.file_name,
-        raw_metadata=base_raw_metadata,
-    )
-
-    merged_contact_ids = _merge_document_contact_ids(
-        contact_ids,
-        _infer_document_contact_ids(
-            user_email=user_email,
-            title=prepared.title,
-            description=prepared.description,
-            file_name=stored.file_name,
-            content=content_text,
-        ),
-    )
-
-    row = _upsert_document(
-        document_id=document_id,
-        title=prepared.title,
-        tags=prepared.tags,
-        contact_ids=merged_contact_ids,
-        description=prepared.description,
-        stored=stored,
-        content=content_text,
-        embedding=prepared.embedding,
-        chunk_embeddings=prepared.chunk_embeddings,
-        document_date=prepared.document_date,
-        raw_metadata=prepared.raw_metadata,
-        replace_contact_links=True,
-    )
-    _enqueue_document_tag_enrichment(document_id)
-    return _row_to_document(row, include_metadata=True, include_content=True)
+    _enqueue_document_enhancement(document_id, user_email=user_email)
+    refreshed = get_document(document_id)
+    return refreshed or _row_to_document(row, include_metadata=True, include_content=True)
 
 
 def list_documents(
     limit: int = 200,
     offset: int = 0,
     contact_ids: Sequence[str] | None = None,
+    *,
+    sort_by: str = "document_date",
+    sort_direction: str = "desc",
+    missing_enhancement: bool = False,
 ) -> list[dict[str, Any]]:
     limit = max(1, min(limit, 200))
     offset = max(0, offset)
@@ -244,7 +214,19 @@ def list_documents(
                 "EXISTS (SELECT 1 FROM document_contacts dc WHERE dc.document_id = documents.document_id AND dc.contact_id = ANY(%s))"
             )
             params.append(normalized_contact_ids)
+        if missing_enhancement:
+            filters.append("enhancement_status <> %s")
+            params.append(DocumentEnhancementStatus.COMPLETE.value)
         where_clause = f"WHERE {' AND '.join(filters)}" if filters else ""
+        sort_column = {"document_date": "document_date", "created_at": "created_at"}.get(
+            str(sort_by or "").strip().lower()
+        )
+        direction = {"asc": "ASC", "desc": "DESC"}.get(
+            str(sort_direction or "").strip().lower()
+        )
+        if not sort_column or not direction:
+            raise ValueError("sort_by must be document_date or created_at and sort_direction must be asc or desc")
+        null_order = "CASE WHEN document_date IS NULL THEN 1 ELSE 0 END, " if sort_column == "document_date" else ""
         cur.execute(
             f"""
             SELECT
@@ -258,10 +240,12 @@ def list_documents(
                 document_date,
                 created_at,
                 updated_at,
-                content
+                content,
+                enhancement_status,
+                enhancement_error
             FROM documents
             {where_clause}
-            ORDER BY created_at DESC
+            ORDER BY {null_order}{sort_column} {direction}, created_at DESC
             LIMIT %s OFFSET %s
             """,
             (*params, limit, offset),
@@ -289,7 +273,9 @@ def get_document(document_id: str) -> dict[str, Any] | None:
                 created_at,
                 updated_at,
                 content,
-                raw_metadata
+                raw_metadata,
+                enhancement_status,
+                enhancement_error
             FROM documents
             WHERE document_id = %s
             """,
@@ -440,6 +426,7 @@ def search_documents(
     tags: Sequence[str] | None = None,
     contact_ids: Sequence[str] | None = None,
     limit: int = 20,
+    missing_enhancement: bool = False,
 ) -> list[dict[str, Any]]:
     search_query = normalize_search_text(query)
     normalized_tags = normalize_search_list(tags)
@@ -483,6 +470,12 @@ def search_documents(
     ][: max(1, limit)]
 
     rows = _fetch_documents(sorted_ids)
+    if missing_enhancement:
+        rows = [
+            row
+            for row in rows
+            if row.get("enhancement_status") != DocumentEnhancementStatus.COMPLETE.value
+        ]
     order = {doc_id: idx for idx, doc_id in enumerate(sorted_ids)}
     rows.sort(key=lambda r: order.get(r["document_id"], len(sorted_ids)))
     return [_row_to_document(row) for row in rows]
@@ -712,6 +705,54 @@ def _store_upload(upload: UploadFile, document_id: str) -> StoredFileInfo:
         mime_type=mime_type,
         size=size,
     )
+
+
+def _remove_stored_upload(path: Path) -> None:
+    try:
+        if path.exists():
+            path.unlink()
+    except OSError as exc:
+        logger.warning("[documents] Failed to clean up upload %s: %s", path, exc)
+
+
+def _create_document_placeholder(
+    *,
+    document_id: str,
+    title: str,
+    tags: Sequence[str],
+    description: str | None,
+    contact_ids: Sequence[str] | None,
+    stored: StoredFileInfo,
+    document_date: datetime | None,
+    raw_metadata: dict[str, Any],
+) -> dict[str, Any]:
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO documents (
+                document_id, title, tags, description, file_path, file_name,
+                file_mime, file_size, document_date, raw_metadata,
+                enhancement_status, created_at, updated_at
+            )
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,NOW(),NOW())
+            RETURNING document_id, title, tags, description, file_name, file_mime,
+                file_size, document_date, created_at, updated_at, content,
+                raw_metadata, enhancement_status, enhancement_error
+            """,
+            (
+                document_id, title, list(tags), description, str(stored.path),
+                stored.file_name, stored.mime_type, stored.size, document_date,
+                json.dumps(raw_metadata), DocumentEnhancementStatus.PENDING.value,
+            ),
+        )
+        row = cur.fetchone()
+        _set_document_contacts(cur, document_id=document_id, contact_ids=contact_ids)
+        if row:
+            _attach_linked_contacts(cur, [row])
+        conn.commit()
+    if not row:
+        raise DocumentProcessingError("Failed to create document record")
+    return row
 
 
 def _extract_text(path: Path, mime_type: str | None) -> str:
@@ -991,6 +1032,129 @@ def _enqueue_document_tag_enrichment(document_id: str) -> None:
             document_id,
             exc,
         )
+
+
+def _set_enhancement_status(
+    document_id: str,
+    status: DocumentEnhancementStatus,
+    *,
+    error: str | None = None,
+) -> None:
+    assignments = ["enhancement_status = %s", "enhancement_error = %s"]
+    params: list[Any] = [status.value, error]
+    assignments.append("updated_at = NOW()")
+    params.append(document_id)
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            f"UPDATE documents SET {', '.join(assignments)} WHERE document_id = %s",
+            params,
+        )
+        conn.commit()
+
+
+def _enqueue_document_enhancement(
+    document_id: str,
+    *,
+    user_email: str | None = None,
+    source: str = "document_upload",
+) -> dict[str, Any] | None:
+    try:
+        import document_enhancement_jobs
+
+        _set_enhancement_status(document_id, DocumentEnhancementStatus.PENDING)
+        return document_enhancement_jobs.enqueue_document_enhancement(
+            document_id,
+            user_email=user_email,
+            source=source,
+        )
+    except Exception as exc:
+        logger.exception("[documents] Failed to queue enhancement for %s", document_id)
+        _set_enhancement_status(
+            document_id,
+            DocumentEnhancementStatus.FAILED,
+            error=str(exc),
+        )
+        return None
+
+
+def enhance_document(document_id: str, *, user_email: str | None = None) -> dict[str, Any]:
+    """Run extraction, metadata generation, embeddings, and tag enrichment."""
+    row = _load_document_row(document_id)
+    if not row:
+        raise DocumentProcessingError("Document not found")
+    file_path = row.get("file_path")
+    if not file_path or not Path(file_path).exists():
+        raise DocumentProcessingError("Stored file reference is missing for the document")
+
+    path = Path(file_path)
+    stored = StoredFileInfo(
+        document_id=document_id,
+        path=path,
+        file_name=row.get("file_name") or path.name,
+        mime_type=row.get("file_mime"),
+        size=int(row.get("file_size") or path.stat().st_size),
+    )
+    raw_metadata = row.get("raw_metadata")
+    if isinstance(raw_metadata, str):
+        try:
+            raw_metadata = json.loads(raw_metadata)
+        except json.JSONDecodeError:
+            raw_metadata = {"raw": raw_metadata}
+    metadata = dict(raw_metadata) if isinstance(raw_metadata, dict) else {}
+
+    extraction = _extract_and_normalize_document(path, stored.mime_type)
+    content_text = extraction["normalized_content"] or " ".join(
+        filter(None, [row.get("description"), row.get("title"), stored.file_name, document_id])
+    )
+    for key in (
+        "raw_extracted_text",
+        "parser_used",
+        "parser_warnings",
+        "normalized_sections",
+        "normalization_metadata",
+    ):
+        if extraction.get(key):
+            metadata[key] = extraction[key]
+    content_text, metadata = prepare_document_content_for_storage(
+        content_text,
+        document_id=document_id,
+        raw_metadata=metadata,
+    )
+
+    prepared = _build_document_fields(
+        document_id=document_id,
+        content_text=content_text,
+        tags=row.get("tags") or [],
+        provided_title=row.get("title") if metadata.get("title_provided") else "",
+        provided_description=row.get("description") if metadata.get("description_provided") else "",
+        document_date=row.get("document_date"),
+        file_name=stored.file_name,
+        raw_metadata=metadata,
+    )
+    inferred_contacts = _infer_document_contact_ids(
+        user_email=user_email,
+        title=prepared.title,
+        description=prepared.description,
+        file_name=stored.file_name,
+        content=content_text,
+    )
+    existing_contacts = [item.get("contact_id") for item in row.get("linked_contacts") or []]
+    _upsert_document(
+        document_id=document_id,
+        title=prepared.title,
+        tags=prepared.tags,
+        contact_ids=_merge_document_contact_ids(existing_contacts, inferred_contacts),
+        description=prepared.description,
+        stored=stored,
+        content=content_text,
+        embedding=prepared.embedding,
+        chunk_embeddings=prepared.chunk_embeddings,
+        document_date=prepared.document_date,
+        raw_metadata=prepared.raw_metadata,
+        replace_contact_links=True,
+    )
+    generate_and_persist_document_tags(document_id)
+    return get_document(document_id) or _row_to_document(row, include_metadata=True, include_content=True)
 
 
 def generate_and_persist_document_tags(document_id: str) -> dict[str, Any]:
@@ -1311,7 +1475,9 @@ def _upsert_document(
                 created_at,
                 updated_at,
                 content,
-                raw_metadata
+                raw_metadata,
+                enhancement_status,
+                enhancement_error
             """,
             (
                 document_id,
@@ -1639,7 +1805,10 @@ def _load_document_row(document_id: str) -> dict[str, Any] | None:
             """,
             (document_id,),
         )
-        return cur.fetchone()
+        row = cur.fetchone()
+        if row:
+            _attach_linked_contacts(cur, [row])
+        return row
 
 
 def _fetch_documents(document_ids: Sequence[str]) -> list[dict[str, Any]]:
@@ -1659,7 +1828,9 @@ def _fetch_documents(document_ids: Sequence[str]) -> list[dict[str, Any]]:
                 document_date,
                 created_at,
                 updated_at,
-                content
+                content,
+                enhancement_status,
+                enhancement_error
             FROM documents
             WHERE document_id = ANY(%s)
             """,
@@ -1691,6 +1862,8 @@ def _row_to_document(
         "updated_at": row.get("updated_at"),
         "snippet": _make_snippet(snippet_source),
         "linked_contacts": row.get("linked_contacts") or [],
+        "enhancement_status": row.get("enhancement_status") or DocumentEnhancementStatus.COMPLETE.value,
+        "enhancement_error": row.get("enhancement_error"),
     }
     if include_metadata:
         raw_metadata = row.get("raw_metadata")

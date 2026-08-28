@@ -225,7 +225,7 @@ def upload_asset_stream(
                 f'--{boundary}\r\nContent-Disposition: form-data; '
                 f'name="{_safe_multipart_value(name)}"'
                 f"\r\n\r\n{_safe_multipart_value(value)}\r\n"
-            ).encode("utf-8")
+            ).encode()
         )
     prefix_parts.append(
         (
@@ -233,7 +233,7 @@ def upload_asset_stream(
             f'filename="{_safe_multipart_value(filename)}"\r\n'
             f"Content-Type: "
             f"{_safe_multipart_value(mime_type or 'application/octet-stream')}\r\n\r\n"
-        ).encode("utf-8")
+        ).encode()
     )
     suffix = f"\r\n--{boundary}--\r\n".encode("ascii")
     body = _StreamingMultipartBody(

@@ -18,6 +18,9 @@ type DocumentItem = {
   snippet?: string | null;
   content_preview?: string | null;
   raw_metadata?: Record<string, unknown>;
+  enhancement_status: "pending" | "processing" | "complete" | "failed";
+  enhancement_error?: string | null;
+  enhancement_attempts: number;
 };
 
 type DocumentCollection = {
@@ -86,9 +89,13 @@ export default function DocumentsPage() {
   const [isUploading, setIsUploading] = useState(false);
   const [status, setStatus] = useState<StatusMessage>(DEFAULT_STATUS);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [retryingId, setRetryingId] = useState<string | null>(null);
 
   const [searchQuery, setSearchQuery] = useState("");
   const [searchTags, setSearchTags] = useState("");
+  const [sortBy, setSortBy] = useState<"document_date" | "created_at">("document_date");
+  const [sortDirection, setSortDirection] = useState<"asc" | "desc">("desc");
+  const [missingEnhancement, setMissingEnhancement] = useState(false);
 
   const [uploadTitle, setUploadTitle] = useState("");
   const [uploadTags, setUploadTags] = useState("");
@@ -108,7 +115,11 @@ export default function DocumentsPage() {
     setIsLoading(true);
     setStatus(DEFAULT_STATUS);
     try {
-      const data = await api.get<DocumentCollection>("/documents");
+      const params = new URLSearchParams({ sort_by: sortBy, sort_direction: sortDirection });
+      if (missingEnhancement) {
+        params.set("missing_enhancement", "true");
+      }
+      const data = await api.get<DocumentCollection>(`/documents?${params.toString()}`);
       setDocuments(data.documents ?? []);
     } catch (error) {
       const message = error instanceof Error ? error.message : "Failed to load documents";
@@ -116,7 +127,7 @@ export default function DocumentsPage() {
     } finally {
       setIsLoading(false);
     }
-  }, []);
+  }, [missingEnhancement, sortBy, sortDirection]);
 
   useEffect(() => {
     void loadDocuments();
@@ -151,7 +162,7 @@ export default function DocumentsPage() {
       try {
         const created = await api.post<DocumentItem>("/ingest/document", formData);
         setDocuments((previous) => [created, ...previous.filter((doc) => doc.document_id !== created.document_id)]);
-        setStatus({ kind: "success", message: `Uploaded "${created.title}"` });
+        setStatus({ kind: "success", message: `Uploaded "${created.title}"; enhancement queued` });
         setUploadTitle("");
         setUploadTags("");
         setUploadDescription("");
@@ -185,6 +196,7 @@ export default function DocumentsPage() {
           query: trimmedQuery,
           tags,
           limit: 50,
+          missing_enhancement: missingEnhancement,
         };
         const result = await api.post<DocumentCollection>("/documents/search", payload);
         setDocuments(result.documents ?? []);
@@ -195,7 +207,7 @@ export default function DocumentsPage() {
         setIsSearching(false);
       }
     },
-    [loadDocuments, searchQuery, searchTags]
+    [loadDocuments, missingEnhancement, searchQuery, searchTags]
   );
 
   const resetSearch = useCallback(() => {
@@ -227,6 +239,25 @@ export default function DocumentsPage() {
     },
     []
   );
+
+  const handleRetryEnhancement = useCallback(async (document: DocumentItem) => {
+    setRetryingId(document.document_id);
+    setStatus(DEFAULT_STATUS);
+    try {
+      const updated = await api.post<DocumentItem>(
+        `/documents/${encodeURIComponent(document.document_id)}/enhance`
+      );
+      setDocuments((previous) =>
+        previous.map((item) => (item.document_id === updated.document_id ? updated : item))
+      );
+      setStatus({ kind: "success", message: `Enhancement queued for "${document.title}"` });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Failed to queue enhancement";
+      setStatus({ kind: "error", message });
+    } finally {
+      setRetryingId(null);
+    }
+  }, []);
 
   const beginEditing = useCallback((document: DocumentItem) => {
     setEditingDocument(document);
@@ -498,6 +529,39 @@ export default function DocumentsPage() {
               />
             </label>
 
+            <div style={{ display: "flex", flexWrap: "wrap", gap: "12px", alignItems: "end" }}>
+              <label style={{ display: "grid", gap: "4px" }}>
+                <span style={{ fontWeight: 600 }}>Sort by</span>
+                <select
+                  value={sortBy}
+                  onChange={(event) => setSortBy(event.target.value as "document_date" | "created_at")}
+                  style={{ border: "1px solid #d1d5db", borderRadius: "8px", padding: "8px 12px" }}
+                >
+                  <option value="document_date">Document date</option>
+                  <option value="created_at">Upload date</option>
+                </select>
+              </label>
+              <label style={{ display: "grid", gap: "4px" }}>
+                <span style={{ fontWeight: 600 }}>Order</span>
+                <select
+                  value={sortDirection}
+                  onChange={(event) => setSortDirection(event.target.value as "asc" | "desc")}
+                  style={{ border: "1px solid #d1d5db", borderRadius: "8px", padding: "8px 12px" }}
+                >
+                  <option value="desc">Newest first</option>
+                  <option value="asc">Oldest first</option>
+                </select>
+              </label>
+              <label style={{ display: "flex", gap: "8px", alignItems: "center", paddingBottom: "9px" }}>
+                <input
+                  type="checkbox"
+                  checked={missingEnhancement}
+                  onChange={(event) => setMissingEnhancement(event.target.checked)}
+                />
+                <span style={{ fontWeight: 600 }}>Needs enhancement</span>
+              </label>
+            </div>
+
             <label style={{ display: "grid", gap: "4px" }}>
               <span style={{ fontWeight: 600 }}>Filter by tags</span>
               <input
@@ -566,6 +630,8 @@ export default function DocumentsPage() {
                 onEdit={beginEditing}
                 onDelete={handleDelete}
                 isDeleting={deletingId === document.document_id}
+                onRetryEnhancement={handleRetryEnhancement}
+                isRetrying={retryingId === document.document_id}
               />
             ))
           )}
@@ -740,9 +806,11 @@ type DocumentCardProps = {
   onEdit: (document: DocumentItem) => void;
   onDelete: (document: DocumentItem) => Promise<void>;
   isDeleting: boolean;
+  onRetryEnhancement: (document: DocumentItem) => Promise<void>;
+  isRetrying: boolean;
 };
 
-function DocumentCard({ document, onEdit, onDelete, isDeleting }: DocumentCardProps) {
+function DocumentCard({ document, onEdit, onDelete, isDeleting, onRetryEnhancement, isRetrying }: DocumentCardProps) {
   return (
     <article
       style={{
@@ -767,6 +835,24 @@ function DocumentCard({ document, onEdit, onDelete, isDeleting }: DocumentCardPr
           </span>
         </div>
         <div style={{ display: "flex", gap: "8px" }}>
+          {document.enhancement_status !== "complete" && (
+            <button
+              type="button"
+              onClick={() => void onRetryEnhancement(document)}
+              disabled={isRetrying}
+              style={{
+                background: "#fef3c7",
+                color: "#92400e",
+                border: "1px solid #fcd34d",
+                borderRadius: "8px",
+                padding: "8px 14px",
+                fontWeight: 600,
+                cursor: isRetrying ? "progress" : "pointer",
+              }}
+            >
+              {isRetrying ? "Queueing…" : "Retry enhancement"}
+            </button>
+          )}
           <a
             href={`/api/orchestrator${document.download_url}`}
             style={{
@@ -821,6 +907,28 @@ function DocumentCard({ document, onEdit, onDelete, isDeleting }: DocumentCardPr
         </div>
       </header>
 
+      {document.enhancement_status !== "complete" && (
+        <div
+          role="status"
+          style={{
+            background: document.enhancement_status === "failed" ? "#fee2e2" : "#fef3c7",
+            color: document.enhancement_status === "failed" ? "#991b1b" : "#92400e",
+            borderRadius: "8px",
+            padding: "8px 12px",
+            fontSize: "0.9rem",
+          }}
+        >
+          <strong>
+            {document.enhancement_status === "failed"
+              ? "Enhancement failed"
+              : document.enhancement_status === "processing"
+                ? "Enhancement in progress"
+                : "Enhancement pending"}
+          </strong>
+          {document.enhancement_error && <span> — {document.enhancement_error}</span>}
+        </div>
+      )}
+
       {document.tags.length > 0 && (
         <div style={{ display: "grid", gap: "4px" }}>
           <strong style={{ fontSize: "0.85rem", color: "#1d4ed8" }}>Tags</strong>
@@ -873,4 +981,3 @@ function DocumentCard({ document, onEdit, onDelete, isDeleting }: DocumentCardPr
     </article>
   );
 }
-

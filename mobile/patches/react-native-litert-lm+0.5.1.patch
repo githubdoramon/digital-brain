@@ -1,8 +1,8 @@
 diff --git a/node_modules/react-native-litert-lm/android/build.gradle b/node_modules/react-native-litert-lm/android/build.gradle
-index 58c8f44..ab42304 100644
+index f30b71c..87517d7 100644
 --- a/node_modules/react-native-litert-lm/android/build.gradle
 +++ b/node_modules/react-native-litert-lm/android/build.gradle
-@@ -19,7 +19,8 @@ android {
+@@ -18,7 +18,8 @@ android {
      compileSdk 36
      
      defaultConfig {
@@ -12,8 +12,25 @@ index 58c8f44..ab42304 100644
          consumerProguardFiles 'consumer-rules.pro'
          
          externalNativeBuild {
+@@ -75,6 +76,16 @@ android {
+     }
+ }
+ 
++// litertlm-android 0.14.0 publishes Kotlin metadata 2.3.0 while Expo SDK 55
++// compiles native modules with Kotlin 2.1.x. The React Native bridge only
++// consumes the library API, so skip metadata validation for this module rather
++// than changing the app-wide Kotlin toolchain.
++tasks.withType(org.jetbrains.kotlin.gradle.tasks.KotlinCompile).configureEach {
++    kotlinOptions {
++        freeCompilerArgs += ['-Xskip-metadata-version-check']
++    }
++}
++
+ repositories {
+     google()
+     mavenCentral()
 diff --git a/node_modules/react-native-litert-lm/android/src/main/java/com/margelo/nitro/dev/litert/litertlm/HybridLiteRTLM.kt b/node_modules/react-native-litert-lm/android/src/main/java/com/margelo/nitro/dev/litert/litertlm/HybridLiteRTLM.kt
-index 22f6b2a..dd90019 100644
+index 894bf34..efa6aeb 100644
 --- a/node_modules/react-native-litert-lm/android/src/main/java/com/margelo/nitro/dev/litert/litertlm/HybridLiteRTLM.kt
 +++ b/node_modules/react-native-litert-lm/android/src/main/java/com/margelo/nitro/dev/litert/litertlm/HybridLiteRTLM.kt
 @@ -281,44 +281,17 @@ class HybridLiteRTLM : HybridLiteRTLMSpec() {

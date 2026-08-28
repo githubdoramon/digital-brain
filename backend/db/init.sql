@@ -397,6 +397,8 @@ CREATE TABLE IF NOT EXISTS documents (
   content_embed VECTOR(768),
   content_tsv tsvector,
   raw_metadata JSONB DEFAULT '{}'::JSONB,
+  enhancement_status TEXT NOT NULL DEFAULT 'complete',
+  enhancement_error TEXT,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
@@ -442,6 +444,7 @@ CREATE INDEX IF NOT EXISTS idx_documents_created_at ON documents (created_at DES
 CREATE INDEX IF NOT EXISTS idx_documents_tags ON documents USING GIN (tags);
 CREATE INDEX IF NOT EXISTS idx_documents_content_tsv ON documents USING GIN (content_tsv);
 CREATE INDEX IF NOT EXISTS idx_documents_embed ON documents USING ivfflat (content_embed) WITH (lists = 100);
+CREATE INDEX IF NOT EXISTS idx_documents_enhancement_status ON documents (enhancement_status, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_document_chunks_document_id ON document_chunks (document_id);
 CREATE INDEX IF NOT EXISTS idx_document_chunks_embed ON document_chunks USING ivfflat (chunk_embed) WITH (lists = 100);
 
