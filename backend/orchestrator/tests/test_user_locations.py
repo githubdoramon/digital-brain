@@ -8,6 +8,12 @@ class _FakeCursor:
         self.row = row
         self.params = None
 
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_args):
+        return False
+
     def execute(self, _query, params):
         self.params = params
 
