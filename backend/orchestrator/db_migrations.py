@@ -42,20 +42,26 @@ def run_pending_migrations() -> list[str]:
 
         cur.execute("SELECT pg_advisory_lock(%s)", (_ADVISORY_LOCK_KEY,))
         try:
-            cur.execute("SELECT version, checksum FROM schema_migrations")
+            cur.execute("SELECT version, filename, checksum FROM schema_migrations")
             applied_rows = cur.fetchall()
             applied = {
-                str(row.get("version") or ""): str(row.get("checksum") or "")
+                str(row.get("version") or ""): (
+                    str(row.get("filename") or ""),
+                    str(row.get("checksum") or ""),
+                )
                 for row in applied_rows
             }
 
             for migration in migration_files:
-                existing_checksum = applied.get(migration.version)
+                applied_filename, existing_checksum = applied.get(
+                    migration.version, ("", "")
+                )
                 if existing_checksum:
                     if existing_checksum != migration.checksum:
                         raise RuntimeError(
                             "Applied migration checksum mismatch for "
-                            f"{migration.filename} (version={migration.version})"
+                            f"{migration.filename} (version={migration.version}; "
+                            f"database_filename={applied_filename or 'unknown'})"
                         )
                     continue
 
@@ -103,6 +109,16 @@ def _load_migration_files(directory: Path) -> list[MigrationFile]:
         )
 
     migrations.sort(key=lambda item: (int(item.version), item.filename))
+    versions: dict[str, list[str]] = {}
+    for migration in migrations:
+        versions.setdefault(migration.version, []).append(migration.filename)
+    duplicates = {version: filenames for version, filenames in versions.items() if len(filenames) > 1}
+    if duplicates:
+        details = "; ".join(
+            f"{version}: {', '.join(filenames)}"
+            for version, filenames in sorted(duplicates.items(), key=lambda item: int(item[0]))
+        )
+        raise RuntimeError(f"Duplicate migration version(s): {details}")
     return migrations
 
 

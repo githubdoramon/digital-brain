@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 
+import pytest
+
 import db_migrations
 
 
@@ -45,6 +47,14 @@ def test_load_migration_files_orders_and_filters(tmp_path):
 
     files = db_migrations._load_migration_files(tmp_path)
     assert [item.filename for item in files] == ["0001_first.sql", "0002_second.sql"]
+
+
+def test_load_migration_files_rejects_duplicate_versions(tmp_path):
+    (tmp_path / "0001_first.sql").write_text("SELECT 1;", encoding="utf-8")
+    (tmp_path / "0001_second.sql").write_text("SELECT 2;", encoding="utf-8")
+
+    with pytest.raises(RuntimeError, match="Duplicate migration version"):
+        db_migrations._load_migration_files(tmp_path)
 
 
 def test_run_pending_migrations_applies_new_files(monkeypatch, tmp_path):
