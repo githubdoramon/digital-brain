@@ -5,6 +5,7 @@ import { apiFetch, getAuthRequestContext } from '@/api/client';
 import { getStoredGoogleIdToken, refreshStoredGoogleIdToken } from '@/auth/backgroundToken';
 import { reportLocationDebugEvent } from '@/location/debugState';
 
+import { appendMentraDebugLog } from './debug';
 import {
   disableGlassesHotspot,
   downloadGlassesFile,
@@ -21,6 +22,7 @@ import {
   getCaptureFolderUri,
   getLocalCaptureInfo,
   loadCaptureQueue,
+  normalizeSafDirectoryUri,
   privateCapturePath,
   saveCaptureQueue,
 } from './storage';
@@ -54,6 +56,14 @@ function debugCaptureStage(
 ): void {
   // Keep diagnostics free of media paths, URLs, auth headers, and raw bytes.
   reportLocationDebugEvent(eventName, { message, payload, recordInHistory: true });
+  void appendMentraDebugLog(eventName, { message, payload }).catch(() => undefined);
+}
+
+function safeCaptureErrorMessage(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  // Android SAF exceptions often include the complete content URI. Keep the
+  // status actionable without surfacing provider paths in the UI/diagnostics.
+  return message.replace(/content:\/\/\S+/g, '[selected-folder-access]').slice(0, 240);
 }
 
 export function getCaptureSyncStatus(): CaptureSyncStatus {
@@ -211,37 +221,51 @@ async function downloadToPhone(remote: RemoteCapture): Promise<string> {
   if (remote.sizeBytes != null && downloaded.size !== remote.sizeBytes) {
     throw new Error(`Downloaded media size mismatch (${downloaded.size}/${remote.sizeBytes})`);
   }
-  const folder = await getCaptureFolderUri();
+  const storedFolder = await getCaptureFolderUri();
+  const folder = storedFolder ? normalizeSafDirectoryUri(storedFolder) : null;
   if (folder) {
-    const visibleName = `${remote.captureId.replace(/[^a-zA-Z0-9._-]/g, '_')}-${mediaLeafName(remote.fileName)}`;
-    const existing = (
-      await FileSystem.StorageAccessFramework.readDirectoryAsync(folder).catch(() => [])
-    ).find((uri) => decodeURIComponent(uri).endsWith(`/${visibleName}`));
-    if (existing) {
-      const existingInfo = await getLocalCaptureInfo(existing);
-      if (existingInfo.exists && existingInfo.size === downloaded.size) {
-        await deleteLocalCapture(temporary);
-        return existing;
+    let visibleTarget: string | null = null;
+    try {
+      const visibleName = `${remote.captureId.replace(/[^a-zA-Z0-9._-]/g, '_')}-${mediaLeafName(remote.fileName)}`;
+      const existing = (
+        await FileSystem.StorageAccessFramework.readDirectoryAsync(folder).catch(() => [])
+      ).find((uri) => decodeURIComponent(uri).endsWith(`/${visibleName}`));
+      if (existing) {
+        const existingInfo = await getLocalCaptureInfo(existing);
+        if (existingInfo.exists && existingInfo.size === downloaded.size) {
+          await deleteLocalCapture(temporary);
+          return existing;
+        }
+        await deleteLocalCapture(existing);
       }
-      await deleteLocalCapture(existing);
+      visibleTarget = await FileSystem.StorageAccessFramework.createFileAsync(
+        folder,
+        // v3 folder-based captures use names such as IMG_xxx/base.jpg. SAF creates a
+        // single child and rejects a slash, so retain the extension while making the
+        // visible name deterministic and collision-resistant.
+        visibleName,
+        remote.mimeType,
+      );
+      // copyAsync keeps the transfer native and bounded for videos. It also avoids a partially
+      // transferred JS string if the media is larger than the app's heap budget.
+      await FileSystem.copyAsync({ from: temporary, to: visibleTarget });
+      const visible = await getLocalCaptureInfo(visibleTarget);
+      if (!visible.exists || visible.size !== downloaded.size) {
+        throw new Error('Visible capture copy failed validation');
+      }
+      await deleteLocalCapture(temporary);
+      return visibleTarget;
+    } catch {
+      // A persisted SAF grant can expire or Android can reject a nested tree URI
+      // even though the folder was previously selected. Never let the optional
+      // Files-app copy block acknowledgement and Immich upload: retain the media
+      // in the app-private queue and continue the durable sync flow.
+      if (visibleTarget) await deleteLocalCapture(visibleTarget).catch(() => undefined);
+      debugCaptureStage(
+        'glasses_capture_visible_copy_unavailable',
+        'Documents-folder copy unavailable; using app-private queue.',
+      );
     }
-    const target = await FileSystem.StorageAccessFramework.createFileAsync(
-      folder,
-      // v3 folder-based captures use names such as IMG_xxx/base.jpg. SAF creates a
-      // single child and rejects a slash, so retain the extension while making the
-      // visible name deterministic and collision-resistant.
-      visibleName,
-      remote.mimeType,
-    );
-    // copyAsync keeps the transfer native and bounded for videos. It also avoids a partially
-    // transferred JS string if the media is larger than the app's heap budget.
-    await FileSystem.copyAsync({ from: temporary, to: target });
-    const visible = await getLocalCaptureInfo(target);
-    if (!visible.exists || visible.size !== downloaded.size) {
-      throw new Error('Visible capture copy failed validation');
-    }
-    await deleteLocalCapture(temporary);
-    return target;
   }
   const target = privateCapturePath(remote.fileName);
   await FileSystem.deleteAsync(target, { idempotent: true });
@@ -354,23 +378,64 @@ async function uploadCapture(entry: CaptureQueueEntry): Promise<string> {
 }
 
 async function runSync(): Promise<void> {
+  debugCaptureStage('glasses_capture_sync_starting', 'Starting glasses capture reconciliation.');
   if (Platform.OS !== 'android')
     throw new Error('Glasses capture sync is Android-only in this release');
-  await ensureMentraConnection();
-  const connection = await connectGalleryServer();
-  publish({ networkPath: connection.path });
-  debugCaptureStage('glasses_capture_network_ready', 'Glasses camera server transport is ready.', {
-    network_path: connection.path,
-  });
-  const discovered = await discoverAllCaptures(connection.baseUrl);
-  debugCaptureStage(
-    'glasses_capture_discovered',
-    'Glasses gallery reconciliation discovered captures.',
-    {
-      count: discovered.length,
-      network_path: connection.path,
-    },
-  );
+  // A capture signal can arrive while the glasses camera is still busy. Reconnect/readiness is
+  // safe here, but replaying gallery/photo/video settings during that camera transaction can
+  // race the firmware and make a physical-button capture appear to do nothing. Defaults are
+  // applied on pairing, app startup, and the explicit settings action instead.
+  let connection: Awaited<ReturnType<typeof connectGalleryServer>> | null = null;
+  try {
+    const connected = await ensureMentraConnection({ applyCaptureDefaults: false });
+    if (!connected) {
+      throw new Error(
+        'No Mentra Live is paired. Open Settings → Glasses capture and pair the glasses.',
+      );
+    }
+    connection = await connectGalleryServer();
+    publish({ networkPath: connection.path });
+    debugCaptureStage(
+      'glasses_capture_network_ready',
+      'Glasses camera server transport is ready.',
+      {
+        network_path: connection.path,
+      },
+    );
+  } catch (error) {
+    // A local file whose glasses acknowledgement already succeeded can still
+    // be uploaded while Bluetooth or the glasses hotspot is temporarily down.
+    // Keep reconciliation useful for that durable stage instead of blocking on
+    // a fresh gallery connection.
+    publish({ networkPath: 'unavailable' });
+    debugCaptureStage(
+      'glasses_capture_connection_unavailable',
+      'Glasses connection unavailable; draining previously acknowledged local captures only.',
+      { error: safeCaptureErrorMessage(error) },
+    );
+  }
+  let discovered: RemoteCapture[] = [];
+  if (connection) {
+    try {
+      discovered = await discoverAllCaptures(connection.baseUrl);
+    } catch (error) {
+      debugCaptureStage(
+        'glasses_capture_discovery_unavailable',
+        'Glasses gallery discovery failed; continuing with the durable local queue.',
+        { error: safeCaptureErrorMessage(error) },
+      );
+    }
+  }
+  if (connection) {
+    debugCaptureStage(
+      'glasses_capture_discovered',
+      'Glasses gallery reconciliation discovered captures.',
+      {
+        count: discovered.length,
+        network_path: connection.path,
+      },
+    );
+  }
   let queue = await loadCaptureQueue();
   const now = new Date().toISOString();
   for (const remote of discovered) {
@@ -418,6 +483,8 @@ async function runSync(): Promise<void> {
         );
         continue;
       }
+      if (!entry.localUri && !connection) continue;
+      if (!connection && entry.uploadReady !== true) continue;
       if (!entry.localUri) {
         debugCaptureStage('glasses_capture_transfer_started', 'Downloading capture from glasses.', {
           capture_id: entry.captureId,
@@ -448,18 +515,28 @@ async function runSync(): Promise<void> {
           ),
         );
       }
-      await acknowledgeCapture(connection.baseUrl, entry);
-      debugCaptureStage(
-        'glasses_capture_glasses_acknowledged',
-        'Glasses capture acknowledged after local commit.',
-        { capture_id: entry.captureId, protocol_version: entry.protocolVersion },
-      );
-      entry = { ...entry, state: 'glasses_acked', updatedAt: new Date().toISOString() };
-      await saveCaptureQueue(
-        (await loadCaptureQueue()).map((item) =>
-          item.captureId === entry!.captureId && item.fileName === entry!.fileName ? entry! : item,
-        ),
-      );
+      if (!entry.uploadReady) {
+        if (!connection) continue;
+        await acknowledgeCapture(connection.baseUrl, entry);
+        debugCaptureStage(
+          'glasses_capture_glasses_acknowledged',
+          'Glasses capture acknowledged after local commit.',
+          { capture_id: entry.captureId, protocol_version: entry.protocolVersion },
+        );
+        entry = {
+          ...entry,
+          state: 'glasses_acked',
+          uploadReady: true,
+          updatedAt: new Date().toISOString(),
+        };
+        await saveCaptureQueue(
+          (await loadCaptureQueue()).map((item) =>
+            item.captureId === entry!.captureId && item.fileName === entry!.fileName
+              ? entry!
+              : item,
+          ),
+        );
+      }
       entry = { ...entry, state: 'uploading', updatedAt: new Date().toISOString() };
       await saveCaptureQueue(
         (await loadCaptureQueue()).map((item) =>
@@ -502,7 +579,7 @@ async function runSync(): Promise<void> {
         ),
       );
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
+      const message = safeCaptureErrorMessage(error);
       if (entry.state === 'uploaded') {
         await saveCaptureQueue(
           (await loadCaptureQueue()).map((item) =>
@@ -544,23 +621,41 @@ async function runSync(): Promise<void> {
         error: message,
         payload: { stage: 'capture_sync', capture_id: entry.captureId, attempts },
       });
+      // Per-entry failures do not reject the overall reconciliation promise, so
+      // surface the actionable backend/transfer error in the settings screen too.
+      publish({ lastError: message.slice(0, 240) });
     }
   }
   const remaining = await loadCaptureQueue();
+  const latestError =
+    [...remaining].reverse().find((item) => item.state === 'failed' && item.lastError)?.lastError ??
+    null;
   publish({
     pendingCount: remaining.filter((item) => !['uploaded', 'missing'].includes(item.state)).length,
     failedCount: remaining.filter((item) => item.state === 'failed').length,
     uploadedCount: remaining.filter((item) => item.state === 'uploaded').length,
+    lastError: latestError ? safeCaptureErrorMessage(latestError) : null,
   });
 }
 
 export function reconcileGlassesCaptures(): Promise<void> {
   if (activeSync) return activeSync;
+  debugCaptureStage('glasses_capture_sync_requested', 'Capture reconciliation requested.');
   publish({ running: true, lastError: null });
   activeSync = runSync()
-    .then(() => publish({ running: false, lastRunAt: new Date().toISOString() }))
+    .then(() => {
+      debugCaptureStage('glasses_capture_sync_finished', 'Capture reconciliation finished.');
+      publish({ running: false, lastRunAt: new Date().toISOString() });
+    })
     .catch((error) => {
-      const message = error instanceof Error ? error.message : String(error);
+      const message = safeCaptureErrorMessage(error);
+      debugCaptureStage(
+        'glasses_capture_sync_failed',
+        'Capture reconciliation failed before completing the queue drain.',
+        {
+          error: message.slice(0, 240),
+        },
+      );
       reportLocationDebugEvent('glasses_capture_sync_failed', {
         message: 'Capture reconciliation failed before completing the queue drain.',
         error: message.slice(0, 240),

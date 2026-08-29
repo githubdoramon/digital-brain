@@ -19,8 +19,12 @@ Each capture is processed sequentially:
 
 1. Discover it from the paginated v3 manifest (`/api/v3/manifest`), falling back
    to `/api/gallery` for older camera-server builds.
-2. Download original bytes to `Digital Brain/Capture Queue` (or the user-selected
-   Android Documents folder).
+2. Download original bytes to the app-private `Digital Brain/Capture Queue`
+   directory, or directly to the user-selected Android Documents folder. The
+   picker should be used to grant the actual `Digital Brain/Capture Queue`
+   folder (not a parent folder whose child URI the app then reconstructs).
+   Android can revoke or reject a persisted grant; in that case the visible
+   copy is best-effort and the app-private queue remains authoritative.
 3. Validate that the committed local file is non-empty and matches the remote
    size when supplied.
 4. Acknowledge it with `/api/v3/ack` when protocol v3 is available, otherwise
@@ -39,7 +43,9 @@ timestamp, selected sample timestamp, source, and offset provenance. Missing
 location never blocks media upload.
 
 The local queue persists every pending/failed record and its retry/backoff
-state; it is not silently size-trimmed while media is awaiting upload.
+state; it is not silently size-trimmed while media is awaiting upload. Per-entry
+upload failures are surfaced in the Glasses capture status card, rather than
+being hidden behind a successful reconciliation pass.
 Transfers stream directly to disk (including long videos), and the mobile
 proxy forwards the request body as a stream. FastAPI keeps the incoming
 `UploadFile` in a spooled temporary file; the backend hashes it in 1 MiB
@@ -49,14 +55,31 @@ deleting an unuploaded file marks it `missing` to prevent an infinite retry
 loop. Captures are never discarded automatically before the backend confirms
 the Immich asset.
 
+Android's Storage Access Framework returns document/tree URIs whose exact shape
+varies by provider. The app repairs malformed legacy values (including the
+duplicated `Documents/Digital Brain` paths produced by older builds), but keeps
+the picker-selected folder as the permission boundary. A SAF copy failure never
+blocks the durable queue, glasses acknowledgement, or backend upload; the file
+stays in app-private storage until the backend confirms it.
+
 ## Setup and test protocol
 
 Install `@mentra/bluetooth-sdk` and build a native Android development or
-production variant; Expo Go cannot provide the native Bluetooth module. Pair a
-Mentra Live, enable camera/gallery mode, sign in, and choose an Android
-Documents folder from Settings → Glasses capture. Configure the backend with
-the existing Immich variables (`IMMICH_SERVER_URL`, `IMMICH_API_KEY`) and run
-the database migrations.
+production variant; Expo Go cannot provide the native Bluetooth module. On the
+first search, Android must grant the app **Nearby devices** (Bluetooth scan and
+connect) permission; the app requests it when **Search for glasses** is tapped.
+Open Settings → Glasses capture, tap **Search for glasses**, select the
+discovered Mentra Live, and wait for the connection to finish before applying
+capture settings. Android's system Bluetooth pairing screen is not a substitute
+for the SDK scan: the SDK also stores an app-local default device and BLE
+address. No separate "pairing mode" is required when the glasses are awake and
+advertising.
+The app only attempts automatic reconnection after a default device has been
+explicitly saved; an unpaired install remains idle instead of calling
+`connectDefault()`. If you want the queue visible in Files, create or select
+`Documents/Digital Brain/Capture Queue` itself in the folder picker so Android
+grants that exact tree. Configure the backend with the existing Immich variables
+(`IMMICH_SERVER_URL`, `IMMICH_API_KEY`) and run the database migrations.
 
 On a physical device, test: one short press online; one short press while the
 phone has no internet; a long press followed by stop; a 15-minute-cap recording

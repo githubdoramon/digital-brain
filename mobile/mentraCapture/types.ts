@@ -31,6 +31,8 @@ export type CaptureQueueEntry = RemoteCapture & {
   discoveredAt: string;
   updatedAt: string;
   immichAssetId: string | null;
+  /** The glasses was already acknowledged, so this file can upload without BLE. */
+  uploadReady?: boolean;
   location?: CaptureLocation | null;
 };
 

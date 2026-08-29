@@ -12,7 +12,7 @@ import immich_client
 import scheduled_jobs
 from auth import get_current_user, require_service_api_key
 from notifications.channels.push import send_push_notification
-from observability.log_stream import LOG_LEVELS, get_log_buffer
+from observability.log_stream import LOG_BUFFER_MAX_ENTRIES, LOG_LEVELS, get_log_buffer
 from schemas import (
     PushNotificationTestIn,
     PushNotificationTestOut,
@@ -78,8 +78,8 @@ def create_system_router() -> APIRouter:
     @router.get("/system/logs")
     def list_system_logs(
         level: str | None = Query(default=None),
-        since_minutes: int | None = Query(default=15, ge=1, le=1440),
-        limit: int = Query(default=200, ge=1, le=1000),
+        since_minutes: int | None = Query(default=10 * 60, ge=1, le=1440),
+        limit: int = Query(default=LOG_BUFFER_MAX_ENTRIES, ge=1, le=LOG_BUFFER_MAX_ENTRIES),
         _: dict = Depends(get_current_user),
     ):
         if level:

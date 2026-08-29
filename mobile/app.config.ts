@@ -1,5 +1,5 @@
 import type { ConfigContext, ExpoConfig } from '@expo/config';
-import { withAppBuildGradle } from 'expo/config-plugins';
+import { withAndroidManifest, withAppBuildGradle } from 'expo/config-plugins';
 import { existsSync } from 'fs';
 import { isAbsolute, join, resolve } from 'path';
 
@@ -92,6 +92,24 @@ function withSystemDebugKeystore(config: ExpoConfig) {
   });
 }
 
+/**
+ * Mentra Live exposes its gallery over a short-lived local HTTP server while the
+ * phone is connected to the glasses hotspot. `expo prebuild --clean` regenerates
+ * AndroidManifest.xml, so keep this transport requirement in dynamic config.
+ */
+function withGlassesCaptureCleartext(config: ExpoConfig): ExpoConfig {
+  return withAndroidManifest(config, (mod) => {
+    const application = mod.modResults.manifest.application?.[0];
+    if (application) {
+      application.$ = {
+        ...application.$,
+        'android:usesCleartextTraffic': 'true',
+      };
+    }
+    return mod;
+  });
+}
+
 export default ({ config }: ConfigContext): ExpoConfig => {
   const appName = getAppName();
   const bundleId = getUniqueIdentifier();
@@ -166,7 +184,8 @@ export default ({ config }: ConfigContext): ExpoConfig => {
     iosConfig: {
       microphoneUsageDescription:
         'Digital Brain uses your microphone so you can dictate chat messages with on-device Whisper transcription.',
-      notificationUsageDescription: 'Digital Brain can show recording controls while capturing audio.',
+      notificationUsageDescription:
+        'Digital Brain can show recording controls while capturing audio.',
     },
   });
   const pluginsWithLiteRt = withPlugin(pluginsWithAudioStudio, 'react-native-litert-lm');
@@ -176,8 +195,10 @@ export default ({ config }: ConfigContext): ExpoConfig => {
     },
   });
 
-  return withSystemDebugKeystore({
-    ...merged,
-    plugins: withPlugin(pluginsWithBuildProperties, 'expo-background-task'),
-  });
+  return withGlassesCaptureCleartext(
+    withSystemDebugKeystore({
+      ...merged,
+      plugins: withPlugin(pluginsWithBuildProperties, 'expo-background-task'),
+    }),
+  );
 };

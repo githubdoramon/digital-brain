@@ -47,6 +47,10 @@ const LOG_SERVICE_COLORS: Record<LogService, string> = {
   orchestrator: "#a5b4fc",
   robot_gateway: "#fcd34d",
 };
+const LOG_HISTORY_MINUTES = 10 * 60;
+const LOG_MAX_ENTRIES_PER_SERVICE = 3000;
+const LOG_MAX_ENTRIES_TOTAL = LOG_MAX_ENTRIES_PER_SERVICE * LOG_SERVICES.length;
+const LOG_SEEN_KEY_LIMIT = LOG_MAX_ENTRIES_TOTAL * 5;
 const LOG_CONTENT_MAX_WIDTH = 1024;
 const HIDDEN_INDEX_STYLE = {
   position: "absolute",
@@ -594,7 +598,9 @@ export default function SystemStatusPage() {
   useEffect(() => {
     let mounted = true;
     Promise.allSettled(
-      LOG_SERVICES.map(({ id }) => getSystemLogs("all", 60, 1000, id))
+      LOG_SERVICES.map(({ id }) =>
+        getSystemLogs("all", LOG_HISTORY_MINUTES, LOG_MAX_ENTRIES_PER_SERVICE, id)
+      )
     ).then((results) => {
       if (!mounted) return;
       const allEntries: LogRow[] = [];
@@ -661,8 +667,11 @@ export default function SystemStatusPage() {
               seenLogKeysRef.current.add(key);
               setLogEntries((current) => {
                 const next = sortLogEntries([...current, toLogRow(entry)]);
-                const trimmed = next.length > 1000 ? next.slice(-1000) : next;
-                if (seenLogKeysRef.current.size > 5000) {
+                const trimmed =
+                  next.length > LOG_MAX_ENTRIES_TOTAL
+                    ? next.slice(-LOG_MAX_ENTRIES_TOTAL)
+                    : next;
+                if (seenLogKeysRef.current.size > LOG_SEEN_KEY_LIMIT) {
                   seenLogKeysRef.current = new Set(trimmed.map((row) => getLogKey(row)));
                 }
                 return trimmed;

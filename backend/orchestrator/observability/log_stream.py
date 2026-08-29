@@ -13,6 +13,7 @@ from typing import Any
 LOG_LEVELS = {"debug", "info", "decision", "warning", "error"}
 DECISION_LEVEL = 25
 INTENTIONAL_DEBUG_LEVEL = 15
+LOG_BUFFER_MAX_ENTRIES = 3000
 ORCHESTRATOR_ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -124,7 +125,7 @@ def extract_message_segments(message: str) -> list[dict[str, Any]] | None:
 
 
 class LogBuffer:
-    def __init__(self, max_entries: int = 1000) -> None:
+    def __init__(self, max_entries: int = LOG_BUFFER_MAX_ENTRIES) -> None:
         self._entries: deque[LogEntry] = deque(maxlen=max_entries)
         self._lock = threading.Lock()
         self._counter = 0

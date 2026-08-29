@@ -31,24 +31,32 @@
       "softwareKeyboardLayoutMode": "resize",
       "predictiveBackGestureEnabled": false,
       "package": "com.appcalipse.digitalbrain",
-        "permissions": [
-          "POST_NOTIFICATIONS",
-          "ACCESS_COARSE_LOCATION",
-          "ACCESS_FINE_LOCATION",
-          "ACCESS_MEDIA_LOCATION",
-          "ACCESS_BACKGROUND_LOCATION",
-          "RECORD_AUDIO",
-          "FOREGROUND_SERVICE",
-          "FOREGROUND_SERVICE_LOCATION"
+      "permissions": [
+        "POST_NOTIFICATIONS",
+        "ACCESS_COARSE_LOCATION",
+        "ACCESS_FINE_LOCATION",
+        "ACCESS_MEDIA_LOCATION",
+        "ACCESS_BACKGROUND_LOCATION",
+        "BLUETOOTH",
+        "BLUETOOTH_ADMIN",
+        "BLUETOOTH_SCAN",
+        "BLUETOOTH_CONNECT",
+        "CHANGE_NETWORK_STATE",
+        "RECORD_AUDIO",
+        "FOREGROUND_SERVICE",
+        "FOREGROUND_SERVICE_LOCATION"
       ]
     },
     "plugins": [
-      ["expo-splash-screen", {
-        "image": "./assets/images/splash-icon.png",
-        "resizeMode": "contain",
-        "backgroundColor": "#fff2e8",
-        "imageWidth": 150
-      }],
+      [
+        "expo-splash-screen",
+        {
+          "image": "./assets/images/splash-icon.png",
+          "resizeMode": "contain",
+          "backgroundColor": "#fff2e8",
+          "imageWidth": 150
+        }
+      ],
       "expo-router",
       "expo-font",
       "expo-notifications",

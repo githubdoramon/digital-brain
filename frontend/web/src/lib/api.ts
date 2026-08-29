@@ -628,8 +628,8 @@ export async function streamSystemLogs(
 
 export async function getSystemLogs(
   level: LogLevel | "all",
-  sinceMinutes = 15,
-  limit = 200,
+  sinceMinutes = 10 * 60,
+  limit = 3000,
   service: LogService = "orchestrator"
 ): Promise<LogEntry[]> {
   const params = new URLSearchParams();

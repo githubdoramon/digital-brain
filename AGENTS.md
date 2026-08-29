@@ -551,4 +551,9 @@ and restore the internet path after sync. Never delete a glasses capture before
 a validated local commit; never delete the phone copy before
 `/mobile/glasses/captures` confirms the Immich asset and `Ramon eyes capture`
 album membership. Keep pending files under `Digital Brain/Capture Queue`.
-See `mobile/GLASSES_CAPTURE_PIPELINE.md`.
+When using an Android Documents folder, ask the user to grant the actual
+`Digital Brain/Capture Queue` tree rather than synthesizing a child URI from a
+parent grant. Repair malformed legacy SAF values that duplicated the queue path,
+but treat visible-folder copies as best-effort: a revoked/rejected grant must
+fall back to app-private storage and never block acknowledgement or upload. See
+`mobile/GLASSES_CAPTURE_PIPELINE.md`.
