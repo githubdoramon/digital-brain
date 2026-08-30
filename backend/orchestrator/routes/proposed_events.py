@@ -17,12 +17,18 @@ class ProposedEventAcceptIn(BaseModel):
     start_at: datetime | None = Field(default=None, alias="startAt")
     end_at: datetime | None = Field(default=None, alias="endAt")
     contact_ids: list[str] | None = Field(default=None, alias="contactIds")
+    place_id: str | None = Field(default=None, alias="placeId")
     place_candidate_id: str | None = Field(default=None, alias="placeCandidateId")
+    media_asset_ids: list[str] | None = Field(default=None, alias="mediaAssetIds")
 
 
 class ProposedEventRunIn(BaseModel):
     target_date: date | None = Field(default=None, alias="targetDate")
     timezone: str | None = None
+
+
+class ProposedEventMediaSelectionIn(BaseModel):
+    media_asset_ids: list[str] = Field(default_factory=list, alias="mediaAssetIds")
 
 
 def _user_email(user: dict[str, Any]) -> str:
@@ -113,13 +119,34 @@ def create_proposed_events_router() -> APIRouter:
                 start_at=payload.start_at,
                 end_at=payload.end_at,
                 contact_ids=payload.contact_ids,
+                place_id=payload.place_id,
                 place_candidate_id=payload.place_candidate_id,
+                media_asset_ids=payload.media_asset_ids,
             )
         except LookupError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return {"ok": True, "proposal": proposal}
+
+    @router.post("/mobile/proposed-events/{proposal_id}/media-selection")
+    def select_mobile_proposed_event_media(
+        proposal_id: str,
+        payload: ProposedEventMediaSelectionIn,
+        user: dict = Depends(get_current_user),
+    ):
+        email = _user_email(user)
+        try:
+            proposed_events_service.get_owned_proposal(email, proposal_id)
+            media_suggestions = proposed_events_service.set_proposal_media_selection(
+                proposal_id,
+                payload.media_asset_ids,
+            )
+        except LookupError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"ok": True, "media_suggestions": media_suggestions}
 
     @router.post("/mobile/proposed-events/{proposal_id}/dismiss")
     def dismiss_mobile_proposed_event(

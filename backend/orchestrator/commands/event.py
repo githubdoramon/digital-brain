@@ -93,6 +93,7 @@ def _event_command_data_from_result(
         "existing_event_id": command_result.get("existing_event_id"),
         "matched_event": deepcopy(command_result.get("matched_event")),
         "candidate_events": deepcopy(command_result.get("candidate_events") or []),
+        "media_suggestions": deepcopy(command_result.get("media_suggestions") or []),
         "media_attachments": [],
     }
 
@@ -286,6 +287,8 @@ def _normalize_event_modifications(
         normalized["types"] = _string_list_from_modification(raw.get("types"))
     if "contact_ids" in raw:
         normalized["contact_ids"] = _string_list_from_modification(raw.get("contact_ids"))
+    if "media_asset_ids" in raw:
+        normalized["media_asset_ids"] = _string_list_from_modification(raw.get("media_asset_ids"))
 
     if "operation" in raw:
         operation_raw = raw.get("operation")
@@ -427,11 +430,29 @@ def confirm_event_command(
     extracted = command_data["extracted"]
     resolution = command_data["resolution"]
     media_attachments = _get_command_media_attachments(command_data)
+    media_suggestions = [
+        item
+        for item in (command_data.get("media_suggestions") or [])
+        if isinstance(item, dict) and str(item.get("asset_id") or "").strip()
+    ]
     command_timezone = event_timezone_from_context(command_data)
     normalized_modifications = _normalize_event_modifications(
         payload.modifications,
         default_tz=command_timezone,
     )
+    available_media_asset_ids = {
+        str(item.get("asset_id") or "").strip() for item in media_suggestions
+    }
+    selected_media_asset_ids = [
+        str(item.get("asset_id") or "").strip() for item in media_suggestions
+    ]
+    if "media_asset_ids" in normalized_modifications:
+        selected_media_asset_ids = normalized_modifications["media_asset_ids"]
+        if not set(selected_media_asset_ids).issubset(available_media_asset_ids):
+            raise HTTPException(
+                status_code=400,
+                detail="One or more selected media items are not event suggestions.",
+            )
     group_confirmations = payload.group_confirmations or {}
     if not group_confirmations:
         raw_group_confirmations = normalized_modifications.get("group_confirmations")
@@ -915,6 +936,23 @@ def confirm_event_command(
                 all_contact_ids[:10],  # Log first 10 to avoid huge log lines
             )
             events_service.ingest_event(event_in)
+
+        for asset_id in selected_media_asset_ids:
+            try:
+                attached_photos.append(
+                    event_photos_service.link_existing_event_asset(
+                        event_id,
+                        asset_id,
+                        source="event_command_suggestion",
+                    )
+                )
+            except Exception as exc:
+                photo_errors.append(f"{asset_id}: {exc}")
+                logger.warning(
+                    "[event_confirm] Failed to link suggested media asset_id=%s: %s",
+                    asset_id,
+                    exc,
+                )
 
         for media_attachment in media_attachments:
             try:

@@ -1,3 +1,4 @@
+from datetime import datetime, timezone
 from unittest.mock import Mock, patch
 
 import immich_client
@@ -54,3 +55,36 @@ def test_ensure_album_includes_immich_error_body():
             assert "invalid asset" in str(exc)
         else:
             raise AssertionError("ensure_album should report the Immich response body")
+
+
+def test_search_assets_by_time_paginates_metadata_results():
+    config = immich_client.ImmichConfig(
+        base_url="https://immich.example",
+        api_key="test-key",
+        face_api_key=None,
+    )
+    first_page = _response({"assets": {"items": [{"id": "asset-1"}], "nextPage": 2}})
+    second_page = _response({"assets": {"items": [{"id": "asset-2"}]}})
+
+    with patch.object(
+        immich_client.requests,
+        "post",
+        side_effect=[first_page, second_page],
+    ) as post:
+        assets = immich_client.search_assets_by_time(
+            taken_after=datetime(2026, 8, 30, 10, 0, tzinfo=timezone.utc),
+            taken_before=datetime(2026, 8, 30, 11, 0, tzinfo=timezone.utc),
+            config=config,
+        )
+
+    assert [asset["id"] for asset in assets] == ["asset-1", "asset-2"]
+    assert post.call_count == 2
+    assert post.call_args_list[0].kwargs["json"] == {
+        "takenAfter": "2026-08-30T10:00:00Z",
+        "takenBefore": "2026-08-30T11:00:00Z",
+        "withDeleted": False,
+        "withArchived": False,
+        "withExif": True,
+        "size": 1000,
+        "page": 1,
+    }

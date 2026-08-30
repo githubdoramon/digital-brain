@@ -420,6 +420,20 @@ def create_events_router(
             raise HTTPException(status_code=502, detail="Failed to load event photo thumbnail") from exc
         return Response(content=content, media_type=content_type)
 
+    @router.get("/mobile/event-media/{asset_id}/thumbnail")
+    def get_event_media_thumbnail(
+        asset_id: str,
+        user: dict = Depends(get_current_user),
+    ):
+        try:
+            content, content_type = event_photos_service.fetch_event_media_thumbnail(asset_id)
+        except event_photos_service.EventPhotoError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except Exception as exc:
+            logger.exception("[event_media] Failed to load suggestion thumbnail: %s", exc)
+            raise HTTPException(status_code=502, detail="Failed to load media thumbnail") from exc
+        return Response(content=content, media_type=content_type)
+
     @router.delete("/mobile/events/{event_id}/photos/{asset_id}")
     def unlink_event_photo(
         event_id: str,

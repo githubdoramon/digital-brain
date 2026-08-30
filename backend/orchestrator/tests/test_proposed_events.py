@@ -186,6 +186,17 @@ def test_selected_google_place_is_materialized_only_at_acceptance(monkeypatch):
     assert created["place"].name == "Example Cafe"
 
 
+def test_explicit_empty_place_selection_clears_existing_place():
+    assert (
+        proposed_events._materialize_selected_place(
+            {"place_id": "place:old"},
+            None,
+            place_id="",
+        )
+        is None
+    )
+
+
 def _segment(minutes: int) -> proposed_events.StaySegment:
     start = datetime(2026, 6, 16, 9, 0, tzinfo=timezone.utc)
     end = start + timedelta(minutes=minutes)
@@ -393,6 +404,33 @@ def test_duration_humanization_and_overnight_context():
     assert clipped_context["likely_overnight_sleep"] is True
 
 
+def test_generated_summary_drops_time_only_location_descriptions():
+    assert (
+        proposed_events._sanitize_generated_summary(
+            "Seems you spent 2 hours at Example Cafe.",
+            duration_minutes=120,
+        )
+        == ""
+    )
+    assert (
+        proposed_events._sanitize_generated_summary(
+            "A lunch stop at Example Cafe.",
+            duration_minutes=120,
+        )
+        == "A lunch stop at Example Cafe."
+    )
+
+
+def test_naive_edited_proposal_datetime_uses_proposal_timezone():
+    value = proposed_events._coerce_proposal_datetime(
+        datetime(2026, 8, 23, 10, 0),
+        timezone_name="Europe/Lisbon",
+    )
+
+    assert value is not None
+    assert value.isoformat() == "2026-08-23T10:00:00+01:00"
+
+
 def test_long_afternoon_to_morning_stay_splits_activity_and_sleep():
     start = datetime(2026, 6, 16, 16, 0, tzinfo=timezone.utc)
     end = datetime(2026, 6, 17, 10, 0, tzinfo=timezone.utc)
@@ -500,10 +538,12 @@ def test_serialized_proposal_includes_duration_label():
             "duration_minutes": 75,
             "start_at": datetime(2026, 6, 16, 12, tzinfo=timezone.utc),
             "end_at": datetime(2026, 6, 16, 13, 15, tzinfo=timezone.utc),
+            "suggested_summary": "Seems you spent 1 hour at Example Cafe.",
         }
     )
 
     assert result["duration_label"] == "1 hour and 15 minutes"
+    assert result["suggested_summary"] == ""
 
 
 def test_llm_enrichment_appends_known_place_description(monkeypatch):

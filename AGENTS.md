@@ -192,6 +192,7 @@ User Question → Intent Router → Conversational Profile Dispatch → Tool Vis
 - **News intelligence persistence**: keep story-level clusters/mentions and selected briefing news items in DB tables so ranking can use trend + novelty history and mobile interactions can be attributed to stable briefing item IDs.
 - **Daily briefing event quality**: event prep summaries should prioritize non-obvious, context-grounded guidance, summarize the last 4 matching prior occurrences of the same meeting using the `summarize_memories` synthesis flow (not broad memory search), fall back to attendee-overlap history when title/recurrence matches are absent, and only use freeform current-context/research synthesis when no useful prior occurrences exist. Keep per-event prep single-responsibility: no web research on the main history-synthesis path, and no second event-summary rewrite after structured prep is built.
 - **Proposed events flow**: the `proposed_events_daily` worker runs after 04:00 UTC; the cutoff only controls eligibility, while each run scans a rolling two-local-day window in the latest captured timezone. Stable stay identity (user, local date, start time, and location signature) prevents repeated scans from creating duplicate proposals when additional samples extend a stay. Location samples use 75m spatial stay clusters; unresolved clusters query Google Places at up to three representative points and reuse a separate lookup/coverage cache within a configurable 150m tolerance. High-confidence internal places bypass Google and are never overwritten. The LLM may rank only supplied candidates; mobile exposes the top three, and only the user's selected candidate creates a new internal place. See `backend/orchestrator/docs/architecture/OVERVIEW.md` for the full enrichment, overlap, notification, and acceptance contract.
+- **Proposed event review content**: the mobile review screen lets users edit title, summary, local start/end, participants, and linked place before acceptance. Generated summaries must add meaningful event content and remain blank when the evidence only establishes a timed stay; duration belongs in the proposal metadata/reason, not the event summary.
 - **Daily briefing schedule**: daily briefing remains externally triggerable through `/agents/daily-briefing/run`, but the backend also runs a `daily_briefing` polling worker that enqueues/processes one briefing per active user after 05:00 UTC using the user's latest captured timezone when available.
 - **Scheduled jobs registry**: `backend/orchestrator/scheduled_jobs.py` is the single source of truth for scheduled/background job metadata (job type, worker module, UTC trigger time, poll interval, retry interval, and trigger source). `/system/jobs` and `/mobile/system/jobs` expose the registry plus worker liveness. Update this registry whenever a scheduled/background worker is added or its timing changes.
 - **Validation semantics**: post-execution validation must treat clarification-required search/resolution results as `need_user_input`, not generic empty-result retries.
@@ -225,6 +226,7 @@ User Question → Intent Router → Conversational Profile Dispatch → Tool Vis
 - **`/event` matching should be date/time-first when available**: if the user provides a concrete date or time, build a bounded candidate set from that temporal window first and rank within that smaller set before widening to semantic search across the whole corpus.
 - **Collective selector extraction must not broaden family mentions**: contact-resolution selector extraction should only accept explicit collective intents (for example team/company/everyone/@domain) and must reject family/relationship-style groups like children/kids/family so `/event` participant lists do not explode into unrelated contacts.
 - **Event photos live in Immich**: event image attachments should upload/link to Immich assets rather than local document storage. Preserve original picker file bytes/metadata where possible, send a stable duplicate-detection signal to Immich, and refresh detected people from Immich on later event reads because face clustering can finish asynchronously. When Immich returns tagged people, map those person IDs back to contacts and merge them into the event graph. Mobile chat media attachments are currently carried through `/event` preview, clarification, and confirmation so confirmed events can link uploaded photos after creation/update.
+- **Event media suggestions**: mobile `/event` previews and proposed-event reviews may persist all Immich media candidates matching the event interval with a 30-minute tolerance; missing end times use a one-hour search duration. Time is primary, GPS narrows only when both event and asset coordinates exist (250m maximum), and no-GPS assets remain eligible. Never search while opening an existing event. The reviewer can remove any candidate, and confirmation links selected existing assets through `event_photos` without uploading duplicate bytes.
 - **Meeting transcript ingest**: `POST /ingest/meetings/transcript` uses normal bearer-token auth with a mandatory current user, stores the payload in the generic `async_jobs` queue, immediately acknowledges receipt, and processes the latest queued payload after a 30-second debounce. New submissions for the same meeting replace the pending job and restart the debounce; failures are logged and retried after one minute. Processing skips regeneration when the incoming `transcript_hash` matches the stored event raw metadata; otherwise it matches the backing calendar meeting when possible, consolidates attendee contacts by exact email/name evidence, lightly normalizes transcript segments by time-ordering and merging adjacent same-speaker fragments before summarization, injects names/aliases/emails for involved people into the summarizer prompt, stores the raw transcript payload in event metadata, writes an LLM-generated discussion summary plus structured action items to event metadata, projects action items on event detail reads for mobile, and creates linked todos for action items assigned to the authenticated user by email or identifier match. With GPT-OSS 128k context, transcript summarization currently sends up to 300k transcript characters before any future chunking/synthesis path is needed.
 - **Meeting summary rerun**: `POST /meetings/{meeting_id}/summary/rerun` reconstructs a stored meeting transcript from `events.raw`, queues it through the existing debounced worker, and explicitly bypasses unchanged-transcript-hash skipping for targeted reprocessing.
 - **Meeting speaker voice profiles**: `POST /meetings/speakers/match` accepts transient per-meeting speaker embeddings and returns backend-owned auto-label or suggestion decisions before note enhancement; participant contacts are a ranking prior, not a search restriction. Durable contact voice profiles may contain multiple internal voice clusters per contact, and matching ranks each contact by its best cluster so microphone/device/noise variants do not collapse into one blurred centroid. `POST /meetings/speakers/confirm` is the only path that trains durable contact voice profiles, records rejected match evidence when users correct labels, and ignores unassigned/unknown speakers. Raw embeddings and profile centroids stay server-internal.
@@ -550,10 +552,39 @@ server before opening its hotspot, use scoped local networking when available,
 and restore the internet path after sync. Never delete a glasses capture before
 a validated local commit; never delete the phone copy before
 `/mobile/glasses/captures` confirms the Immich asset and `Ramon eyes capture`
-album membership. Keep pending files under `Digital Brain/Capture Queue`.
-When using an Android Documents folder, ask the user to grant the actual
-`Digital Brain/Capture Queue` tree rather than synthesizing a child URI from a
-parent grant. Repair malformed legacy SAF values that duplicated the queue path,
-but treat visible-folder copies as best-effort: a revoked/rejected grant must
-fall back to app-private storage and never block acknowledgement or upload. See
-`mobile/GLASSES_CAPTURE_PIPELINE.md`.
+album membership. The Android shared Digital Brain base folder owns managed
+`Recordings`, `Glasses Capture Queue`, and `Exports` subfolders; create them via
+the granted document provider rather than synthesizing SAF child-tree URIs.
+Visible queue copies remain best-effort: a revoked/rejected grant must fall back
+to app-private storage and never block acknowledgement or upload.
+
+Glasses microphone recording is Android-first. It uses app buttons only; never
+repurpose the physical glasses photo/video button. Reuse the single Mentra SDK
+session, encode 16 kHz mono PCM natively to user-visible M4A files in
+`Recordings`, and use an Android connected-device foreground service so a live
+recording continues while backgrounded or locked (not after force-stop). There
+is no v1 upload, transcription, processing, or retention cap. On Bluetooth
+loss, low storage, or recovery after process interruption, keep only a verified
+playable M4A and discard invalid partials. See `mobile/GLASSES_CAPTURE_PIPELINE.md`.
+
+Android Smart glasses alerts live under Settings → Smart glasses → Glasses
+alerts. They are an explicit local-only allow-list: the Android notification
+listener must inspect only a posted notification's source package name and
+must never persist, log, upload, or expose its title, body, people, or actions.
+Phone calls are independent of that allow-list and require `READ_PHONE_STATE`;
+use the state only to start a distinct repeating ring while `RINGING` and stop
+it on `OFFHOOK`/`IDLE`, never read/store a caller number. Alert PCM must select
+the active Bluetooth output whose name matches the remembered Mentra audio
+device; if that route is unavailable, play nothing rather than falling back to
+the phone or another headset. Preserve the phone's ordinary notification and
+ring behavior, request transient ducking focus for the glasses tone, and keep
+a short package-agnostic app-alert cooldown. Before every app/call alert, gate
+on `PowerManager.isInteractive && !KeyguardManager.isKeyguardLocked`: suppress
+when the phone is awake and unlocked, without adding usage-access, accessibility,
+or screen-content collection. The Android notification-listener
+grant and phone-state permission must be separately explained in the UI.
+Do not let a selected dialer app's `CATEGORY_CALL` notification generate the
+ordinary one-shot app chime: only the telephony state owns a call alert. Start
+the repeat loop from the notification-listener service before attempting its
+media-playback foreground-service promotion; Android/OEM background-FGS refusal
+must leave the existing repeat loop running rather than degrading it to one tone.

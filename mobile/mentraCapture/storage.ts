@@ -2,6 +2,10 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as FileSystem from 'expo-file-system/legacy';
 
 import type { CaptureQueueEntry } from './types';
+import {
+  DigitalBrainStorageFolder,
+  getDigitalBrainStorageFolder,
+} from '@/storage/digitalBrainStorage';
 
 const STORAGE_KEY = 'digitalbrain.glasses.capture.queue.v1';
 const FOLDER_KEY = 'digitalbrain.glasses.capture.folder.v1';
@@ -71,6 +75,10 @@ export async function saveCaptureQueue(queue: CaptureQueueEntry[]): Promise<void
 }
 
 export async function getCaptureFolderUri(): Promise<string | null> {
+  const sharedFolder = await getDigitalBrainStorageFolder(
+    DigitalBrainStorageFolder.GlassesCaptureQueue,
+  );
+  if (sharedFolder) return sharedFolder;
   const stored = await AsyncStorage.getItem(FOLDER_KEY);
   if (!stored) return null;
   const normalized = normalizeSafDirectoryUri(stored);

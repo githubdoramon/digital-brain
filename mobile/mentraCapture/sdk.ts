@@ -5,6 +5,7 @@ import * as FileSystem from 'expo-file-system/legacy';
 import { PermissionsAndroid, Platform } from 'react-native';
 
 import { appendMentraDebugLog } from './debug';
+import { setExpectedGlassesAlertAudioDevice } from '@/glassesAlerts/runtime';
 
 type Subscription = { remove: () => void };
 export type MentraDevice = {
@@ -40,6 +41,40 @@ type BluetoothSdk = {
   }) => Promise<unknown>;
   setMaxVideoRecordingDuration: (minutes: number) => Promise<unknown>;
   setHotspotState: (enabled: boolean) => Promise<unknown>;
+  setMicState: (
+    enabled: boolean,
+    useGlassesMic?: boolean,
+    sendTranscript?: boolean,
+    sendLc3Data?: boolean,
+  ) => Promise<void>;
+  startGlassesM4aRecording: (outputUri: string) => Promise<GlassesM4aRecordingResult>;
+  stopGlassesM4aRecording: (reason: string) => Promise<GlassesM4aRecordingResult>;
+  recoverGlassesM4aRecording: () => Promise<GlassesM4aRecoveryResult>;
+  getGlassesM4aRecordingStatus: () => Promise<GlassesM4aRecordingStatus>;
+  playGlassesM4aRecording: (
+    outputUri: string,
+  ) => Promise<{ playing: boolean; durationMs?: number }>;
+  stopGlassesM4aPlayback: () => Promise<{ playing: boolean }>;
+};
+
+export type GlassesM4aRecordingResult = {
+  completed: boolean;
+  reason: string;
+  outputUri: string;
+  durationMs?: number;
+  sizeBytes?: number;
+  startedAt?: number;
+};
+
+export type GlassesM4aRecoveryResult = {
+  recovered: boolean;
+  outputUri: string | null;
+};
+
+export type GlassesM4aRecordingStatus = {
+  recording: boolean;
+  outputUri: string | null;
+  startedAt: number | null;
 };
 type InternalBluetoothSdk = BluetoothSdk & {
   getGlassesStatus?: () => Promise<{
@@ -197,6 +232,95 @@ function loadInternalSdk(): InternalBluetoothSdk | null {
 
 export function isMentraSdkAvailable(): boolean {
   return Boolean(loadSdk());
+}
+
+function isGlassesAudioRecorderUnavailable(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    (error.message.includes('GlassesM4a') ||
+      error.message.includes('not available in this native build'))
+  );
+}
+
+export async function startGlassesM4aRecording(
+  outputUri: string,
+): Promise<GlassesM4aRecordingResult> {
+  const native = loadSdk();
+  if (!native)
+    throw new Error(
+      'Mentra Bluetooth SDK is not available in this build. Rebuild the Android app.',
+    );
+  return native.startGlassesM4aRecording(outputUri);
+}
+
+export async function stopGlassesM4aRecording(reason: string): Promise<GlassesM4aRecordingResult> {
+  const native = loadSdk();
+  if (!native)
+    throw new Error(
+      'Mentra Bluetooth SDK is not available in this build. Rebuild the Android app.',
+    );
+  return native.stopGlassesM4aRecording(reason);
+}
+
+export async function recoverGlassesM4aRecording(): Promise<GlassesM4aRecoveryResult> {
+  const native = loadSdk();
+  if (!native) return { recovered: false, outputUri: null };
+  try {
+    return await native.recoverGlassesM4aRecording();
+  } catch (error) {
+    if (isGlassesAudioRecorderUnavailable(error)) return { recovered: false, outputUri: null };
+    throw error;
+  }
+}
+
+export async function getGlassesM4aRecordingStatus(): Promise<GlassesM4aRecordingStatus> {
+  const native = loadSdk();
+  if (!native) return { recording: false, outputUri: null, startedAt: null };
+  try {
+    return await native.getGlassesM4aRecordingStatus();
+  } catch (error) {
+    if (isGlassesAudioRecorderUnavailable(error)) {
+      return { recording: false, outputUri: null, startedAt: null };
+    }
+    throw error;
+  }
+}
+
+export async function playGlassesM4aRecording(
+  outputUri: string,
+): Promise<{ playing: boolean; durationMs?: number }> {
+  const native = loadSdk();
+  if (!native)
+    throw new Error(
+      'Mentra Bluetooth SDK is not available in this build. Rebuild the Android app.',
+    );
+  return native.playGlassesM4aRecording(outputUri);
+}
+
+export async function stopGlassesM4aPlayback(): Promise<void> {
+  const native = loadSdk();
+  if (!native) return;
+  await native.stopGlassesM4aPlayback();
+}
+
+export async function setMentraMicState(enabled: boolean): Promise<void> {
+  const native = loadSdk();
+  if (!native)
+    throw new Error(
+      'Mentra Bluetooth SDK is not available in this build. Rebuild the Android app.',
+    );
+  await native.setMicState(enabled, true, false, false);
+}
+
+export function subscribeGlassesM4aRecordingFinished(
+  listener: (result: GlassesM4aRecordingResult) => void,
+): () => void {
+  const native = loadSdk();
+  if (!native) return () => undefined;
+  const subscription = native.addListener('glasses_audio_recording_finished', (event) => {
+    if (event && typeof event.outputUri === 'string') listener(event as GlassesM4aRecordingResult);
+  });
+  return () => subscription.remove();
 }
 
 /**
@@ -368,6 +492,7 @@ export async function pairGlasses(device: MentraDevice): Promise<void> {
   try {
     await native.connect(device, { saveAsDefault: true, cancelExistingConnectionAttempt: true });
     await persistDefaultDevice(device);
+    await setExpectedGlassesAlertAudioDevice(device.name?.trim() || null).catch(() => undefined);
     await waitForGlassesReady();
     await configureCaptureDefaults();
     debugSdk('pair_finished', { model: device.model });
@@ -383,6 +508,7 @@ export async function forgetPairedGlasses(): Promise<void> {
   if (!native) return;
   await native.clearDefaultDevice();
   await native.forget().catch(() => undefined);
+  await setExpectedGlassesAlertAudioDevice(null).catch(() => undefined);
 }
 
 export function subscribeMentraEvents(onCaptureSignal: (kind: CaptureKind) => void): () => void {
@@ -425,6 +551,21 @@ export function subscribeMentraEvents(onCaptureSignal: (kind: CaptureKind) => vo
       debugSdk('capture_signal', { kind: 'photo', source: 'gallery_status' });
       onCaptureSignal('photo');
     }),
+  ];
+  return () => subscriptions.forEach((subscription) => subscription.remove());
+}
+
+export function subscribeMentraAudioOutput(
+  onAudioDevice: (deviceName: string | null) => void,
+): () => void {
+  const native = loadSdk();
+  if (!native) return () => undefined;
+  const subscriptions = [
+    native.addListener('audio_connected', (event) => {
+      const deviceName = typeof event?.deviceName === 'string' ? event.deviceName.trim() : '';
+      if (deviceName) onAudioDevice(deviceName);
+    }),
+    native.addListener('audio_disconnected', () => onAudioDevice(null)),
   ];
   return () => subscriptions.forEach((subscription) => subscription.remove());
 }

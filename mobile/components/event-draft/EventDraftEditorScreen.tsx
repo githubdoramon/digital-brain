@@ -24,6 +24,7 @@ import {
   CollapsingTopBar,
 } from '@/components/CollapsingTopBar';
 import { FloatingSaveButton } from '@/components/FloatingSaveButton';
+import { EventMediaSuggestionCard } from '@/components/event-draft/EventMediaSuggestionCard';
 import { EventPhotoCard } from '@/components/event-draft/EventPhotoCard';
 import {
   draftDateTimePickerValue,
@@ -39,11 +40,9 @@ import {
   type EventPhoto,
   type EventPlaceOption,
 } from '@/components/event-draft/types';
-import {
-  getEventDraftEditSession,
-  submitEventDraftEditSession,
-} from '@/events/draftEditorSession';
+import { getEventDraftEditSession, submitEventDraftEditSession } from '@/events/draftEditorSession';
 import { theme } from '@/theme';
+import { useAuth } from '@/auth/AuthContext';
 import { normalizeSearch } from '@/utils/text';
 import { matchesContactSearch } from '@/utils/contactSearch';
 
@@ -215,6 +214,9 @@ export function EventDetailsForm({
   const [matchedEvent, setMatchedEvent] = React.useState<EventMatchCandidate | null>(
     initialDraft.matchedEvent,
   );
+  const [mediaSuggestions, setMediaSuggestions] = React.useState<EventPhoto[]>(
+    initialDraft.mediaSuggestions || [],
+  );
   const [showCandidatePicker, setShowCandidatePicker] = React.useState(false);
 
   React.useEffect(() => {
@@ -226,11 +228,14 @@ export function EventDetailsForm({
     setSelectedPlaceId(initialDraft.placeId || null);
     setTagsInput(listToInput(initialDraft.tags));
     setTypesInput(listToInput(initialDraft.types));
-    setSelectedParticipantIds(initialDraft.participants.map((participant) => participant.contactId));
+    setSelectedParticipantIds(
+      initialDraft.participants.map((participant) => participant.contactId),
+    );
     setParticipantQuery('');
     setOperation(initialDraft.operation);
     setExistingEventId(initialDraft.existingEventId);
     setMatchedEvent(initialDraft.matchedEvent);
+    setMediaSuggestions(initialDraft.mediaSuggestions || []);
     setShowCandidatePicker(false);
   }, [initialDraft]);
 
@@ -323,6 +328,7 @@ export function EventDetailsForm({
       operation: operation === 'update' && existingEventId ? 'update' : 'create',
       existingEventId: operation === 'update' ? existingEventId : null,
       matchedEvent: operation === 'update' ? matchedEvent : null,
+      mediaSuggestions,
     }),
     [
       endWhen,
@@ -337,6 +343,7 @@ export function EventDetailsForm({
       typesInput,
       when,
       where,
+      mediaSuggestions,
     ],
   );
 
@@ -384,12 +391,16 @@ export function EventDetailsForm({
         types: sameDraftList(inputToList(typesInput), updateBaseDraft?.types || [])
           ? createFallbackDraft.types
           : inputToList(typesInput),
-        participants: sameDraftParticipants(selectedParticipants, updateBaseDraft?.participants || [])
+        participants: sameDraftParticipants(
+          selectedParticipants,
+          updateBaseDraft?.participants || [],
+        )
           ? createFallbackDraft.participants
           : selectedParticipants,
         operation: 'create',
         existingEventId: null,
         matchedEvent: null,
+        mediaSuggestions,
       };
 
       setTitle(nextDraft.title);
@@ -401,6 +412,7 @@ export function EventDetailsForm({
       setTagsInput(listToInput(nextDraft.tags));
       setTypesInput(listToInput(nextDraft.types));
       setSelectedParticipantIds(nextDraft.participants.map((participant) => participant.contactId));
+      setMediaSuggestions(nextDraft.mediaSuggestions);
       setParticipantQuery('');
     }
     setOperation('create');
@@ -419,6 +431,7 @@ export function EventDetailsForm({
     updateBaseDraft,
     when,
     where,
+    mediaSuggestions,
   ]);
 
   const readOnlyParticipants = selectedParticipants;
@@ -507,9 +520,7 @@ export function EventDetailsForm({
                           ) : null}
                         </View>
                         <Text style={styles.candidateScore}>
-                          {candidate.matchScore > 0
-                            ? `${Math.round(candidate.matchScore)}%`
-                            : ''}
+                          {candidate.matchScore > 0 ? `${Math.round(candidate.matchScore)}%` : ''}
                         </Text>
                       </Pressable>
                     );
@@ -552,9 +563,7 @@ export function EventDetailsForm({
                       ) : null}
                     </View>
                     <Text style={styles.candidateScore}>
-                      {candidate.matchScore > 0
-                        ? `${Math.round(candidate.matchScore)}%`
-                        : ''}
+                      {candidate.matchScore > 0 ? `${Math.round(candidate.matchScore)}%` : ''}
                     </Text>
                   </Pressable>
                 ))}
@@ -571,6 +580,20 @@ export function EventDetailsForm({
                 token={photoToken}
                 onAddPhoto={onAddPhoto}
                 onRemovePhoto={onRemovePhoto}
+              />
+            </Card>
+          ) : null}
+
+          {editable && mediaSuggestions.length > 0 ? (
+            <Card style={styles.card}>
+              <EventMediaSuggestionCard
+                suggestions={mediaSuggestions}
+                token={photoToken}
+                onRemove={(assetId) =>
+                  setMediaSuggestions((current) =>
+                    current.filter((suggestion) => suggestion.asset_id !== assetId),
+                  )
+                }
               />
             </Card>
           ) : null}
@@ -616,7 +639,7 @@ export function EventDetailsForm({
                       <Ionicons
                         name={
                           item.belongs_to_current_user
-                            ? 'person-check-outline'
+                            ? 'person-outline'
                             : 'checkmark-circle-outline'
                         }
                         size={17}
@@ -650,7 +673,11 @@ export function EventDetailsForm({
                     accessibilityRole="button"
                     accessibilityLabel="Select event start date and time"
                     onPress={() => setShowWhenPicker(true)}
-                    style={({ pressed }) => [styles.dateField, styles.dateFieldExpanded, pressed && styles.dateFieldPressed]}
+                    style={({ pressed }) => [
+                      styles.dateField,
+                      styles.dateFieldExpanded,
+                      pressed && styles.dateFieldPressed,
+                    ]}
                   >
                     <Text style={when ? styles.dateValue : styles.datePlaceholder}>
                       {when ? formatWhen(when) : 'Add start date and time'}
@@ -660,7 +687,10 @@ export function EventDetailsForm({
                     accessibilityRole="button"
                     accessibilityLabel="Clear event start date and time"
                     onPress={() => setWhen('')}
-                    style={({ pressed }) => [styles.clearIconButton, pressed && styles.clearIconButtonPressed]}
+                    style={({ pressed }) => [
+                      styles.clearIconButton,
+                      pressed && styles.clearIconButtonPressed,
+                    ]}
                   >
                     <Ionicons name="close" size={16} color={theme.colors.mutedInk} />
                   </Pressable>
@@ -672,7 +702,11 @@ export function EventDetailsForm({
                     accessibilityRole="button"
                     accessibilityLabel="Select event end date and time"
                     onPress={() => setShowEndDateTimePicker(true)}
-                    style={({ pressed }) => [styles.dateField, styles.dateFieldExpanded, pressed && styles.dateFieldPressed]}
+                    style={({ pressed }) => [
+                      styles.dateField,
+                      styles.dateFieldExpanded,
+                      pressed && styles.dateFieldPressed,
+                    ]}
                   >
                     <Text style={endWhen ? styles.dateValue : styles.datePlaceholder}>
                       {endWhen ? formatWhen(endWhen) : 'Add end date and time'}
@@ -682,7 +716,10 @@ export function EventDetailsForm({
                     accessibilityRole="button"
                     accessibilityLabel="Clear event end date and time"
                     onPress={() => setEndWhen('')}
-                    style={({ pressed }) => [styles.clearIconButton, pressed && styles.clearIconButtonPressed]}
+                    style={({ pressed }) => [
+                      styles.clearIconButton,
+                      pressed && styles.clearIconButtonPressed,
+                    ]}
                   >
                     <Ionicons name="close" size={16} color={theme.colors.mutedInk} />
                   </Pressable>
@@ -731,7 +768,10 @@ export function EventDetailsForm({
                           setWhere(formatPlaceLabel(place));
                           setSelectedPlaceId(place.place_id);
                         }}
-                        style={({ pressed }) => [styles.suggestionRow, pressed && styles.suggestionPressed]}
+                        style={({ pressed }) => [
+                          styles.suggestionRow,
+                          pressed && styles.suggestionPressed,
+                        ]}
                       >
                         <View style={styles.suggestionBody}>
                           <Text style={styles.suggestionText}>{formatPlaceLabel(place)}</Text>
@@ -739,7 +779,11 @@ export function EventDetailsForm({
                             <Text style={styles.suggestionMeta}>{place.address}</Text>
                           ) : null}
                         </View>
-                        <Ionicons name="location-outline" size={16} color={theme.colors.accentDeep} />
+                        <Ionicons
+                          name="location-outline"
+                          size={16}
+                          color={theme.colors.accentDeep}
+                        />
                       </Pressable>
                     ))}
                   </View>
@@ -789,7 +833,10 @@ export function EventDetailsForm({
                         accessibilityRole="button"
                         accessibilityLabel={`Add ${contact.display_name}`}
                         onPress={() => toggleParticipant(contact.contact_id)}
-                        style={({ pressed }) => [styles.suggestionRow, pressed && styles.suggestionPressed]}
+                        style={({ pressed }) => [
+                          styles.suggestionRow,
+                          pressed && styles.suggestionPressed,
+                        ]}
                       >
                         <Text style={styles.suggestionText}>{contact.display_name}</Text>
                         <Ionicons name="add" size={16} color={theme.colors.accentDeep} />
@@ -919,6 +966,7 @@ export function EventDetailsForm({
 export function EventDraftEditorScreen({ sessionId }: DraftEditorScreenProps) {
   const router = useRouter();
   const insets = useSafeAreaInsets();
+  const { token } = useAuth();
   const session = React.useMemo(() => getEventDraftEditSession(sessionId), [sessionId]);
 
   const handleDone = React.useCallback(
@@ -945,9 +993,11 @@ export function EventDraftEditorScreen({ sessionId }: DraftEditorScreenProps) {
   if (!session) {
     return (
       <LinearGradient colors={theme.gradients.dusk} style={styles.container}>
-        <View style={[styles.emptyState, { paddingTop: insets.top + 80 }]}> 
+        <View style={[styles.emptyState, { paddingTop: insets.top + 80 }]}>
           <Text style={styles.emptyTitle}>Draft editor unavailable</Text>
-          <Text style={styles.emptyBody}>This draft has expired. Return to chat and re-open edit.</Text>
+          <Text style={styles.emptyBody}>
+            This draft has expired. Return to chat and re-open edit.
+          </Text>
           <Pressable onPress={() => router.back()} style={styles.emptyAction}>
             <Text style={styles.emptyActionText}>Back to chat</Text>
           </Pressable>
@@ -969,6 +1019,7 @@ export function EventDraftEditorScreen({ sessionId }: DraftEditorScreenProps) {
       headerTitle="Edit draft"
       headerSubtitle="Review details before creating the event."
       doneLabel="Done"
+      photoToken={token}
       onDone={handleDone}
       onPressBack={() => router.back()}
     />

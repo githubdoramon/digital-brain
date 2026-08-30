@@ -25,6 +25,7 @@ import { apiFetch } from '@/api/client';
 import { useAuth } from '@/auth/AuthContext';
 import { AppPressable as Pressable } from '@/components/AppPressable';
 import { GeneratedFilesRow } from '@/components/chat/GeneratedFilesRow';
+import { EventMediaSuggestionCard } from '@/components/event-draft/EventMediaSuggestionCard';
 import {
   COLLAPSING_CONTENT_TOP_PADDING,
   COLLAPSING_SECONDARY_TITLE_BLOCK_HEIGHT,
@@ -43,6 +44,7 @@ import type {
   EventDraftModifications,
   EventDraftOperation,
   EventMatchCandidate,
+  EventPhoto,
   EventPlaceOption,
 } from '@/components/event-draft/types';
 import { askWithStreaming, waitForRunCompletion } from '@/chat/streaming';
@@ -167,6 +169,7 @@ type EventCommandResultPayload = {
   existing_event_id?: string | null;
   matched_event?: EventMatchCandidatePayload | null;
   candidate_events?: EventMatchCandidatePayload[];
+  media_suggestions?: EventMediaSuggestionPayload[];
   original_extracted?: {
     title?: unknown;
     summary?: unknown;
@@ -217,6 +220,24 @@ type EventCommandResultPayload = {
       place_id?: unknown;
     };
   };
+};
+
+type EventMediaSuggestionPayload = {
+  asset_id?: unknown;
+  media_type?: unknown;
+  checksum?: unknown;
+  file_name?: unknown;
+  mime_type?: unknown;
+  captured_at?: unknown;
+  width?: unknown;
+  height?: unknown;
+  duration_seconds?: unknown;
+  distance_m?: unknown;
+  temporal_distance_seconds?: unknown;
+  has_gps?: unknown;
+  status?: unknown;
+  match_reasons?: unknown;
+  thumbnail_path?: unknown;
 };
 
 const EVENT_CONFIRM_ACTION_ID = 'event_confirmation_action';
@@ -274,8 +295,8 @@ function backendErrorDetails(error: unknown): RequestErrorMetadata {
 }
 
 function conciseBackendErrorMessage(error: unknown, fallback: string): string {
-  const detail = backendErrorDetails(error).details
-    .replace(/^HTTP \d+:\s*/i, '')
+  const detail = backendErrorDetails(error)
+    .details.replace(/^HTTP \d+:\s*/i, '')
     .replace(/^\{"detail":\s*/i, '')
     .replace(/"\}\s*$/i, '')
     .trim();
@@ -334,7 +355,10 @@ function fieldForSubmission(block: UiDirectiveBlock | undefined, fieldId: string
   return fields.find((field) => field.id === fieldId);
 }
 
-function optionLabelForField(field: ReturnType<typeof fieldForSubmission>, rawValue: string): string {
+function optionLabelForField(
+  field: ReturnType<typeof fieldForSubmission>,
+  rawValue: string,
+): string {
   const options = field?.options || [];
   const match = options.find((option) => option.id === rawValue);
   return match?.label || rawValue;
@@ -435,9 +459,7 @@ function textValue(value: unknown): string {
 
 function stringArrayValue(value: unknown): string[] {
   if (!Array.isArray(value)) return [];
-  return value
-    .map((entry) => textValue(entry))
-    .filter(Boolean);
+  return value.map((entry) => textValue(entry)).filter(Boolean);
 }
 
 type ConfirmedRelationship = {
@@ -539,14 +561,15 @@ function buildEventMatchCandidate(
   const eventId = textValue(candidate.event_id);
   if (!eventId) return null;
   const placeRaw = candidate.place;
-  const place = placeRaw && typeof placeRaw === 'object'
-    ? {
-        placeId: textValue(placeRaw.place_id),
-        name: textValue(placeRaw.name),
-        city: nullableText(placeRaw.city),
-        country: nullableText(placeRaw.country),
-      }
-    : null;
+  const place =
+    placeRaw && typeof placeRaw === 'object'
+      ? {
+          placeId: textValue(placeRaw.place_id),
+          name: textValue(placeRaw.name),
+          city: nullableText(placeRaw.city),
+          country: nullableText(placeRaw.country),
+        }
+      : null;
   return {
     eventId,
     title: textValue(candidate.title),
@@ -573,6 +596,41 @@ function buildEventCandidateList(
     out.push(built);
   }
   return out;
+}
+
+function buildEventMediaSuggestions(
+  suggestions: EventMediaSuggestionPayload[] | undefined,
+): EventPhoto[] {
+  if (!Array.isArray(suggestions)) return [];
+  const seen = new Set<string>();
+  return suggestions.flatMap((suggestion) => {
+    const assetId = textValue(suggestion.asset_id);
+    if (!assetId || seen.has(assetId) || suggestion.status === 'removed') return [];
+    seen.add(assetId);
+    return [
+      {
+        asset_id: assetId,
+        media_type: nullableText(suggestion.media_type),
+        checksum: nullableText(suggestion.checksum),
+        file_name: nullableText(suggestion.file_name),
+        mime_type: nullableText(suggestion.mime_type),
+        captured_at: nullableText(suggestion.captured_at),
+        width: suggestion.width == null ? null : numberValue(suggestion.width),
+        height: suggestion.height == null ? null : numberValue(suggestion.height),
+        duration_seconds:
+          suggestion.duration_seconds == null ? null : numberValue(suggestion.duration_seconds),
+        distance_m: suggestion.distance_m == null ? null : numberValue(suggestion.distance_m),
+        temporal_distance_seconds:
+          suggestion.temporal_distance_seconds == null
+            ? null
+            : numberValue(suggestion.temporal_distance_seconds),
+        has_gps: suggestion.has_gps === true,
+        status: 'included',
+        match_reasons: stringArrayValue(suggestion.match_reasons),
+        thumbnail_path: nullableText(suggestion.thumbnail_path),
+      } satisfies EventPhoto,
+    ];
+  });
 }
 
 function buildEventDraftFromPayload(
@@ -628,7 +686,8 @@ function buildEventDraftFromPayload(
   const operation: EventDraftOperation =
     options?.forceOperation ?? (payload.operation === 'update' ? 'update' : 'create');
   const existingEventId = textValue(payload.existing_event_id) || null;
-  const matchedEvent = operation === 'update' ? buildEventMatchCandidate(payload.matched_event) : null;
+  const matchedEvent =
+    operation === 'update' ? buildEventMatchCandidate(payload.matched_event) : null;
 
   return {
     title: textValue(extracted.title),
@@ -643,10 +702,14 @@ function buildEventDraftFromPayload(
     operation: operation === 'update' && existingEventId ? 'update' : 'create',
     existingEventId: operation === 'update' ? existingEventId : null,
     matchedEvent,
+    mediaSuggestions: buildEventMediaSuggestions(payload.media_suggestions),
   };
 }
 
-function buildEventDraft(commandResult: CommandResult | undefined, previewId: string): EventDraft | null {
+function buildEventDraft(
+  commandResult: CommandResult | undefined,
+  previewId: string,
+): EventDraft | null {
   if (!commandResult || typeof commandResult !== 'object') return null;
   return buildEventDraftFromPayload(commandResult as EventCommandResultPayload, previewId);
 }
@@ -677,9 +740,14 @@ function applyDraftModifications(
           contactId,
           displayName: contactNameById.get(contactId) || contactId,
         }));
+  const mediaSuggestions =
+    modifications.media_asset_ids === undefined
+      ? baseDraft.mediaSuggestions
+      : baseDraft.mediaSuggestions.filter((suggestion) =>
+          modifications.media_asset_ids?.includes(suggestion.asset_id),
+        );
 
-  const operation: EventDraftOperation =
-    modifications.operation ?? baseDraft.operation;
+  const operation: EventDraftOperation = modifications.operation ?? baseDraft.operation;
   const existingEventId =
     modifications.existing_event_id === undefined
       ? baseDraft.existingEventId
@@ -719,6 +787,7 @@ function applyDraftModifications(
     operation: operation === 'update' && existingEventId ? 'update' : 'create',
     existingEventId: operation === 'update' ? existingEventId : null,
     matchedEvent: operation === 'update' ? matchedEvent : null,
+    mediaSuggestions,
   };
 }
 
@@ -727,7 +796,10 @@ function sameStringList(left: string[], right: string[]) {
   return left.every((entry, index) => entry === right[index]);
 }
 
-function buildDraftModifications(baseDraft: EventDraft, nextDraft: EventDraft): EventDraftModifications {
+function buildDraftModifications(
+  baseDraft: EventDraft,
+  nextDraft: EventDraft,
+): EventDraftModifications {
   const modifications: EventDraftModifications = {};
 
   if (normalizedDraftValue(baseDraft.title) !== normalizedDraftValue(nextDraft.title)) {
@@ -759,6 +831,11 @@ function buildDraftModifications(baseDraft: EventDraft, nextDraft: EventDraft): 
   if (!sameStringList(baseParticipantIds, nextParticipantIds)) {
     modifications.contact_ids = nextParticipantIds;
   }
+  const baseMediaIds = baseDraft.mediaSuggestions.map((suggestion) => suggestion.asset_id);
+  const nextMediaIds = nextDraft.mediaSuggestions.map((suggestion) => suggestion.asset_id);
+  if (!sameStringList(baseMediaIds, nextMediaIds)) {
+    modifications.media_asset_ids = nextMediaIds;
+  }
 
   if (baseDraft.operation !== nextDraft.operation) {
     modifications.operation = nextDraft.operation;
@@ -781,6 +858,7 @@ function modificationSummary(modifications: EventDraftModifications): string {
   if ('tags' in modifications) labels.push('tags');
   if ('types' in modifications) labels.push('types');
   if ('contact_ids' in modifications) labels.push('participants');
+  if ('media_asset_ids' in modifications) labels.push('media');
   return labels.join(', ');
 }
 
@@ -980,9 +1058,7 @@ function updateEventAuxiliaryCards(
   const uniqueNewContacts = Array.from(new Set(selectedNewContacts));
 
   const resolutionNewPlaces = Array.isArray(payload.resolution?.new_entities?.places)
-    ? payload.resolution?.new_entities?.places
-        .map((place) => textValue(place.name))
-        .filter(Boolean)
+    ? payload.resolution?.new_entities?.places.map((place) => textValue(place.name)).filter(Boolean)
     : [];
   const extractedWhere = textValue(payload.extracted?.where);
   const normalizedDraftWhere = normalizeSearch(draft.where.trim());
@@ -1056,7 +1132,9 @@ function updateContactDraftCards(
   draft: ReturnType<typeof buildContactDraft>,
 ): UiDirectives {
   if (!draft) return directives;
-  const placeNameByReference = new Map(draft.places.map((place) => [place.reference, place.name.trim()]));
+  const placeNameByReference = new Map(
+    draft.places.map((place) => [place.reference, place.name.trim()]),
+  );
   const contactNameByReference = new Map(
     draft.contacts.map((contact) => [contact.reference, contact.displayName.trim()]),
   );
@@ -1076,8 +1154,12 @@ function updateContactDraftCards(
     explicitLines.push(`Place: ${place.name.trim() || place.reference}`);
   }
   for (const link of draft.placeLinks) {
-    const contactName = contactNameByReference.get(link.contactReference) || link.contactDisplayName || link.contactReference;
-    const placeName = placeNameByReference.get(link.placeReference) || link.placeName || link.placeReference;
+    const contactName =
+      contactNameByReference.get(link.contactReference) ||
+      link.contactDisplayName ||
+      link.contactReference;
+    const placeName =
+      placeNameByReference.get(link.placeReference) || link.placeName || link.placeReference;
     explicitLines.push(`Link: ${contactName} -> ${placeName} as ${link.role || 'related'}`);
   }
 
@@ -1144,15 +1226,20 @@ export function ChatConversationScreen({
   const [contactDraftModificationsByPreview, setContactDraftModificationsByPreview] = useState<
     Record<string, ContactDraftModifications>
   >({});
-  const [activeContactDraftEditorSessionId, setActiveContactDraftEditorSessionId] =
-    useState<string | null>(null);
+  const [activeContactDraftEditorSessionId, setActiveContactDraftEditorSessionId] = useState<
+    string | null
+  >(null);
   const [eventEditorContacts, setEventEditorContacts] = useState<EventContactOption[]>([]);
   const [eventEditorPlaces, setEventEditorPlaces] = useState<EventPlaceOption[]>([]);
   const isAtBottomRef = useRef(true);
   const [forceScrollNext, setForceScrollNext] = useState(false);
   const [isBootstrapping, setIsBootstrapping] = useState(true);
-  const [expandedErrorMessageIds, setExpandedErrorMessageIds] = useState<Record<string, boolean>>({});
-  const [composerMediaAttachments, setComposerMediaAttachments] = useState<ComposerMediaAttachment[]>([]);
+  const [expandedErrorMessageIds, setExpandedErrorMessageIds] = useState<Record<string, boolean>>(
+    {},
+  );
+  const [composerMediaAttachments, setComposerMediaAttachments] = useState<
+    ComposerMediaAttachment[]
+  >([]);
   const hasHydratedSessionRef = useRef(false);
   const restoreGenerationRef = useRef(0);
   const [composerHeight, setComposerHeight] = useState(0);
@@ -1162,7 +1249,7 @@ export function ChatConversationScreen({
   const composerBottomOffset = keyboardVisible
     ? Platform.OS === 'ios'
       ? Math.max(0, keyboardHeight - insets.bottom) + COMPOSER_KEYBOARD_GAP
-      : Math.max(0, keyboardHeight - insets.bottom) + 2*COMPOSER_KEYBOARD_GAP
+      : Math.max(0, keyboardHeight - insets.bottom) + 2 * COMPOSER_KEYBOARD_GAP
     : 0;
   const listBottomInset =
     composerHeight > 0
@@ -1216,8 +1303,7 @@ export function ChatConversationScreen({
     const restoreGeneration = restoreGenerationRef.current + 1;
     restoreGenerationRef.current = restoreGeneration;
 
-    const isCurrentRestore = () =>
-      !cancelled && restoreGenerationRef.current === restoreGeneration;
+    const isCurrentRestore = () => !cancelled && restoreGenerationRef.current === restoreGeneration;
 
     const restoreSession = async () => {
       if (isAuthLoading) {
@@ -1423,15 +1509,7 @@ export function ChatConversationScreen({
     if (restored.messages.length > 0) {
       setMessages(restored.messages);
     }
-  }, [
-    allowed,
-    isAuthLoading,
-    isBootstrapping,
-    isMainChat,
-    pendingEventId,
-    threadId,
-    token,
-  ]);
+  }, [allowed, isAuthLoading, isBootstrapping, isMainChat, pendingEventId, threadId, token]);
 
   useEffect(() => {
     if (!token || !allowed || isAuthLoading || isBootstrapping) return;
@@ -1452,14 +1530,7 @@ export function ChatConversationScreen({
     return () => {
       subscription.remove();
     };
-  }, [
-    allowed,
-    isAuthLoading,
-    isBootstrapping,
-    resumePendingRun,
-    syncLatestThreadState,
-    token,
-  ]);
+  }, [allowed, isAuthLoading, isBootstrapping, resumePendingRun, syncLatestThreadState, token]);
 
   useFocusEffect(
     useCallback(() => {
@@ -1477,14 +1548,7 @@ export function ChatConversationScreen({
       })();
 
       return () => undefined;
-    }, [
-      allowed,
-      isAuthLoading,
-      isBootstrapping,
-      resumePendingRun,
-      syncLatestThreadState,
-      token,
-    ]),
+    }, [allowed, isAuthLoading, isBootstrapping, resumePendingRun, syncLatestThreadState, token]),
   );
 
   useEffect(() => {
@@ -1545,7 +1609,9 @@ export function ChatConversationScreen({
       if (assets.length === 0) {
         return;
       }
-      const nextAttachments = await Promise.all(assets.map((asset) => buildComposerMediaAttachment(asset)));
+      const nextAttachments = await Promise.all(
+        assets.map((asset) => buildComposerMediaAttachment(asset)),
+      );
       setComposerMediaAttachments((prev) => {
         if (prev.length >= MAX_CHAT_MEDIA_ATTACHMENTS) {
           return prev;
@@ -1568,203 +1634,231 @@ export function ChatConversationScreen({
     }
   }, [allowed, composerMediaAttachments.length, isSending, pickImages, showError]);
 
-  const sendMessage = useCallback(async (override?: SendMessageInput) => {
-    const overrideText = typeof override === 'string' ? override : override?.text;
-    const overridePendingCommandId =
-      typeof override === 'string' ? undefined : override?.pendingCommandId;
-    const uiSubmission = typeof override === 'string' ? undefined : override?.uiSubmission;
-    const overrideMediaAttachments =
-      typeof override === 'string' ? undefined : override?.mediaAttachments;
+  const sendMessage = useCallback(
+    async (override?: SendMessageInput) => {
+      const overrideText = typeof override === 'string' ? override : override?.text;
+      const overridePendingCommandId =
+        typeof override === 'string' ? undefined : override?.pendingCommandId;
+      const uiSubmission = typeof override === 'string' ? undefined : override?.uiSubmission;
+      const overrideMediaAttachments =
+        typeof override === 'string' ? undefined : override?.mediaAttachments;
 
-    const draft = overrideText ?? input;
-    const trimmed = draft.trim();
-    const outboundText =
-      trimmed || uiSubmission?.text_fallback?.trim() || 'Submitted structured response.';
-    const outboundMediaAttachments = overrideMediaAttachments ?? composerMediaAttachments;
+      const draft = overrideText ?? input;
+      const trimmed = draft.trim();
+      const outboundText =
+        trimmed || uiSubmission?.text_fallback?.trim() || 'Submitted structured response.';
+      const outboundMediaAttachments = overrideMediaAttachments ?? composerMediaAttachments;
 
-    if ((!outboundText && outboundMediaAttachments.length === 0) || isSending || !allowed || isBootstrapping) return;
-    Keyboard.dismiss();
-    setInput('');
-    setComposerMediaAttachments([]);
-    setForceScrollNext(true);
-    const pendingId = `${Date.now()}-pending`;
+      if (
+        (!outboundText && outboundMediaAttachments.length === 0) ||
+        isSending ||
+        !allowed ||
+        isBootstrapping
+      )
+        return;
+      Keyboard.dismiss();
+      setInput('');
+      setComposerMediaAttachments([]);
+      setForceScrollNext(true);
+      const pendingId = `${Date.now()}-pending`;
 
-    setMessages((prev) => [
-      ...prev,
-      {
-        id: `${Date.now()}-user`,
-        role: 'user',
-        content: outboundText,
-        metadata:
-          outboundMediaAttachments.length > 0
-            ? {
-                media_attachments: outboundMediaAttachments.map((attachment) => ({
-                  attachment_id: attachment.attachmentId,
-                  file_name: attachment.fileName,
-                  mime_type: attachment.mimeType,
-                  source: attachment.source,
-                  captured_at: attachment.capturedAt ?? null,
-                  width: attachment.width ?? null,
-                  height: attachment.height ?? null,
-                  uri: attachment.uri,
-                })),
-              }
-            : undefined,
-      },
-      { id: pendingId, role: 'assistant', content: 'Thinking...', pending: true },
-    ]);
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: `${Date.now()}-user`,
+          role: 'user',
+          content: outboundText,
+          metadata:
+            outboundMediaAttachments.length > 0
+              ? {
+                  media_attachments: outboundMediaAttachments.map((attachment) => ({
+                    attachment_id: attachment.attachmentId,
+                    file_name: attachment.fileName,
+                    mime_type: attachment.mimeType,
+                    source: attachment.source,
+                    captured_at: attachment.capturedAt ?? null,
+                    width: attachment.width ?? null,
+                    height: attachment.height ?? null,
+                    uri: attachment.uri,
+                  })),
+                }
+              : undefined,
+        },
+        { id: pendingId, role: 'assistant', content: 'Thinking...', pending: true },
+      ]);
 
-    const updatePendingMessage = (nextContent: string) => {
-      setMessages((prev) =>
-        prev.map((message) =>
-          message.id === pendingId
-            ? {
-                ...message,
-                content: nextContent,
-                pending: true,
-                metadata: message.metadata,
-              }
-            : message,
-        ),
-      );
-    };
+      const updatePendingMessage = (nextContent: string) => {
+        setMessages((prev) =>
+          prev.map((message) =>
+            message.id === pendingId
+              ? {
+                  ...message,
+                  content: nextContent,
+                  pending: true,
+                  metadata: message.metadata,
+                }
+              : message,
+          ),
+        );
+      };
 
-    const setProgressChip = (chipLabelRaw: string) => {
-      const chipLabel = chipLabelRaw.trim();
-      if (!chipLabel) return;
+      const setProgressChip = (chipLabelRaw: string) => {
+        const chipLabel = chipLabelRaw.trim();
+        if (!chipLabel) return;
 
-      setMessages((prev) =>
-        prev.map((message) => {
-          if (message.id !== pendingId) {
-            return message;
-          }
-          if (message.metadata?.progress_chip === chipLabel) {
-            return message;
-          }
-          return {
-            ...message,
-            metadata: {
-              ...message.metadata,
-              progress_chip: chipLabel,
-            },
-          };
-        }),
-      );
-    };
+        setMessages((prev) =>
+          prev.map((message) => {
+            if (message.id !== pendingId) {
+              return message;
+            }
+            if (message.metadata?.progress_chip === chipLabel) {
+              return message;
+            }
+            return {
+              ...message,
+              metadata: {
+                ...message.metadata,
+                progress_chip: chipLabel,
+              },
+            };
+          }),
+        );
+      };
 
-    setIsSending(true);
-    let activeRunId: string | null = null;
-    try {
-      let streamedContent = '';
-      let lastStatus = 'Thinking...';
-      const response = await askWithStreaming({
-        token,
-        question: outboundText,
-        threadId: isMainChat ? undefined : threadId,
-        pendingCommandId:
-          commandsEnabled
+      setIsSending(true);
+      let activeRunId: string | null = null;
+      try {
+        let streamedContent = '';
+        let lastStatus = 'Thinking...';
+        const response = await askWithStreaming({
+          token,
+          question: outboundText,
+          threadId: isMainChat ? undefined : threadId,
+          pendingCommandId: commandsEnabled
             ? overridePendingCommandId !== undefined
               ? overridePendingCommandId
               : pendingEventId
             : null,
-        uiSubmission,
-        mediaAttachments: outboundMediaAttachments.map(toChatMediaAttachmentPayload),
-        callbacks: {
-          onSessionInfo: (threadIdFromStream) => {
-            setThreadId((prev) => threadIdFromStream ?? prev);
-            if (activeRunId) {
+          uiSubmission,
+          mediaAttachments: outboundMediaAttachments.map(toChatMediaAttachmentPayload),
+          callbacks: {
+            onSessionInfo: (threadIdFromStream) => {
+              setThreadId((prev) => threadIdFromStream ?? prev);
+              if (activeRunId) {
+                void savePendingRun({
+                  runId: activeRunId,
+                  pendingMessageId: pendingId,
+                  threadId: threadIdFromStream ?? null,
+                  question: outboundText,
+                  startedAt: Date.now(),
+                });
+              }
+            },
+            onRunId: (runIdFromStream) => {
+              activeRunId = runIdFromStream;
               void savePendingRun({
-                runId: activeRunId,
+                runId: runIdFromStream,
                 pendingMessageId: pendingId,
-                threadId: threadIdFromStream ?? null,
+                threadId: isMainChat ? threadId : (threadId ?? initialThreadId),
                 question: outboundText,
                 startedAt: Date.now(),
               });
-            }
-          },
-          onRunId: (runIdFromStream) => {
-            activeRunId = runIdFromStream;
-            void savePendingRun({
-              runId: runIdFromStream,
-              pendingMessageId: pendingId,
-              threadId: isMainChat ? threadId : (threadId ?? initialThreadId),
-              question: outboundText,
-              startedAt: Date.now(),
-            });
-          },
-          onStatus: (statusMessage) => {
-            lastStatus = statusMessage;
-            const isReconnectStatus = statusMessage.toLowerCase().startsWith('reconnecting');
-            if (isReconnectStatus) {
-              streamedContent = '';
-            }
-            if (!streamedContent || isReconnectStatus) {
-              updatePendingMessage(lastStatus);
-            }
-          },
-          onToken: (delta) => {
-            streamedContent += delta;
-            updatePendingMessage(streamedContent);
-          },
-          onClearContent: () => {
-            streamedContent = '';
-            updatePendingMessage(lastStatus || 'Thinking...');
-          },
-          onProgressChip: setProgressChip,
-        },
-      });
-
-      await clearPendingRun();
-
-      setThreadId((prev) => response.thread_id ?? prev);
-      const commandResult = response.command_result as CommandResult | undefined;
-      const uiDirectives = response.ui_directives;
-      const linkedItems = Array.isArray(response.linked_items)
-        ? (response.linked_items as LinkedItem[])
-        : [];
-      const generatedFiles = Array.isArray(response.generated_files)
-        ? (response.generated_files as GeneratedFile[])
-        : [];
-      const assistantContent =
-        response.answer ??
-        uiDirectives?.fallback_text ??
-        (commandResult ? 'Command completed.' : 'Ready when you are.');
-
-      if (response.pending_event_id !== undefined) {
-        setPendingEventId(response.pending_event_id ?? null);
-      }
-
-      setForceScrollNext(true);
-      setMessages((prev) =>
-        prev.map((message) =>
-          message.id === pendingId
-            ? {
-                ...message,
-                content: assistantContent,
-                pending: false,
-                metadata:
-                  commandResult ||
-                  uiDirectives ||
-                  linkedItems.length > 0 ||
-                  generatedFiles.length > 0
-                    ? {
-                        command_result: commandResult,
-                        ui_directives: uiDirectives,
-                        linked_items: linkedItems.length > 0 ? linkedItems : undefined,
-                        generated_files: generatedFiles.length > 0 ? generatedFiles : undefined,
-                      }
-                    : undefined,
+            },
+            onStatus: (statusMessage) => {
+              lastStatus = statusMessage;
+              const isReconnectStatus = statusMessage.toLowerCase().startsWith('reconnecting');
+              if (isReconnectStatus) {
+                streamedContent = '';
               }
-            : message,
-        ),
-      );
-    } catch (error) {
-      const authExpired = (error as Error & { authExpired?: boolean }).authExpired;
-      if (authExpired) {
+              if (!streamedContent || isReconnectStatus) {
+                updatePendingMessage(lastStatus);
+              }
+            },
+            onToken: (delta) => {
+              streamedContent += delta;
+              updatePendingMessage(streamedContent);
+            },
+            onClearContent: () => {
+              streamedContent = '';
+              updatePendingMessage(lastStatus || 'Thinking...');
+            },
+            onProgressChip: setProgressChip,
+          },
+        });
+
         await clearPendingRun();
-        await signOut();
-        if (outboundMediaAttachments.length > 0) {
-          setComposerMediaAttachments(outboundMediaAttachments);
+
+        setThreadId((prev) => response.thread_id ?? prev);
+        const commandResult = response.command_result as CommandResult | undefined;
+        const uiDirectives = response.ui_directives;
+        const linkedItems = Array.isArray(response.linked_items)
+          ? (response.linked_items as LinkedItem[])
+          : [];
+        const generatedFiles = Array.isArray(response.generated_files)
+          ? (response.generated_files as GeneratedFile[])
+          : [];
+        const assistantContent =
+          response.answer ??
+          uiDirectives?.fallback_text ??
+          (commandResult ? 'Command completed.' : 'Ready when you are.');
+
+        if (response.pending_event_id !== undefined) {
+          setPendingEventId(response.pending_event_id ?? null);
+        }
+
+        setForceScrollNext(true);
+        setMessages((prev) =>
+          prev.map((message) =>
+            message.id === pendingId
+              ? {
+                  ...message,
+                  content: assistantContent,
+                  pending: false,
+                  metadata:
+                    commandResult ||
+                    uiDirectives ||
+                    linkedItems.length > 0 ||
+                    generatedFiles.length > 0
+                      ? {
+                          command_result: commandResult,
+                          ui_directives: uiDirectives,
+                          linked_items: linkedItems.length > 0 ? linkedItems : undefined,
+                          generated_files: generatedFiles.length > 0 ? generatedFiles : undefined,
+                        }
+                      : undefined,
+                }
+              : message,
+          ),
+        );
+      } catch (error) {
+        const authExpired = (error as Error & { authExpired?: boolean }).authExpired;
+        if (authExpired) {
+          await clearPendingRun();
+          await signOut();
+          if (outboundMediaAttachments.length > 0) {
+            setComposerMediaAttachments(outboundMediaAttachments);
+          }
+          setForceScrollNext(true);
+          setMessages((prev) =>
+            prev.map((message) =>
+              message.id === pendingId
+                ? {
+                    ...message,
+                    content: 'Session expired. Please sign in again.',
+                    pending: false,
+                  }
+                : message,
+            ),
+          );
+          return;
+        }
+        const requestError = backendErrorDetails(error);
+        const keepPendingRun = Boolean(activeRunId) && shouldKeepPendingRun(error);
+        if (!keepPendingRun) {
+          await clearPendingRun();
+          if (outboundMediaAttachments.length > 0) {
+            setComposerMediaAttachments(outboundMediaAttachments);
+          }
         }
         setForceScrollNext(true);
         setMessages((prev) =>
@@ -1772,62 +1866,42 @@ export function ChatConversationScreen({
             message.id === pendingId
               ? {
                   ...message,
-                  content: 'Session expired. Please sign in again.',
-                  pending: false,
+                  content: keepPendingRun
+                    ? 'Reconnecting...'
+                    : conciseBackendErrorMessage(
+                        error,
+                        'I hit a snag reaching the brain. Try again in a moment.',
+                      ),
+                  pending: keepPendingRun,
+                  metadata: keepPendingRun
+                    ? message.metadata
+                    : {
+                        ...message.metadata,
+                        request_error: requestError,
+                      },
                 }
               : message,
           ),
         );
-        return;
+      } finally {
+        setIsSending(false);
       }
-      const requestError = backendErrorDetails(error);
-      const keepPendingRun = Boolean(activeRunId) && shouldKeepPendingRun(error);
-      if (!keepPendingRun) {
-        await clearPendingRun();
-        if (outboundMediaAttachments.length > 0) {
-          setComposerMediaAttachments(outboundMediaAttachments);
-        }
-      }
-      setForceScrollNext(true);
-      setMessages((prev) =>
-        prev.map((message) =>
-          message.id === pendingId
-            ? {
-                ...message,
-                content: keepPendingRun
-                  ? 'Reconnecting...'
-                  : conciseBackendErrorMessage(
-                      error,
-                      'I hit a snag reaching the brain. Try again in a moment.',
-                    ),
-                pending: keepPendingRun,
-                metadata: keepPendingRun
-                  ? message.metadata
-                  : {
-                      ...message.metadata,
-                      request_error: requestError,
-                    },
-              }
-            : message,
-        ),
-      );
-    } finally {
-      setIsSending(false);
-    }
-  }, [
-    allowed,
-    composerMediaAttachments,
-    commandsEnabled,
-    input,
-    initialThreadId,
-    isBootstrapping,
-    isMainChat,
-    isSending,
-    pendingEventId,
-    signOut,
-    threadId,
-    token,
-  ]);
+    },
+    [
+      allowed,
+      composerMediaAttachments,
+      commandsEnabled,
+      input,
+      initialThreadId,
+      isBootstrapping,
+      isMainChat,
+      isSending,
+      pendingEventId,
+      signOut,
+      threadId,
+      token,
+    ],
+  );
 
   const loadEventEditorContacts = useCallback(async (): Promise<EventContactOption[]> => {
     if (!token) return [];
@@ -1965,7 +2039,8 @@ export function ChatConversationScreen({
               {
                 id: `${Date.now()}-contact-edit-unavailable`,
                 role: 'assistant',
-                content: 'I could not load that contact draft for editing. Please retry from the latest preview.',
+                content:
+                  'I could not load that contact draft for editing. Please retry from the latest preview.',
               },
             ]);
             setForceScrollNext(true);
@@ -2004,7 +2079,8 @@ export function ChatConversationScreen({
 
           const resolved: CommandResolvedMeta = {
             status: action.type === 'confirm' ? 'created' : 'cancelled',
-            label: action.type === 'confirm' ? 'Contact changes applied' : 'Contact update cancelled',
+            label:
+              action.type === 'confirm' ? 'Contact changes applied' : 'Contact update cancelled',
           };
           setPendingEventId(null);
           setContactDraftModificationsByPreview((prev) => {
@@ -2049,7 +2125,10 @@ export function ChatConversationScreen({
       }
 
       if (submission.action_id?.startsWith(CONTACT_EDIT_ACTION_PREFIX)) {
-        const previewId = submission.action_id.slice(CONTACT_EDIT_ACTION_PREFIX.length).replace(/^:/, '').trim();
+        const previewId = submission.action_id
+          .slice(CONTACT_EDIT_ACTION_PREFIX.length)
+          .replace(/^:/, '')
+          .trim();
         if (!previewId) {
           return;
         }
@@ -2146,7 +2225,8 @@ export function ChatConversationScreen({
               {
                 id: `${Date.now()}-event-edit-unavailable`,
                 role: 'assistant',
-                content: 'I could not load that draft for editing. Please retry from the latest event preview.',
+                content:
+                  'I could not load that draft for editing. Please retry from the latest event preview.',
               },
             ]);
             setForceScrollNext(true);
@@ -2157,7 +2237,10 @@ export function ChatConversationScreen({
           const candidateEvents = buildEventCandidateList(
             (commandResult as EventCommandResultPayload | undefined)?.candidate_events,
           );
-          const createFallbackDraft = buildCreateFallbackEventDraft(commandResult, action.previewId);
+          const createFallbackDraft = buildCreateFallbackEventDraft(
+            commandResult,
+            action.previewId,
+          );
           const session = createEventDraftEditSession({
             previewId: action.previewId,
             baseDraft,
@@ -2197,7 +2280,9 @@ export function ChatConversationScreen({
           const participantIds = modifications.contact_ids
             ? new Set(modifications.contact_ids)
             : baseDraftForConfirm
-              ? new Set(baseDraftForConfirm.participants.map((participant) => participant.contactId))
+              ? new Set(
+                  baseDraftForConfirm.participants.map((participant) => participant.contactId),
+                )
               : undefined;
           const participantNames = baseDraftForConfirm
             ? new Set(
@@ -2320,8 +2405,9 @@ export function ChatConversationScreen({
         return;
       }
 
-      const isContactClarificationSubmission =
-        submission.action_id?.startsWith(CONTACT_CLARIFICATION_ACTION_PREFIX);
+      const isContactClarificationSubmission = submission.action_id?.startsWith(
+        CONTACT_CLARIFICATION_ACTION_PREFIX,
+      );
 
       if (isContactClarificationSubmission) {
         const answer = buildEventClarificationAnswer(submission, directives);
@@ -2391,8 +2477,8 @@ export function ChatConversationScreen({
           showError(result.fallbackWarning);
         }
         showSuccess(
-          result.savedToDownloads
-            ? `Saved ${result.label} to Downloads.`
+          result.savedToDigitalBrainFolder
+            ? `Saved ${result.label} to your Digital Brain folder.`
             : `Downloaded ${result.label}.`,
         );
         void Linking.openURL(result.openUri).catch(() => undefined);
@@ -2404,24 +2490,21 @@ export function ChatConversationScreen({
     [refreshToken, showError, showSuccess, token],
   );
 
-  const scrollToBottom = useCallback(
-    (animated: boolean) => {
-      if (scrollFallbackTimeoutRef.current) {
-        clearTimeout(scrollFallbackTimeoutRef.current);
-      }
+  const scrollToBottom = useCallback((animated: boolean) => {
+    if (scrollFallbackTimeoutRef.current) {
+      clearTimeout(scrollFallbackTimeoutRef.current);
+    }
 
-      const runScroll = () => {
-        listRef.current?.scrollToEnd({ animated });
-      };
+    const runScroll = () => {
+      listRef.current?.scrollToEnd({ animated });
+    };
 
-      requestAnimationFrame(() => {
-        requestAnimationFrame(runScroll);
-      });
+    requestAnimationFrame(() => {
+      requestAnimationFrame(runScroll);
+    });
 
-      scrollFallbackTimeoutRef.current = setTimeout(runScroll, animated ? 140 : 0);
-    },
-    [],
-  );
+    scrollFallbackTimeoutRef.current = setTimeout(runScroll, animated ? 140 : 0);
+  }, []);
 
   useEffect(() => {
     return () => {
@@ -2576,18 +2659,34 @@ export function ChatConversationScreen({
             const isLatestAssistantMessage = item.id === lastMessage?.id;
             const isStaleClarificationCard = Boolean(
               clarificationDirectiveId &&
-                isClarificationDirective(directivesForCard) &&
-                pendingEventId &&
-                pendingEventId !== clarificationDirectiveId &&
-                !isLatestAssistantMessage,
+              isClarificationDirective(directivesForCard) &&
+              pendingEventId &&
+              pendingEventId !== clarificationDirectiveId &&
+              !isLatestAssistantMessage,
             );
+            const eventMediaDraft = eventPreviewId
+              ? (() => {
+                  const baseDraft = buildEventDraft(commandResult, eventPreviewId);
+                  if (!baseDraft) return null;
+                  if (!eventPreviewModifications) return baseDraft;
+                  return applyDraftModifications(
+                    baseDraft,
+                    eventPreviewModifications,
+                    new Map(),
+                    buildEventCandidateList(
+                      (commandResult as EventCommandResultPayload | undefined)?.candidate_events,
+                    ),
+                  );
+                })()
+              : null;
 
             return (
               <View
                 style={[
                   styles.messageBubble,
                   item.role === 'user' ? styles.userBubble : styles.assistantBubble,
-                ]}>
+                ]}
+              >
                 {item.role === 'user' && userMediaAttachments.length > 0 ? (
                   <View style={styles.userMediaRow}>
                     {userMediaAttachments.slice(0, 4).map((attachment, index) =>
@@ -2609,7 +2708,9 @@ export function ChatConversationScreen({
                     )}
                     {userMediaAttachments.length > 4 ? (
                       <View style={[styles.userMediaImage, styles.userMediaOverflow]}>
-                        <Text style={styles.userMediaOverflowText}>{`+${userMediaAttachments.length - 4}`}</Text>
+                        <Text
+                          style={styles.userMediaOverflowText}
+                        >{`+${userMediaAttachments.length - 4}`}</Text>
                       </View>
                     ) : null}
                   </View>
@@ -2625,6 +2726,31 @@ export function ChatConversationScreen({
                 )}
                 {directivesForCard && !isStaleClarificationCard && (
                   <View style={styles.commandCardWrap}>
+                    {eventMediaDraft && eventMediaDraft.mediaSuggestions.length > 0 ? (
+                      <EventMediaSuggestionCard
+                        suggestions={eventMediaDraft.mediaSuggestions}
+                        token={token}
+                        editable={!item.metadata?.command_resolved && !isSupersededEventCard}
+                        onRemove={(assetId) => {
+                          if (isSupersededEventCard) return;
+                          setEventDraftModificationsByPreview((current) => {
+                            const baseDraft = buildEventDraft(commandResult, eventPreviewId || '');
+                            if (!baseDraft) return current;
+                            const previous = current[eventPreviewId || ''] || {};
+                            const selectedIds =
+                              previous.media_asset_ids ??
+                              baseDraft.mediaSuggestions.map((suggestion) => suggestion.asset_id);
+                            return {
+                              ...current,
+                              [eventPreviewId || '']: {
+                                ...previous,
+                                media_asset_ids: selectedIds.filter((id) => id !== assetId),
+                              },
+                            };
+                          });
+                        }}
+                      />
+                    ) : null}
                     <UiDirectiveCard
                       directives={directivesForCard}
                       isSubmitting={isSending || isConfirmingEvent || isSupersededEventCard}
@@ -2709,7 +2835,10 @@ export function ChatConversationScreen({
                 onPress={() => router.push('/chat/history')}
                 accessibilityRole="button"
                 accessibilityLabel="Open thread history"
-                style={({ pressed }) => [styles.headerActionButton, pressed && styles.headerActionButtonPressed]}
+                style={({ pressed }) => [
+                  styles.headerActionButton,
+                  pressed && styles.headerActionButtonPressed,
+                ]}
               >
                 <Ionicons name="time-outline" size={18} color={theme.colors.ink} />
               </Pressable>
@@ -2717,7 +2846,12 @@ export function ChatConversationScreen({
           }
         />
         {showAnchoredSlashPalette && (
-          <View style={[styles.slashPaletteAnchor, { bottom: composerHeight + composerBottomOffset + 8 }]}>
+          <View
+            style={[
+              styles.slashPaletteAnchor,
+              { bottom: composerHeight + composerBottomOffset + 8 },
+            ]}
+          >
             <SlashCommandPalette
               query={slashQuery}
               onSelect={(command) => {
@@ -2764,7 +2898,6 @@ export function ChatConversationScreen({
             !allowed || isSending || composerMediaAttachments.length >= MAX_CHAT_MEDIA_ATTACHMENTS
           }
         />
-
       </KeyboardAvoidingView>
       {imagePickerSheet}
     </LinearGradient>

@@ -110,6 +110,76 @@ function withGlassesCaptureCleartext(config: ExpoConfig): ExpoConfig {
   });
 }
 
+/**
+ * Glasses alerts use Android's notification-access boundary and a temporary
+ * media-playback foreground service for an incoming-call ring. Keep the
+ * declarations here because Expo prebuild regenerates AndroidManifest.xml.
+ */
+function withGlassesAlertsAndroidManifest(config: ExpoConfig): ExpoConfig {
+  return withAndroidManifest(config, (mod) => {
+    const manifest = mod.modResults.manifest;
+    const addPermission = (name: string) => {
+      const permissions = manifest['uses-permission'] ?? [];
+      if (!permissions.some((permission) => permission.$?.['android:name'] === name)) {
+        permissions.push({ $: { 'android:name': name } });
+      }
+      manifest['uses-permission'] = permissions;
+    };
+    addPermission('android.permission.READ_PHONE_STATE');
+    addPermission('android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK');
+
+    const application = manifest.application?.[0];
+    if (!application) return mod;
+    const services = application.service ?? [];
+    const addService = (name: string, attributes: Record<string, string>, action?: string) => {
+      if (services.some((service) => service.$?.['android:name'] === name)) return;
+      services.push({
+        $: { 'android:name': name, ...attributes },
+        ...(action
+          ? { 'intent-filter': [{ action: [{ $: { 'android:name': action } }] }] }
+          : {}),
+      });
+    };
+    addService(
+      'expo.modules.digitalbrainglassesalerts.GlassesAlertNotificationListenerService',
+      {
+        'android:label': 'Digital Brain glasses alerts',
+        'android:permission': 'android.permission.BIND_NOTIFICATION_LISTENER_SERVICE',
+        'android:exported': 'true',
+      },
+      'android.service.notification.NotificationListenerService',
+    );
+    addService(
+      'expo.modules.digitalbrainglassesalerts.GlassesAlertPlaybackService',
+      {
+        'android:exported': 'false',
+        'android:foregroundServiceType': 'mediaPlayback',
+      },
+    );
+    application.service = services;
+
+    const queries = manifest.queries?.[0] ?? {};
+    const intents = queries.intent ?? [];
+    const hasLauncherQuery = intents.some((intent) =>
+      intent.action?.some((action: { $?: Record<string, string> }) =>
+        action.$?.['android:name'] === 'android.intent.action.MAIN',
+      ) &&
+      intent.category?.some((category: { $?: Record<string, string> }) =>
+        category.$?.['android:name'] === 'android.intent.category.LAUNCHER',
+      ),
+    );
+    if (!hasLauncherQuery) {
+      intents.push({
+        action: [{ $: { 'android:name': 'android.intent.action.MAIN' } }],
+        category: [{ $: { 'android:name': 'android.intent.category.LAUNCHER' } }],
+      });
+    }
+    queries.intent = intents;
+    manifest.queries = [queries];
+    return mod;
+  });
+}
+
 export default ({ config }: ConfigContext): ExpoConfig => {
   const appName = getAppName();
   const bundleId = getUniqueIdentifier();
@@ -195,10 +265,12 @@ export default ({ config }: ConfigContext): ExpoConfig => {
     },
   });
 
-  return withGlassesCaptureCleartext(
-    withSystemDebugKeystore({
+  return withGlassesAlertsAndroidManifest(
+    withGlassesCaptureCleartext(
+      withSystemDebugKeystore({
       ...merged,
       plugins: withPlugin(pluginsWithBuildProperties, 'expo-background-task'),
-    }),
+      }),
+    ),
   );
 };

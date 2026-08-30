@@ -1,18 +1,18 @@
-import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as FileSystem from 'expo-file-system/legacy';
 import { Platform } from 'react-native';
 
 import { API_BASE_URL } from '@/api/client';
 import { generatedFileLabel, type GeneratedFile } from '@/chat/generatedFiles';
-
-const DOWNLOADS_DIRECTORY_URI_KEY = 'generated_files_downloads_directory_uri';
-const { StorageAccessFramework } = FileSystem;
+import {
+  copyToDigitalBrainStorage,
+  DigitalBrainStorageFolder,
+} from '@/storage/digitalBrainStorage';
 
 type DownloadGeneratedFileResult = {
   fileName: string;
   label: string;
   openUri: string;
-  savedToDownloads: boolean;
+  savedToDigitalBrainFolder: boolean;
   fallbackWarning?: string;
 };
 
@@ -86,56 +86,17 @@ async function verifyDownloadedFile(uri: string, expectedSize?: number | null): 
   }
 }
 
-async function ensureAndroidDownloadsDirectoryUri(forcePrompt: boolean = false): Promise<string> {
-  if (!forcePrompt) {
-    const cached = await AsyncStorage.getItem(DOWNLOADS_DIRECTORY_URI_KEY);
-    if (cached) return cached;
-  }
-
-  const initialUri = StorageAccessFramework.getUriForDirectoryInRoot('Download');
-  const permission = await StorageAccessFramework.requestDirectoryPermissionsAsync(initialUri);
-  if (!permission.granted || !permission.directoryUri) {
-    throw new Error('Downloads access not granted.');
-  }
-
-  await AsyncStorage.setItem(DOWNLOADS_DIRECTORY_URI_KEY, permission.directoryUri);
-  return permission.directoryUri;
-}
-
-async function exportToAndroidDownloads(
+async function exportToDigitalBrainStorage(
   localFileUri: string,
   fileName: string,
   mimeType?: string | null,
 ): Promise<string> {
-  const writeToDownloads = async (directoryUri: string): Promise<string> => {
-    const lastDot = fileName.lastIndexOf('.');
-    const baseName = lastDot > 0 ? fileName.slice(0, lastDot) : fileName;
-    const targetMime = mimeType || 'application/pdf';
-    const safFileUri = await StorageAccessFramework.createFileAsync(
-      directoryUri,
-      baseName,
-      targetMime,
-    );
-    const base64Content = await FileSystem.readAsStringAsync(localFileUri, {
-      encoding: FileSystem.EncodingType.Base64,
-    });
-    if (!base64Content) {
-      throw new Error('Download failed: the PDF file was empty.');
-    }
-    await FileSystem.writeAsStringAsync(safFileUri, base64Content, {
-      encoding: FileSystem.EncodingType.Base64,
-    });
-    return safFileUri;
-  };
-
-  const directoryUri = await ensureAndroidDownloadsDirectoryUri(false);
-  try {
-    return await writeToDownloads(directoryUri);
-  } catch {
-    await AsyncStorage.removeItem(DOWNLOADS_DIRECTORY_URI_KEY);
-    const refreshedDirectoryUri = await ensureAndroidDownloadsDirectoryUri(true);
-    return writeToDownloads(refreshedDirectoryUri);
-  }
+  return copyToDigitalBrainStorage(
+    localFileUri,
+    DigitalBrainStorageFolder.Exports,
+    fileName,
+    mimeType || 'application/pdf',
+  );
 }
 
 export async function downloadGeneratedFile(
@@ -159,18 +120,18 @@ export async function downloadGeneratedFile(
   await verifyDownloadedFile(result.uri, file.file_size);
 
   let openUri = result.uri;
-  let savedToDownloads = false;
+  let savedToDigitalBrainFolder = false;
   let fallbackWarning: string | undefined;
 
   if (Platform.OS === 'android') {
     try {
-      openUri = await exportToAndroidDownloads(result.uri, fileName, file.file_mime);
-      savedToDownloads = true;
+      openUri = await exportToDigitalBrainStorage(result.uri, fileName, file.file_mime);
+      savedToDigitalBrainFolder = true;
     } catch (error) {
       fallbackWarning =
         error instanceof Error
           ? error.message
-          : 'Could not save to Downloads. File kept in app storage.';
+          : 'Could not save to the Digital Brain folder. File kept in app storage.';
       openUri = await FileSystem.getContentUriAsync(result.uri).catch(() => result.uri);
     }
   }
@@ -179,7 +140,7 @@ export async function downloadGeneratedFile(
     fileName,
     label: generatedFileLabel(file),
     openUri,
-    savedToDownloads,
+    savedToDigitalBrainFolder,
     fallbackWarning,
   };
 }

@@ -1,5 +1,4 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
-import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useFocusEffect } from '@react-navigation/native';
 import * as FileSystem from 'expo-file-system/legacy';
 import { router, Stack, useLocalSearchParams } from 'expo-router';
@@ -25,6 +24,10 @@ import { Card } from '@/components/Card';
 import { FloatingSaveButton } from '@/components/FloatingSaveButton';
 import { ScrollHeaderBackdrop } from '@/components/ScrollHeaderBackdrop';
 import { useAppNotice } from '@/hooks/useAppNotice';
+import {
+  copyToDigitalBrainStorage,
+  DigitalBrainStorageFolder,
+} from '@/storage/digitalBrainStorage';
 import { theme } from '@/theme';
 
 type RouteParams = {
@@ -48,9 +51,6 @@ type DocumentDetail = {
     display_name: string;
   }[];
 };
-
-const DOWNLOADS_DIRECTORY_URI_KEY = 'downloads_directory_uri';
-const { StorageAccessFramework } = FileSystem;
 
 function formatDate(value?: string | null): string {
   if (!value) return 'Unknown';
@@ -146,59 +146,15 @@ export default function DocumentDetailScreen() {
     }
   }, [ensureNotificationPermission, showError]);
 
-  const ensureAndroidDownloadsDirectoryUri = React.useCallback(
-    async (forcePrompt: boolean = false): Promise<string> => {
-      if (!forcePrompt) {
-        const cached = await AsyncStorage.getItem(DOWNLOADS_DIRECTORY_URI_KEY);
-        if (cached) {
-          return cached;
-        }
-      }
-
-      const initialUri = StorageAccessFramework.getUriForDirectoryInRoot('Download');
-      const permission = await StorageAccessFramework.requestDirectoryPermissionsAsync(initialUri);
-      if (!permission.granted || !permission.directoryUri) {
-        throw new Error('Downloads access not granted.');
-      }
-
-      await AsyncStorage.setItem(DOWNLOADS_DIRECTORY_URI_KEY, permission.directoryUri);
-      return permission.directoryUri;
-    },
+  const exportToDigitalBrainStorage = React.useCallback(
+    async (localFileUri: string, fileName: string, mimeType?: string | null): Promise<string> =>
+      copyToDigitalBrainStorage(
+        localFileUri,
+        DigitalBrainStorageFolder.Exports,
+        fileName,
+        mimeType || 'application/octet-stream',
+      ),
     [],
-  );
-
-  const exportToAndroidDownloads = React.useCallback(
-    async (localFileUri: string, fileName: string, mimeType?: string | null): Promise<string> => {
-      const writeToDownloads = async (directoryUri: string): Promise<string> => {
-        const lastDot = fileName.lastIndexOf('.');
-        const baseName = lastDot > 0 ? fileName.slice(0, lastDot) : fileName;
-        const targetMime = mimeType || 'application/octet-stream';
-
-        const safFileUri = await StorageAccessFramework.createFileAsync(
-          directoryUri,
-          baseName,
-          targetMime,
-        );
-        const base64Content = await FileSystem.readAsStringAsync(localFileUri, {
-          encoding: FileSystem.EncodingType.Base64,
-        });
-        await FileSystem.writeAsStringAsync(safFileUri, base64Content, {
-          encoding: FileSystem.EncodingType.Base64,
-        });
-
-        return safFileUri;
-      };
-
-      const directoryUri = await ensureAndroidDownloadsDirectoryUri(false);
-      try {
-        return await writeToDownloads(directoryUri);
-      } catch {
-        await AsyncStorage.removeItem(DOWNLOADS_DIRECTORY_URI_KEY);
-        const refreshedDirectoryUri = await ensureAndroidDownloadsDirectoryUri(true);
-        return await writeToDownloads(refreshedDirectoryUri);
-      }
-    },
-    [ensureAndroidDownloadsDirectoryUri],
   );
 
   const performDownload = React.useCallback(
@@ -305,12 +261,12 @@ export default function DocumentDetailScreen() {
 
       if (Platform.OS === 'android') {
         try {
-          openUri = await exportToAndroidDownloads(result.uri, safeName, document.file_mime);
+          openUri = await exportToDigitalBrainStorage(result.uri, safeName, document.file_mime);
         } catch (exportError) {
           const message =
             exportError instanceof Error
               ? exportError.message
-              : 'Could not save to Downloads. File kept in app storage.';
+              : 'Could not save to the Digital Brain folder. File kept in app storage.';
           showWarning(message);
           completionLabel = `${safeName} (saved in app storage)`;
           openUri = await FileSystem.getContentUriAsync(result.uri).catch(() => result.uri);
@@ -334,7 +290,7 @@ export default function DocumentDetailScreen() {
     isDownloading,
     notifyDownloadComplete,
     notifyDownloadFailed,
-    exportToAndroidDownloads,
+    exportToDigitalBrainStorage,
     performDownload,
     showError,
     showWarning,

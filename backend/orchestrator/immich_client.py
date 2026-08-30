@@ -18,6 +18,7 @@ logger = get_runtime_logger(__name__)
 
 IMMICH_HTTP_TIMEOUT = int(os.getenv("IMMICH_HTTP_TIMEOUT", "45"))
 UPLOAD_CHUNK_SIZE = 1024 * 1024
+IMMICH_SEARCH_PAGE_SIZE = 1000
 
 
 class ImmichClientError(RuntimeError):
@@ -435,6 +436,68 @@ def fetch_asset(asset_id: str, config: ImmichConfig | None = None) -> dict[str, 
     if not isinstance(payload, dict):
         raise ImmichClientError("Immich asset fetch returned unexpected payload")
     return payload
+
+
+def search_assets_by_time(
+    *,
+    taken_after: datetime,
+    taken_before: datetime,
+    config: ImmichConfig | None = None,
+) -> list[dict[str, Any]]:
+    """Return every non-deleted Immich asset in a capture-time interval.
+
+    Immich limits each metadata-search response to 1000 assets. This helper
+    deliberately paginates until the server reports that there is no next
+    page so callers do not silently lose candidates.
+    """
+    if taken_before < taken_after:
+        raise ImmichClientError("taken_before must be after taken_after")
+
+    cfg = config or get_immich_config()
+    url = f"{cfg.base_url}/api/search/metadata"
+    headers = {
+        "x-api-key": cfg.api_key,
+        "accept": "application/json",
+        "content-type": "application/json",
+    }
+    timeout = cfg.http_timeout or IMMICH_HTTP_TIMEOUT
+    assets: list[dict[str, Any]] = []
+    page = 1
+
+    while True:
+        payload = {
+            "takenAfter": _format_timestamp(taken_after),
+            "takenBefore": _format_timestamp(taken_before),
+            "withDeleted": False,
+            "withArchived": False,
+            "withExif": True,
+            "size": IMMICH_SEARCH_PAGE_SIZE,
+            "page": page,
+        }
+        try:
+            response = requests.post(url, headers=headers, json=payload, timeout=timeout)
+            response.raise_for_status()
+        except requests.RequestException as exc:
+            raise ImmichClientError(f"Immich asset search failed: {exc}") from exc
+
+        try:
+            result = response.json()
+        except ValueError as exc:
+            raise ImmichClientError("Immich asset search returned invalid JSON response") from exc
+
+        page_payload = result.get("assets") if isinstance(result, dict) else None
+        page_items = page_payload.get("items") if isinstance(page_payload, dict) else None
+        if not isinstance(page_items, list):
+            raise ImmichClientError("Immich asset search returned unexpected payload")
+        assets.extend(item for item in page_items if isinstance(item, dict))
+
+        next_page = page_payload.get("nextPage") if isinstance(page_payload, dict) else None
+        next_cursor = page_payload.get("nextCursor") if isinstance(page_payload, dict) else None
+        if not next_page and not next_cursor and len(page_items) < IMMICH_SEARCH_PAGE_SIZE:
+            break
+        page += 1
+
+    return assets
 
 
 def fetch_asset_faces(asset_id: str, config: ImmichConfig | None = None) -> list[dict[str, Any]]:

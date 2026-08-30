@@ -98,6 +98,47 @@ def attach_event_photo(
     return photo_row
 
 
+def link_existing_event_asset(
+    event_id: str,
+    asset_id: str,
+    *,
+    source: str = "immich_suggestion",
+) -> dict[str, Any]:
+    """Link an existing Immich asset to an event without uploading it again."""
+    normalized_event_id = _normalize_required_string(event_id, "event_id")
+    normalized_asset_id = _normalize_required_string(asset_id, "asset_id")
+    if not _event_exists(normalized_event_id):
+        raise EventPhotoError("Event not found")
+
+    asset_payload, detected_people = _fetch_immich_asset_context(normalized_asset_id)
+    tagged_contacts = _resolve_tagged_contacts_from_detected_people(detected_people)
+    exif = asset_payload.get("exifInfo") if isinstance(asset_payload.get("exifInfo"), dict) else {}
+    metadata = {
+        "immich_asset": asset_payload,
+        "detected_people": detected_people,
+        "match_source": source,
+    }
+    photo_row = _upsert_event_photo(
+        normalized_event_id,
+        asset_id=normalized_asset_id,
+        checksum=str(asset_payload.get("checksum") or "").strip(),
+        filename=str(asset_payload.get("originalFileName") or "").strip()
+        or f"{normalized_asset_id}.media",
+        mime_type=str(asset_payload.get("originalMimeType") or "").strip() or None,
+        captured_at=_parse_iso_datetime(asset_payload.get("fileCreatedAt")),
+        local_asset_id=None,
+        source=source,
+        metadata=metadata,
+        tagged_contacts=tagged_contacts,
+    )
+    photo_row["media_type"] = str(asset_payload.get("type") or "").strip().lower() or None
+    photo_row["duration_seconds"] = _coerce_duration(asset_payload.get("duration"))
+    photo_row["width"] = photo_row.get("width") or _coerce_int(exif.get("exifImageWidth"))
+    photo_row["height"] = photo_row.get("height") or _coerce_int(exif.get("exifImageHeight"))
+    _merge_event_contacts(normalized_event_id, tagged_contacts)
+    return photo_row
+
+
 def list_event_photos(event_id: str) -> list[dict[str, Any]]:
     return list_event_photos_for_events([event_id]).get(event_id, [])
 
@@ -188,6 +229,11 @@ def fetch_event_photo_thumbnail(event_id: str, asset_id: str) -> tuple[bytes, st
     if not _event_photo_exists(normalized_event_id, normalized_asset_id):
         raise EventPhotoError("Event photo not found")
     return immich_client.fetch_asset_thumbnail(normalized_asset_id)
+
+
+def fetch_event_media_thumbnail(asset_id: str) -> tuple[bytes, str]:
+    """Fetch a thumbnail for a persisted suggestion before it is linked."""
+    return immich_client.fetch_asset_thumbnail(_normalize_required_string(asset_id, "asset_id"))
 
 
 def _upsert_event_photo(
@@ -391,12 +437,17 @@ def _serialize_photo_row(row: dict[str, Any]) -> dict[str, Any]:
     event_id = str(row.get("event_id") or "").strip()
     asset_id = str(row.get("immich_asset_id") or "").strip()
     metadata = row.get("metadata") if isinstance(row.get("metadata"), dict) else {}
+    immich_asset = metadata.get("immich_asset") if isinstance(metadata.get("immich_asset"), dict) else {}
     detected_people = metadata.get("detected_people") if isinstance(metadata, dict) else None
     return {
         "asset_id": asset_id,
         "checksum": row.get("checksum"),
         "file_name": row.get("original_file_name"),
         "mime_type": row.get("mime_type"),
+        "media_type": row.get("media_type")
+        or str(immich_asset.get("type") or "").strip().lower()
+        or _media_type_from_mime(row.get("mime_type")),
+        "duration_seconds": row.get("duration_seconds") or _coerce_duration(immich_asset.get("duration")),
         "captured_at": _datetime_to_iso(row.get("captured_at")),
         "local_asset_id": row.get("local_asset_id"),
         "source": row.get("source"),
@@ -496,6 +547,24 @@ def _coerce_int(value: Any) -> int | None:
         return int(value)
     except (TypeError, ValueError):
         return None
+
+
+def _coerce_duration(value: Any) -> float | None:
+    if value in (None, ""):
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _media_type_from_mime(value: Any) -> str | None:
+    mime_type = str(value or "").strip().lower()
+    if mime_type.startswith("video/"):
+        return "video"
+    if mime_type.startswith("image/"):
+        return "image"
+    return None
 
 
 def _build_upload_debug(

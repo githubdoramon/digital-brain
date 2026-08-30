@@ -158,12 +158,17 @@ function toDraft(event: EventDetail, contactMap: Map<string, string>): EventDraf
     endWhen: String(event.end_date || '').trim(),
     where: placeLabel,
     placeId: event.place?.place_id || null,
-    tags: Array.isArray(event.tags) ? event.tags.map((tag) => String(tag || '').trim()).filter(Boolean) : [],
-    types: Array.isArray(event.types) ? event.types.map((typeValue) => String(typeValue || '').trim()).filter(Boolean) : [],
+    tags: Array.isArray(event.tags)
+      ? event.tags.map((tag) => String(tag || '').trim()).filter(Boolean)
+      : [],
+    types: Array.isArray(event.types)
+      ? event.types.map((typeValue) => String(typeValue || '').trim()).filter(Boolean)
+      : [],
     participants: normalizeEventPeople(event.people, contactMap),
     operation: 'create',
     existingEventId: null,
     matchedEvent: null,
+    mediaSuggestions: [],
   };
 }
 
@@ -223,7 +228,9 @@ function EventDetailView({ eventId, editable }: EventDetailViewProps) {
 
     (async () => {
       try {
-        const result = (await apiFetch(`/mobile/events/${encodeURIComponent(eventId)}`)) as EventDetail;
+        const result = (await apiFetch(
+          `/mobile/events/${encodeURIComponent(eventId)}`,
+        )) as EventDetail;
         if (mounted) {
           setEvent(result);
         }
@@ -294,9 +301,7 @@ function EventDetailView({ eventId, editable }: EventDetailViewProps) {
   const photos = React.useMemo(() => event?.photos || [], [event?.photos]);
   const actionItems = React.useMemo(
     () =>
-      Array.isArray(event?.action_items)
-        ? event.action_items.filter((item) => item?.task)
-        : [],
+      Array.isArray(event?.action_items) ? event.action_items.filter((item) => item?.task) : [],
     [event?.action_items],
   );
 
@@ -315,7 +320,10 @@ function EventDetailView({ eventId, editable }: EventDetailViewProps) {
       if (nextEndDate) {
         const parsedEnd = new Date(nextEndDate);
         if (Number.isNaN(parsedEnd.getTime())) {
-          Alert.alert('Invalid end date', 'Select a valid end date and time before saving this event.');
+          Alert.alert(
+            'Invalid end date',
+            'Select a valid end date and time before saving this event.',
+          );
           return;
         }
         if (parsedEnd.getTime() < parsedStart.getTime()) {
@@ -344,7 +352,9 @@ function EventDetailView({ eventId, editable }: EventDetailViewProps) {
           }),
         });
 
-        const refreshed = (await apiFetch(`/mobile/events/${encodeURIComponent(eventId)}`)) as EventDetail;
+        const refreshed = (await apiFetch(
+          `/mobile/events/${encodeURIComponent(eventId)}`,
+        )) as EventDetail;
         setEvent(refreshed);
         setIsEditing(false);
         showSuccess('Event updated.');
@@ -391,7 +401,9 @@ function EventDetailView({ eventId, editable }: EventDetailViewProps) {
 
   const reloadEvent = React.useCallback(async () => {
     if (!eventId) return;
-    const refreshed = (await apiFetch(`/mobile/events/${encodeURIComponent(eventId)}`)) as EventDetail;
+    const refreshed = (await apiFetch(
+      `/mobile/events/${encodeURIComponent(eventId)}`,
+    )) as EventDetail;
     setEvent(refreshed);
   }, [eventId]);
 
@@ -445,7 +457,9 @@ function EventDetailView({ eventId, editable }: EventDetailViewProps) {
       if (debugSummaries.length === 1) {
         showSuccess(debugSummaries[0]);
       } else if (debugSummaries.length > 1) {
-        showSuccess(`Linked ${debugSummaries.length} photos. Check latest upload logs for per-photo debug details.`);
+        showSuccess(
+          `Linked ${debugSummaries.length} photos. Check latest upload logs for per-photo debug details.`,
+        );
       } else {
         showSuccess(`Linked ${assets.length} ${assets.length === 1 ? 'photo' : 'photos'}.`);
       }
@@ -464,31 +478,35 @@ function EventDetailView({ eventId, editable }: EventDetailViewProps) {
   const handleRemovePhoto = React.useCallback(
     (assetId: string) => {
       if (!eventId || !assetId) return;
-      Alert.alert('Unlink photo?', 'This removes the photo from the event but keeps it in Immich.', [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Unlink',
-          style: 'destructive',
-          onPress: () => {
-            void (async () => {
-              try {
-                await apiFetch(
-                  `/mobile/events/${encodeURIComponent(eventId)}/photos/${encodeURIComponent(assetId)}`,
-                  {
-                    method: 'DELETE',
-                    token,
-                  },
-                );
-                await reloadEvent();
-                showSuccess('Photo unlinked.');
-              } catch (error) {
-                console.warn('[events] photo unlink failed', error);
-                showError('Unable to unlink that photo right now.');
-              }
-            })();
+      Alert.alert(
+        'Unlink photo?',
+        'This removes the photo from the event but keeps it in Immich.',
+        [
+          { text: 'Cancel', style: 'cancel' },
+          {
+            text: 'Unlink',
+            style: 'destructive',
+            onPress: () => {
+              void (async () => {
+                try {
+                  await apiFetch(
+                    `/mobile/events/${encodeURIComponent(eventId)}/photos/${encodeURIComponent(assetId)}`,
+                    {
+                      method: 'DELETE',
+                      token,
+                    },
+                  );
+                  await reloadEvent();
+                  showSuccess('Photo unlinked.');
+                } catch (error) {
+                  console.warn('[events] photo unlink failed', error);
+                  showError('Unable to unlink that photo right now.');
+                }
+              })();
+            },
           },
-        },
-      ]);
+        ],
+      );
     },
     [eventId, reloadEvent, showError, showSuccess, token],
   );

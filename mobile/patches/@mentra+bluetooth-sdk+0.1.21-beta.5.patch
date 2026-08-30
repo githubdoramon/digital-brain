@@ -1,0 +1,476 @@
+diff --git a/node_modules/@mentra/bluetooth-sdk/android/src/main/AndroidManifest.xml b/node_modules/@mentra/bluetooth-sdk/android/src/main/AndroidManifest.xml
+index 3f05cf8..cc16448 100644
+--- a/node_modules/@mentra/bluetooth-sdk/android/src/main/AndroidManifest.xml
++++ b/node_modules/@mentra/bluetooth-sdk/android/src/main/AndroidManifest.xml
+@@ -38,5 +38,6 @@
+ 
+   <application>
+     <service android:name="com.mentra.bluetoothsdk.services.ForegroundService" android:exported="false" android:foregroundServiceType="dataSync|connectedDevice|location|mediaPlayback|microphone"/>
++    <service android:name="com.mentra.bluetoothsdk.GlassesAudioRecordingService" android:exported="false" android:foregroundServiceType="connectedDevice"/>
+   </application>
+ </manifest>
+diff --git a/node_modules/@mentra/bluetooth-sdk/android/src/main/java/com/mentra/bluetoothsdk/BluetoothSdkModule.kt b/node_modules/@mentra/bluetooth-sdk/android/src/main/java/com/mentra/bluetoothsdk/BluetoothSdkModule.kt
+index 921962e..fe4a0d0 100644
+--- a/node_modules/@mentra/bluetooth-sdk/android/src/main/java/com/mentra/bluetoothsdk/BluetoothSdkModule.kt
++++ b/node_modules/@mentra/bluetooth-sdk/android/src/main/java/com/mentra/bluetoothsdk/BluetoothSdkModule.kt
+@@ -133,6 +133,9 @@ private inline fun <
+ class BluetoothSdkModule : Module() {
+     private var sdk: MentraBluetoothSdk? = null
+     private var deviceManager: DeviceManager? = null
++    private fun recordingContext() = appContext.reactContext
++            ?: appContext.currentActivity
++            ?: throw IllegalStateException("Android application context is unavailable.")
+     private val sdkListener =
+             object : MentraBluetoothSdkListener {
+                 override fun onGlassesChanged(glasses: GlassesRuntimeState) {
+@@ -279,6 +282,10 @@ class BluetoothSdkModule : Module() {
+                 }
+ 
+                 override fun onMicPcm(event: MicPcmEvent) {
++                    GlassesM4aRecorder.offer(recordingContext(), event)?.let {
++                        sdk?.setMicState(enabled = false, useGlassesMic = true, sendTranscript = false, sendLc3Data = false)
++                        sendEvent("glasses_audio_recording_finished", it)
++                    }
+                     sendEvent("mic_pcm", event.toMap())
+                 }
+ 
+@@ -299,6 +306,11 @@ class BluetoothSdkModule : Module() {
+                 }
+ 
+                 override fun onRawEvent(eventName: String, values: Map<String, Any>) {
++                    if (eventName == "audio_disconnected") {
++                        GlassesM4aRecorder.finish(recordingContext(), "bluetooth_disconnected")?.let {
++                            sendEvent("glasses_audio_recording_finished", it)
++                        }
++                    }
+                     sendEvent(eventName, values)
+                 }
+         }
+@@ -358,6 +370,7 @@ class BluetoothSdkModule : Module() {
+             "audio_pairing_needed",
+             "audio_connected",
+             "audio_disconnected",
++            "glasses_audio_recording_finished",
+             "save_setting",
+             "phone_notification",
+             "phone_notification_dismissed",
+@@ -787,6 +800,32 @@ class BluetoothSdkModule : Module() {
+             )
+         }
+ 
++        SdkAsyncFunction("startGlassesM4aRecording") { outputUri: String ->
++            GlassesM4aRecorder.start(recordingContext(), outputUri)
++        }
++
++        SdkAsyncFunction("stopGlassesM4aRecording") { reason: String ->
++            GlassesM4aRecorder.finish(recordingContext(), reason)
++                ?: mapOf("completed" to false, "reason" to "not_recording")
++        }
++
++        SdkAsyncFunction<Map<String, Any?>>("recoverGlassesM4aRecording") {
++            GlassesM4aRecorder.recoverInterrupted(recordingContext())
++                ?: mapOf("recovered" to false, "outputUri" to null)
++        }
++
++        SdkAsyncFunction<Map<String, Any?>>("getGlassesM4aRecordingStatus") {
++            GlassesM4aRecorder.status()
++        }
++
++        SdkAsyncFunction("playGlassesM4aRecording") { outputUri: String ->
++            GlassesM4aPlayback.play(recordingContext(), outputUri)
++        }
++
++        SdkAsyncFunction<Map<String, Any>>("stopGlassesM4aPlayback") {
++            GlassesM4aPlayback.stop()
++        }
++
+         // Runs on Dispatchers.IO, not the shared Expo AsyncFunctionQueue: restart()
+         // does a synchronous JNI model reload that would otherwise block every other
+         // native call in the app until it completes.
+diff --git a/node_modules/@mentra/bluetooth-sdk/android/src/main/java/com/mentra/bluetoothsdk/GlassesM4aRecorder.kt b/node_modules/@mentra/bluetooth-sdk/android/src/main/java/com/mentra/bluetoothsdk/GlassesM4aRecorder.kt
+new file mode 100644
+index 0000000..f2316df
+--- /dev/null
++++ b/node_modules/@mentra/bluetooth-sdk/android/src/main/java/com/mentra/bluetoothsdk/GlassesM4aRecorder.kt
+@@ -0,0 +1,291 @@
++package com.mentra.bluetoothsdk
++
++import android.app.Notification
++import android.app.NotificationChannel
++import android.app.NotificationManager
++import android.app.Service
++import android.content.Context
++import android.content.Intent
++import android.content.pm.ServiceInfo
++import android.media.MediaCodec
++import android.media.MediaCodecInfo
++import android.media.MediaExtractor
++import android.media.MediaFormat
++import android.media.MediaMuxer
++import android.media.MediaPlayer
++import android.net.Uri
++import android.os.Build
++import android.os.IBinder
++import android.os.ParcelFileDescriptor
++import android.os.StatFs
++import androidx.core.content.ContextCompat
++
++private const val RECORDING_CHANNEL_ID = "mentra_glasses_recording"
++private const val RECORDING_NOTIFICATION_ID = 4017
++private const val RECORDING_PREFS = "mentra_glasses_audio_recording"
++private const val RECORDING_URI_KEY = "active_output_uri"
++private const val SAMPLE_RATE = 16_000
++private const val CHANNEL_COUNT = 1
++private const val PCM_BYTES_PER_SAMPLE = 2
++private const val MINIMUM_AVAILABLE_BYTES = 20L * 1024L * 1024L
++
++class GlassesAudioRecordingService : Service() {
++  override fun onBind(intent: Intent?): IBinder? = null
++
++  override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
++    val manager = getSystemService(NotificationManager::class.java)
++    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
++      manager.createNotificationChannel(
++        NotificationChannel(
++          RECORDING_CHANNEL_ID,
++          "Glasses recording",
++          NotificationManager.IMPORTANCE_LOW,
++        ).apply { description = "Shows while Digital Brain records audio from Mentra Live." },
++      )
++    }
++    val notification = Notification.Builder(this, RECORDING_CHANNEL_ID)
++      .setSmallIcon(android.R.drawable.ic_btn_speak_now)
++      .setContentTitle("Digital Brain is recording")
++      .setContentText("Recording audio from Mentra Live glasses")
++      .setOngoing(true)
++      .build()
++    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
++      startForeground(
++        RECORDING_NOTIFICATION_ID,
++        notification,
++        ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE,
++      )
++    } else {
++      startForeground(RECORDING_NOTIFICATION_ID, notification)
++    }
++    return START_NOT_STICKY
++  }
++}
++
++/**
++ * Receives Mentra's already-decoded 16-bit glasses PCM before it crosses the
++ * React Native event bridge.  The encoder and foreground service therefore
++ * keep working while the app UI is backgrounded or the phone is locked.
++ */
++object GlassesM4aRecorder {
++  private data class ActiveRecording(
++    val outputUri: String,
++    val descriptor: ParcelFileDescriptor,
++    val codec: MediaCodec,
++    val muxer: MediaMuxer,
++    val startedAtMs: Long,
++    var trackIndex: Int = -1,
++    var muxerStarted: Boolean = false,
++    var submittedSamples: Long = 0,
++    var inputBytes: Long = 0,
++  )
++
++  private var active: ActiveRecording? = null
++
++  private fun contextPrefs(context: Context) =
++    context.getSharedPreferences(RECORDING_PREFS, Context.MODE_PRIVATE)
++
++  private fun startService(context: Context) {
++    ContextCompat.startForegroundService(context, Intent(context, GlassesAudioRecordingService::class.java))
++  }
++
++  private fun stopService(context: Context) {
++    context.stopService(Intent(context, GlassesAudioRecordingService::class.java))
++  }
++
++  private fun hasEnoughFreeSpace(context: Context): Boolean =
++    runCatching {
++      StatFs(context.filesDir.absolutePath).availableBytes >= MINIMUM_AVAILABLE_BYTES
++    }.getOrDefault(false)
++
++  @Synchronized
++  fun start(context: Context, outputUri: String): Map<String, Any> {
++    check(active == null) { "A Mentra Live recording is already in progress." }
++    check(hasEnoughFreeSpace(context)) { "Digital Brain needs at least 20 MB of free storage to record audio." }
++    val uri = Uri.parse(outputUri)
++    val descriptor = context.contentResolver.openFileDescriptor(uri, "rw")
++      ?: throw IllegalArgumentException("Digital Brain cannot write to the selected recording file.")
++    try {
++      val codec = MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_AUDIO_AAC)
++      val format = MediaFormat.createAudioFormat(MediaFormat.MIMETYPE_AUDIO_AAC, SAMPLE_RATE, CHANNEL_COUNT)
++      format.setInteger(MediaFormat.KEY_AAC_PROFILE, MediaCodecInfo.CodecProfileLevel.AACObjectLC)
++      format.setInteger(MediaFormat.KEY_BIT_RATE, 48_000)
++      format.setInteger(MediaFormat.KEY_MAX_INPUT_SIZE, 16 * 1024)
++      codec.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
++      codec.start()
++      val muxer = MediaMuxer(descriptor.fileDescriptor, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
++      active = ActiveRecording(outputUri, descriptor, codec, muxer, System.currentTimeMillis())
++      contextPrefs(context).edit().putString(RECORDING_URI_KEY, outputUri).apply()
++      startService(context)
++      return mapOf("outputUri" to outputUri, "startedAt" to System.currentTimeMillis())
++    } catch (error: Throwable) {
++      descriptor.close()
++      context.contentResolver.delete(uri, null, null)
++      throw error
++    }
++  }
++
++  @Synchronized
++  fun status(): Map<String, Any?> = active?.let {
++    mapOf("recording" to true, "outputUri" to it.outputUri, "startedAt" to it.startedAtMs)
++  } ?: mapOf("recording" to false, "outputUri" to null, "startedAt" to null)
++
++  @Synchronized
++  fun offer(context: Context, event: MicPcmEvent): Map<String, Any>? {
++    val recording = active ?: return null
++    if (!hasEnoughFreeSpace(context)) return finish(context, "low_storage")
++    if (
++      event.sampleRate != SAMPLE_RATE ||
++      event.channels != CHANNEL_COUNT ||
++      event.bitsPerSample != PCM_BYTES_PER_SAMPLE * 8 ||
++      event.encoding != "pcm_s16le"
++    ) {
++      return null
++    }
++    var offset = 0
++    while (offset < event.pcm.size) {
++      drain(recording, false)
++      val inputIndex = recording.codec.dequeueInputBuffer(10_000)
++      if (inputIndex < 0) return null
++      val input = recording.codec.getInputBuffer(inputIndex) ?: return null
++      input.clear()
++      val count = minOf(input.remaining(), event.pcm.size - offset)
++      input.put(event.pcm, offset, count)
++      val presentationTimeUs = recording.submittedSamples * 1_000_000L / SAMPLE_RATE
++      recording.codec.queueInputBuffer(inputIndex, 0, count, presentationTimeUs, 0)
++      recording.submittedSamples += count / PCM_BYTES_PER_SAMPLE
++      recording.inputBytes += count
++      offset += count
++    }
++    return null
++  }
++
++  private fun drain(recording: ActiveRecording, endOfStream: Boolean) {
++    val info = MediaCodec.BufferInfo()
++    var idlePasses = 0
++    while (idlePasses < if (endOfStream) 60 else 1) {
++      when (val outputIndex = recording.codec.dequeueOutputBuffer(info, 10_000)) {
++        MediaCodec.INFO_TRY_AGAIN_LATER -> {
++          idlePasses += 1
++          if (!endOfStream) return
++        }
++        MediaCodec.INFO_OUTPUT_FORMAT_CHANGED -> {
++          check(!recording.muxerStarted) { "Audio encoder changed format twice." }
++          recording.trackIndex = recording.muxer.addTrack(recording.codec.outputFormat)
++          recording.muxer.start()
++          recording.muxerStarted = true
++        }
++        else -> if (outputIndex >= 0) {
++          val output = recording.codec.getOutputBuffer(outputIndex)
++            ?: throw IllegalStateException("Audio encoder output buffer is unavailable.")
++          if (info.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG == 0 && info.size > 0) {
++            check(recording.muxerStarted && recording.trackIndex >= 0) { "Audio muxer is not ready." }
++            output.position(info.offset)
++            output.limit(info.offset + info.size)
++            recording.muxer.writeSampleData(recording.trackIndex, output, info)
++          }
++          recording.codec.releaseOutputBuffer(outputIndex, false)
++          if (info.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0) return
++          idlePasses = 0
++        }
++      }
++    }
++  }
++
++  @Synchronized
++  fun finish(context: Context, reason: String): Map<String, Any>? {
++    val recording = active ?: return null
++    active = null
++    var completed = false
++    try {
++      var inputIndex = recording.codec.dequeueInputBuffer(20_000)
++      var retries = 0
++      while (inputIndex < 0 && retries < 5) {
++        drain(recording, false)
++        inputIndex = recording.codec.dequeueInputBuffer(20_000)
++        retries += 1
++      }
++      if (inputIndex >= 0) {
++        recording.codec.queueInputBuffer(
++          inputIndex,
++          0,
++          0,
++          recording.submittedSamples * 1_000_000L / SAMPLE_RATE,
++          MediaCodec.BUFFER_FLAG_END_OF_STREAM,
++        )
++        drain(recording, true)
++      }
++      completed = recording.muxerStarted && recording.inputBytes > 0
++      if (recording.muxerStarted) recording.muxer.stop()
++    } catch (_: Throwable) {
++      completed = false
++    } finally {
++      runCatching { recording.codec.stop() }
++      runCatching { recording.codec.release() }
++      runCatching { recording.muxer.release() }
++      runCatching { recording.descriptor.close() }
++      contextPrefs(context).edit().remove(RECORDING_URI_KEY).apply()
++      stopService(context)
++    }
++    if (!completed) {
++      context.contentResolver.delete(Uri.parse(recording.outputUri), null, null)
++      return mapOf("completed" to false, "reason" to reason, "outputUri" to recording.outputUri)
++    }
++    return mapOf(
++      "completed" to true,
++      "reason" to reason,
++      "outputUri" to recording.outputUri,
++      "durationMs" to (recording.submittedSamples * 1_000L / SAMPLE_RATE),
++      "sizeBytes" to recording.inputBytes,
++      "startedAt" to recording.startedAtMs,
++    )
++  }
++
++  @Synchronized
++  fun recoverInterrupted(context: Context): Map<String, Any>? {
++    if (active != null) return null
++    val uriString = contextPrefs(context).getString(RECORDING_URI_KEY, null) ?: return null
++    contextPrefs(context).edit().remove(RECORDING_URI_KEY).apply()
++    val uri = Uri.parse(uriString)
++    val playable = runCatching {
++      val extractor = MediaExtractor()
++      try {
++        extractor.setDataSource(context, uri, emptyMap())
++        (0 until extractor.trackCount).any { index ->
++          extractor.getTrackFormat(index).getString(MediaFormat.KEY_MIME)?.startsWith("audio/") == true
++        }
++      } finally {
++        extractor.release()
++      }
++    }.getOrDefault(false)
++    if (!playable) {
++      context.contentResolver.delete(uri, null, null)
++    }
++    return mapOf("outputUri" to uriString, "recovered" to playable)
++  }
++}
++
++object GlassesM4aPlayback {
++  private var player: MediaPlayer? = null
++
++  @Synchronized
++  fun play(context: Context, uriString: String): Map<String, Any> {
++    stop()
++    val next = MediaPlayer()
++    next.setDataSource(context, Uri.parse(uriString))
++    next.setOnCompletionListener { stop() }
++    next.prepare()
++    next.start()
++    player = next
++    return mapOf("playing" to true, "durationMs" to next.duration)
++  }
++
++  @Synchronized
++  fun stop(): Map<String, Any> {
++    val current = player ?: return mapOf("playing" to false)
++    player = null
++    runCatching { current.stop() }
++    current.release()
++    return mapOf("playing" to false)
++  }
++}
+diff --git a/node_modules/@mentra/bluetooth-sdk/src/BluetoothSdk.types.ts b/node_modules/@mentra/bluetooth-sdk/src/BluetoothSdk.types.ts
+index d3b6641..b7b9a52 100644
+--- a/node_modules/@mentra/bluetooth-sdk/src/BluetoothSdk.types.ts
++++ b/node_modules/@mentra/bluetooth-sdk/src/BluetoothSdk.types.ts
+@@ -662,6 +662,14 @@ export type AudioDisconnectedEvent = {
+   type: "audio_disconnected"
+ }
+ 
++export type GlassesAudioRecordingFinishedEvent = {
++  completed: boolean
++  outputUri?: string
++  startedAt?: number
++  durationMs?: number
++  reason?: string
++}
++
+ export type SaveSettingEvent = {
+   type: "save_setting"
+   key: string
+@@ -898,6 +906,7 @@ export type BluetoothSdkModuleEvents = {
+   audio_pairing_needed: (event: AudioPairingNeededEvent) => void
+   audio_connected: (event: AudioConnectedEvent) => void
+   audio_disconnected: (event: AudioDisconnectedEvent) => void
++  glasses_audio_recording_finished: (event: GlassesAudioRecordingFinishedEvent) => void
+   save_setting: (event: SaveSettingEvent) => void
+   ws_text: (event: WsTextEvent) => void
+   ws_bin: (event: WsBinEvent) => void
+@@ -1002,6 +1011,7 @@ export type BluetoothSdkEventMap = {
+   audio_pairing_needed: AudioPairingNeededEvent
+   audio_connected: AudioConnectedEvent
+   audio_disconnected: AudioDisconnectedEvent
++  glasses_audio_recording_finished: GlassesAudioRecordingFinishedEvent
+   mic_pcm: MicPcmEvent
+   mic_lc3: MicLc3Event
+   stream_status: StreamStatusEvent
+@@ -1117,6 +1127,12 @@ export interface BluetoothSdkPublicModule {
+   setMicState(enabled: boolean, useGlassesMic?: boolean, sendTranscript?: boolean, sendLc3Data?: boolean): Promise<void>
+   setPreferredMic(preferredMic: MicPreference): Promise<void>
+   setOwnAppAudioPlaying(playing: boolean): Promise<void>
++  startGlassesM4aRecording(outputUri: string): Promise<GlassesAudioRecordingFinishedEvent>
++  stopGlassesM4aRecording(reason: string): Promise<GlassesAudioRecordingFinishedEvent>
++  recoverGlassesM4aRecording(): Promise<{recovered: boolean; outputUri: string | null}>
++  getGlassesM4aRecordingStatus(): Promise<{recording: boolean; outputUri: string | null; startedAt: number | null}>
++  playGlassesM4aRecording(outputUri: string): Promise<{playing: boolean; durationMs?: number}>
++  stopGlassesM4aPlayback(): Promise<{playing: boolean}>
+   getGlassesMediaVolume(): Promise<GlassesMediaVolumeGetResult>
+   setGlassesMediaVolume(level: number): Promise<GlassesMediaVolumeSetResult>
+ 
+diff --git a/node_modules/@mentra/bluetooth-sdk/src/_private/BluetoothSdkModule.ts b/node_modules/@mentra/bluetooth-sdk/src/_private/BluetoothSdkModule.ts
+index dd40ee5..da349dd 100644
+--- a/node_modules/@mentra/bluetooth-sdk/src/_private/BluetoothSdkModule.ts
++++ b/node_modules/@mentra/bluetooth-sdk/src/_private/BluetoothSdkModule.ts
+@@ -190,6 +190,12 @@ declare class BluetoothSdkNativeModule extends NativeModule<BluetoothSdkModuleEv
+   setMicState(enabled: boolean, useGlassesMic?: boolean, sendTranscript?: boolean, sendLc3Data?: boolean): Promise<void>
+   setPreferredMic(preferredMic: MicPreference): Promise<void>
+   restartTranscriber(): Promise<void>
++  startGlassesM4aRecording(outputUri: string): Promise<{completed: boolean; outputUri?: string; startedAt?: number; durationMs?: number; reason?: string}>
++  stopGlassesM4aRecording(reason: string): Promise<{completed: boolean; outputUri?: string; startedAt?: number; durationMs?: number; reason?: string}>
++  recoverGlassesM4aRecording(): Promise<{recovered: boolean; outputUri: string | null}>
++  getGlassesM4aRecordingStatus(): Promise<{recording: boolean; outputUri: string | null; startedAt: number | null}>
++  playGlassesM4aRecording(outputUri: string): Promise<{playing: boolean; durationMs?: number}>
++  stopGlassesM4aPlayback(): Promise<{playing: boolean}>
+ 
+   // Audio Playback Monitoring
+   // Notify native side when our app starts/stops playing audio
+diff --git a/node_modules/@mentra/bluetooth-sdk/src/index.ts b/node_modules/@mentra/bluetooth-sdk/src/index.ts
+index f7e8ecd..53da4e3 100644
+--- a/node_modules/@mentra/bluetooth-sdk/src/index.ts
++++ b/node_modules/@mentra/bluetooth-sdk/src/index.ts
+@@ -39,6 +39,7 @@ const PUBLIC_EVENT_NAMES = new Set<BluetoothSdkEventName>([
+   "audio_pairing_needed",
+   "audio_connected",
+   "audio_disconnected",
++  "glasses_audio_recording_finished",
+   "mic_pcm",
+   "mic_lc3",
+   "stream_status",
+@@ -130,6 +131,12 @@ export const BluetoothSdk: BluetoothSdkPublicModule = Object.freeze({
+   setMicState: bindPublicMethod("setMicState"),
+   setPreferredMic: bindPublicMethod("setPreferredMic"),
+   setOwnAppAudioPlaying: bindPublicMethod("setOwnAppAudioPlaying"),
++  startGlassesM4aRecording: bindPublicMethod("startGlassesM4aRecording"),
++  stopGlassesM4aRecording: bindPublicMethod("stopGlassesM4aRecording"),
++  recoverGlassesM4aRecording: bindPublicMethod("recoverGlassesM4aRecording"),
++  getGlassesM4aRecordingStatus: bindPublicMethod("getGlassesM4aRecordingStatus"),
++  playGlassesM4aRecording: bindPublicMethod("playGlassesM4aRecording"),
++  stopGlassesM4aPlayback: bindPublicMethod("stopGlassesM4aPlayback"),
+   getGlassesMediaVolume: bindPublicMethod("getGlassesMediaVolume"),
+   setGlassesMediaVolume: bindPublicMethod("setGlassesMediaVolume"),
+   rgbLedControl: bindPublicMethod("rgbLedControl"),

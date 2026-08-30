@@ -18,6 +18,7 @@ export type EventPhotoDetectedPerson = {
 
 export type EventPhoto = {
   asset_id: string;
+  media_type?: string | null;
   checksum?: string | null;
   file_name?: string | null;
   mime_type?: string | null;
@@ -26,6 +27,12 @@ export type EventPhoto = {
   source?: string | null;
   width?: number | null;
   height?: number | null;
+  duration_seconds?: number | null;
+  distance_m?: number | null;
+  temporal_distance_seconds?: number | null;
+  has_gps?: boolean;
+  status?: 'included' | 'removed' | string | null;
+  match_reasons?: string[];
   created_at?: string | null;
   updated_at?: string | null;
   thumbnail_path?: string | null;
@@ -79,6 +86,7 @@ export type EventDraft = {
   operation: EventDraftOperation;
   existingEventId: string | null;
   matchedEvent: EventMatchCandidate | null;
+  mediaSuggestions: EventPhoto[];
 };
 
 export type EventDraftModifications = {
@@ -93,6 +101,7 @@ export type EventDraftModifications = {
   contact_ids?: string[];
   operation?: EventDraftOperation;
   existing_event_id?: string | null;
+  media_asset_ids?: string[];
 };
 
 export const EMPTY_EVENT_DRAFT: EventDraft = {
@@ -108,4 +117,5 @@ export const EMPTY_EVENT_DRAFT: EventDraft = {
   operation: 'create',
   existingEventId: null,
   matchedEvent: null,
+  mediaSuggestions: [],
 };

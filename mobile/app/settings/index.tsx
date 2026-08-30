@@ -47,9 +47,11 @@ import {
   type LocationDebugSnapshot,
 } from '@/location/debugState';
 import { useAppNotice } from '@/hooks/useAppNotice';
+import {
+  copyToDigitalBrainStorage,
+  DigitalBrainStorageFolder,
+} from '@/storage/digitalBrainStorage';
 import { theme } from '@/theme';
-
-const { StorageAccessFramework } = FileSystem;
 
 function formatBuildTimestamp(value: string | null | undefined): string {
   if (!value) {
@@ -239,26 +241,14 @@ export default function SettingsScreen() {
       });
 
       if (Platform.OS === 'android') {
-        const initialUri = StorageAccessFramework.getUriForDirectoryInRoot('Download');
-        const permission =
-          await StorageAccessFramework.requestDirectoryPermissionsAsync(initialUri);
-        if (!permission.granted || !permission.directoryUri) {
-          throw new Error('Downloads access not granted.');
-        }
-
-        const targetUri = await StorageAccessFramework.createFileAsync(
-          permission.directoryUri,
-          fileName.replace(/\.txt$/i, ''),
+        await copyToDigitalBrainStorage(
+          tempFileUri,
+          DigitalBrainStorageFolder.Exports,
+          fileName,
           'text/plain',
         );
-        const base64Content = await FileSystem.readAsStringAsync(tempFileUri, {
-          encoding: FileSystem.EncodingType.Base64,
-        });
-        await FileSystem.writeAsStringAsync(targetUri, base64Content, {
-          encoding: FileSystem.EncodingType.Base64,
-        });
         setLocationDebugLogInfo(await getLocationDebugLogInfo());
-        showSuccess(`Saved to Downloads as ${fileName}.`);
+        showSuccess(`Saved to your Digital Brain folder as ${fileName}.`);
         return;
       }
 
@@ -293,26 +283,14 @@ export default function SettingsScreen() {
 
       let exported = false;
       if (Platform.OS === 'android') {
-        const initialUri = StorageAccessFramework.getUriForDirectoryInRoot('Download');
-        const permission =
-          await StorageAccessFramework.requestDirectoryPermissionsAsync(initialUri);
-        if (!permission.granted || !permission.directoryUri) {
-          throw new Error('Downloads access not granted.');
-        }
-
-        const targetUri = await StorageAccessFramework.createFileAsync(
-          permission.directoryUri,
-          fileName.replace(/\.txt$/i, ''),
+        await copyToDigitalBrainStorage(
+          tempFileUri,
+          DigitalBrainStorageFolder.Exports,
+          fileName,
           'text/plain',
         );
-        const base64Content = await FileSystem.readAsStringAsync(tempFileUri, {
-          encoding: FileSystem.EncodingType.Base64,
-        });
-        await FileSystem.writeAsStringAsync(targetUri, base64Content, {
-          encoding: FileSystem.EncodingType.Base64,
-        });
         exported = true;
-        showSuccess(`Saved event photo debug to Downloads as ${fileName}.`);
+        showSuccess(`Saved event photo debug to your Digital Brain folder as ${fileName}.`);
       } else {
         const shareResult = await Share.share({
           url: tempFileUri,
@@ -354,26 +332,14 @@ export default function SettingsScreen() {
 
       let exported = false;
       if (Platform.OS === 'android') {
-        const initialUri = StorageAccessFramework.getUriForDirectoryInRoot('Download');
-        const permission =
-          await StorageAccessFramework.requestDirectoryPermissionsAsync(initialUri);
-        if (!permission.granted || !permission.directoryUri) {
-          throw new Error('Downloads access not granted.');
-        }
-
-        const targetUri = await StorageAccessFramework.createFileAsync(
-          permission.directoryUri,
-          fileName.replace(/\.txt$/i, ''),
+        await copyToDigitalBrainStorage(
+          tempFileUri,
+          DigitalBrainStorageFolder.Exports,
+          fileName,
           'text/plain',
         );
-        const base64Content = await FileSystem.readAsStringAsync(tempFileUri, {
-          encoding: FileSystem.EncodingType.Base64,
-        });
-        await FileSystem.writeAsStringAsync(targetUri, base64Content, {
-          encoding: FileSystem.EncodingType.Base64,
-        });
         exported = true;
-        showSuccess(`Saved voice debug log to Downloads as ${fileName}.`);
+        showSuccess(`Saved voice debug log to your Digital Brain folder as ${fileName}.`);
       } else {
         const shareResult = await Share.share({
           url: tempFileUri,
@@ -411,25 +377,13 @@ export default function SettingsScreen() {
       await FileSystem.copyAsync({ from: current.audioUri, to: tempFileUri });
 
       if (Platform.OS === 'android') {
-        const initialUri = StorageAccessFramework.getUriForDirectoryInRoot('Download');
-        const permission =
-          await StorageAccessFramework.requestDirectoryPermissionsAsync(initialUri);
-        if (!permission.granted || !permission.directoryUri) {
-          throw new Error('Downloads access not granted.');
-        }
-
-        const targetUri = await StorageAccessFramework.createFileAsync(
-          permission.directoryUri,
-          fileName.replace(/\.m4a$/i, ''),
+        await copyToDigitalBrainStorage(
+          tempFileUri,
+          DigitalBrainStorageFolder.Exports,
+          fileName,
           'audio/mp4',
         );
-        const base64Content = await FileSystem.readAsStringAsync(tempFileUri, {
-          encoding: FileSystem.EncodingType.Base64,
-        });
-        await FileSystem.writeAsStringAsync(targetUri, base64Content, {
-          encoding: FileSystem.EncodingType.Base64,
-        });
-        showSuccess(`Saved voice sample to Downloads as ${fileName}.`);
+        showSuccess(`Saved voice sample to your Digital Brain folder as ${fileName}.`);
       } else {
         const shareResult = await Share.share({
           url: tempFileUri,
@@ -499,10 +453,22 @@ export default function SettingsScreen() {
             onPress={() => router.push('/settings/glasses-capture' as never)}
           >
             <View style={styles.textBlock}>
-              <Text style={styles.rowTitle}>Glasses capture</Text>
-              <Text style={styles.rowSubtitle}>Sync photos and videos to Immich</Text>
+              <Text style={styles.rowTitle}>Smart glasses</Text>
+              <Text style={styles.rowSubtitle}>Capture what you see and sync it to Immich</Text>
             </View>
             <Ionicons name="chevron-forward" size={20} color={theme.colors.mutedInk} />
+          </Pressable>
+          <Pressable
+            style={styles.navRow}
+            onPress={() => router.push('/settings/storage' as never)}
+          >
+            <View style={styles.textBlock}>
+              <Text style={styles.rowTitle}>Storage location</Text>
+              <Text style={styles.rowSubtitle}>
+                Choose one Digital Brain folder for recordings, captures, and exports.
+              </Text>
+            </View>
+            <Ionicons name="folder-open-outline" size={20} color={theme.colors.mutedInk} />
           </Pressable>
         </Card>
 

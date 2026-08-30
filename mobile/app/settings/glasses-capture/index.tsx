@@ -17,26 +17,26 @@ import {
   ensureMentraConnection,
   forgetPairedGlasses,
   getDefaultGlassesDevice,
-  getCaptureFolderUri,
   getCaptureSyncStatus,
   isMentraSdkAvailable,
-  movePendingCapturesToFolder,
-  normalizeSafDirectoryUri,
   pairGlasses,
   reconcileGlassesCaptures,
   retryFailedGlassesCaptures,
   scanForGlasses,
-  setCaptureFolderUri,
   subscribeCaptureSync,
   type MentraDevice,
 } from '@/mentraCapture';
+import { theme } from '@/theme';
+import {
+  copyToDigitalBrainStorage,
+  DigitalBrainStorageFolder,
+} from '@/storage/digitalBrainStorage';
 
 export default function GlassesCaptureScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const { showSuccess, showError } = useAppNotice();
   const [status, setStatus] = React.useState(getCaptureSyncStatus());
-  const [folderUri, setFolderUri] = React.useState<string | null>(null);
   const [running, setRunning] = React.useState(false);
   const [defaultDevice, setDefaultDevice] = React.useState<MentraDevice | null>(null);
   const [devices, setDevices] = React.useState<MentraDevice[]>([]);
@@ -49,7 +49,6 @@ export default function GlassesCaptureScreen() {
 
   React.useEffect(() => {
     const unsubscribe = subscribeCaptureSync(setStatus);
-    void getCaptureFolderUri().then(setFolderUri);
     void getDefaultGlassesDevice()
       .then(setDefaultDevice)
       .catch(() => setDefaultDevice(null));
@@ -73,24 +72,13 @@ export default function GlassesCaptureScreen() {
         encoding: FileSystem.EncodingType.UTF8,
       });
       if (Platform.OS === 'android') {
-        const initialUri = FileSystem.StorageAccessFramework.getUriForDirectoryInRoot('Download');
-        const permission =
-          await FileSystem.StorageAccessFramework.requestDirectoryPermissionsAsync(initialUri);
-        if (!permission.granted || !permission.directoryUri) {
-          throw new Error('Downloads access not granted.');
-        }
-        const targetUri = await FileSystem.StorageAccessFramework.createFileAsync(
-          permission.directoryUri,
-          fileName.replace(/\.jsonl$/i, ''),
+        await copyToDigitalBrainStorage(
+          tempFileUri,
+          DigitalBrainStorageFolder.Exports,
+          fileName,
           'application/json',
         );
-        const base64Content = await FileSystem.readAsStringAsync(tempFileUri, {
-          encoding: FileSystem.EncodingType.Base64,
-        });
-        await FileSystem.writeAsStringAsync(targetUri, base64Content, {
-          encoding: FileSystem.EncodingType.Base64,
-        });
-        showSuccess(`Saved Mentra diagnostics to Downloads as ${fileName}.`);
+        showSuccess(`Saved Mentra diagnostics to your Digital Brain folder as ${fileName}.`);
       } else {
         await Share.share({ url: tempFileUri, message: logText, title: fileName });
         showSuccess('Shared Mentra diagnostics.');
@@ -150,34 +138,6 @@ export default function GlassesCaptureScreen() {
     }
   };
 
-  const chooseFolder = async () => {
-    if (Platform.OS !== 'android') return;
-    const root = FileSystem.StorageAccessFramework.getUriForDirectoryInRoot('Documents');
-    const result = await FileSystem.StorageAccessFramework.requestDirectoryPermissionsAsync(root);
-    if (result.granted && result.directoryUri) {
-      // Keep the URI returned by ACTION_OPEN_DOCUMENT_TREE as the permission
-      // grant. Do not create nested children and synthesize a new tree URI: the
-      // provider may grant access to the selected folder only, and Android can
-      // reject a reconstructed child URI later during sync. The picker opens at
-      // Documents; select (or create) Digital Brain/Capture Queue itself.
-      const selectedDirectoryUri = normalizeSafDirectoryUri(result.directoryUri);
-      await setCaptureFolderUri(selectedDirectoryUri);
-      setFolderUri(selectedDirectoryUri);
-      const migration = await movePendingCapturesToFolder(selectedDirectoryUri);
-      if (migration.failed > 0) {
-        showError(
-          `Capture queue folder selected. ${migration.moved} existing capture(s) made visible; ${migration.failed} could not be copied.`,
-        );
-      } else if (migration.moved > 0) {
-        showSuccess(
-          `Capture queue folder selected. ${migration.moved} existing capture(s) are now visible there.`,
-        );
-      } else {
-        showSuccess('Capture queue folder selected.');
-      }
-    }
-  };
-
   const sync = async () => {
     setRunning(true);
     await reconcileGlassesCaptures();
@@ -191,6 +151,14 @@ export default function GlassesCaptureScreen() {
     setRunning(false);
   };
 
+  const syncSummary = running
+    ? 'Syncing captures now'
+    : status.lastError
+      ? 'Needs attention'
+      : status.pendingCount > 0
+        ? `${status.pendingCount} capture${status.pendingCount === 1 ? '' : 's'} waiting`
+        : 'All captures are up to date';
+
   return (
     <View style={styles.screen}>
       <ScrollView
@@ -200,28 +168,93 @@ export default function GlassesCaptureScreen() {
         ]}
       >
         <Pressable style={styles.back} onPress={() => router.back()}>
-          <Ionicons name="arrow-back" size={22} color="#1a1d22" />
+          <Ionicons name="arrow-back" size={22} color={theme.colors.ink} />
           <Text style={styles.backText}>Settings</Text>
         </Pressable>
-        <Text style={styles.title}>Glasses capture</Text>
-        <Text style={styles.subtitle}>
-          Original glasses media is copied locally, acknowledged on the glasses, then uploaded to
-          Immich.
-        </Text>
-        <Text style={styles.subtitle}>
-          Use the right action button on the glasses: short press takes a photo; long press starts a
-          video; press again to stop it. Gallery mode saves captures on the glasses until sync.
-        </Text>
+        <View style={styles.hero}>
+          <View style={styles.heroIcon}>
+            <Ionicons name="glasses-outline" size={28} color={theme.colors.teal} />
+          </View>
+          <View style={styles.heroCopy}>
+            <Text style={styles.eyebrow}>SMART GLASSES</Text>
+            <Text style={styles.title}>Smart glasses</Text>
+            <Text style={styles.subtitle}>
+              Capture what you see and keep it in your digital brain.
+            </Text>
+          </View>
+        </View>
+        <View style={styles.captureHint}>
+          <Ionicons name="information-circle-outline" size={18} color={theme.colors.teal} />
+          <Text style={styles.captureHintText}>
+            Short press the right button for a photo. Hold it to start a video, then press again to
+            stop. Captures stay on the glasses until they sync.
+          </Text>
+        </View>
+        <Pressable
+          style={styles.recordingsShortcut}
+          onPress={() => router.push('/settings/glasses-recordings' as never)}
+        >
+          <View style={styles.recordingsShortcutIcon}>
+            <Ionicons name="mic-outline" size={21} color={theme.colors.teal} />
+          </View>
+          <View style={styles.recordingsShortcutCopy}>
+            <Text style={styles.recordingsShortcutTitle}>Glasses recordings</Text>
+            <Text style={styles.recordingsShortcutText}>
+              Record and manage audio from Mentra Live.
+            </Text>
+          </View>
+          <Ionicons name="chevron-forward" size={20} color={theme.colors.mutedInk} />
+        </Pressable>
+        <Pressable
+          style={styles.recordingsShortcut}
+          onPress={() => router.push('/settings/glasses-alerts' as never)}
+        >
+          <View style={styles.recordingsShortcutIcon}>
+            <Ionicons name="notifications-outline" size={21} color={theme.colors.teal} />
+          </View>
+          <View style={styles.recordingsShortcutCopy}>
+            <Text style={styles.recordingsShortcutTitle}>Glasses alerts</Text>
+            <Text style={styles.recordingsShortcutText}>
+              Hear selected app notifications and incoming calls.
+            </Text>
+          </View>
+          <Ionicons name="chevron-forward" size={20} color={theme.colors.mutedInk} />
+        </Pressable>
         {Platform.OS !== 'android' ? (
           <Text style={styles.warning}>This first implementation is Android-only.</Text>
         ) : null}
         <Card style={styles.card}>
-          <Text style={styles.cardTitle}>Glasses connection</Text>
-          <Text style={styles.value}>
-            {defaultDevice
-              ? `Paired: ${defaultDevice.name || 'Mentra Live'}`
-              : 'No glasses paired with this phone.'}
-          </Text>
+          <View style={styles.sectionHeader}>
+            <View style={styles.sectionIcon}>
+              <Ionicons name="bluetooth-outline" size={20} color={theme.colors.teal} />
+            </View>
+            <View style={styles.sectionCopy}>
+              <Text style={styles.cardTitle}>Connection</Text>
+              <Text style={styles.sectionSubtitle}>Connect your Mentra Live glasses</Text>
+            </View>
+            <View
+              style={[
+                styles.statusPill,
+                defaultDevice ? styles.statusPillOn : styles.statusPillOff,
+              ]}
+            >
+              <View
+                style={[styles.statusDot, defaultDevice ? styles.statusDotOn : styles.statusDotOff]}
+              />
+              <Text style={styles.statusPillText}>{defaultDevice ? 'Ready' : 'Not connected'}</Text>
+            </View>
+          </View>
+          <View style={styles.connectionRow}>
+            <Ionicons name="hardware-chip-outline" size={20} color={theme.colors.mutedInk} />
+            <View style={styles.connectionCopy}>
+              <Text style={styles.connectionName}>
+                {defaultDevice ? defaultDevice.name || 'Mentra Live' : 'No glasses connected'}
+              </Text>
+              <Text style={styles.value}>
+                {defaultDevice ? 'Paired with this phone' : 'Search nearby devices to get started'}
+              </Text>
+            </View>
+          </View>
           <Button
             label={scanning ? 'Searching…' : 'Search for glasses'}
             onPress={() => void scan()}
@@ -235,6 +268,9 @@ export default function GlassesCaptureScreen() {
               onPress={() => void pair(device)}
               disabled={pairingDeviceId !== null}
             >
+              <View style={styles.deviceIcon}>
+                <Ionicons name="glasses-outline" size={20} color={theme.colors.teal} />
+              </View>
               <View style={styles.deviceText}>
                 <Text style={styles.deviceName}>{device.name || 'Mentra Live'}</Text>
                 <Text style={styles.deviceMeta}>{device.model}</Text>
@@ -255,19 +291,47 @@ export default function GlassesCaptureScreen() {
           ) : null}
         </Card>
         <Card style={styles.card}>
-          <Text style={styles.cardTitle}>Status</Text>
-          <Text style={styles.value}>
-            SDK: {isMentraSdkAvailable() ? 'available' : 'native rebuild required'}
-          </Text>
-          <Text style={styles.value}>
-            Queue: {status.pendingCount} pending · {status.failedCount} failed
-          </Text>
-          <Text style={styles.value}>Current: {status.currentCaptureId ?? 'idle'}</Text>
-          <Text style={styles.value}>Network: {status.networkPath ?? 'idle'}</Text>
-          <Text style={styles.value}>
-            Last sync: {status.lastRunAt ? new Date(status.lastRunAt).toLocaleString() : 'never'}
-          </Text>
-          {status.lastError ? <Text style={styles.error}>{status.lastError}</Text> : null}
+          <View style={styles.sectionHeader}>
+            <View style={styles.sectionIcon}>
+              <Ionicons name="cloud-upload-outline" size={20} color={theme.colors.teal} />
+            </View>
+            <View style={styles.sectionCopy}>
+              <Text style={styles.cardTitle}>Sync</Text>
+              <Text style={styles.sectionSubtitle}>Move captures from your glasses to Immich</Text>
+            </View>
+          </View>
+          <Text style={styles.syncSummary}>{syncSummary}</Text>
+          <View style={styles.metricGrid}>
+            <View style={styles.metric}>
+              <Text style={styles.metricValue}>{status.pendingCount}</Text>
+              <Text style={styles.metricLabel}>Waiting</Text>
+            </View>
+            <View style={styles.metric}>
+              <Text style={[styles.metricValue, status.failedCount > 0 && styles.metricValueAlert]}>
+                {status.failedCount}
+              </Text>
+              <Text style={styles.metricLabel}>Failed</Text>
+            </View>
+            <View style={styles.metric}>
+              <Text style={styles.metricValue}>{isMentraSdkAvailable() ? 'On' : 'Setup'}</Text>
+              <Text style={styles.metricLabel}>SDK</Text>
+            </View>
+          </View>
+          <View style={styles.syncDetails}>
+            <Text style={styles.detailText}>
+              Network: {status.networkPath ?? 'waiting for glasses'}
+            </Text>
+            <Text style={styles.detailText}>
+              Last checked:{' '}
+              {status.lastRunAt ? new Date(status.lastRunAt).toLocaleString() : 'never'}
+            </Text>
+          </View>
+          {status.lastError ? (
+            <View style={styles.errorBox}>
+              <Ionicons name="warning-outline" size={18} color={theme.colors.accentDeep} />
+              <Text style={styles.error}>{status.lastError}</Text>
+            </View>
+          ) : null}
           <Button
             label={running ? 'Syncing…' : 'Sync now'}
             onPress={() => void sync()}
@@ -283,9 +347,29 @@ export default function GlassesCaptureScreen() {
           />
         </Card>
         <Card style={styles.card}>
-          <Text style={styles.cardTitle}>Capture settings</Text>
-          <Text style={styles.value}>Photos: maximum supported quality, medium compression</Text>
-          <Text style={styles.value}>Video: 720p at 30fps with audio, maximum 15 minutes</Text>
+          <View style={styles.sectionHeader}>
+            <View style={styles.sectionIcon}>
+              <Ionicons name="options-outline" size={20} color={theme.colors.teal} />
+            </View>
+            <View style={styles.sectionCopy}>
+              <Text style={styles.cardTitle}>Capture settings</Text>
+              <Text style={styles.sectionSubtitle}>Set how the glasses record</Text>
+            </View>
+          </View>
+          <View style={styles.infoRow}>
+            <Ionicons name="camera-outline" size={20} color={theme.colors.mutedInk} />
+            <View style={styles.infoCopy}>
+              <Text style={styles.infoTitle}>Photos</Text>
+              <Text style={styles.value}>Maximum supported quality · medium compression</Text>
+            </View>
+          </View>
+          <View style={styles.infoRow}>
+            <Ionicons name="videocam-outline" size={20} color={theme.colors.mutedInk} />
+            <View style={styles.infoCopy}>
+              <Text style={styles.infoTitle}>Videos</Text>
+              <Text style={styles.value}>720p at 30 fps with audio · up to 15 minutes</Text>
+            </View>
+          </View>
           <Button
             label="Apply glasses settings"
             onPress={() =>
@@ -307,29 +391,21 @@ export default function GlassesCaptureScreen() {
             style={styles.button}
           />
         </Card>
-        <Card style={styles.card}>
-          <Text style={styles.cardTitle}>Local queue folder</Text>
-          <Text style={styles.value}>
-            {folderUri
-              ? 'Custom Android folder selected (sync falls back privately if Android access expires)'
-              : 'App-private fallback (select the Capture Queue folder to make pending media visible)'}
+        <Card style={[styles.card, styles.troubleshootingCard]}>
+          <View style={styles.sectionHeader}>
+            <View style={styles.sectionIconMuted}>
+              <Ionicons name="help-buoy-outline" size={20} color={theme.colors.mutedInk} />
+            </View>
+            <View style={styles.sectionCopy}>
+              <Text style={styles.cardTitle}>Troubleshooting</Text>
+              <Text style={styles.sectionSubtitle}>Only needed when something goes wrong</Text>
+            </View>
+          </View>
+          <Text style={styles.helperText}>
+            Export a redacted support log when investigating a connection or sync problem.
           </Text>
-          <Button
-            label="Choose Capture Queue folder"
-            onPress={() => void chooseFolder()}
-            variant="secondary"
-            style={styles.button}
-          />
-        </Card>
-        <Card style={styles.card}>
-          <Text style={styles.cardTitle}>Mentra diagnostics</Text>
-          <Text style={styles.value}>
-            Captures connection, gallery-mode, physical-button, camera, and sync events. Media
-            bytes, file paths, URLs, and credentials are redacted.
-          </Text>
-          <Text style={styles.value}>
-            Log file:{' '}
-            {mentraDebugInfo.exists ? `${mentraDebugInfo.sizeBytes} bytes` : 'not created yet'}
+          <Text style={styles.detailText}>
+            Log: {mentraDebugInfo.exists ? `${mentraDebugInfo.sizeBytes} bytes` : 'not created yet'}
           </Text>
           <Button
             label="Download diagnostics"
@@ -347,8 +423,8 @@ export default function GlassesCaptureScreen() {
           />
         </Card>
         <Text style={styles.note}>
-          Immich album: Ramon eyes capture. Local files are deleted only after the backend confirms
-          the Immich asset.
+          Upload destination: Immich album “Ramon eyes capture”. Pending files are never discarded;
+          local copies are removed only after the server confirms the asset.
         </Text>
       </ScrollView>
     </View>
@@ -356,31 +432,143 @@ export default function GlassesCaptureScreen() {
 }
 
 const styles = StyleSheet.create({
-  screen: { flex: 1, backgroundColor: '#f7f2ec' },
-  content: { paddingHorizontal: 20, gap: 16 },
+  screen: { flex: 1, backgroundColor: theme.colors.background },
+  content: { paddingHorizontal: 20, gap: 14 },
   back: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 8 },
-  backText: { fontSize: 16, color: '#1a1d22' },
-  title: { fontSize: 30, fontWeight: '700', color: '#1a1d22' },
-  subtitle: { fontSize: 15, lineHeight: 22, color: '#5c626b' },
-  warning: { color: '#8b5b17' },
-  card: { padding: 16, gap: 8 },
-  cardTitle: { fontSize: 18, fontWeight: '700', color: '#1a1d22' },
-  value: { color: '#4e555e', lineHeight: 20 },
+  backText: { fontSize: 16, color: theme.colors.ink, fontWeight: '500' },
+  hero: { flexDirection: 'row', alignItems: 'center', gap: 14, paddingTop: 4 },
+  heroIcon: {
+    width: 58,
+    height: 58,
+    borderRadius: 18,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: theme.colors.paleTeal,
+  },
+  heroCopy: { flex: 1, gap: 2 },
+  eyebrow: { fontSize: 11, letterSpacing: 1.2, fontWeight: '700', color: theme.colors.teal },
+  title: { fontSize: 30, fontWeight: '700', color: theme.colors.ink },
+  subtitle: { fontSize: 15, lineHeight: 21, color: theme.colors.mutedInk },
+  captureHint: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 8,
+    padding: 12,
+    borderRadius: theme.radius.md,
+    backgroundColor: 'rgba(217,236,235,0.7)',
+  },
+  captureHintText: { flex: 1, color: theme.colors.teal, lineHeight: 19, fontSize: 13 },
+  recordingsShortcut: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    padding: 14,
+    borderRadius: theme.radius.md,
+    backgroundColor: theme.colors.card,
+    borderWidth: 1,
+    borderColor: theme.colors.line,
+  },
+  recordingsShortcutIcon: {
+    width: 38,
+    height: 38,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: theme.colors.paleTeal,
+  },
+  recordingsShortcutCopy: { flex: 1, gap: 2 },
+  recordingsShortcutTitle: { color: theme.colors.ink, fontSize: 16, fontWeight: '700' },
+  recordingsShortcutText: { color: theme.colors.mutedInk, fontSize: 13, lineHeight: 18 },
+  warning: { color: '#8b5b17', lineHeight: 20 },
+  card: { padding: 16, gap: 12 },
+  troubleshootingCard: { backgroundColor: 'rgba(255,255,255,0.72)' },
+  sectionHeader: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  sectionIcon: {
+    width: 36,
+    height: 36,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: theme.colors.paleTeal,
+  },
+  sectionIconMuted: {
+    width: 36,
+    height: 36,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#f2eee9',
+  },
+  sectionCopy: { flex: 1, gap: 2 },
+  cardTitle: { fontSize: 18, fontWeight: '700', color: theme.colors.ink },
+  sectionSubtitle: { fontSize: 13, lineHeight: 18, color: theme.colors.mutedInk },
+  value: { color: theme.colors.mutedInk, lineHeight: 20 },
+  connectionRow: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 2 },
+  connectionCopy: { flex: 1, gap: 1 },
+  connectionName: { color: theme.colors.ink, fontSize: 16, fontWeight: '600' },
+  statusPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    borderRadius: 20,
+    paddingHorizontal: 9,
+    paddingVertical: 5,
+  },
+  statusPillOn: { backgroundColor: theme.colors.paleTeal },
+  statusPillOff: { backgroundColor: '#f2eee9' },
+  statusPillText: { color: theme.colors.mutedInk, fontSize: 11, fontWeight: '700' },
+  statusDot: { width: 7, height: 7, borderRadius: 4 },
+  statusDotOn: { backgroundColor: '#2b9872' },
+  statusDotOff: { backgroundColor: '#9a938b' },
   deviceRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
     borderWidth: 1,
-    borderColor: '#ded8d1',
-    borderRadius: 12,
+    borderColor: theme.colors.line,
+    borderRadius: theme.radius.md,
     padding: 12,
     gap: 12,
   },
+  deviceIcon: {
+    width: 32,
+    height: 32,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: theme.colors.paleTeal,
+  },
   deviceText: { flex: 1, gap: 2 },
-  deviceName: { color: '#1a1d22', fontSize: 16, fontWeight: '600' },
-  deviceMeta: { color: '#6a7078', fontSize: 13 },
-  deviceAction: { color: '#d8584e', fontWeight: '700' },
-  error: { color: '#a83232', lineHeight: 20 },
+  deviceName: { color: theme.colors.ink, fontSize: 16, fontWeight: '600' },
+  deviceMeta: { color: theme.colors.mutedInk, fontSize: 13 },
+  deviceAction: { color: theme.colors.accentDeep, fontWeight: '700' },
+  syncSummary: { color: theme.colors.ink, fontSize: 16, fontWeight: '600' },
+  metricGrid: { flexDirection: 'row', gap: 8 },
+  metric: {
+    flex: 1,
+    borderRadius: theme.radius.md,
+    backgroundColor: '#f8f5f1',
+    padding: 10,
+    gap: 2,
+  },
+  metricValue: { color: theme.colors.ink, fontSize: 18, fontWeight: '700' },
+  metricValueAlert: { color: theme.colors.accentDeep },
+  metricLabel: { color: theme.colors.mutedInk, fontSize: 12 },
+  syncDetails: { gap: 2 },
+  detailText: { color: theme.colors.mutedInk, fontSize: 12, lineHeight: 18 },
+  errorBox: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 8,
+    padding: 10,
+    borderRadius: theme.radius.md,
+    backgroundColor: '#fdf2ef',
+  },
+  error: { flex: 1, color: theme.colors.accentDeep, lineHeight: 19 },
+  infoRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 10 },
+  infoCopy: { flex: 1, gap: 1 },
+  infoTitle: { color: theme.colors.ink, fontWeight: '600' },
+  helperText: { color: theme.colors.mutedInk, fontSize: 13, lineHeight: 19 },
   button: { marginTop: 4 },
-  note: { color: '#5c626b', fontSize: 13, lineHeight: 19 },
+  note: { color: theme.colors.mutedInk, fontSize: 13, lineHeight: 19, paddingTop: 2 },
 });

@@ -18,19 +18,28 @@ type EventPhotoCardProps = {
 };
 
 function formatPhotoMeta(photo: EventPhoto) {
+  const kind = photo.media_type === 'video' ? 'Video' : 'Photo';
+  const duration =
+    photo.duration_seconds && photo.duration_seconds > 0
+      ? `${Math.round(photo.duration_seconds)}s`
+      : null;
   const capturedAt = String(photo.captured_at || '').trim();
-  if (!capturedAt) return 'Synced from Immich';
+  if (!capturedAt) return [kind, duration, 'Synced from Immich'].filter(Boolean).join(' · ');
   const parsed = new Date(capturedAt);
-  if (Number.isNaN(parsed.getTime())) return 'Synced from Immich';
-  return parsed.toLocaleDateString(undefined, {
+  if (Number.isNaN(parsed.getTime()))
+    return [kind, duration, 'Synced from Immich'].filter(Boolean).join(' · ');
+  const date = parsed.toLocaleDateString(undefined, {
     month: 'short',
     day: 'numeric',
     year: 'numeric',
   });
+  return [kind, date, duration].filter(Boolean).join(' · ');
 }
 
 function detectedPersonLabel(photo: EventPhoto, person: EventPhotoDetectedPerson) {
-  const matchedContact = (photo.tagged_contacts || []).find((contact) => contact.contact_id === person.contact_id);
+  const matchedContact = (photo.tagged_contacts || []).find(
+    (contact) => contact.contact_id === person.contact_id,
+  );
   return (matchedContact?.display_name || person.display_name || person.name || '').trim();
 }
 
@@ -67,11 +76,18 @@ export function EventPhotoCard({
       {photos.length === 0 ? (
         <Text style={styles.emptyText}>No photos linked yet.</Text>
       ) : (
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.photoRow}>
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          contentContainerStyle={styles.photoRow}
+        >
           {photos.map((photo) => {
             const taggedContacts = photo.tagged_contacts || [];
             const detectedPeople = (photo.detected_people || [])
-              .filter((person) => !taggedContacts.some((contact) => contact.contact_id === person.contact_id))
+              .filter(
+                (person) =>
+                  !taggedContacts.some((contact) => contact.contact_id === person.contact_id),
+              )
               .map((person) => ({
                 ...person,
                 label: detectedPersonLabel(photo, person),
@@ -113,13 +129,18 @@ export function EventPhotoCard({
                     <Text style={styles.suggestionLabel}>Detected in Immich</Text>
                     <View style={styles.tagRow}>
                       {detectedPeople.slice(0, 3).map((person) => (
-                        <View key={`${photo.asset_id}:${person.person_id}`} style={styles.suggestionChip}>
+                        <View
+                          key={`${photo.asset_id}:${person.person_id}`}
+                          style={styles.suggestionChip}
+                        >
                           <Text style={styles.suggestionChipText}>{person.label}</Text>
                         </View>
                       ))}
                       {detectedPeople.length > 3 ? (
                         <View style={styles.suggestionChip}>
-                          <Text style={styles.suggestionChipText}>{`+${detectedPeople.length - 3}`}</Text>
+                          <Text
+                            style={styles.suggestionChipText}
+                          >{`+${detectedPeople.length - 3}`}</Text>
                         </View>
                       ) : null}
                     </View>
@@ -133,7 +154,10 @@ export function EventPhotoCard({
                     accessibilityRole="button"
                     accessibilityLabel="Unlink photo"
                     onPress={() => onRemovePhoto(photo.asset_id)}
-                    style={({ pressed }) => [styles.unlinkButton, pressed && styles.unlinkButtonPressed]}
+                    style={({ pressed }) => [
+                      styles.unlinkButton,
+                      pressed && styles.unlinkButtonPressed,
+                    ]}
                   >
                     <Text style={styles.unlinkText}>Unlink</Text>
                   </Pressable>

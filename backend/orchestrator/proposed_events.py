@@ -10,6 +10,8 @@ from typing import Any
 from uuid import uuid4
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+import event_media_suggestions
+import event_photos as event_photos_service
 import events as events_service
 import google_place_cache
 import google_places
@@ -371,13 +373,28 @@ def accept_proposal(
     start_at: datetime | None = None,
     end_at: datetime | None = None,
     contact_ids: list[str] | None = None,
+    place_id: str | None = None,
     place_candidate_id: str | None = None,
+    media_asset_ids: list[str] | None = None,
 ) -> dict[str, Any]:
     proposal = _get_owned_proposal(user_email, proposal_id)
     if proposal.get("status") != "pending":
         raise ValueError("Only pending proposals can be accepted")
 
-    selected_place_id = _materialize_selected_place(proposal, place_candidate_id)
+    selected_place_id = _materialize_selected_place(proposal, place_candidate_id, place_id)
+
+    proposal_timezone = str(proposal.get("timezone") or "UTC").strip() or "UTC"
+    resolved_start_at = _coerce_proposal_datetime(
+        start_at or proposal["start_at"],
+        timezone_name=proposal_timezone,
+    )
+    resolved_end_at = _coerce_proposal_datetime(
+        end_at if end_at is not None else proposal.get("end_at"),
+        timezone_name=proposal_timezone,
+    )
+    if resolved_end_at is not None and resolved_end_at < resolved_start_at:
+        raise ValueError("Event end must be after its start")
+    resolved_summary = proposal.get("suggested_summary") if summary is None else summary
 
     event_id = f"event:proposed:{uuid4().hex[:12]}"
     resolved_contacts = list(
@@ -395,14 +412,14 @@ def accept_proposal(
     )
     event = EventIn(
         id=event_id,
-        startDate=start_at or proposal["start_at"],
-        endDate=end_at or proposal.get("end_at"),
+        startDate=resolved_start_at,
+        endDate=resolved_end_at,
         placeId=selected_place_id,
         people=resolved_contacts,
         tags=["proposed-event"],
         types=["personal"],
         title=(title or proposal.get("suggested_title") or "Untitled event").strip(),
-        summary=(summary or proposal.get("suggested_summary") or "").strip(),
+        summary=(resolved_summary or "").strip(),
         raw={
             "source": "proposed_events",
             "proposal_id": proposal_id,
@@ -410,7 +427,37 @@ def accept_proposal(
             "location_evidence": proposal.get("evidence") or {},
         },
     )
+    if media_asset_ids is not None:
+        media_suggestions = event_media_suggestions.set_proposal_media_selection(
+            proposal_id,
+            media_asset_ids,
+        )
+        selected_media_asset_ids = [
+            str(item.get("asset_id") or "").strip()
+            for item in media_suggestions
+            if item.get("status") == "included" and str(item.get("asset_id") or "").strip()
+        ]
+    else:
+        selected_media_asset_ids = event_media_suggestions.selected_proposal_asset_ids(proposal_id)
+
     events_service.ingest_event(event)
+
+    media_errors: list[str] = []
+    for asset_id in selected_media_asset_ids:
+        try:
+            event_photos_service.link_existing_event_asset(
+                event_id,
+                asset_id,
+                source="proposed_event_suggestion",
+            )
+        except Exception as exc:
+            media_errors.append(f"{asset_id}: {exc}")
+            logger.warning(
+                "[proposed_events] Failed to link suggested media proposal_id=%s asset_id=%s: %s",
+                proposal_id,
+                asset_id,
+                exc,
+            )
 
     with get_conn() as conn, conn.cursor() as cur:
         cur.execute(
@@ -433,13 +480,31 @@ def accept_proposal(
         raise LookupError("Pending proposal not found")
     serialized = _serialize_proposal(dict(row))
     serialized["event_id"] = event_id
+    serialized["media_errors"] = media_errors
     return serialized
 
 
-def _materialize_selected_place(proposal: dict[str, Any], place_candidate_id: str | None) -> str | None:
+def _coerce_proposal_datetime(value: datetime | None, *, timezone_name: str) -> datetime | None:
+    if value is None or value.tzinfo is not None:
+        return value
+    return value.replace(tzinfo=_resolve_timezone(timezone_name))
+
+
+def _materialize_selected_place(
+    proposal: dict[str, Any],
+    place_candidate_id: str | None,
+    place_id: str | None = None,
+) -> str | None:
     existing_place_id = str(proposal.get("place_id") or "").strip() or None
     selected_id = str(place_candidate_id or "").strip()
     if not selected_id:
+        if place_id is not None:
+            explicit_place_id = str(place_id).strip()
+            if not explicit_place_id:
+                return None
+            if explicit_place_id == existing_place_id or places_service.get_place(explicit_place_id):
+                return explicit_place_id
+            raise ValueError("Selected place is not available")
         return existing_place_id
 
     evidence = proposal.get("evidence")
@@ -664,11 +729,7 @@ def _build_candidate(
     duration_label = _humanize_duration_minutes(duration_minutes)
     time_context = _build_time_context(segment.start_at, segment.end_at, timezone_name)
     title = f"Overnight stay at {place_label}" if time_context["likely_overnight_sleep"] else f"Visited {place_label}"
-    suggested_summary = (
-        f"Stayed overnight at {place_label}."
-        if time_context["likely_overnight_sleep"]
-        else f"Spent {duration_label} at {place_label}."
-    )
+    suggested_summary = f"Stayed overnight at {place_label}." if time_context["likely_overnight_sleep"] else ""
     reason = (
         f"Location samples show a {duration_label} stay with no blocking event. "
         f"{time_context['interpretation_hint']}"
@@ -703,6 +764,12 @@ def _build_candidate(
         },
         "expires_at": datetime.now(timezone.utc) + timedelta(days=PROPOSAL_TTL_DAYS),
     }
+    candidate["media_suggestions"] = event_media_suggestions.suggest_event_media(
+        start_at=segment.start_at,
+        end_at=segment.end_at,
+        event_lat=segment.lat,
+        event_lon=segment.lon,
+    )
     return _enrich_candidate_with_history(candidate, segment=segment, timezone_name=timezone_name)
 
 
@@ -828,7 +895,23 @@ def _insert_proposal(candidate: dict[str, Any]) -> dict[str, Any] | None:
         _iso(row.get("end_at")),
         row.get("place_id"),
     )
-    return _serialize_proposal(dict(row))
+    serialized = _serialize_proposal(dict(row))
+    try:
+        event_media_suggestions.persist_proposal_media(
+            str(row.get("proposal_id") or ""),
+            candidate.get("media_suggestions") or [],
+        )
+        serialized["media_suggestions"] = event_media_suggestions.list_proposal_media(
+            str(row.get("proposal_id") or "")
+        )
+    except Exception as exc:
+        logger.warning(
+            "[proposed_events] Failed to persist media suggestions proposal_id=%s: %s",
+            row.get("proposal_id"),
+            exc,
+        )
+        serialized["media_suggestions"] = []
+    return serialized
 
 
 def _enrich_candidate_with_history(
@@ -1253,7 +1336,7 @@ def _build_enrichment_prompt(candidate: dict[str, Any], context: dict[str, Any])
             "audience": "The current user that generated the data.",
             "quality_bar": (
                 "The proposal should feel like a thoughtful memory suggestion, not raw telemetry. "
-                "Use a natural title and a summary that explains why this event is plausible."
+                "Use a natural title. A summary is optional and must add meaningful event content."
             ),
         },
         "event_candidate": {
@@ -1282,10 +1365,12 @@ def _build_enrichment_prompt(candidate: dict[str, Any], context: dict[str, Any])
             ],
             "summary": [
                 "Write what likely happened, not why you believe it happened.",
-                "Use natural time phrasing from duration_label; avoid raw minute phrasing like '75 minutes' unless under one hour.",
+                "Never repeat the known time range or duration in suggested_summary.",
+                "Do not write summaries such as 'Seems you spent 2 hours at ...', 'You stayed 2 hours at ...', or other time-only descriptions.",
+                "A place type alone is not proof of an activity. Infer an activity only when history, contacts, timing, or strong venue evidence supports it.",
                 "For whole-night stays, prefer a sleep/overnight-stay summary unless stronger evidence says otherwise.",
                 "Do not overstate public web snippets as proof of what the user did.",
-                "When evidence is weak, keep the summary generic and factual, such as an overnight stay or a visit at/near the place.",
+                "When evidence is weak or only establishes that the user was at a place, return an empty suggested_summary.",
             ],
             "reason": [
                 "Explain why this proposal was generated and how confident the inference is.",
@@ -1320,7 +1405,7 @@ def _apply_llm_enrichment(
     allowed_contact_ids: set[str],
 ) -> dict[str, Any]:
     title = " ".join(str(enriched.get("suggested_title") or "").split()).strip()
-    summary = _normalize_generated_event_text(
+    summary = _sanitize_generated_summary(
         enriched.get("suggested_summary"),
         duration_minutes=candidate.get("duration_minutes"),
     )
@@ -1335,8 +1420,7 @@ def _apply_llm_enrichment(
 
     if title:
         candidate["suggested_title"] = title
-    if summary:
-        candidate["suggested_summary"] = summary
+    candidate["suggested_summary"] = summary
     if reason:
         candidate["reason"] = reason
     if contact_ids:
@@ -1394,6 +1478,16 @@ def _normalize_generated_event_text(value: Any, *, duration_minutes: Any) -> str
             flags=re.IGNORECASE,
         )
     return text
+
+
+def _sanitize_generated_summary(value: Any, *, duration_minutes: Any) -> str:
+    text = _normalize_generated_event_text(value, duration_minutes=duration_minutes)
+    if not text:
+        return ""
+
+    lowered = text.lower()
+    has_duration = bool(re.search(r"\b(?:\d+(?:\.\d+)?|a|an|one|two|three|four|five|six|seven|eight|nine|ten)\s*[- ]?(?:hours?|minutes?)\b", lowered))
+    return "" if has_duration else text
 
 
 def _place_intelligence_evidence(
@@ -1916,6 +2010,11 @@ def _get_owned_proposal(user_email: str, proposal_id: str) -> dict[str, Any]:
     return dict(row)
 
 
+def get_owned_proposal(user_email: str, proposal_id: str) -> dict[str, Any]:
+    """Return a proposal after enforcing ownership for auxiliary actions."""
+    return _get_owned_proposal(user_email, proposal_id)
+
+
 def _set_status(user_email: str, proposal_id: str, status: str) -> dict[str, Any]:
     with get_conn() as conn, conn.cursor() as cur:
         cur.execute(
@@ -2167,6 +2266,11 @@ def _serialize_proposal(row: dict[str, Any]) -> dict[str, Any]:
     duration_minutes = output.get("duration_minutes")
     if duration_minutes is not None:
         output["duration_label"] = _humanize_duration_minutes(int(duration_minutes))
+        if "suggested_summary" in output:
+            output["suggested_summary"] = _sanitize_generated_summary(
+                output.get("suggested_summary"),
+                duration_minutes=duration_minutes,
+            )
     evidence = output.get("evidence")
     if isinstance(evidence, str):
         try:
@@ -2191,4 +2295,15 @@ def _serialize_proposal(row: dict[str, Any]) -> dict[str, Any]:
             ordered = [by_id[provider_id] for provider_id in ranked_ids if provider_id in by_id]
             ordered.extend(item for item in candidates if item not in ordered)
             output["place_candidates"] = ordered[:3]
+    proposal_id = str(output.get("proposal_id") or "").strip()
+    if proposal_id and "media_suggestions" not in output:
+        try:
+            output["media_suggestions"] = event_media_suggestions.list_proposal_media(proposal_id)
+        except Exception as exc:
+            logger.warning(
+                "[proposed_events] Failed to load media suggestions proposal_id=%s: %s",
+                proposal_id,
+                exc,
+            )
+            output["media_suggestions"] = []
     return output

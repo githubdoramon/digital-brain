@@ -13,6 +13,7 @@ from typing import Any
 from uuid import uuid4
 
 import contacts as contacts_service
+import event_media_suggestions
 import events as events_service
 import places as places_service
 import retrieval
@@ -212,6 +213,38 @@ _MEAL_TIME_HINTS = {
     "lunch": (12, 30),
     "dinner": (19, 30),
 }
+
+
+def _event_media_coordinates(
+    resolution: dict[str, Any],
+    extracted: dict[str, Any],
+) -> tuple[float | None, float | None]:
+    candidates: list[dict[str, Any]] = []
+    for key in ("matched_place", "geocoded_place", "inferred_location"):
+        value = resolution.get(key)
+        if isinstance(value, dict):
+            candidates.append(value)
+    where = str(extracted.get("where") or "").strip()
+    for place in resolution.get("new_entities", {}).get("places", []):
+        if isinstance(place, dict) and str(place.get("name") or "").strip() == where:
+            candidates.append(place)
+    for candidate in candidates:
+        lat = _safe_float(candidate.get("lat") or candidate.get("latitude"))
+        lon = _safe_float(candidate.get("lon") or candidate.get("longitude"))
+        if lat is not None and lon is not None:
+            return lat, lon
+        place_id = str(candidate.get("place_id") or "").strip()
+        if place_id:
+            try:
+                stored_place = places_service.get_place(place_id)
+            except Exception:
+                stored_place = None
+            if isinstance(stored_place, dict):
+                lat = _safe_float(stored_place.get("lat"))
+                lon = _safe_float(stored_place.get("lon"))
+                if lat is not None and lon is not None:
+                    return lat, lon
+    return None, None
 
 
 def _infer_recent_event_datetime(message: str) -> datetime | None:
@@ -3595,6 +3628,13 @@ def handle_event(parsed: ParsedCommand, context: dict) -> dict[str, Any]:
         )
 
     media_attachment_summaries = summarize_staged_chat_media_attachments(media_attachments)
+    media_lat, media_lon = _event_media_coordinates(resolution, extracted)
+    media_suggestions = event_media_suggestions.suggest_event_media(
+        start_at=extracted.get("when"),
+        end_at=extracted.get("end_when"),
+        event_lat=media_lat,
+        event_lon=media_lon,
+    )
 
     # Generate a preview ID and store the data
     preview_id = f"event:preview:{uuid4().hex[:8]}"
@@ -3625,6 +3665,7 @@ def handle_event(parsed: ParsedCommand, context: dict) -> dict[str, Any]:
             "existing_event_id": existing_event_id,
             "matched_event": matched_event,
             "candidate_events": candidate_events,
+            "media_suggestions": media_suggestions,
             "media_attachments": media_attachments,
         },
     )
@@ -3676,6 +3717,7 @@ def handle_event(parsed: ParsedCommand, context: dict) -> dict[str, Any]:
         "existing_event_id": existing_event_id,
         "matched_event": matched_event,
         "candidate_events": candidate_events,
+        "media_suggestions": media_suggestions,
         "media_attachments": media_attachment_summaries,
         "requires_confirmation": True,
         "message": message,

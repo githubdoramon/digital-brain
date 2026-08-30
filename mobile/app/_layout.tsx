@@ -15,7 +15,14 @@ import { AuthProvider, useAuth } from '@/auth/AuthContext';
 import { TopNoticeProvider } from '@/components/top-notice';
 import { syncBackgroundLocationTracking } from '@/location/backgroundLocation';
 import { registerGlassesCaptureReconciliation } from '@/mentraCapture/backgroundTask';
-import { ensureMentraConnection, subscribeMentraEvents } from '@/mentraCapture/sdk';
+import { hydrateGlassesAudioRecording } from '@/mentraCapture/recordings';
+import {
+  ensureMentraConnection,
+  getDefaultGlassesDevice,
+  subscribeMentraAudioOutput,
+  subscribeMentraEvents,
+} from '@/mentraCapture/sdk';
+import { setExpectedGlassesAlertAudioDevice } from '@/glassesAlerts/runtime';
 import { reconcileGlassesCaptures } from '@/mentraCapture/sync';
 import { ensureAppStateTracking } from '@/location/runtimeState';
 import { theme } from '@/theme';
@@ -58,7 +65,18 @@ export default function RootLayout() {
     const unsubscribe = subscribeMentraEvents(() => {
       void reconcileGlassesCaptures();
     });
+    const unsubscribeAudioOutput = subscribeMentraAudioOutput((deviceName) => {
+      if (deviceName) void setExpectedGlassesAlertAudioDevice(deviceName).catch(() => undefined);
+    });
+    void getDefaultGlassesDevice()
+      .then((device) => {
+        if (device?.name) return setExpectedGlassesAlertAudioDevice(device.name);
+      })
+      .catch(() => undefined);
     void registerGlassesCaptureReconciliation();
+    // The native recorder marks an unfinished file before encoding. On a
+    // process restart, retain it only when Android can verify a playable M4A.
+    void hydrateGlassesAudioRecording().catch(() => undefined);
 
     // The native SDK's connection state is process-local. Restore the saved
     // device and apply camera/gallery defaults on the first app launch, then
@@ -104,6 +122,7 @@ export default function RootLayout() {
       disposed = true;
       appStateSubscription.remove();
       unsubscribe();
+      unsubscribeAudioOutput();
     };
   }, []);
 
@@ -318,6 +337,24 @@ function RootLayoutNav({ loaded }: { loaded: boolean }) {
         />
         <Stack.Screen
           name="settings/glasses-capture/index"
+          options={{
+            headerShown: false,
+          }}
+        />
+        <Stack.Screen
+          name="settings/storage/index"
+          options={{
+            headerShown: false,
+          }}
+        />
+        <Stack.Screen
+          name="settings/glasses-recordings/index"
+          options={{
+            headerShown: false,
+          }}
+        />
+        <Stack.Screen
+          name="settings/glasses-alerts/index"
           options={{
             headerShown: false,
           }}
