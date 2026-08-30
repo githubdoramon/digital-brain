@@ -26,6 +26,7 @@ import { useAuth } from '@/auth/AuthContext';
 import { AppPressable as Pressable } from '@/components/AppPressable';
 import { GeneratedFilesRow } from '@/components/chat/GeneratedFilesRow';
 import { EventMediaSuggestionCard } from '@/components/event-draft/EventMediaSuggestionCard';
+import { appendEventPhotoDebugLog } from '@/debug/eventPhotoDebugLog';
 import {
   COLLAPSING_CONTENT_TOP_PADDING,
   COLLAPSING_SECONDARY_TITLE_BLOCK_HEIGHT,
@@ -1790,6 +1791,22 @@ export function ChatConversationScreen({
 
         setThreadId((prev) => response.thread_id ?? prev);
         const commandResult = response.command_result as CommandResult | undefined;
+        if (commandResult && typeof commandResult === 'object') {
+          const mediaSuggestions = (commandResult as EventCommandResultPayload).media_suggestions;
+          if (Array.isArray(mediaSuggestions)) {
+            void appendEventPhotoDebugLog('event-media-suggestions-received', {
+              previewId: textValue((commandResult as EventCommandResultPayload).preview_id),
+              rawCount: mediaSuggestions.length,
+              assetIds: mediaSuggestions
+                .map((suggestion) => textValue(suggestion?.asset_id))
+                .filter(Boolean),
+              capturedAt: mediaSuggestions
+                .map((suggestion) => nullableText(suggestion?.captured_at))
+                .filter(Boolean),
+              statuses: mediaSuggestions.map((suggestion) => suggestion?.status ?? null),
+            });
+          }
+        }
         const uiDirectives = response.ui_directives;
         const linkedItems = Array.isArray(response.linked_items)
           ? (response.linked_items as LinkedItem[])

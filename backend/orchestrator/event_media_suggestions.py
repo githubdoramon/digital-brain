@@ -31,15 +31,44 @@ def suggest_event_media(
     """
     start = _parse_datetime(start_at)
     if start is None:
+        logger.warning("[event_media] search skipped because event start is invalid start_at=%r", start_at)
         return []
-    end = _parse_datetime(end_at) or (start + DEFAULT_EVENT_DURATION)
+    parsed_end = _parse_datetime(end_at)
+    end = parsed_end or (start + DEFAULT_EVENT_DURATION)
     if end < start:
+        logger.warning(
+            "[event_media] search skipped because event end precedes start start=%s end=%s",
+            start.isoformat(),
+            end.isoformat(),
+        )
         return []
 
+    taken_after = start - TIME_TOLERANCE
+    taken_before = end + TIME_TOLERANCE
+    logger.info(
+        "[event_media] search started start=%s end=%s end_defaulted=%s "
+        "taken_after=%s taken_before=%s event_coordinates_present=%s",
+        start.isoformat(),
+        end.isoformat(),
+        parsed_end is None,
+        taken_after.isoformat(),
+        taken_before.isoformat(),
+        event_lat is not None and event_lon is not None,
+    )
+
     try:
+        config = immich_client.get_immich_config()
+        logger.debug(
+            "[event_media] Immich configuration available server_configured=%s "
+            "api_key_configured=%s timeout=%s",
+            bool(config.base_url),
+            bool(config.api_key),
+            config.http_timeout,
+        )
         assets = immich_client.search_assets_by_time(
-            taken_after=start - TIME_TOLERANCE,
-            taken_before=end + TIME_TOLERANCE,
+            taken_after=taken_after,
+            taken_before=taken_before,
+            config=config,
         )
     except Exception as exc:
         logger.warning("[event_media] Immich suggestion search failed: %s", exc)
@@ -47,22 +76,76 @@ def suggest_event_media(
 
     suggestions: list[dict[str, Any]] = []
     seen_ids: set[str] = set()
+    skipped = {
+        "non_object": 0,
+        "missing_id": 0,
+        "duplicate_id": 0,
+        "missing_file_created_at": 0,
+        "outside_distance": 0,
+    }
+    logger.info("[event_media] Immich search returned raw_assets=%d", len(assets))
     for asset in assets:
+        if not isinstance(asset, dict):
+            skipped["non_object"] += 1
+            continue
         asset_id = str(asset.get("id") or "").strip()
-        if not asset_id or asset_id in seen_ids:
+        if not asset_id:
+            skipped["missing_id"] += 1
+            logger.debug("[event_media] asset rejected reason=missing_id")
+            continue
+        if asset_id in seen_ids:
+            skipped["duplicate_id"] += 1
+            logger.debug("[event_media] asset rejected asset_id=%s reason=duplicate_id", asset_id)
             continue
         captured_at = _parse_datetime(asset.get("fileCreatedAt"))
         if captured_at is None:
+            skipped["missing_file_created_at"] += 1
+            exif = asset.get("exifInfo") if isinstance(asset.get("exifInfo"), dict) else {}
+            logger.debug(
+                "[event_media] asset rejected asset_id=%s filename=%s reason=missing_file_created_at "
+                "file_created_at=%r local_date_time=%r exif_date_time_original=%r",
+                asset_id,
+                asset.get("originalFileName"),
+                asset.get("fileCreatedAt"),
+                asset.get("localDateTime"),
+                exif.get("dateTimeOriginal"),
+            )
             continue
         asset_lat, asset_lon = _asset_coordinates(asset)
         distance_m = None
         if event_lat is not None and event_lon is not None and asset_lat is not None and asset_lon is not None:
             distance_m = _distance_meters(event_lat, event_lon, asset_lat, asset_lon)
             if distance_m > MAX_DISTANCE_METERS:
+                skipped["outside_distance"] += 1
+                logger.debug(
+                    "[event_media] asset rejected asset_id=%s filename=%s reason=outside_distance "
+                    "distance_m=%.2f max_distance_m=%.2f captured_at=%s",
+                    asset_id,
+                    asset.get("originalFileName"),
+                    distance_m,
+                    MAX_DISTANCE_METERS,
+                    captured_at.isoformat(),
+                )
                 continue
 
         seen_ids.add(asset_id)
         temporal_distance_seconds = _distance_to_interval_seconds(captured_at, start, end)
+        exif = asset.get("exifInfo") if isinstance(asset.get("exifInfo"), dict) else {}
+        logger.debug(
+            "[event_media] asset accepted asset_id=%s filename=%s type=%s "
+            "file_created_at=%r local_date_time=%r exif_date_time_original=%r "
+            "captured_at=%s temporal_distance_seconds=%.3f distance_m=%s has_gps=%s",
+            asset_id,
+            asset.get("originalFileName"),
+            asset.get("type"),
+            asset.get("fileCreatedAt"),
+            asset.get("localDateTime"),
+            exif.get("dateTimeOriginal"),
+            captured_at.isoformat(),
+            temporal_distance_seconds,
+            round(distance_m, 2) if distance_m is not None else None,
+            asset_lat is not None and asset_lon is not None,
+        )
         suggestions.append(
             _serialize_suggestion(
                 asset,
@@ -79,6 +162,18 @@ def suggest_event_media(
             str(item.get("captured_at") or ""),
             str(item.get("asset_id") or ""),
         )
+    )
+    logger.info(
+        "[event_media] search completed raw_assets=%d suggestions=%d "
+        "skipped_non_object=%d skipped_missing_id=%d skipped_duplicate_id=%d "
+        "skipped_missing_file_created_at=%d skipped_outside_distance=%d",
+        len(assets),
+        len(suggestions),
+        skipped["non_object"],
+        skipped["missing_id"],
+        skipped["duplicate_id"],
+        skipped["missing_file_created_at"],
+        skipped["outside_distance"],
     )
     return suggestions
 

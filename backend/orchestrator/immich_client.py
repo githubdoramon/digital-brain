@@ -7,6 +7,7 @@ from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from io import BytesIO
+from time import perf_counter
 from typing import Any, BinaryIO
 
 import requests
@@ -463,6 +464,17 @@ def search_assets_by_time(
     timeout = cfg.http_timeout or IMMICH_HTTP_TIMEOUT
     assets: list[dict[str, Any]] = []
     page = 1
+    started_at = perf_counter()
+    logger.info(
+        "[immich_search] metadata search started taken_after=%s taken_before=%s size=%d "
+        "server_configured=%s api_key_configured=%s timeout=%s",
+        _format_timestamp(taken_after),
+        _format_timestamp(taken_before),
+        IMMICH_SEARCH_PAGE_SIZE,
+        bool(cfg.base_url),
+        bool(cfg.api_key),
+        timeout,
+    )
 
     while True:
         payload = {
@@ -474,29 +486,76 @@ def search_assets_by_time(
             "size": IMMICH_SEARCH_PAGE_SIZE,
             "page": page,
         }
+        page_started_at = perf_counter()
+        logger.debug(
+            "[immich_search] metadata request page=%d taken_after=%s taken_before=%s",
+            page,
+            payload["takenAfter"],
+            payload["takenBefore"],
+        )
         try:
             response = requests.post(url, headers=headers, json=payload, timeout=timeout)
             response.raise_for_status()
         except requests.RequestException as exc:
+            logger.warning(
+                "[immich_search] metadata request failed page=%d elapsed_ms=%.1f error=%s",
+                page,
+                (perf_counter() - page_started_at) * 1000,
+                exc,
+            )
             raise ImmichClientError(f"Immich asset search failed: {exc}") from exc
 
         try:
             result = response.json()
         except ValueError as exc:
+            logger.error(
+                "[immich_search] metadata response was not JSON page=%d status=%d "
+                "content_type=%s elapsed_ms=%.1f",
+                page,
+                response.status_code,
+                response.headers.get("content-type"),
+                (perf_counter() - page_started_at) * 1000,
+            )
             raise ImmichClientError("Immich asset search returned invalid JSON response") from exc
 
         page_payload = result.get("assets") if isinstance(result, dict) else None
         page_items = page_payload.get("items") if isinstance(page_payload, dict) else None
         if not isinstance(page_items, list):
+            logger.error(
+                "[immich_search] metadata response had unexpected shape page=%d status=%d "
+                "result_type=%s result_keys=%s assets_type=%s",
+                page,
+                response.status_code,
+                type(result).__name__,
+                sorted(result.keys()) if isinstance(result, dict) else None,
+                type(page_payload).__name__,
+            )
             raise ImmichClientError("Immich asset search returned unexpected payload")
         assets.extend(item for item in page_items if isinstance(item, dict))
 
         next_page = page_payload.get("nextPage") if isinstance(page_payload, dict) else None
         next_cursor = page_payload.get("nextCursor") if isinstance(page_payload, dict) else None
+        logger.info(
+            "[immich_search] metadata response page=%d status=%d items=%d next_page=%s "
+            "has_next_cursor=%s elapsed_ms=%.1f total_items=%d",
+            page,
+            response.status_code,
+            len(page_items),
+            next_page,
+            bool(next_cursor),
+            (perf_counter() - page_started_at) * 1000,
+            len(assets),
+        )
         if not next_page and not next_cursor and len(page_items) < IMMICH_SEARCH_PAGE_SIZE:
             break
         page += 1
 
+    logger.info(
+        "[immich_search] metadata search completed pages=%d total_items=%d elapsed_ms=%.1f",
+        page,
+        len(assets),
+        (perf_counter() - started_at) * 1000,
+    )
     return assets
 
 
@@ -549,16 +608,47 @@ def fetch_asset_thumbnail(
         "accept": "image/*",
     }
     timeout = cfg.http_timeout or IMMICH_HTTP_TIMEOUT
+    started_at = perf_counter()
+    logger.info(
+        "[immich_thumbnail] request started asset_id=%s size=%s server_configured=%s "
+        "api_key_configured=%s",
+        normalized_asset_id,
+        size,
+        bool(cfg.base_url),
+        bool(cfg.api_key),
+    )
 
     try:
         response = requests.get(url, headers=headers, params={"size": size}, timeout=timeout)
     except requests.RequestException as exc:
+        logger.warning(
+            "[immich_thumbnail] request failed asset_id=%s elapsed_ms=%.1f error=%s",
+            normalized_asset_id,
+            (perf_counter() - started_at) * 1000,
+            exc,
+        )
         raise ImmichClientError(f"Immich thumbnail request failed: {exc}") from exc
 
     if response.status_code >= 400:
         snippet = response.text[:200]
+        logger.warning(
+            "[immich_thumbnail] response failed asset_id=%s status=%d elapsed_ms=%.1f body=%s",
+            normalized_asset_id,
+            response.status_code,
+            (perf_counter() - started_at) * 1000,
+            snippet,
+        )
         raise ImmichClientError(f"Immich thumbnail fetch failed ({response.status_code}): {snippet}")
 
+    logger.info(
+        "[immich_thumbnail] response succeeded asset_id=%s status=%d bytes=%d content_type=%s "
+        "elapsed_ms=%.1f",
+        normalized_asset_id,
+        response.status_code,
+        len(response.content),
+        response.headers.get("content-type"),
+        (perf_counter() - started_at) * 1000,
+    )
     return response.content, response.headers.get("content-type") or "image/jpeg"
 
 

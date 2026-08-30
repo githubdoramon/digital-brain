@@ -5,6 +5,7 @@ import { Image, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { API_BASE_URL } from '@/api/client';
 import { AppPressable as Pressable } from '@/components/AppPressable';
 import { type EventPhoto } from '@/components/event-draft/types';
+import { appendEventPhotoDebugLog } from '@/debug/eventPhotoDebugLog';
 import { theme } from '@/theme';
 
 type EventMediaSuggestionCardProps = {
@@ -38,6 +39,22 @@ export function EventMediaSuggestionCard({
     () => (token ? { Authorization: `Bearer ${token}` } : undefined),
     [token],
   );
+  const lastRenderedSignature = React.useRef<string | null>(null);
+
+  React.useEffect(() => {
+    if (suggestions.length === 0) return;
+    const signature = suggestions
+      .map((suggestion) => `${suggestion.asset_id}:${suggestion.thumbnail_path || ''}`)
+      .join('|');
+    if (signature === lastRenderedSignature.current) return;
+    lastRenderedSignature.current = signature;
+    void appendEventPhotoDebugLog('event-media-suggestions-rendered', {
+      count: suggestions.length,
+      assetIds: suggestions.map((suggestion) => suggestion.asset_id),
+      capturedAt: suggestions.map((suggestion) => suggestion.captured_at),
+      thumbnailPaths: suggestions.map((suggestion) => suggestion.thumbnail_path),
+    });
+  }, [suggestions]);
 
   if (suggestions.length === 0) return null;
 
@@ -68,6 +85,17 @@ export function EventMediaSuggestionCard({
                   source={{ uri: thumbnailUri, headers }}
                   style={styles.image}
                   resizeMode="cover"
+                  onLoad={() => {
+                    void appendEventPhotoDebugLog('event-media-thumbnail-loaded', {
+                      assetId: media.asset_id,
+                    });
+                  }}
+                  onError={(event) => {
+                    void appendEventPhotoDebugLog('event-media-thumbnail-error', {
+                      assetId: media.asset_id,
+                      error: event.nativeEvent.error,
+                    });
+                  }}
                 />
               ) : (
                 <View style={[styles.image, styles.fallback]}>

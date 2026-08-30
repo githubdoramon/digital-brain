@@ -1003,6 +1003,21 @@ def _resolve_ambiguous_contacts_from_answer(
             "already covered",
         )
     )
+    unlisted_contact_references = [
+        item
+        for item in ambiguous_contacts
+        if not item.get("candidates")
+        and not re.fullmatch(
+            r".+\'s\s+family",
+            str(item.get("original_text") or "").strip(),
+            flags=re.IGNORECASE,
+        )
+    ]
+    exact_typed_contact = (
+        _select_unique_exact_contact_from_clarification_answer(answer)
+        if len(unlisted_contact_references) == 1
+        else None
+    )
 
     for item in ambiguous_contacts:
         original_text = str(item.get("original_text") or "").strip()
@@ -1033,10 +1048,73 @@ def _resolve_ambiguous_contacts_from_answer(
                     "confidence": "high",
                 }
             )
+        elif not candidates:
+            if exact_typed_contact:
+                resolved.append(
+                    {
+                        "original_text": original_text,
+                        "contact_id": exact_typed_contact["contact_id"],
+                        "display_name": exact_typed_contact["display_name"],
+                        "matched_via": "clarification_exact_name",
+                        "confidence": "high",
+                    }
+                )
+            else:
+                remaining.append(item)
         else:
             remaining.append(item)
 
     return resolved, remaining
+
+
+def _select_unique_exact_contact_from_clarification_answer(answer: str) -> dict[str, str] | None:
+    """Resolve a typed clarification answer only when it exactly identifies one contact.
+
+    Nested references can be ambiguous because their anchor is ambiguous (for
+    example, ``Ava's father``). That state intentionally has no candidate for
+    the full relationship phrase, so matching the reply against the original
+    candidate list cannot work. A user-provided exact contact name is still
+    authoritative enough to bind to that phrase, but partial/fuzzy results
+    must remain unresolved rather than silently picking a contact.
+    """
+    answer_text = str(answer or "").strip()
+    answer_normalized = normalize_search_text(answer_text)
+    if not answer_normalized:
+        return None
+
+    matches = contacts_service.search_contacts(
+        answer_text,
+        search_by="name",
+        fuzzy_threshold=80,
+        limit=10,
+    )
+    exact_matches: list[dict[str, Any]] = []
+    for match in matches:
+        display_name = str(match.get("display_name") or "").strip()
+        alias_values = match.get("aliases") or []
+        if normalize_search_text(display_name) == answer_normalized:
+            exact_matches.append(match)
+            continue
+        if any(
+            normalize_search_text(str(alias or "")) == answer_normalized
+            for alias in alias_values
+            if str(alias or "").strip()
+        ):
+            exact_matches.append(match)
+
+    unique_matches = {
+        str(match.get("contact_id") or ""): match
+        for match in exact_matches
+        if str(match.get("contact_id") or "").strip()
+    }
+    if len(unique_matches) != 1:
+        return None
+
+    selected = next(iter(unique_matches.values()))
+    return {
+        "contact_id": str(selected["contact_id"]),
+        "display_name": str(selected.get("display_name") or answer_text),
+    }
 
 
 def _should_skip_contact_resolution(
@@ -3005,7 +3083,7 @@ def handle_event(parsed: ParsedCommand, context: dict) -> dict[str, Any]:
         if raw_message and ambiguous_contacts:
             resolved_contacts, remaining_contacts = _resolve_ambiguous_contacts_from_answer(
                 ambiguous_contacts,
-                raw_message,
+                clarification_detail or raw_message,
             )
             if resolved_contacts:
                 previous_contact_result = {
@@ -3635,6 +3713,11 @@ def handle_event(parsed: ParsedCommand, context: dict) -> dict[str, Any]:
         event_lat=media_lat,
         event_lon=media_lon,
     )
+    logger.info(
+        "[handle_event] Event media suggestion result count=%d event_coordinates_present=%s",
+        len(media_suggestions),
+        media_lat is not None and media_lon is not None,
+    )
 
     # Generate a preview ID and store the data
     preview_id = f"event:preview:{uuid4().hex[:8]}"
@@ -3691,6 +3774,7 @@ def handle_event(parsed: ParsedCommand, context: dict) -> dict[str, Any]:
         existing_event_id,
         len(candidate_events),
     )
+    logger.info("  - Media suggestions: %d", len(media_suggestions))
 
     if operation == "update":
         message = (

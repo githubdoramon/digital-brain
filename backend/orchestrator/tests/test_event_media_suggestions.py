@@ -6,7 +6,7 @@ import event_media_suggestions
 def test_suggestions_use_one_hour_default_and_retain_assets_without_gps(monkeypatch):
     captured = {}
 
-    def search_assets_by_time(*, taken_after, taken_before):
+    def search_assets_by_time(*, taken_after, taken_before, config=None):
         captured["after"] = taken_after
         captured["before"] = taken_before
         return [
@@ -19,6 +19,15 @@ def test_suggestions_use_one_hour_default_and_retain_assets_without_gps(monkeypa
         ]
 
     monkeypatch.setattr(event_media_suggestions.immich_client, "search_assets_by_time", search_assets_by_time)
+    monkeypatch.setattr(
+        event_media_suggestions.immich_client,
+        "get_immich_config",
+        lambda: event_media_suggestions.immich_client.ImmichConfig(
+            base_url="https://immich.example",
+            api_key="test-key",
+            face_api_key=None,
+        ),
+    )
 
     result = event_media_suggestions.suggest_event_media(
         start_at=datetime(2026, 8, 30, 10, 0, tzinfo=timezone.utc),
@@ -51,6 +60,15 @@ def test_suggestions_filter_geo_tagged_assets_beyond_250m(monkeypatch):
                 "exifInfo": {"latitude": 38.71, "longitude": -9.1},
             },
         ],
+    )
+    monkeypatch.setattr(
+        event_media_suggestions.immich_client,
+        "get_immich_config",
+        lambda: event_media_suggestions.immich_client.ImmichConfig(
+            base_url="https://immich.example",
+            api_key="test-key",
+            face_api_key=None,
+        ),
     )
 
     result = event_media_suggestions.suggest_event_media(

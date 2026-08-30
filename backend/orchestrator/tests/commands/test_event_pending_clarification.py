@@ -1427,6 +1427,45 @@ def test_resolve_ambiguous_contacts_from_answer_supports_exclusion_intent():
     assert remaining == ambiguous_contacts
 
 
+def test_resolve_ambiguous_nested_reference_from_exact_typed_contact(monkeypatch):
+    """A nested reference can lack direct candidates when its anchor is ambiguous."""
+    ambiguous_contacts = [
+        {
+            "original_text": "Avery's father",
+            "candidates": [],
+        }
+    ]
+
+    monkeypatch.setattr(
+        "commands.handlers.event.contacts_service.search_contacts",
+        lambda query, **_kwargs: [
+            {
+                "contact_id": "contact:morgan",
+                "display_name": "Morgan Vale",
+                "aliases": [],
+            }
+        ]
+        if query == "Morgan Vale"
+        else [],
+    )
+
+    resolved, remaining = event_handler._resolve_ambiguous_contacts_from_answer(
+        ambiguous_contacts,
+        "Morgan Vale",
+    )
+
+    assert remaining == []
+    assert resolved == [
+        {
+            "original_text": "Avery's father",
+            "contact_id": "contact:morgan",
+            "display_name": "Morgan Vale",
+            "matched_via": "clarification_exact_name",
+            "confidence": "high",
+        }
+    ]
+
+
 def test_resolve_ambiguous_contacts_from_answer_marks_collective_as_already_covered():
     ambiguous_contacts = [
         {
