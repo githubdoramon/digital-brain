@@ -143,6 +143,10 @@ class GlassesAlertsModule : Module() {
       )
     }
 
+    AsyncFunction("getImageEnhancementForegroundServiceStatus") {
+      GlassesImageEnhancementService.status()
+    }
+
     OnDestroy {
       if (activeModule?.get() === this@GlassesAlertsModule) activeModule = null
     }

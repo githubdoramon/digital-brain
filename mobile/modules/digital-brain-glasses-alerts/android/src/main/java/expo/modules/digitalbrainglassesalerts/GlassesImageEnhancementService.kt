@@ -26,6 +26,17 @@ class GlassesImageEnhancementService : Service() {
     private const val CHANNEL_ID = "glasses_image_enhancement"
     private const val LEGACY_CHANNEL_ID = "glasses_poc2_capture"
     private const val NOTIFICATION_ID = 4312
+    @Volatile private var active = false
+    @Volatile private var startedAtMs: Long? = null
+    @Volatile private var lastNativeTickAtMs: Long? = null
+    @Volatile private var nativeTickCount = 0L
+
+    fun status() = mapOf(
+      "active" to active,
+      "startedAtMs" to startedAtMs,
+      "lastNativeTickAtMs" to lastNativeTickAtMs,
+      "nativeTickCount" to nativeTickCount,
+    )
 
     fun start(context: Context, intervalMinutes: Int, scheduleCount: Int) {
       val intent = Intent(context, GlassesImageEnhancementService::class.java)
@@ -44,6 +55,8 @@ class GlassesImageEnhancementService : Service() {
   private var tickIntervalMs = 60_000L
   private val foregroundTick = object : Runnable {
     override fun run() {
+      lastNativeTickAtMs = System.currentTimeMillis()
+      nativeTickCount += 1
       GlassesAlertsModule.emitImageEnhancementForegroundTick()
       handler.postDelayed(this, tickIntervalMs)
     }
@@ -59,6 +72,8 @@ class GlassesImageEnhancementService : Service() {
       intent?.getIntExtra("interval_minutes", 1) ?: 1,
       intent?.getIntExtra("schedule_count", 1) ?: 1,
     )
+    active = true
+    if (startedAtMs == null) startedAtMs = System.currentTimeMillis()
     tickIntervalMs = (intent?.getIntExtra("interval_minutes", 1) ?: 1)
       .coerceAtLeast(1) * 60_000L
     handler.removeCallbacks(foregroundTick)
@@ -68,6 +83,10 @@ class GlassesImageEnhancementService : Service() {
 
   override fun onDestroy() {
     handler.removeCallbacks(foregroundTick)
+    active = false
+    startedAtMs = null
+    lastNativeTickAtMs = null
+    nativeTickCount = 0
     super.onDestroy()
   }
 

@@ -34,6 +34,8 @@ export type MomentDrainResult = {
   acceptedCount: number;
   rejectedCount: number;
   pendingCount: number;
+  attemptedRequest: boolean;
+  rejectedDetail?: string;
   deferredReason?: 'no_auth_token' | 'network_error';
 };
 
@@ -130,11 +132,19 @@ export async function drainQueuedMoments(trigger: string): Promise<MomentDrainRe
   if (drainInFlight) return drainInFlight;
   const activeDrain = (async (): Promise<MomentDrainResult> => {
     const entries = await loadQueue();
-    if (!entries.length) return { acceptedCount: 0, rejectedCount: 0, pendingCount: 0 };
+    if (!entries.length) {
+      return { acceptedCount: 0, rejectedCount: 0, pendingCount: 0, attemptedRequest: false };
+    }
     const token = await resolveAuth();
     if (!token) {
       await appendMentraDebugLog('moment_delivery_deferred', { trigger, reason: 'no_auth_token' });
-      return { acceptedCount: 0, rejectedCount: 0, pendingCount: entries.length, deferredReason: 'no_auth_token' };
+      return {
+        acceptedCount: 0,
+        rejectedCount: 0,
+        pendingCount: entries.length,
+        attemptedRequest: false,
+        deferredReason: 'no_auth_token',
+      };
     }
     const batch = entries.slice(0, MAX_BATCH_SIZE);
     await enrichLocations(batch, token);
@@ -170,7 +180,13 @@ export async function drainQueuedMoments(trigger: string): Promise<MomentDrainRe
         rejected_count: rejected.size,
         pending_count: queue.length,
       });
-      return { acceptedCount: accepted.size, rejectedCount: rejected.size, pendingCount: queue.length };
+      return {
+        acceptedCount: accepted.size,
+        rejectedCount: rejected.size,
+        pendingCount: queue.length,
+        attemptedRequest: true,
+        rejectedDetail: rejected.size ? Array.from(rejected.values())[0] : undefined,
+      };
     } catch (error) {
       queue = entries.map((entry) => ({
         ...entry,
@@ -182,7 +198,13 @@ export async function drainQueuedMoments(trigger: string): Promise<MomentDrainRe
         trigger,
         pending_count: queue.length,
       });
-      return { acceptedCount: 0, rejectedCount: 0, pendingCount: queue.length, deferredReason: 'network_error' };
+      return {
+        acceptedCount: 0,
+        rejectedCount: 0,
+        pendingCount: queue.length,
+        attemptedRequest: true,
+        deferredReason: 'network_error',
+      };
     }
   })().finally(() => {
     drainInFlight = null;

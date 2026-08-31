@@ -11,6 +11,7 @@ import { AppState, Platform, type AppStateStatus } from 'react-native';
 import { imageUnderstandingCoordinator } from '@/image-understanding/coordinator';
 import ImageEnhancementForegroundServiceNative, {
   type ImageEnhancementDeviceHealth,
+  type ImageEnhancementForegroundServiceStatus,
 } from '@/modules/digital-brain-glasses-alerts/src';
 import type { ImageUnderstandingRunRecord } from '@/image-understanding/types';
 import {
@@ -114,6 +115,8 @@ type ImageEnhancementLogEntry = {
   phase?: string;
   capturedAt?: string;
   deviceHealth?: ImageEnhancementDeviceHealth | null;
+  appState?: AppStateStatus;
+  foregroundService?: ImageEnhancementForegroundServiceStatus | null;
   pipeline?: {
     evidence: SafeRunSummary;
     enhancement: SafeRunSummary;
@@ -782,6 +785,13 @@ async function readDeviceHealth(): Promise<ImageEnhancementDeviceHealth | null> 
   );
 }
 
+async function readForegroundServiceStatus(): Promise<ImageEnhancementForegroundServiceStatus | null> {
+  if (Platform.OS !== 'android' || !ImageEnhancementForegroundServiceNative) return null;
+  return ImageEnhancementForegroundServiceNative.getImageEnhancementForegroundServiceStatus().catch(
+    () => null,
+  );
+}
+
 async function logPhase(
   phase: string,
   startedAt: number,
@@ -985,6 +995,12 @@ async function processEnhancementJob(job: ImageEnhancementProcessingJob): Promis
       source: job.source,
       capturedAt: job.capturedAt,
     });
+    await log({
+      timestamp: new Date().toISOString(),
+      event: 'moment_delivery_starting',
+      source: job.source,
+      capturedAt: job.capturedAt,
+    });
     void drainQueuedMoments('automatic_capture').then((delivery) =>
       log({
         timestamp: new Date().toISOString(),
@@ -992,6 +1008,9 @@ async function processEnhancementJob(job: ImageEnhancementProcessingJob): Promis
         source: job.source,
         capturedAt: job.capturedAt,
         reason: delivery.deferredReason ?? `accepted:${delivery.acceptedCount};rejected:${delivery.rejectedCount};pending:${delivery.pendingCount}`,
+        error:
+          delivery.rejectedDetail ??
+          (delivery.attemptedRequest ? undefined : 'No authenticated request was sent'),
       }),
     );
     publish({ running: false, lastError: null });
@@ -1184,7 +1203,7 @@ async function scheduleAndDrain(source: ImageEnhancementCaptureJob['source']): P
     void drainEnhancementQueue();
     // A queued moment may have failed while the app was offline. Revisit it on
     // every scheduler/foreground opportunity, even when no new photo is due.
-    await drainQueuedMoments(`scheduler_${source}`);
+    void drainQueuedMoments(`scheduler_${source}`);
   })().finally(() => {
     schedulerDispatch = null;
   });
@@ -1217,12 +1236,14 @@ function subscribeToNativeForegroundTicks(): void {
   }
   foregroundTickSubscription = ImageEnhancementForegroundServiceNative.addListener(
     'onImageEnhancementForegroundTick',
-    () => {
+    async () => {
       if (!config.enabled) return;
-      void log({
+      await log({
         timestamp: new Date().toISOString(),
         event: 'foreground_service_tick',
         source: 'foreground_service',
+        appState: AppState.currentState,
+        foregroundService: await readForegroundServiceStatus(),
       });
       void scheduleAndDrain('foreground_service');
     },
@@ -1277,6 +1298,8 @@ async function syncImageEnhancementForegroundService(
       timestamp: new Date().toISOString(),
       event: serviceActive ? 'foreground_service_started' : 'foreground_service_stopped',
       source,
+      appState: AppState.currentState,
+      foregroundService: await readForegroundServiceStatus(),
     });
   } catch (error) {
     const message = safeError(error);
@@ -1289,6 +1312,8 @@ async function syncImageEnhancementForegroundService(
       event: 'foreground_service_failed',
       source,
       error: message,
+      appState: AppState.currentState,
+      foregroundService: await readForegroundServiceStatus(),
     }).catch(() => undefined);
   }
 }

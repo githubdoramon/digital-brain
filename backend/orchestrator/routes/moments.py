@@ -9,7 +9,10 @@ from pydantic import ValidationError
 import moments as moments_service
 import user_locations
 from auth import get_current_user
+from observability.logger import get_runtime_logger
 from schemas import MomentIn
+
+logger = get_runtime_logger(__name__)
 
 
 def _user_email(user: dict[str, Any]) -> str:
@@ -63,6 +66,7 @@ def create_moments_router() -> APIRouter:
             except moments_service.MomentConflictError as exc:
                 results.append({"id": str(raw_id) if raw_id else None, "status": "rejected", "detail": str(exc)})
             except Exception:
+                logger.exception("[moments] Failed to store moment id=%s", raw_id or "unknown")
                 results.append({"id": str(raw_id) if raw_id else None, "status": "rejected", "detail": "Unable to store moment"})
         return {"results": results}
 
