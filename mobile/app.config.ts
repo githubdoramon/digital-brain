@@ -112,8 +112,9 @@ function withGlassesCaptureCleartext(config: ExpoConfig): ExpoConfig {
 
 /**
  * Glasses alerts use Android's notification-access boundary and a temporary
- * media-playback foreground service for an incoming-call ring. Keep the
- * declarations here because Expo prebuild regenerates AndroidManifest.xml.
+ * media-playback foreground service for an incoming-call ring. Image enhancement also uses
+ * a connected-device foreground service while automatic capture is enabled.
+ * Keep the declarations here because Expo prebuild regenerates AndroidManifest.xml.
  */
 function withGlassesAlertsAndroidManifest(config: ExpoConfig): ExpoConfig {
   return withAndroidManifest(config, (mod) => {
@@ -127,6 +128,8 @@ function withGlassesAlertsAndroidManifest(config: ExpoConfig): ExpoConfig {
     };
     addPermission('android.permission.READ_PHONE_STATE');
     addPermission('android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK');
+    addPermission('android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE');
+    addPermission('android.permission.FOREGROUND_SERVICE_DATA_SYNC');
 
     const application = manifest.application?.[0];
     if (!application) return mod;
@@ -135,9 +138,7 @@ function withGlassesAlertsAndroidManifest(config: ExpoConfig): ExpoConfig {
       if (services.some((service) => service.$?.['android:name'] === name)) return;
       services.push({
         $: { 'android:name': name, ...attributes },
-        ...(action
-          ? { 'intent-filter': [{ action: [{ $: { 'android:name': action } }] }] }
-          : {}),
+        ...(action ? { 'intent-filter': [{ action: [{ $: { 'android:name': action } }] }] } : {}),
       });
     };
     addService(
@@ -149,24 +150,28 @@ function withGlassesAlertsAndroidManifest(config: ExpoConfig): ExpoConfig {
       },
       'android.service.notification.NotificationListenerService',
     );
-    addService(
-      'expo.modules.digitalbrainglassesalerts.GlassesAlertPlaybackService',
-      {
-        'android:exported': 'false',
-        'android:foregroundServiceType': 'mediaPlayback',
-      },
-    );
+    addService('expo.modules.digitalbrainglassesalerts.GlassesAlertPlaybackService', {
+      'android:exported': 'false',
+      'android:foregroundServiceType': 'mediaPlayback',
+    });
+    addService('expo.modules.digitalbrainglassesalerts.GlassesImageEnhancementService', {
+      'android:exported': 'false',
+      'android:foregroundServiceType': 'connectedDevice',
+    });
     application.service = services;
 
     const queries = manifest.queries?.[0] ?? {};
     const intents = queries.intent ?? [];
-    const hasLauncherQuery = intents.some((intent) =>
-      intent.action?.some((action: { $?: Record<string, string> }) =>
-        action.$?.['android:name'] === 'android.intent.action.MAIN',
-      ) &&
-      intent.category?.some((category: { $?: Record<string, string> }) =>
-        category.$?.['android:name'] === 'android.intent.category.LAUNCHER',
-      ),
+    const hasLauncherQuery = intents.some(
+      (intent) =>
+        intent.action?.some(
+          (action: { $?: Record<string, string> }) =>
+            action.$?.['android:name'] === 'android.intent.action.MAIN',
+        ) &&
+        intent.category?.some(
+          (category: { $?: Record<string, string> }) =>
+            category.$?.['android:name'] === 'android.intent.category.LAUNCHER',
+        ),
     );
     if (!hasLauncherQuery) {
       intents.push({
@@ -258,8 +263,7 @@ export default ({ config }: ConfigContext): ExpoConfig => {
         'Digital Brain can show recording controls while capturing audio.',
     },
   });
-  const pluginsWithLiteRt = withPlugin(pluginsWithAudioStudio, 'react-native-litert-lm');
-  const pluginsWithBuildProperties = withPlugin(pluginsWithLiteRt, 'expo-build-properties', {
+  const pluginsWithBuildProperties = withPlugin(pluginsWithAudioStudio, 'expo-build-properties', {
     android: {
       minSdkVersion: 28,
     },
@@ -268,8 +272,8 @@ export default ({ config }: ConfigContext): ExpoConfig => {
   return withGlassesAlertsAndroidManifest(
     withGlassesCaptureCleartext(
       withSystemDebugKeystore({
-      ...merged,
-      plugins: withPlugin(pluginsWithBuildProperties, 'expo-background-task'),
+        ...merged,
+        plugins: withPlugin(pluginsWithBuildProperties, 'expo-background-task'),
       }),
     ),
   );

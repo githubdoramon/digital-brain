@@ -2,7 +2,16 @@ import Ionicons from '@expo/vector-icons/Ionicons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
 import React from 'react';
-import { Animated, RefreshControl, StyleSheet, Text, TextInput, View } from 'react-native';
+import {
+  Animated,
+  KeyboardAvoidingView,
+  Platform,
+  RefreshControl,
+  StyleSheet,
+  Text,
+  TextInput,
+  View,
+} from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { apiFetch } from '@/api/client';
@@ -323,6 +332,7 @@ export default function ProposedEventsScreen() {
                 endAt: draftEndById[proposal.proposal_id] || proposal.end_at,
                 contactIds: draftContactIdsById[proposal.proposal_id] || [],
                 placeId: draftPlaceIdById[proposal.proposal_id] || '',
+                placeName: draftPlaceTextById[proposal.proposal_id] || '',
                 ...(selectedPlaceById[proposal.proposal_id]
                   ? { placeCandidateId: selectedPlaceById[proposal.proposal_id] }
                   : {}),
@@ -364,6 +374,7 @@ export default function ProposedEventsScreen() {
       draftContactIdsById,
       draftEndById,
       draftPlaceIdById,
+      draftPlaceTextById,
       draftStartById,
       draftSummaryById,
       draftTitleById,
@@ -408,453 +419,466 @@ export default function ProposedEventsScreen() {
 
   return (
     <LinearGradient colors={theme.gradients.sunrise} style={styles.container}>
-      <Animated.ScrollView
-        onScroll={Animated.event([{ nativeEvent: { contentOffset: { y: scrollY } } }], {
-          useNativeDriver: false,
-        })}
-        scrollEventThrottle={16}
-        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={refresh} />}
-        contentContainerStyle={[
-          styles.content,
-          {
-            paddingTop:
-              insets.top +
-              COLLAPSING_TOP_BAR_HEIGHT +
-              COLLAPSING_CONTENT_TOP_PADDING +
-              COLLAPSING_SECONDARY_TITLE_BLOCK_HEIGHT,
-            paddingBottom: insets.bottom + 24,
-          },
-        ]}
+      <KeyboardAvoidingView
+        style={styles.screen}
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        keyboardVerticalOffset={0}
       >
-        <Card style={styles.summaryCard}>
-          <View style={styles.summaryIcon}>
-            <Ionicons name="calendar-outline" size={20} color={theme.colors.teal} />
-          </View>
-          <View style={styles.summaryText}>
-            <Text style={styles.summaryTitle}>
-              {pendingCount === 1 ? '1 possible event' : `${pendingCount} possible events`}
-            </Text>
-            <Text style={styles.summarySubtitle}>
-              Daily scans review today and yesterday, and keep suggestions for 7 days.
-            </Text>
-          </View>
-        </Card>
-
-        <Button
-          label={runningScan ? 'Scanning...' : 'Scan today'}
-          onPress={() => {
-            void runScan();
-          }}
-          loading={runningScan}
-          variant="secondary"
-          style={styles.scanButton}
-        />
-
-        {!loading && proposals.length === 0 ? (
-          <Card style={styles.emptyCard}>
-            <Text style={styles.emptyTitle}>Nothing to review</Text>
-            <Text style={styles.emptyText}>
-              When your location history shows a meaningful stay without a matching event, it will
-              appear here.
-            </Text>
+        <Animated.ScrollView
+          onScroll={Animated.event([{ nativeEvent: { contentOffset: { y: scrollY } } }], {
+            useNativeDriver: false,
+          })}
+          scrollEventThrottle={16}
+          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={refresh} />}
+          automaticallyAdjustKeyboardInsets={Platform.OS === 'ios'}
+          keyboardShouldPersistTaps="handled"
+          keyboardDismissMode="on-drag"
+          contentContainerStyle={[
+            styles.content,
+            {
+              paddingTop:
+                insets.top +
+                COLLAPSING_TOP_BAR_HEIGHT +
+                COLLAPSING_CONTENT_TOP_PADDING +
+                COLLAPSING_SECONDARY_TITLE_BLOCK_HEIGHT,
+              paddingBottom: insets.bottom + 24,
+            },
+          ]}
+        >
+          <Card style={styles.summaryCard}>
+            <View style={styles.summaryIcon}>
+              <Ionicons name="calendar-outline" size={20} color={theme.colors.teal} />
+            </View>
+            <View style={styles.summaryText}>
+              <Text style={styles.summaryTitle}>
+                {pendingCount === 1 ? '1 possible event' : `${pendingCount} possible events`}
+              </Text>
+              <Text style={styles.summarySubtitle}>
+                Daily scans review today and yesterday, and keep suggestions for 7 days.
+              </Text>
+            </View>
           </Card>
-        ) : null}
 
-        {proposals.map((proposal) => {
-          const isActive = activeId === proposal.proposal_id;
-          const isSaving = savingId === proposal.proposal_id;
-          return (
-            <Card key={proposal.proposal_id} style={styles.proposalCard}>
-              <Pressable
-                onPress={() => setActiveId(isActive ? null : proposal.proposal_id)}
-                style={styles.proposalHeader}
-              >
-                <View style={styles.proposalIcon}>
-                  <Ionicons name="location-outline" size={18} color={theme.colors.accentDeep} />
-                </View>
-                <View style={styles.proposalTitleBlock}>
-                  <Text style={styles.proposalTitle}>
-                    {proposal.suggested_title || placeLabel(proposal)}
-                  </Text>
-                  <Text style={styles.proposalMeta}>
-                    {formatTimeRange(proposal.start_at, proposal.end_at)}
-                  </Text>
-                  <Text style={styles.proposalMeta}>
-                    {proposal.duration_label || `${proposal.duration_minutes} min`} ·{' '}
-                    {proposal.confidence} confidence
-                  </Text>
-                </View>
-                <Ionicons
-                  name={isActive ? 'chevron-up' : 'chevron-down'}
-                  size={20}
-                  color={theme.colors.mutedInk}
-                />
-              </Pressable>
+          <Button
+            label={runningScan ? 'Scanning...' : 'Scan today'}
+            onPress={() => {
+              void runScan();
+            }}
+            loading={runningScan}
+            variant="secondary"
+            style={styles.scanButton}
+          />
 
-              {isActive ? (
-                <View style={styles.editor}>
-                  <Text style={styles.fieldLabel}>When</Text>
-                  <Text style={styles.helperText}>Start</Text>
-                  <Pressable
-                    accessibilityRole="button"
-                    accessibilityLabel="Edit event start date and time"
-                    onPress={() =>
-                      setActivePicker({ proposalId: proposal.proposal_id, field: 'start' })
-                    }
-                    style={styles.dateField}
-                  >
-                    <Text style={styles.dateValue}>
-                      {draftStartById[proposal.proposal_id]
-                        ? formatDraftDateTime(draftStartById[proposal.proposal_id])
-                        : 'Add start date and time'}
+          {!loading && proposals.length === 0 ? (
+            <Card style={styles.emptyCard}>
+              <Text style={styles.emptyTitle}>Nothing to review</Text>
+              <Text style={styles.emptyText}>
+                When your location history shows a meaningful stay without a matching event, it will
+                appear here.
+              </Text>
+            </Card>
+          ) : null}
+
+          {proposals.map((proposal) => {
+            const isActive = activeId === proposal.proposal_id;
+            const isSaving = savingId === proposal.proposal_id;
+            return (
+              <Card key={proposal.proposal_id} style={styles.proposalCard}>
+                <Pressable
+                  onPress={() => setActiveId(isActive ? null : proposal.proposal_id)}
+                  style={styles.proposalHeader}
+                >
+                  <View style={styles.proposalIcon}>
+                    <Ionicons name="location-outline" size={18} color={theme.colors.accentDeep} />
+                  </View>
+                  <View style={styles.proposalTitleBlock}>
+                    <Text style={styles.proposalTitle}>
+                      {proposal.suggested_title || placeLabel(proposal)}
                     </Text>
-                  </Pressable>
-                  <Text style={styles.helperText}>End</Text>
-                  <Pressable
-                    accessibilityRole="button"
-                    accessibilityLabel="Edit event end date and time"
-                    onPress={() =>
-                      setActivePicker({ proposalId: proposal.proposal_id, field: 'end' })
-                    }
-                    style={styles.dateField}
-                  >
-                    <Text style={styles.dateValue}>
-                      {draftEndById[proposal.proposal_id]
-                        ? formatDraftDateTime(draftEndById[proposal.proposal_id])
-                        : 'Add end date and time'}
+                    <Text style={styles.proposalMeta}>
+                      {formatTimeRange(proposal.start_at, proposal.end_at)}
                     </Text>
-                  </Pressable>
-
-                  <Text style={styles.fieldLabel}>Place</Text>
-                  <TextInput
-                    value={draftPlaceTextById[proposal.proposal_id] ?? ''}
-                    onChangeText={(value) => {
-                      setDraftPlaceTextById((current) => ({
-                        ...current,
-                        [proposal.proposal_id]: value,
-                      }));
-                      setDraftPlaceIdById((current) => ({
-                        ...current,
-                        [proposal.proposal_id]: null,
-                      }));
-                      setSelectedPlaceById((current) => ({
-                        ...current,
-                        [proposal.proposal_id]: null,
-                      }));
-                    }}
-                    style={styles.input}
-                    placeholder="Search places"
-                    placeholderTextColor={theme.colors.mutedInk}
+                    <Text style={styles.proposalMeta}>
+                      {proposal.duration_label || `${proposal.duration_minutes} min`} ·{' '}
+                      {proposal.confidence} confidence
+                    </Text>
+                  </View>
+                  <Ionicons
+                    name={isActive ? 'chevron-up' : 'chevron-down'}
+                    size={20}
+                    color={theme.colors.mutedInk}
                   />
-                  {draftPlaceTextById[proposal.proposal_id]?.trim() && availablePlaces.length ? (
-                    <View style={styles.suggestionList}>
-                      {availablePlaces
-                        .filter((place) =>
-                          normalizeSearch(placeOptionLabel(place)).includes(
-                            normalizeSearch(draftPlaceTextById[proposal.proposal_id] || ''),
-                          ),
-                        )
-                        .slice(0, 5)
-                        .map((place) => (
-                          <Pressable
-                            key={place.place_id}
-                            accessibilityRole="button"
-                            accessibilityLabel={`Select ${placeOptionLabel(place)}`}
-                            onPress={() => {
-                              setDraftPlaceTextById((current) => ({
-                                ...current,
-                                [proposal.proposal_id]: placeOptionLabel(place),
-                              }));
-                              setDraftPlaceIdById((current) => ({
-                                ...current,
-                                [proposal.proposal_id]: place.place_id,
-                              }));
-                              setSelectedPlaceById((current) => ({
-                                ...current,
-                                [proposal.proposal_id]: null,
-                              }));
-                            }}
-                            style={styles.suggestionRow}
-                          >
-                            <Text style={styles.suggestionText}>{placeOptionLabel(place)}</Text>
-                            <Ionicons
-                              name="location-outline"
-                              size={16}
-                              color={theme.colors.accentDeep}
-                            />
-                          </Pressable>
-                        ))}
-                    </View>
-                  ) : null}
-                  {proposal.place_candidates?.length ? (
-                    <View>
-                      <Text style={styles.fieldLabel}>Choose the place</Text>
-                      <Text style={styles.placeHint}>
-                        Select the venue that matches your visit. The selected place will be saved
-                        for future location matching.
+                </Pressable>
+
+                {isActive ? (
+                  <View style={styles.editor}>
+                    <Text style={styles.fieldLabel}>When</Text>
+                    <Text style={styles.helperText}>Start</Text>
+                    <Pressable
+                      accessibilityRole="button"
+                      accessibilityLabel="Edit event start date and time"
+                      onPress={() =>
+                        setActivePicker({ proposalId: proposal.proposal_id, field: 'start' })
+                      }
+                      style={styles.dateField}
+                    >
+                      <Text style={styles.dateValue}>
+                        {draftStartById[proposal.proposal_id]
+                          ? formatDraftDateTime(draftStartById[proposal.proposal_id])
+                          : 'Add start date and time'}
                       </Text>
-                      <View style={styles.placeCandidates}>
-                        {proposal.place_candidates.slice(0, 3).map((candidate) => {
-                          const selected =
-                            selectedPlaceById[proposal.proposal_id] === candidate.provider_place_id;
-                          const candidateType = candidate.primary_type?.replaceAll('_', ' ');
-                          return (
+                    </Pressable>
+                    <Text style={styles.helperText}>End</Text>
+                    <Pressable
+                      accessibilityRole="button"
+                      accessibilityLabel="Edit event end date and time"
+                      onPress={() =>
+                        setActivePicker({ proposalId: proposal.proposal_id, field: 'end' })
+                      }
+                      style={styles.dateField}
+                    >
+                      <Text style={styles.dateValue}>
+                        {draftEndById[proposal.proposal_id]
+                          ? formatDraftDateTime(draftEndById[proposal.proposal_id])
+                          : 'Add end date and time'}
+                      </Text>
+                    </Pressable>
+
+                    <Text style={styles.fieldLabel}>Place</Text>
+                    <TextInput
+                      value={draftPlaceTextById[proposal.proposal_id] ?? ''}
+                      onChangeText={(value) => {
+                        setDraftPlaceTextById((current) => ({
+                          ...current,
+                          [proposal.proposal_id]: value,
+                        }));
+                        setDraftPlaceIdById((current) => ({
+                          ...current,
+                          [proposal.proposal_id]: null,
+                        }));
+                        setSelectedPlaceById((current) => ({
+                          ...current,
+                          [proposal.proposal_id]: null,
+                        }));
+                      }}
+                      style={styles.input}
+                      placeholder="Search places"
+                      placeholderTextColor={theme.colors.mutedInk}
+                    />
+                    {draftPlaceTextById[proposal.proposal_id]?.trim() && availablePlaces.length ? (
+                      <View style={styles.suggestionList}>
+                        {availablePlaces
+                          .filter((place) =>
+                            normalizeSearch(placeOptionLabel(place)).includes(
+                              normalizeSearch(draftPlaceTextById[proposal.proposal_id] || ''),
+                            ),
+                          )
+                          .slice(0, 5)
+                          .map((place) => (
                             <Pressable
-                              key={candidate.provider_place_id}
+                              key={place.place_id}
+                              accessibilityRole="button"
+                              accessibilityLabel={`Select ${placeOptionLabel(place)}`}
                               onPress={() => {
-                                setSelectedPlaceById((current) => ({
+                                setDraftPlaceTextById((current) => ({
                                   ...current,
-                                  [proposal.proposal_id]: candidate.provider_place_id,
+                                  [proposal.proposal_id]: placeOptionLabel(place),
                                 }));
                                 setDraftPlaceIdById((current) => ({
                                   ...current,
+                                  [proposal.proposal_id]: place.place_id,
+                                }));
+                                setSelectedPlaceById((current) => ({
+                                  ...current,
                                   [proposal.proposal_id]: null,
                                 }));
-                                setDraftPlaceTextById((current) => ({
-                                  ...current,
-                                  [proposal.proposal_id]: candidate.title || '',
-                                }));
                               }}
-                              style={[
-                                styles.placeCandidate,
-                                selected && styles.placeCandidateSelected,
-                              ]}
+                              style={styles.suggestionRow}
                             >
-                              <View style={styles.placeCandidateCopy}>
-                                <Text style={styles.placeCandidateTitle}>
-                                  {candidate.title || 'Unnamed place'}
-                                </Text>
-                                <Text style={styles.placeCandidateMeta}>
-                                  {[
-                                    candidateType,
-                                    candidate.distance_m != null
-                                      ? `${Math.round(candidate.distance_m)}m away`
-                                      : null,
-                                  ]
-                                    .filter(Boolean)
-                                    .join(' · ')}
-                                </Text>
-                                {candidate.formatted_address ? (
-                                  <Text style={styles.placeCandidateAddress}>
-                                    {candidate.formatted_address}
-                                  </Text>
-                                ) : null}
-                              </View>
+                              <Text style={styles.suggestionText}>{placeOptionLabel(place)}</Text>
                               <Ionicons
-                                name={selected ? 'checkmark-circle' : 'ellipse-outline'}
-                                size={22}
-                                color={selected ? theme.colors.teal : theme.colors.mutedInk}
+                                name="location-outline"
+                                size={16}
+                                color={theme.colors.accentDeep}
                               />
+                            </Pressable>
+                          ))}
+                      </View>
+                    ) : null}
+                    {proposal.place_candidates?.length ? (
+                      <View>
+                        <Text style={styles.fieldLabel}>Choose the place</Text>
+                        <Text style={styles.placeHint}>
+                          Select the venue that matches your visit. The selected place will be saved
+                          for future location matching.
+                        </Text>
+                        <View style={styles.placeCandidates}>
+                          {proposal.place_candidates.slice(0, 3).map((candidate) => {
+                            const selected =
+                              selectedPlaceById[proposal.proposal_id] ===
+                              candidate.provider_place_id;
+                            const candidateType = candidate.primary_type?.replaceAll('_', ' ');
+                            return (
+                              <Pressable
+                                key={candidate.provider_place_id}
+                                onPress={() => {
+                                  setSelectedPlaceById((current) => ({
+                                    ...current,
+                                    [proposal.proposal_id]: candidate.provider_place_id,
+                                  }));
+                                  setDraftPlaceIdById((current) => ({
+                                    ...current,
+                                    [proposal.proposal_id]: null,
+                                  }));
+                                  setDraftPlaceTextById((current) => ({
+                                    ...current,
+                                    [proposal.proposal_id]: candidate.title || '',
+                                  }));
+                                }}
+                                style={[
+                                  styles.placeCandidate,
+                                  selected && styles.placeCandidateSelected,
+                                ]}
+                              >
+                                <View style={styles.placeCandidateCopy}>
+                                  <Text style={styles.placeCandidateTitle}>
+                                    {candidate.title || 'Unnamed place'}
+                                  </Text>
+                                  <Text style={styles.placeCandidateMeta}>
+                                    {[
+                                      candidateType,
+                                      candidate.distance_m != null
+                                        ? `${Math.round(candidate.distance_m)}m away`
+                                        : null,
+                                    ]
+                                      .filter(Boolean)
+                                      .join(' · ')}
+                                  </Text>
+                                  {candidate.formatted_address ? (
+                                    <Text style={styles.placeCandidateAddress}>
+                                      {candidate.formatted_address}
+                                    </Text>
+                                  ) : null}
+                                </View>
+                                <Ionicons
+                                  name={selected ? 'checkmark-circle' : 'ellipse-outline'}
+                                  size={22}
+                                  color={selected ? theme.colors.teal : theme.colors.mutedInk}
+                                />
+                              </Pressable>
+                            );
+                          })}
+                        </View>
+                      </View>
+                    ) : null}
+
+                    <Text style={styles.fieldLabel}>People</Text>
+                    <TextInput
+                      value={participantQueryById[proposal.proposal_id] || ''}
+                      onChangeText={(value) =>
+                        setParticipantQueryById((current) => ({
+                          ...current,
+                          [proposal.proposal_id]: value,
+                        }))
+                      }
+                      style={styles.input}
+                      placeholder="Search contacts"
+                      placeholderTextColor={theme.colors.mutedInk}
+                    />
+                    {(draftContactIdsById[proposal.proposal_id] || []).length ? (
+                      <View style={styles.chipRow}>
+                        {(draftContactIdsById[proposal.proposal_id] || []).map((contactId) => {
+                          const contact = availableContacts.find(
+                            (item) => item.contact_id === contactId,
+                          );
+                          return (
+                            <Pressable
+                              key={contactId}
+                              onPress={() =>
+                                setDraftContactIdsById((current) => ({
+                                  ...current,
+                                  [proposal.proposal_id]: (
+                                    current[proposal.proposal_id] || []
+                                  ).filter((id) => id !== contactId),
+                                }))
+                              }
+                              style={styles.chip}
+                            >
+                              <Text style={styles.chipText}>
+                                {contact?.display_name || contactId}
+                              </Text>
+                              <Ionicons name="close" size={12} color={theme.colors.mutedInk} />
                             </Pressable>
                           );
                         })}
                       </View>
-                    </View>
-                  ) : null}
-
-                  <Text style={styles.fieldLabel}>People</Text>
-                  <TextInput
-                    value={participantQueryById[proposal.proposal_id] || ''}
-                    onChangeText={(value) =>
-                      setParticipantQueryById((current) => ({
-                        ...current,
-                        [proposal.proposal_id]: value,
-                      }))
-                    }
-                    style={styles.input}
-                    placeholder="Search contacts"
-                    placeholderTextColor={theme.colors.mutedInk}
-                  />
-                  {(draftContactIdsById[proposal.proposal_id] || []).length ? (
-                    <View style={styles.chipRow}>
-                      {(draftContactIdsById[proposal.proposal_id] || []).map((contactId) => {
-                        const contact = availableContacts.find(
-                          (item) => item.contact_id === contactId,
-                        );
-                        return (
-                          <Pressable
-                            key={contactId}
-                            onPress={() =>
-                              setDraftContactIdsById((current) => ({
-                                ...current,
-                                [proposal.proposal_id]: (
-                                  current[proposal.proposal_id] || []
-                                ).filter((id) => id !== contactId),
-                              }))
-                            }
-                            style={styles.chip}
-                          >
-                            <Text style={styles.chipText}>
-                              {contact?.display_name || contactId}
-                            </Text>
-                            <Ionicons name="close" size={12} color={theme.colors.mutedInk} />
-                          </Pressable>
-                        );
-                      })}
-                    </View>
-                  ) : (
-                    <Text style={styles.helperText}>No people selected.</Text>
-                  )}
-                  {participantQueryById[proposal.proposal_id]?.trim() ? (
-                    <View style={styles.suggestionList}>
-                      {availableContacts
-                        .filter(
-                          (contact) =>
-                            !(draftContactIdsById[proposal.proposal_id] || []).includes(
-                              contact.contact_id,
-                            ) &&
-                            matchesContactSearch(
-                              contact,
-                              participantQueryById[proposal.proposal_id] || '',
-                            ),
-                        )
-                        .slice(0, 5)
-                        .map((contact) => (
-                          <Pressable
-                            key={contact.contact_id}
-                            onPress={() => {
-                              setDraftContactIdsById((current) => ({
-                                ...current,
-                                [proposal.proposal_id]: [
-                                  ...(current[proposal.proposal_id] || []),
-                                  contact.contact_id,
-                                ],
-                              }));
-                              setParticipantQueryById((current) => ({
-                                ...current,
-                                [proposal.proposal_id]: '',
-                              }));
-                            }}
-                            style={styles.suggestionRow}
-                          >
-                            <Text style={styles.suggestionText}>{contact.display_name}</Text>
-                            <Ionicons name="add" size={16} color={theme.colors.accentDeep} />
-                          </Pressable>
-                        ))}
-                    </View>
-                  ) : null}
-                  <Text style={styles.fieldLabel}>Title</Text>
-                  <TextInput
-                    value={draftTitleById[proposal.proposal_id] ?? proposal.suggested_title ?? ''}
-                    onChangeText={(value) =>
-                      setDraftTitleById((current) => ({
-                        ...current,
-                        [proposal.proposal_id]: value,
-                      }))
-                    }
-                    style={styles.input}
-                    placeholder="Event title"
-                    placeholderTextColor={theme.colors.mutedInk}
-                  />
-                  <Text style={styles.fieldLabel}>Summary</Text>
-                  <TextInput
-                    value={
-                      draftSummaryById[proposal.proposal_id] ?? proposal.suggested_summary ?? ''
-                    }
-                    onChangeText={(value) =>
-                      setDraftSummaryById((current) => ({
-                        ...current,
-                        [proposal.proposal_id]: value,
-                      }))
-                    }
-                    style={[styles.input, styles.summaryInput]}
-                    multiline
-                    placeholder="What happened?"
-                    placeholderTextColor={theme.colors.mutedInk}
-                  />
-                  {proposal.reason ? (
-                    <>
-                      <Text style={styles.fieldLabel}>Why suggested</Text>
-                      <Text style={styles.reasonText}>{proposal.reason}</Text>
-                    </>
-                  ) : null}
-                  <EventMediaSuggestionCard
-                    suggestions={(proposal.media_suggestions || []).filter((media) =>
-                      (selectedMediaIdsById[proposal.proposal_id] || []).includes(media.asset_id),
+                    ) : (
+                      <Text style={styles.helperText}>No people selected.</Text>
                     )}
-                    token={token}
-                    onRemove={(assetId) => {
-                      void removeSuggestedMedia(proposal, assetId);
-                    }}
-                  />
-                  <View style={styles.actions}>
-                    <Button
-                      label="Create event"
-                      onPress={() => {
-                        void updateProposal(proposal, 'accept');
-                      }}
-                      loading={isSaving}
-                      style={styles.primaryAction}
+                    {participantQueryById[proposal.proposal_id]?.trim() ? (
+                      <View style={styles.suggestionList}>
+                        {availableContacts
+                          .filter(
+                            (contact) =>
+                              !(draftContactIdsById[proposal.proposal_id] || []).includes(
+                                contact.contact_id,
+                              ) &&
+                              matchesContactSearch(
+                                contact,
+                                participantQueryById[proposal.proposal_id] || '',
+                              ),
+                          )
+                          .slice(0, 5)
+                          .map((contact) => (
+                            <Pressable
+                              key={contact.contact_id}
+                              onPress={() => {
+                                setDraftContactIdsById((current) => ({
+                                  ...current,
+                                  [proposal.proposal_id]: [
+                                    ...(current[proposal.proposal_id] || []),
+                                    contact.contact_id,
+                                  ],
+                                }));
+                                setParticipantQueryById((current) => ({
+                                  ...current,
+                                  [proposal.proposal_id]: '',
+                                }));
+                              }}
+                              style={styles.suggestionRow}
+                            >
+                              <Text style={styles.suggestionText}>{contact.display_name}</Text>
+                              <Ionicons name="add" size={16} color={theme.colors.accentDeep} />
+                            </Pressable>
+                          ))}
+                      </View>
+                    ) : null}
+                    <Text style={styles.fieldLabel}>Title</Text>
+                    <TextInput
+                      value={draftTitleById[proposal.proposal_id] ?? proposal.suggested_title ?? ''}
+                      onChangeText={(value) =>
+                        setDraftTitleById((current) => ({
+                          ...current,
+                          [proposal.proposal_id]: value,
+                        }))
+                      }
+                      style={styles.input}
+                      placeholder="Event title"
+                      placeholderTextColor={theme.colors.mutedInk}
                     />
-                    <View style={styles.secondaryActions}>
+                    <Text style={styles.fieldLabel}>Summary</Text>
+                    <TextInput
+                      value={
+                        draftSummaryById[proposal.proposal_id] ?? proposal.suggested_summary ?? ''
+                      }
+                      onChangeText={(value) =>
+                        setDraftSummaryById((current) => ({
+                          ...current,
+                          [proposal.proposal_id]: value,
+                        }))
+                      }
+                      style={[styles.input, styles.summaryInput]}
+                      multiline
+                      placeholder="What happened?"
+                      placeholderTextColor={theme.colors.mutedInk}
+                    />
+                    {proposal.reason ? (
+                      <>
+                        <Text style={styles.fieldLabel}>Why suggested</Text>
+                        <Text style={styles.reasonText}>{proposal.reason}</Text>
+                      </>
+                    ) : null}
+                    <EventMediaSuggestionCard
+                      suggestions={(proposal.media_suggestions || []).filter((media) =>
+                        (selectedMediaIdsById[proposal.proposal_id] || []).includes(media.asset_id),
+                      )}
+                      token={token}
+                      onRemove={(assetId) => {
+                        void removeSuggestedMedia(proposal, assetId);
+                      }}
+                    />
+                    <View style={styles.actions}>
                       <Button
-                        label="Dismiss"
+                        label="Create event"
                         onPress={() => {
-                          void updateProposal(proposal, 'dismiss');
+                          void updateProposal(proposal, 'accept');
                         }}
-                        disabled={isSaving}
-                        variant="secondary"
-                        style={styles.secondaryAction}
+                        loading={isSaving}
+                        style={styles.primaryAction}
                       />
-                      <Button
-                        label="Ignore place"
-                        onPress={() => {
-                          void updateProposal(proposal, 'ignore');
-                        }}
-                        disabled={isSaving}
-                        variant="danger"
-                        style={styles.secondaryAction}
-                      />
+                      <View style={styles.secondaryActions}>
+                        <Button
+                          label="Dismiss"
+                          onPress={() => {
+                            void updateProposal(proposal, 'dismiss');
+                          }}
+                          disabled={isSaving}
+                          variant="secondary"
+                          style={styles.secondaryAction}
+                        />
+                        <Button
+                          label="Ignore place"
+                          onPress={() => {
+                            void updateProposal(proposal, 'ignore');
+                          }}
+                          disabled={isSaving}
+                          variant="danger"
+                          style={styles.secondaryAction}
+                        />
+                      </View>
                     </View>
                   </View>
-                </View>
-              ) : null}
-            </Card>
-          );
-        })}
-      </Animated.ScrollView>
+                ) : null}
+              </Card>
+            );
+          })}
+        </Animated.ScrollView>
 
-      {activePicker ? (
-        <UiDirectiveDateTimePickerSheet
-          visible
-          mode="datetime"
-          value={(() => {
-            const draftValue =
-              activePicker.field === 'start'
-                ? draftStartById[activePicker.proposalId]
-                : draftEndById[activePicker.proposalId];
-            return draftValue ? draftDateTimePickerValue(draftValue) : undefined;
-          })()}
-          onClose={() => setActivePicker(null)}
-          onConfirm={(value) => {
-            if (activePicker.field === 'start') {
-              setDraftStartById((current) => ({
-                ...current,
-                [activePicker.proposalId]: value,
-              }));
-            } else {
-              setDraftEndById((current) => ({
-                ...current,
-                [activePicker.proposalId]: value,
-              }));
-            }
-            setActivePicker(null);
-          }}
+        {activePicker ? (
+          <UiDirectiveDateTimePickerSheet
+            visible
+            mode="datetime"
+            value={(() => {
+              const draftValue =
+                activePicker.field === 'start'
+                  ? draftStartById[activePicker.proposalId]
+                  : draftEndById[activePicker.proposalId];
+              return draftValue ? draftDateTimePickerValue(draftValue) : undefined;
+            })()}
+            onClose={() => setActivePicker(null)}
+            onConfirm={(value) => {
+              if (activePicker.field === 'start') {
+                setDraftStartById((current) => ({
+                  ...current,
+                  [activePicker.proposalId]: value,
+                }));
+              } else {
+                setDraftEndById((current) => ({
+                  ...current,
+                  [activePicker.proposalId]: value,
+                }));
+              }
+              setActivePicker(null);
+            }}
+          />
+        ) : null}
+
+        <CollapsingTopBar
+          title="Proposed events"
+          secondaryTitle="Fill in your day"
+          scrollY={scrollY}
+          onPressBack={() => router.back()}
         />
-      ) : null}
-
-      <CollapsingTopBar
-        title="Proposed events"
-        secondaryTitle="Fill in your day"
-        scrollY={scrollY}
-        onPressBack={() => router.back()}
-      />
+      </KeyboardAvoidingView>
     </LinearGradient>
   );
 }
 
 const styles = StyleSheet.create({
   container: {
+    flex: 1,
+  },
+  screen: {
     flex: 1,
   },
   content: {

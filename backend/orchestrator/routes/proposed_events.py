@@ -18,6 +18,7 @@ class ProposedEventAcceptIn(BaseModel):
     end_at: datetime | None = Field(default=None, alias="endAt")
     contact_ids: list[str] | None = Field(default=None, alias="contactIds")
     place_id: str | None = Field(default=None, alias="placeId")
+    place_name: str | None = Field(default=None, alias="placeName")
     place_candidate_id: str | None = Field(default=None, alias="placeCandidateId")
     media_asset_ids: list[str] | None = Field(default=None, alias="mediaAssetIds")
 
@@ -120,6 +121,7 @@ def create_proposed_events_router() -> APIRouter:
                 end_at=payload.end_at,
                 contact_ids=payload.contact_ids,
                 place_id=payload.place_id,
+                place_name=payload.place_name,
                 place_candidate_id=payload.place_candidate_id,
                 media_asset_ids=payload.media_asset_ids,
             )

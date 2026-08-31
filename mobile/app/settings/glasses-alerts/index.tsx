@@ -205,6 +205,7 @@ export default function GlassesAlertsScreen() {
           <Text style={styles.cardTitle}>Required access</Text>
           <Text style={styles.sectionSubtitle}>
             The phone keeps its normal notification sounds. Glasses alerts run only while the phone is locked or inactive, so they stay quiet while you are using it.
+            Test sounds always play when the glasses audio route is ready.
           </Text>
           <PermissionRow
             icon="notifications-outline"

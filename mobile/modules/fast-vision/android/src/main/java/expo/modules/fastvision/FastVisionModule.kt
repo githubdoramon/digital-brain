@@ -29,6 +29,7 @@ import expo.modules.kotlin.modules.Module
 import expo.modules.kotlin.modules.ModuleDefinition
 import java.io.File
 import java.io.FileInputStream
+import java.io.FileOutputStream
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.nio.MappedByteBuffer
@@ -36,6 +37,7 @@ import java.nio.channels.FileChannel
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.ExecutionException
 import java.util.concurrent.TimeUnit
+import java.util.UUID
 import kotlin.math.exp
 import kotlin.math.min
 import org.tensorflow.lite.DataType
@@ -316,6 +318,31 @@ class FastVisionModule : Module() {
         "mlKitModulesAvailable" to available,
         "modelsLoaded" to (objectDetector != null && sceneClassifier != null),
       )
+    }
+
+    AsyncFunction("normalizeImageForInference") { imageUri: String ->
+      val bitmap = decodeBitmap(imageUri)
+      val target = File(context().cacheDir, "vision-input-${UUID.randomUUID()}.jpg")
+      try {
+        FileOutputStream(target).use { output ->
+          check(bitmap.compress(Bitmap.CompressFormat.JPEG, 95, output)) {
+            "Android could not encode the inference image."
+          }
+          output.flush()
+        }
+        check(target.length() > 0L) { "Android produced an empty inference image." }
+        mapOf(
+          "uri" to Uri.fromFile(target).toString(),
+          "bytes" to target.length(),
+          "width" to bitmap.width,
+          "height" to bitmap.height,
+        )
+      } catch (error: Throwable) {
+        target.delete()
+        throw error
+      } finally {
+        bitmap.recycle()
+      }
     }
 
     AsyncFunction("installMlKitModules") {

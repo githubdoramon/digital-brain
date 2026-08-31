@@ -45,6 +45,101 @@ The local queue persists every pending/failed record and its retry/backoff
 state; it is not silently size-trimmed while media is awaiting upload. Per-entry
 upload failures are surfaced in the Smart glasses sync card, rather than
 being hidden behind a successful reconciliation pass.
+
+## Automatic image enhancement pipeline
+
+Settings → Smart glasses → Automatic scene capture is an opt-in local
+pipeline. Its toggle and one positive whole-minute interval persist in app
+storage and are restored after process or device restart. On Android,
+enabling it starts a connected-device foreground service with a persistent
+system notification. A native foreground-service clock emits the configured
+cadence to the live JavaScript runtime, while the JavaScript timer remains a
+coalesced fallback. The app also registers an Android background task as a
+restart/catch-up path. Android WorkManager enforces a 15-minute minimum and may
+defer it further after the process is killed, so sub-15-minute recovery cannot
+be guaranteed after force-stop/process death. Every native tick and scheduled
+capture is recorded in `image-enhancement-pipeline.jsonl`.
+Returning the app to the foreground also requests a catch-up capture when the
+toggle is still enabled.
+
+Each queued job requests one high-quality, medium-compression photo with
+`save=false`, `sound=false`, and the SDK's local phone photo receiver. The
+`auto` transfer mode attempts direct glasses Wi‑Fi delivery first and uses the
+SDK's phone-relayed Bluetooth transfer when direct delivery cannot reach the
+receiver. This is deliberately separate from gallery mode: physical-button
+photos continue to be reconciled and uploaded by the normal queue, while
+automatic photos never enter that queue. A successful automatic enhancement is
+durably queued as a source-independent `moment_observation.v1` and delivered
+to `POST /mobile/moments/batch`; it never uploads the source image or model
+diagnostics. One automatic
+capture/enhancement may be in flight at a time; overlapping interval ticks are
+coalesced into at most one pending job and persisted before execution. Failed
+jobs retry with bounded backoff. Native camera requests and
+enhancement each have a bounded timeout, so a wedged glasses or model call is
+recorded as a failure instead of leaving the settings screen in an endless
+"capturing" state. An enhancement timeout actively interrupts ExecuTorch
+generation before the coordinator unloads the model; it does not merely detach
+the UI wait while CPU inference continues in the background.
+
+Automatic photos are copied into the managed `Image Pipeline Temp` folder and
+the JSONL diagnostic log into `Exports` inside the user-selected Digital Brain
+storage base. App-private fallbacks use the same `Digital Brain/Image Pipeline
+Temp` and `Digital Brain/Exports` layout. The validated app-private copy is the
+capture critical path; Android document-provider copies run on a
+serialized asynchronous storage queue and never delay image understanding.
+The append-only private JSONL file is mirrored on a coalesced timer rather than
+being fully rewritten and followed by a full photo-folder scan for every log
+entry. The explicit **Save image enhancement log** action and general Mentra
+diagnostics both write to `Exports`. Neither action bypasses the user-selected
+Digital Brain base folder. Startup and explicit storage sync reconcile any
+retained private files and migrate the previous experimental storage layout.
+They are retained for manual
+inspection. Every photo runs through
+the serialized Fast Vision → Balanced VLM coordinator, which unloads native
+resources after each stage and failure. Balanced inference uses a short-lived
+canonical JPEG transcoded through Android's bitmap decoder. This preserves the
+original Mentra file while avoiding OpenCV differences in raw glasses JPEG and
+URI handling. The old selected-photo benchmark UI, LiteRT benchmark, and
+benchmark run-history store are not part of this pipeline. In particular, the
+coordinator no longer rewrites benchmark history at every model phase. Model
+downloads and deletion live under Settings → Smart glasses → Scene analysis
+models. On its first operation after an upgrade, the coordinator also removes
+the old Gemma LiteRT model and incomplete download from the former app-private
+model store so the retired benchmark cannot leave roughly 2.6 GB orphaned.
+The separate JSONL export records safe
+capture metadata, dimensions, model versions, timings, detector/enhancement
+results, skipped ticks, and errors. Capture phases separately time connection,
+receiver startup, camera request, transfer after request, private copy, shared
+copy, and image understanding. Start/end/failure entries also record Android
+battery percentage, charging state, thermal status, and app memory. Logs omit
+paths, URIs, EXIF, auth data, and OCR text.
+
+The moments queue is idempotent by a mobile-generated UUID. It retains an
+entry until the backend returns `created`, `updated`, or `duplicate`; rejected
+or offline entries remain durable for later retry. The moment includes the
+canonical final observation plus the closest phone-location provenance when
+available. Source photos remain in `Image Pipeline Temp` during this testing
+phase and are not deleted by the moments acknowledgement.
+
+Balanced receives explicit first-person context: every automatic photo comes
+from the user's worn glasses, so the user is an active participant even when
+behind the camera. It may cautiously infer what the user is doing from visible
+scene evidence. It must not count the wearer as a visible person or invent the
+wearer's pose, clothing, expression, or identity.
+Likewise, a camera-server/hotspot connection failure remains visible even when
+the queue is empty: zero discovered captures cannot be presented as an
+up-to-date sync. The saved SDK default is a pairing target only, so the screen
+reports it separately from an active, fully booted Mentra session and offers a
+reconnect action.
+
+Digital Brain serializes all Mentra controller ownership in one in-process
+connection operation. Startup, foreground resume, sync, manual Connect, and
+pairing join or wait for that operation instead of issuing `cancelExisting`
+while a link is connecting/bonding/booting. This follows Mentra's own mobile
+reconnect policy. Only after the boot window expires does the app perform one
+ordered controller disconnect, short Android BLE release delay, and reconnect.
+The regular Android Bluetooth/audio pairing is OS-owned and can coexist with
+this control session; it is not a second companion app controlling the glasses.
 Transfers stream directly to disk (including long videos), and the mobile
 proxy forwards the request body as a stream. FastAPI keeps the incoming
 `UploadFile` in a spooled temporary file; the backend hashes it in 1 MiB
@@ -56,12 +151,12 @@ the Immich asset.
 
 Android's Storage Access Framework returns document/tree URIs whose exact shape
 varies by provider. The app treats the selected Digital Brain base folder as the
-permission boundary and creates managed subfolders through Android's document
-provider rather than reconstructing a child tree URI. It repairs malformed
-legacy values (including duplicated `Documents/Digital Brain` paths). A SAF
-copy failure never blocks the durable queue, glasses acknowledgement, or
-backend upload; the file stays in app-private storage until the backend
-confirms it.
+permission boundary, creates managed subfolders through Android's document
+provider, and preserves the exact child document URI returned by that provider.
+It must never reconstruct a child tree URI because Android has not granted that
+synthetic tree. A SAF copy failure never blocks the durable queue, glasses
+acknowledgement, or backend upload; the file stays in app-private storage until
+the backend confirms it.
 
 ## Glasses audio recording (Android-first)
 
@@ -100,7 +195,8 @@ advertising.
 The app only attempts automatic reconnection after a default device has been
 explicitly saved; an unpaired install remains idle instead of calling
 `connectDefault()`. In Settings → Storage, choose the shared Digital Brain base
-folder. The app creates its `Recordings`, `Glasses Capture Queue`, and `Exports`
+folder. The app creates its `Recordings`, `Glasses Capture Queue`, `Image Pipeline
+Temp`, and `Exports`
 subfolders through the granted document tree. Configure the backend with the
 existing Immich variables (`IMMICH_SERVER_URL`, `IMMICH_API_KEY`) and run the
 database migrations.
@@ -159,6 +255,9 @@ the handset speaker or an unrelated headset. It also stays silent while Android
 reports the phone is both interactive and unlocked; that privacy-preserving
 proxy avoids a redundant glasses alert while the user is already using the
 phone, without collecting usage history or screen content.
+That suppression applies only to automatic alerts; the explicit settings app
+chime and call-ring previews bypass it so the user can verify the selected
+Mentra audio route while using the phone.
 
 On a physical Android device, pair and audio-pair a Mentra Live, grant
 notification access and phone-state permission, select two launchable apps, and

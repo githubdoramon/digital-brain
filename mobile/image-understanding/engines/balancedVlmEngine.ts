@@ -3,6 +3,8 @@ import { Platform } from 'react-native';
 import { LFM2_5_VL_450M_QUANTIZED, LLMModule, type Message } from 'react-native-executorch';
 import { ExpoResourceFetcher } from 'react-native-executorch-expo-resource-fetcher';
 
+import FastVisionNative from '@/modules/fast-vision/src';
+
 import {
   BALANCED_OBSERVATION_PROMPT_VERSION,
   buildBalancedObservation,
@@ -20,13 +22,52 @@ import type {
 const MODEL = LFM2_5_VL_450M_QUANTIZED;
 const ARTIFACTS = [MODEL.modelSource, MODEL.tokenizerSource, MODEL.tokenizerConfigSource] as const;
 const MINIMUM_ANDROID_API = 33;
+const INPUT_DIRECTORY = `${FileSystem.cacheDirectory ?? FileSystem.documentDirectory}balanced-vlm-input/`;
 
 function artifactFilename(source: string): string {
   return source.split('?')[0].split('/').at(-1) ?? source;
 }
 
-function localPath(path: string): string {
-  return path.startsWith('file://') ? path.slice('file://'.length) : path;
+/**
+ * ExecuTorch's Android image loader uses the URI scheme to distinguish local
+ * files from base64 input. A bare `/data/...` path is therefore interpreted as
+ * base64 and fails with `Read image error: invalid argument`.
+ */
+export function executorchMediaPath(path: string): string {
+  if (path.startsWith('file://')) return path;
+  return path.startsWith('/') ? `file://${path}` : path;
+}
+
+async function stageExecutorchImage(imageUri: string): Promise<{
+  mediaPath: string;
+  cleanup: () => Promise<void>;
+}> {
+  if (imageUri.startsWith('data:') || imageUri.startsWith('http')) {
+    return { mediaPath: imageUri, cleanup: async () => undefined };
+  }
+  if (!INPUT_DIRECTORY) throw new Error('App cache storage is unavailable for Balanced VLM.');
+  if (FastVisionNative) {
+    const normalized = await FastVisionNative.normalizeImageForInference(imageUri);
+    return {
+      mediaPath: executorchMediaPath(normalized.uri),
+      cleanup: () => FileSystem.deleteAsync(normalized.uri, { idempotent: true }),
+    };
+  }
+  await FileSystem.makeDirectoryAsync(INPUT_DIRECTORY, { intermediates: true });
+  const stagedUri = `${INPUT_DIRECTORY}input-${Date.now()}-${Math.random()
+    .toString(36)
+    .slice(2, 8)}.jpg`;
+  const sourceUri = imageUri.startsWith('/') ? `file://${imageUri}` : imageUri;
+  await FileSystem.copyAsync({ from: sourceUri, to: stagedUri });
+  const info = await FileSystem.getInfoAsync(stagedUri);
+  if (!info.exists || info.isDirectory || !info.size) {
+    await FileSystem.deleteAsync(stagedUri, { idempotent: true }).catch(() => undefined);
+    throw new Error('Balanced VLM could not stage a readable image.');
+  }
+  return {
+    mediaPath: executorchMediaPath(stagedUri),
+    cleanup: () => FileSystem.deleteAsync(stagedUri, { idempotent: true }),
+  };
 }
 
 async function downloadedArtifactInfo(): Promise<{ downloaded: boolean; sizeBytes: number }> {
@@ -133,7 +174,7 @@ export class BalancedVlmImageUnderstandingEngine implements ImageUnderstandingEn
     model.configure({
       chatConfig: {
         systemPrompt:
-          'You create useful visual memories of what is happening. Follow the requested headings, distinguish visible facts from interpretations, and do not invent unsupported details.',
+          'You create useful first-person visual memories from the user’s smart glasses. The camera wearer is an active participant even when not visible. Follow the requested headings, distinguish visible facts from interpretations, and do not invent unsupported details.',
       },
       generationConfig: {
         temperature: 0.1,
@@ -160,12 +201,13 @@ export class BalancedVlmImageUnderstandingEngine implements ImageUnderstandingEn
         : 'Describing the moment without detector evidence…',
     });
     const prompt = buildBalancedObservationPrompt(context?.detectorObservation);
+    const stagedImage = await stageExecutorchImage(imageUri);
     const startedAt = Date.now();
     this.inferenceStartedAt = startedAt;
     this.firstTokenAt = null;
     try {
       const messages: Message[] = [
-        { role: 'user', content: prompt, mediaPath: localPath(imageUri) },
+        { role: 'user', content: prompt, mediaPath: stagedImage.mediaPath },
       ];
       const rawOutput = await model.generate(messages);
       const inferenceMs = Date.now() - startedAt;
@@ -189,6 +231,7 @@ export class BalancedVlmImageUnderstandingEngine implements ImageUnderstandingEn
     } finally {
       this.inferenceStartedAt = null;
       this.firstTokenAt = null;
+      await stagedImage.cleanup().catch(() => undefined);
     }
   }
 
@@ -198,6 +241,10 @@ export class BalancedVlmImageUnderstandingEngine implements ImageUnderstandingEn
     onProgress?.({ stage: 'unloading', detail: 'Releasing Balanced VLM native resources…' });
     this.model = null;
     model.delete();
+  }
+
+  interrupt(): void {
+    this.model?.interrupt();
   }
 
   async deleteModel(onProgress: (progress: EngineProgress) => void): Promise<void> {

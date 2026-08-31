@@ -386,6 +386,7 @@ async function runSync(): Promise<void> {
   // race the firmware and make a physical-button capture appear to do nothing. Defaults are
   // applied on pairing, app startup, and the explicit settings action instead.
   let connection: Awaited<ReturnType<typeof connectGalleryServer>> | null = null;
+  let connectionError: string | null = null;
   try {
     const connected = await ensureMentraConnection({ applyCaptureDefaults: false });
     if (!connected) {
@@ -407,11 +408,12 @@ async function runSync(): Promise<void> {
     // be uploaded while Bluetooth or the glasses hotspot is temporarily down.
     // Keep reconciliation useful for that durable stage instead of blocking on
     // a fresh gallery connection.
-    publish({ networkPath: 'unavailable' });
+    connectionError = safeCaptureErrorMessage(error);
+    publish({ networkPath: 'unavailable', lastError: connectionError });
     debugCaptureStage(
       'glasses_capture_connection_unavailable',
       'Glasses connection unavailable; draining previously acknowledged local captures only.',
-      { error: safeCaptureErrorMessage(error) },
+      { error: connectionError },
     );
   }
   let discovered: RemoteCapture[] = [];
@@ -634,7 +636,10 @@ async function runSync(): Promise<void> {
     pendingCount: remaining.filter((item) => !['uploaded', 'missing'].includes(item.state)).length,
     failedCount: remaining.filter((item) => item.state === 'failed').length,
     uploadedCount: remaining.filter((item) => item.state === 'uploaded').length,
-    lastError: latestError ? safeCaptureErrorMessage(latestError) : null,
+    // A zero-item queue must not turn a failed camera-server connection into
+    // a misleading "All captures are up to date" result. Preserve the actual
+    // connection failure so the settings screen can guide a reconnect.
+    lastError: latestError ? safeCaptureErrorMessage(latestError) : connectionError,
   });
 }
 

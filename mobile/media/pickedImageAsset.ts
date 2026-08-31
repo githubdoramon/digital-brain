@@ -84,7 +84,7 @@ export async function resolvePickedImageAsset(
       const assetFileName = String(info.filename ?? '').trim();
       const resolvedUri = assetLocalUri || pickerUri;
       const resolvedFileName = assetFileName || pickerFileName || `photo-${Date.now()}.jpg`;
-      const resolved = {
+      const resolved: ResolvedPickedImageAsset = {
         assetId: asset.assetId,
         uri: resolvedUri,
         displayUri: pickerUri,
@@ -115,7 +115,7 @@ export async function resolvePickedImageAsset(
   }
 
   const fallbackFileName = pickerFileName || `photo-${Date.now()}.jpg`;
-  const fallback = {
+  const fallback: ResolvedPickedImageAsset = {
     assetId: asset.assetId ?? null,
     uri: pickerUri,
     displayUri: pickerUri,

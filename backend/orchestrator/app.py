@@ -29,6 +29,7 @@ from routes.documents import create_documents_router
 from routes.evals import create_evals_router
 from routes.events import create_events_router
 from routes.generated_pdfs import create_generated_pdfs_router
+from routes.moments import create_moments_router
 from routes.news import create_news_router
 from routes.places import create_places_router
 from routes.proposed_events import create_proposed_events_router
@@ -158,6 +159,7 @@ api = FastAPI(title="Personal Memory Orchestrator", version="0.3.1", lifespan=li
 
 api.include_router(create_daily_briefing_router())
 api.include_router(create_news_router())
+api.include_router(create_moments_router())
 api.include_router(create_chat_router())
 api.include_router(create_contacts_router())
 api.include_router(create_places_router())

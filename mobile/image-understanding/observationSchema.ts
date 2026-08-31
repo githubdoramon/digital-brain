@@ -80,24 +80,6 @@ export const IMAGE_OBSERVATION_JSON_SCHEMA = {
   },
 } as const;
 
-export const IMAGE_OBSERVATION_PROMPT = `Study only the attached image. Reply with one valid JSON object. Start with { and end with }. Do not use Markdown.
-
-Use these exact keys in this exact flat structure:
-{"schema_version":"visual_observation.v2","summary":"visible facts only","objects":[{"label":"object","count_min":1,"count_max":1,"details":["visible detail"]}],"visible_text":["exact readable text"],"people_presence":"none","people_count_min":0,"people_count_max":0,"people_details":[],"setting":"visible setting or null","interpretations":[{"claim":"possible meaning","evidence":["supporting visible fact"],"confidence":"low"}],"uncertainties":["fact that cannot be determined visually"],"person_identification_attempted":false}
-
-Rules:
-- Replace every example value with facts from this image. Keep every key exactly once. Do not add keys or nested wrapper objects.
-- summary, objects, visible_text, people fields, and setting are visible evidence only.
-- Count people only as people. Describe them as "person 1", "person 2", and so on, using only visible clothing, position, and pose.
-- Every people_details item must be one plain string such as "person 1: striped top, center". Never put objects inside people_details.
-- Never label or guess identity, name, age, gender, relationship, ethnicity, religion, health, or another sensitive trait. Do not use labels such as woman, man, girl, boy, mother, father, or child.
-- Copy text only when legible. Do not infer relationships from visible text.
-- Use count ranges when unsure. If no people are visible, use "none", 0, and 0. Otherwise use "possible" or "present".
-- Interpretations are not visible facts. Each needs visible evidence and low, medium, or high confidence.
-- Use [] for no objects, text, details, interpretations, or uncertainties. Use null only for setting.
-- Maximums: 8 objects, 3 interpretations, 3 uncertainties, 4 details per array.
-- person_identification_attempted is always false. Check that the JSON parses before replying.`;
-
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 }

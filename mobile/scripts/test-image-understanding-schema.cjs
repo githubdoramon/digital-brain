@@ -37,7 +37,7 @@ const balanced = compile('image-understanding/balancedObservation.ts', (specifie
 });
 
 const validObservation = {
-  schema_version: 'visual_observation.v2',
+  schema_version: 'moment_observation.v1',
   summary: 'A table with two cups.',
   objects: [
     {
@@ -67,7 +67,7 @@ const validObservation = {
 const parsed = schema.parseVisualObservation(
   `\`\`\`json\n${JSON.stringify(validObservation)}\n\`\`\``,
 );
-assert.equal(parsed.schema_version, 'visual_observation.v2');
+assert.equal(parsed.schema_version, 'moment_observation.v1');
 assert.equal(parsed.people_count_max, 1);
 
 const invalid = structuredClone(validObservation);
@@ -77,12 +77,6 @@ assert.throws(
   () => schema.parseVisualObservation(JSON.stringify(invalid)),
   /People observation fields are malformed/,
 );
-assert.match(schema.IMAGE_OBSERVATION_PROMPT, /Never label or guess identity/);
-assert.match(schema.IMAGE_OBSERVATION_PROMPT, /person_identification_attempted/);
-assert.match(schema.IMAGE_OBSERVATION_PROMPT, /exact flat structure/);
-assert.match(schema.IMAGE_OBSERVATION_PROMPT, /Do not use labels such as woman/);
-assert.equal(types.IMAGE_OBSERVATION_PROMPT_VERSION, 'visual_observation_prompt.v4');
-
 const nestedPeopleDetails = {
   ...validObservation,
   people_presence: 'present',
@@ -281,5 +275,15 @@ assert.match(
 assert.doesNotMatch(balanced.buildBalancedObservationPrompt(fastObservation), /under 140 words/);
 assert.doesNotMatch(balanced.buildBalancedObservationPrompt(fastObservation), /^TEXT:/m);
 assert.match(balanced.buildBalancedObservationPrompt(fastObservation), /apparent age, gender/);
+assert.match(balanced.buildBalancedObservationPrompt(fastObservation), /first-person photograph/);
+assert.match(
+  balanced.buildBalancedObservationPrompt(fastObservation),
+  /user wearing the glasses is always an active participant/,
+);
+assert.match(
+  balanced.buildBalancedObservationPrompt(fastObservation),
+  /Do not count the camera wearer as a visible person/,
+);
+assert.equal(balanced.BALANCED_OBSERVATION_PROMPT_VERSION, 'balanced_observation_prompt.v3');
 
 console.log('image-understanding schema tests passed');

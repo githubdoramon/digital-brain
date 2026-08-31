@@ -77,6 +77,13 @@ export type FastVisionSupport = {
   modelsLoaded: boolean;
 };
 
+export type NormalizedInferenceImage = {
+  uri: string;
+  bytes: number;
+  width: number;
+  height: number;
+};
+
 type FastVisionEvents = {
   onMlKitInstallProgress(progress: FastVisionInstallProgress): void;
   onFastVisionProgress(progress: FastVisionAnalysisProgress): void;
@@ -93,6 +100,7 @@ declare class FastVisionNativeModule extends NativeModule<FastVisionEvents> {
     sceneIndoorOutdoorPath: string,
   ): Promise<void>;
   analyze(imageUri: string): Promise<FastVisionAnalysis>;
+  normalizeImageForInference(imageUri: string): Promise<NormalizedInferenceImage>;
   unload(): Promise<void>;
 }
 

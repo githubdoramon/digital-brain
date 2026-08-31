@@ -1,11 +1,10 @@
 import * as Device from 'expo-device';
+import * as FileSystem from 'expo-file-system/legacy';
 
 import { BalancedVlmImageUnderstandingEngine } from './engines/balancedVlmEngine';
 import { FastVisionImageUnderstandingEngine } from './engines/fastVisionEngine';
-import { LiteRTImageUnderstandingEngine } from './engines/litertEngine';
 import { parseVisualObservationDetailed } from './observationSchema';
 import { redactDiagnosticText } from './privacy';
-import { appendImageUnderstandingRun } from './runHistory';
 import {
   IMAGE_OBSERVATION_SCHEMA_VERSION,
   type EngineModelState,
@@ -20,7 +19,6 @@ import {
 const MAX_PROCESS_LOG_ENTRIES = 250;
 
 const engineList: ImageUnderstandingEngine[] = [
-  new LiteRTImageUnderstandingEngine(),
   new FastVisionImageUnderstandingEngine(),
   new BalancedVlmImageUnderstandingEngine(),
 ];
@@ -28,9 +26,28 @@ const pipelineEngineIds: ImageUnderstandingEngineId[] = ['fast-vision', 'balance
 const engines = new Map(engineList.map((engine) => [engine.id, engine]));
 
 let operationTail: Promise<void> = Promise.resolve();
+let legacyCleanup: Promise<void> | null = null;
+
+function removeLegacyLiteRtArtifacts(): Promise<void> {
+  if (legacyCleanup) return legacyCleanup;
+  legacyCleanup = (async () => {
+    if (!FileSystem.documentDirectory) return;
+    const legacyModel = `${FileSystem.documentDirectory}models/gemma-4-E2B-it.litertlm`;
+    await Promise.all(
+      [legacyModel, `${legacyModel}.tmp`].map((uri) =>
+        FileSystem.deleteAsync(uri, { idempotent: true }).catch(() => undefined),
+      ),
+    );
+  })();
+  return legacyCleanup;
+}
 
 function withSerializedInference<T>(operation: () => Promise<T>): Promise<T> {
-  const result = operationTail.then(operation, operation);
+  const run = async () => {
+    await removeLegacyLiteRtArtifacts();
+    return operation();
+  };
+  const result = operationTail.then(run, run);
   operationTail = result.then(
     () => undefined,
     () => undefined,
@@ -144,13 +161,6 @@ async function runEngineLocked(
   const run = baseRun(engine);
   const startedAt = Date.now();
   const log = createProcessLogger(run, startedAt);
-  const checkpoint = async () => {
-    try {
-      await appendImageUnderstandingRun(run);
-    } catch (error) {
-      log('history', `History checkpoint failed: ${redactDiagnosticText(error)}`);
-    }
-  };
   const report = (progress: EngineProgress) => {
     log(progress.stage, progress.detail, {
       progressPercent:
@@ -166,29 +176,22 @@ async function runEngineLocked(
     imageUsesLocalFileUri: imageUriScheme(imageUri) === 'file',
     imageUsesAbsolutePath: imageUriScheme(imageUri) === 'absolute-path',
   });
-  await checkpoint();
   try {
     log('unloading', 'Releasing every image-understanding engine before loading this model.');
     await unloadEveryEngine();
     log('unloading', 'All image-understanding engines report unloaded.');
-    await checkpoint();
     log('download_starting', 'Checking the cache and downloading any missing model artifacts.');
-    await checkpoint();
     const downloaded = await engine.download(report);
     run.measurements.modelSizeBytes = downloaded.modelSizeBytes;
     log('downloaded', 'Required model artifacts are available locally.', {
       modelSizeBytes: downloaded.modelSizeBytes,
       alreadyLoaded: downloaded.loaded,
     });
-    await checkpoint();
     log('load_starting', 'About to enter the native model load call.');
-    await checkpoint();
     const coldLoadMs = await engine.load(report);
     run.measurements.coldLoadMs = coldLoadMs;
     log('loaded', 'Native model load completed.', { coldLoadMs });
-    await checkpoint();
     log('inference_starting', 'About to enter the native multimodal inference call.');
-    await checkpoint();
     const inference = await engine.infer(imageUri, report, context);
     run.rawOutput = inference.rawOutput;
     run.measurements.inferenceMs = inference.inferenceMs;
@@ -222,9 +225,8 @@ async function runEngineLocked(
       objectDetectionMs: run.measurements.objectDetectionMs,
       sceneClassificationMs: run.measurements.sceneClassificationMs,
     });
-    await checkpoint();
     try {
-      log('parsing', 'Validating raw output against visual_observation.v2.');
+      log('parsing', `Validating raw output against ${IMAGE_OBSERVATION_SCHEMA_VERSION}.`);
       const parsed = parseVisualObservationDetailed(
         inference.parsedObservation
           ? JSON.stringify(inference.parsedObservation)
@@ -248,11 +250,9 @@ async function runEngineLocked(
       run.error = `Structured output invalid: ${redactDiagnosticText(error)}`;
       log('parse_failed', run.error, { rawOutputCharacters: inference.rawOutput.length });
     }
-    await checkpoint();
   } catch (error) {
     run.error = redactDiagnosticText(error);
     log('failed', run.error);
-    await checkpoint();
   } finally {
     log('unloading', `Releasing ${engine.label} native resources after the run.`);
     try {
@@ -268,105 +268,25 @@ async function runEngineLocked(
       totalElapsedMs: Date.now() - startedAt,
     });
     report({ stage: 'idle', detail: run.error ? 'Run finished with an error.' : 'Run complete.' });
-    await appendImageUnderstandingRun(run);
   }
   return run;
 }
 
 export const imageUnderstandingCoordinator = {
-  engines: engineList.map(
-    ({
-      id,
-      label,
-      runtimePackage,
-      runtimeVersion,
-      modelId,
-      modelVersion,
-      computeBackend,
-      promptVersion,
-    }) => ({
-      id,
-      label,
-      runtimePackage,
-      runtimeVersion,
-      modelId,
-      modelVersion,
-      computeBackend,
-      promptVersion,
-    }),
-  ),
+  /** Interrupt native generation without waiting behind the serialization lock. */
+  interruptActive(): void {
+    for (const engine of engineList) engine.interrupt?.();
+  },
 
-  pipelineEngines: engineList
-    .filter((engine) => pipelineEngineIds.includes(engine.id))
-    .map(
-      ({
-        id,
-        label,
-        runtimePackage,
-        runtimeVersion,
-        modelId,
-        modelVersion,
-        computeBackend,
-        promptVersion,
-      }) => ({
-        id,
-        label,
-        runtimePackage,
-        runtimeVersion,
-        modelId,
-        modelVersion,
-        computeBackend,
-        promptVersion,
-      }),
-    ),
-
-  inspectAll(): Promise<Record<ImageUnderstandingEngineId, EngineModelState>> {
+  inspectPipeline(): Promise<Record<'fast-vision' | 'balanced-vlm', EngineModelState>> {
     return withSerializedInference(async () => {
       const entries = await Promise.all(
         engineList.map(async (engine) => [engine.id, await engine.inspect()] as const),
       );
-      return Object.fromEntries(entries) as Record<ImageUnderstandingEngineId, EngineModelState>;
-    });
-  },
-
-  download(
-    id: ImageUnderstandingEngineId,
-    onProgress: (engineId: ImageUnderstandingEngineId, progress: EngineProgress) => void,
-  ): Promise<EngineModelState> {
-    return withSerializedInference(async () => {
-      await unloadEveryEngine();
-      return getEngine(id).download((progress) => onProgress(id, progress));
-    });
-  },
-
-  run(
-    id: ImageUnderstandingEngineId,
-    imageUri: string,
-    onProgress: (engineId: ImageUnderstandingEngineId, progress: EngineProgress) => void,
-  ): Promise<ImageUnderstandingRunRecord> {
-    return withSerializedInference(() => runEngineLocked(id, imageUri, onProgress));
-  },
-
-  runAll(
-    imageUri: string,
-    onProgress: (engineId: ImageUnderstandingEngineId, progress: EngineProgress) => void,
-  ): Promise<ImageUnderstandingRunRecord[]> {
-    return withSerializedInference(async () => {
-      const runs: ImageUnderstandingRunRecord[] = [];
-      let detectorObservation: ImageUnderstandingRunRecord['observation'] = null;
-      for (const engine of engineList) {
-        const run = await runEngineLocked(
-          engine.id,
-          imageUri,
-          onProgress,
-          engine.id === 'balanced-vlm' && detectorObservation ? { detectorObservation } : undefined,
-        );
-        runs.push(run);
-        if (engine.id === 'fast-vision' && run.outputValid && run.observation) {
-          detectorObservation = run.observation;
-        }
-      }
-      return runs;
+      return Object.fromEntries(entries) as Record<
+        'fast-vision' | 'balanced-vlm',
+        EngineModelState
+      >;
     });
   },
 
@@ -411,20 +331,6 @@ export const imageUnderstandingCoordinator = {
       for (const id of pipelineEngineIds) {
         await getEngine(id).deleteModel((progress) => onProgress(id, progress));
       }
-    });
-  },
-
-  unloadAll(onProgress?: (progress: EngineProgress) => void): Promise<void> {
-    return withSerializedInference(() => unloadEveryEngine(onProgress));
-  },
-
-  deleteModel(
-    id: ImageUnderstandingEngineId,
-    onProgress: (engineId: ImageUnderstandingEngineId, progress: EngineProgress) => void,
-  ): Promise<void> {
-    return withSerializedInference(async () => {
-      await unloadEveryEngine();
-      await getEngine(id).deleteModel((progress) => onProgress(id, progress));
     });
   },
 };

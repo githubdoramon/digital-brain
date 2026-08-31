@@ -81,32 +81,21 @@ export default function RootLayout() {
     // The native SDK's connection state is process-local. Restore the saved
     // device and apply camera/gallery defaults on the first app launch, then
     // reconnect on later foreground transitions without reconfiguring a live
-    // camera session.
+    // camera session. ensureMentraConnection owns its own boot wait and one
+    // controlled recovery; do not layer competing retry loops above it.
     let disposed = false;
     let foregroundSync: Promise<void> | null = null;
-    const wait = (milliseconds: number) =>
-      new Promise<void>((resolve) => setTimeout(resolve, milliseconds));
     const reconnect = (applyCaptureDefaults: boolean) => {
       if (disposed || foregroundSync) return;
       foregroundSync = (async () => {
-        // A cold Android launch can race native SDK initialization, and a
-        // resume can race Bluetooth reconnect. Retry the complete connection
-        // and reconciliation sequence instead of silently losing the one
-        // foreground opportunity and requiring a manual Sync tap.
-        const retryDelays = [0, 1_000, 3_000];
-        for (let attempt = 0; attempt < retryDelays.length; attempt += 1) {
-          if (disposed) return;
-          if (retryDelays[attempt] > 0) await wait(retryDelays[attempt]);
-          try {
-            const connected = await ensureMentraConnection({ applyCaptureDefaults });
-            if (!connected || disposed) return;
-            await reconcileGlassesCaptures();
-            return;
-          } catch {
-            // The next bounded attempt handles transient SDK/Bluetooth/network
-            // races. The reconciliation function publishes durable errors for
-            // failures after connection succeeds.
-          }
+        try {
+          const connected = await ensureMentraConnection({ applyCaptureDefaults });
+          if (!connected || disposed) return;
+          await reconcileGlassesCaptures();
+        } catch {
+          // The settings connection state and sync status retain the
+          // actionable failure. Do not restart a controller that is already
+          // performing the coordinator's controlled recovery.
         }
       })().finally(() => {
         foregroundSync = null;
@@ -330,13 +319,13 @@ function RootLayoutNav({ loaded }: { loaded: boolean }) {
           }}
         />
         <Stack.Screen
-          name="settings/image-understanding/index"
+          name="settings/glasses-capture/index"
           options={{
             headerShown: false,
           }}
         />
         <Stack.Screen
-          name="settings/glasses-capture/index"
+          name="settings/glasses-capture/models/index"
           options={{
             headerShown: false,
           }}

@@ -14,33 +14,36 @@ Personal memory orchestrator with a **bounded agent architecture**. Backend: Fas
 
 **Mobile screen convention**: Reuse established full-screen patterns before creating new screen chrome. Screens that own a custom/collapsing header (for example event/contact draft editors) must hide the native Expo Stack header in `mobile/app/_layout.tsx` to avoid double navigation bars.
 
+**Mobile keyboard-input convention**: Every mobile screen with a keyboard-editable input must be keyboard-aware. Wrap its scrollable content in a flex `KeyboardAvoidingView` (`padding` on iOS and `height` on Android), keep Android `softwareKeyboardLayoutMode: "resize"`, and use a `ScrollView`/`FlatList` that adjusts iOS keyboard insets, preserves taps on in-form controls, and dismisses on drag. Its bottom content inset must keep the final field and any fixed action visible above the keyboard and safe-area inset.
+
 **Mobile voice input convention**: Chat dictation uses on-device Whisper in `mobile` with a long-press send gesture, swipe-up lock, and transcript insertion into the composer (never auto-send). This requires a native Expo dev build / prebuild workflow; do not assume it works in Expo Go.
 
 **Mobile background task convention**: Expo background task definitions must be imported from `mobile/index.js` before `expo-router/entry`, so headless/background launches register the tasks even when React navigation has not mounted.
 
 **Mobile background location convention**: Android background location uses two separate workers: a capture worker and an upload/drain worker. Keep the location, geofence, and drain task definitions imported from `mobile/index.js`; quiet mode should avoid a foreground-service notification while stationary, geofence/current-place movement should switch to reliable foreground-service capture while moving, and a stationary window should switch back to quiet mode. Android location-task callbacks must only validate/dedupe/update capture mode and enqueue durable samples; they must not call the backend or read auth state. The scheduled drain worker is the only background path that reads auth state and uploads queued samples to the backend, using bounded sequential batches. Preserve mode/geofence/queue/drain/debug logging so exported logs can distinguish capture, enqueue, drain, auth, backend, and OS throttling failures.
 
-**Mobile image understanding convention**: On-device image understanding is owned by the serialized coordinator in `mobile/image-understanding/`. Keep Fast Vision, Balanced VLM, and LiteRT-LM behind `ImageUnderstandingEngine`, use one shared versioned observation schema, never keep two pipelines loaded simultaneously, require strict GPU initialization for LiteRT benchmarks rather than silently falling back to CPU, and release native resources after every run and failure. The user-facing POC runs one fused pipeline: Fast Vision supplies detector/count/OCR evidence, unloads, then Balanced VLM owns the description of the scene, people, actions, setting, and likely event. Detector evidence supports rather than replaces the visual model's interpretation; exact OCR is appended deterministically instead of being regenerated. Do not reject useful visible person descriptions or cautious apparent-role/relationship interpretations, but do not invent identities or unsupported facts. Models remain optional downloads with explicit unload/delete controls; Fast Vision detector and scene-classifier files and Balanced VLM artifacts are app-private, while Fast Vision's optional ML Kit modules are managed by Google Play services. LiteRT remains available only as a hidden benchmark; its parser repairs must stay conservative, syntax-only, and auditable in run history. Selected photos, URIs, EXIF, auth state, and account identifiers must never enter diagnostics, run history, export payloads, backend calls, or upload queues. See `mobile/IMAGE_UNDERSTANDING_POC.md`.
+**Mobile image understanding convention**: On-device image understanding is owned by the serialized coordinator in `mobile/image-understanding/`. Keep Fast Vision and Balanced VLM behind `ImageUnderstandingEngine`, use the shared `moment_observation.v1` schema, never keep two pipelines loaded simultaneously, and release native resources after every run and failure. The automatic smart-glasses flow runs one fused pipeline: Fast Vision supplies detector/count/OCR evidence, unloads, then Balanced VLM owns the first-person description of the scene, people, actions, setting, and likely event. The prompt must treat the glasses wearer as the active participant even when behind the camera, without counting them as a visible person or inventing unsupported personal details. Detector evidence supports rather than replaces the visual model's interpretation; exact OCR is appended deterministically instead of being regenerated. A successful automatic run queues only the canonical observation, capture time/timezone, source type, and nullable location provenance to the idempotent Moments API; never upload source photos, URIs, EXIF, model diagnostics, auth state, or account identifiers. Keep source images locally while the testing retention policy is active. Models remain optional downloads with explicit delete controls under Settings → Smart glasses → Scene analysis models; Fast Vision detector and scene-classifier files and Balanced VLM artifacts are app-private, while Fast Vision's optional ML Kit modules are managed by Google Play services. See `mobile/GLASSES_CAPTURE_PIPELINE.md`.
+
+**Automatic glasses capture scheduling**: `mobile/mentraCapture/imageEnhancement.ts` supports multiple persisted schedules backed by one serialized capture worker. Coalesce missed ticks to one pending job per schedule, persist jobs before native execution, retry failures with bounded backoff, and keep `requestPhoto(transferMethod='auto')` so direct Wi-Fi delivery falls back to the SDK's phone-relayed BLE path. Physical-button gallery/video reconciliation remains a separate local-server flow with hotspot fallback.
 
 ## Architecture Documentation
 
 Detailed architecture docs live in `backend/orchestrator/docs/architecture/`:
 
-| Document | Purpose |
-|----------|---------|
-| [OVERVIEW.md](backend/orchestrator/docs/architecture/OVERVIEW.md) | System architecture and request flow |
-| [ADDING_TOOLS.md](backend/orchestrator/docs/architecture/ADDING_TOOLS.md) | Complete guide to adding new tools |
-| [ADDING_INTENTS.md](backend/orchestrator/docs/architecture/ADDING_INTENTS.md) | Guide to creating new intent types |
-| [TOOL_GROUPS.md](backend/orchestrator/docs/architecture/TOOL_GROUPS.md) | Tool group reference and patterns |
-| [STATE_MANAGEMENT.md](backend/orchestrator/docs/architecture/STATE_MANAGEMENT.md) | AgentState guide with examples |
-| [VALIDATION.md](backend/orchestrator/docs/architecture/VALIDATION.md) | Pre/post validation system |
-| [AGENT_LIMITS.md](backend/orchestrator/docs/architecture/AGENT_LIMITS.md) | Limits and stop rules configuration |
-| [PORTABLE_AGENT_RUNTIME_IMPROVEMENTS.md](backend/orchestrator/docs/architecture/PORTABLE_AGENT_RUNTIME_IMPROVEMENTS.md) | Future-work backlog for portable agent runtime improvements |
-| [LINKED_ITEMS_DSL.md](backend/orchestrator/docs/architecture/LINKED_ITEMS_DSL.md) | Prompt-level protocol for controller-derived deep links |
-| [CLIENT_API_PROXY.md](CLIENT_API_PROXY.md) | Client API proxy requirements and routing |
-| [agents/DAILY_BRIEFING.md](backend/orchestrator/docs/agents/DAILY_BRIEFING.md) | Daily briefing agent behavior, generation flow, and quality rules |
-| [agents/MEMORY_EXPERT.md](backend/orchestrator/docs/agents/MEMORY_EXPERT.md) | Memory expert retrieval/disambiguation behavior and contact-aware rules |
-
+| Document                                                                                                                | Purpose                                                                 |
+| ----------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------- |
+| [OVERVIEW.md](backend/orchestrator/docs/architecture/OVERVIEW.md)                                                       | System architecture and request flow                                    |
+| [ADDING_TOOLS.md](backend/orchestrator/docs/architecture/ADDING_TOOLS.md)                                               | Complete guide to adding new tools                                      |
+| [ADDING_INTENTS.md](backend/orchestrator/docs/architecture/ADDING_INTENTS.md)                                           | Guide to creating new intent types                                      |
+| [TOOL_GROUPS.md](backend/orchestrator/docs/architecture/TOOL_GROUPS.md)                                                 | Tool group reference and patterns                                       |
+| [STATE_MANAGEMENT.md](backend/orchestrator/docs/architecture/STATE_MANAGEMENT.md)                                       | AgentState guide with examples                                          |
+| [VALIDATION.md](backend/orchestrator/docs/architecture/VALIDATION.md)                                                   | Pre/post validation system                                              |
+| [AGENT_LIMITS.md](backend/orchestrator/docs/architecture/AGENT_LIMITS.md)                                               | Limits and stop rules configuration                                     |
+| [PORTABLE_AGENT_RUNTIME_IMPROVEMENTS.md](backend/orchestrator/docs/architecture/PORTABLE_AGENT_RUNTIME_IMPROVEMENTS.md) | Future-work backlog for portable agent runtime improvements             |
+| [LINKED_ITEMS_DSL.md](backend/orchestrator/docs/architecture/LINKED_ITEMS_DSL.md)                                       | Prompt-level protocol for controller-derived deep links                 |
+| [CLIENT_API_PROXY.md](CLIENT_API_PROXY.md)                                                                              | Client API proxy requirements and routing                               |
+| [agents/DAILY_BRIEFING.md](backend/orchestrator/docs/agents/DAILY_BRIEFING.md)                                          | Daily briefing agent behavior, generation flow, and quality rules       |
+| [agents/MEMORY_EXPERT.md](backend/orchestrator/docs/agents/MEMORY_EXPERT.md)                                            | Memory expert retrieval/disambiguation behavior and contact-aware rules |
 
 ## Services & Runtime
 
@@ -136,29 +139,29 @@ User Question → Intent Router → Conversational Profile Dispatch → Tool Vis
 
 ### Intent Types
 
-| Intent | Tool Groups | Description |
-|--------|-------------|-------------|
-| `MEMORY_SEARCH` | memory, resolution | Search memories with optional entity resolution |
-| `DATA_QUERY` | memory, resolution | Structured retrieval/counting (no SQL tools) |
-| `CONTACT_LOOKUP` | resolution, memory | Find people, relationships, and related records |
-| `WEB_SEARCH` | web | External information |
-| `HOME_CONTROL` | home | Smart home automation |
-| `SKILL_EXECUTION` | skills | Run skill scripts |
-| `SYSTEM_COMMAND` | system | Bash/shell commands |
-| `CONVERSATIONAL` | memory, resolution, web, pdf, ui | General chat and generated PDF/content creation |
+| Intent            | Tool Groups                      | Description                                     |
+| ----------------- | -------------------------------- | ----------------------------------------------- |
+| `MEMORY_SEARCH`   | memory, resolution               | Search memories with optional entity resolution |
+| `DATA_QUERY`      | memory, resolution               | Structured retrieval/counting (no SQL tools)    |
+| `CONTACT_LOOKUP`  | resolution, memory               | Find people, relationships, and related records |
+| `WEB_SEARCH`      | web                              | External information                            |
+| `HOME_CONTROL`    | home                             | Smart home automation                           |
+| `SKILL_EXECUTION` | skills                           | Run skill scripts                               |
+| `SYSTEM_COMMAND`  | system                           | Bash/shell commands                             |
+| `CONVERSATIONAL`  | memory, resolution, web, pdf, ui | General chat and generated PDF/content creation |
 
 ### Tool Groups
 
-| Group | Tools |
-|-------|-------|
-| `memory` | search_memories, get_events, get_document |
+| Group        | Tools                                                                                                          |
+| ------------ | -------------------------------------------------------------------------------------------------------------- |
+| `memory`     | search_memories, get_events, get_document                                                                      |
 | `resolution` | resolve_contacts, lookup_contact, select_contacts, lookup_places, lookup_contact_places, lookup_place_contacts |
-| `web` | web_search, fetch_web_page |
-| `home` | home_assistant |
-| `skills` | run_skill_script |
-| `pdf` | create_pdf, ingest_generated_pdf |
-| `ui` | emit_ui_directive |
-| `system` | bash |
+| `web`        | web_search, fetch_web_page                                                                                     |
+| `home`       | home_assistant                                                                                                 |
+| `skills`     | run_skill_script                                                                                               |
+| `pdf`        | create_pdf, ingest_generated_pdf                                                                               |
+| `ui`         | emit_ui_directive                                                                                              |
+| `system`     | bash                                                                                                           |
 
 ### Important Rules (Recent)
 
@@ -267,6 +270,7 @@ User Question → Intent Router → Conversational Profile Dispatch → Tool Vis
 ## Backend Endpoints
 
 ### Conversation API
+
 - `POST /ask` – Ask a question (returns answer + state)
 - `POST /ask/stream` – Streaming responses
 - Mobile `/ask/stream` sends a `chat-reply` push notification only when the stream disconnected before completion; notification data includes `threadId` and `isMainSession` so taps route to `/home` or `/chat/[threadId]`.
@@ -275,6 +279,7 @@ User Question → Intent Router → Conversational Profile Dispatch → Tool Vis
 - `GET /threads/{id}` – Get thread
 
 ### Data Ingestion
+
 - `POST /ingest/contact` – Add contact
 - `POST /ingest/place` – Add place
 - `POST /ingest/todo` – Add todo
@@ -283,6 +288,7 @@ User Question → Intent Router → Conversational Profile Dispatch → Tool Vis
 - `POST /ingest/document` – Upload document
 
 ### Data Access
+
 - `GET /documents` – List documents
 - `POST /documents/search` – Search documents
 - `GET /contacts` – List contacts
@@ -295,11 +301,13 @@ User Question → Intent Router → Conversational Profile Dispatch → Tool Vis
 - `GET /meetings/{id}` – Get meeting
 
 ### User Facts
+
 - `GET /user/facts` – List all known facts about the user
 - `PUT /user/facts/{id}` – Update/correct a fact
 - `DELETE /user/facts/{id}` – Delete a fact
 
 ### Mobile Settings
+
 - `GET /mobile/settings` – Legacy push notification summary
 - `GET /mobile/settings/notifications` – List per-type notification settings and channels
 - `PUT /mobile/settings/notifications/{notification_type}` – Update channels for one notification type
@@ -310,22 +318,26 @@ User Question → Intent Router → Conversational Profile Dispatch → Tool Vis
 - `GET /mobile/location/history/nearest` – Resolve the nearest eligible historical phone location sample for a media capture timestamp
 
 ### Daily Briefings
+
 - `GET /mobile/briefings/daily` – Get daily briefing or immediate pending status (auto-enqueues generation)
 - `GET /mobile/briefings/latest` – Get latest generated briefing
 - `POST /agents/daily-briefing/run` – Service API key endpoint to enqueue generation
 - `POST /debug/daily-briefing/event-summary` – Run daily-briefing meeting prep synthesis for one event and inspect intermediate debug data
 
 ### News Topics
+
 - `GET /news-topics` – List tracked topics
 - `POST /news-topics` – Create/update topic
 - `DELETE /news-topics/{id}` – Delete topic
 - `POST /news/interactions` – Record article open/thumbs feedback
 
 ### Webhooks
+
 - `POST /webhooks/contacts` – Sync/unlink contacts
 - `POST /webhooks/telegram/messages` – Telegram messages
 
 ### System
+
 - `GET /system/versions` – Service versions
 - `GET /system/logs` – Read recent in-memory runtime logs
 - `GET /system/logs/stream` – Stream runtime logs over SSE
@@ -520,25 +532,25 @@ HackerNews? If no, anonymize.
 
 ## Key Implementation Files
 
-| Purpose | File |
-|---------|------|
-| Agent loop | `backend/orchestrator/agent/controller.py` |
-| Intent routing | `backend/orchestrator/agent/router.py` |
-| Conversational profile dispatch | `backend/orchestrator/agents/registry.py` |
-| Memory expert profile | `backend/orchestrator/agents/memory_expert/` |
-| Tool registry | `backend/orchestrator/tools/registry.py` |
-| Tool contracts | `backend/orchestrator/tools/contracts.py` |
-| Validation | `backend/orchestrator/tools/validators/` |
-| Tracing/Logging | `backend/orchestrator/observability/logger.py` |
-| LLM orchestration | `backend/orchestrator/llm.py` |
-| Model routing policy | `backend/orchestrator/agent/model_routing.py` |
-| Planner/verifier policy | `backend/orchestrator/agent/planning_policy.py` |
-| Vector search | `backend/orchestrator/retrieval.py` |
-| User facts service | `backend/orchestrator/user_facts.py` |
-| Fact extraction pipeline | `backend/orchestrator/fact_extraction.py` |
-| News feed aggregation | `backend/orchestrator/news_feeds.py` |
-| Daily briefing agent | `backend/orchestrator/agents/daily_briefing/executor.py` |
-| Frontend API client | `frontend/web/src/lib/api.ts` |
+| Purpose                         | File                                                     |
+| ------------------------------- | -------------------------------------------------------- |
+| Agent loop                      | `backend/orchestrator/agent/controller.py`               |
+| Intent routing                  | `backend/orchestrator/agent/router.py`                   |
+| Conversational profile dispatch | `backend/orchestrator/agents/registry.py`                |
+| Memory expert profile           | `backend/orchestrator/agents/memory_expert/`             |
+| Tool registry                   | `backend/orchestrator/tools/registry.py`                 |
+| Tool contracts                  | `backend/orchestrator/tools/contracts.py`                |
+| Validation                      | `backend/orchestrator/tools/validators/`                 |
+| Tracing/Logging                 | `backend/orchestrator/observability/logger.py`           |
+| LLM orchestration               | `backend/orchestrator/llm.py`                            |
+| Model routing policy            | `backend/orchestrator/agent/model_routing.py`            |
+| Planner/verifier policy         | `backend/orchestrator/agent/planning_policy.py`          |
+| Vector search                   | `backend/orchestrator/retrieval.py`                      |
+| User facts service              | `backend/orchestrator/user_facts.py`                     |
+| Fact extraction pipeline        | `backend/orchestrator/fact_extraction.py`                |
+| News feed aggregation           | `backend/orchestrator/news_feeds.py`                     |
+| Daily briefing agent            | `backend/orchestrator/agents/daily_briefing/executor.py` |
+| Frontend API client             | `frontend/web/src/lib/api.ts`                            |
 
 ## Mobile glasses capture convention
 
@@ -553,10 +565,47 @@ and restore the internet path after sync. Never delete a glasses capture before
 a validated local commit; never delete the phone copy before
 `/mobile/glasses/captures` confirms the Immich asset and `Ramon eyes capture`
 album membership. The Android shared Digital Brain base folder owns managed
-`Recordings`, `Glasses Capture Queue`, and `Exports` subfolders; create them via
+`Recordings`, `Glasses Capture Queue`, `Image Pipeline Temp`, and `Exports`
+subfolders; create them via
 the granted document provider rather than synthesizing SAF child-tree URIs.
 Visible queue copies remain best-effort: a revoked/rejected grant must fall back
 to app-private storage and never block acknowledgement or upload.
+A persisted Mentra default device is only a saved pairing, not proof of an
+active, fully booted SDK session. Keep that live connection state distinct in
+the mobile UI and offer reconnect; a camera-server/hotspot failure must remain
+visible as a sync error even when there are no queue entries.
+Digital Brain must be the sole in-process owner of Mentra connection changes:
+app launch, foreground resume, sync, manual reconnect, and pairing must join a
+single connection operation rather than cancelling a controller that is still
+booting. Follow Mentra's own rule: do not reconnect while the native link is
+scanning, connecting, bonding, or finishing boot; after a genuine boot timeout,
+perform one orderly disconnect, brief release delay, and reconnect. Android
+system Bluetooth/audio pairing remains OS-owned and is not evidence of a
+competing Mentra app.
+
+The automatic image enhancement pipeline is separate from the
+physical-button/Immich queue. Keep its persisted scheduler serialized and
+coalesced, with the Android
+connected-device foreground service providing native cadence ticks while the
+process is alive and WorkManager serving only as a delayed restart/catch-up
+path. A received photo must first commit to app-private storage; shared-folder
+photo mirroring to `Image Pipeline Temp` and log mirroring to `Exports` are
+asynchronous and must never block glasses transfer or image understanding.
+Preserve phase timings for connection, receiver, request,
+transfer, private/shared copies, and inference plus battery/thermal/memory
+telemetry. ExecuTorch image inputs must retain a `file://` URI; a bare Android
+absolute path is misread as base64 by its native image loader. Decode and
+re-encode automatic Mentra photos through Android's bitmap stack into a
+short-lived canonical cache JPEG before Balanced inference; retain the original
+glasses file unchanged for inspection.
+
+Moments are the backend's generic, source-independent record of an observed
+point in time. `moments` stores one canonical `moment_observation.v1` JSONB
+payload with immutable source type and observed time, nullable location
+provenance, and received/updated timestamps. The mobile queue posts batches to
+`/mobile/moments/batch`, uses a UUID for idempotency, and removes only accepted
+(`created`, `updated`, or `duplicate`) entries. Do not persist source images,
+raw model output, runtime diagnostics, or failure processing state in Moments.
 
 Glasses microphone recording is Android-first. It uses app buttons only; never
 repurpose the physical glasses photo/video button. Reuse the single Mentra SDK
@@ -583,6 +632,9 @@ on `PowerManager.isInteractive && !KeyguardManager.isKeyguardLocked`: suppress
 when the phone is awake and unlocked, without adding usage-access, accessibility,
 or screen-content collection. The Android notification-listener
 grant and phone-state permission must be separately explained in the UI.
+Phone-use suppression applies only to automatic app/call alerts: an explicit
+settings test must still play through the verified Mentra audio route while the
+phone is unlocked.
 Do not let a selected dialer app's `CATEGORY_CALL` notification generate the
 ordinary one-shot app chime: only the telephony state owns a call alert. Start
 the repeat loop from the notification-listener service before attempting its

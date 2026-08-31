@@ -8,12 +8,30 @@ import { appendMentraDebugLog } from './debug';
 import { setExpectedGlassesAlertAudioDevice } from '@/glassesAlerts/runtime';
 
 type Subscription = { remove: () => void };
+type PhotoRequestParams = {
+  requestId?: string;
+  size: 'low' | 'medium' | 'high' | 'max';
+  mode?: 'photo' | 'text';
+  transferMethod?: 'auto' | 'direct' | 'ble';
+  webhookUrl: string | null;
+  authToken: string | null;
+  compress: 'none' | 'medium' | 'heavy';
+  save?: boolean;
+  sound: boolean;
+};
+type PhotoSuccessResponseEvent = { state: 'success'; requestId?: string } & Record<string, unknown>;
 export type MentraDevice = {
   id: string;
   model: string;
   name: string;
   address?: string;
   rssi?: number;
+};
+export type MentraConnectionStatus = {
+  hasSavedDevice: boolean;
+  connected: boolean;
+  fullyBooted: boolean;
+  state: string | null;
 };
 type ScanOptions = {
   timeoutMs?: number;
@@ -31,8 +49,10 @@ type BluetoothSdk = {
     options?: { saveAsDefault?: boolean; cancelExistingConnectionAttempt?: boolean },
   ) => Promise<void>;
   connectDefault: (options?: { cancelExistingConnectionAttempt?: boolean }) => Promise<void>;
+  disconnect: () => Promise<void>;
   forget: () => Promise<void>;
   setGalleryModeEnabled: (enabled: boolean) => Promise<unknown>;
+  requestPhoto: (params: PhotoRequestParams) => Promise<PhotoSuccessResponseEvent>;
   setPhotoCaptureDefaults: (settings: Record<string, unknown>) => Promise<unknown>;
   setVideoRecordingDefaults: (settings: {
     width: number;
@@ -90,6 +110,7 @@ type InternalBluetoothSdk = BluetoothSdk & {
 const DEFAULT_DEVICE_STORAGE_KEY = 'digitalbrain.mentra.default.device.v1';
 
 type LocalNetworkModule = {
+  addListener?: (event: string, listener: (event: any) => void) => Subscription;
   connect?: (ssid: string, password: string) => Promise<unknown>;
   request?: (
     requestId: string,
@@ -115,10 +136,14 @@ let internalSdk: InternalBluetoothSdk | null | undefined;
 let wifiIp: string | null = null;
 let hotspot: { localIp: string; ssid: string; password: string } | null = null;
 let localNetwork: LocalNetworkModule | null = null;
+let localNetworkListenerInitialized = false;
 let scopedNetworkActive = false;
 let stateListenersInitialized = false;
 let diagnosticsListenersInitialized = false;
 let lastNativeLogAt = 0;
+let activeMentraConnection: Promise<boolean> | null = null;
+let activeMentraConnectionAppliesCaptureDefaults = false;
+const automaticPhotoRequestIds = new Set<string>();
 
 function debugSdk(event: string, payload?: unknown): void {
   void appendMentraDebugLog(event, payload).catch(() => undefined);
@@ -197,6 +222,17 @@ function loadSdk(): BluetoothSdk | null {
       // The published SDK keeps the Android scoped-network bridge on its internal export.
       // eslint-disable-next-line @typescript-eslint/no-require-imports
       localNetwork = require('@mentra/bluetooth-sdk/internal').MentraLocalNetwork ?? null;
+      if (localNetwork?.addListener && !localNetworkListenerInitialized) {
+        localNetwork.addListener('networkLost', (event) => {
+          scopedNetworkActive = false;
+          debugSdk('glasses_local_network_lost', {
+            transport: 'glasses_hotspot',
+            network_lost: true,
+            hasSsid: typeof event?.ssid === 'string' && event.ssid.length > 0,
+          });
+        });
+        localNetworkListenerInitialized = true;
+      }
     } catch {
       localNetwork = null;
     }
@@ -385,6 +421,24 @@ export async function getDefaultGlassesDevice(): Promise<MentraDevice | null> {
   return null;
 }
 
+/**
+ * A saved SDK default is not proof of a live BLE session. Settings uses this
+ * read-only snapshot so it never labels stale pairing data as connected.
+ */
+export async function getMentraConnectionStatus(): Promise<MentraConnectionStatus> {
+  const device = await getDefaultGlassesDevice();
+  const native = loadInternalSdk();
+  const status = await native?.getGlassesStatus?.();
+  const state = status?.connection?.state ?? null;
+  const fullyBooted = status?.connection?.fullyBooted === true;
+  return {
+    hasSavedDevice: device !== null,
+    connected: state === 'connected' && fullyBooted,
+    fullyBooted,
+    state,
+  };
+}
+
 async function loadPersistedDefaultDevice(): Promise<MentraDevice | null> {
   try {
     const raw = await AsyncStorage.getItem(DEFAULT_DEVICE_STORAGE_KEY);
@@ -444,7 +498,10 @@ export async function scanForGlasses(
   }
 }
 
-async function waitForGlassesReady(timeoutMs = 20_000): Promise<void> {
+const wait = (milliseconds: number) =>
+  new Promise<void>((resolve) => setTimeout(resolve, milliseconds));
+
+async function waitForGlassesReady(timeoutMs = 30_000): Promise<void> {
   const native = loadInternalSdk();
   if (!native?.getGlassesStatus) {
     debugSdk('readiness_unavailable');
@@ -477,6 +534,36 @@ async function waitForGlassesReady(timeoutMs = 20_000): Promise<void> {
   });
 }
 
+function isBootingConnection(
+  status:
+    | {
+        connection?: { state?: string; fullyBooted?: boolean };
+      }
+    | undefined,
+): boolean {
+  const state = status?.connection?.state;
+  return (
+    state === 'scanning' || state === 'connecting' || state === 'bonding' || state === 'connected'
+  );
+}
+
+async function resetAndReconnectMentra(
+  native: BluetoothSdk,
+  device: MentraDevice,
+  reason: 'stalled_boot' | 'wrong_controller',
+): Promise<void> {
+  debugSdk('connection_reset_starting', { reason });
+  // Do not issue connect-with-cancel immediately after disconnect. The SDK's
+  // cancellation path closes the GATT link asynchronously; starting a second
+  // scan before Android has released it can leave Mentra in connected-but-not-
+  // fully-booted state until the glasses are power-cycled.
+  await native.disconnect().catch(() => undefined);
+  await wait(1_000);
+  await native.connect(device, { saveAsDefault: true, cancelExistingConnectionAttempt: false });
+  await waitForGlassesReady();
+  debugSdk('connection_reset_succeeded', { reason });
+}
+
 export async function pairGlasses(device: MentraDevice): Promise<void> {
   debugSdk('pair_starting', { model: device.model });
   await ensureMentraBluetoothPermissions();
@@ -490,7 +577,14 @@ export async function pairGlasses(device: MentraDevice): Promise<void> {
     throw new Error(`Unsupported glasses model: ${device.model}. Select a Mentra Live device.`);
   }
   try {
-    await native.connect(device, { saveAsDefault: true, cancelExistingConnectionAttempt: true });
+    // A user-selected pair operation deliberately replaces the active target,
+    // but it still waits for a foreground/sync ensure to finish first. That
+    // makes Digital Brain the single owner of controller changes in this
+    // process instead of letting a pair and an automatic reconnect collide.
+    await activeMentraConnection?.catch(() => undefined);
+    await native.disconnect().catch(() => undefined);
+    await wait(1_000);
+    await native.connect(device, { saveAsDefault: true, cancelExistingConnectionAttempt: false });
     await persistDefaultDevice(device);
     await setExpectedGlassesAlertAudioDevice(device.name?.trim() || null).catch(() => undefined);
     await waitForGlassesReady();
@@ -522,6 +616,7 @@ export function subscribeMentraEvents(onCaptureSignal: (kind: CaptureKind) => vo
       updateHotspotState(event);
     }),
     native.addListener('photo_status', (event) => {
+      if (isAutomaticPhotoEvent(event)) return;
       debugSdk('capture_signal', { kind: 'photo', status: event?.status });
       // Intermediate accepted/configuring/capturing events can fire in bursts. Reconcile only
       // once the camera reports bytes are available or are being transferred; the periodic task
@@ -531,13 +626,15 @@ export function subscribeMentraEvents(onCaptureSignal: (kind: CaptureKind) => vo
       }
     }),
     native.addListener('photo_response', (event) => {
+      if (isAutomaticPhotoEvent(event)) return;
       debugSdk('capture_signal', { kind: 'photo_response', state: event?.state });
       // Some firmware/SDK combinations only emit the terminal response for a
       // physical-button capture. Reconcile on either terminal outcome; the
       // manifest remains the source of truth for whether bytes are available.
       if (event?.state === 'success' || event?.state === 'error') onCaptureSignal('photo');
     }),
-    native.addListener('media_success', () => {
+    native.addListener('media_success', (event) => {
+      if (isAutomaticPhotoEvent(event)) return;
       debugSdk('capture_signal', { kind: 'photo', source: 'media_success' });
       onCaptureSignal('photo');
     }),
@@ -578,6 +675,36 @@ export function getKnownHotspot(): { localIp: string; ssid: string; password: st
   return hotspot;
 }
 
+export function registerAutomaticPhotoRequest(requestId: string): void {
+  automaticPhotoRequestIds.add(requestId);
+}
+
+export function unregisterAutomaticPhotoRequest(requestId: string): void {
+  automaticPhotoRequestIds.delete(requestId);
+}
+
+function isAutomaticPhotoEvent(event: any): boolean {
+  return typeof event?.requestId === 'string' && automaticPhotoRequestIds.has(event.requestId);
+}
+
+/**
+ * Request a one-shot photo from the glasses. This is deliberately separate from
+ * gallery-mode/button capture: callers can set save=false so the image is
+ * delivered only to their explicitly supplied receiver and never enters the
+ * normal Immich reconciliation queue.
+ */
+export async function requestGlassesPhoto(
+  params: PhotoRequestParams,
+): Promise<PhotoSuccessResponseEvent> {
+  const native = loadSdk();
+  if (!native?.requestPhoto) {
+    throw new Error(
+      'Mentra photo capture is not available in this build. Rebuild the Android app.',
+    );
+  }
+  return native.requestPhoto(params);
+}
+
 export async function configureCaptureDefaults(): Promise<void> {
   const native = loadSdk();
   if (!native) return;
@@ -605,7 +732,7 @@ export async function configureCaptureDefaults(): Promise<void> {
   }
 }
 
-export async function ensureMentraConnection(
+async function ensureMentraConnectionOnce(
   options: { applyCaptureDefaults?: boolean } = {},
 ): Promise<boolean> {
   debugSdk('connection_ensure_starting', {
@@ -645,15 +772,27 @@ export async function ensureMentraConnection(
   const wrongNativeController = Boolean(nativeModel && nativeModel !== 'Mentra Live');
   if (!alreadyReady || wrongNativeController) {
     debugSdk('connection_reconnecting', { alreadyReady, wrongNativeController });
-    if (wrongNativeController) {
-      await native.connect(defaultDevice, {
-        saveAsDefault: true,
-        cancelExistingConnectionAttempt: true,
-      });
+    // A normal Android resume can observe the SDK while it is still bonding or
+    // finishing its control-plane boot. Let that single attempt settle before
+    // resetting it; reconnecting with cancelExisting at this point is exactly
+    // what turns a transient boot into a permanent-looking timeout.
+    if (!wrongNativeController && isBootingConnection(currentStatus)) {
+      try {
+        await waitForGlassesReady();
+      } catch {
+        await resetAndReconnectMentra(native, defaultDevice, 'stalled_boot');
+      }
     } else {
-      await native.connectDefault({ cancelExistingConnectionAttempt: true });
+      if (wrongNativeController) {
+        await resetAndReconnectMentra(native, defaultDevice, 'wrong_controller');
+      } else {
+        // Match Mentra's own reconnect behavior: an idle/disconnected SDK can
+        // simply connect its stored default. Avoid a needless disconnect on
+        // every cold start, which creates an additional race with Android BLE.
+        await native.connectDefault({ cancelExistingConnectionAttempt: false });
+        await waitForGlassesReady();
+      }
     }
-    await waitForGlassesReady();
     currentStatus = await internal?.getGlassesStatus?.();
     debugSdk('connection_status_after', {
       connection: currentStatus?.connection,
@@ -675,11 +814,7 @@ export async function ensureMentraConnection(
         throw error;
       }
       debugSdk('connection_configuration_retrying', { reason: 'unsupported_device' });
-      await native.connect(defaultDevice, {
-        saveAsDefault: true,
-        cancelExistingConnectionAttempt: true,
-      });
-      await waitForGlassesReady();
+      await resetAndReconnectMentra(native, defaultDevice, 'wrong_controller');
       await configureCaptureDefaults();
     }
   }
@@ -687,6 +822,38 @@ export async function ensureMentraConnection(
     applyCaptureDefaults: options.applyCaptureDefaults !== false,
   });
   return true;
+}
+
+/**
+ * The Mentra SDK owns one controller per process. App launch, foreground
+ * resume, manual Connect, and capture sync can all need that controller, but
+ * they must join one operation rather than repeatedly cancel each other.
+ */
+export async function ensureMentraConnection(
+  options: { applyCaptureDefaults?: boolean } = {},
+): Promise<boolean> {
+  const applyCaptureDefaults = options.applyCaptureDefaults !== false;
+  if (activeMentraConnection) {
+    debugSdk('connection_joined_existing_attempt', { applyCaptureDefaults });
+    const joined = activeMentraConnection;
+    if (!applyCaptureDefaults || activeMentraConnectionAppliesCaptureDefaults) return joined;
+    // A sync can start first with defaults disabled because a camera operation
+    // is in flight. If the foreground owner then needs defaults, run one
+    // follow-up after the shared connection completes instead of interrupting
+    // it in the middle of boot.
+    return joined.then(async (connected) => {
+      if (!connected) return false;
+      return ensureMentraConnection({ applyCaptureDefaults: true });
+    });
+  }
+
+  activeMentraConnectionAppliesCaptureDefaults = applyCaptureDefaults;
+  const operation = ensureMentraConnectionOnce({ applyCaptureDefaults });
+  activeMentraConnection = operation.finally(() => {
+    activeMentraConnection = null;
+    activeMentraConnectionAppliesCaptureDefaults = false;
+  });
+  return activeMentraConnection;
 }
 
 export async function enableGlassesHotspot(): Promise<{ localIp: string; openedByUs: boolean }> {

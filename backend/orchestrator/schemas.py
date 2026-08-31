@@ -925,3 +925,97 @@ class NewsInteractionEventIn(BaseModel):
 
 class NewsInteractionsIn(BaseModel):
     events: list[NewsInteractionEventIn] = Field(default_factory=list)
+
+
+class MomentObjectIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    label: str
+    count_min: int = Field(ge=0)
+    count_max: int = Field(ge=0)
+    details: list[str] = Field(default_factory=list)
+
+
+class MomentInterpretationIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    claim: str
+    evidence: list[str] = Field(default_factory=list)
+    confidence: Literal["low", "medium", "high"]
+
+
+class MomentObservationIn(BaseModel):
+    """Canonical, source-independent representation of one observed moment."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal["moment_observation.v1"]
+    summary: str
+    objects: list[MomentObjectIn] = Field(default_factory=list)
+    visible_text: list[str] = Field(default_factory=list)
+    people_presence: Literal["none", "possible", "present"]
+    people_count_min: int = Field(ge=0)
+    people_count_max: int = Field(ge=0)
+    people_details: list[str] = Field(default_factory=list)
+    setting: str | None = None
+    interpretations: list[MomentInterpretationIn] = Field(default_factory=list)
+    uncertainties: list[str] = Field(default_factory=list)
+    person_identification_attempted: Literal[False] = False
+
+    @field_validator("objects")
+    @classmethod
+    def _validate_object_counts(cls, objects: list[MomentObjectIn]) -> list[MomentObjectIn]:
+        for item in objects:
+            if item.count_min > item.count_max:
+                raise ValueError("object count_min must not exceed count_max")
+        return objects
+
+    @field_validator("people_count_max")
+    @classmethod
+    def _validate_people_counts(cls, count_max: int, info: Any) -> int:
+        count_min = info.data.get("people_count_min")
+        if isinstance(count_min, int) and count_min > count_max:
+            raise ValueError("people_count_min must not exceed people_count_max")
+        return count_max
+
+
+class MomentLocationIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    lat: float = Field(ge=-90, le=90)
+    lon: float = Field(ge=-180, le=180)
+    accuracy_m: float | None = Field(default=None, ge=0)
+    captured_at: datetime | None = None
+    source: str | None = None
+    provenance: str | None = None
+    sample_captured_at: datetime | None = None
+    sample_source: str | None = None
+    offset_ms: int | None = Field(default=None, ge=0)
+    tolerance_ms: int | None = Field(default=None, ge=0)
+
+
+class MomentIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: str
+    source_type: str
+    observed_at: datetime
+    observed_timezone: str = Field(min_length=1, max_length=100)
+    observed_utc_offset_minutes: int = Field(ge=-840, le=840)
+    observation: MomentObservationIn
+    location: MomentLocationIn | None = None
+
+    @field_validator("id")
+    @classmethod
+    def _validate_id(cls, value: str) -> str:
+        from uuid import UUID
+
+        return str(UUID(str(value)))
+
+    @field_validator("source_type")
+    @classmethod
+    def _validate_source_type(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("source_type is required")
+        return normalized

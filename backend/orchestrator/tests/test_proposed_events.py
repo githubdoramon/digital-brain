@@ -176,7 +176,7 @@ def test_selected_google_place_is_materialized_only_at_acceptance(monkeypatch):
     place_id = proposed_events._materialize_selected_place(
         {
             "place_id": None,
-            "evidence": {"place_candidates": [candidate]},
+            "evidence": {"place_intelligence": {"candidates": [candidate]}},
         },
         "ChIJexample",
     )
@@ -184,6 +184,44 @@ def test_selected_google_place_is_materialized_only_at_acceptance(monkeypatch):
     assert place_id and place_id.startswith("plc_example-cafe_")
     assert created["provider_id"] == "ChIJexample"
     assert created["place"].name == "Example Cafe"
+
+
+def test_typed_proposal_place_is_created_when_no_existing_place_matches(monkeypatch):
+    created: dict[str, object] = {}
+    monkeypatch.setattr(proposed_events.places_service, "find_best_place_match", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        proposed_events.places_service,
+        "ingest_place",
+        lambda place: created.update(place=place),
+    )
+
+    place_id = proposed_events._materialize_selected_place(
+        {"proposal_id": "proposal:example", "place_id": None},
+        None,
+        place_id="",
+        place_name="New Cafe Downtown",
+    )
+
+    assert place_id and place_id.startswith("plc_new-cafe-downtown_")
+    assert created["place"].name == "New Cafe Downtown"
+
+
+def test_typed_proposal_place_reuses_an_existing_match(monkeypatch):
+    monkeypatch.setattr(
+        proposed_events.places_service,
+        "find_best_place_match",
+        lambda *_args, **_kwargs: {"place_id": "plc_existing"},
+    )
+
+    assert (
+        proposed_events._materialize_selected_place(
+            {"place_id": None},
+            None,
+            place_id="",
+            place_name="Existing place alias",
+        )
+        == "plc_existing"
+    )
 
 
 def test_explicit_empty_place_selection_clears_existing_place():

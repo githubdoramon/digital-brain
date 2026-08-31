@@ -374,6 +374,7 @@ def accept_proposal(
     end_at: datetime | None = None,
     contact_ids: list[str] | None = None,
     place_id: str | None = None,
+    place_name: str | None = None,
     place_candidate_id: str | None = None,
     media_asset_ids: list[str] | None = None,
 ) -> dict[str, Any]:
@@ -381,7 +382,12 @@ def accept_proposal(
     if proposal.get("status") != "pending":
         raise ValueError("Only pending proposals can be accepted")
 
-    selected_place_id = _materialize_selected_place(proposal, place_candidate_id, place_id)
+    selected_place_id = _materialize_selected_place(
+        proposal,
+        place_candidate_id,
+        place_id,
+        place_name,
+    )
 
     proposal_timezone = str(proposal.get("timezone") or "UTC").strip() or "UTC"
     resolved_start_at = _coerce_proposal_datetime(
@@ -494,18 +500,45 @@ def _materialize_selected_place(
     proposal: dict[str, Any],
     place_candidate_id: str | None,
     place_id: str | None = None,
+    place_name: str | None = None,
 ) -> str | None:
     existing_place_id = str(proposal.get("place_id") or "").strip() or None
     selected_id = str(place_candidate_id or "").strip()
     if not selected_id:
+        typed_place_name = " ".join(str(place_name or "").split()).strip()
+        place_was_explicitly_cleared = False
         if place_id is not None:
             explicit_place_id = str(place_id).strip()
             if not explicit_place_id:
-                return None
-            if explicit_place_id == existing_place_id or places_service.get_place(explicit_place_id):
+                place_was_explicitly_cleared = True
+            elif explicit_place_id == existing_place_id or places_service.get_place(explicit_place_id):
                 return explicit_place_id
-            raise ValueError("Selected place is not available")
-        return existing_place_id
+            else:
+                raise ValueError("Selected place is not available")
+        if not typed_place_name:
+            return None if place_was_explicitly_cleared else existing_place_id
+
+        best_match = places_service.find_best_place_match(
+            typed_place_name,
+            fuzzy_threshold=98,
+        )
+        matched_place_id = str((best_match or {}).get("place_id") or "").strip()
+        if matched_place_id:
+            return matched_place_id
+
+        internal_place_id = f"plc_{_safe_place_slug(typed_place_name)}_{uuid4().hex[:6]}"
+        places_service.ingest_place(
+            PlaceIn(
+                place_id=internal_place_id,
+                name=typed_place_name,
+            )
+        )
+        logger.info(
+            "[proposed_events] Created new place from proposal text proposal_id=%s place_id=%s",
+            proposal.get("proposal_id"),
+            internal_place_id,
+        )
+        return internal_place_id
 
     evidence = proposal.get("evidence")
     if isinstance(evidence, str):
@@ -515,7 +548,12 @@ def _materialize_selected_place(
             evidence = {}
     if not isinstance(evidence, dict):
         evidence = {}
-    candidates = evidence.get("place_candidates")
+    place_intelligence = evidence.get("place_intelligence")
+    candidates = (
+        place_intelligence.get("candidates")
+        if isinstance(place_intelligence, dict)
+        else evidence.get("place_candidates")
+    )
     if not isinstance(candidates, list):
         raise ValueError("Selected place candidate is not available")
     candidate = next(

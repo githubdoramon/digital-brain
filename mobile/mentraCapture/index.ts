@@ -5,3 +5,5 @@ export * from './recordings';
 export * from './storage';
 export * from './sync';
 export * from './types';
+export * from './imageEnhancement';
+export * from './moments';

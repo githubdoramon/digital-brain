@@ -1,5 +1,6 @@
-export const IMAGE_OBSERVATION_SCHEMA_VERSION = 'visual_observation.v2' as const;
-export const IMAGE_OBSERVATION_PROMPT_VERSION = 'visual_observation_prompt.v4' as const;
+// This is intentionally source-independent: an image is the first producer,
+// but the persisted system unit is a moment rather than an image analysis run.
+export const IMAGE_OBSERVATION_SCHEMA_VERSION = 'moment_observation.v1' as const;
 
 export type Confidence = 'low' | 'medium' | 'high';
 
@@ -27,7 +28,7 @@ export type VisualObservation = {
   person_identification_attempted: false;
 };
 
-export type ImageUnderstandingEngineId = 'fast-vision' | 'balanced-vlm' | 'litert-lm';
+export type ImageUnderstandingEngineId = 'fast-vision' | 'balanced-vlm';
 
 export type EngineInferenceContext = {
   detectorObservation?: VisualObservation;
@@ -102,6 +103,7 @@ export interface ImageUnderstandingEngine {
     onProgress: (progress: EngineProgress) => void,
     context?: EngineInferenceContext,
   ): Promise<EngineInferenceResult>;
+  interrupt?(): void;
   unload(onProgress?: (progress: EngineProgress) => void): Promise<void>;
   deleteModel(onProgress: (progress: EngineProgress) => void): Promise<void>;
 }

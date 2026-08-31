@@ -86,6 +86,21 @@ internal object GlassesAlertPlayback {
     return true
   }
 
+  /**
+   * An explicit settings test is intentionally not subject to the normal
+   * phone-use suppression. The user is looking at the phone precisely because
+   * they asked to verify the route; production notification alerts retain the
+   * privacy-preserving unlocked-phone gate above.
+   */
+  fun playNotificationPreview(context: Context): Boolean {
+    if (GlassesAlertSettings.findGlassesAudioDevice(context) == null) return false
+    requestTransientFocus(context)
+    playTone(1040, 75, context)
+    handler.postDelayed({ playTone(1560, 95, context) }, 145)
+    handler.postDelayed({ if (!callAlertActive) releaseAudioFocus() }, 420)
+    return true
+  }
+
   private fun playTone(frequencyHz: Int, durationMs: Int, suppliedContext: Context? = null) {
     val context = suppliedContext ?: return
     val device = GlassesAlertSettings.findGlassesAudioDevice(context) ?: return

@@ -1,4 +1,4 @@
-import { requireOptionalNativeModule } from 'expo';
+import { NativeModule, requireOptionalNativeModule } from 'expo';
 
 export type GlassesAlertApp = {
   packageName: string;
@@ -20,7 +20,19 @@ export type GlassesAlertStatus = {
   settings: GlassesAlertSettings;
 };
 
-type DigitalBrainGlassesAlertsNativeModule = {
+export type ImageEnhancementDeviceHealth = {
+  batteryPercent: number | null;
+  charging: boolean | null;
+  thermalStatus: number | null;
+  thermalStatusLabel: string;
+  appMemoryBytes: number;
+};
+
+type DigitalBrainGlassesAlertsEvents = {
+  onImageEnhancementForegroundTick(event: { timestampMs: number }): void;
+};
+
+declare class DigitalBrainGlassesAlertsNativeModule extends NativeModule<DigitalBrainGlassesAlertsEvents> {
   getStatus(): Promise<GlassesAlertStatus>;
   getLaunchableApps(): Promise<GlassesAlertApp[]>;
   saveSettings(enabled: boolean, selectedPackages: string[]): Promise<GlassesAlertSettings>;
@@ -29,7 +41,13 @@ type DigitalBrainGlassesAlertsNativeModule = {
   openNotificationAccessSettings(): Promise<void>;
   playTestAlert(): Promise<boolean>;
   playTestCallAlert(): Promise<boolean>;
-};
+  startImageEnhancementForegroundService(
+    intervalMinutes: number,
+    scheduleCount?: number,
+  ): Promise<void>;
+  stopImageEnhancementForegroundService(): Promise<void>;
+  getImageEnhancementDeviceHealth(): Promise<ImageEnhancementDeviceHealth>;
+}
 
 export default requireOptionalNativeModule<DigitalBrainGlassesAlertsNativeModule>(
   'DigitalBrainGlassesAlerts',

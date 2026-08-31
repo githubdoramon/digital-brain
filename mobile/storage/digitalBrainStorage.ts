@@ -7,10 +7,14 @@ import DigitalBrainStorageNative from '@/modules/digital-brain-storage/src';
 export enum DigitalBrainStorageFolder {
   Recordings = 'Recordings',
   GlassesCaptureQueue = 'Glasses Capture Queue',
+  ImagePipelineTemp = 'Image Pipeline Temp',
   Exports = 'Exports',
 }
 
+const LEGACY_IMAGE_PIPELINE_FOLDER = 'Smart Glasses POC 2';
+
 const STORAGE_BASE_URI_KEY = 'digitalbrain.storage.base_folder.v1';
+let storageCopyChain: Promise<void> = Promise.resolve();
 
 export function normalizeDigitalBrainStorageUri(uri: string): string {
   return uri.trim().replace(/[?#].*$/, '');
@@ -27,7 +31,8 @@ export function digitalBrainStorageFolderLabel(uri: string): string {
 
 export async function getDigitalBrainStorageBaseUri(): Promise<string | null> {
   const stored = await AsyncStorage.getItem(STORAGE_BASE_URI_KEY);
-  return stored ? normalizeDigitalBrainStorageUri(stored) : null;
+  if (!stored) return null;
+  return normalizeDigitalBrainStorageUri(stored);
 }
 
 export async function setDigitalBrainStorageBaseUri(uri: string): Promise<void> {
@@ -59,6 +64,15 @@ export async function getDigitalBrainStorageFolder(
   if (!DigitalBrainStorageNative) {
     throw new Error('Digital Brain storage needs an Android rebuild before it can create folders.');
   }
+  if (folder === DigitalBrainStorageFolder.ImagePipelineTemp) {
+    await DigitalBrainStorageNative.renameSubdirectoryIfExists(
+      baseUri,
+      LEGACY_IMAGE_PIPELINE_FOLDER,
+      folder,
+    );
+  }
+  // Preserve the provider-returned child document URI exactly. Rebuilding it
+  // as a child tree loses the grant attached to the selected base directory.
   return (await DigitalBrainStorageNative.ensureSubdirectory(baseUri, folder)).uri;
 }
 
@@ -71,33 +85,71 @@ export function safeStorageFileName(name: string, fallback: string): string {
   return cleaned || fallback;
 }
 
-export async function copyToDigitalBrainStorage(
+async function copyToDigitalBrainStorageNow(
   sourceUri: string,
   folder: DigitalBrainStorageFolder,
   fileName: string,
   mimeType: string,
+  skipIfSameSize: boolean,
 ): Promise<string> {
-  const destinationFolder = await getDigitalBrainStorageFolder(folder);
-  if (!destinationFolder) {
+  const sourceInfo = await FileSystem.getInfoAsync(sourceUri);
+  if (!sourceInfo.exists || !('size' in sourceInfo) || !sourceInfo.size) {
+    throw new Error('Digital Brain cannot copy a missing or empty source file.');
+  }
+  const baseUri = await getDigitalBrainStorageBaseUri();
+  if (!baseUri) {
     throw new Error('Choose a Digital Brain storage location before saving files.');
   }
+  if (!DigitalBrainStorageNative) {
+    throw new Error('Digital Brain storage needs an Android rebuild before it can save files.');
+  }
+  if (folder === DigitalBrainStorageFolder.ImagePipelineTemp) {
+    await DigitalBrainStorageNative.renameSubdirectoryIfExists(
+      baseUri,
+      LEGACY_IMAGE_PIPELINE_FOLDER,
+      folder,
+    );
+  }
   const name = safeStorageFileName(fileName, 'digital-brain-file');
-  const existing = await FileSystem.StorageAccessFramework.readDirectoryAsync(
-    destinationFolder,
-  ).catch(() => []);
-  const existingUri = existing.find((uri) => decodeURIComponent(uri).endsWith(`/${name}`));
-  if (existingUri)
-    await FileSystem.deleteAsync(existingUri, { idempotent: true }).catch(() => undefined);
-  const destination = await FileSystem.StorageAccessFramework.createFileAsync(
-    destinationFolder,
+  const result = await DigitalBrainStorageNative.copyToSubdirectory(
+    baseUri,
+    folder,
+    sourceUri,
     name,
     mimeType,
+    skipIfSameSize,
   );
-  await FileSystem.copyAsync({ from: sourceUri, to: destination });
-  const info = await FileSystem.getInfoAsync(destination);
-  if (!info.exists || !('size' in info) || !info.size) {
-    await FileSystem.deleteAsync(destination, { idempotent: true }).catch(() => undefined);
-    throw new Error('Digital Brain could not verify the saved file.');
+  if (result.bytes !== sourceInfo.size) {
+    throw new Error(
+      `Digital Brain could not verify the saved file (${result.bytes}/${sourceInfo.size} bytes).`,
+    );
   }
-  return destination;
+  return result.uri;
+}
+
+export function copyToDigitalBrainStorage(
+  sourceUri: string,
+  folder: DigitalBrainStorageFolder,
+  fileName: string,
+  mimeType: string,
+  options: { skipIfSameSize?: boolean } = {},
+): Promise<string> {
+  // Android document-provider writes are serialized. Concurrent writes to the
+  // same granted tree can race while replacing a file and expose partial data.
+  const copy = storageCopyChain
+    .catch(() => undefined)
+    .then(() =>
+      copyToDigitalBrainStorageNow(
+        sourceUri,
+        folder,
+        fileName,
+        mimeType,
+        options.skipIfSameSize === true,
+      ),
+    );
+  storageCopyChain = copy.then(
+    () => undefined,
+    () => undefined,
+  );
+  return copy;
 }

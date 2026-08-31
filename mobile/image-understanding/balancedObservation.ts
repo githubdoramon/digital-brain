@@ -20,7 +20,7 @@ const FIELD_NAMES = [
   'UNCERTAINTY',
 ] as const;
 
-export const BALANCED_OBSERVATION_PROMPT_VERSION = 'balanced_observation_prompt.v2';
+export const BALANCED_OBSERVATION_PROMPT_VERSION = 'balanced_observation_prompt.v3';
 
 function compactDetectorEvidence(observation?: VisualObservation): string {
   if (!observation) return 'No detector evidence is available for this run.';
@@ -40,7 +40,9 @@ function compactDetectorEvidence(observation?: VisualObservation): string {
 }
 
 export function buildBalancedObservationPrompt(detectorObservation?: VisualObservation): string {
-  return `You are creating a visual memory of what the user is seeing.
+  return `You are creating a visual memory from a first-person photograph captured by the user's smart glasses.
+
+The user wearing the glasses is always an active participant in this moment even when they are behind the camera and therefore not visible. Describe what the user appears to be doing or participating in when the visible scene supports an inference. Phrase inferred activity cautiously (for example, "the user appears to be working at a computer") and cite the visible scene that supports it. Do not count the camera wearer as a visible person, do not describe them under PEOPLE unless part of their body or reflection is visible, and do not invent their pose, clothing, expression, or identity.
 
 Study the attached image and describe what is happening. Prioritize:
 1. The overall situation or event.
