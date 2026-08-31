@@ -44,6 +44,21 @@ class DigitalBrainStorageModule : Module() {
     }
   }
 
+  /**
+   * Some document providers silently add an extension based on MIME type.
+   * Reuse that provider-owned name on later writes instead of creating a new
+   * "same" document every time a rolling log is mirrored.
+   */
+  private fun existingTarget(folder: DocumentFile, requestedName: String): DocumentFile? {
+    return folder.findFile(requestedName)
+      ?: folder.listFiles().firstOrNull { child ->
+        val actualName = child.name ?: return@firstOrNull false
+        actualName == requestedName ||
+          actualName.startsWith("$requestedName.") ||
+          actualName.startsWith("$requestedName (")
+      }
+  }
+
   private fun mergeDirectory(source: DocumentFile, target: DocumentFile) {
     source.listFiles().filter { it.isFile }.forEach { child ->
       val originalName = child.name ?: "legacy-file-${System.currentTimeMillis()}"
@@ -162,7 +177,7 @@ class DigitalBrainStorageModule : Module() {
 
       val expectedBytes = sourceLength(sourceUri)
       check(expectedBytes != 0L) { "Digital Brain cannot copy an empty source file." }
-      var target = targetFolder.findFile(name)
+      var target = existingTarget(targetFolder, name)
       if (target != null && skipIfSameSize && expectedBytes > 0 && target.length() == expectedBytes) {
         return@AsyncFunction mapOf(
           "uri" to target.uri.toString(),

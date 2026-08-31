@@ -34,6 +34,7 @@ const LEGACY_BACKGROUND_TASK = 'digitalbrain-glasses-poc2-capture';
 const CONFIG_KEY = 'digitalbrain.glasses.image-enhancement.config.v1';
 const STATUS_KEY = 'digitalbrain.glasses.image-enhancement.status.v1';
 const QUEUE_KEY = 'digitalbrain.glasses.image-enhancement.queue.v1';
+const ENHANCEMENT_QUEUE_KEY = 'digitalbrain.glasses.image-enhancement.processing-queue.v1';
 const SCHEDULE_STATE_KEY = 'digitalbrain.glasses.image-enhancement.schedule-state.v1';
 const LEGACY_CONFIG_KEY = 'digitalbrain.glasses.poc2.config.v1';
 const LEGACY_STATUS_KEY = 'digitalbrain.glasses.poc2.status.v1';
@@ -84,6 +85,16 @@ type ImageEnhancementCaptureJob = {
   scheduleId: string;
   source: 'timer' | 'background_task' | 'foreground_service' | 'startup' | 'settings';
   requestedAt: string;
+  attempts: number;
+  nextAttemptAt: string | null;
+};
+
+type ImageEnhancementProcessingJob = {
+  id: string;
+  source: ImageEnhancementCaptureJob['source'];
+  capturedAt: string;
+  localUri: string;
+  bytes: number;
   attempts: number;
   nextAttemptAt: string | null;
 };
@@ -167,9 +178,12 @@ let statusLoaded = false;
 let schedulerTimer: ReturnType<typeof setInterval> | null = null;
 let captureQueue: ImageEnhancementCaptureJob[] = [];
 let queueLoaded: Promise<void> | null = null;
+let enhancementQueue: ImageEnhancementProcessingJob[] = [];
+let enhancementQueueLoaded: Promise<void> | null = null;
 let scheduleState: ScheduleState = {};
 let scheduleStateLoaded: Promise<void> | null = null;
 let queueDrain: Promise<void> | null = null;
+let enhancementDrain: Promise<void> | null = null;
 let schedulerDispatch: Promise<void> | null = null;
 let activeCaptureJob: ImageEnhancementCaptureJob | null = null;
 let nativeOperationInFlight = false;
@@ -248,10 +262,11 @@ function trackNativeOperation<T>(
   timeoutMs: number,
   message: string,
   onTimeout?: () => void,
+  blocksCapture = true,
 ): Promise<T> {
-  nativeOperationInFlight = true;
+  if (blocksCapture) nativeOperationInFlight = true;
   const markSettled = () => {
-    nativeOperationInFlight = false;
+    if (blocksCapture) nativeOperationInFlight = false;
   };
   operation.then(markSettled, markSettled);
   return withTimeout(operation, timeoutMs, message, onTimeout);
@@ -386,6 +401,62 @@ async function persistCaptureQueue(): Promise<void> {
   await AsyncStorage.setItem(QUEUE_KEY, JSON.stringify(captureQueue));
 }
 
+async function loadEnhancementQueue(): Promise<void> {
+  if (enhancementQueueLoaded) return enhancementQueueLoaded;
+  enhancementQueueLoaded = AsyncStorage.getItem(ENHANCEMENT_QUEUE_KEY)
+    .then((raw) => {
+      if (!raw) return;
+      try {
+        const parsed = JSON.parse(raw);
+        if (!Array.isArray(parsed)) return;
+        enhancementQueue = parsed
+          .filter((item): item is Partial<ImageEnhancementProcessingJob> =>
+            Boolean(item && typeof item === 'object'),
+          )
+          .map(
+            (item): ImageEnhancementProcessingJob => ({
+              id: typeof item.id === 'string' ? item.id : '',
+              source:
+                item.source === 'background_task' ||
+                item.source === 'foreground_service' ||
+                item.source === 'startup' ||
+                item.source === 'settings'
+                  ? item.source
+                  : 'timer',
+              capturedAt: typeof item.capturedAt === 'string' ? item.capturedAt : '',
+              localUri: typeof item.localUri === 'string' ? item.localUri : '',
+              bytes: Math.max(0, Number(item.bytes) || 0),
+              attempts: Math.max(0, Number(item.attempts) || 0),
+              nextAttemptAt: typeof item.nextAttemptAt === 'string' ? item.nextAttemptAt : null,
+            }),
+          )
+          .filter((item) => item.id && item.capturedAt && item.localUri && item.bytes > 0);
+      } catch {
+        enhancementQueue = [];
+      }
+    })
+    .catch(() => undefined);
+  await enhancementQueueLoaded;
+}
+
+async function persistEnhancementQueue(): Promise<void> {
+  await AsyncStorage.setItem(ENHANCEMENT_QUEUE_KEY, JSON.stringify(enhancementQueue));
+}
+
+async function enqueueEnhancementJob(
+  job: Omit<ImageEnhancementProcessingJob, 'id' | 'attempts' | 'nextAttemptAt'>,
+): Promise<void> {
+  await loadEnhancementQueue();
+  enhancementQueue.push({
+    ...job,
+    id: `image-enhancement-process-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    attempts: 0,
+    nextAttemptAt: null,
+  });
+  await persistEnhancementQueue();
+  updateQueueStatus();
+}
+
 async function loadScheduleState(): Promise<void> {
   if (scheduleStateLoaded) return scheduleStateLoaded;
   scheduleStateLoaded = readMigratedStorageValue(SCHEDULE_STATE_KEY, LEGACY_SCHEDULE_STATE_KEY)
@@ -428,7 +499,7 @@ function updateQueueStatus(): void {
     .filter((value): value is string => Boolean(value));
   const nextCaptureAt = [...nextRunTimes, ...nextQueuedRetry].sort()[0] ?? null;
   publish({
-    queuedCount: captureQueue.length,
+    queuedCount: captureQueue.length + enhancementQueue.length,
     nextCaptureAt: config.enabled ? nextCaptureAt : null,
   });
 }
@@ -485,7 +556,7 @@ async function mirrorLogToSharedStorage(): Promise<void> {
           LOG_FILE_URI,
           DigitalBrainStorageFolder.Exports,
           LOG_FILE_NAME,
-          'application/json',
+          'application/x-ndjson',
         );
       });
     try {
@@ -833,34 +904,11 @@ async function captureOnce(job: ImageEnhancementCaptureJob): Promise<boolean> {
       shared: false,
     });
     queuePhotoSharedCopy(local.uri, capturedAt, local.bytes);
-
-    phaseStartedAt = Date.now();
-    const pipeline = await trackNativeOperation(
-      imageUnderstandingCoordinator.runPipeline(local.uri, () => undefined),
-      ENHANCEMENT_TIMEOUT_MS,
-      'Timed out while enhancing the automatic glasses photo',
-      () => imageUnderstandingCoordinator.interruptActive(),
-    );
-    await logPhase('image_understanding_pipeline', phaseStartedAt, source, capturedAt);
-    const dimensions = imageDimensionsFromRun(pipeline.evidenceRun);
-    await log({
-      timestamp: new Date().toISOString(),
-      event: 'enhancement_completed',
-      source,
-      capturedAt,
-      bytes: local.bytes,
-      ...dimensions,
-      durationMs: Date.now() - startedAt,
-      pipeline: {
-        evidence: runForLog(pipeline.evidenceRun),
-        enhancement: runForLog(pipeline.finalRun),
-      },
-      deviceHealth: await readDeviceHealth(),
-    });
-    if (pipeline.finalRun.observation) {
-      await enqueueImageMoment(capturedAt, pipeline.finalRun.observation);
-      void drainQueuedMoments('automatic_capture');
-    }
+    // Capture cadence must not wait for VLM inference. The photo is now durable,
+    // so process it sequentially from a separate queue while the next minute's
+    // glasses capture can proceed.
+    await enqueueEnhancementJob({ source, capturedAt, localUri: local.uri, bytes: local.bytes });
+    void drainEnhancementQueue();
     publish({
       running: false,
       lastCaptureAt: capturedAt,
@@ -895,6 +943,113 @@ async function captureOnce(job: ImageEnhancementCaptureJob): Promise<boolean> {
   }
 }
 
+async function processEnhancementJob(job: ImageEnhancementProcessingJob): Promise<boolean> {
+  const startedAt = Date.now();
+  publish({ running: true, lastError: null });
+  try {
+    const sourceInfo = await FileSystem.getInfoAsync(job.localUri);
+    if (!sourceInfo.exists || !('size' in sourceInfo) || !sourceInfo.size) {
+      throw new Error('The retained automatic photo is missing or empty');
+    }
+    const pipelineStartedAt = Date.now();
+    const pipeline = await trackNativeOperation(
+      imageUnderstandingCoordinator.runPipeline(job.localUri, () => undefined),
+      ENHANCEMENT_TIMEOUT_MS,
+      'Timed out while enhancing the automatic glasses photo',
+      () => imageUnderstandingCoordinator.interruptActive(),
+      false,
+    );
+    await logPhase('image_understanding_pipeline', pipelineStartedAt, job.source, job.capturedAt);
+    const dimensions = imageDimensionsFromRun(pipeline.evidenceRun);
+    await log({
+      timestamp: new Date().toISOString(),
+      event: 'enhancement_completed',
+      source: job.source,
+      capturedAt: job.capturedAt,
+      bytes: job.bytes,
+      ...dimensions,
+      durationMs: Date.now() - startedAt,
+      pipeline: {
+        evidence: runForLog(pipeline.evidenceRun),
+        enhancement: runForLog(pipeline.finalRun),
+      },
+      deviceHealth: await readDeviceHealth(),
+    });
+    if (!pipeline.finalRun.observation) {
+      throw new Error('The image pipeline produced no canonical observation');
+    }
+    await enqueueImageMoment(job.capturedAt, pipeline.finalRun.observation);
+    await log({
+      timestamp: new Date().toISOString(),
+      event: 'moment_queued',
+      source: job.source,
+      capturedAt: job.capturedAt,
+    });
+    void drainQueuedMoments('automatic_capture').then((delivery) =>
+      log({
+        timestamp: new Date().toISOString(),
+        event: 'moment_delivery_completed',
+        source: job.source,
+        capturedAt: job.capturedAt,
+        reason: delivery.deferredReason ?? `accepted:${delivery.acceptedCount};rejected:${delivery.rejectedCount};pending:${delivery.pendingCount}`,
+      }),
+    );
+    publish({ running: false, lastError: null });
+    return true;
+  } catch (error) {
+    const message = safeError(error);
+    await log({
+      timestamp: new Date().toISOString(),
+      event: 'enhancement_failed',
+      source: job.source,
+      capturedAt: job.capturedAt,
+      bytes: job.bytes,
+      durationMs: Date.now() - startedAt,
+      error: message,
+      deviceHealth: await readDeviceHealth(),
+    });
+    publish({ running: false, lastError: message });
+    return false;
+  }
+}
+
+async function drainEnhancementQueue(): Promise<void> {
+  if (enhancementDrain) return enhancementDrain;
+  enhancementDrain = (async () => {
+    await loadEnhancementQueue();
+    while (config.enabled && enhancementQueue.length > 0) {
+      const now = Date.now();
+      const nextIndex = enhancementQueue.findIndex(
+        (job) => !job.nextAttemptAt || Date.parse(job.nextAttemptAt) <= now,
+      );
+      if (nextIndex < 0) break;
+      const job = { ...enhancementQueue[nextIndex], attempts: enhancementQueue[nextIndex].attempts + 1 };
+      enhancementQueue[nextIndex] = job;
+      await persistEnhancementQueue();
+      updateQueueStatus();
+      const success = await processEnhancementJob(job);
+      const currentIndex = enhancementQueue.findIndex((item) => item.id === job.id);
+      if (success) {
+        if (currentIndex >= 0) enhancementQueue.splice(currentIndex, 1);
+      } else if (job.attempts < MAX_QUEUE_ATTEMPTS && currentIndex >= 0) {
+        enhancementQueue[currentIndex] = {
+          ...job,
+          nextAttemptAt: new Date(Date.now() + Math.min(15 * 60_000, 30_000 * 2 ** job.attempts)).toISOString(),
+        };
+      } else if (currentIndex >= 0) {
+        // Keep the retained image, but stop retrying a persistently bad input.
+        enhancementQueue.splice(currentIndex, 1);
+        status = { ...status, failedQueueCount: status.failedQueueCount + 1 };
+      }
+      await persistEnhancementQueue();
+      updateQueueStatus();
+    }
+  })().finally(() => {
+    enhancementDrain = null;
+  });
+  await enhancementDrain;
+}
+
 function hasPendingSchedule(scheduleId: string): boolean {
   return captureQueue.some(
     (job) => job.scheduleId === scheduleId && job.id !== activeCaptureJob?.id,
@@ -904,6 +1059,7 @@ function hasPendingSchedule(scheduleId: string): boolean {
 async function enqueueDueJobs(source: ImageEnhancementCaptureJob['source']): Promise<void> {
   await loadConfig();
   await loadStatus();
+  await loadEnhancementQueue();
   await loadCaptureQueue();
   await loadScheduleState();
   if (!config.enabled) return;
@@ -1025,6 +1181,7 @@ async function scheduleAndDrain(source: ImageEnhancementCaptureJob['source']): P
   schedulerDispatch = (async () => {
     await enqueueDueJobs(source);
     await drainCaptureQueue();
+    void drainEnhancementQueue();
     // A queued moment may have failed while the app was offline. Revisit it on
     // every scheduler/foreground opportunity, even when no new photo is due.
     await drainQueuedMoments(`scheduler_${source}`);
@@ -1176,6 +1333,7 @@ export async function initializeImageEnhancement(): Promise<void> {
     });
   });
   await scheduleAndDrain('startup');
+  void drainEnhancementQueue();
   updateQueueStatus();
   startTimer();
   subscribeToForegroundCatchUp();
@@ -1207,6 +1365,7 @@ export async function setImageEnhancementEnabled(enabled: boolean): Promise<void
   await loadConfig();
   await loadStatus();
   await loadCaptureQueue();
+  await loadEnhancementQueue();
   config = { ...config, enabled };
   await loadScheduleState();
   if (enabled) {
@@ -1237,6 +1396,7 @@ export async function setImageEnhancementEnabled(enabled: boolean): Promise<void
     await syncImageEnhancementForegroundService(true);
     await registerBackgroundTask();
     await scheduleAndDrain('settings');
+    void drainEnhancementQueue();
     startTimer();
     subscribeToForegroundCatchUp();
   } else {

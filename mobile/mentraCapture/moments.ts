@@ -28,7 +28,14 @@ type MomentQueueEntry = {
 };
 
 let queue: MomentQueueEntry[] | null = null;
-let drainInFlight: Promise<void> | null = null;
+let drainInFlight: Promise<MomentDrainResult> | null = null;
+
+export type MomentDrainResult = {
+  acceptedCount: number;
+  rejectedCount: number;
+  pendingCount: number;
+  deferredReason?: 'no_auth_token' | 'network_error';
+};
 
 function createUuid(): string {
   if (typeof globalThis.crypto?.randomUUID === 'function') return globalThis.crypto.randomUUID();
@@ -119,15 +126,15 @@ async function enrichLocations(entries: MomentQueueEntry[], token: string): Prom
   if (changed) await persistQueue();
 }
 
-export async function drainQueuedMoments(trigger: string): Promise<void> {
+export async function drainQueuedMoments(trigger: string): Promise<MomentDrainResult> {
   if (drainInFlight) return drainInFlight;
-  drainInFlight = (async () => {
+  const activeDrain = (async (): Promise<MomentDrainResult> => {
     const entries = await loadQueue();
-    if (!entries.length) return;
+    if (!entries.length) return { acceptedCount: 0, rejectedCount: 0, pendingCount: 0 };
     const token = await resolveAuth();
     if (!token) {
       await appendMentraDebugLog('moment_delivery_deferred', { trigger, reason: 'no_auth_token' });
-      return;
+      return { acceptedCount: 0, rejectedCount: 0, pendingCount: entries.length, deferredReason: 'no_auth_token' };
     }
     const batch = entries.slice(0, MAX_BATCH_SIZE);
     await enrichLocations(batch, token);
@@ -137,7 +144,7 @@ export async function drainQueuedMoments(trigger: string): Promise<void> {
         token,
         onAuthExpired: refreshStoredGoogleIdToken,
         body: JSON.stringify({ moments: batch }),
-      })) as { results?: Array<{ id?: string; status?: string; detail?: unknown }> };
+      })) as { results?: { id?: string; status?: string; detail?: unknown }[] };
       const accepted = new Set(
         (response.results ?? [])
           .filter((result) => ['created', 'updated', 'duplicate'].includes(result.status ?? ''))
@@ -163,6 +170,7 @@ export async function drainQueuedMoments(trigger: string): Promise<void> {
         rejected_count: rejected.size,
         pending_count: queue.length,
       });
+      return { acceptedCount: accepted.size, rejectedCount: rejected.size, pendingCount: queue.length };
     } catch (error) {
       queue = entries.map((entry) => ({
         ...entry,
@@ -174,11 +182,13 @@ export async function drainQueuedMoments(trigger: string): Promise<void> {
         trigger,
         pending_count: queue.length,
       });
+      return { acceptedCount: 0, rejectedCount: 0, pendingCount: queue.length, deferredReason: 'network_error' };
     }
   })().finally(() => {
     drainInFlight = null;
   });
-  return drainInFlight;
+  drainInFlight = activeDrain;
+  return activeDrain;
 }
 
 export async function getQueuedMomentCount(): Promise<number> {
