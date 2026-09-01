@@ -12,6 +12,7 @@ from agents.daily_briefing.executor import (
     _build_event_research_value_signals,
     _build_event_summary_debug_bundle,
     _enrich_selected_news_summaries,
+    _escape_markdown_link_label,
     _fetch_similar_events,
     _format_context_text,
     _format_event_for_analysis,
@@ -1144,6 +1145,11 @@ class TestBriefingPromptNews:
 
 
 class TestGenerateNewsSectionMarkdown:
+    def test_escapes_markdown_brackets_in_article_title(self):
+        assert _escape_markdown_link_label("[CONTRIBUTION] Stablecoin story") == (
+            r"\[CONTRIBUTION\] Stablecoin story"
+        )
+
     def test_keeps_topic_assignment_deterministic(self):
         selected_news = {
             "topic_articles": [

@@ -111,7 +111,10 @@ Focused validation runs in `agents/daily_briefing/validators.py`:
 2. News section validation (`validate_news_section`): checks article presentation format (title + link + summary + source).
 
 If event section generation fails validation, the executor falls back to deterministic event-section construction.
-If news validation fails, the executor falls back to `No notable news today.`
+Before validation, malformed news bullets are discarded individually while valid
+bullets are preserved. If no valid article bullets remain, the executor falls
+back to `No notable news today.` Link labels are escaped during rendering so
+article titles containing Markdown brackets remain valid links.
 
 ## Key Files
 

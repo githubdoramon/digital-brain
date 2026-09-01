@@ -24,6 +24,7 @@ from agents.daily_briefing.profile import (
     build_event_research_profile,
 )
 from agents.daily_briefing.validators import (
+    filter_news_section,
     validate_event_sections,
     validate_news_section,
     validate_summary,
@@ -1929,6 +1930,12 @@ def _generate_markdown(
                 user_email=user_email,
             )
             news_section = news_future.result()
+        news_section, dropped_news_lines = filter_news_section(news_section)
+        if dropped_news_lines:
+            logger.warning(
+                "[briefing] Dropped %d malformed news line(s); preserved valid articles",
+                dropped_news_lines,
+            )
         logger.info(
             "[briefing] Parallel section generation complete (%.0fms)",
             (perf_counter() - t_parallel) * 1000,
@@ -2614,7 +2621,7 @@ def _render_news_article_lines(
     lines: list[str] = []
     dedupe_urls = seen_urls if seen_urls is not None else set()
     for article in articles:
-        title = str(article.get("title") or "Untitled").strip()
+        title = re.sub(r"\s+", " ", str(article.get("title") or "Untitled")).strip()
         url = str(article.get("url") or "").strip()
         canonical_url = news_feeds.canonicalize_news_url(url).lower()
         source = str(article.get("source") or "Unknown").strip()
@@ -2630,8 +2637,14 @@ def _render_news_article_lines(
             dedupe_urls.add(canonical_url)
         if not summary:
             summary = "Notable development worth tracking for your priorities."
-        lines.append(f"- [{title}]({url}) - {summary} ({source})")
+        safe_title = _escape_markdown_link_label(title)
+        lines.append(f"- [{safe_title}]({url}) - {summary} ({source})")
     return lines
+
+
+def _escape_markdown_link_label(text: str) -> str:
+    """Escape link-label syntax without changing the displayed title."""
+    return text.replace("\\", "\\\\").replace("[", "\\[").replace("]", "\\]")
 
 
 def _to_single_news_sentence(text: str) -> str:

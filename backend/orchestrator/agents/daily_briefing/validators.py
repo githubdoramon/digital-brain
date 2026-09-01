@@ -127,6 +127,10 @@ _BANNED_THINKING = [
 
 _ALL_BANNED = _BANNED_META + _BANNED_THINKING
 
+_NEWS_ARTICLE_LINE_RE = re.compile(
+    r"^\s*-\s+\[(?:\\.|[^\]])+\]\(https?://[^)\s]+\)\s+-\s+.+\s+\([^)]+\)\s*$"
+)
+
 # Artifact patterns (raw tool call / JSON leaks)
 _ARTIFACT_PATTERNS = [
     r'\{"tool_call"',
@@ -433,9 +437,10 @@ def validate_news_section(section_markdown: str, has_news_input: bool) -> Valida
     if "no notable news today." in lowered:
         return ValidationResult(valid=True)
 
-    article_pattern = re.compile(r"\[[^\]]+\]\(https?://[^)]+\)\s*-\s*.+\s*\([^)]+\)")
     article_lines = [
-        line.strip() for line in text.splitlines() if "[" in line and "](" in line and " - " in line
+        line.strip()
+        for line in text.splitlines()
+        if line.strip().startswith("- ") and "[" in line and "](" in line
     ]
     if not article_lines:
         return ValidationResult(
@@ -444,10 +449,36 @@ def validate_news_section(section_markdown: str, has_news_input: bool) -> Valida
             reasons=["No article lines found in news section"],
         )
     for line in article_lines:
-        if not article_pattern.search(line):
+        if not _NEWS_ARTICLE_LINE_RE.fullmatch(line):
             return ValidationResult(
                 valid=False,
                 tier=TIER_COHERENCE,
                 reasons=[f"Invalid news line format: {line[:120]}. Corrent format is [Title](URL) - Summary (Source), in markdown format."],
             )
     return ValidationResult(valid=True)
+
+
+def filter_news_section(section_markdown: str) -> tuple[str, int]:
+    """Discard malformed news bullets while preserving valid articles."""
+    text = (section_markdown or "").strip()
+    if not text:
+        return "## News & Topics\nNo notable news today.", 0
+
+    kept_lines: list[str] = []
+    dropped_count = 0
+    valid_article_count = 0
+    for line in text.splitlines():
+        stripped = line.strip()
+        looks_like_article = stripped.startswith("- ") and "[" in stripped and "](" in stripped
+        if looks_like_article:
+            if _NEWS_ARTICLE_LINE_RE.fullmatch(stripped):
+                kept_lines.append(stripped)
+                valid_article_count += 1
+            else:
+                dropped_count += 1
+            continue
+        kept_lines.append(stripped)
+
+    if valid_article_count == 0:
+        return "## News & Topics\nNo notable news today.", dropped_count
+    return "\n".join(line for line in kept_lines if line).strip(), dropped_count

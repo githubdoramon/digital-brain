@@ -12,6 +12,7 @@ from agents.daily_briefing.validators import (
     _validate_coherence,
     _validate_llm_judge,
     _validate_structural,
+    filter_news_section,
     validate_briefing,
     validate_event_sections,
     validate_summary,
@@ -185,6 +186,27 @@ class TestCoherenceValidation:
             _ctx(events=[_event()], news=[_news()]),
         )
         assert result.valid
+
+    def test_news_section_allows_escaped_brackets_in_title(self):
+        brief = VALID_BRIEFING + (
+            "## News & Topics\n"
+            r"- [\[CONTRIBUTION\] Stablecoin infrastructure](https://example.com/news) - "
+            "The development matters. (example.com)\n"
+        )
+        result = _validate_coherence(brief, _ctx(events=[_event()], news=[_news()]))
+        assert result.valid
+
+    def test_filter_news_section_preserves_valid_lines(self):
+        section = (
+            "## News & Topics\n"
+            "### General Headlines\n"
+            "- [Valid story](https://example.com/valid) - Useful summary. (example.com)\n"
+            "- [[CONTRIBUTION] Broken story](https://example.com/broken) - Broken summary. (example.com)\n"
+        )
+        filtered, dropped = filter_news_section(section)
+        assert dropped == 1
+        assert "Valid story" in filtered
+        assert "Broken story" not in filtered
 
     def test_news_no_notable_passes(self):
         brief = VALID_BRIEFING + "## News & Topics\nNo notable news today.\n"
