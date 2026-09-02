@@ -417,7 +417,9 @@ export default function GlassesCaptureScreen() {
             <View style={styles.imageEnhancementStatusBox}>
               <Text style={styles.detailText}>
                 {imageEnhancementStatus.running
-                  ? 'Capturing and enhancing a glasses photo…'
+                  ? imageEnhancementStatus.captureQueueCount > 0
+                    ? 'Requesting a new photo from the glasses…'
+                    : 'Enhancing a retained glasses photo locally…'
                   : imageEnhancementStatus.enabled
                     ? `Next capture: ${imageEnhancementStatus.nextCaptureAt ? new Date(imageEnhancementStatus.nextCaptureAt).toLocaleString() : 'scheduled'}`
                     : 'Automatic capture is off'}
@@ -428,10 +430,18 @@ export default function GlassesCaptureScreen() {
                   {imageEnhancementStatus.captureCount} total
                 </Text>
               ) : null}
-              {imageEnhancementStatus.queuedCount > 0 ? (
+              {imageEnhancementStatus.captureQueueCount > 0 ? (
                 <Text style={styles.detailText}>
-                  {imageEnhancementStatus.queuedCount} capture
-                  {imageEnhancementStatus.queuedCount === 1 ? '' : 's'} queued for the glasses
+                  {imageEnhancementStatus.captureQueueCount} camera request
+                  {imageEnhancementStatus.captureQueueCount === 1 ? '' : 's'} waiting for the
+                  glasses
+                </Text>
+              ) : null}
+              {imageEnhancementStatus.enhancementQueueCount > 0 ? (
+                <Text style={styles.detailText}>
+                  {imageEnhancementStatus.enhancementQueueCount} retained photo
+                  {imageEnhancementStatus.enhancementQueueCount === 1 ? '' : 's'} awaiting local
+                  analysis
                 </Text>
               ) : null}
               {imageEnhancementStatus.failedQueueCount > 0 ? (

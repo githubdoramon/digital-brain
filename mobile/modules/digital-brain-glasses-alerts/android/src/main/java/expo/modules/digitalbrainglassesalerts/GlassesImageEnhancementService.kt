@@ -10,6 +10,7 @@ import android.os.Build
 import android.os.IBinder
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import androidx.core.content.ContextCompat
 import androidx.core.app.NotificationCompat
 
@@ -53,12 +54,20 @@ class GlassesImageEnhancementService : Service() {
 
   private val handler = Handler(Looper.getMainLooper())
   private var tickIntervalMs = 60_000L
+  private var nextTickUptimeMs = 0L
   private val foregroundTick = object : Runnable {
     override fun run() {
       lastNativeTickAtMs = System.currentTimeMillis()
       nativeTickCount += 1
       GlassesAlertsModule.emitImageEnhancementForegroundTick()
-      handler.postDelayed(this, tickIntervalMs)
+      // Keep ticks aligned to the configured cadence. `postDelayed` from the
+      // end of a late main-thread callback accumulates drift, which made a
+      // one-minute setting turn into 80–140-second camera intervals.
+      val now = SystemClock.uptimeMillis()
+      do {
+        nextTickUptimeMs += tickIntervalMs
+      } while (nextTickUptimeMs <= now)
+      handler.postAtTime(this, nextTickUptimeMs)
     }
   }
 
@@ -77,12 +86,14 @@ class GlassesImageEnhancementService : Service() {
     tickIntervalMs = (intent?.getIntExtra("interval_minutes", 1) ?: 1)
       .coerceAtLeast(1) * 60_000L
     handler.removeCallbacks(foregroundTick)
-    handler.postDelayed(foregroundTick, tickIntervalMs)
+    nextTickUptimeMs = SystemClock.uptimeMillis() + tickIntervalMs
+    handler.postAtTime(foregroundTick, nextTickUptimeMs)
     return START_STICKY
   }
 
   override fun onDestroy() {
     handler.removeCallbacks(foregroundTick)
+    nextTickUptimeMs = 0L
     active = false
     startedAtMs = null
     lastNativeTickAtMs = null

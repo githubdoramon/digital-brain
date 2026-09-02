@@ -41,21 +41,26 @@ export default function GlassesRecordingsScreen() {
   const { showError, showSuccess } = useAppNotice();
   const [recordings, setRecordings] = React.useState<GlassesAudioRecording[]>([]);
   const [state, setState] = React.useState(getGlassesAudioRecordingState());
-  const [pendingAction, setPendingAction] = React.useState<'start' | 'stop' | null>(null);
+  const [busy, setBusy] = React.useState(false);
   const [renameId, setRenameId] = React.useState<string | null>(null);
   const [renameValue, setRenameValue] = React.useState('');
   const [, setClock] = React.useState(Date.now());
   const [hasStorage, setHasStorage] = React.useState(false);
 
-  const refresh = React.useCallback(async () => {
+  const refreshLibrary = React.useCallback(async () => {
     const [nextRecordings, baseUri] = await Promise.all([
       listGlassesAudioRecordings(),
       getDigitalBrainStorageBaseUri(),
     ]);
     setRecordings(nextRecordings);
     setHasStorage(Boolean(baseUri));
-    await hydrateGlassesAudioRecording();
   }, []);
+
+  const refresh = React.useCallback(async () => {
+    await refreshLibrary();
+    await hydrateGlassesAudioRecording();
+    await refreshLibrary();
+  }, [refreshLibrary]);
 
   useFocusEffect(
     React.useCallback(() => {
@@ -73,26 +78,26 @@ export default function GlassesRecordingsScreen() {
   }, [state.recording]);
 
   const start = async () => {
-    setPendingAction('start');
+    setBusy(true);
     try {
       await startGlassesAudioRecording();
     } catch (error) {
       showError(error instanceof Error ? error.message : 'Could not start recording.');
     } finally {
-      setPendingAction(null);
+      setBusy(false);
     }
   };
 
   const stop = async () => {
-    setPendingAction('stop');
+    setBusy(true);
     try {
       await stopGlassesAudioRecording();
-      await refresh();
+      await refreshLibrary();
       showSuccess('Recording saved to your Digital Brain folder.');
     } catch (error) {
       showError(error instanceof Error ? error.message : 'Could not stop recording.');
     } finally {
-      setPendingAction(null);
+      setBusy(false);
     }
   };
 
@@ -127,14 +132,6 @@ export default function GlassesRecordingsScreen() {
   };
 
   const elapsed = state.recording && state.startedAt ? Date.now() - state.startedAt : 0;
-  const recordingActionLabel =
-    pendingAction === 'start'
-      ? 'Starting recording…'
-      : pendingAction === 'stop'
-        ? 'Saving recording…'
-        : state.recording
-          ? 'Stop recording'
-          : 'Start recording';
 
   return (
     <View style={styles.screen}>
@@ -189,14 +186,11 @@ export default function GlassesRecordingsScreen() {
               : 'Only the app controls recording. Your glasses photo and video buttons keep their existing behavior.'}
           </Text>
           <Button
-            label={recordingActionLabel}
+            label={state.recording ? 'Stop recording' : 'Start recording'}
             variant={state.recording ? 'danger' : 'primary'}
             onPress={() => void (state.recording ? stop() : start())}
-            disabled={
-              pendingAction !== null ||
-              Platform.OS !== 'android' ||
-              (!state.recording && !hasStorage)
-            }
+            loading={busy}
+            disabled={Platform.OS !== 'android' || (!state.recording && !hasStorage)}
           />
         </Card>
         <Text style={styles.sectionTitle}>Saved recordings</Text>

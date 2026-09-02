@@ -4,11 +4,22 @@ import json
 from datetime import datetime
 from typing import Any
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Response, UploadFile
+from fastapi import (
+    APIRouter,
+    Depends,
+    File,
+    Form,
+    HTTPException,
+    Query,
+    Request,
+    Response,
+    UploadFile,
+)
 
 import contacts as contacts_service
 import event_photos as event_photos_service
 import events as events_service
+import glasses_capture_uploads
 import glasses_captures as glasses_captures_service
 import meeting_transcript_jobs
 import voice_profiles as voice_profiles_service
@@ -403,6 +414,50 @@ def create_events_router(
         except Exception as exc:
             logger.exception("[glasses_captures] Upload failed capture_id=%s", capture_id)
             raise HTTPException(status_code=502, detail="Failed to commit glasses capture") from exc
+        return {"ok": True, "capture": capture}
+
+    @router.post("/mobile/glasses/captures/upload-sessions")
+    async def create_glasses_capture_upload_session(
+        request: Request,
+        user: dict = Depends(get_current_user),
+    ):
+        try:
+            payload = await request.json()
+            if not isinstance(payload, dict):
+                raise ValueError("payload must be an object")
+            return glasses_capture_uploads.create(str(user.get("email") or ""), payload)
+        except (ValueError, glasses_capture_uploads.UploadSessionError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @router.put("/mobile/glasses/captures/upload-sessions/{session_id}/chunk")
+    async def upload_glasses_capture_chunk(
+        session_id: str,
+        request: Request,
+        user: dict = Depends(get_current_user),
+    ):
+        try:
+            start = int(request.headers.get("x-upload-offset") or "")
+            total = int(request.headers.get("x-upload-total") or "")
+            body = await request.body()
+            glasses_capture_uploads.store_chunk(
+                str(user.get("email") or ""), session_id, start, total, body
+            )
+        except (ValueError, glasses_capture_uploads.UploadSessionError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return Response(status_code=204)
+
+    @router.post("/mobile/glasses/captures/upload-sessions/{session_id}/complete")
+    def complete_glasses_capture_upload_session(
+        session_id: str,
+        user: dict = Depends(get_current_user),
+    ):
+        try:
+            capture = glasses_capture_uploads.complete(str(user.get("email") or ""), session_id)
+        except glasses_capture_uploads.UploadSessionError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except Exception:
+            logger.exception("[glasses_captures] Chunked upload failed session_id=%s", session_id)
+            raise HTTPException(status_code=502, detail="Failed to commit glasses capture") from None
         return {"ok": True, "capture": capture}
 
     @router.get("/mobile/events/{event_id}/photos/{asset_id}/thumbnail")

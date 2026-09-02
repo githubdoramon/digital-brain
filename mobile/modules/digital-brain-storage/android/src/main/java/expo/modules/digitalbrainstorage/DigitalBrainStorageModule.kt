@@ -7,6 +7,8 @@ import expo.modules.kotlin.modules.ModuleDefinition
 import java.io.File
 import java.io.FileInputStream
 import java.io.InputStream
+import java.net.HttpURLConnection
+import java.net.URL
 
 /**
  * SAF only grants a selected tree, not a path prefix.  DocumentFile is the
@@ -41,6 +43,42 @@ class DigitalBrainStorageModule : Module() {
       "content" -> context().contentResolver.openAssetFileDescriptor(uri, "r")?.use { it.length } ?: -1L
       "file" -> uri.path?.let { File(it).length() } ?: -1L
       else -> File(sourceUri).length()
+    }
+  }
+
+  private fun skipFully(input: InputStream, offset: Long) {
+    var remaining = offset
+    val buffer = ByteArray(64 * 1024)
+    while (remaining > 0) {
+      val skipped = input.skip(remaining)
+      if (skipped > 0) {
+        remaining -= skipped
+      } else {
+        val read = input.read(buffer, 0, minOf(buffer.size.toLong(), remaining).toInt())
+        check(read > 0) { "The source file ended before the requested upload range." }
+        remaining -= read.toLong()
+      }
+    }
+  }
+
+  private fun copyRange(input: InputStream, output: java.io.OutputStream, length: Long) {
+    var remaining = length
+    val buffer = ByteArray(64 * 1024)
+    while (remaining > 0) {
+      val read = input.read(buffer, 0, minOf(buffer.size.toLong(), remaining).toInt())
+      check(read > 0) { "The source file ended during the requested upload range." }
+      output.write(buffer, 0, read)
+      remaining -= read.toLong()
+    }
+  }
+
+  private fun responseSnippet(connection: HttpURLConnection): String {
+    val stream = if (connection.responseCode >= 400) connection.errorStream else connection.inputStream
+      ?: return ""
+    return stream.use { input ->
+      val buffer = ByteArray(4096)
+      val read = input.read(buffer)
+      if (read > 0) String(buffer, 0, read, Charsets.UTF_8) else ""
     }
   }
 
@@ -217,6 +255,43 @@ class DigitalBrainStorageModule : Module() {
       } catch (error: Throwable) {
         target.delete()
         throw error
+      }
+    }
+
+    AsyncFunction("uploadFileRange") {
+        url: String,
+        sourceUri: String,
+        offset: Double,
+        length: Double,
+        headers: Map<String, String>,
+      ->
+      val byteOffset = offset.toLong()
+      val byteLength = length.toLong()
+      require(byteOffset >= 0 && byteLength > 0) { "Upload range must be positive." }
+      val sourceBytes = sourceLength(sourceUri)
+      require(sourceBytes < 0 || sourceBytes >= byteOffset + byteLength) {
+        "Upload range exceeds the source file."
+      }
+
+      val connection = (URL(url).openConnection() as HttpURLConnection)
+      try {
+        connection.requestMethod = "PUT"
+        connection.doOutput = true
+        connection.connectTimeout = 30_000
+        connection.readTimeout = 90_000
+        connection.setFixedLengthStreamingMode(byteLength)
+        headers.forEach { (name, value) -> connection.setRequestProperty(name, value) }
+        connection.setRequestProperty("Content-Type", "application/octet-stream")
+        openSource(sourceUri).use { input ->
+          skipFully(input, byteOffset)
+          connection.outputStream.use { output ->
+            copyRange(input, output, byteLength)
+            output.flush()
+          }
+        }
+        mapOf("status" to connection.responseCode, "body" to responseSnippet(connection))
+      } finally {
+        connection.disconnect()
       }
     }
   }

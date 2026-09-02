@@ -43,7 +43,7 @@ export class LocalTranscriptionError extends Error {
   }
 }
 
-const MODEL_FILE_NAME = 'ggml-small.en.bin';
+const MODEL_FILE_NAME = 'ggml-base.en.bin';
 const MODEL_URL = `https://huggingface.co/ggerganov/whisper.cpp/resolve/main/${MODEL_FILE_NAME}`;
 const MODEL_DIRECTORY = `${FileSystem.documentDirectory ?? FileSystem.cacheDirectory}whisper/`;
 const MODEL_FILE_URI = `${MODEL_DIRECTORY}${MODEL_FILE_NAME}`;

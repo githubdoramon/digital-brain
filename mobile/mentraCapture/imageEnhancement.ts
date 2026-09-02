@@ -54,9 +54,12 @@ const MIN_INTERVAL_MINUTES = 1;
 const MAX_INTERVAL_MINUTES = 24 * 60;
 const MAX_QUEUE_ITEMS = 16;
 const SCHEDULER_TICK_MS = 15_000;
-const MAX_QUEUE_ATTEMPTS = 4;
+// A failed native generation can leave ExecuTorch finishing its cleanup in the
+// background. Retrying that same image over and over only builds a hidden
+// serialization backlog and prevents newer captures from being analysed.
+const MAX_QUEUE_ATTEMPTS = 2;
 const PHOTO_REQUEST_TIMEOUT_MS = 60_000;
-const ENHANCEMENT_TIMEOUT_MS = 120_000;
+const ENHANCEMENT_TIMEOUT_MS = 180_000;
 
 export type ImageEnhancementSchedule = {
   id: string;
@@ -77,6 +80,10 @@ export type ImageEnhancementStatus = ImageEnhancementConfig & {
   lastError: string | null;
   captureCount: number;
   skippedOverlapCount: number;
+  /** Camera requests waiting to be sent to the glasses. */
+  captureQueueCount: number;
+  /** Durable photos waiting for the serialized local analysis pipeline. */
+  enhancementQueueCount: number;
   queuedCount: number;
   failedQueueCount: number;
 };
@@ -166,6 +173,8 @@ const defaultStatus: ImageEnhancementStatus = {
   lastError: null,
   captureCount: 0,
   skippedOverlapCount: 0,
+  captureQueueCount: 0,
+  enhancementQueueCount: 0,
   queuedCount: 0,
   failedQueueCount: 0,
 };
@@ -351,6 +360,8 @@ async function loadStatus(): Promise<void> {
       schedules: config.schedules,
       running: false,
       lastError: typeof parsed.lastError === 'string' ? parsed.lastError : null,
+      captureQueueCount: 0,
+      enhancementQueueCount: 0,
       queuedCount: 0,
       failedQueueCount: 0,
     };
@@ -433,7 +444,17 @@ async function loadEnhancementQueue(): Promise<void> {
               nextAttemptAt: typeof item.nextAttemptAt === 'string' ? item.nextAttemptAt : null,
             }),
           )
-          .filter((item) => item.id && item.capturedAt && item.localUri && item.bytes > 0);
+          .filter(
+            (item) =>
+              item.id &&
+              item.capturedAt &&
+              item.localUri &&
+              item.bytes > 0 &&
+              // Older builds retried timeout jobs four times. Those source
+              // files stay in Image Pipeline Temp, but they must not keep
+              // blocking fresh captures after an upgrade.
+              item.attempts < MAX_QUEUE_ATTEMPTS,
+          );
       } catch {
         enhancementQueue = [];
       }
@@ -502,6 +523,8 @@ function updateQueueStatus(): void {
     .filter((value): value is string => Boolean(value));
   const nextCaptureAt = [...nextRunTimes, ...nextQueuedRetry].sort()[0] ?? null;
   publish({
+    captureQueueCount: captureQueue.length,
+    enhancementQueueCount: enhancementQueue.length,
     queuedCount: captureQueue.length + enhancementQueue.length,
     nextCaptureAt: config.enabled ? nextCaptureAt : null,
   });
@@ -1408,6 +1431,8 @@ export async function setImageEnhancementEnabled(enabled: boolean): Promise<void
     enabled,
     running: enabled ? status.running : false,
     nextCaptureAt: null,
+    captureQueueCount: captureQueue.length,
+    enhancementQueueCount: enhancementQueue.length,
     queuedCount: captureQueue.length,
     lastError: null,
   });

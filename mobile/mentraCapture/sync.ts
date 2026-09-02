@@ -1,7 +1,7 @@
 import * as FileSystem from 'expo-file-system/legacy';
 import { Platform } from 'react-native';
 
-import { apiFetch, getAuthRequestContext } from '@/api/client';
+import { API_BASE_URL, apiFetch, getAuthRequestContext } from '@/api/client';
 import { getStoredGoogleIdToken, refreshStoredGoogleIdToken } from '@/auth/backgroundToken';
 import { reportLocationDebugEvent } from '@/location/debugState';
 
@@ -17,17 +17,22 @@ import {
   releaseGlassesNetwork,
 } from './sdk';
 import {
+  copyToDigitalBrainStorage,
+  DigitalBrainStorageFolder,
+  getDigitalBrainStorageBaseUri,
+} from '@/storage/digitalBrainStorage';
+import {
   deleteLocalCapture,
   ensurePrivateCaptureDirectory,
-  getCaptureFolderUri,
   getLocalCaptureInfo,
   loadCaptureQueue,
-  normalizeSafDirectoryUri,
+  movePendingCapturesToSharedFolder,
   privateCapturePath,
   saveCaptureQueue,
 } from './storage';
 import type { CaptureQueueEntry, CaptureSyncStatus, RemoteCapture } from './types';
 import { resolveCaptureLocation } from './location';
+import DigitalBrainStorageNative from '@/modules/digital-brain-storage/src';
 
 type SyncListener = (status: CaptureSyncStatus) => void;
 let status: CaptureSyncStatus = {
@@ -43,6 +48,11 @@ let status: CaptureSyncStatus = {
 const listeners = new Set<SyncListener>();
 let activeSync: Promise<void> | null = null;
 let hotspotOpenedBySync = false;
+// Keep each request below the existing 10 MiB client-proxy ceiling with space
+// for headers. Large videos use the same backend, just one bounded range at a
+// time rather than one monolithic multipart body.
+const CHUNKED_UPLOAD_THRESHOLD_BYTES = 8 * 1024 * 1024;
+const DEFAULT_UPLOAD_CHUNK_BYTES = 6 * 1024 * 1024;
 
 function publish(next: Partial<CaptureSyncStatus>): void {
   status = { ...status, ...next };
@@ -61,6 +71,9 @@ function debugCaptureStage(
 
 function safeCaptureErrorMessage(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error);
+  if (/\b413\b[\s\S]{0,80}payload too large|payload too large[\s\S]{0,80}\b413\b/i.test(message)) {
+    return 'Upload rejected because this video exceeds the upstream size limit. It remains retained locally and other captures can continue syncing.';
+  }
   // Android SAF exceptions often include the complete content URI. Keep the
   // status actionable without surfacing provider paths in the UI/diagnostics.
   return message.replace(/content:\/\/\S+/g, '[selected-folder-access]').slice(0, 240);
@@ -221,56 +234,33 @@ async function downloadToPhone(remote: RemoteCapture): Promise<string> {
   if (remote.sizeBytes != null && downloaded.size !== remote.sizeBytes) {
     throw new Error(`Downloaded media size mismatch (${downloaded.size}/${remote.sizeBytes})`);
   }
-  const storedFolder = await getCaptureFolderUri();
-  const folder = storedFolder ? normalizeSafDirectoryUri(storedFolder) : null;
-  if (folder) {
-    let visibleTarget: string | null = null;
+  // First make the local copy durable in app storage. The shared Documents
+  // copy is for visibility and recovery, but a document-provider failure must
+  // never leave this capture only in a transient cache file.
+  const privateTarget = privateCapturePath(remote.fileName);
+  await FileSystem.deleteAsync(privateTarget, { idempotent: true });
+  await FileSystem.moveAsync({ from: temporary, to: privateTarget });
+
+  if (await getDigitalBrainStorageBaseUri()) {
     try {
       const visibleName = `${remote.captureId.replace(/[^a-zA-Z0-9._-]/g, '_')}-${mediaLeafName(remote.fileName)}`;
-      const existing = (
-        await FileSystem.StorageAccessFramework.readDirectoryAsync(folder).catch(() => [])
-      ).find((uri) => decodeURIComponent(uri).endsWith(`/${visibleName}`));
-      if (existing) {
-        const existingInfo = await getLocalCaptureInfo(existing);
-        if (existingInfo.exists && existingInfo.size === downloaded.size) {
-          await deleteLocalCapture(temporary);
-          return existing;
-        }
-        await deleteLocalCapture(existing);
-      }
-      visibleTarget = await FileSystem.StorageAccessFramework.createFileAsync(
-        folder,
-        // v3 folder-based captures use names such as IMG_xxx/base.jpg. SAF creates a
-        // single child and rejects a slash, so retain the extension while making the
-        // visible name deterministic and collision-resistant.
+      const visibleTarget = await copyToDigitalBrainStorage(
+        privateTarget,
+        DigitalBrainStorageFolder.GlassesCaptureQueue,
         visibleName,
         remote.mimeType,
+        { skipIfSameSize: true },
       );
-      // copyAsync keeps the transfer native and bounded for videos. It also avoids a partially
-      // transferred JS string if the media is larger than the app's heap budget.
-      await FileSystem.copyAsync({ from: temporary, to: visibleTarget });
-      const visible = await getLocalCaptureInfo(visibleTarget);
-      if (!visible.exists || visible.size !== downloaded.size) {
-        throw new Error('Visible capture copy failed validation');
-      }
-      await deleteLocalCapture(temporary);
+      await deleteLocalCapture(privateTarget);
       return visibleTarget;
     } catch {
-      // A persisted SAF grant can expire or Android can reject a nested tree URI
-      // even though the folder was previously selected. Never let the optional
-      // Files-app copy block acknowledgement and Immich upload: retain the media
-      // in the app-private queue and continue the durable sync flow.
-      if (visibleTarget) await deleteLocalCapture(visibleTarget).catch(() => undefined);
       debugCaptureStage(
         'glasses_capture_visible_copy_unavailable',
-        'Documents-folder copy unavailable; using app-private queue.',
+        'Documents-folder copy unavailable; retaining the capture in the app-private queue.',
       );
     }
   }
-  const target = privateCapturePath(remote.fileName);
-  await FileSystem.deleteAsync(target, { idempotent: true });
-  await FileSystem.moveAsync({ from: temporary, to: target });
-  return target;
+  return privateTarget;
 }
 
 async function acknowledgeCapture(baseUrl: string, entry: CaptureQueueEntry): Promise<void> {
@@ -356,6 +346,13 @@ async function uploadCapture(entry: CaptureQueueEntry): Promise<string> {
       { capture_id: entry.captureId },
     );
   }
+  if (info.size > CHUNKED_UPLOAD_THRESHOLD_BYTES) {
+    return uploadCaptureInChunks(entry, info.size, location, token, async () => {
+      token = await refreshStoredGoogleIdToken();
+      return token;
+    });
+  }
+
   const form = new FormData();
   form.append('capture_id', entry.captureId);
   if (entry.capturedAt) form.append('captured_at', entry.capturedAt);
@@ -377,10 +374,110 @@ async function uploadCapture(entry: CaptureQueueEntry): Promise<string> {
   return String(response?.capture?.immich_asset_id ?? '');
 }
 
+type UploadLocation = NonNullable<CaptureQueueEntry['location']> | null;
+
+function uploadSessionUrl(sessionId: string, suffix = ''): string {
+  return `${API_BASE_URL.replace(/\/$/, '')}/mobile/glasses/captures/upload-sessions/${encodeURIComponent(sessionId)}${suffix}`;
+}
+
+async function uploadCaptureInChunks(
+  entry: CaptureQueueEntry,
+  sizeBytes: number,
+  location: UploadLocation,
+  initialToken: string,
+  refreshToken: () => Promise<string | null>,
+): Promise<string> {
+  if (!entry.localUri) throw new Error('Local media path is missing');
+  if (!DigitalBrainStorageNative) {
+    throw new Error('Large capture upload needs an Android rebuild.');
+  }
+  const nativeStorage = DigitalBrainStorageNative;
+  let token = initialToken;
+  const session = (await apiFetch('/mobile/glasses/captures/upload-sessions', {
+    method: 'POST',
+    body: JSON.stringify({
+      capture_id: entry.captureId,
+      filename: mediaLeafName(entry.fileName),
+      mime_type: entry.mimeType,
+      captured_at: entry.capturedAt,
+      location: location ?? {},
+      size_bytes: sizeBytes,
+    }),
+    token,
+    onAuthExpired: async () => {
+      const refreshed = await refreshToken();
+      if (refreshed) token = refreshed;
+      return refreshed;
+    },
+  })) as { session_id?: string; chunk_size_bytes?: number };
+  const sessionId = String(session.session_id ?? '');
+  if (!sessionId) throw new Error('Backend did not create an upload session');
+  const chunkSize = Math.min(
+    DEFAULT_UPLOAD_CHUNK_BYTES,
+    Number(session.chunk_size_bytes) || DEFAULT_UPLOAD_CHUNK_BYTES,
+  );
+
+  debugCaptureStage(
+    'glasses_capture_chunked_upload_started',
+    'Uploading a large capture to the backend in bounded ranges.',
+    { capture_id: entry.captureId, size_bytes: sizeBytes, chunk_size_bytes: chunkSize },
+  );
+  for (let offset = 0; offset < sizeBytes; offset += chunkSize) {
+    const length = Math.min(chunkSize, sizeBytes - offset);
+    const send = async (): Promise<{ status: number; body: string }> =>
+      nativeStorage.uploadFileRange(
+        uploadSessionUrl(sessionId, '/chunk'),
+        entry.localUri!,
+        offset,
+        length,
+        {
+          Authorization: `Bearer ${token}`,
+          'X-Upload-Offset': String(offset),
+          'X-Upload-Total': String(sizeBytes),
+        },
+      );
+    let result = await send();
+    if (result.status === 401) {
+      const refreshed = await refreshToken();
+      if (!refreshed) throw new Error('Authentication expired during capture upload');
+      token = refreshed;
+      result = await send();
+    }
+    if (result.status < 200 || result.status >= 300) {
+      throw new Error(
+        `Upload range ${offset}-${offset + length} failed (${result.status}): ${result.body.slice(0, 160)}`,
+      );
+    }
+    debugCaptureStage(
+      'glasses_capture_chunked_upload_progress',
+      'Uploaded a bounded capture range to the backend.',
+      { capture_id: entry.captureId, uploaded_bytes: offset + length, size_bytes: sizeBytes },
+    );
+  }
+  const response = (await apiFetch(`/mobile/glasses/captures/upload-sessions/${encodeURIComponent(sessionId)}/complete`, {
+    method: 'POST',
+    token,
+    onAuthExpired: async () => {
+      const refreshed = await refreshToken();
+      if (refreshed) token = refreshed;
+      return refreshed;
+    },
+  })) as any;
+  return String(response?.capture?.immich_asset_id ?? '');
+}
+
 async function runSync(): Promise<void> {
   debugCaptureStage('glasses_capture_sync_starting', 'Starting glasses capture reconciliation.');
   if (Platform.OS !== 'android')
     throw new Error('Glasses capture sync is Android-only in this release');
+  const migration = await movePendingCapturesToSharedFolder();
+  if (migration.moved || migration.failed) {
+    debugCaptureStage(
+      'glasses_capture_pending_media_migrated',
+      'Reconciled pending local captures with the Documents capture queue.',
+      { moved: migration.moved, failed: migration.failed },
+    );
+  }
   // A capture signal can arrive while the glasses camera is still busy. Reconnect/readiness is
   // safe here, but replaying gallery/photo/video settings during that camera transaction can
   // race the firmware and make a physical-button capture appear to do nothing. Defaults are

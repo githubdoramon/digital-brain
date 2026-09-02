@@ -29,9 +29,15 @@ Each capture is processed sequentially:
 4. Acknowledge it with `/api/v3/ack` when protocol v3 is available, otherwise
    use the legacy `/api/delete-files` endpoint. Mentra retains acknowledged
    captures in recoverable trash for its supported seven-day window.
-5. Upload through `/mobile/glasses/captures`. The backend uploads to Immich,
-   verifies the asset, finds or creates the exact `Ramon eyes capture` album,
-   and commits the capture ID/checksum record.
+5. Small media uploads through `/mobile/glasses/captures`. Larger media opens
+   an authenticated upload session and sends sequential bounded ranges to
+   `/mobile/glasses/captures/upload-sessions`; the backend validates and
+   reassembles those ranges in its persistent staging volume before using the
+   same Immich commit path. This keeps phone-to-backend requests below proxy
+   body limits without changing the original file or attempting a direct
+   phone-to-Immich upload. The backend then verifies the asset, finds or
+   creates the exact `Ramon eyes capture` album, and commits the
+   capture ID/checksum record.
 6. Delete the phone copy only after that backend confirmation.
 
 Before upload, the app resolves the nearest phone location sample within a

@@ -27,6 +27,17 @@ type MomentQueueEntry = {
   created_at: string;
 };
 
+type MomentWirePayload = Pick<
+  MomentQueueEntry,
+  | 'id'
+  | 'source_type'
+  | 'observed_at'
+  | 'observed_timezone'
+  | 'observed_utc_offset_minutes'
+  | 'observation'
+  | 'location'
+>;
+
 let queue: MomentQueueEntry[] | null = null;
 let drainInFlight: Promise<MomentDrainResult> | null = null;
 
@@ -66,6 +77,29 @@ function localTimeContext(observedAt: string): Pick<
     observed_timezone: timezone,
     observed_utc_offset_minutes: -date.getTimezoneOffset(),
   };
+}
+
+function toMomentWirePayload(entry: MomentQueueEntry): MomentWirePayload {
+  // Queue bookkeeping is intentionally local. The Moments API has a strict
+  // schema and must receive only the durable, system-meaningful fields.
+  return {
+    id: entry.id,
+    source_type: entry.source_type,
+    observed_at: entry.observed_at,
+    observed_timezone: entry.observed_timezone,
+    observed_utc_offset_minutes: entry.observed_utc_offset_minutes,
+    observation: entry.observation,
+    location: entry.location,
+  };
+}
+
+function rejectionDetail(value: unknown): string {
+  if (typeof value === 'string') return value;
+  try {
+    return JSON.stringify(value).slice(0, 1_000);
+  } catch {
+    return 'rejected';
+  }
 }
 
 async function loadQueue(): Promise<MomentQueueEntry[]> {
@@ -153,7 +187,7 @@ export async function drainQueuedMoments(trigger: string): Promise<MomentDrainRe
         method: 'POST',
         token,
         onAuthExpired: refreshStoredGoogleIdToken,
-        body: JSON.stringify({ moments: batch }),
+        body: JSON.stringify({ moments: batch.map(toMomentWirePayload) }),
       })) as { results?: { id?: string; status?: string; detail?: unknown }[] };
       const accepted = new Set(
         (response.results ?? [])
@@ -164,7 +198,7 @@ export async function drainQueuedMoments(trigger: string): Promise<MomentDrainRe
       const rejected = new Map(
         (response.results ?? [])
           .filter((result) => result.status === 'rejected' && result.id)
-          .map((result) => [result.id as string, String(result.detail ?? 'rejected')]),
+          .map((result) => [result.id as string, rejectionDetail(result.detail ?? 'rejected')]),
       );
       queue = entries
         .filter((entry) => !accepted.has(entry.id))

@@ -3,7 +3,9 @@ import * as FileSystem from 'expo-file-system/legacy';
 
 import type { CaptureQueueEntry } from './types';
 import {
+  copyToDigitalBrainStorage,
   DigitalBrainStorageFolder,
+  getDigitalBrainStorageBaseUri,
   getDigitalBrainStorageFolder,
 } from '@/storage/digitalBrainStorage';
 
@@ -126,54 +128,30 @@ export async function getLocalCaptureInfo(uri: string): Promise<{ exists: boolea
  * selected after a failed upload: retrying the upload must not leave those files
  * stranded in app-private storage where Android's Files app cannot show them.
  */
-export async function movePendingCapturesToFolder(
-  folderUri: string,
+export async function movePendingCapturesToSharedFolder(
 ): Promise<{ moved: number; failed: number }> {
-  folderUri = normalizeSafDirectoryUri(folderUri);
+  if (!(await getDigitalBrainStorageBaseUri())) return { moved: 0, failed: 0 };
   let queue = await loadCaptureQueue();
   let moved = 0;
   let failed = 0;
 
   for (const entry of queue) {
     if (!entry.localUri || entry.state === 'missing' || entry.state === 'uploaded') continue;
+    // A previous successful migration already points at the Documents copy.
+    if (entry.localUri.startsWith('content://')) continue;
     const source = entry.localUri;
     const sourceInfo = await getLocalCaptureInfo(source);
     if (!sourceInfo.exists || sourceInfo.size <= 0) continue;
 
     const name = visibleCaptureName(entry);
-    let createdTarget: string | null = null;
     try {
-      const children = await FileSystem.StorageAccessFramework.readDirectoryAsync(folderUri).catch(
-        () => [],
-      );
-      let target = children.find((uri) => decodeURIComponent(uri).endsWith(`/${name}`)) ?? null;
-      if (target) {
-        const targetInfo = await getLocalCaptureInfo(target);
-        if (targetInfo.exists && targetInfo.size === sourceInfo.size) {
-          await deleteLocalCapture(source);
-          queue = queue.map((item) =>
-            item.captureId === entry.captureId && item.fileName === entry.fileName
-              ? { ...item, localUri: target, updatedAt: new Date().toISOString() }
-              : item,
-          );
-          moved += 1;
-          continue;
-        }
-        await deleteLocalCapture(target);
-        target = null;
-      }
-
-      target = await FileSystem.StorageAccessFramework.createFileAsync(
-        folderUri,
+      const target = await copyToDigitalBrainStorage(
+        source,
+        DigitalBrainStorageFolder.GlassesCaptureQueue,
         name,
         entry.mimeType,
+        { skipIfSameSize: true },
       );
-      createdTarget = target;
-      await FileSystem.copyAsync({ from: source, to: target });
-      const targetInfo = await getLocalCaptureInfo(target);
-      if (!targetInfo.exists || targetInfo.size !== sourceInfo.size) {
-        throw new Error('Visible capture copy failed validation');
-      }
       await deleteLocalCapture(source);
       queue = queue.map((item) =>
         item.captureId === entry.captureId && item.fileName === entry.fileName
@@ -183,7 +161,6 @@ export async function movePendingCapturesToFolder(
       moved += 1;
     } catch {
       failed += 1;
-      if (createdTarget) await deleteLocalCapture(createdTarget).catch(() => undefined);
     }
   }
 

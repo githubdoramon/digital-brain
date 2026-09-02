@@ -16,6 +16,13 @@ type DigitalBrainStorageNativeModule = {
     mimeType: string,
     skipIfSameSize: boolean,
   ): Promise<{ uri: string; name: string; bytes: number; reused: boolean }>;
+  uploadFileRange(
+    url: string,
+    sourceUri: string,
+    offset: number,
+    length: number,
+    headers: Record<string, string>,
+  ): Promise<{ status: number; body: string }>;
 };
 
 export default requireOptionalNativeModule<DigitalBrainStorageNativeModule>('DigitalBrainStorage');
