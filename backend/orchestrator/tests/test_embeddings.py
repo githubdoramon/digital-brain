@@ -31,13 +31,13 @@ def test_embed_text_uses_embed_endpoint_with_token_truncate(monkeypatch):
         captured["timeout"] = timeout
         return FakeResponse()
 
-    monkeypatch.setattr(embeddings, "OLLAMA_EMBED_MAX_INPUT_TOKENS", 8192)
+    monkeypatch.setattr(embeddings, "EMBED_MAX_INPUT_TOKENS", 8192)
     monkeypatch.setattr(embeddings.requests, "post", fake_post)
 
     output = embeddings.embed_text("123456789")
 
     assert output == [0.1, 0.2]
-    assert captured["url"].endswith("/api/embed")
+    assert captured["url"].endswith("/embed")
     assert captured["json"]["input"] == "123456789"
     assert captured["json"]["truncate"] is True
     assert captured["json"]["options"] == {"num_ctx": 8192}
@@ -59,24 +59,24 @@ def test_embed_text_falls_back_to_legacy_endpoint(monkeypatch):
 
     def fake_post(url: str, json: dict[str, Any], timeout: int) -> FakeResponse:
         calls.append((url, json))
-        if url.endswith("/api/embed"):
+        if url.endswith("/embed"):
             return FakeResponse(404, {})
         return FakeResponse(200, {"embedding": [0.9]})
 
-    monkeypatch.setattr(embeddings, "OLLAMA_EMBED_MAX_INPUT_BYTES", 5)
+    monkeypatch.setattr(embeddings, "EMBED_MAX_INPUT_BYTES", 5)
     monkeypatch.setattr(embeddings.requests, "post", fake_post)
 
     output = embeddings.embed_text("123456789")
 
     assert output == [0.9]
-    assert calls[0][0].endswith("/api/embed")
-    assert calls[1][0].endswith("/api/embeddings")
+    assert calls[0][0].endswith("/embed")
+    assert calls[1][0].endswith("/embeddings")
     assert calls[1][1]["prompt"] == "12345"
 
 
 def test_embed_text_returns_zero_vector_for_empty(monkeypatch):
     monkeypatch.setattr(embeddings, "EMBED_DIM", 4)
-    monkeypatch.setattr(embeddings, "OLLAMA_EMBED_MAX_INPUT_TOKENS", 8192)
+    monkeypatch.setattr(embeddings, "EMBED_MAX_INPUT_TOKENS", 8192)
 
     output = embeddings.embed_text("   ")
 
