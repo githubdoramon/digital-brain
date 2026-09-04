@@ -53,7 +53,7 @@ def _extract_embedding(data: dict[str, Any]) -> list[float] | None:
 
 
 def _embed_text_with_legacy_endpoint(text: str) -> list[float]:
-    fallback_text = _truncate_utf8_bytes(text, OLLAMA_EMBED_MAX_INPUT_BYTES)
+    fallback_text = _truncate_utf8_bytes(text, EMBED_MAX_INPUT_BYTES)
     if not fallback_text:
         return [0.0] * EMBED_DIM
 
