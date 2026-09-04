@@ -9,7 +9,7 @@ from observability.logger import get_runtime_logger
 
 logger = get_runtime_logger(__name__)
 
-EMBEDDINGS_HOST = os.getenv("EMBEDDINGS_HOST", "http://localhost:11434")
+EMBEDDINGS_HOST = os.getenv("EMBEDDINGS_HOST", "http://localhost:8080")
 EMBEDDINGS_MODEL = os.getenv("EMBEDDINGS_MODEL", "nomic-embed-text")
 EMBEDDINGS_API_KEY = os.getenv("EMBEDDINGS_API_KEY", "")
 EMBED_DIM = int(os.getenv("EMBEDDINGS_DIM", "768"))
@@ -26,6 +26,11 @@ def get_embeddings_headers() -> dict[str, str]:
     if api_key:
         headers["Authorization"] = f"Bearer {api_key}"
     return headers
+
+
+def _get_embeddings_base_url() -> str:
+    host = EMBEDDINGS_HOST.rstrip("/")
+    return host if host.endswith("/v1") else f"{host}/v1"
 
 
 def _truncate_utf8_bytes(text: str, max_bytes: int) -> str:
@@ -59,26 +64,16 @@ def _extract_embedding(data: dict[str, Any]) -> list[float] | None:
     legacy_embedding = data.get("embedding")
     if isinstance(legacy_embedding, list) and legacy_embedding:
         return [float(value) for value in legacy_embedding]
+
+    # llama.cpp's OpenAI-compatible endpoint returns {"data": [{"embedding": [...]}]}.
+    response_data = data.get("data")
+    if isinstance(response_data, list) and response_data:
+        first_result = response_data[0]
+        if isinstance(first_result, dict):
+            embedding = first_result.get("embedding")
+            if isinstance(embedding, list) and embedding:
+                return [float(value) for value in embedding]
     return None
-
-
-def _embed_text_with_legacy_endpoint(text: str) -> list[float]:
-    fallback_text = _truncate_utf8_bytes(text, EMBED_MAX_INPUT_BYTES)
-    if not fallback_text:
-        return [0.0] * EMBED_DIM
-
-    response = requests.post(
-        f"{EMBEDDINGS_HOST}/embeddings",
-        headers=get_embeddings_headers(),
-        json={"model": EMBEDDINGS_MODEL, "prompt": fallback_text},
-        timeout=30,
-    )
-    response.raise_for_status()
-    data = response.json()
-    embedding = _extract_embedding(data)
-    if embedding:
-        return embedding
-    raise RuntimeError(f"Ollama embeddings response missing data: {data}")
 
 
 def embed_text(text: str) -> list[float]:
@@ -94,22 +89,17 @@ def embed_text(text: str) -> list[float]:
 
     def _post_embed(payload_text: str) -> requests.Response:
         return requests.post(
-            f"{EMBEDDINGS_HOST}/embed",
+            f"{_get_embeddings_base_url()}/embeddings",
             headers=get_embeddings_headers(),
             json={
                 "model": EMBEDDINGS_MODEL,
                 "input": payload_text,
-                "truncate": True,
-                "options": {"num_ctx": EMBED_MAX_INPUT_TOKENS},
+                "encoding_format": "float",
             },
             timeout=30,
         )
 
     response = _post_embed(input_text)
-
-    if response.status_code == 404:
-        logger.warning("[embeddings] /embed not available; using legacy /embeddings")
-        return _embed_text_with_legacy_endpoint(input_text)
 
     if response.status_code >= 400:
         body = (response.text or "").strip()
@@ -136,9 +126,6 @@ def embed_text(text: str) -> list[float]:
                     reduced_bytes,
                 )
                 retry_response = _post_embed(reduced)
-                if retry_response.status_code == 404:
-                    _adaptive_max_input_bytes = min(_adaptive_max_input_bytes, reduced_bytes)
-                    return _embed_text_with_legacy_endpoint(reduced)
                 if retry_response.status_code >= 400:
                     retry_body = (retry_response.text or "").strip()
                     logger.warning(
@@ -157,11 +144,10 @@ def embed_text(text: str) -> list[float]:
                             _adaptive_max_input_bytes,
                         )
                     return retry_embedding
-            return _embed_text_with_legacy_endpoint(input_text)
         response.raise_for_status()
 
     data = response.json()
     embedding = _extract_embedding(data)
     if embedding:
         return embedding
-    raise RuntimeError(f"Ollama embed response missing data: {data}")
+    raise RuntimeError(f"Embedding response missing data: {data}")

@@ -28,7 +28,7 @@ def test_truncate_utf8_bytes_preserves_valid_utf8():
     assert embeddings._truncate_utf8_bytes(text, 8) == "abc€é"
 
 
-def test_embed_text_uses_embed_endpoint_with_token_truncate(monkeypatch):
+def test_embed_text_uses_llama_cpp_v1_embeddings_endpoint(monkeypatch):
     captured: dict[str, Any] = {}
 
     class FakeResponse:
@@ -38,7 +38,7 @@ def test_embed_text_uses_embed_endpoint_with_token_truncate(monkeypatch):
             return None
 
         def json(self) -> dict[str, Any]:
-            return {"embeddings": [[0.1, 0.2]]}
+            return {"data": [{"embedding": [0.1, 0.2]}]}
 
     def fake_post(
         url: str, headers: dict[str, str], json: dict[str, Any], timeout: int
@@ -50,7 +50,7 @@ def test_embed_text_uses_embed_endpoint_with_token_truncate(monkeypatch):
         return FakeResponse()
 
     monkeypatch.setenv("EMBEDDINGS_API_KEY", "embedding-secret")
-    monkeypatch.setattr(embeddings, "EMBED_MAX_INPUT_TOKENS", 8192)
+    monkeypatch.setattr(embeddings, "EMBEDDINGS_HOST", "http://llama:8080")
     monkeypatch.setattr(embeddings.requests, "post", fake_post)
 
     output = embeddings.embed_text("123456789")
@@ -60,14 +60,17 @@ def test_embed_text_uses_embed_endpoint_with_token_truncate(monkeypatch):
         "Content-Type": "application/json",
         "Authorization": "Bearer embedding-secret",
     }
-    assert captured["url"].endswith("/embed")
+    assert captured["url"] == "http://llama:8080/v1/embeddings"
     assert captured["json"]["input"] == "123456789"
-    assert captured["json"]["truncate"] is True
-    assert captured["json"]["options"] == {"num_ctx": 8192}
+    assert captured["json"] == {
+        "model": embeddings.EMBEDDINGS_MODEL,
+        "input": "123456789",
+        "encoding_format": "float",
+    }
 
 
-def test_embed_text_falls_back_to_legacy_endpoint(monkeypatch):
-    calls: list[tuple[str, dict[str, Any]]] = []
+def test_embed_text_does_not_duplicate_v1_host_suffix(monkeypatch):
+    calls: list[tuple[str, dict[str, str], dict[str, Any]]] = []
 
     class FakeResponse:
         def __init__(self, status_code: int, payload: dict[str, Any]):
@@ -84,22 +87,17 @@ def test_embed_text_falls_back_to_legacy_endpoint(monkeypatch):
         url: str, headers: dict[str, str], json: dict[str, Any], timeout: int
     ) -> FakeResponse:
         calls.append((url, headers, json))
-        if url.endswith("/embed"):
-            return FakeResponse(404, {})
-        return FakeResponse(200, {"embedding": [0.9]})
+        return FakeResponse(200, {"data": [{"embedding": [0.9]}]})
 
     monkeypatch.setenv("EMBEDDINGS_API_KEY", "embedding-secret")
-    monkeypatch.setattr(embeddings, "EMBED_MAX_INPUT_BYTES", 5)
+    monkeypatch.setattr(embeddings, "EMBEDDINGS_HOST", "http://llama:8080/v1/")
     monkeypatch.setattr(embeddings.requests, "post", fake_post)
 
     output = embeddings.embed_text("123456789")
 
     assert output == [0.9]
-    assert calls[0][0].endswith("/embed")
+    assert calls[0][0] == "http://llama:8080/v1/embeddings"
     assert calls[0][1]["Authorization"] == "Bearer embedding-secret"
-    assert calls[1][0].endswith("/embeddings")
-    assert calls[1][1]["Authorization"] == "Bearer embedding-secret"
-    assert calls[1][2]["prompt"] == "12345"
 
 
 def test_embed_text_returns_zero_vector_for_empty(monkeypatch):
