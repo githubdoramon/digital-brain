@@ -25,6 +25,7 @@ import {
   deleteLocalCapture,
   ensurePrivateCaptureDirectory,
   getLocalCaptureInfo,
+  importVisibleCaptureQueueEntries,
   loadCaptureQueue,
   movePendingCapturesToSharedFolder,
   privateCapturePath,
@@ -48,11 +49,29 @@ let status: CaptureSyncStatus = {
 const listeners = new Set<SyncListener>();
 let activeSync: Promise<void> | null = null;
 let hotspotOpenedBySync = false;
-// Keep each request below the existing 10 MiB client-proxy ceiling with space
-// for headers. Large videos use the same backend, just one bounded range at a
-// time rather than one monolithic multipart body.
-const CHUNKED_UPLOAD_THRESHOLD_BYTES = 8 * 1024 * 1024;
-const DEFAULT_UPLOAD_CHUNK_BYTES = 6 * 1024 * 1024;
+// Every capture uses the same bounded transport. This deliberately avoids
+// guessing which intermediate proxy limit applies to a specific deployment.
+// The resumable session endpoint keeps every request well below the upstream
+// body limit. Eight MiB reduces per-chunk HTTP overhead without reintroducing
+// the old monolithic-upload failure mode.
+const DEFAULT_UPLOAD_CHUNK_BYTES = 8 * 1024 * 1024;
+const GLASSES_CONNECTION_TIMEOUT_MS = 30_000;
+
+function withTimeout<T>(operation: Promise<T>, timeoutMs: number, message: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(message)), timeoutMs);
+    operation.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (error) => {
+        clearTimeout(timer);
+        reject(error);
+      },
+    );
+  });
+}
 
 function publish(next: Partial<CaptureSyncStatus>): void {
   status = { ...status, ...next };
@@ -251,8 +270,11 @@ async function downloadToPhone(remote: RemoteCapture): Promise<string> {
         remote.mimeType,
         { skipIfSameSize: true },
       );
-      await deleteLocalCapture(privateTarget);
-      return visibleTarget;
+      // Keep the app-private file as the canonical upload source. The visible
+      // Documents copy is deliberately a mirror, because SAF content URIs are
+      // not interchangeable with Expo's file URI APIs across app lifecycles.
+      void visibleTarget;
+      return privateTarget;
     } catch {
       debugCaptureStage(
         'glasses_capture_visible_copy_unavailable',
@@ -346,32 +368,10 @@ async function uploadCapture(entry: CaptureQueueEntry): Promise<string> {
       { capture_id: entry.captureId },
     );
   }
-  if (info.size > CHUNKED_UPLOAD_THRESHOLD_BYTES) {
-    return uploadCaptureInChunks(entry, info.size, location, token, async () => {
-      token = await refreshStoredGoogleIdToken();
-      return token;
-    });
-  }
-
-  const form = new FormData();
-  form.append('capture_id', entry.captureId);
-  if (entry.capturedAt) form.append('captured_at', entry.capturedAt);
-  if (location) form.append('location', JSON.stringify(location));
-  form.append('file', {
-    uri: entry.localUri,
-    name: mediaLeafName(entry.fileName),
-    type: entry.mimeType,
-  } as unknown as Blob);
-  const response = (await apiFetch('/mobile/glasses/captures', {
-    method: 'POST',
-    body: form,
-    token,
-    onAuthExpired: async () => {
-      token = await refreshStoredGoogleIdToken();
-      return token;
-    },
-  })) as any;
-  return String(response?.capture?.immich_asset_id ?? '');
+  return uploadCaptureInChunks(entry, info.size, location, token, async () => {
+    token = await refreshStoredGoogleIdToken();
+    return token;
+  });
 }
 
 type UploadLocation = NonNullable<CaptureQueueEntry['location']> | null;
@@ -389,7 +389,7 @@ async function uploadCaptureInChunks(
 ): Promise<string> {
   if (!entry.localUri) throw new Error('Local media path is missing');
   if (!DigitalBrainStorageNative) {
-    throw new Error('Large capture upload needs an Android rebuild.');
+    throw new Error('Capture upload needs an Android rebuild.');
   }
   const nativeStorage = DigitalBrainStorageNative;
   let token = initialToken;
@@ -419,7 +419,7 @@ async function uploadCaptureInChunks(
 
   debugCaptureStage(
     'glasses_capture_chunked_upload_started',
-    'Uploading a large capture to the backend in bounded ranges.',
+    'Uploading a capture to the backend in bounded ranges.',
     { capture_id: entry.captureId, size_bytes: sizeBytes, chunk_size_bytes: chunkSize },
   );
   for (let offset = 0; offset < sizeBytes; offset += chunkSize) {
@@ -466,6 +466,80 @@ async function uploadCaptureInChunks(
   return String(response?.capture?.immich_asset_id ?? '');
 }
 
+/**
+ * Uploads media that has already crossed the glasses → phone durability
+ * boundary. This is deliberately independent of BLE, the camera server, and
+ * the glasses hotspot: a local, acknowledged file must never wait for those
+ * transports before it can reach the backend.
+ */
+async function drainLocalCaptureUploads(): Promise<void> {
+  const initialQueue = await loadCaptureQueue();
+  const eligible = initialQueue.filter(
+    (entry) =>
+      entry.uploadReady === true &&
+      Boolean(entry.localUri) &&
+      !['uploaded', 'missing'].includes(entry.state) &&
+      (!entry.nextRetryAt || Date.parse(entry.nextRetryAt) <= Date.now()),
+  );
+  debugCaptureStage('glasses_capture_local_upload_drain_started', 'Draining retained local captures.', {
+    eligible_count: eligible.length,
+  });
+  for (const initial of eligible) {
+    let entry = (await loadCaptureQueue()).find(
+      (item) => item.captureId === initial.captureId && item.fileName === initial.fileName,
+    );
+    if (!entry?.localUri || entry.uploadReady !== true) continue;
+    const localUri = entry.localUri;
+    try {
+      const local = await getLocalCaptureInfo(localUri);
+      if (!local.exists || local.size <= 0) throw new Error('Local capture was manually removed');
+      entry = { ...entry, state: 'uploading', updatedAt: new Date().toISOString() };
+      await saveCaptureQueue(
+        (await loadCaptureQueue()).map((item) =>
+          item.captureId === entry!.captureId && item.fileName === entry!.fileName ? entry! : item,
+        ),
+      );
+      debugCaptureStage('glasses_capture_backend_upload_started', 'Uploading retained local capture.', {
+        capture_id: entry.captureId,
+        kind: entry.kind,
+      });
+      const assetId = await uploadCapture(entry);
+      if (!assetId) throw new Error('Backend did not confirm an Immich asset');
+      await deleteLocalCapture(localUri);
+      await saveCaptureQueue(
+        (await loadCaptureQueue()).filter(
+          (item) => item.captureId !== entry!.captureId || item.fileName !== entry!.fileName,
+        ),
+      );
+      debugCaptureStage('glasses_capture_backend_upload_confirmed', 'Backend confirmed retained local capture.', {
+        capture_id: entry.captureId,
+        immich_asset_id: assetId,
+      });
+    } catch (error) {
+      const message = safeCaptureErrorMessage(error);
+      const attempts = entry.attempts + 1;
+      await saveCaptureQueue(
+        (await loadCaptureQueue()).map((item) =>
+          item.captureId === entry!.captureId && item.fileName === entry!.fileName
+            ? {
+                ...entry!,
+                state: message.includes('manually removed') ? 'missing' : 'failed',
+                attempts,
+                nextRetryAt: new Date(Date.now() + 15_000 * 2 ** Math.min(attempts, 8)).toISOString(),
+                lastError: message.slice(0, 240),
+                updatedAt: new Date().toISOString(),
+              }
+            : item,
+        ),
+      );
+      debugCaptureStage('glasses_capture_local_upload_failed', 'Retained local capture upload failed.', {
+        capture_id: entry.captureId,
+        error: message,
+      });
+    }
+  }
+}
+
 async function runSync(): Promise<void> {
   debugCaptureStage('glasses_capture_sync_starting', 'Starting glasses capture reconciliation.');
   if (Platform.OS !== 'android')
@@ -478,6 +552,13 @@ async function runSync(): Promise<void> {
       { moved: migration.moved, failed: migration.failed },
     );
   }
+  const imported = await importVisibleCaptureQueueEntries();
+  if (imported) {
+    debugCaptureStage('glasses_capture_visible_queue_imported', 'Imported retained Documents media into the upload queue.', {
+      imported_count: imported,
+    });
+  }
+  await drainLocalCaptureUploads();
   // A capture signal can arrive while the glasses camera is still busy. Reconnect/readiness is
   // safe here, but replaying gallery/photo/video settings during that camera transaction can
   // race the firmware and make a physical-button capture appear to do nothing. Defaults are
@@ -485,13 +566,21 @@ async function runSync(): Promise<void> {
   let connection: Awaited<ReturnType<typeof connectGalleryServer>> | null = null;
   let connectionError: string | null = null;
   try {
-    const connected = await ensureMentraConnection({ applyCaptureDefaults: false });
+    const connected = await withTimeout(
+      ensureMentraConnection({ applyCaptureDefaults: false }),
+      GLASSES_CONNECTION_TIMEOUT_MS,
+      'Glasses connection timed out; continuing with retained local captures.',
+    );
     if (!connected) {
       throw new Error(
         'No Mentra Live is paired. Open Settings → Glasses capture and pair the glasses.',
       );
     }
-    connection = await connectGalleryServer();
+    connection = await withTimeout(
+      connectGalleryServer(),
+      GLASSES_CONNECTION_TIMEOUT_MS,
+      'Glasses gallery connection timed out; continuing with retained local captures.',
+    );
     publish({ networkPath: connection.path });
     debugCaptureStage(
       'glasses_capture_network_ready',
@@ -536,6 +625,16 @@ async function runSync(): Promise<void> {
     );
   }
   let queue = await loadCaptureQueue();
+  debugCaptureStage(
+    'glasses_capture_queue_loaded',
+    'Loaded the durable glasses capture queue.',
+    {
+      total: queue.length,
+      failed: queue.filter((entry) => entry.state === 'failed').length,
+      upload_ready: queue.filter((entry) => entry.uploadReady === true).length,
+      local_ready: queue.filter((entry) => Boolean(entry.localUri)).length,
+    },
+  );
   const now = new Date().toISOString();
   for (const remote of discovered) {
     if (
@@ -783,13 +882,23 @@ export function reconcileGlassesCaptures(): Promise<void> {
 }
 
 export async function retryFailedGlassesCaptures(): Promise<void> {
+  // Startup, resume, and the retry button can overlap. A running pass has
+  // already captured its queue snapshot, so changing a failed entry under it
+  // would otherwise be a no-op until some later external trigger.
+  if (activeSync) await activeSync;
   const queue = await loadCaptureQueue();
+  const retryCount = queue.filter((entry) => entry.state === 'failed').length;
   await saveCaptureQueue(
     queue.map((entry) =>
       entry.state === 'failed'
         ? { ...entry, state: 'discovered', nextRetryAt: null, lastError: null }
-        : entry,
+      : entry,
     ),
+  );
+  debugCaptureStage(
+    'glasses_capture_retry_requested',
+    'Reset failed local captures and starting a fresh reconciliation pass.',
+    { retry_count: retryCount },
   );
   return reconcileGlassesCaptures();
 }

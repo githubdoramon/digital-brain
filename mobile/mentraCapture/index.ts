@@ -7,3 +7,5 @@ export * from './sync';
 export * from './types';
 export * from './imageEnhancement';
 export * from './moments';
+export * from './wakeWord';
+export * from './wakeCommandDebug';

@@ -20,10 +20,16 @@ import { Button } from '@/components/Button';
 import { Card } from '@/components/Card';
 import { useAppNotice } from '@/hooks/useAppNotice';
 import {
-  getMentraDebugLogFileName,
+  getMentraDebugLogExportFileName,
   getMentraDebugLogInfo,
+  getWakeCommandDebugLogExportFileName,
+  getWakeCommandDebugLogInfo,
+  getRetainedWakeCommandAudio,
   readMentraDebugLog,
+  readWakeCommandDebugLog,
   clearMentraDebugLog,
+  clearRetainedWakeCommandAudio,
+  clearWakeCommandDebugLog,
   ensureMentraConnection,
   forgetPairedGlasses,
   getMentraConnectionStatus,
@@ -82,6 +88,11 @@ export default function GlassesCaptureScreen() {
     exists: false,
     sizeBytes: 0,
   });
+  const [wakeCommandDebugInfo, setWakeCommandDebugInfo] = React.useState({
+    exists: false,
+    sizeBytes: 0,
+    audioCount: 0,
+  });
   const [imageEnhancementStatus, setImageEnhancementStatus] = React.useState(
     getImageEnhancementStatus(),
   );
@@ -115,9 +126,15 @@ export default function GlassesCaptureScreen() {
     void refreshConnection();
     void initializeImageEnhancement();
     void getMentraDebugLogInfo().then(setMentraDebugInfo);
+    void Promise.all([getWakeCommandDebugLogInfo(), getRetainedWakeCommandAudio()]).then(
+      ([logInfo, audio]) => setWakeCommandDebugInfo({ ...logInfo, audioCount: audio.length }),
+    );
     void getImageEnhancementLogInfo().then(setImageEnhancementLogInfo);
     const refreshTimer = setInterval(() => {
       void getMentraDebugLogInfo().then(setMentraDebugInfo);
+      void Promise.all([getWakeCommandDebugLogInfo(), getRetainedWakeCommandAudio()]).then(
+        ([logInfo, audio]) => setWakeCommandDebugInfo({ ...logInfo, audioCount: audio.length }),
+      );
       void getImageEnhancementLogInfo().then(setImageEnhancementLogInfo);
       void refreshConnection();
     }, 2_000);
@@ -132,7 +149,7 @@ export default function GlassesCaptureScreen() {
     try {
       const logText = await readMentraDebugLog();
       if (!logText.trim()) throw new Error('No Mentra diagnostics have been recorded yet.');
-      const fileName = getMentraDebugLogFileName();
+      const fileName = getMentraDebugLogExportFileName();
       const tempFileUri = `${FileSystem.cacheDirectory ?? FileSystem.documentDirectory}${fileName}`;
       await FileSystem.writeAsStringAsync(tempFileUri, logText, {
         encoding: FileSystem.EncodingType.UTF8,
@@ -150,10 +167,78 @@ export default function GlassesCaptureScreen() {
     }
   };
 
-  const clearMentraDiagnostics = async () => {
-    await clearMentraDebugLog();
-    setMentraDebugInfo(await getMentraDebugLogInfo());
-    showSuccess('Mentra diagnostics cleared.');
+  const clearMentraDiagnostics = () => {
+    // Clearing changes the active log generation synchronously. Reflect that
+    // immediately instead of making the button wait behind background logging.
+    setMentraDebugInfo({ exists: true, sizeBytes: 0 });
+    showSuccess('Mentra diagnostics cleared. New exports begin with a clear marker.');
+    void clearMentraDebugLog()
+      .then(() => getMentraDebugLogInfo())
+      .then(setMentraDebugInfo)
+      .catch((error) => {
+        showError(error instanceof Error ? error.message : 'Failed to clear Mentra diagnostics.');
+      });
+  };
+
+  const exportWakeCommandDiagnostics = async () => {
+    try {
+      const [logText, audio] = await Promise.all([
+        readWakeCommandDebugLog(),
+        getRetainedWakeCommandAudio(),
+      ]);
+      if (!logText.trim()) throw new Error('No wake-command diagnostics have been recorded yet.');
+      const fileName = getWakeCommandDebugLogExportFileName();
+      const tempFileUri = `${FileSystem.cacheDirectory ?? FileSystem.documentDirectory}${fileName}`;
+      await FileSystem.writeAsStringAsync(tempFileUri, logText, {
+        encoding: FileSystem.EncodingType.UTF8,
+      });
+      if (Platform.OS === 'android') {
+        await saveAndroidDiagnostic(
+          tempFileUri,
+          DigitalBrainStorageFolder.WakeCommandDebug,
+          fileName,
+        );
+        await Promise.all(
+          audio.map((entry) =>
+            copyToDigitalBrainStorage(
+              entry.uri,
+              DigitalBrainStorageFolder.WakeCommandDebug,
+              entry.fileName,
+              'audio/wav',
+            ),
+          ),
+        );
+        showSuccess(
+          `Saved the command trace and ${audio.length} WAV file${audio.length === 1 ? '' : 's'} to Digital Brain / Wake Command Debug.`,
+        );
+      } else {
+        await Share.share({ url: tempFileUri, message: logText, title: fileName });
+        showSuccess('Shared the wake-command trace.');
+      }
+    } catch (error) {
+      showError(
+        error instanceof Error ? error.message : 'Failed to export wake-command diagnostics.',
+      );
+    } finally {
+      const [logInfo, audio] = await Promise.all([
+        getWakeCommandDebugLogInfo(),
+        getRetainedWakeCommandAudio(),
+      ]);
+      setWakeCommandDebugInfo({ ...logInfo, audioCount: audio.length });
+    }
+  };
+
+  const clearWakeCommandDiagnostics = () => {
+    setWakeCommandDebugInfo({ exists: true, sizeBytes: 0, audioCount: 0 });
+    showSuccess('Wake-command trace and retained audio cleared.');
+    void Promise.all([clearWakeCommandDebugLog(), clearRetainedWakeCommandAudio()])
+      .then(() => Promise.all([getWakeCommandDebugLogInfo(), getRetainedWakeCommandAudio()]))
+      .then(([logInfo, audio]) => setWakeCommandDebugInfo({ ...logInfo, audioCount: audio.length }))
+      .catch((error) => {
+        showError(
+          error instanceof Error ? error.message : 'Failed to clear wake-command diagnostics.',
+        );
+      });
   };
 
   const updateImageEnhancementInterval = async () => {
@@ -686,6 +771,30 @@ export default function GlassesCaptureScreen() {
               label="Clear diagnostics"
               onPress={() => void clearMentraDiagnostics()}
               disabled={!mentraDebugInfo.exists}
+              variant="secondary"
+              style={styles.button}
+            />
+            <Text style={styles.detailText}>
+              Wake-command trace:{' '}
+              {wakeCommandDebugInfo.exists
+                ? `${wakeCommandDebugInfo.sizeBytes} bytes · ${wakeCommandDebugInfo.audioCount} WAV file${wakeCommandDebugInfo.audioCount === 1 ? '' : 's'}`
+                : 'not created yet'}
+            </Text>
+            <Text style={styles.helperText}>
+              Saves only wake, command-audio, endpoint, LED, and transcription events, plus the
+              matching 16 kHz WAV clips.
+            </Text>
+            <Button
+              label="Download wake-command investigation"
+              onPress={() => void exportWakeCommandDiagnostics()}
+              disabled={!wakeCommandDebugInfo.exists}
+              variant="secondary"
+              style={styles.button}
+            />
+            <Button
+              label="Clear wake-command investigation"
+              onPress={() => void clearWakeCommandDiagnostics()}
+              disabled={!wakeCommandDebugInfo.exists && wakeCommandDebugInfo.audioCount === 0}
               variant="secondary"
               style={styles.button}
             />

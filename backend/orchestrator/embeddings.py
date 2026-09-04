@@ -9,13 +9,13 @@ from observability.logger import get_runtime_logger
 
 logger = get_runtime_logger(__name__)
 
-OLLAMA_HOST = os.getenv("OLLAMA_HOST", "http://localhost:11434")
-OLLAMA_EMBED_MODEL = os.getenv("OLLAMA_EMBED_MODEL", "nomic-embed-text")
-EMBED_DIM = int(os.getenv("OLLAMA_EMBED_DIM", "768"))
-OLLAMA_EMBED_MAX_INPUT_TOKENS = int(os.getenv("OLLAMA_EMBED_MAX_INPUT_TOKENS", "2048"))
-OLLAMA_EMBED_MAX_INPUT_BYTES = int(os.getenv("OLLAMA_EMBED_MAX_INPUT_BYTES", "3000"))
+EMBEDDINGS_HOST = os.getenv("EMBEDDINGS_HOST", "http://localhost:11434")
+EMBEDDINGS_MODEL = os.getenv("EMBEDDINGS_MODEL", "nomic-embed-text")
+EMBED_DIM = int(os.getenv("EMBEDDINGS_DIM", "768"))
+EMBED_MAX_INPUT_TOKENS = int(os.getenv("EMBEDDINGS_MAX_INPUT_TOKENS", "2048"))
+EMBED_MAX_INPUT_BYTES = int(os.getenv("EMBEDDINGS_MAX_INPUT_BYTES", "3000"))
 ADAPTIVE_MIN_INPUT_BYTES = 800
-_adaptive_max_input_bytes = max(ADAPTIVE_MIN_INPUT_BYTES, OLLAMA_EMBED_MAX_INPUT_BYTES)
+_adaptive_max_input_bytes = max(ADAPTIVE_MIN_INPUT_BYTES, EMBED_MAX_INPUT_BYTES)
 
 
 def _truncate_utf8_bytes(text: str, max_bytes: int) -> str:
@@ -58,8 +58,8 @@ def _embed_text_with_legacy_endpoint(text: str) -> list[float]:
         return [0.0] * EMBED_DIM
 
     response = requests.post(
-        f"{OLLAMA_HOST}/api/embeddings",
-        json={"model": OLLAMA_EMBED_MODEL, "prompt": fallback_text},
+        f"{EMBEDDINGS_HOST}/embeddings",
+        json={"model": EMBEDDINGS_MODEL, "prompt": fallback_text},
         timeout=30,
     )
     response.raise_for_status()
@@ -83,12 +83,12 @@ def embed_text(text: str) -> list[float]:
 
     def _post_embed(payload_text: str) -> requests.Response:
         return requests.post(
-            f"{OLLAMA_HOST}/api/embed",
+            f"{EMBEDDINGS_HOST}/embed",
             json={
-                "model": OLLAMA_EMBED_MODEL,
+                "model": EMBEDDINGS_MODEL,
                 "input": payload_text,
                 "truncate": True,
-                "options": {"num_ctx": OLLAMA_EMBED_MAX_INPUT_TOKENS},
+                "options": {"num_ctx": EMBED_MAX_INPUT_TOKENS},
             },
             timeout=30,
         )

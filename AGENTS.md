@@ -616,6 +616,59 @@ is no v1 upload, transcription, processing, or retention cap. On Bluetooth
 loss, low storage, or recovery after process interruption, keep only a verified
 playable M4A and discard invalid partials. See `mobile/GLASSES_CAPTURE_PIPELINE.md`.
 
+Wake-word acknowledgement is Android-only and starts automatically
+after a ready Mentra Live reconnect. Initialize its long-lived coordinator from
+`mobile/index.js` before Expo Router; keep one packaged on-device ONNX detector
+per continuous 16 kHz mono PCM stream, with bounded sequential ingress and a
+reset on reconnect/discontinuity. The connected-device foreground service is
+the shared glasses runtime lease for wake listening and automatic capture, not
+a replacement for the location workers or location foreground-service mode.
+The Mentra service must not infer the Android `microphone` foreground-service
+type from the mere presence of `RECORD_AUDIO`: Android 14+ can recreate it from
+headless/background work, where that while-in-use type is rejected. Start with
+safe connected-device/media-playback types, then promote microphone only from
+the visibly resumed app, with a safe-type fallback around type promotion.
+Manual audio recording and any glasses video recording have exclusive mic
+ownership: pause/reset the wake listener first and resume only after completion.
+For manual audio stop, shut down native capture before disabling the mic,
+release the UI after native capture stops, and keep SAF indexing and wake-word
+reactivation off the user-facing busy path; coalesce duplicate native
+completion events by output URI.
+Wake-word diagnostics must expose service/readiness, mic ownership, PCM
+backlog, inference, detection, LED dispatch handoff, and LED acknowledgement
+failures. The latency-sensitive wake blink uses the non-blocking native SDK
+dispatch rather than an awaited glasses response. The LED API
+selects a color but not a separate physical light target, so hardware behavior
+must be tested before documenting a specific internal/external light.
+Diagnostic clears must immediately switch to a fresh persisted log generation,
+so pending background writers can finish only in the prior file. Retain a fresh
+clear marker so an exported JSONL can prove where the new diagnostic window began.
+The command-transcription POC begins immediately after a confirmed wake and
+retains the detector's 1.8-second pre-roll plus queued post-detection PCM in
+the bounded in-memory command window. Its speech gate ignores the first 350 ms
+of wake-word tail but retains those samples for Whisper, so the pause after the
+wake phrase cannot endpoint a command before it begins. It preserves an
+initial 3-second command window after wake before endpointing may begin, then
+endpoints after 1.5 seconds of sustained silence (or eight seconds total).
+Use a permissive rolling ambient baseline only to begin speech, and require a
+higher sustained continuation level to prevent incidental room noise from
+keeping the session open; export both thresholds and their chunk counts.
+For this developer-only debugging POC, retain the exact post-wake command PCM
+as bounded app-private 16 kHz WAV clips (latest 40) and export them only via
+the dedicated focused wake-command investigation action. Its JSONL must be
+limited to command-pipeline events and correlate each WAV with its command ID,
+PCM chunk/gap statistics, speech threshold, wake-tail guard, endpoint, LED,
+transcript, and all latency milestones. Reuse the warmed English-only Whisper
+context through its raw-PCM `transcribeData` path; keep that raw audio intact,
+record detector decision/pre-roll source-audio bounds, then remove a
+model-label-derived fuzzy wake anchor from the final command transcript while
+retaining raw and normalized transcript fields and removal method for debugging.
+Use `ggml-base.en.bin`; request acceleration from the native binding and log
+the actual selected backend, but do not claim GPU use on Android while the
+installed `whisper.rn` binary reports CPU-only support.
+Do not parse or execute a command in this POC. The SDK has no yellow LED value; use orange for the
+listening-finished acknowledgement and log the effective color.
+
 Android Smart glasses alerts live under Settings → Smart glasses → Glasses
 alerts. They are an explicit local-only allow-list: the Android notification
 listener must inspect only a posted notification's source package name and

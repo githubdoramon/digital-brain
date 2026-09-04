@@ -49,5 +49,6 @@ fi
 export NODE_ENV=production
 export APP_VARIANT=production
 export GOOGLE_SERVICES_FILE
+export ORG_GRADLE_PROJECT_reactNativeArchitectures=arm64-v8a
 
 exec eas build -p android --profile preview --local

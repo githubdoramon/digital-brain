@@ -1,5 +1,5 @@
 import type { ConfigContext, ExpoConfig } from '@expo/config';
-import { withAndroidManifest, withAppBuildGradle } from 'expo/config-plugins';
+import { withAndroidManifest, withAppBuildGradle, withMainApplication } from 'expo/config-plugins';
 import { existsSync } from 'fs';
 import { isAbsolute, join, resolve } from 'path';
 
@@ -130,6 +130,7 @@ function withGlassesAlertsAndroidManifest(config: ExpoConfig): ExpoConfig {
     addPermission('android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK');
     addPermission('android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE');
     addPermission('android.permission.FOREGROUND_SERVICE_DATA_SYNC');
+    addPermission('android.permission.FOREGROUND_SERVICE_MICROPHONE');
 
     const application = manifest.application?.[0];
     if (!application) return mod;
@@ -181,6 +182,28 @@ function withGlassesAlertsAndroidManifest(config: ExpoConfig): ExpoConfig {
     }
     queries.intent = intents;
     manifest.queries = [queries];
+    return mod;
+  });
+}
+
+/**
+ * onnxruntime-react-native only ships legacy Expo unimodule metadata, which
+ * Expo/RN 0.83 does not turn into a React Package. Keep this native package
+ * registration in config so it survives `expo prebuild --clean`.
+ */
+function withOnnxRuntimePackage(config: ExpoConfig): ExpoConfig {
+  return withMainApplication(config, (mod) => {
+    if (mod.modResults.language !== 'kt') return mod;
+    const packageClass = 'ai.onnxruntime.reactnative.OnnxruntimePackage';
+    if (mod.modResults.contents.includes(packageClass)) return mod;
+    const marker = 'PackageList(this).packages.apply {';
+    if (!mod.modResults.contents.includes(marker)) {
+      throw new Error('Unable to register onnxruntime-react-native in MainApplication.kt');
+    }
+    mod.modResults.contents = mod.modResults.contents.replace(
+      marker,
+      `${marker}\n          add(${packageClass}())`,
+    );
     return mod;
   });
 }
@@ -269,12 +292,14 @@ export default ({ config }: ConfigContext): ExpoConfig => {
     },
   });
 
-  return withGlassesAlertsAndroidManifest(
-    withGlassesCaptureCleartext(
-      withSystemDebugKeystore({
-        ...merged,
-        plugins: withPlugin(pluginsWithBuildProperties, 'expo-background-task'),
-      }),
+  return withOnnxRuntimePackage(
+    withGlassesAlertsAndroidManifest(
+      withGlassesCaptureCleartext(
+        withSystemDebugKeystore({
+          ...merged,
+          plugins: withPlugin(pluginsWithBuildProperties, 'expo-background-task'),
+        }),
+      ),
     ),
   );
 };

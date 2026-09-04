@@ -87,6 +87,30 @@ index 921962e..fe4a0d0 100644
          // Runs on Dispatchers.IO, not the shared Expo AsyncFunctionQueue: restart()
          // does a synchronous JNI model reload that would otherwise block every other
          // native call in the app until it completes.
+@@ -847,1 +873,23 @@ class BluetoothSdkModule : Module() {
++        SdkFunction("dispatchRgbLedControl") { params: Map<String, Any?> ->
++            val requestId = params["requestId"] as? String
++                    ?: throw IllegalArgumentException("requestId is required")
++            val action = params["action"] as? String ?: "on"
++            val color = params["color"] as? String
++            val onDurationMs = (params["onDurationMs"] as? Number)?.toInt() ?: 250
++            val offDurationMs = (params["offDurationMs"] as? Number)?.toInt() ?: 0
++            val count = (params["count"] as? Number)?.toInt() ?: 1
++            requireSdk().dispatchRgbLedControl(
++                    RgbLedRequest(
++                            requestId = requestId,
++                            packageName = null,
++                            action = RgbLedAction.fromValue(action),
++                            color = RgbLedColor.fromValue(color),
++                            onDurationMs = onDurationMs,
++                            offDurationMs = offDurationMs,
++                            count = count,
++                    )
++            )
++            requestId
++        }
++
+         SdkCoroutineFunction("rgbLedControl") {
 diff --git a/node_modules/@mentra/bluetooth-sdk/android/src/main/java/com/mentra/bluetoothsdk/GlassesM4aRecorder.kt b/node_modules/@mentra/bluetooth-sdk/android/src/main/java/com/mentra/bluetoothsdk/GlassesM4aRecorder.kt
 new file mode 100644
 index 0000000..f2316df
@@ -474,3 +498,89 @@ index f7e8ecd..53da4e3 100644
    getGlassesMediaVolume: bindPublicMethod("getGlassesMediaVolume"),
    setGlassesMediaVolume: bindPublicMethod("setGlassesMediaVolume"),
    rgbLedControl: bindPublicMethod("rgbLedControl"),
+diff --git a/node_modules/@mentra/bluetooth-sdk/android/src/main/java/com/mentra/bluetoothsdk/MentraBluetoothSdk.kt b/node_modules/@mentra/bluetooth-sdk/android/src/main/java/com/mentra/bluetoothsdk/MentraBluetoothSdk.kt
+index 91402ee..f2d9f49 100644
+--- a/node_modules/@mentra/bluetooth-sdk/android/src/main/java/com/mentra/bluetoothsdk/MentraBluetoothSdk.kt
++++ b/node_modules/@mentra/bluetooth-sdk/android/src/main/java/com/mentra/bluetoothsdk/MentraBluetoothSdk.kt
+@@ -994,1 +994,19 @@ class MentraBluetoothSdk(
++    /**
++     * Dispatches LED feedback without waiting for the glasses' optional response.
++     *
++     * This is intentionally for latency-sensitive acknowledgement only. Regular
++     * callers should continue to use [rgbLedControl] when they need a response.
++     */
++    fun dispatchRgbLedControl(request: RgbLedRequest) {
++        deviceManager.rgbLedControl(
++            request.requestId,
++            request.packageName,
++            request.action.value,
++            request.color?.value,
++            request.onDurationMs,
++            request.offDurationMs,
++            request.count,
++        )
++    }
++
+    suspend fun stopStream(): StreamStatusEvent {
+
+diff --git a/node_modules/@mentra/bluetooth-sdk/android/src/main/java/com/mentra/bluetoothsdk/services/Foreground.kt b/node_modules/@mentra/bluetooth-sdk/android/src/main/java/com/mentra/bluetoothsdk/services/Foreground.kt
+--- a/node_modules/@mentra/bluetooth-sdk/android/src/main/java/com/mentra/bluetoothsdk/services/Foreground.kt
++++ b/node_modules/@mentra/bluetooth-sdk/android/src/main/java/com/mentra/bluetoothsdk/services/Foreground.kt
+@@ -23,6 +23,7 @@
+     }
+
+     private var locationTypeRequested = false
++    private var microphoneTypeRequested = false
+
+     override fun onCreate() {
+         super.onCreate()
+@@ -41,8 +42,9 @@
+         )
+         if (intent?.action == ACTION_REFRESH_TYPES) {
+             // This action is only sent while the host Activity is foregrounded. Android 14+
+-            // rejects adding a while-in-use location type from the background.
++            // rejects adding while-in-use location or microphone types from the background.
+             locationTypeRequested = true
++            microphoneTypeRequested = true
+         }
+         // Re-check permissions in case they changed
+         startForegroundWithAutoDetectedType()
+@@ -67,7 +69,23 @@
+             Bridge.log(
+                     "ForegroundService: Starting with auto-detected type: ${getServiceTypeName(serviceType)}"
+             )
+-            startForeground(NOTIFICATION_ID, notification, serviceType)
++            try {
++                startForeground(NOTIFICATION_ID, notification, serviceType)
++            } catch (e: SecurityException) {
++                // A service can be recreated by a headless/background launch. Android 14+
++                // refuses while-in-use FGS types in that state even when their manifest and
++                // runtime permissions are present. Keep the connection service alive with
++                // non-while-in-use types and let the next foreground refresh add them safely.
++                val safeServiceType =
++                        serviceType and
++                                (ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE or
++                                        ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK or
++                                        ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
++                Bridge.log(
++                        "ForegroundService: Type promotion rejected (${e.message}); retrying with safe type: ${getServiceTypeName(safeServiceType)}"
++                )
++                startForeground(NOTIFICATION_ID, notification, safeServiceType)
++            }
+         } else {
+             Bridge.log("ForegroundService: Starting foreground (pre-Q, no service types)")
+             startForeground(NOTIFICATION_ID, notification)
+@@ -135,9 +153,11 @@
+                 ContextCompat.checkSelfPermission(this, android.Manifest.permission.RECORD_AUDIO) ==
+                         PackageManager.PERMISSION_GRANTED
+
+-        if (hasMicPermission) {
++        if (hasMicPermission && microphoneTypeRequested) {
+             serviceType = serviceType or ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
+-            Bridge.log("ForegroundService: Added microphone (has RECORD_AUDIO permission)")
++            Bridge.log("ForegroundService: Added microphone (foreground refresh requested)")
++        } else if (hasMicPermission) {
++            Bridge.log("ForegroundService: Microphone permission present but type not requested")
+         } else {
+             Bridge.log("ForegroundService: No microphone permission")
+         }

@@ -5,10 +5,7 @@ import { initWhisper, type WhisperContext } from 'whisper.rn';
 import { appendVoiceTranscriptionDebugLog } from '@/debug/voiceTranscriptionDebug';
 import { normalizeTranscriptText } from '@/chat/voiceState';
 
-export type LocalTranscriptionStage =
-  | 'downloading_model'
-  | 'loading_model'
-  | 'transcribing';
+export type LocalTranscriptionStage = 'downloading_model' | 'loading_model' | 'transcribing';
 
 export type LocalTranscriptionStatus = {
   stage: LocalTranscriptionStage;
@@ -43,10 +40,10 @@ export class LocalTranscriptionError extends Error {
   }
 }
 
-const MODEL_FILE_NAME = 'ggml-base.en.bin';
-const MODEL_URL = `https://huggingface.co/ggerganov/whisper.cpp/resolve/main/${MODEL_FILE_NAME}`;
+export const LOCAL_WHISPER_MODEL_FILE_NAME = 'ggml-small.en.bin';
+const MODEL_URL = `https://huggingface.co/ggerganov/whisper.cpp/resolve/main/${LOCAL_WHISPER_MODEL_FILE_NAME}`;
 const MODEL_DIRECTORY = `${FileSystem.documentDirectory ?? FileSystem.cacheDirectory}whisper/`;
-const MODEL_FILE_URI = `${MODEL_DIRECTORY}${MODEL_FILE_NAME}`;
+const MODEL_FILE_URI = `${MODEL_DIRECTORY}${LOCAL_WHISPER_MODEL_FILE_NAME}`;
 
 let whisperContextPromise: Promise<WhisperContext> | null = null;
 
@@ -97,9 +94,7 @@ async function ensureModelFile(onStatus?: (status: LocalTranscriptionStatus) => 
   } catch (error) {
     throw new LocalTranscriptionError(
       'download_failed',
-      error instanceof Error
-        ? error.message
-        : 'The Whisper model could not be downloaded.',
+      error instanceof Error ? error.message : 'The Whisper model could not be downloaded.',
     );
   }
 }
@@ -118,7 +113,11 @@ async function getWhisperContext(onStatus?: (status: LocalTranscriptionStatus) =
       onStatus?.({ stage: 'loading_model' });
       return initWhisper({
         filePath: modelFileUri,
-        useGpu: Platform.OS === 'ios',
+        // Ask the native binding for acceleration on every native platform.
+        // The current Android whisper.rn binary reports CPU-only; keeping the
+        // request here means a future Android GPU-capable binding is used
+        // without changing the command pipeline.
+        useGpu: true,
       });
     })().catch((error) => {
       whisperContextPromise = null;
@@ -127,6 +126,31 @@ async function getWhisperContext(onStatus?: (status: LocalTranscriptionStatus) =
   }
 
   return whisperContextPromise;
+}
+
+export async function warmEnglishWhisperContext(): Promise<WhisperContext> {
+  return getWhisperContext();
+}
+
+/**
+ * The Android native module can lose its context map during a host lifecycle
+ * transition while JavaScript is still holding this cached promise. Drop only
+ * the JavaScript handle so the next warm call creates a new native context.
+ */
+export function invalidateEnglishWhisperContext(): void {
+  whisperContextPromise = null;
+}
+
+export function isMissingNativeWhisperContextError(error: unknown): boolean {
+  const message =
+    error instanceof Error
+      ? error.message
+      : typeof error === 'string'
+        ? error
+        : error && typeof error === 'object' && 'message' in error
+          ? String(error.message)
+          : '';
+  return /context not found/iu.test(message);
 }
 
 export async function transcribeAudioFile(
@@ -151,7 +175,7 @@ export async function transcribeAudioFile(
     await appendVoiceTranscriptionDebugLog('voice_transcription_result', {
       fileUri,
       normalizedFilePath,
-      modelFileName: MODEL_FILE_NAME,
+      modelFileName: LOCAL_WHISPER_MODEL_FILE_NAME,
       audioContainer: fileUri.split('.').pop() ?? null,
       rawText: result.result,
       normalizedText: text,
@@ -162,10 +186,7 @@ export async function transcribeAudioFile(
     }).catch(() => undefined);
 
     if (!text) {
-      throw new LocalTranscriptionError(
-        'no_speech',
-        'No speech was detected in that recording.',
-      );
+      throw new LocalTranscriptionError('no_speech', 'No speech was detected in that recording.');
     }
 
     return {
@@ -173,14 +194,14 @@ export async function transcribeAudioFile(
       rawText: result.result,
       language: result.language,
       isAborted: result.isAborted,
-      modelFileName: MODEL_FILE_NAME,
+      modelFileName: LOCAL_WHISPER_MODEL_FILE_NAME,
       segments: result.segments,
     };
   } catch (error) {
     await appendVoiceTranscriptionDebugLog('voice_transcription_failure', {
       fileUri,
       normalizedFilePath: normalizeWhisperFilePath(fileUri),
-      modelFileName: MODEL_FILE_NAME,
+      modelFileName: LOCAL_WHISPER_MODEL_FILE_NAME,
       error: error instanceof Error ? error.message : String(error),
     }).catch(() => undefined);
 
@@ -206,7 +227,5 @@ export function getLocalTranscriptionErrorMessage(error: unknown) {
     return error.message;
   }
 
-  return error instanceof Error
-    ? error.message
-    : 'Unable to transcribe that recording right now.';
+  return error instanceof Error ? error.message : 'Unable to transcribe that recording right now.';
 }

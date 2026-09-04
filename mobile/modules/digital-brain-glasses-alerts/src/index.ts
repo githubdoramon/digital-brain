@@ -35,6 +35,13 @@ export type ImageEnhancementForegroundServiceStatus = {
   nativeTickCount: number;
 };
 
+export type GlassesRuntimeForegroundServiceStatus = {
+  active: boolean;
+  wakeListeningRequested: boolean;
+  automaticCaptureActive: boolean;
+  startedAtMs: number | null;
+};
+
 type DigitalBrainGlassesAlertsEvents = {
   onImageEnhancementForegroundTick(event: { timestampMs: number }): void;
 };
@@ -55,6 +62,9 @@ declare class DigitalBrainGlassesAlertsNativeModule extends NativeModule<Digital
   stopImageEnhancementForegroundService(): Promise<void>;
   getImageEnhancementDeviceHealth(): Promise<ImageEnhancementDeviceHealth>;
   getImageEnhancementForegroundServiceStatus(): Promise<ImageEnhancementForegroundServiceStatus>;
+  startGlassesWakeRuntime(): Promise<void>;
+  stopGlassesWakeRuntime(): Promise<void>;
+  getGlassesRuntimeForegroundServiceStatus(): Promise<GlassesRuntimeForegroundServiceStatus>;
 }
 
 export default requireOptionalNativeModule<DigitalBrainGlassesAlertsNativeModule>(

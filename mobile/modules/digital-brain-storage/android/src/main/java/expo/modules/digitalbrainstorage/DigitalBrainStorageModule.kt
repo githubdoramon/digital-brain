@@ -189,6 +189,35 @@ class DigitalBrainStorageModule : Module() {
       mapOf("uri" to document.uri.toString(), "name" to name)
     }
 
+    AsyncFunction("getFileInfo") { uri: String ->
+      val parsed = Uri.parse(uri)
+      when (parsed.scheme) {
+        "content" -> {
+          val document = DocumentFile.fromSingleUri(context(), parsed)
+            ?: return@AsyncFunction mapOf("exists" to false, "bytes" to 0L)
+          mapOf("exists" to (document.exists() && document.isFile), "bytes" to document.length())
+        }
+        "file" -> {
+          val file = parsed.path?.let(::File)
+          mapOf("exists" to (file?.isFile == true), "bytes" to (file?.length() ?: 0L))
+        }
+        else -> {
+          val file = File(uri)
+          mapOf("exists" to file.isFile, "bytes" to file.length())
+        }
+      }
+    }
+
+    AsyncFunction("deleteFile") { uri: String ->
+      val parsed = Uri.parse(uri)
+      val deleted = when (parsed.scheme) {
+        "content" -> DocumentFile.fromSingleUri(context(), parsed)?.delete() ?: false
+        "file" -> parsed.path?.let(::File)?.delete() ?: false
+        else -> File(uri).delete()
+      }
+      check(deleted) { "Android could not remove the retained media file." }
+    }
+
     AsyncFunction("copyToSubdirectory") {
         baseUri: String,
         folder: String,
@@ -292,6 +321,21 @@ class DigitalBrainStorageModule : Module() {
         mapOf("status" to connection.responseCode, "body" to responseSnippet(connection))
       } finally {
         connection.disconnect()
+      }
+    }
+
+    AsyncFunction("listSubdirectory") { baseUri: String, folder: String ->
+      val base = directoryFor(baseUri)
+      val target = base.findFile(folder)
+      if (target == null) return@AsyncFunction emptyList<Map<String, Any>>()
+      check(target.isDirectory) { "$folder exists but is not a folder." }
+      target.listFiles().filter { it.isFile && it.length() > 0 }.map { document ->
+        mapOf(
+          "uri" to document.uri.toString(),
+          "name" to (document.name ?: "capture.bin"),
+          "mimeType" to (document.type ?: "application/octet-stream"),
+          "bytes" to document.length(),
+        )
       }
     }
   }

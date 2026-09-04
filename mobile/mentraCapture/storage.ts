@@ -8,6 +8,7 @@ import {
   getDigitalBrainStorageBaseUri,
   getDigitalBrainStorageFolder,
 } from '@/storage/digitalBrainStorage';
+import DigitalBrainStorageNative from '@/modules/digital-brain-storage/src';
 
 const STORAGE_KEY = 'digitalbrain.glasses.capture.queue.v1';
 const FOLDER_KEY = 'digitalbrain.glasses.capture.folder.v1';
@@ -114,10 +115,18 @@ function visibleCaptureName(entry: CaptureQueueEntry): string {
 }
 
 export async function deleteLocalCapture(uri: string): Promise<void> {
+  if (uri.startsWith('content://') && DigitalBrainStorageNative) {
+    await DigitalBrainStorageNative.deleteFile(uri);
+    return;
+  }
   await FileSystem.deleteAsync(uri, { idempotent: true });
 }
 
 export async function getLocalCaptureInfo(uri: string): Promise<{ exists: boolean; size: number }> {
+  if (uri.startsWith('content://') && DigitalBrainStorageNative) {
+    const info = await DigitalBrainStorageNative.getFileInfo(uri);
+    return { exists: info.exists, size: info.bytes };
+  }
   const info = await FileSystem.getInfoAsync(uri);
   return { exists: info.exists, size: info.exists && 'size' in info ? (info.size ?? 0) : 0 };
 }
@@ -152,12 +161,10 @@ export async function movePendingCapturesToSharedFolder(
         entry.mimeType,
         { skipIfSameSize: true },
       );
-      await deleteLocalCapture(source);
-      queue = queue.map((item) =>
-        item.captureId === entry.captureId && item.fileName === entry.fileName
-          ? { ...item, localUri: target, updatedAt: new Date().toISOString() }
-          : item,
-      );
+      // The app-private original is the upload queue. The Documents copy is a
+      // user-visible mirror/recovery copy, not the working media URI: Expo's
+      // file APIs cannot reliably inspect SAF content URIs in a headless run.
+      void target;
       moved += 1;
     } catch {
       failed += 1;
@@ -166,4 +173,48 @@ export async function movePendingCapturesToSharedFolder(
 
   await saveCaptureQueue(queue);
   return { moved, failed };
+}
+
+/** Restore upload records from user-visible retained media after an app-data loss. */
+export async function importVisibleCaptureQueueEntries(): Promise<number> {
+  const baseUri = await getDigitalBrainStorageBaseUri();
+  if (!baseUri || !DigitalBrainStorageNative) return 0;
+  const files = await DigitalBrainStorageNative.listSubdirectory(
+    baseUri,
+    DigitalBrainStorageFolder.GlassesCaptureQueue,
+  );
+  let queue = await loadCaptureQueue();
+  let imported = 0;
+  for (const file of files) {
+    const divider = file.name.indexOf('-');
+    if (divider <= 0 || divider === file.name.length - 1) continue;
+    const captureId = file.name.slice(0, divider);
+    const fileName = file.name.slice(divider + 1);
+    if (queue.some((entry) => entry.captureId === captureId && entry.fileName === fileName)) continue;
+    const now = new Date().toISOString();
+    queue.push({
+      captureId,
+      kind: file.mimeType.startsWith('video/') ? 'video' : 'photo',
+      capturedAt: null,
+      fileName,
+      downloadUrl: '',
+      mimeType: file.mimeType,
+      sizeBytes: file.bytes,
+      ackId: null,
+      protocolVersion: 3,
+      state: 'glasses_acked',
+      localUri: file.uri,
+      attempts: 0,
+      nextRetryAt: null,
+      lastError: null,
+      discoveredAt: now,
+      updatedAt: now,
+      immichAssetId: null,
+      uploadReady: true,
+      location: null,
+    });
+    imported += 1;
+  }
+  if (imported) await saveCaptureQueue(queue);
+  return imported;
 }

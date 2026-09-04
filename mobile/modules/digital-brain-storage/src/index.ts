@@ -23,6 +23,12 @@ type DigitalBrainStorageNativeModule = {
     length: number,
     headers: Record<string, string>,
   ): Promise<{ status: number; body: string }>;
+  listSubdirectory(
+    baseUri: string,
+    folder: string,
+  ): Promise<{ uri: string; name: string; mimeType: string; bytes: number }[]>;
+  getFileInfo(uri: string): Promise<{ exists: boolean; bytes: number }>;
+  deleteFile(uri: string): Promise<void>;
 };
 
 export default requireOptionalNativeModule<DigitalBrainStorageNativeModule>('DigitalBrainStorage');

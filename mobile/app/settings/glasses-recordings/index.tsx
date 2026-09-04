@@ -91,9 +91,20 @@ export default function GlassesRecordingsScreen() {
   const stop = async () => {
     setBusy(true);
     try {
-      await stopGlassesAudioRecording();
-      await refreshLibrary();
-      showSuccess('Recording saved to your Digital Brain folder.');
+      const result = await stopGlassesAudioRecording();
+      void result.saved
+        .then((saved) => {
+          if (!saved) {
+            showError('The recording could not be saved.');
+            return;
+          }
+          return refreshLibrary().then(() =>
+            showSuccess('Recording saved to your Digital Brain folder.'),
+          );
+        })
+        .catch((error) =>
+          showError(error instanceof Error ? error.message : 'Could not save recording.'),
+        );
     } catch (error) {
       showError(error instanceof Error ? error.message : 'Could not stop recording.');
     } finally {

@@ -147,6 +147,18 @@ class GlassesAlertsModule : Module() {
       GlassesImageEnhancementService.status()
     }
 
+    AsyncFunction("startGlassesWakeRuntime") {
+      GlassesImageEnhancementService.startWakeRuntime(context())
+    }
+
+    AsyncFunction("stopGlassesWakeRuntime") {
+      GlassesImageEnhancementService.stopWakeRuntime(context())
+    }
+
+    AsyncFunction("getGlassesRuntimeForegroundServiceStatus") {
+      GlassesImageEnhancementService.runtimeStatus()
+    }
+
     OnDestroy {
       if (activeModule?.get() === this@GlassesAlertsModule) activeModule = null
     }

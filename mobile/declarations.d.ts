@@ -32,6 +32,13 @@ declare module 'whisper.rn' {
       stop: () => Promise<void>;
       promise: Promise<TranscribeResult>;
     };
+    transcribeData(
+      data: ArrayBuffer,
+      options?: TranscribeFileOptions,
+    ): {
+      stop: () => Promise<void>;
+      promise: Promise<TranscribeResult>;
+    };
     release(): Promise<void>;
   }
 

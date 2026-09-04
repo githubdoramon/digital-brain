@@ -8,6 +8,7 @@ export enum DigitalBrainStorageFolder {
   Recordings = 'Recordings',
   GlassesCaptureQueue = 'Glasses Capture Queue',
   ImagePipelineTemp = 'Image Pipeline Temp',
+  WakeCommandDebug = 'Wake Command Debug',
   Exports = 'Exports',
 }
 

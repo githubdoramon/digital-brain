@@ -29,8 +29,8 @@ Each capture is processed sequentially:
 4. Acknowledge it with `/api/v3/ack` when protocol v3 is available, otherwise
    use the legacy `/api/delete-files` endpoint. Mentra retains acknowledged
    captures in recoverable trash for its supported seven-day window.
-5. Small media uploads through `/mobile/glasses/captures`. Larger media opens
-   an authenticated upload session and sends sequential bounded ranges to
+5. Media opens an authenticated upload session and sends sequential bounded
+   1 MiB ranges to
    `/mobile/glasses/captures/upload-sessions`; the backend validates and
    reassembles those ranges in its persistent staging volume before using the
    same Immich commit path. This keeps phone-to-backend requests below proxy
@@ -51,6 +51,9 @@ The local queue persists every pending/failed record and its retry/backoff
 state; it is not silently size-trimmed while media is awaiting upload. Per-entry
 upload failures are surfaced in the Smart glasses sync card, rather than
 being hidden behind a successful reconciliation pass.
+On startup and every sync, retained media in `Glasses Capture Queue` is also
+imported back into that upload queue when a prior app-data loss left a visible
+file without its local queue record.
 
 ## Automatic image enhancement pipeline
 
@@ -185,6 +188,87 @@ SAF file. Bluetooth loss or low free storage finalizes a playable file when the
 MP4 container can be completed; otherwise it deletes the invalid partial file.
 After a process interruption, the next app launch keeps a partial file only
 when Android's media extractor can prove it contains an audio track.
+On user stop, native encoder shutdown stops accepting PCM first and the
+mic-disable request follows without blocking the screen; the screen becomes
+ready as soon as native capture has stopped, while SAF indexing and the
+saved-recordings refresh complete asynchronously. Native
+completion notifications are idempotently coalesced so Bluetooth teardown
+cannot create duplicate library entries or race the user-stop save.
+
+## Wake-word acknowledgement (Android-first)
+
+Android builds automatically enable the local personalized wake-word detector
+after a saved Mentra Live connection becomes both connected and fully booted.
+The runtime is initialized from `mobile/index.js` before Expo Router, packages
+the two ONNX feature models plus the personalized classifier, and maintains one
+streaming detector while its glasses PCM session is continuous. Mentra delivers
+16 kHz, mono, signed PCM16; the runtime serializes those chunks through a
+bounded queue and resets detector history after reconnects, errors, or a real
+audio-source handoff.
+
+The existing connected-device foreground service is the shared glasses-runtime
+lease for wake listening and automatic capture. On Android 14+, it starts from
+background/headless work with only non-while-in-use service types; the
+microphone type is promoted only after the host app is visibly resumed. This
+avoids Android rejecting a background service restart simply because
+`RECORD_AUDIO` is granted. It keeps the process eligible while the app is
+backgrounded or locked, but it is not a promise to survive a force-stop or
+restart before the app launches again. Location remains a separate Android
+runtime: it preserves quiet stationary capture and uses its own location
+foreground-service mode only while moving.
+
+Glasses audio recording and video recording own the microphone. The wake
+runtime releases its PCM subscription before either starts, resets its model
+state, and resumes only after the owner reports completion. A confirmed wake
+dispatches one short blue RGB LED blink through the SDK's non-blocking native
+path; diagnostics record the JS-to-native dispatch time rather than waiting
+for the glasses' optional response. Firmware exposes no separate target for an
+internal light, so the first physical-device test must verify the visible LED before it is considered
+the final acknowledgement.
+
+Wake lifecycle, connection readiness, PCM validation, queue/backlog, inference
+timing, model failures, detector scores, detections, mic ownership, and LED
+responses all append to the existing exportable Mentra diagnostics JSONL. The
+diagnostic log is bounded. The POC also maintains a separate, focused
+wake-command JSONL with its matching local WAV clips; it contains no general
+connection/capture noise. Both logs use authoritative file generations when
+cleared, so pending writers cannot restore an old trace to the new export.
+Each exported file includes a timestamp in its filename so a newly exported
+file cannot be mistaken for an earlier one.
+
+For the command-transcription POC, a confirmed wake immediately begins its
+bounded in-memory command stream and retains both the detector's 1.8-second
+pre-roll and any queued post-detection PCM. The speech-energy gate ignores the
+first 350 ms of wake-word tail when deciding whether speech has started, while
+still retaining that audio for Whisper. This prevents the pause after “hey
+brain” from ending a command before it begins.
+It uses a permissive rolling low-percentile ambient threshold to recognize the
+start of speech, then requires a higher, sustained continuation threshold
+before incidental room noise can keep a command open; both thresholds and
+their chunk counts are recorded for diagnostics. It never endpoints within the
+initial 3-second command window after wake, then ends after 1.5 seconds of
+silence or eight seconds total. The shared warmed English-only
+`ggml-small.en.bin` Whisper context receives that raw 16 kHz PCM through
+`transcribeData`. The current Android `whisper.rn` native build is CPU-only;
+the command trace records the runtime-selected accelerator and the native
+reason when GPU is unavailable. If the native bridge reports that its Whisper
+context disappeared, the command path records the invalidation, recreates one
+context, and retries the same PCM exactly once; it records both native context
+identities and the recovery result. The retained PCM is never trimmed to remove the wake phrase:
+the detector records its source-audio decision and pre-roll time bounds, but a
+decision is not an exact phonetic boundary and cannot safely crop an immediate
+command. After transcription, the POC uses the wake model label's final word
+as a fuzzy anchor in the initial recognised words, which handles Whisper
+variants such as `okay brain` without a list of aliases. The focused trace
+keeps raw and normalized transcripts, removal method, and source-audio timing.
+For this debugging POC, the exact PCM submitted to
+Whisper is also written as a 16 kHz mono WAV after endpointing. The app keeps
+the latest 40 clips app-private; **Download wake-command investigation** copies
+the focused trace and retained clips to `Digital Brain / Wake Command Debug`.
+The trace records PCM chunk count/gaps, speech gate values and wake-tail guard,
+endpoint reason, LED dispatch, and each model timing. The SDK has no yellow LED
+value, so the listening-finish acknowledgement uses its supported orange RGB
+value as the yellow-equivalent.
 
 ## Setup and test protocol
 

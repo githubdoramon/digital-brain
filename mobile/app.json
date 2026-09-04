@@ -45,7 +45,8 @@
         "RECORD_AUDIO",
         "FOREGROUND_SERVICE",
         "FOREGROUND_SERVICE_CONNECTED_DEVICE",
-        "FOREGROUND_SERVICE_LOCATION"
+        "FOREGROUND_SERVICE_LOCATION",
+        "FOREGROUND_SERVICE_MICROPHONE"
       ]
     },
     "plugins": [
@@ -85,6 +86,7 @@
       "expo-secure-store",
       "expo-web-browser",
       "react-native-maps",
+      "onnxruntime-react-native",
       "@react-native-google-signin/google-signin"
     ],
     "experiments": {

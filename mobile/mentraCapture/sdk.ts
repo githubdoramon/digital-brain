@@ -4,7 +4,7 @@ import { Buffer } from 'buffer';
 import * as FileSystem from 'expo-file-system/legacy';
 import { PermissionsAndroid, Platform } from 'react-native';
 
-import { appendMentraDebugLog } from './debug';
+import { appendMentraDebugLog, appendWakeCommandDebugLog } from './debug';
 import { setExpectedGlassesAlertAudioDevice } from '@/glassesAlerts/runtime';
 
 type Subscription = { remove: () => void };
@@ -32,6 +32,7 @@ export type MentraConnectionStatus = {
   connected: boolean;
   fullyBooted: boolean;
   state: string | null;
+  deviceModel?: string | null;
 };
 type ScanOptions = {
   timeoutMs?: number;
@@ -75,6 +76,23 @@ type BluetoothSdk = {
     outputUri: string,
   ) => Promise<{ playing: boolean; durationMs?: number }>;
   stopGlassesM4aPlayback: () => Promise<{ playing: boolean }>;
+  rgbLedControl: (
+    requestId: string,
+    packageName: string | null,
+    action: 'on' | 'off',
+    color: 'red' | 'green' | 'blue' | 'orange' | 'white' | null,
+    onDurationMs: number,
+    offDurationMs: number,
+    count: number,
+  ) => Promise<{ requestId: string }>;
+  dispatchRgbLedControl?: (params: {
+    requestId: string;
+    action: 'on' | 'off';
+    color: 'red' | 'green' | 'blue' | 'orange' | 'white' | null;
+    onDurationMs: number;
+    offDurationMs: number;
+    count: number;
+  }) => string;
 };
 
 export type GlassesM4aRecordingResult = {
@@ -96,6 +114,19 @@ export type GlassesM4aRecordingStatus = {
   outputUri: string | null;
   startedAt: number | null;
 };
+
+export type MentraMicPcm = {
+  pcm: ArrayBuffer | ArrayBufferView;
+  sampleRate: 16_000;
+  bitsPerSample: 16;
+  channels: 1;
+  encoding: 'pcm_s16le';
+};
+
+export type MentraVideoRecordingStatus = {
+  status?: string;
+  data?: { recording?: boolean };
+};
 type InternalBluetoothSdk = BluetoothSdk & {
   getGlassesStatus?: () => Promise<{
     connection?: { state?: string; fullyBooted?: boolean };
@@ -106,6 +137,27 @@ type InternalBluetoothSdk = BluetoothSdk & {
     listener: (status: { connection?: { state?: string; fullyBooted?: boolean } }) => void,
   ) => () => void;
 };
+
+type DirectRgbLedModule = {
+  dispatchRgbLedControl?: BluetoothSdk['dispatchRgbLedControl'];
+};
+
+function loadDirectRgbLedDispatcher(): BluetoothSdk['dispatchRgbLedControl'] {
+  try {
+    // The public SDK facade deliberately exposes only the response-tracked LED
+    // command. Load the Expo native module directly for our latency-sensitive
+    // fire-and-forget acknowledgement.
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const expoModules = require('expo-modules-core') as {
+      requireNativeModule?: (name: string) => DirectRgbLedModule;
+    };
+    const nativeModule = expoModules.requireNativeModule?.('BluetoothSdk');
+    const dispatcher = nativeModule?.dispatchRgbLedControl;
+    return typeof dispatcher === 'function' ? dispatcher.bind(nativeModule) : undefined;
+  } catch {
+    return undefined;
+  }
+}
 
 const DEFAULT_DEVICE_STORAGE_KEY = 'digitalbrain.mentra.default.device.v1';
 
@@ -133,6 +185,7 @@ type LocalNetworkModule = {
 
 let sdk: BluetoothSdk | null | undefined;
 let internalSdk: InternalBluetoothSdk | null | undefined;
+let immediateRgbLedDispatcher: BluetoothSdk['dispatchRgbLedControl'];
 let wifiIp: string | null = null;
 let hotspot: { localIp: string; ssid: string; password: string } | null = null;
 let localNetwork: LocalNetworkModule | null = null;
@@ -147,6 +200,16 @@ const automaticPhotoRequestIds = new Set<string>();
 
 function debugSdk(event: string, payload?: unknown): void {
   void appendMentraDebugLog(event, payload).catch(() => undefined);
+  const nativeMessage =
+    event === 'sdk_event' &&
+    payload &&
+    typeof payload === 'object' &&
+    typeof (payload as { payload?: { message?: unknown } }).payload?.message === 'string'
+      ? (payload as { payload: { message: string } }).payload.message
+      : null;
+  if (event.startsWith('wake_led_') || nativeMessage?.includes('RGB LED control')) {
+    void appendWakeCommandDebugLog(event, payload).catch(() => undefined);
+  }
 }
 
 const DIAGNOSTIC_SDK_EVENTS = [
@@ -218,10 +281,23 @@ function loadSdk(): BluetoothSdk | null {
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     const module = require('@mentra/bluetooth-sdk');
     sdk = (module.BluetoothSdk ?? module.default) as BluetoothSdk;
+    immediateRgbLedDispatcher = loadDirectRgbLedDispatcher();
+    if (immediateRgbLedDispatcher) {
+      debugSdk('wake_led_transport_ready', { transport: 'direct_native_module' });
+    }
     try {
       // The published SDK keeps the Android scoped-network bridge on its internal export.
       // eslint-disable-next-line @typescript-eslint/no-require-imports
-      localNetwork = require('@mentra/bluetooth-sdk/internal').MentraLocalNetwork ?? null;
+      const internal = require('@mentra/bluetooth-sdk/internal') as {
+        default?: { dispatchRgbLedControl?: BluetoothSdk['dispatchRgbLedControl'] };
+        MentraLocalNetwork?: LocalNetworkModule;
+      };
+      const dispatchRgbLedControl = internal.default?.dispatchRgbLedControl;
+      if (!immediateRgbLedDispatcher && dispatchRgbLedControl) {
+        immediateRgbLedDispatcher = dispatchRgbLedControl.bind(internal.default);
+        debugSdk('wake_led_transport_ready', { transport: 'sdk_internal' });
+      }
+      localNetwork = internal.MentraLocalNetwork ?? null;
       if (localNetwork?.addListener && !localNetworkListenerInitialized) {
         localNetwork.addListener('networkLost', (event) => {
           scopedNetworkActive = false;
@@ -236,6 +312,11 @@ function loadSdk(): BluetoothSdk | null {
     } catch {
       localNetwork = null;
     }
+    if (!immediateRgbLedDispatcher) {
+      debugSdk('wake_led_transport_unavailable', {
+        reason: 'native_dispatch_function_not_exposed',
+      });
+    }
     // Keep transport state available to headless background-task launches,
     // where the navigation tree (and its UI subscription) is not mounted.
     const native = sdk;
@@ -245,9 +326,13 @@ function loadSdk(): BluetoothSdk | null {
       stateListenersInitialized = true;
     }
     if (native) initializeDiagnosticsListeners(native);
-  } catch {
+  } catch (error) {
     sdk = null;
-    debugSdk('sdk_load_error', { error: 'Bluetooth SDK module unavailable' });
+    immediateRgbLedDispatcher = undefined;
+    debugSdk('sdk_load_error', {
+      error: error instanceof Error ? error.message : String(error),
+      error_name: error instanceof Error ? error.name : null,
+    });
   }
   return sdk;
 }
@@ -348,6 +433,135 @@ export async function setMentraMicState(enabled: boolean): Promise<void> {
   await native.setMicState(enabled, true, false, false);
 }
 
+async function blinkMentraLed(
+  color: 'blue' | 'orange',
+  requestPrefix: 'wake' | 'command-finished',
+): Promise<string> {
+  const native = loadSdk();
+  if (!native)
+    throw new Error(
+      'Mentra Bluetooth SDK is not available in this build. Rebuild the Android app.',
+    );
+  const requestId = `digitalbrain-${requestPrefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  const startedAt = Date.now();
+  debugSdk('wake_led_request', { request_id: requestId, color, count: 1 });
+  if (immediateRgbLedDispatcher) {
+    try {
+      immediateRgbLedDispatcher({
+        requestId,
+        action: 'on',
+        color,
+        onDurationMs: 250,
+        offDurationMs: 0,
+        count: 1,
+      });
+      debugSdk('wake_led_dispatched', {
+        request_id: requestId,
+        color,
+        dispatch_ms: Date.now() - startedAt,
+        transport: 'immediate',
+      });
+      return requestId;
+    } catch (error) {
+      debugSdk('wake_led_direct_dispatch_failed', {
+        request_id: requestId,
+        color,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+  debugSdk('wake_led_dispatch_fallback', {
+    request_id: requestId,
+    color,
+    reason: 'direct_native_dispatch_unavailable_or_failed',
+  });
+  const response = await native.rgbLedControl(requestId, null, 'on', color, 250, 0, 1);
+  debugSdk('wake_led_acknowledged', {
+    request_id: response.requestId,
+    color,
+    acknowledgement_ms: Date.now() - startedAt,
+  });
+  return response.requestId;
+}
+
+export function blinkMentraBlueLed(): Promise<string> {
+  return blinkMentraLed('blue', 'wake');
+}
+
+export function blinkMentraOrangeLed(): Promise<string> {
+  return blinkMentraLed('orange', 'command-finished');
+}
+
+function isArrayBuffer(value: unknown): value is ArrayBuffer {
+  // Native event payloads may originate from another JavaScript realm, where
+  // `instanceof ArrayBuffer` is false despite a valid ArrayBuffer payload.
+  return Object.prototype.toString.call(value) === '[object ArrayBuffer]';
+}
+
+function isPcmBuffer(value: unknown): value is ArrayBuffer | ArrayBufferView {
+  return isArrayBuffer(value) || ArrayBuffer.isView(value);
+}
+
+export function subscribeMentraMicPcm(listener: (event: MentraMicPcm) => void): () => void {
+  const native = loadSdk();
+  if (!native) return () => undefined;
+  const subscription = native.addListener('mic_pcm', (event) => {
+    if (
+      isPcmBuffer(event?.pcm) &&
+      event.sampleRate === 16_000 &&
+      event.bitsPerSample === 16 &&
+      event.channels === 1 &&
+      event.encoding === 'pcm_s16le'
+    ) {
+      listener(event as MentraMicPcm);
+      return;
+    }
+    debugSdk('wake_pcm_invalid', {
+      sample_rate: event?.sampleRate,
+      bits_per_sample: event?.bitsPerSample,
+      channels: event?.channels,
+      encoding: event?.encoding,
+      pcm_type: Object.prototype.toString.call(event?.pcm),
+    });
+  });
+  return () => subscription.remove();
+}
+
+export function subscribeMentraVideoRecordingStatus(
+  listener: (event: MentraVideoRecordingStatus) => void,
+): () => void {
+  const native = loadSdk();
+  if (!native) return () => undefined;
+  const subscription = native.addListener('video_recording_status', listener);
+  return () => subscription.remove();
+}
+
+export function subscribeMentraConnectionState(
+  listener: (status: MentraConnectionStatus) => void,
+): () => void {
+  const native = loadInternalSdk();
+  if (!native?.getGlassesStatus) return () => undefined;
+  const report = (status?: { connection?: { state?: string; fullyBooted?: boolean } }) => {
+    const state = status?.connection?.state ?? null;
+    const fullyBooted = status?.connection?.fullyBooted === true;
+    void getDefaultGlassesDevice()
+      .then((device) =>
+        listener({
+          hasSavedDevice: device !== null,
+          connected: state === 'connected' && fullyBooted,
+          fullyBooted,
+          state,
+        }),
+      )
+      .catch(() => undefined);
+  };
+  void native
+    .getGlassesStatus()
+    .then(report)
+    .catch(() => undefined);
+  return native.onGlassesStatus?.(report) ?? (() => undefined);
+}
+
 export function subscribeGlassesM4aRecordingFinished(
   listener: (result: GlassesM4aRecordingResult) => void,
 ): () => void {
@@ -407,7 +621,6 @@ export async function getDefaultGlassesDevice(): Promise<MentraDevice | null> {
     debugSdk('default_device_native', { model: nativeDevice.model, present: true });
     return nativeDevice;
   }
-
   // The SDK's observable store is process-local. Restore our app-owned copy so
   // an ordinary app restart (or an APK update that recreates the native module)
   // does not require pairing again.
@@ -436,6 +649,7 @@ export async function getMentraConnectionStatus(): Promise<MentraConnectionStatu
     connected: state === 'connected' && fullyBooted,
     fullyBooted,
     state,
+    deviceModel: status?.deviceModel?.trim() || null,
   };
 }
 

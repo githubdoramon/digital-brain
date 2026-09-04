@@ -24,6 +24,8 @@ class GlassesImageEnhancementService : Service() {
   companion object {
     const val ACTION_START = "digitalbrain.imageenhancement.START"
     const val ACTION_STOP = "digitalbrain.imageenhancement.STOP"
+    const val ACTION_WAKE_START = "digitalbrain.glassesruntime.WAKE_START"
+    const val ACTION_WAKE_STOP = "digitalbrain.glassesruntime.WAKE_STOP"
     private const val CHANNEL_ID = "glasses_image_enhancement"
     private const val LEGACY_CHANNEL_ID = "glasses_poc2_capture"
     private const val NOTIFICATION_ID = 4312
@@ -31,12 +33,21 @@ class GlassesImageEnhancementService : Service() {
     @Volatile private var startedAtMs: Long? = null
     @Volatile private var lastNativeTickAtMs: Long? = null
     @Volatile private var nativeTickCount = 0L
+    @Volatile private var wakeListeningRequested = false
+    @Volatile private var automaticCaptureActive = false
 
     fun status() = mapOf(
       "active" to active,
       "startedAtMs" to startedAtMs,
       "lastNativeTickAtMs" to lastNativeTickAtMs,
       "nativeTickCount" to nativeTickCount,
+    )
+
+    fun runtimeStatus() = mapOf(
+      "active" to active,
+      "wakeListeningRequested" to wakeListeningRequested,
+      "automaticCaptureActive" to automaticCaptureActive,
+      "startedAtMs" to startedAtMs,
     )
 
     fun start(context: Context, intervalMinutes: Int, scheduleCount: Int) {
@@ -48,7 +59,21 @@ class GlassesImageEnhancementService : Service() {
     }
 
     fun stop(context: Context) {
-      context.stopService(Intent(context, GlassesImageEnhancementService::class.java))
+      val intent = Intent(context, GlassesImageEnhancementService::class.java).setAction(ACTION_STOP)
+      context.startService(intent)
+    }
+
+    fun startWakeRuntime(context: Context) {
+      ContextCompat.startForegroundService(
+        context,
+        Intent(context, GlassesImageEnhancementService::class.java).setAction(ACTION_WAKE_START),
+      )
+    }
+
+    fun stopWakeRuntime(context: Context) {
+      context.startService(
+        Intent(context, GlassesImageEnhancementService::class.java).setAction(ACTION_WAKE_STOP),
+      )
     }
   }
 
@@ -72,10 +97,19 @@ class GlassesImageEnhancementService : Service() {
   }
 
   override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-    if (intent?.action == ACTION_STOP) {
-      stopForeground(STOP_FOREGROUND_REMOVE)
-      stopSelf()
-      return START_NOT_STICKY
+    val action = intent?.action
+    if (action == ACTION_WAKE_START) wakeListeningRequested = true
+    if (action == ACTION_WAKE_STOP) wakeListeningRequested = false
+    if (action == ACTION_START) automaticCaptureActive = true
+    if (action == ACTION_STOP) {
+      automaticCaptureActive = false
+      handler.removeCallbacks(foregroundTick)
+      nextTickUptimeMs = 0L
+      if (!wakeListeningRequested) {
+        stopForeground(STOP_FOREGROUND_REMOVE)
+        stopSelf()
+        return START_NOT_STICKY
+      }
     }
     showForegroundNotification(
       intent?.getIntExtra("interval_minutes", 1) ?: 1,
@@ -83,11 +117,18 @@ class GlassesImageEnhancementService : Service() {
     )
     active = true
     if (startedAtMs == null) startedAtMs = System.currentTimeMillis()
-    tickIntervalMs = (intent?.getIntExtra("interval_minutes", 1) ?: 1)
-      .coerceAtLeast(1) * 60_000L
-    handler.removeCallbacks(foregroundTick)
-    nextTickUptimeMs = SystemClock.uptimeMillis() + tickIntervalMs
-    handler.postAtTime(foregroundTick, nextTickUptimeMs)
+    if (action == ACTION_START) {
+      tickIntervalMs = intent.getIntExtra("interval_minutes", 1)
+        .coerceAtLeast(1) * 60_000L
+      handler.removeCallbacks(foregroundTick)
+      nextTickUptimeMs = SystemClock.uptimeMillis() + tickIntervalMs
+      handler.postAtTime(foregroundTick, nextTickUptimeMs)
+    }
+    if (action == ACTION_WAKE_STOP && nextTickUptimeMs == 0L) {
+      stopForeground(STOP_FOREGROUND_REMOVE)
+      stopSelf()
+      return START_NOT_STICKY
+    }
     return START_STICKY
   }
 
@@ -98,6 +139,8 @@ class GlassesImageEnhancementService : Service() {
     startedAtMs = null
     lastNativeTickAtMs = null
     nativeTickCount = 0
+    wakeListeningRequested = false
+    automaticCaptureActive = false
     super.onDestroy()
   }
 
@@ -115,14 +158,20 @@ class GlassesImageEnhancementService : Service() {
         ).apply { setSound(null, null) },
       )
     }
-    val scheduleText = if (scheduleCount == 1) {
+    val scheduleText = if (wakeListeningRequested && automaticCaptureActive && scheduleCount == 1) {
+      "Listening for Hey Brain and running automatic glasses capture"
+    } else if (wakeListeningRequested && automaticCaptureActive) {
+      "Listening for Hey Brain while automatic glasses work is active"
+    } else if (wakeListeningRequested) {
+      "Listening for Hey Brain on connected glasses"
+    } else if (scheduleCount == 1) {
       "Capturing one photo every $intervalMinutes minute(s) for local analysis"
     } else {
       "Running $scheduleCount automatic capture schedules for local analysis"
     }
     val notification = NotificationCompat.Builder(this, CHANNEL_ID)
       .setSmallIcon(android.R.drawable.ic_menu_camera)
-      .setContentTitle("Automatic glasses capture is active")
+      .setContentTitle(if (wakeListeningRequested) "Digital Brain glasses runtime is active" else "Automatic glasses capture is active")
       .setContentText(scheduleText)
       .setOngoing(true)
       .setSilent(true)
