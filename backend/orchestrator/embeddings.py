@@ -11,11 +11,21 @@ logger = get_runtime_logger(__name__)
 
 EMBEDDINGS_HOST = os.getenv("EMBEDDINGS_HOST", "http://localhost:11434")
 EMBEDDINGS_MODEL = os.getenv("EMBEDDINGS_MODEL", "nomic-embed-text")
+EMBEDDINGS_API_KEY = os.getenv("EMBEDDINGS_API_KEY", "")
 EMBED_DIM = int(os.getenv("EMBEDDINGS_DIM", "768"))
 EMBED_MAX_INPUT_TOKENS = int(os.getenv("EMBEDDINGS_MAX_INPUT_TOKENS", "2048"))
 EMBED_MAX_INPUT_BYTES = int(os.getenv("EMBEDDINGS_MAX_INPUT_BYTES", "3000"))
 ADAPTIVE_MIN_INPUT_BYTES = 800
 _adaptive_max_input_bytes = max(ADAPTIVE_MIN_INPUT_BYTES, EMBED_MAX_INPUT_BYTES)
+
+
+def get_embeddings_headers() -> dict[str, str]:
+    """Return standard headers for embedding API requests."""
+    headers = {"Content-Type": "application/json"}
+    api_key = os.getenv("EMBEDDINGS_API_KEY", EMBEDDINGS_API_KEY).strip()
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+    return headers
 
 
 def _truncate_utf8_bytes(text: str, max_bytes: int) -> str:
@@ -59,6 +69,7 @@ def _embed_text_with_legacy_endpoint(text: str) -> list[float]:
 
     response = requests.post(
         f"{EMBEDDINGS_HOST}/embeddings",
+        headers=get_embeddings_headers(),
         json={"model": EMBEDDINGS_MODEL, "prompt": fallback_text},
         timeout=30,
     )
@@ -84,6 +95,7 @@ def embed_text(text: str) -> list[float]:
     def _post_embed(payload_text: str) -> requests.Response:
         return requests.post(
             f"{EMBEDDINGS_HOST}/embed",
+            headers=get_embeddings_headers(),
             json={
                 "model": EMBEDDINGS_MODEL,
                 "input": payload_text,
@@ -96,7 +108,7 @@ def embed_text(text: str) -> list[float]:
     response = _post_embed(input_text)
 
     if response.status_code == 404:
-        logger.warning("[embeddings] /api/embed not available; using legacy /api/embeddings")
+        logger.warning("[embeddings] /embed not available; using legacy /embeddings")
         return _embed_text_with_legacy_endpoint(input_text)
 
     if response.status_code >= 400:
