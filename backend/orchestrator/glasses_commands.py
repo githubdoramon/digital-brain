@@ -46,15 +46,15 @@ def shortcut_for_transcript(transcript: str) -> str | None:
     }.get(normalize_transcript(transcript))
 
 
-def _gate_config(kind: str) -> tuple[str, str]:
+def _gate_config(kind: str) -> tuple[str, dict[str, Any]]:
     if kind == "front_gate":
         return (
-            os.getenv("GLASSES_FRONT_GATE_TOOL", "HassTurnOn").strip(),
-            os.getenv("GLASSES_FRONT_GATE_SCRIPT", "House gate automation").strip(),
+            os.getenv("GLASSES_FRONT_GATE_TOOL", "script__toggle_house_gate").strip(),
+            {},
         )
     return (
-        os.getenv("GLASSES_CAR_GATE_TOOL", "HassTurnOn").strip(),
-        os.getenv("GLASSES_CAR_GATE_SCRIPT", "Garage gate automation").strip(),
+        os.getenv("GLASSES_CAR_GATE_TOOL", "script__toggle_car_gate").strip(),
+        {},
     )
 
 
@@ -88,23 +88,23 @@ async def execute_gate(kind: str, *, command_id: str | None = None) -> dict[str,
     """Invoke the configured fixed HA operation without model/tool discovery."""
     from mcp.servers.home_assistant import call_ha_tool_async, is_ha_configured
 
-    tool_name, script_name = _gate_config(kind)
+    tool_name, arguments = _gate_config(kind)
     started_at = time.monotonic()
     logger.info(
-        "[glasses] gate shortcut dispatch command_id=%s control=%s tool=%s script=%r",
+        "[glasses] gate shortcut dispatch command_id=%s control=%s tool=%s arguments=%s",
         command_id or "unavailable",
         kind,
         tool_name,
-        script_name,
+        arguments,
     )
-    if not tool_name or not script_name:
+    if not tool_name:
         logger.error(
             "[glasses] gate shortcut configuration invalid command_id=%s control=%s "
-            "tool=%r script=%r",
+            "tool=%r arguments=%s",
             command_id or "unavailable",
             kind,
             tool_name,
-            script_name,
+            arguments,
         )
         raise GlassesCommandError("shortcut_unavailable", "That gate shortcut is not configured.")
     if not is_ha_configured():
@@ -115,17 +115,17 @@ async def execute_gate(kind: str, *, command_id: str | None = None) -> dict[str,
         )
         raise GlassesCommandError("ha_unavailable", "Home Assistant is not configured.", retryable=True)
     try:
-        result = await call_ha_tool_async(tool_name, {"name": script_name})
+        result = await call_ha_tool_async(tool_name, arguments)
     except asyncio.CancelledError:
         raise
     except Exception as exc:
         logger.warning(
             "[glasses] gate shortcut transport failure command_id=%s control=%s "
-            "tool=%s script=%r elapsed_ms=%d exception_type=%s error=%s",
+            "tool=%s arguments=%s elapsed_ms=%d exception_type=%s error=%s",
             command_id or "unavailable",
             kind,
             tool_name,
-            script_name,
+            arguments,
             round((time.monotonic() - started_at) * 1_000),
             type(exc).__name__,
             exc,
@@ -136,12 +136,12 @@ async def execute_gate(kind: str, *, command_id: str | None = None) -> dict[str,
         ) from exc
     if not result.get("success"):
         logger.warning(
-            "[glasses] gate shortcut rejected command_id=%s control=%s tool=%s script=%r "
+            "[glasses] gate shortcut rejected command_id=%s control=%s tool=%s arguments=%s "
             "elapsed_ms=%d error=%r ha_response=%s",
             command_id or "unavailable",
             kind,
             tool_name,
-            script_name,
+            arguments,
             round((time.monotonic() - started_at) * 1_000),
             result.get("error"),
             _safe_log_payload(result),
@@ -152,15 +152,15 @@ async def execute_gate(kind: str, *, command_id: str | None = None) -> dict[str,
             retryable=False,
         )
     logger.info(
-        "[glasses] gate shortcut completed command_id=%s control=%s tool=%s script=%r "
+        "[glasses] gate shortcut completed command_id=%s control=%s tool=%s arguments=%s "
         "elapsed_ms=%d",
         command_id or "unavailable",
         kind,
         tool_name,
-        script_name,
+        arguments,
         round((time.monotonic() - started_at) * 1_000),
     )
-    return {"tool_name": tool_name, "script_name": script_name}
+    return {"tool_name": tool_name, "arguments": arguments}
 
 
 def claim_command(user_email: str, command_id: str, transcript: str) -> dict[str, Any]:

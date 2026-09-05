@@ -13,8 +13,10 @@ Personal memory orchestrator with a **bounded agent architecture**. Backend: Fas
 **Smart-glasses command backend**: `POST /mobile/glasses/commands` is an
 authenticated, idempotent transcript endpoint sharing normal main-session and
 thread semantics. Exact `slash new`, `front gate`, and `car gate` shortcuts are
-controller-owned; gate execution uses fixed `HassTurnOn` + configured friendly
-script names and must not perform LLM/tool discovery. Voice responses use the
+controller-owned; gate execution uses fixed HA script tools
+(`script__toggle_house_gate` and `script__toggle_car_gate`, with
+empty arguments) and must not perform LLM/tool discovery. These tool names are
+environment-overridable for deployment-specific HA inventories. Voice responses use the
 request-level modality across all conversational profiles, persist the same
 sanitized answer sent to CPU-only Kokoro, and expose only short-lived
 authenticated mono WAV references. Ambiguous cancellation/timeouts must never
