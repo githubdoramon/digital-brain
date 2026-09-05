@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import time
 from typing import Any
@@ -57,31 +58,108 @@ def _gate_config(kind: str) -> tuple[str, str]:
     )
 
 
-async def execute_gate(kind: str) -> dict[str, Any]:
+def _safe_log_payload(value: Any, *, limit: int = 2_000) -> str:
+    """Serialize bounded diagnostics while redacting credential-shaped fields."""
+
+    sensitive_fragments = ("authorization", "password", "secret", "token")
+
+    def sanitize(item: Any) -> Any:
+        if isinstance(item, dict):
+            return {
+                str(key): (
+                    "[REDACTED]"
+                    if any(fragment in str(key).lower() for fragment in sensitive_fragments)
+                    else sanitize(child)
+                )
+                for key, child in item.items()
+            }
+        if isinstance(item, (list, tuple)):
+            return [sanitize(child) for child in item]
+        return item
+
+    try:
+        rendered = json.dumps(sanitize(value), default=str, ensure_ascii=False, sort_keys=True)
+    except Exception:
+        rendered = repr(value)
+    return rendered if len(rendered) <= limit else f"{rendered[:limit]}...[truncated]"
+
+
+async def execute_gate(kind: str, *, command_id: str | None = None) -> dict[str, Any]:
     """Invoke the configured fixed HA operation without model/tool discovery."""
     from mcp.servers.home_assistant import call_ha_tool_async, is_ha_configured
 
     tool_name, script_name = _gate_config(kind)
+    started_at = time.monotonic()
+    logger.info(
+        "[glasses] gate shortcut dispatch command_id=%s control=%s tool=%s script=%r",
+        command_id or "unavailable",
+        kind,
+        tool_name,
+        script_name,
+    )
     if not tool_name or not script_name:
+        logger.error(
+            "[glasses] gate shortcut configuration invalid command_id=%s control=%s "
+            "tool=%r script=%r",
+            command_id or "unavailable",
+            kind,
+            tool_name,
+            script_name,
+        )
         raise GlassesCommandError("shortcut_unavailable", "That gate shortcut is not configured.")
     if not is_ha_configured():
+        logger.error(
+            "[glasses] gate shortcut unavailable command_id=%s control=%s reason=ha_not_configured",
+            command_id or "unavailable",
+            kind,
+        )
         raise GlassesCommandError("ha_unavailable", "Home Assistant is not configured.", retryable=True)
     try:
         result = await call_ha_tool_async(tool_name, {"name": script_name})
     except asyncio.CancelledError:
         raise
     except Exception as exc:
-        logger.warning("[glasses] fixed HA operation failed: %s", exc, exc_info=exc)
+        logger.warning(
+            "[glasses] gate shortcut transport failure command_id=%s control=%s "
+            "tool=%s script=%r elapsed_ms=%d exception_type=%s error=%s",
+            command_id or "unavailable",
+            kind,
+            tool_name,
+            script_name,
+            round((time.monotonic() - started_at) * 1_000),
+            type(exc).__name__,
+            exc,
+            exc_info=exc,
+        )
         raise GlassesCommandError(
             "ha_execution_failed", "The gate could not be operated.", retryable=True
         ) from exc
     if not result.get("success"):
-        logger.warning("[glasses] fixed HA operation returned failure: %s", result.get("error"))
+        logger.warning(
+            "[glasses] gate shortcut rejected command_id=%s control=%s tool=%s script=%r "
+            "elapsed_ms=%d error=%r ha_response=%s",
+            command_id or "unavailable",
+            kind,
+            tool_name,
+            script_name,
+            round((time.monotonic() - started_at) * 1_000),
+            result.get("error"),
+            _safe_log_payload(result),
+        )
         raise GlassesCommandError(
             "ha_execution_failed",
             "The gate could not be operated.",
             retryable=False,
         )
+    logger.info(
+        "[glasses] gate shortcut completed command_id=%s control=%s tool=%s script=%r "
+        "elapsed_ms=%d",
+        command_id or "unavailable",
+        kind,
+        tool_name,
+        script_name,
+        round((time.monotonic() - started_at) * 1_000),
+    )
     return {"tool_name": tool_name, "script_name": script_name}
 
 
@@ -266,7 +344,7 @@ async def process_command(payload: Any, user: dict[str, Any]) -> dict[str, Any]:
         elif shortcut in {"front_gate", "car_gate"}:
             timeout = max(0.1, float(os.getenv("GLASSES_SHORTCUT_TIMEOUT_SECONDS", "10")))
             async with asyncio.timeout(timeout):
-                details = await execute_gate(shortcut)
+                details = await execute_gate(shortcut, command_id=command_id)
             response = {
                 "outcome": "control_completed",
                 "command_id": command_id,

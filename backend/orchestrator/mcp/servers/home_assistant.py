@@ -125,9 +125,24 @@ def call_ha_tool(tool_name: str, arguments: dict[str, Any] | None = None) -> dic
         result = client.call_tool_sync(tool_name, arguments)
         elapsed = perf_counter() - start
 
-        logger.info("[mcp.ha] call_ha_tool(%s) completed in %.3fs", tool_name, elapsed)
+        result_dict = result.to_dict()
+        if not result.success:
+            logger.warning(
+                "[mcp.ha] call_ha_tool(%s) completed success=false in %.3fs "
+                "error=%r",
+                tool_name,
+                elapsed,
+                result.error,
+            )
+            return result_dict
 
-        return result.to_dict()
+        logger.info(
+            "[mcp.ha] call_ha_tool(%s) completed success=true in %.3fs",
+            tool_name,
+            elapsed,
+        )
+
+        return result_dict
 
     except MCPClientError as e:
         elapsed = perf_counter() - start
@@ -170,13 +185,24 @@ async def call_ha_tool_async(
         result = await client.call_tool_async(tool_name, arguments)
         elapsed = perf_counter() - start
 
+        result_dict = result.to_dict()
+        if not result.success:
+            logger.warning(
+                "[mcp.ha] call_ha_tool_async(%s) completed success=false in %.3fs "
+                "error=%r",
+                tool_name,
+                elapsed,
+                result.error,
+            )
+            return result_dict
+
         logger.info(
-            "[mcp.ha] call_ha_tool_async(%s) completed in %.3fs",
+            "[mcp.ha] call_ha_tool_async(%s) completed success=true in %.3fs",
             tool_name,
             elapsed,
         )
 
-        return result.to_dict()
+        return result_dict
 
     except MCPClientError as e:
         elapsed = perf_counter() - start

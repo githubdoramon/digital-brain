@@ -371,9 +371,21 @@ class MCPClient:
             else (text_content if text_content else result)
         )
 
+        error = None
+        if is_error:
+            if isinstance(parsed_content, str) and parsed_content.strip():
+                error = parsed_content.strip()
+            elif isinstance(parsed_content, list):
+                messages = [str(item).strip() for item in parsed_content if str(item).strip()]
+                if messages:
+                    error = "\n".join(messages)
+            if not error:
+                error = "MCP tool returned isError=true without an error message"
+
         return MCPToolResult(
             success=not is_error,
             content=parsed_content,
+            error=error,
             is_error=is_error,
         )
 

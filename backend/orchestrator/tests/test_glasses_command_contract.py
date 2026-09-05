@@ -167,6 +167,47 @@ async def test_fixed_gate_failure_is_structured_and_never_discovered(monkeypatch
 
 
 @pytest.mark.asyncio
+async def test_fixed_gate_failure_logs_correlation_and_ha_payload(monkeypatch, caplog):
+    import glasses_commands
+
+    async def failed_call(_tool_name, _arguments):
+        return {
+            "success": False,
+            "error": "service call failed",
+            "result": {"message": "entity not found", "access_token": "do-not-log"},
+        }
+
+    monkeypatch.setattr("mcp.servers.home_assistant.is_ha_configured", lambda: True)
+    monkeypatch.setattr("mcp.servers.home_assistant.call_ha_tool_async", failed_call)
+    with pytest.raises(glasses_commands.GlassesCommandError):
+        await glasses_commands.execute_gate("front_gate", command_id="command-123")
+
+    message = caplog.text
+    assert "command_id=command-123" in message
+    assert "control=front_gate" in message
+    assert "House gate automation" in message
+    assert "entity not found" in message
+    assert "do-not-log" not in message
+    assert "[REDACTED]" in message
+
+
+def test_mcp_error_content_becomes_actionable_error():
+    from mcp.client import MCPClient
+
+    client = MCPClient(base_url="http://example.invalid", token="fake-token")
+    result = client._parse_tool_result(
+        {
+            "isError": True,
+            "content": [{"type": "text", "text": "Service call failed: entity not found"}],
+        }
+    )
+
+    assert result.success is False
+    assert result.error == "Service call failed: entity not found"
+    assert result.to_dict()["error"] == "Service call failed: entity not found"
+
+
+@pytest.mark.asyncio
 async def test_gate_timeout_is_terminal_and_non_retryable(monkeypatch):
     import glasses_commands
 
@@ -251,7 +292,8 @@ async def test_concurrent_gate_requests_are_idempotent(monkeypatch):
         state["status"] = status
         state["response"] = response
 
-    async def fake_gate(_kind):
+    async def fake_gate(_kind, *, command_id=None):
+        assert command_id
         calls.append(True)
         return {"tool_name": "HassTurnOn", "script_name": "Garage gate automation"}
 
