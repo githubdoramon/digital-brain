@@ -157,7 +157,7 @@ def test_audio_route_denies_wrong_owner():
 
 
 @pytest.mark.asyncio
-async def test_fixed_gate_operation_uses_turn_on_intent_with_fixed_script_name(monkeypatch):
+async def test_fixed_gate_operation_dispatches_dedicated_script_tool(monkeypatch):
     import glasses_commands
 
     calls = []
@@ -170,31 +170,38 @@ async def test_fixed_gate_operation_uses_turn_on_intent_with_fixed_script_name(m
     monkeypatch.setattr("mcp.servers.home_assistant.call_ha_tool_async", fake_call)
     result = await glasses_commands.execute_gate("car_gate")
     assert result == {
-        "tool_name": "intent__HassTurnOn",
-        "arguments": {"name": "Garage gate automation"},
+        "tool_name": "script__toggle_car_gate",
+        "arguments": {},
+        "dispatch_accepted": True,
     }
-    assert calls == [("intent__HassTurnOn", {"name": "Garage gate automation"})]
+    assert calls == [("script__toggle_car_gate", {})]
 
 
 @pytest.mark.asyncio
-async def test_turn_on_gate_target_name_can_be_overridden(monkeypatch):
+async def test_gate_dispatch_returns_before_ha_completion(monkeypatch):
     import glasses_commands
 
-    calls = []
+    started = asyncio.Event()
+    release = asyncio.Event()
 
     async def fake_call(tool_name, arguments):
-        calls.append((tool_name, arguments))
+        assert tool_name == "script__toggle_house_gate"
+        assert arguments == {}
+        started.set()
+        await release.wait()
         return {"success": True}
 
-    monkeypatch.setenv("GLASSES_FRONT_GATE_NAME", "Custom house gate")
     monkeypatch.setattr("mcp.servers.home_assistant.is_ha_configured", lambda: True)
     monkeypatch.setattr("mcp.servers.home_assistant.call_ha_tool_async", fake_call)
     result = await glasses_commands.execute_gate("front_gate")
     assert result == {
-        "tool_name": "intent__HassTurnOn",
-        "arguments": {"name": "Custom house gate"},
+        "tool_name": "script__toggle_house_gate",
+        "arguments": {},
+        "dispatch_accepted": True,
     }
-    assert calls == [("intent__HassTurnOn", {"name": "Custom house gate"})]
+    await asyncio.wait_for(started.wait(), timeout=0.1)
+    release.set()
+    await asyncio.sleep(0)
 
 
 @pytest.mark.asyncio
@@ -229,7 +236,7 @@ async def test_command_latency_log_combines_client_and_backend_timings(monkeypat
     message = caplog.text
     assert "[glasses] command latency" in message
     assert 'transcription_ms": 85' in message
-    assert "ha_execution_ms" in message
+    assert "ha_dispatch_ms" in message
     assert "total_ms" in message
 
 
@@ -247,24 +254,29 @@ async def test_gate_tool_name_can_be_overridden_without_changing_empty_args(monk
     monkeypatch.setattr("mcp.servers.home_assistant.is_ha_configured", lambda: True)
     monkeypatch.setattr("mcp.servers.home_assistant.call_ha_tool_async", fake_call)
     result = await glasses_commands.execute_gate("front_gate")
-    assert result == {"tool_name": "script__custom_house_gate", "arguments": {}}
+    assert result == {
+        "tool_name": "script__custom_house_gate",
+        "arguments": {},
+        "dispatch_accepted": True,
+    }
     assert calls == [("script__custom_house_gate", {})]
 
 
 @pytest.mark.asyncio
-async def test_fixed_gate_failure_is_structured_and_never_discovered(monkeypatch):
+async def test_fixed_gate_failure_is_logged_after_dispatch(monkeypatch, caplog):
     import glasses_commands
 
     async def failed_call(tool_name, arguments):
-        assert tool_name == "intent__HassTurnOn"
-        assert arguments == {"name": "House gate automation"}
+        assert tool_name == "script__toggle_house_gate"
+        assert arguments == {}
         return {"success": False, "error": "script unavailable"}
 
     monkeypatch.setattr("mcp.servers.home_assistant.is_ha_configured", lambda: True)
     monkeypatch.setattr("mcp.servers.home_assistant.call_ha_tool_async", failed_call)
-    with pytest.raises(glasses_commands.GlassesCommandError) as caught:
-        await glasses_commands.execute_gate("front_gate")
-    assert caught.value.code == "ha_execution_failed"
+    result = await glasses_commands.execute_gate("front_gate")
+    await asyncio.sleep(0)
+    assert result["dispatch_accepted"] is True
+    assert "gate shortcut rejected" in caplog.text
 
 
 @pytest.mark.asyncio
@@ -280,13 +292,14 @@ async def test_fixed_gate_failure_logs_correlation_and_ha_payload(monkeypatch, c
 
     monkeypatch.setattr("mcp.servers.home_assistant.is_ha_configured", lambda: True)
     monkeypatch.setattr("mcp.servers.home_assistant.call_ha_tool_async", failed_call)
-    with pytest.raises(glasses_commands.GlassesCommandError):
-        await glasses_commands.execute_gate("front_gate", command_id="command-123")
+    result = await glasses_commands.execute_gate("front_gate", command_id="command-123")
+    await asyncio.sleep(0)
+    assert result["dispatch_accepted"] is True
 
     message = caplog.text
     assert "command_id=command-123" in message
     assert "control=front_gate" in message
-    assert "intent__HassTurnOn" in message
+    assert "script__toggle_house_gate" in message
     assert "entity not found" in message
     assert "do-not-log" not in message
     assert "[REDACTED]" in message
@@ -309,11 +322,12 @@ def test_mcp_error_content_becomes_actionable_error():
 
 
 @pytest.mark.asyncio
-async def test_gate_timeout_is_terminal_and_non_retryable(monkeypatch):
+async def test_gate_dispatch_does_not_wait_for_ha_result(monkeypatch):
     import glasses_commands
 
     stored = {}
-    monkeypatch.setenv("GLASSES_SHORTCUT_TIMEOUT_SECONDS", "0.1")
+    started = asyncio.Event()
+    release = asyncio.Event()
     monkeypatch.setattr(glasses_commands, "claim_command", lambda *_args: {"claimed": True})
     monkeypatch.setattr(
         glasses_commands,
@@ -322,7 +336,8 @@ async def test_gate_timeout_is_terminal_and_non_retryable(monkeypatch):
     )
 
     async def slow_call(_tool_name, _arguments):
-        await asyncio.sleep(1)
+        started.set()
+        await release.wait()
         return {"success": True}
 
     monkeypatch.setattr("mcp.servers.home_assistant.is_ha_configured", lambda: True)
@@ -331,12 +346,12 @@ async def test_gate_timeout_is_terminal_and_non_retryable(monkeypatch):
         command_id=uuid4(), transcript="front gate", thread_id=None, client_context=None
     )
     result = await glasses_commands.process_command(payload, {"email": "user@example.invalid"})
-    assert result["error"] == {
-        "code": "deadline_exceeded",
-        "message": "The command exceeded its deadline.",
-        "retryable": False,
-    }
-    assert stored["status"] == "failed"
+    assert result["outcome"] == "control_completed"
+    assert result["dispatch_accepted"] is True
+    assert stored["status"] == "completed"
+    await asyncio.wait_for(started.wait(), timeout=0.1)
+    release.set()
+    await asyncio.sleep(0)
 
 
 def test_kokoro_engine_is_cached_and_cpu_provider_requested(monkeypatch, tmp_path):

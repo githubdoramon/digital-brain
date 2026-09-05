@@ -105,12 +105,12 @@ sequenceDiagram
 - Smart-glasses commands use authenticated `POST /mobile/glasses/commands` and
   the same main-session/thread model as `/mobile/ask`. Exact normalized
   transcripts `slash new`, `front gate`, and `car gate` are handled before the
-  agent; the gate shortcuts call the fixed Home Assistant MCP
-  `intent__HassTurnOn` tool with a controller-configured script name and never
-  discover tools per request. The tool names and target names are
-  environment-overridable for a deployment-specific inventory; dedicated
-  script tools remain supported with empty arguments. A PostgreSQL idempotency
-  row is claimed before side effects,
+  agent; the gate shortcuts call fixed Home Assistant MCP script tools
+  `script__toggle_house_gate` or `script__toggle_car_gate` with `{}` and never
+  discover tools per request. The tool names are environment-overridable for a
+  deployment-specific inventory. The endpoint acknowledges once the MCP call
+  task has been dispatched; later Home Assistant success/failure is logged
+  asynchronously. A PostgreSQL idempotency row is claimed before side effects,
   and cancelled/ambiguous work remains processing so a toggle cannot be
   replayed. Agent voice mode is injected into every selected conversational
   profile and validates/repairs the answer before existing conversation

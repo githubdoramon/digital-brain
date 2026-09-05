@@ -27,6 +27,7 @@ logger = get_runtime_logger(__name__)
 _command_timing: ContextVar[dict[str, float] | None] = ContextVar(
     "glasses_command_timing", default=None
 )
+_background_gate_tasks: set[asyncio.Task[None]] = set()
 
 
 def _record_timing(name: str, elapsed_ms: float) -> None:
@@ -81,17 +82,8 @@ def shortcut_for_transcript(transcript: str) -> str | None:
 
 def _gate_config(kind: str) -> tuple[str, dict[str, Any]]:
     if kind == "front_gate":
-        tool_name = os.getenv("GLASSES_FRONT_GATE_TOOL", "intent__HassTurnOn").strip()
-        target_name = os.getenv("GLASSES_FRONT_GATE_NAME", "House gate automation").strip()
-    else:
-        tool_name = os.getenv("GLASSES_CAR_GATE_TOOL", "intent__HassTurnOn").strip()
-        target_name = os.getenv("GLASSES_CAR_GATE_NAME", "Garage gate automation").strip()
-
-    # HassTurnOn is a generic Assist intent and requires a target selector.
-    # Keep the target fixed in controller configuration; an operator can still
-    # override the tool with a dedicated script tool, which takes empty args.
-    arguments = {"name": target_name} if tool_name == "intent__HassTurnOn" else {}
-    return tool_name, arguments
+        return os.getenv("GLASSES_FRONT_GATE_TOOL", "script__toggle_house_gate").strip(), {}
+    return os.getenv("GLASSES_CAR_GATE_TOOL", "script__toggle_car_gate").strip(), {}
 
 
 def _safe_log_payload(value: Any, *, limit: int = 2_000) -> str:
@@ -121,7 +113,7 @@ def _safe_log_payload(value: Any, *, limit: int = 2_000) -> str:
 
 
 async def execute_gate(kind: str, *, command_id: str | None = None) -> dict[str, Any]:
-    """Invoke the configured fixed HA operation without model/tool discovery."""
+    """Dispatch the fixed HA operation without waiting for its final result."""
     from mcp.servers.home_assistant import call_ha_tool_async, is_ha_configured
 
     tool_name, arguments = _gate_config(kind)
@@ -150,53 +142,93 @@ async def execute_gate(kind: str, *, command_id: str | None = None) -> dict[str,
             kind,
         )
         raise GlassesCommandError("ha_unavailable", "Home Assistant is not configured.", retryable=True)
-    try:
-        result = await call_ha_tool_async(tool_name, arguments)
-    except asyncio.CancelledError:
-        raise
-    except Exception as exc:
-        logger.warning(
-            "[glasses] gate shortcut transport failure command_id=%s control=%s "
-            "tool=%s arguments=%s elapsed_ms=%d exception_type=%s error=%s",
+    async def run_call() -> None:
+        try:
+            result = await call_ha_tool_async(tool_name, arguments)
+        except asyncio.CancelledError:
+            logger.warning(
+                "[glasses] gate shortcut HA task cancelled command_id=%s control=%s "
+                "tool=%s arguments=%s elapsed_ms=%d",
+                command_id or "unavailable",
+                kind,
+                tool_name,
+                arguments,
+                round((time.monotonic() - started_at) * 1_000),
+            )
+            raise
+        except Exception as exc:
+            logger.warning(
+                "[glasses] gate shortcut transport failure command_id=%s control=%s "
+                "tool=%s arguments=%s elapsed_ms=%d exception_type=%s error=%s",
+                command_id or "unavailable",
+                kind,
+                tool_name,
+                arguments,
+                round((time.monotonic() - started_at) * 1_000),
+                type(exc).__name__,
+                exc,
+                exc_info=exc,
+            )
+            return
+        if not result.get("success"):
+            logger.warning(
+                "[glasses] gate shortcut rejected command_id=%s control=%s tool=%s arguments=%s "
+                "elapsed_ms=%d error=%r ha_response=%s",
+                command_id or "unavailable",
+                kind,
+                tool_name,
+                arguments,
+                round((time.monotonic() - started_at) * 1_000),
+                result.get("error"),
+                _safe_log_payload(result),
+            )
+            return
+        logger.info(
+            "[glasses] gate shortcut HA completed command_id=%s control=%s tool=%s arguments=%s "
+            "elapsed_ms=%d",
             command_id or "unavailable",
             kind,
             tool_name,
             arguments,
             round((time.monotonic() - started_at) * 1_000),
+        )
+
+    try:
+        task = asyncio.create_task(run_call(), name=f"glasses-gate-{kind}-{command_id or 'unknown'}")
+    except Exception as exc:
+        logger.warning(
+            "[glasses] gate shortcut dispatch failed command_id=%s control=%s tool=%s "
+            "arguments=%s exception_type=%s error=%s",
+            command_id or "unavailable",
+            kind,
+            tool_name,
+            arguments,
             type(exc).__name__,
             exc,
             exc_info=exc,
         )
         raise GlassesCommandError(
-            "ha_execution_failed", "The gate could not be operated.", retryable=True
+            "ha_dispatch_failed", "The gate command could not be dispatched.", retryable=True
         ) from exc
-    if not result.get("success"):
-        logger.warning(
-            "[glasses] gate shortcut rejected command_id=%s control=%s tool=%s arguments=%s "
-            "elapsed_ms=%d error=%r ha_response=%s",
-            command_id or "unavailable",
-            kind,
-            tool_name,
-            arguments,
-            round((time.monotonic() - started_at) * 1_000),
-            result.get("error"),
-            _safe_log_payload(result),
-        )
-        raise GlassesCommandError(
-            "ha_execution_failed",
-            "The gate could not be operated.",
-            retryable=False,
-        )
+
+    _background_gate_tasks.add(task)
+    task.add_done_callback(_background_gate_tasks.discard)
+    # Let the task reach its first network await before acknowledging dispatch.
+    await asyncio.sleep(0)
     logger.info(
-        "[glasses] gate shortcut completed command_id=%s control=%s tool=%s arguments=%s "
-        "elapsed_ms=%d",
+        "[glasses] gate shortcut dispatched command_id=%s control=%s tool=%s arguments=%s "
+        "dispatch_ms=%d",
         command_id or "unavailable",
         kind,
         tool_name,
         arguments,
         round((time.monotonic() - started_at) * 1_000),
     )
-    return {"tool_name": tool_name, "arguments": arguments}
+    return {
+        "tool_name": tool_name,
+        "arguments": arguments,
+        "dispatch_accepted": True,
+    }
 
 
 def claim_command(user_email: str, command_id: str, transcript: str) -> dict[str, Any]:
@@ -407,7 +439,7 @@ async def _process_command(payload: Any, user: dict[str, Any]) -> dict[str, Any]
         elif shortcut in {"front_gate", "car_gate"}:
             timeout = max(0.1, float(os.getenv("GLASSES_SHORTCUT_TIMEOUT_SECONDS", "10")))
             async with asyncio.timeout(timeout):
-                with _timed_phase("ha_execution_ms"):
+                with _timed_phase("ha_dispatch_ms"):
                     details = await execute_gate(shortcut, command_id=command_id)
             response = {
                 "outcome": "control_completed",

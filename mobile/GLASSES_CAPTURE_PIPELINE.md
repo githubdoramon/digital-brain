@@ -251,7 +251,7 @@ then requires a higher sustained continuation threshold (at least 0.075 RMS
 and 1.6× the measured noise floor) before incidental room noise can keep a
 command open; both raw and filtered levels, thresholds, and chunk counts are
 recorded for diagnostics. It never endpoints within the initial 3-second
-command window after wake, then ends after 1.5 seconds of silence or eight
+command window after wake, then ends after 1 second of silence or eight
 seconds total. The shared warmed English-only `ggml-base.en.bin` Whisper
 context receives the filtered 16 kHz PCM through `transcribeData`. The current
 Android `whisper.rn` native build is CPU-only;

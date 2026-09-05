@@ -14,10 +14,11 @@ Personal memory orchestrator with a **bounded agent architecture**. Backend: Fas
 authenticated, idempotent transcript endpoint sharing normal main-session and
 thread semantics. Exact `slash new`, `front gate`, and `car gate` shortcuts are
 controller-owned; gate execution uses fixed HA script tools
-(`intent__HassTurnOn` with a fixed controller-configured script name) and must
-not perform LLM/tool discovery. The tool names and target names are
-environment-overridable for deployment-specific HA inventories; dedicated
-script tools with empty arguments remain supported. Voice responses use the
+(`script__toggle_house_gate` and `script__toggle_car_gate`, with empty
+arguments) and must not perform LLM/tool discovery. The tool names are
+environment-overridable for deployment-specific HA inventories. Gate commands
+are acknowledged once the MCP call task is dispatched; later Home Assistant
+success/failure is logged asynchronously. Voice responses use the
 request-level modality across all conversational profiles, persist the same
 sanitized answer sent to CPU-only Kokoro, and expose only short-lived
 authenticated mono WAV references. Ambiguous cancellation/timeouts must never
@@ -665,7 +666,7 @@ the bounded in-memory command window. Its speech gate ignores the first 350 ms
 of wake-word tail but retains those samples for Whisper, so the pause after the
 wake phrase cannot endpoint a command before it begins. It preserves an
 initial 3-second command window after wake before endpointing may begin, then
-endpoints after 1.5 seconds of sustained silence (or eight seconds total).
+endpoints after 1 second of sustained silence (or eight seconds total).
 Run command PCM through a stateful 120 Hz–7 kHz band-pass copy for speech
 gating and Whisper while retaining the original PCM for debug WAVs. Use a
 permissive rolling ambient baseline on the filtered signal only to begin
