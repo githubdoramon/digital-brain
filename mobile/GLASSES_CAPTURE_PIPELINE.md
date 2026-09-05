@@ -248,7 +248,7 @@ before incidental room noise can keep a command open; both thresholds and
 their chunk counts are recorded for diagnostics. It never endpoints within the
 initial 3-second command window after wake, then ends after 1.5 seconds of
 silence or eight seconds total. The shared warmed English-only
-`ggml-small.en.bin` Whisper context receives that raw 16 kHz PCM through
+`ggml-base.en.bin` Whisper context receives that raw 16 kHz PCM through
 `transcribeData`. The current Android `whisper.rn` native build is CPU-only;
 the command trace records the runtime-selected accelerator and the native
 reason when GPU is unavailable. If the native bridge reports that its Whisper
@@ -259,7 +259,9 @@ the detector records its source-audio decision and pre-roll time bounds, but a
 decision is not an exact phonetic boundary and cannot safely crop an immediate
 command. After transcription, the POC uses the wake model label's final word
 as a fuzzy anchor in the initial recognised words, which handles Whisper
-variants such as `okay brain` without a list of aliases. The focused trace
+variants such as `okay brain` without a list of aliases. If Whisper merges
+the wake phrase into one near-phonetic token, the bounded first-token check
+also removes variants such as `Hebrin` before dispatch. The focused trace
 keeps raw and normalized transcripts, removal method, and source-audio timing.
 For this debugging POC, the exact PCM submitted to
 Whisper is also written as a 16 kHz mono WAV after endpointing. The app keeps
@@ -360,7 +362,7 @@ from the phone or another Bluetooth device.
 
 ## Wake commands and agent audio (Android-first)
 
-After the existing local English `ggml-small.en` transcription completes, the
+After the existing local English `ggml-base.en` transcription completes, the
 transcript enters a typed device-command interception registry. The registry is
 empty in v1, so spoken `slash new` (which the backend maps to `/new`) and every
 other transcript are sent through the authenticated `POST /mobile/glasses/commands` proxy using one stable UUID

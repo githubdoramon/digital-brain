@@ -40,7 +40,7 @@ export class LocalTranscriptionError extends Error {
   }
 }
 
-export const LOCAL_WHISPER_MODEL_FILE_NAME = 'ggml-small.en.bin';
+export const LOCAL_WHISPER_MODEL_FILE_NAME = 'ggml-base.en.bin';
 const MODEL_URL = `https://huggingface.co/ggerganov/whisper.cpp/resolve/main/${LOCAL_WHISPER_MODEL_FILE_NAME}`;
 const MODEL_DIRECTORY = `${FileSystem.documentDirectory ?? FileSystem.cacheDirectory}whisper/`;
 const MODEL_FILE_URI = `${MODEL_DIRECTORY}${LOCAL_WHISPER_MODEL_FILE_NAME}`;

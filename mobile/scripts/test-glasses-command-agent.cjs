@@ -82,7 +82,7 @@ Module._load = function patchedLoad(request, parent, isMain) {
     'expo-file-system/legacy': { __esModule: true, ...fileSystem },
     '@/api/client': api,
     '@/chat/localTranscription': {
-      LOCAL_WHISPER_MODEL_FILE_NAME: 'ggml-small.en.bin',
+      LOCAL_WHISPER_MODEL_FILE_NAME: 'ggml-base.en.bin',
       warmEnglishWhisperContext: async () => whisperFailureContext,
       invalidateEnglishWhisperContext: () => undefined,
       isMissingNativeWhisperContextError: () => false,

@@ -192,13 +192,28 @@ function isWakeAnchorMatch(candidate: string, expected: string): boolean {
   );
 }
 
+function isCombinedWakePrefixMatch(candidate: string, wakeWords: TranscriptWord[]): boolean {
+  if (wakeWords.length < 2) return false;
+
+  const expected = wakeWords.map((word) => word.normalized).join('');
+  const candidateSkeleton = phoneticSkeleton(candidate);
+  const expectedSkeleton = phoneticSkeleton(expected);
+  const minimumLength = Math.max(4, expected.length - 2);
+
+  return (
+    candidate.length >= minimumLength &&
+    candidateSkeleton.length >= 3 &&
+    editDistance(candidateSkeleton, expectedSkeleton) <= 1
+  );
+}
+
 function stripWakeWordPrefix(
   transcript: string,
   wakePhrase: string,
 ): {
   transcript: string;
   wakeWordPrefixRemoved: boolean;
-  removalMethod: 'model_anchor' | 'none';
+  removalMethod: 'combined_fuzzy' | 'model_anchor' | 'none';
 } {
   // The model has already acoustically accepted the wake phrase. Use its
   // label's final word as a fuzzy anchor in the first few recognised words,
@@ -211,6 +226,19 @@ function stripWakeWordPrefix(
   const words = transcriptWords(transcript);
   if (!anchor || wakeWords.length < 2 || words.length < 2) {
     return { transcript, wakeWordPrefixRemoved: false, removalMethod: 'none' };
+  }
+
+  const firstWord = words[0];
+  if (isCombinedWakePrefixMatch(firstWord.normalized, wakeWords)) {
+    const withoutWakeWord = transcript
+      .slice(firstWord.end)
+      .replace(/^[\s,.:;!?-]*/u, '')
+      .trim();
+    return {
+      transcript: withoutWakeWord,
+      wakeWordPrefixRemoved: true,
+      removalMethod: 'combined_fuzzy',
+    };
   }
 
   const maximumAnchorIndex = Math.min(words.length - 1, wakeWords.length);
