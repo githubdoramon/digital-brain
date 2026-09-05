@@ -502,7 +502,7 @@ diff --git a/node_modules/@mentra/bluetooth-sdk/android/src/main/java/com/mentra
 index 91402ee..f2d9f49 100644
 --- a/node_modules/@mentra/bluetooth-sdk/android/src/main/java/com/mentra/bluetoothsdk/MentraBluetoothSdk.kt
 +++ b/node_modules/@mentra/bluetooth-sdk/android/src/main/java/com/mentra/bluetoothsdk/MentraBluetoothSdk.kt
-@@ -994,1 +994,19 @@ class MentraBluetoothSdk(
+@@ -994,1 +994,18 @@ class MentraBluetoothSdk(
 +    /**
 +     * Dispatches LED feedback without waiting for the glasses' optional response.
 +     *
@@ -520,9 +520,7 @@ index 91402ee..f2d9f49 100644
 +            request.count,
 +        )
 +    }
-+
-    suspend fun stopStream(): StreamStatusEvent {
-
+     suspend fun stopStream(): StreamStatusEvent {
 diff --git a/node_modules/@mentra/bluetooth-sdk/android/src/main/java/com/mentra/bluetoothsdk/services/Foreground.kt b/node_modules/@mentra/bluetooth-sdk/android/src/main/java/com/mentra/bluetoothsdk/services/Foreground.kt
 --- a/node_modules/@mentra/bluetooth-sdk/android/src/main/java/com/mentra/bluetoothsdk/services/Foreground.kt
 +++ b/node_modules/@mentra/bluetooth-sdk/android/src/main/java/com/mentra/bluetoothsdk/services/Foreground.kt
