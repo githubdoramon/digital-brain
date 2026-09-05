@@ -10,6 +10,16 @@ Personal memory orchestrator with a **bounded agent architecture**. Backend: Fas
 
 **Execution**: No need to propose ticket creation or plans for engineers to execute later. You are also the executor here.
 
+**Smart-glasses command backend**: `POST /mobile/glasses/commands` is an
+authenticated, idempotent transcript endpoint sharing normal main-session and
+thread semantics. Exact `slash new`, `front gate`, and `car gate` shortcuts are
+controller-owned; gate execution uses fixed `HassTurnOn` + configured friendly
+script names and must not perform LLM/tool discovery. Voice responses use the
+request-level modality across all conversational profiles, persist the same
+sanitized answer sent to CPU-only Kokoro, and expose only short-lived
+authenticated mono WAV references. Ambiguous cancellation/timeouts must never
+replay a gate toggle; input command WAV capture remains mobile-owned.
+
 **Mobile routing convention**: For dynamic mobile routes, prefer folder-based segments with `index.tsx` (for example `mobile/app/contacts/[contactId]/index.tsx`) so nested subroutes can be added without migrating route structure later.
 
 **Mobile screen convention**: Reuse established full-screen patterns before creating new screen chrome. Screens that own a custom/collapsing header (for example event/contact draft editors) must hide the native Expo Stack header in `mobile/app/_layout.tsx` to avoid double navigation bars.

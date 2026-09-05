@@ -6,6 +6,9 @@ import android.media.AudioFocusRequest
 import android.media.AudioFormat
 import android.media.AudioManager
 import android.media.AudioTrack
+import android.media.MediaPlayer
+import android.net.Uri
+import android.util.Log
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
@@ -29,6 +32,14 @@ internal object GlassesAlertPlayback {
   private var audioFocusRequest: AudioFocusRequest? = null
   private var audioFocusManager: AudioManager? = null
   private var activeContext: Context? = null
+  private var speechPlayer: MediaPlayer? = null
+  private var speechCommandId: String? = null
+  private var speechStartedAt = 0L
+  private var speechFinishedCallback: ((String, Long?, String?) -> Unit)? = null
+  private val cancelledSpeechCommands = LinkedHashSet<String>()
+  private const val MAX_CANCELLED_SPEECH_COMMANDS = 32
+
+  private const val SPEECH_TAG = "DigitalBrainSpeech"
 
   private val callCycle = object : Runnable {
     override fun run() {
@@ -99,6 +110,152 @@ internal object GlassesAlertPlayback {
     handler.postDelayed({ playTone(1560, 95, context) }, 145)
     handler.postDelayed({ if (!callAlertActive) releaseAudioFocus() }, 420)
     return true
+  }
+
+  /**
+   * Starts app-private speech playback on the remembered Mentra Bluetooth
+   * output. Completion is reported through the Expo event callback so the JS
+   * command state machine can resume wake listening only after all audio has
+   * drained. No audio bytes cross the React Native bridge.
+   */
+  @Synchronized
+  fun playSpeechAudio(
+    context: Context,
+    commandId: String,
+    fileUri: String,
+    onFinished: (String, Long?, String?) -> Unit,
+  ): Map<String, Any> {
+    stopSpeechAudio(null)
+    synchronized(this) {
+      if (cancelledSpeechCommands.remove(commandId)) return mapOf("started" to false)
+    }
+    val device = GlassesAlertSettings.findGlassesAudioDevice(context)
+      ?: return mapOf("started" to false)
+    val parsedUri = Uri.parse(fileUri)
+    if (parsedUri.scheme !in setOf("file", "content")) {
+      return mapOf("started" to false)
+    }
+    val player = try {
+      MediaPlayer().apply {
+        setAudioAttributes(
+          AudioAttributes.Builder()
+            .setUsage(AudioAttributes.USAGE_MEDIA)
+            .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+            .build(),
+        )
+        setDataSource(context, parsedUri)
+        if (!setPreferredDevice(device)) {
+          release()
+          return mapOf("started" to false)
+        }
+        setOnPreparedListener { prepared ->
+          if (speechPlayer !== prepared || speechCommandId != commandId) return@setOnPreparedListener
+          requestSpeechFocus(context)
+          speechStartedAt = SystemClock.elapsedRealtime()
+          prepared.start()
+        }
+        setOnCompletionListener { completed ->
+          val duration = SystemClock.elapsedRealtime() - speechStartedAt
+          finishSpeechPlayback(completed, commandId, "completed", duration, null, onFinished)
+        }
+        setOnErrorListener { failed, what, extra ->
+          finishSpeechPlayback(
+            failed,
+            commandId,
+            "error",
+            null,
+            "MediaPlayer error ($what/$extra)",
+            onFinished,
+          )
+          true
+        }
+        prepareAsync()
+      }
+    } catch (error: Exception) {
+      Log.w(SPEECH_TAG, "Speech playback setup failed", error)
+      releaseSpeechFocus()
+      onFinished("error", null, error.message ?: "Speech playback setup failed.")
+      return mapOf("started" to false)
+    }
+    speechPlayer = player
+    speechCommandId = commandId
+    speechFinishedCallback = onFinished
+    return mapOf("started" to true)
+  }
+
+  @Synchronized
+  fun stopSpeechAudio(commandId: String?): Boolean {
+    if (commandId != null && speechCommandId == null) {
+      if (cancelledSpeechCommands.size >= MAX_CANCELLED_SPEECH_COMMANDS) {
+        cancelledSpeechCommands.iterator().next().let(cancelledSpeechCommands::remove)
+      }
+      cancelledSpeechCommands.add(commandId)
+    }
+    if (commandId != null && speechCommandId != null && commandId != speechCommandId) return false
+    val player = speechPlayer ?: return false
+    val stoppedCommandId = speechCommandId
+    val callback = speechFinishedCallback
+    try {
+      if (player.isPlaying) player.stop()
+    } catch (_: IllegalStateException) {
+      // A prepareAsync callback can race with an explicit stop.
+    }
+    player.release()
+    speechPlayer = null
+    speechCommandId = null
+    speechFinishedCallback = null
+    speechStartedAt = 0L
+    releaseSpeechFocus()
+    if (stoppedCommandId != null) callback?.invoke("stopped", null, "Speech playback stopped.")
+    return stoppedCommandId != null
+  }
+
+  private fun finishSpeechPlayback(
+    player: MediaPlayer,
+    commandId: String,
+    status: String,
+    durationMs: Long?,
+    error: String?,
+    onFinished: (String, Long?, String?) -> Unit,
+  ) {
+    synchronized(this) {
+      if (speechPlayer !== player || speechCommandId != commandId) return
+      try {
+        player.release()
+      } catch (_: Exception) {
+        // Release is best effort after a terminal callback.
+      }
+      speechPlayer = null
+      speechCommandId = null
+      speechFinishedCallback = null
+      speechStartedAt = 0L
+      releaseSpeechFocus()
+    }
+    onFinished(status, durationMs, error)
+  }
+
+  private fun requestSpeechFocus(context: Context) {
+    val manager = context.getSystemService(AudioManager::class.java) ?: return
+    audioFocusManager = manager
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+      val request = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT)
+        .setAudioAttributes(
+          AudioAttributes.Builder()
+            .setUsage(AudioAttributes.USAGE_MEDIA)
+            .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+            .build(),
+        )
+        .build()
+      audioFocusRequest = request
+      manager.requestAudioFocus(request)
+    } else {
+      @Suppress("DEPRECATION")
+      manager.requestAudioFocus(null, AudioManager.STREAM_MUSIC, AudioManager.AUDIOFOCUS_GAIN_TRANSIENT)
+    }
+  }
+
+  private fun releaseSpeechFocus() {
+    releaseAudioFocus()
   }
 
   private fun playTone(frequencyHz: Int, durationMs: Int, suppliedContext: Context? = null) {

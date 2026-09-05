@@ -332,6 +332,7 @@ class AgentController:
         question: str,
         client_context: Optional[dict[str, Any]],
         ui_submission: Optional[dict[str, Any]],
+        response_modality: Optional[str] = None,
     ) -> AgentState:
         """Build the canonical AgentState shared by sync/stream paths."""
         state = AgentState(goal=question)
@@ -339,6 +340,10 @@ class AgentController:
         normalized_submission = self._normalize_ui_submission(ui_submission)
         if normalized_submission:
             state.request_context["ui_submission"] = normalized_submission
+        if response_modality:
+            from voice_response import normalize_modality
+
+            state.request_context["response_modality"] = normalize_modality(response_modality).value
         state.conversational_profile = self.runtime_profile.name
         return state
 
@@ -454,6 +459,7 @@ class AgentController:
         search_limit: int = 30,
         client_context: Optional[dict[str, Any]] = None,
         ui_submission: Optional[dict[str, Any]] = None,
+        response_modality: Optional[str] = None,
     ) -> dict[str, Any]:
         """
         Run the agent loop for a question.
@@ -478,6 +484,7 @@ class AgentController:
             question=question,
             client_context=client_context,
             ui_submission=ui_submission,
+            response_modality=response_modality,
         )
         self._inject_inferred_location(state=state, user_email=user_email)
 
@@ -732,6 +739,7 @@ class AgentController:
         search_limit: int = 30,
         client_context: Optional[dict[str, Any]] = None,
         ui_submission: Optional[dict[str, Any]] = None,
+        response_modality: Optional[str] = None,
     ) -> AsyncGenerator[dict[str, Any], None]:
         """
         Stream agent responses with tool calling support.
@@ -743,6 +751,7 @@ class AgentController:
             question=question,
             client_context=client_context,
             ui_submission=ui_submission,
+            response_modality=response_modality,
         )
         self._inject_inferred_location(state=state, user_email=user_email)
 

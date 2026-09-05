@@ -4,7 +4,7 @@ import { Platform } from 'react-native';
 import GlassesAlertsNative from '@/modules/digital-brain-glasses-alerts/src';
 import {
   blinkMentraBlueLed,
-  blinkMentraOrangeLed,
+  blinkMentraRedLed,
   getMentraConnectionStatus,
   setMentraMicState,
   subscribeMentraConnectionState,
@@ -20,6 +20,7 @@ import {
   startGlassesCommandTranscription,
   warmGlassesCommandTranscription,
 } from '@/mentraCapture/commandTranscription';
+import { dispatchGlassesCommand } from '@/mentraCapture/glassesCommandAgent';
 import {
   EmbeddingWakeWordDetector,
   OpenWakeWordOnnxBackend,
@@ -31,7 +32,7 @@ const model = require('@/assets/wake-word/hey-brain-embedding.json') as Embeddin
 const MAX_PENDING_PCM_CHUNKS = 24;
 const EVALUATION_LOG_INTERVAL_MS = 5_000;
 
-type PauseReason = 'audio_recording' | 'video_recording' | 'connection_lost';
+type PauseReason = 'audio_recording' | 'video_recording' | 'glasses_command' | 'connection_lost';
 let initialized = false;
 let detector: EmbeddingWakeWordDetector | null = null;
 let pcmUnsubscribe: (() => void) | null = null;
@@ -48,6 +49,24 @@ let lastEvaluationLogAt = 0;
 function debug(event: string, payload?: Record<string, unknown>): void {
   void appendMentraDebugLog(event, payload).catch(() => undefined);
   void appendWakeCommandDebugLog(event, payload).catch(() => undefined);
+}
+
+function handleGlassesCommandTranscriptionFailure(event: {
+  commandId: string;
+  wakeDetectedAt: number;
+  error: string;
+}): void {
+  debug('glasses_command_transcription_failure_led', {
+    command_id: event.commandId,
+    wake_to_failure_ms: Date.now() - event.wakeDetectedAt,
+    error: event.error,
+  });
+  void blinkMentraRedLed().catch((error) =>
+    debug('glasses_command_red_led_failed', {
+      command_id: event.commandId,
+      error: error instanceof Error ? error.message : String(error),
+    }),
+  );
 }
 
 function shouldListen(): boolean {
@@ -168,14 +187,7 @@ async function processPendingPcm(): Promise<void> {
         resetDetector('command_session_started');
         startGlassesCommandTranscription(
           wakeDetectedAt,
-          (command) => {
-            void blinkMentraOrangeLed().catch((error) =>
-              debug('glasses_command_listening_finished_led_failed', {
-                command_id: command.commandId,
-                error: error instanceof Error ? error.message : String(error),
-              }),
-            );
-          },
+          () => undefined,
           commandInitialChunks,
           {
             wakePhrase: event.modelName.replace(/[-_]+/gu, ' '),
@@ -183,6 +195,13 @@ async function processPendingPcm(): Promise<void> {
             preRollStartAudioTimeMs: event.preRollStartAudioTimeMs,
             preRollEndAudioTimeMs: event.preRollEndAudioTimeMs,
           },
+          (transcript) => {
+            void dispatchGlassesCommand(transcript, {
+              pauseListening: () => pauseWakeWordListening('glasses_command'),
+              resumeListening: () => resumeWakeWordListening('glasses_command', 'command_finished'),
+            });
+          },
+          handleGlassesCommandTranscriptionFailure,
         );
       }
     }
@@ -208,14 +227,19 @@ function acceptPcm(pcm: ArrayBuffer | ArrayBufferView): void {
   if (!listenerActive) return;
   const samples = new Int16Array(copyPcmBytes(pcm));
   if (isGlassesCommandSessionActive()) {
-    acceptGlassesCommandPcm(samples, (command) => {
-      void blinkMentraOrangeLed().catch((error) =>
-        debug('glasses_command_listening_finished_led_failed', {
-          command_id: command.commandId,
-          error: error instanceof Error ? error.message : String(error),
-        }),
-      );
-    });
+    acceptGlassesCommandPcm(
+      samples,
+      (command) => {
+        debug('glasses_command_listening_finished', { command_id: command.commandId });
+      },
+      (transcript) => {
+        void dispatchGlassesCommand(transcript, {
+          pauseListening: () => pauseWakeWordListening('glasses_command'),
+          resumeListening: () => resumeWakeWordListening('glasses_command', 'command_finished'),
+        });
+      },
+      handleGlassesCommandTranscriptionFailure,
+    );
     return;
   }
   observeGlassesAmbientPcm(samples);
@@ -295,15 +319,15 @@ async function reconcile(reason: string): Promise<void> {
 }
 
 export async function pauseWakeWordListening(
-  reason: 'audio_recording' | 'video_recording',
+  reason: 'audio_recording' | 'video_recording' | 'glasses_command',
 ): Promise<void> {
   pauseReasons.set(reason, reason === 'audio_recording');
-  await deactivateListener(reason, reason === 'audio_recording');
+  await deactivateListener(reason, reason === 'audio_recording' || reason === 'glasses_command');
   await GlassesAlertsNative?.stopGlassesWakeRuntime().catch(() => undefined);
 }
 
 export async function resumeWakeWordListening(
-  owner: 'audio_recording' | 'video_recording',
+  owner: 'audio_recording' | 'video_recording' | 'glasses_command',
   reason: string,
 ): Promise<void> {
   pauseReasons.delete(owner);

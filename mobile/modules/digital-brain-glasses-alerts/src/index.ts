@@ -44,6 +44,12 @@ export type GlassesRuntimeForegroundServiceStatus = {
 
 type DigitalBrainGlassesAlertsEvents = {
   onImageEnhancementForegroundTick(event: { timestampMs: number }): void;
+  onSpeechPlaybackFinished(event: {
+    commandId: string;
+    status: 'completed' | 'error' | 'stopped';
+    durationMs?: number;
+    error?: string;
+  }): void;
 };
 
 declare class DigitalBrainGlassesAlertsNativeModule extends NativeModule<DigitalBrainGlassesAlertsEvents> {
@@ -65,6 +71,11 @@ declare class DigitalBrainGlassesAlertsNativeModule extends NativeModule<Digital
   startGlassesWakeRuntime(): Promise<void>;
   stopGlassesWakeRuntime(): Promise<void>;
   getGlassesRuntimeForegroundServiceStatus(): Promise<GlassesRuntimeForegroundServiceStatus>;
+  playSpeechAudio(
+    commandId: string,
+    fileUri: string,
+  ): Promise<{ started: boolean; durationMs?: number }>;
+  stopSpeechAudio(commandId?: string): Promise<{ stopped: boolean }>;
 }
 
 export default requireOptionalNativeModule<DigitalBrainGlassesAlertsNativeModule>(

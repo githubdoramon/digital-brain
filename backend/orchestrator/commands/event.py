@@ -120,6 +120,7 @@ def handle_pending_event(
     command_response_text: CommandResponseTextFn,
     command_assistant_metadata: CommandAssistantMetadataFn,
     progress_callback: ProgressCallbackFn | None = None,
+    response_text_transform: Callable[[str], str] | None = None,
 ) -> CommandResultPayload | None:
     if parse_command(question):
         return None
@@ -207,7 +208,9 @@ def handle_pending_event(
             command_thread_id,
             user_email,
             question,
-            command_response_text(command_result),
+            response_text_transform(command_response_text(command_result))
+            if response_text_transform
+            else command_response_text(command_result),
             user_metadata=user_metadata,
             assistant_metadata=assistant_metadata,
         )

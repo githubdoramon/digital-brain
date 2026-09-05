@@ -14,6 +14,16 @@ Examples:
 - `/mobile/threads`
 - `/mobile/threads/{id}`
 - `/mobile/commands/event/confirm`
+- `/mobile/glasses/commands`
+- `/mobile/glasses/audio/{audio_id}`
+
+Smart-glasses commands are authenticated bearer-token requests. The command
+body contains a UUID `command_id`, transcript, optional `thread_id` (or
+`session_id`) and client context. Responses are discriminated by `outcome`:
+`control_completed`, `shortcut_completed`, `agent_response`, or `error`.
+Voice agent responses include a short-lived `audio` reference; gate and `slash
+new` shortcuts are silent. Audio is mono WAV, authenticated, process-local,
+and deleted after a successful download (or by TTL cleanup).
 
 If a new backend endpoint is added for mobile usage, make sure the client calls it
 with the `/mobile` prefix and the proxy middleware routes it to the backend. And make sure the backend can handle this route as well (for example, by responding to both `/api_endpoint` and `/mobile/api_endpoint`)

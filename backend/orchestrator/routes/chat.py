@@ -1118,6 +1118,7 @@ def _handle_command(
     media_attachments: list[dict[str, Any]] | None = None,
     user_metadata: dict[str, Any] | None = None,
     progress_callback: Callable[[str], None] | None = None,
+    response_text_transform: Callable[[str], str] | None = None,
 ) -> tuple[dict[str, Any], str, dict[str, Any] | None] | None:
     from commands import get_command_registry, parse_command
     from commands.storage import store_command_thread
@@ -1157,7 +1158,9 @@ def _handle_command(
             command_thread_id,
             user_email,
             question,
-            _command_response_text(command_result),
+            response_text_transform(_command_response_text(command_result))
+            if response_text_transform
+            else _command_response_text(command_result),
             user_metadata=user_metadata,
             assistant_metadata=assistant_metadata,
         )

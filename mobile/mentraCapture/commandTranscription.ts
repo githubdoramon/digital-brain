@@ -73,6 +73,21 @@ export type GlassesCommandListeningFinished = {
   audioDurationMs: number;
 };
 
+export type GlassesCommandTranscribed = {
+  commandId: string;
+  transcript: string;
+  rawTranscript: string;
+  language: string;
+  audioDurationMs: number;
+  wakeDetectedAt: number;
+};
+
+export type GlassesCommandTranscriptionFailed = {
+  commandId: string;
+  wakeDetectedAt: number;
+  error: string;
+};
+
 let state: CommandSessionState = 'idle';
 let activeSession: CommandSession | null = null;
 let commandModelWarmup: Promise<void> | null = null;
@@ -84,7 +99,13 @@ function debug(event: string, payload?: Record<string, unknown>): void {
 }
 
 function createCommandId(): string {
-  return `glasses-command-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  const crypto = (globalThis as { crypto?: { randomUUID?: () => string } }).crypto;
+  if (crypto?.randomUUID) return crypto.randomUUID();
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/gu, (character) => {
+    const random = Math.floor(Math.random() * 16);
+    const value = character === 'x' ? random : (random & 0x3) | 0x8;
+    return value.toString(16);
+  });
 }
 
 function rms(samples: Int16Array): number {
@@ -130,10 +151,7 @@ function transcriptWords(text: string): TranscriptWord[] {
     const start = match.index;
     if (start === undefined) continue;
     words.push({
-      normalized: value
-        .normalize('NFD')
-        .replace(/\p{M}/gu, '')
-        .toLocaleLowerCase(),
+      normalized: value.normalize('NFD').replace(/\p{M}/gu, '').toLocaleLowerCase(),
       start,
       end: start + value.length,
     });
@@ -174,7 +192,10 @@ function isWakeAnchorMatch(candidate: string, expected: string): boolean {
   );
 }
 
-function stripWakeWordPrefix(transcript: string, wakePhrase: string): {
+function stripWakeWordPrefix(
+  transcript: string,
+  wakePhrase: string,
+): {
   transcript: string;
   wakeWordPrefixRemoved: boolean;
   removalMethod: 'model_anchor' | 'none';
@@ -193,9 +214,9 @@ function stripWakeWordPrefix(transcript: string, wakePhrase: string): {
   }
 
   const maximumAnchorIndex = Math.min(words.length - 1, wakeWords.length);
-  const anchorIndex = words.slice(1, maximumAnchorIndex + 1).findIndex((word) =>
-    isWakeAnchorMatch(word.normalized, anchor),
-  );
+  const anchorIndex = words
+    .slice(1, maximumAnchorIndex + 1)
+    .findIndex((word) => isWakeAnchorMatch(word.normalized, anchor));
   if (anchorIndex === -1) {
     return { transcript, wakeWordPrefixRemoved: false, removalMethod: 'none' };
   }
@@ -327,6 +348,8 @@ function endListening(
   session: CommandSession,
   reason: Exclude<CommandFinishReason, 'cancelled'>,
   onListeningFinished: (event: GlassesCommandListeningFinished) => void,
+  onTranscribed?: (event: GlassesCommandTranscribed) => void,
+  onTranscriptionFailed?: (event: GlassesCommandTranscriptionFailed) => void,
 ): void {
   if (activeSession !== session || state !== 'listening') return;
   clearMaximumTimer(session);
@@ -497,6 +520,14 @@ function endListening(
         transcription_total_ms: Date.now() - initialModelReadyAt,
         wake_to_transcript_ms: Date.now() - session.wakeDetectedAt,
       });
+      onTranscribed?.({
+        commandId: session.id,
+        transcript,
+        rawTranscript: result.result,
+        language: result.language,
+        audioDurationMs,
+        wakeDetectedAt: session.wakeDetectedAt,
+      });
     } catch (error) {
       debug('glasses_command_transcription_failed', {
         command_id: session.id,
@@ -504,6 +535,16 @@ function endListening(
         audio_duration_ms: audioDurationMs,
         wake_to_failure_ms: Date.now() - session.wakeDetectedAt,
       });
+      // Cancellation and a normal no-speech endpoint intentionally do not
+      // reach this callback. Only report a real model/transcription failure
+      // while this session still owns the transcription boundary.
+      if (activeSession === session) {
+        onTranscriptionFailed?.({
+          commandId: session.id,
+          wakeDetectedAt: session.wakeDetectedAt,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
     } finally {
       if (activeSession === session) {
         activeSession = null;
@@ -517,6 +558,8 @@ function acceptListeningPcm(
   session: CommandSession,
   samples: Int16Array,
   onListeningFinished: (event: GlassesCommandListeningFinished) => void,
+  onTranscribed?: (event: GlassesCommandTranscribed) => void,
+  onTranscriptionFailed?: (event: GlassesCommandTranscriptionFailed) => void,
   sampleAt = Date.now(),
 ): void {
   if (session.lastPcmAt !== null) {
@@ -585,7 +628,7 @@ function acceptListeningPcm(
     sampleAt >= session.initialEndpointAllowedAt &&
     sampleAt - endpointReferenceAt >= COMMAND_SILENCE_MS
   ) {
-    endListening(session, 'silence', onListeningFinished);
+    endListening(session, 'silence', onListeningFinished, onTranscribed, onTranscriptionFailed);
   }
 }
 
@@ -594,6 +637,8 @@ export function startGlassesCommandTranscription(
   onListeningFinished: (event: GlassesCommandListeningFinished) => void,
   postWakeBufferedChunks: Int16Array[] = [],
   wakeTiming: WakeCommandTiming,
+  onTranscribed?: (event: GlassesCommandTranscribed) => void,
+  onTranscriptionFailed?: (event: GlassesCommandTranscriptionFailed) => void,
 ): void {
   if (state !== 'idle') {
     debug('glasses_command_start_ignored', { state });
@@ -645,7 +690,8 @@ export function startGlassesCommandTranscription(
     const listeningStartedAt = Date.now();
     session.listeningStartedAt = listeningStartedAt;
     session.maximumTimer = setTimeout(
-      () => endListening(session, 'timeout', onListeningFinished),
+      () =>
+        endListening(session, 'timeout', onListeningFinished, onTranscribed, onTranscriptionFailed),
       COMMAND_MAX_LISTENING_MS,
     );
     const graceAudioDurationMs = Math.round(
@@ -671,7 +717,14 @@ export function startGlassesCommandTranscription(
     for (const graceChunk of graceChunks) {
       if (activeSession !== session || state !== 'listening') return;
       graceChunkEndedAt += (graceChunk.length / 16_000) * 1_000;
-      acceptListeningPcm(session, graceChunk, onListeningFinished, graceChunkEndedAt);
+      acceptListeningPcm(
+        session,
+        graceChunk,
+        onListeningFinished,
+        onTranscribed,
+        onTranscriptionFailed,
+        graceChunkEndedAt,
+      );
     }
   };
   beginListening();
@@ -680,6 +733,8 @@ export function startGlassesCommandTranscription(
 export function acceptGlassesCommandPcm(
   samples: Int16Array,
   onListeningFinished: (event: GlassesCommandListeningFinished) => void,
+  onTranscribed?: (event: GlassesCommandTranscribed) => void,
+  onTranscriptionFailed?: (event: GlassesCommandTranscriptionFailed) => void,
 ): void {
   const session = activeSession;
   if (!session) return;
@@ -688,7 +743,7 @@ export function acceptGlassesCommandPcm(
     return;
   }
   if (state !== 'listening') return;
-  acceptListeningPcm(session, samples, onListeningFinished);
+  acceptListeningPcm(session, samples, onListeningFinished, onTranscribed, onTranscriptionFailed);
 }
 
 export function cancelGlassesCommandTranscription(reason: string): void {

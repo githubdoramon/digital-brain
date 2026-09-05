@@ -14,6 +14,7 @@
     "format": "prettier . --write",
     "format:check": "prettier . --check",
     "test:image-understanding": "node scripts/test-image-understanding-schema.cjs",
+    "test:glasses-command": "node scripts/test-glasses-command-agent.cjs",
     "eas:build:android:apk": "source .env; set +a; MENTRA_PUBLIC_SDK=true bash ./scripts/eas-build-android-apk.sh"
   },
   "dependencies": {

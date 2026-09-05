@@ -434,8 +434,8 @@ export async function setMentraMicState(enabled: boolean): Promise<void> {
 }
 
 async function blinkMentraLed(
-  color: 'blue' | 'orange',
-  requestPrefix: 'wake' | 'command-finished',
+  color: 'blue' | 'orange' | 'red',
+  requestPrefix: 'wake' | 'command-finished' | 'command-error',
 ): Promise<string> {
   const native = loadSdk();
   if (!native)
@@ -490,6 +490,10 @@ export function blinkMentraBlueLed(): Promise<string> {
 
 export function blinkMentraOrangeLed(): Promise<string> {
   return blinkMentraLed('orange', 'command-finished');
+}
+
+export function blinkMentraRedLed(): Promise<string> {
+  return blinkMentraLed('red', 'command-error');
 }
 
 function isArrayBuffer(value: unknown): value is ArrayBuffer {

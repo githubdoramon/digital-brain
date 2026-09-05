@@ -2,6 +2,13 @@ from __future__ import annotations
 
 from typing import Any
 
+GLASSES_VOICE_ANSWER_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {"answer": {"type": "string"}},
+    "required": ["answer"],
+    "additionalProperties": False,
+}
+
 STRING_ARRAY_SCHEMA: dict[str, Any] = {
     "type": "array",
     "items": {"type": "string"},

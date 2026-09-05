@@ -357,3 +357,46 @@ in Digital Brain diagnostics, the phone's regular notification sound remains,
 media ducks briefly, an incoming call repeats only in the glasses until it is
 answered/declined, and disconnecting the Mentra audio route produces no sound
 from the phone or another Bluetooth device.
+
+## Wake commands and agent audio (Android-first)
+
+After the existing local English `ggml-small.en` transcription completes, the
+transcript enters a typed device-command interception registry. The registry is
+empty in v1, so spoken `slash new` (which the backend maps to `/new`) and every
+other transcript are sent through the authenticated `POST /mobile/glasses/commands` proxy using one stable UUID
+`command_id`, the existing chat thread id when available, and the normal
+timezone/location `client_context`. The mobile command state machine permits
+one in-flight command, pauses wake listening after dispatch, and always resumes
+it after completion, failure, or the 70-second hard deadline. It never creates a
+new id for a retry or plays a response that arrived after timeout.
+
+The backend outcome is discriminated as `control_completed`,
+`shortcut_completed`, `agent_response`, or `error`. Gate/shortcut and slash-new
+commands are silent. An `agent_response` supplies canonical answer text for
+normal backend-owned conversation storage plus an authenticated ephemeral audio
+route; the app downloads that audio to app-private cache storage, verifies it,
+then plays it completely through the preferred Mentra Bluetooth audio device.
+The temporary file is deleted on every terminal path. Orange means a completed
+shortcut or audio ready immediately before playback; blue remains wake detected;
+red blinks for backend, routing, download, TTS, playback, or lifecycle errors.
+
+The Android `DigitalBrainGlassesAlerts` module owns file-based speech playback,
+audio focus, explicit preferred-device routing, completion/error events, and
+player cleanup. Audio bytes never cross the React Native bridge. Existing
+retained wake-command WAVs and their debug logging are unchanged.
+
+Physical-device validation checklist (static builds do not prove these paths):
+
+1. Pair and audio-pair Mentra Live, lock/background the phone, say “Hey Brain”,
+   and confirm blue wake acknowledgement, no handset audio, and wake listening
+   pauses after local transcription.
+2. Exercise a normal agent question, a `control_completed` gate, a
+   `shortcut_completed` including spoken `slash new`, and an `error`. Confirm exact
+   orange/red semantics, silence for shortcuts, and no duplicate execution.
+3. Confirm agent audio downloads only with the authenticated route, plays fully
+   through Mentra, ducks existing audio appropriately, resumes wake listening
+   only after completion, and deletes the private temp file.
+4. Disconnect glasses during backend execution, download, and playback; deny
+   auth; kill/background the app; and hold the backend past 70 seconds. Confirm
+   red blink, listener recovery, no new command id, no late playback, and no
+   leaked audio/auth data in exported diagnostics.

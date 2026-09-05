@@ -30,7 +30,7 @@ class GlassesAlertsModule : Module() {
 
   override fun definition() = ModuleDefinition {
     Name("DigitalBrainGlassesAlerts")
-    Events("onImageEnhancementForegroundTick")
+    Events("onImageEnhancementForegroundTick", "onSpeechPlaybackFinished")
 
     OnCreate {
       activeModule = WeakReference(this@GlassesAlertsModule)
@@ -159,7 +159,26 @@ class GlassesAlertsModule : Module() {
       GlassesImageEnhancementService.runtimeStatus()
     }
 
+    AsyncFunction("playSpeechAudio") { commandId: String, fileUri: String ->
+      GlassesAlertPlayback.playSpeechAudio(context(), commandId, fileUri) { status, durationMs, error ->
+        sendEvent(
+          "onSpeechPlaybackFinished",
+          mapOf(
+            "commandId" to commandId,
+            "status" to status,
+            "durationMs" to durationMs,
+            "error" to error,
+          ),
+        )
+      }
+    }
+
+    AsyncFunction("stopSpeechAudio") { commandId: String? ->
+      mapOf("stopped" to GlassesAlertPlayback.stopSpeechAudio(commandId))
+    }
+
     OnDestroy {
+      GlassesAlertPlayback.stopSpeechAudio(null)
       if (activeModule?.get() === this@GlassesAlertsModule) activeModule = null
     }
   }

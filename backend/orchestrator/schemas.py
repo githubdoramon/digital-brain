@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import date, datetime
 from typing import Any, Literal
+from uuid import UUID
 
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator
 
@@ -721,6 +722,50 @@ class AskIn(BaseModel):
     client_context: ClientContextIn | None = None
     ui_submission: UiSubmissionIn | None = None
     media_attachments: list[ChatMediaAttachmentIn] = Field(default_factory=list)
+
+
+class GlassesCommandIn(BaseModel):
+    """Authenticated transcript command submitted by the smart-glasses client."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    command_id: UUID = Field(
+        alias="command_id",
+        validation_alias=AliasChoices("command_id", "commandId"),
+    )
+    transcript: str = Field(min_length=1, max_length=4000)
+    thread_id: str | None = Field(
+        default=None,
+        alias="thread_id",
+        validation_alias=AliasChoices("thread_id", "threadId", "session_id", "sessionId"),
+    )
+    client_context: ClientContextIn | None = Field(default=None, alias="client_context")
+
+
+class GlassesAudioReference(BaseModel):
+    audio_id: str
+    download_url: str
+    expires_at: datetime
+
+
+class GlassesCommandErrorOut(BaseModel):
+    code: str
+    message: str
+    retryable: bool = False
+
+
+class GlassesCommandOut(BaseModel):
+    """Discriminated response envelope for smart-glasses commands."""
+
+    model_config = ConfigDict(extra="allow")
+
+    outcome: Literal["control_completed", "shortcut_completed", "agent_response", "error"]
+    command_id: UUID
+    thread_id: str | None = None
+    session_id: str | None = None
+    answer: str | None = None
+    audio: GlassesAudioReference | None = None
+    error: GlassesCommandErrorOut | None = None
 
 
 class AskOut(BaseModel):

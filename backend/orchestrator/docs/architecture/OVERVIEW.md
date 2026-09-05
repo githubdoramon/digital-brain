@@ -102,6 +102,24 @@ sequenceDiagram
 
 ## Important Notes
 
+- Smart-glasses commands use authenticated `POST /mobile/glasses/commands` and
+  the same main-session/thread model as `/mobile/ask`. Exact normalized
+  transcripts `slash new`, `front gate`, and `car gate` are handled before the
+  agent; the gate shortcuts call the fixed Home Assistant `HassTurnOn` MCP
+  operation with the configured friendly script name and never discover tools
+  per request. A PostgreSQL idempotency row is claimed before side effects,
+  and cancelled/ambiguous work remains processing so a toggle cannot be
+  replayed. Agent voice mode is injected into every selected conversational
+  profile and validates/repairs the answer before existing conversation
+  persistence, then sends that exact canonical text to complete CPU-only
+  Kokoro synthesis. Audio is an authenticated, process-local mono WAV
+  reference with TTL and post-download deletion; it is never persisted to
+  conversations, documents, or memory. The orchestrator image bundles the
+  checksum-verified Kokoro v1.0 INT8 model and voices for CPU-only inference;
+  runtime paths and voice selection remain configurable through environment
+  variables. Artifact provenance and build/runtime settings are documented in
+  `backend/orchestrator/docs/GLASSES_TTS.md`.
+
 - Tool groups are now used for runtime visibility policy (not just metadata).
 - Clarification responses follow `need_user_input` standards and map to UI directives when possible.
 - Contact resolution supports collective participant selectors (domain/company/group phrases); deterministic selectors can auto-persist contact groups, while inferred groups are surfaced in event preview and persisted on user confirmation.
