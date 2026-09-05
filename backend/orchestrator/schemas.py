@@ -724,6 +724,25 @@ class AskIn(BaseModel):
     media_attachments: list[ChatMediaAttachmentIn] = Field(default_factory=list)
 
 
+class GlassesCommandClientTimings(BaseModel):
+    """Optional monotonic client-side durations for end-to-end latency logs."""
+
+    model_config = ConfigDict(
+        extra="forbid", populate_by_name=True, protected_namespaces=()
+    )
+
+    wake_to_listening_start_ms: int | None = Field(default=None, ge=0, le=300_000)
+    wake_to_speech_start_ms: int | None = Field(default=None, ge=0, le=300_000)
+    wake_to_listening_end_ms: int | None = Field(default=None, ge=0, le=300_000)
+    wake_to_transcription_start_ms: int | None = Field(default=None, ge=0, le=300_000)
+    model_wait_ms: int | None = Field(default=None, ge=0, le=300_000)
+    transcription_ms: int | None = Field(default=None, ge=0, le=300_000)
+    transcription_total_ms: int | None = Field(default=None, ge=0, le=300_000)
+    wake_to_transcript_ms: int | None = Field(default=None, ge=0, le=300_000)
+    audio_duration_ms: int | None = Field(default=None, ge=0, le=300_000)
+    transcription_attempt_count: int | None = Field(default=None, ge=1, le=10)
+
+
 class GlassesCommandIn(BaseModel):
     """Authenticated transcript command submitted by the smart-glasses client."""
 
@@ -740,6 +759,9 @@ class GlassesCommandIn(BaseModel):
         validation_alias=AliasChoices("thread_id", "threadId", "session_id", "sessionId"),
     )
     client_context: ClientContextIn | None = Field(default=None, alias="client_context")
+    client_timings: GlassesCommandClientTimings | None = Field(
+        default=None, alias="client_timings"
+    )
 
 
 class GlassesAudioReference(BaseModel):

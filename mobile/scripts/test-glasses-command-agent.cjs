@@ -123,6 +123,18 @@ const transcript = (id = '11111111-1111-4111-8111-111111111111') => ({
   language: 'en',
   audioDurationMs: 800,
   wakeDetectedAt: Date.now(),
+  clientTimings: {
+    wake_to_listening_start_ms: 120,
+    wake_to_speech_start_ms: 240,
+    wake_to_listening_end_ms: 1900,
+    wake_to_transcription_start_ms: 1950,
+    model_wait_ms: 12,
+    transcription_ms: 85,
+    transcription_total_ms: 97,
+    wake_to_transcript_ms: 2047,
+    audio_duration_ms: 800,
+    transcription_attempt_count: 1,
+  },
 });
 const hooks = {
   pauseListening: async () => undefined,
@@ -298,7 +310,11 @@ async function testSingleFlightAndStableId() {
   reset();
   let resolveRequest;
   const requestIds = [];
-  apiCall = (_path, options) => requestIds.push(JSON.parse(options.body).command_id);
+  apiCall = (_path, options) => {
+    const request = JSON.parse(options.body);
+    requestIds.push(request.command_id);
+    assert.deepEqual(request.client_timings, transcript(id).clientTimings);
+  };
   apiResponse = () =>
     new Promise((resolve) => {
       resolveRequest = resolve;

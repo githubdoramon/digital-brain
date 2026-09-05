@@ -118,6 +118,9 @@ sequenceDiagram
   conversations, documents, or memory. The orchestrator image bundles the
   checksum-verified Kokoro v1.0 INT8 model and voices for CPU-only inference;
   runtime paths and voice selection remain configurable through environment
+  variables. Mobile may include optional transcription timing fields; the
+  backend emits those alongside server phase timings in one correlated
+  `[glasses] command latency` record immediately before returning the response.
   variables. Artifact provenance and build/runtime settings are documented in
   `backend/orchestrator/docs/GLASSES_TTS.md`.
 

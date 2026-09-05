@@ -6,6 +6,9 @@ import asyncio
 import json
 import os
 import time
+from collections.abc import Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
 from typing import Any
 
 from psycopg.types.json import Json
@@ -20,6 +23,36 @@ from voice_response import (
 )
 
 logger = get_runtime_logger(__name__)
+
+_command_timing: ContextVar[dict[str, float] | None] = ContextVar(
+    "glasses_command_timing", default=None
+)
+
+
+def _record_timing(name: str, elapsed_ms: float) -> None:
+    timings = _command_timing.get()
+    if timings is not None:
+        timings[name] = round(max(0.0, elapsed_ms), 1)
+
+
+@contextmanager
+def _timed_phase(name: str) -> Iterator[None]:
+    started_at = time.perf_counter()
+    try:
+        yield
+    finally:
+        _record_timing(name, (time.perf_counter() - started_at) * 1_000)
+
+
+def _client_timing_payload(payload: Any) -> dict[str, Any] | None:
+    value = getattr(payload, "client_timings", None)
+    if value is None:
+        return None
+    if hasattr(value, "model_dump"):
+        value = value.model_dump(exclude_none=True)
+    if not isinstance(value, dict):
+        return None
+    return value
 
 
 class GlassesCommandError(RuntimeError):
@@ -211,23 +244,24 @@ def finish_command(
     response: dict[str, Any] | None = None,
     error: dict[str, Any] | None = None,
 ) -> None:
-    with get_conn() as conn, conn.cursor() as cur:
-        cur.execute(
-            """
-            UPDATE glasses_command_executions
-            SET status = %s, outcome = %s, response = %s, error = %s, updated_at = NOW()
-            WHERE user_email = %s AND command_id = %s AND status = 'processing'
-            """,
-            (
-                status,
-                outcome,
-                Json(response) if response is not None else None,
-                Json(error) if error else None,
-                user_email,
-                command_id,
-            ),
-        )
-        conn.commit()
+    with _timed_phase("idempotency_finish_ms"):
+        with get_conn() as conn, conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE glasses_command_executions
+                SET status = %s, outcome = %s, response = %s, error = %s, updated_at = NOW()
+                WHERE user_email = %s AND command_id = %s AND status = 'processing'
+                """,
+                (
+                    status,
+                    outcome,
+                    Json(response) if response is not None else None,
+                    Json(error) if error else None,
+                    user_email,
+                    command_id,
+                ),
+            )
+            conn.commit()
 
 
 def _error_response(command_id: str, exc: GlassesCommandError) -> dict[str, Any]:
@@ -239,6 +273,29 @@ def _error_response(command_id: str, exc: GlassesCommandError) -> dict[str, Any]
 
 
 async def process_command(payload: Any, user: dict[str, Any]) -> dict[str, Any]:
+    """Process one command and emit a complete correlated latency record."""
+    started_at = time.perf_counter()
+    timings: dict[str, float] = {}
+    token = _command_timing.set(timings)
+    response: dict[str, Any] | None = None
+    try:
+        response = await _process_command(payload, user)
+        return response
+    finally:
+        timings["total_ms"] = round((time.perf_counter() - started_at) * 1_000, 1)
+        command_id = str(getattr(payload, "command_id", "unknown"))
+        logger.info(
+            "[glasses] command latency command_id=%s outcome=%s client_timings=%s "
+            "backend_timings=%s",
+            command_id,
+            response.get("outcome") if response else "exception",
+            _safe_log_payload(_client_timing_payload(payload) or {}),
+            _safe_log_payload(timings),
+        )
+        _command_timing.reset(token)
+
+
+async def _process_command(payload: Any, user: dict[str, Any]) -> dict[str, Any]:
     """Claim, execute, and durably complete one command."""
     user_email = str(user.get("email") or user.get("user_email") or "").strip()
     if not user_email:
@@ -246,7 +303,8 @@ async def process_command(payload: Any, user: dict[str, Any]) -> dict[str, Any]:
     command_id = str(payload.command_id)
     transcript = str(payload.transcript).strip()
     try:
-        claimed = claim_command(user_email, command_id, transcript)
+        with _timed_phase("idempotency_claim_ms"):
+            claimed = claim_command(user_email, command_id, transcript)
     except GlassesCommandError:
         raise
     except Exception as exc:
@@ -315,7 +373,8 @@ async def process_command(payload: Any, user: dict[str, Any]) -> dict[str, Any]:
         )
 
     try:
-        shortcut = shortcut_for_transcript(transcript)
+        with _timed_phase("shortcut_resolution_ms"):
+            shortcut = shortcut_for_transcript(transcript)
         non_shortcut_deadline = None
         if shortcut not in {"new", "front_gate", "car_gate"}:
             try:
@@ -332,7 +391,8 @@ async def process_command(payload: Any, user: dict[str, Any]) -> dict[str, Any]:
                 thread_id=payload.thread_id,
                 client_context=payload.client_context,
             )
-            ctx = _resolve_session_context(ask_payload, user_email, force_new_session=True)
+            with _timed_phase("session_context_ms"):
+                ctx = _resolve_session_context(ask_payload, user_email, force_new_session=True)
             response = {
                 "outcome": "shortcut_completed",
                 "command_id": command_id,
@@ -344,7 +404,8 @@ async def process_command(payload: Any, user: dict[str, Any]) -> dict[str, Any]:
         elif shortcut in {"front_gate", "car_gate"}:
             timeout = max(0.1, float(os.getenv("GLASSES_SHORTCUT_TIMEOUT_SECONDS", "10")))
             async with asyncio.timeout(timeout):
-                details = await execute_gate(shortcut, command_id=command_id)
+                with _timed_phase("ha_execution_ms"):
+                    details = await execute_gate(shortcut, command_id=command_id)
             response = {
                 "outcome": "control_completed",
                 "command_id": command_id,
@@ -374,7 +435,8 @@ async def process_command(payload: Any, user: dict[str, Any]) -> dict[str, Any]:
                 cached = transformed_answers.get(text)
                 if cached is not None:
                     return cached
-                transformed = prepare_voice_answer_sync(text)
+                with _timed_phase("voice_answer_prepare_ms"):
+                    transformed = prepare_voice_answer_sync(text)
                 if non_shortcut_deadline is not None and time.monotonic() >= non_shortcut_deadline:
                     raise TimeoutError
                 transformed_answers[text] = transformed
@@ -421,9 +483,10 @@ async def process_command(payload: Any, user: dict[str, Any]) -> dict[str, Any]:
             if remaining <= 0:
                 raise asyncio.TimeoutError
             try:
-                command_payload = await asyncio.wait_for(
-                    asyncio.to_thread(run_existing_command), timeout=remaining
-                )
+                with _timed_phase("agent_execution_ms"):
+                    command_payload = await asyncio.wait_for(
+                        asyncio.to_thread(run_existing_command), timeout=remaining
+                    )
             except asyncio.TimeoutError:
                 # `run_existing_command` is legacy synchronous code. Cancelling
                 # its worker cannot stop a handler already executing; the outer
@@ -444,15 +507,17 @@ async def process_command(payload: Any, user: dict[str, Any]) -> dict[str, Any]:
                         )
                         if remaining <= 0:
                             raise asyncio.TimeoutError
-                        wav_bytes = await asyncio.wait_for(
-                            asyncio.to_thread(synthesize_kokoro, answer), timeout=remaining
-                        )
+                        with _timed_phase("tts_synthesis_ms"):
+                            wav_bytes = await asyncio.wait_for(
+                                asyncio.to_thread(synthesize_kokoro, answer), timeout=remaining
+                            )
                         if (
                             non_shortcut_deadline is not None
                             and asyncio.get_running_loop().time() >= non_shortcut_deadline
                         ):
                             raise asyncio.TimeoutError
-                        audio_meta = put_audio(wav_bytes, user_email=user_email)
+                        with _timed_phase("audio_store_ms"):
+                            audio_meta = put_audio(wav_bytes, user_email=user_email)
                     except asyncio.TimeoutError:
                         raise
                     except TTSUnavailableError as exc:
@@ -500,10 +565,11 @@ async def process_command(payload: Any, user: dict[str, Any]) -> dict[str, Any]:
             )
             if remaining <= 0:
                 raise asyncio.TimeoutError
-            ctx = await asyncio.wait_for(
-                asyncio.to_thread(_resolve_session_context, ask_payload, user_email),
-                timeout=remaining,
-            )
+            with _timed_phase("session_context_ms"):
+                ctx = await asyncio.wait_for(
+                    asyncio.to_thread(_resolve_session_context, ask_payload, user_email),
+                    timeout=remaining,
+                )
             if ctx.is_reset_only:
                 response = {
                     "outcome": "shortcut_completed",
@@ -530,15 +596,16 @@ async def process_command(payload: Any, user: dict[str, Any]) -> dict[str, Any]:
                 if remaining <= 0:
                     raise asyncio.TimeoutError
                 async with asyncio.timeout(remaining):
-                    bundle = await llm.answer_question(
-                        ctx.question,
-                        search_limit=30,
-                        user_id=user_email,
-                        session_id=ctx.session_id,
-                        user_email=user_email,
-                        client_context=context,
-                        response_modality=modality.value,
-                    )
+                    with _timed_phase("agent_execution_ms"):
+                        bundle = await llm.answer_question(
+                            ctx.question,
+                            search_limit=30,
+                            user_id=user_email,
+                            session_id=ctx.session_id,
+                            user_email=user_email,
+                            client_context=context,
+                            response_modality=modality.value,
+                        )
                     answer = str(bundle.get("answer") or "").strip()
                     if modality is ResponseModality.VOICE:
                         # llm.answer_question applies the voice contract before
@@ -547,13 +614,15 @@ async def process_command(payload: Any, user: dict[str, Any]) -> dict[str, Any]:
                         # saved canonical answer.
                         audio_meta = None
                         try:
-                            wav_bytes = await asyncio.to_thread(synthesize_kokoro, answer)
+                            with _timed_phase("tts_synthesis_ms"):
+                                wav_bytes = await asyncio.to_thread(synthesize_kokoro, answer)
                             if (
                                 non_shortcut_deadline is not None
                                 and asyncio.get_running_loop().time() >= non_shortcut_deadline
                             ):
                                 raise asyncio.TimeoutError
-                            audio_meta = put_audio(wav_bytes, user_email=user_email)
+                            with _timed_phase("audio_store_ms"):
+                                audio_meta = put_audio(wav_bytes, user_email=user_email)
                         except TTSUnavailableError as exc:
                             raise GlassesCommandError("tts_unavailable", str(exc), retryable=True) from exc
                         except Exception as exc:

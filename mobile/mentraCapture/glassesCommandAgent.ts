@@ -181,6 +181,7 @@ async function downloadSpeechAudio(
   const destination = temporaryAudioUri(command.commandId);
   await FileSystem.deleteAsync(destination, { idempotent: true }).catch(() => undefined);
   debug('glasses_command_audio_download_started', { command_id: command.commandId });
+  const downloadStartedAt = Date.now();
   const result = await FileSystem.downloadAsync(endpoint, destination, {
     headers: { Authorization: `Bearer ${token}` },
   });
@@ -196,7 +197,8 @@ async function downloadSpeechAudio(
   }
   debug('glasses_command_audio_download_ready', {
     command_id: command.commandId,
-    download_ms: Date.now() - command.startedAt,
+    download_ms: Date.now() - downloadStartedAt,
+    elapsed_ms: Date.now() - command.startedAt,
     size_bytes: size,
   });
   return destination;
@@ -209,10 +211,17 @@ async function playSpeechAudio(command: ActiveCommand, fileUri: string): Promise
   if (!isCommandLive(command)) return;
   await blinkMentraOrangeLed();
   if (!isCommandLive(command)) return;
+  const playbackStartedAt = Date.now();
   await new Promise<void>((resolve, reject) => {
     const subscription = native.addListener('onSpeechPlaybackFinished', (event) => {
       if (event.commandId !== command.commandId) return;
       subscription.remove();
+      debug('glasses_command_audio_playback_finished', {
+        command_id: command.commandId,
+        playback_ms: Date.now() - playbackStartedAt,
+        native_duration_ms: event.durationMs,
+        status: event.status,
+      });
       if (event.status === 'completed') resolve();
       else reject(new Error(event.error || 'Glasses speech playback failed.'));
     });
@@ -259,9 +268,18 @@ async function executeCommand(
     has_thread: Boolean(session?.threadId),
     has_location: Boolean(clientContext.location),
   });
+  const transportStartedAt = Date.now();
   const response = await apiFetch('/mobile/glasses/commands', {
     method: 'POST',
-    body: JSON.stringify(body),
+    body: JSON.stringify({ ...body, client_timings: transcript.clientTimings }),
+  });
+  debug('glasses_command_transport_completed', {
+    command_id: transcript.commandId,
+    request_ms: Date.now() - transportStartedAt,
+    outcome:
+      response && typeof response === 'object'
+        ? (response as Record<string, unknown>).outcome
+        : null,
   });
   return responseOutcome(response);
 }

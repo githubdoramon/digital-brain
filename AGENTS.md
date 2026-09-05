@@ -20,7 +20,10 @@ environment-overridable for deployment-specific HA inventories. Voice responses 
 request-level modality across all conversational profiles, persist the same
 sanitized answer sent to CPU-only Kokoro, and expose only short-lived
 authenticated mono WAV references. Ambiguous cancellation/timeouts must never
-replay a gate toggle; input command WAV capture remains mobile-owned.
+replay a gate toggle; input command WAV capture remains mobile-owned. Mobile
+transcription durations are accepted as optional `client_timings`; the backend
+emits one final correlated `[glasses] command latency` record with those values,
+server phase timings, outcome, and total time immediately before returning.
 
 **Mobile routing convention**: For dynamic mobile routes, prefer folder-based segments with `index.tsx` (for example `mobile/app/contacts/[contactId]/index.tsx`) so nested subroutes can be added without migrating route structure later.
 

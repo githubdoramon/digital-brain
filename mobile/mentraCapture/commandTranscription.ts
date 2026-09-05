@@ -73,6 +73,19 @@ export type GlassesCommandListeningFinished = {
   audioDurationMs: number;
 };
 
+export type GlassesCommandClientTimings = {
+  wake_to_listening_start_ms: number;
+  wake_to_speech_start_ms: number | null;
+  wake_to_listening_end_ms: number;
+  wake_to_transcription_start_ms: number;
+  model_wait_ms: number;
+  transcription_ms: number;
+  transcription_total_ms: number;
+  wake_to_transcript_ms: number;
+  audio_duration_ms: number;
+  transcription_attempt_count: number;
+};
+
 export type GlassesCommandTranscribed = {
   commandId: string;
   transcript: string;
@@ -80,6 +93,7 @@ export type GlassesCommandTranscribed = {
   language: string;
   audioDurationMs: number;
   wakeDetectedAt: number;
+  clientTimings: GlassesCommandClientTimings;
 };
 
 export type GlassesCommandTranscriptionFailed = {
@@ -382,6 +396,7 @@ function endListening(
   if (activeSession !== session || state !== 'listening') return;
   clearMaximumTimer(session);
   const listeningStartedAt = session.listeningStartedAt ?? Date.now();
+  const listeningEndedAt = Date.now();
   const audioDurationMs = Math.round((session.samples / 16_000) * 1_000);
   const timing: GlassesCommandListeningFinished = {
     commandId: session.id,
@@ -396,8 +411,8 @@ function endListening(
   debug('glasses_command_listening_finished', {
     command_id: session.id,
     reason,
-    wake_to_listening_end_ms: Date.now() - session.wakeDetectedAt,
-    listening_ms: Date.now() - listeningStartedAt,
+    wake_to_listening_end_ms: listeningEndedAt - session.wakeDetectedAt,
+    listening_ms: listeningEndedAt - listeningStartedAt,
     speech_to_endpoint_ms: session.speechStartedAt ? Date.now() - session.speechStartedAt : null,
     audio_duration_ms: audioDurationMs,
     ambient_rms_p20: percentile(session.ambientRms, 0.2),
@@ -511,7 +526,8 @@ function endListening(
       }
 
       const modelReadyAt = initialModelReadyAt;
-      const transcriptionMs = Date.now() - attemptStartedAt;
+      const transcriptionFinishedAt = Date.now();
+      const transcriptionMs = transcriptionFinishedAt - attemptStartedAt;
       if (activeSession !== session) {
         debug('glasses_command_transcription_discarded', {
           command_id: session.id,
@@ -545,8 +561,8 @@ function endListening(
         transcription_ms: transcriptionMs,
         transcription_attempt_count: transcriptionAttempt,
         whisper_context_recovery_ms: retryRecoveryMs,
-        transcription_total_ms: Date.now() - initialModelReadyAt,
-        wake_to_transcript_ms: Date.now() - session.wakeDetectedAt,
+        transcription_total_ms: transcriptionFinishedAt - initialModelReadyAt,
+        wake_to_transcript_ms: transcriptionFinishedAt - session.wakeDetectedAt,
       });
       onTranscribed?.({
         commandId: session.id,
@@ -555,6 +571,20 @@ function endListening(
         language: result.language,
         audioDurationMs,
         wakeDetectedAt: session.wakeDetectedAt,
+        clientTimings: {
+          wake_to_listening_start_ms: listeningStartedAt - session.wakeDetectedAt,
+          wake_to_speech_start_ms: session.speechStartedAt
+            ? session.speechStartedAt - session.wakeDetectedAt
+            : null,
+          wake_to_listening_end_ms: listeningEndedAt - session.wakeDetectedAt,
+          wake_to_transcription_start_ms: transcriptionStartedAt - session.wakeDetectedAt,
+          model_wait_ms: modelReadyAt - transcriptionStartedAt,
+          transcription_ms: transcriptionMs,
+          transcription_total_ms: transcriptionFinishedAt - initialModelReadyAt,
+          wake_to_transcript_ms: transcriptionFinishedAt - session.wakeDetectedAt,
+          audio_duration_ms: audioDurationMs,
+          transcription_attempt_count: transcriptionAttempt,
+        },
       });
     } catch (error) {
       debug('glasses_command_transcription_failed', {

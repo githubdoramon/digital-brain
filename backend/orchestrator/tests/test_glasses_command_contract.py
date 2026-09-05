@@ -10,7 +10,7 @@ from fastapi import HTTPException
 
 from glasses_audio import clear_audio, get_audio, put_audio
 from glasses_commands import normalize_transcript, shortcut_for_transcript
-from schemas import GlassesCommandIn
+from schemas import GlassesCommandClientTimings, GlassesCommandIn
 from voice_response import (
     ResponseModality,
     normalize_modality,
@@ -70,6 +70,29 @@ def test_command_schema_accepts_existing_client_context_and_aliases():
     )
     assert command.thread_id == "thread_abc"
     assert not hasattr(command, "response_modality")
+
+
+def test_command_schema_accepts_optional_client_timings():
+    command = GlassesCommandIn(
+        command_id=uuid4(),
+        transcript="What is next?",
+        client_timings={
+            "wake_to_listening_start_ms": 120,
+            "transcription_ms": 85,
+            "transcription_attempt_count": 1,
+        },
+    )
+    assert isinstance(command.client_timings, GlassesCommandClientTimings)
+    assert command.client_timings.transcription_ms == 85
+
+
+def test_command_schema_rejects_negative_client_timing():
+    with pytest.raises(ValueError):
+        GlassesCommandIn(
+            command_id=uuid4(),
+            transcript="What is next?",
+            client_timings={"transcription_ms": -1},
+        )
 
 
 def test_command_schema_rejects_client_modality_override():
@@ -148,6 +171,42 @@ async def test_fixed_gate_operation_uses_direct_script_tool(monkeypatch):
     result = await glasses_commands.execute_gate("car_gate")
     assert result == {"tool_name": "script__toggle_car_gate", "arguments": {}}
     assert calls == [("script__toggle_car_gate", {})]
+
+
+@pytest.mark.asyncio
+async def test_command_latency_log_combines_client_and_backend_timings(monkeypatch, caplog):
+    import glasses_commands
+
+    monkeypatch.setattr(
+        glasses_commands,
+        "claim_command",
+        lambda *_args: {"claimed": True, "status": "processing"},
+    )
+    monkeypatch.setattr(glasses_commands, "finish_command", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        glasses_commands,
+        "execute_gate",
+        lambda *_args, **_kwargs: asyncio.sleep(0, result={"tool_name": "script__toggle_house_gate", "arguments": {}}),
+    )
+    caplog.set_level("INFO")
+    payload = SimpleNamespace(
+        command_id=uuid4(),
+        transcript="front gate",
+        thread_id=None,
+        client_context=None,
+        client_timings=GlassesCommandClientTimings(
+            wake_to_listening_start_ms=120,
+            transcription_ms=85,
+            transcription_attempt_count=1,
+        ),
+    )
+    response = await glasses_commands.process_command(payload, {"email": "user@example.invalid"})
+    assert response["outcome"] == "control_completed"
+    message = caplog.text
+    assert "[glasses] command latency" in message
+    assert 'transcription_ms": 85' in message
+    assert "ha_execution_ms" in message
+    assert "total_ms" in message
 
 
 @pytest.mark.asyncio
