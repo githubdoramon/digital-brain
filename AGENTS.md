@@ -14,9 +14,10 @@ Personal memory orchestrator with a **bounded agent architecture**. Backend: Fas
 authenticated, idempotent transcript endpoint sharing normal main-session and
 thread semantics. Exact `slash new`, `front gate`, and `car gate` shortcuts are
 controller-owned; gate execution uses fixed HA script tools
-(`script__toggle_house_gate` and `script__toggle_car_gate`, with
-empty arguments) and must not perform LLM/tool discovery. These tool names are
-environment-overridable for deployment-specific HA inventories. Voice responses use the
+(`intent__HassTurnOn` with a fixed controller-configured script name) and must
+not perform LLM/tool discovery. The tool names and target names are
+environment-overridable for deployment-specific HA inventories; dedicated
+script tools with empty arguments remain supported. Voice responses use the
 request-level modality across all conversational profiles, persist the same
 sanitized answer sent to CPU-only Kokoro, and expose only short-lived
 authenticated mono WAV references. Ambiguous cancellation/timeouts must never
@@ -665,16 +666,21 @@ of wake-word tail but retains those samples for Whisper, so the pause after the
 wake phrase cannot endpoint a command before it begins. It preserves an
 initial 3-second command window after wake before endpointing may begin, then
 endpoints after 1.5 seconds of sustained silence (or eight seconds total).
-Use a permissive rolling ambient baseline only to begin speech, and require a
-higher sustained continuation level to prevent incidental room noise from
-keeping the session open; export both thresholds and their chunk counts.
+Run command PCM through a stateful 120 Hz–7 kHz band-pass copy for speech
+gating and Whisper while retaining the original PCM for debug WAVs. Use a
+permissive rolling ambient baseline on the filtered signal only to begin
+speech, and require a higher sustained continuation level (at least 0.075 RMS
+and 1.6× the measured noise floor) to prevent incidental room noise from
+keeping the session open; export raw/filtered levels, both thresholds, and
+their chunk counts.
 For this developer-only debugging POC, retain the exact post-wake command PCM
 as bounded app-private 16 kHz WAV clips (latest 40) and export them only via
 the dedicated focused wake-command investigation action. Its JSONL must be
 limited to command-pipeline events and correlate each WAV with its command ID,
 PCM chunk/gap statistics, speech threshold, wake-tail guard, endpoint, LED,
 transcript, and all latency milestones. Reuse the warmed English-only Whisper
-context through its raw-PCM `transcribeData` path; keep that raw audio intact,
+context through its filtered-PCM `transcribeData` path; keep the original raw
+audio intact and retain it as the diagnostic WAV,
 record detector decision/pre-roll source-audio bounds, then remove a
 model-label-derived fuzzy wake anchor from the final command transcript while
 retaining raw and normalized transcript fields and removal method for debugging.

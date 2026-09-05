@@ -274,7 +274,9 @@ async function testTranscriptionFailureCallback() {
       () => undefined,
       (event) => failures.push(event),
     );
-    const speech = new Int16Array(1600).fill(10000);
+    const speech = Int16Array.from({ length: 1600 }, (_, index) =>
+      Math.round(Math.sin((2 * Math.PI * 1_000 * index) / 16_000) * 10_000),
+    );
     now = 1400;
     transcription.acceptGlassesCommandPcm(
       speech,
@@ -304,6 +306,22 @@ async function testTranscriptionFailureCallback() {
     transcription.cancelGlassesCommandTranscription('test_cleanup');
     Date.now = originalNow;
   }
+}
+
+function testCommandAudioFilter() {
+  reset();
+  const samples = 16_000;
+  const makeTone = (frequency) =>
+    Int16Array.from({ length: samples }, (_, index) =>
+      Math.round(Math.sin((2 * Math.PI * frequency * index) / 16_000) * 12_000),
+    );
+  const energy = (values) => values.reduce((sum, value) => sum + value * value, 0) / values.length;
+  const lowFrequency = new transcription.AudioBandPassFilter();
+  const speechBand = new transcription.AudioBandPassFilter();
+  const filteredLow = lowFrequency.process(makeTone(60));
+  const filteredSpeech = speechBand.process(makeTone(1_000));
+  assert.ok(energy(filteredLow) < energy(filteredSpeech) * 0.1);
+  assert.ok(energy(filteredSpeech) > 1_000_000);
 }
 
 async function testSingleFlightAndStableId() {
@@ -398,6 +416,7 @@ async function testTimeoutDuringDownloadAndPlayback() {
     await testAudioCompletionAndCleanup();
     await testErrorOutcome();
     await testTranscriptionFailureCallback();
+    testCommandAudioFilter();
     await testSingleFlightAndStableId();
     await testTimeoutDuringRequestAndLateResponse();
     await testTimeoutDuringDownloadAndPlayback();

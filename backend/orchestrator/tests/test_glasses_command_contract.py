@@ -157,7 +157,7 @@ def test_audio_route_denies_wrong_owner():
 
 
 @pytest.mark.asyncio
-async def test_fixed_gate_operation_uses_direct_script_tool(monkeypatch):
+async def test_fixed_gate_operation_uses_turn_on_intent_with_fixed_script_name(monkeypatch):
     import glasses_commands
 
     calls = []
@@ -169,8 +169,32 @@ async def test_fixed_gate_operation_uses_direct_script_tool(monkeypatch):
     monkeypatch.setattr("mcp.servers.home_assistant.is_ha_configured", lambda: True)
     monkeypatch.setattr("mcp.servers.home_assistant.call_ha_tool_async", fake_call)
     result = await glasses_commands.execute_gate("car_gate")
-    assert result == {"tool_name": "script__toggle_car_gate", "arguments": {}}
-    assert calls == [("script__toggle_car_gate", {})]
+    assert result == {
+        "tool_name": "intent__HassTurnOn",
+        "arguments": {"name": "Garage gate automation"},
+    }
+    assert calls == [("intent__HassTurnOn", {"name": "Garage gate automation"})]
+
+
+@pytest.mark.asyncio
+async def test_turn_on_gate_target_name_can_be_overridden(monkeypatch):
+    import glasses_commands
+
+    calls = []
+
+    async def fake_call(tool_name, arguments):
+        calls.append((tool_name, arguments))
+        return {"success": True}
+
+    monkeypatch.setenv("GLASSES_FRONT_GATE_NAME", "Custom house gate")
+    monkeypatch.setattr("mcp.servers.home_assistant.is_ha_configured", lambda: True)
+    monkeypatch.setattr("mcp.servers.home_assistant.call_ha_tool_async", fake_call)
+    result = await glasses_commands.execute_gate("front_gate")
+    assert result == {
+        "tool_name": "intent__HassTurnOn",
+        "arguments": {"name": "Custom house gate"},
+    }
+    assert calls == [("intent__HassTurnOn", {"name": "Custom house gate"})]
 
 
 @pytest.mark.asyncio
@@ -232,8 +256,8 @@ async def test_fixed_gate_failure_is_structured_and_never_discovered(monkeypatch
     import glasses_commands
 
     async def failed_call(tool_name, arguments):
-        assert tool_name == "script__toggle_house_gate"
-        assert arguments == {}
+        assert tool_name == "intent__HassTurnOn"
+        assert arguments == {"name": "House gate automation"}
         return {"success": False, "error": "script unavailable"}
 
     monkeypatch.setattr("mcp.servers.home_assistant.is_ha_configured", lambda: True)
@@ -262,7 +286,7 @@ async def test_fixed_gate_failure_logs_correlation_and_ha_payload(monkeypatch, c
     message = caplog.text
     assert "command_id=command-123" in message
     assert "control=front_gate" in message
-    assert "script__toggle_house_gate" in message
+    assert "intent__HassTurnOn" in message
     assert "entity not found" in message
     assert "do-not-log" not in message
     assert "[REDACTED]" in message

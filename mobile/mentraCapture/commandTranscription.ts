@@ -17,15 +17,19 @@ const COMMAND_MAX_LISTENING_MS = 8_000;
 const COMMAND_MIN_SPEECH_MS = 120;
 const COMMAND_MIN_SPEECH_RMS_THRESHOLD = 0.018;
 const COMMAND_SPEECH_RMS_MARGIN = 0.008;
-const COMMAND_MAX_SPEECH_RMS_THRESHOLD = 0.04;
+const COMMAND_MAX_SPEECH_RMS_THRESHOLD = 0.08;
 // A frame can start speech at the noise-adaptive threshold, but it must be
 // materially louder and sustained before it keeps a command session alive.
 // The command WAV examples put the wearer's voice above roughly -20 dBFS,
 // while the unwanted room conversation was generally below -23 dBFS.
-const COMMAND_CONTINUATION_RMS_THRESHOLD = 0.065;
+const COMMAND_CONTINUATION_RMS_THRESHOLD = 0.075;
+const COMMAND_CONTINUATION_NOISE_RATIO = 1.6;
 const COMMAND_CONTINUATION_MIN_MS = 100;
 const AMBIENT_RMS_HISTORY_SIZE = 120;
 const MIN_AMBIENT_RMS = 0.002;
+const COMMAND_FILTER_SAMPLE_RATE_HZ = 16_000;
+const COMMAND_FILTER_LOW_HZ = 120;
+const COMMAND_FILTER_HIGH_HZ = 7_000;
 
 type CommandSessionState = 'idle' | 'grace' | 'listening' | 'transcribing';
 type CommandFinishReason = 'silence' | 'timeout' | 'no_speech' | 'cancelled';
@@ -48,10 +52,14 @@ type CommandSession = {
   continuationCandidateLastAt: number | null;
   graceChunks: Int16Array[];
   chunks: Int16Array[];
+  filteredChunks: Int16Array[];
+  filter: AudioBandPassFilter;
   samples: number;
   ambientRms: number[];
   minimumRms: number | null;
   maximumRms: number | null;
+  minimumRawRms: number | null;
+  maximumRawRms: number | null;
   currentThreshold: number;
   strongSpeechChunkCount: number;
   weakAudioChunkCount: number;
@@ -132,6 +140,82 @@ function rms(samples: Int16Array): number {
   return Math.sqrt(sum / samples.length);
 }
 
+class BiquadFilter {
+  private readonly b0: number;
+  private readonly b1: number;
+  private readonly b2: number;
+  private readonly a1: number;
+  private readonly a2: number;
+  private x1 = 0;
+  private x2 = 0;
+  private y1 = 0;
+  private y2 = 0;
+
+  constructor(type: 'highpass' | 'lowpass', frequencyHz: number, sampleRateHz: number) {
+    const omega = (2 * Math.PI * frequencyHz) / sampleRateHz;
+    const cosine = Math.cos(omega);
+    const alpha = Math.sin(omega) / (2 * Math.SQRT1_2);
+    const a0 = 1 + alpha;
+    const a1 = -2 * cosine;
+    const a2 = 1 - alpha;
+    const common = type === 'highpass' ? (1 + cosine) / 2 : (1 - cosine) / 2;
+    const numerator =
+      type === 'highpass'
+        ? { b0: common, b1: -(1 + cosine), b2: common }
+        : { b0: common, b1: 1 - cosine, b2: common };
+
+    this.b0 = numerator.b0 / a0;
+    this.b1 = numerator.b1 / a0;
+    this.b2 = numerator.b2 / a0;
+    this.a1 = a1 / a0;
+    this.a2 = a2 / a0;
+  }
+
+  process(sample: number): number {
+    const output =
+      this.b0 * sample +
+      this.b1 * this.x1 +
+      this.b2 * this.x2 -
+      this.a1 * this.y1 -
+      this.a2 * this.y2;
+    this.x2 = this.x1;
+    this.x1 = sample;
+    this.y2 = this.y1;
+    this.y1 = output;
+    return output;
+  }
+}
+
+/**
+ * Removes low-frequency handling noise and high-frequency hiss before VAD and
+ * Whisper. The original PCM is retained separately for investigation clips.
+ */
+export class AudioBandPassFilter {
+  private readonly highpass: BiquadFilter;
+  private readonly lowpass: BiquadFilter;
+
+  constructor(
+    sampleRateHz = COMMAND_FILTER_SAMPLE_RATE_HZ,
+    lowHz = COMMAND_FILTER_LOW_HZ,
+    highHz = COMMAND_FILTER_HIGH_HZ,
+  ) {
+    this.highpass = new BiquadFilter('highpass', lowHz, sampleRateHz);
+    this.lowpass = new BiquadFilter('lowpass', highHz, sampleRateHz);
+  }
+
+  process(samples: Int16Array): Int16Array {
+    const filtered = new Int16Array(samples.length);
+    for (let index = 0; index < samples.length; index += 1) {
+      const normalized = this.lowpass.process(this.highpass.process(samples[index] / 32_768));
+      const clipped = Math.max(-1, Math.min(0.999969482421875, normalized));
+      filtered[index] = Math.round(clipped * 32_768);
+    }
+    return filtered;
+  }
+}
+
+const ambientFilter = new AudioBandPassFilter();
+
 function percentile(values: number[], quantile: number): number | null {
   if (values.length === 0) return null;
   const sorted = [...values].sort((left, right) => left - right);
@@ -147,8 +231,13 @@ function speechThreshold(ambientRms: number[]): number {
   );
 }
 
-function continuationThreshold(startThreshold: number): number {
-  return Math.max(startThreshold, COMMAND_CONTINUATION_RMS_THRESHOLD);
+function continuationThreshold(startThreshold: number, ambientRms: number[] = []): number {
+  const noiseFloor = percentile(ambientRms, 0.2) ?? 0;
+  return Math.max(
+    startThreshold,
+    COMMAND_CONTINUATION_RMS_THRESHOLD,
+    noiseFloor * COMMAND_CONTINUATION_NOISE_RATIO,
+  );
 }
 
 type TranscriptWord = {
@@ -336,7 +425,7 @@ function whisperContextIdentity(context: unknown): {
 
 /** Keeps only aggregate sound levels; command audio itself is never retained here. */
 export function observeGlassesAmbientPcm(samples: Int16Array): void {
-  const level = rms(samples);
+  const level = rms(ambientFilter.process(samples));
   if (level < MIN_AMBIENT_RMS) return;
   ambientRmsHistory.push(level);
   if (ambientRmsHistory.length > AMBIENT_RMS_HISTORY_SIZE) ambientRmsHistory.shift();
@@ -407,6 +496,8 @@ function endListening(
     audioDurationMs,
   };
   const pcm = session.samples > 0 ? combineSamples(session.chunks, session.samples) : null;
+  const filteredPcm =
+    session.samples > 0 ? combineSamples(session.filteredChunks, session.samples) : null;
   state = 'transcribing';
   debug('glasses_command_listening_finished', {
     command_id: session.id,
@@ -418,8 +509,15 @@ function endListening(
     ambient_rms_p20: percentile(session.ambientRms, 0.2),
     rms_min: session.minimumRms,
     rms_max: session.maximumRms,
+    filtered_rms_min: session.minimumRms,
+    filtered_rms_max: session.maximumRms,
+    raw_rms_min: session.minimumRawRms,
+    raw_rms_max: session.maximumRawRms,
+    filter_low_hz: COMMAND_FILTER_LOW_HZ,
+    filter_high_hz: COMMAND_FILTER_HIGH_HZ,
     final_speech_threshold: session.currentThreshold,
-    continuation_rms_threshold: continuationThreshold(session.currentThreshold),
+    continuation_rms_threshold: continuationThreshold(session.currentThreshold, session.ambientRms),
+    continuation_noise_ratio: COMMAND_CONTINUATION_NOISE_RATIO,
     strong_speech_chunk_count: session.strongSpeechChunkCount,
     weak_audio_chunk_count: session.weakAudioChunkCount,
     last_qualifying_speech_after_wake_ms: session.lastSpeechAt
@@ -456,7 +554,7 @@ function endListening(
     });
   }
 
-  if (!session.speechStartedAt || !pcm) {
+  if (!session.speechStartedAt || !pcm || !filteredPcm) {
     debug('glasses_command_transcription_skipped', {
       command_id: session.id,
       reason: 'no_speech',
@@ -483,7 +581,7 @@ function endListening(
           ...whisperContextIdentity(context),
           ...whisperAcceleration(context),
         });
-        return context.transcribeData(pcm, {
+        return context.transcribeData(filteredPcm, {
           language: 'en',
           maxThreads: 4,
         }).promise;
@@ -625,11 +723,18 @@ function acceptListeningPcm(
   }
   session.lastPcmAt = sampleAt;
   session.pcmChunkCount += 1;
+  const filteredSamples = session.filter.process(samples);
   session.chunks.push(samples);
+  session.filteredChunks.push(filteredSamples);
   session.samples += samples.length;
-  const level = rms(samples);
+  const rawLevel = rms(samples);
+  const level = rms(filteredSamples);
   session.minimumRms = session.minimumRms === null ? level : Math.min(session.minimumRms, level);
   session.maximumRms = session.maximumRms === null ? level : Math.max(session.maximumRms, level);
+  session.minimumRawRms =
+    session.minimumRawRms === null ? rawLevel : Math.min(session.minimumRawRms, rawLevel);
+  session.maximumRawRms =
+    session.maximumRawRms === null ? rawLevel : Math.max(session.maximumRawRms, rawLevel);
   if (level >= MIN_AMBIENT_RMS) {
     session.ambientRms.push(level);
     if (session.ambientRms.length > AMBIENT_RMS_HISTORY_SIZE) session.ambientRms.shift();
@@ -640,7 +745,8 @@ function acceptListeningPcm(
   // phrase arm silence endpointing before the actual command starts.
   if (sampleAt < session.wakeTailIgnoreUntil) return;
   const startsSpeech = level >= session.currentThreshold;
-  const keepsListening = level >= continuationThreshold(session.currentThreshold);
+  const keepsListening =
+    level >= continuationThreshold(session.currentThreshold, session.ambientRms);
   if (startsSpeech) {
     session.speechCandidateStartedAt ??= sampleAt;
     if (
@@ -653,7 +759,7 @@ function acceptListeningPcm(
         wake_to_speech_ms: session.speechStartedAt - session.wakeDetectedAt,
         rms: level,
         start_threshold: session.currentThreshold,
-        continuation_threshold: continuationThreshold(session.currentThreshold),
+        continuation_threshold: continuationThreshold(session.currentThreshold, session.ambientRms),
         ambient_rms_p20: percentile(session.ambientRms, 0.2),
       });
     }
@@ -713,10 +819,14 @@ export function startGlassesCommandTranscription(
     continuationCandidateLastAt: null,
     graceChunks: postWakeBufferedChunks,
     chunks: [],
+    filteredChunks: [],
+    filter: new AudioBandPassFilter(),
     samples: 0,
     ambientRms: [...ambientRmsHistory],
     minimumRms: null,
     maximumRms: null,
+    minimumRawRms: null,
+    maximumRawRms: null,
     currentThreshold: speechThreshold(ambientRmsHistory),
     strongSpeechChunkCount: 0,
     weakAudioChunkCount: 0,
@@ -763,7 +873,13 @@ export function startGlassesCommandTranscription(
       maximum_listening_ms: COMMAND_MAX_LISTENING_MS,
       ambient_rms_p20: percentile(session.ambientRms, 0.2),
       speech_rms_threshold: session.currentThreshold,
-      continuation_rms_threshold: continuationThreshold(session.currentThreshold),
+      continuation_rms_threshold: continuationThreshold(
+        session.currentThreshold,
+        session.ambientRms,
+      ),
+      continuation_noise_ratio: COMMAND_CONTINUATION_NOISE_RATIO,
+      filter_low_hz: COMMAND_FILTER_LOW_HZ,
+      filter_high_hz: COMMAND_FILTER_HIGH_HZ,
       continuation_min_ms: COMMAND_CONTINUATION_MIN_MS,
       grace_audio_duration_ms: graceAudioDurationMs,
       grace_timer_delay_ms: 0,

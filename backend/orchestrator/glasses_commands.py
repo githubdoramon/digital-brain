@@ -81,14 +81,17 @@ def shortcut_for_transcript(transcript: str) -> str | None:
 
 def _gate_config(kind: str) -> tuple[str, dict[str, Any]]:
     if kind == "front_gate":
-        return (
-            os.getenv("GLASSES_FRONT_GATE_TOOL", "script__toggle_house_gate").strip(),
-            {},
-        )
-    return (
-        os.getenv("GLASSES_CAR_GATE_TOOL", "script__toggle_car_gate").strip(),
-        {},
-    )
+        tool_name = os.getenv("GLASSES_FRONT_GATE_TOOL", "intent__HassTurnOn").strip()
+        target_name = os.getenv("GLASSES_FRONT_GATE_NAME", "House gate automation").strip()
+    else:
+        tool_name = os.getenv("GLASSES_CAR_GATE_TOOL", "intent__HassTurnOn").strip()
+        target_name = os.getenv("GLASSES_CAR_GATE_NAME", "Garage gate automation").strip()
+
+    # HassTurnOn is a generic Assist intent and requires a target selector.
+    # Keep the target fixed in controller configuration; an operator can still
+    # override the tool with a dedicated script tool, which takes empty args.
+    arguments = {"name": target_name} if tool_name == "intent__HassTurnOn" else {}
+    return tool_name, arguments
 
 
 def _safe_log_payload(value: Any, *, limit: int = 2_000) -> str:

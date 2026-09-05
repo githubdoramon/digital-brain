@@ -242,14 +242,19 @@ pre-roll and any queued post-detection PCM. The speech-energy gate ignores the
 first 350 ms of wake-word tail when deciding whether speech has started, while
 still retaining that audio for Whisper. This prevents the pause after “hey
 brain” from ending a command before it begins.
-It uses a permissive rolling low-percentile ambient threshold to recognize the
-start of speech, then requires a higher, sustained continuation threshold
-before incidental room noise can keep a command open; both thresholds and
-their chunk counts are recorded for diagnostics. It never endpoints within the
-initial 3-second command window after wake, then ends after 1.5 seconds of
-silence or eight seconds total. The shared warmed English-only
-`ggml-base.en.bin` Whisper context receives that raw 16 kHz PCM through
-`transcribeData`. The current Android `whisper.rn` native build is CPU-only;
+It runs a stateful 120 Hz–7 kHz band-pass copy of each command chunk before
+voice activity detection and Whisper, removing handling rumble and high-
+frequency hiss while retaining the original PCM unchanged for investigation.
+The rolling low-percentile ambient threshold is adaptive on that filtered
+signal (with a bounded 0.018–0.08 RMS range) to recognize the start of speech,
+then requires a higher sustained continuation threshold (at least 0.075 RMS
+and 1.6× the measured noise floor) before incidental room noise can keep a
+command open; both raw and filtered levels, thresholds, and chunk counts are
+recorded for diagnostics. It never endpoints within the initial 3-second
+command window after wake, then ends after 1.5 seconds of silence or eight
+seconds total. The shared warmed English-only `ggml-base.en.bin` Whisper
+context receives the filtered 16 kHz PCM through `transcribeData`. The current
+Android `whisper.rn` native build is CPU-only;
 the command trace records the runtime-selected accelerator and the native
 reason when GPU is unavailable. If the native bridge reports that its Whisper
 context disappeared, the command path records the invalidation, recreates one
@@ -263,8 +268,8 @@ variants such as `okay brain` without a list of aliases. If Whisper merges
 the wake phrase into one near-phonetic token, the bounded first-token check
 also removes variants such as `Hebrin` before dispatch. The focused trace
 keeps raw and normalized transcripts, removal method, and source-audio timing.
-For this debugging POC, the exact PCM submitted to
-Whisper is also written as a 16 kHz mono WAV after endpointing. The app keeps
+For this debugging POC, the original command PCM (the unfiltered diagnostic
+source) is also written as a 16 kHz mono WAV after endpointing. The app keeps
 the latest 40 clips app-private; **Download wake-command investigation** copies
 the focused trace and retained clips to `Digital Brain / Wake Command Debug`.
 The trace records PCM chunk count/gaps, speech gate values and wake-tail guard,
