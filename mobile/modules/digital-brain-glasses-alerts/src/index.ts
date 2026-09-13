@@ -42,6 +42,28 @@ export type GlassesRuntimeForegroundServiceStatus = {
   startedAtMs: number | null;
 };
 
+export type AppRuntimeStatus = {
+  active: boolean;
+  owners: string[];
+  locationActive: boolean;
+  startedAtMs: number | null;
+  lastNativeTickAtMs: number | null;
+  nativeTickCount: number;
+  workRequestCount: number;
+  lastWorkDurationMs: number;
+  lastError: string | null;
+  foregroundTypes: number;
+};
+
+export type RuntimeLocationSample = {
+  id: string;
+  latitude: number;
+  longitude: number;
+  timestamp: number;
+  accuracy: number | null;
+  timezone: string;
+};
+
 type DigitalBrainGlassesAlertsEvents = {
   onImageEnhancementForegroundTick(event: { timestampMs: number }): void;
   onSpeechPlaybackFinished(event: {
@@ -53,6 +75,10 @@ type DigitalBrainGlassesAlertsEvents = {
 };
 
 declare class DigitalBrainGlassesAlertsNativeModule extends NativeModule<DigitalBrainGlassesAlertsEvents> {
+  setRuntimeLocationEnabled(enabled: boolean): Promise<void>;
+  getAppRuntimeStatus(): Promise<AppRuntimeStatus>;
+  readRuntimeLocations(): Promise<RuntimeLocationSample[]>;
+  acknowledgeRuntimeLocations(ids: string[]): Promise<void>;
   getStatus(): Promise<GlassesAlertStatus>;
   getLaunchableApps(): Promise<GlassesAlertApp[]>;
   saveSettings(enabled: boolean, selectedPackages: string[]): Promise<GlassesAlertSettings>;

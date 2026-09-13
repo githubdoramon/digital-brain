@@ -123,8 +123,34 @@ sequenceDiagram
   variables. Mobile may include optional transcription timing fields; the
   backend emits those alongside server phase timings in one correlated
   `[glasses] command latency` record immediately before returning the response.
+  Mobile also owns bounded Bluetooth control-plane recovery, sustained local
+  call alerts, and user-initiated glasses firmware updates. Firmware maintenance
+  persists on the phone and pauses capture/wake commands while the glasses run
+  Mentra's OTA protocol; firmware bytes do not pass through the backend.
+  See `mobile/GLASSES_RELIABILITY.md` in the repository root for the lifecycle,
+  installation prerequisites, and hardware validation checklist.
   variables. Artifact provenance and build/runtime settings are documented in
   `backend/orchestrator/docs/GLASSES_TTS.md`.
+
+- Android mobile background work uses one app-owned foreground service and one
+  ongoing Digital Brain notification for enabled glasses features and location.
+  Location remains independent of glasses and uses native balanced-accuracy
+  capture at a requested ten-minute interval with a 50m movement filter and up to twenty minutes of delivery batching. The location input schema accepts `android_foreground_location` sample provenance. Native capture commits a bounded
+  atomic queue without auth or backend calls; JavaScript acknowledges only after
+  its durable queue commit, and a separate uploader posts through the existing
+  client proxy. Runtime drains share a 45-second budget with scheduled fallback
+  drains. The backend `/mobile/location` contract is unchanged. See
+  `mobile/BACKGROUND_RUNTIME.md` for ownership, migration and validation.
+
+- Glasses audio recordings remain mobile-owned local M4A files. The shared
+  recording coordinator separates native capture transitions from background
+  indexing, guards delayed callbacks by capture generation, and serializes
+  library mutations. Storage preference loading does not wait on library reads.
+  Native recorder/recovery/playback operations use a separate IO dispatcher.
+  Playback completion subscribes to the app-patched native event through the
+  internal SDK adapter; the published public event facade rejects that event.
+  There is no backend audio-processing step for this screen. See
+  `mobile/GLASSES_CAPTURE_PIPELINE.md` for lifecycle and validation details.
 
 - Tool groups are now used for runtime visibility policy (not just metadata).
 - Clarification responses follow `need_user_input` standards and map to UI directives when possible.
@@ -174,3 +200,5 @@ sequenceDiagram
 ### Proposed event review content
 
 The mobile proposed-event review screen exposes editable title, summary, local start/end, participants, and linked place fields before acceptance. A user-entered place name is sent explicitly with acceptance: the backend reuses a near-exact existing place or creates a new internal place and links it to the accepted event. Generated summaries must add meaningful event content; when location evidence only establishes that the user stayed somewhere for a known duration, `suggested_summary` remains blank and the duration stays in proposal metadata/reason.
+
+- Mobile location diagnostics rotate at 2MiB with one previous file. Export reads a bounded 256KiB recent JSONL tail using Base64 byte ranges, skips incomplete boundary records, and includes bounded in-memory events. Oversized individual events retain a marked preview. Existing oversized logs can be exported without loading the full file.

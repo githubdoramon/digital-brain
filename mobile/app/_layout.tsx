@@ -16,11 +16,13 @@ import { TopNoticeProvider } from '@/components/top-notice';
 import { syncBackgroundLocationTracking } from '@/location/backgroundLocation';
 import { registerGlassesCaptureReconciliation } from '@/mentraCapture/backgroundTask';
 import { hydrateGlassesAudioRecording } from '@/mentraCapture/recordings';
+import { initializeGlassesFirmware } from '@/mentraCapture/firmware';
 import {
   ensureMentraConnection,
   getDefaultGlassesDevice,
   subscribeMentraAudioOutput,
   subscribeMentraEvents,
+  syncSavedGlassesWifiCredentials,
 } from '@/mentraCapture/sdk';
 import { setExpectedGlassesAlertAudioDevice } from '@/glassesAlerts/runtime';
 import { reconcileGlassesCaptures } from '@/mentraCapture/sync';
@@ -62,6 +64,7 @@ export default function RootLayout() {
 
   useEffect(() => {
     ensureAppStateTracking();
+    if (Platform.OS === 'android') void initializeGlassesFirmware().catch(() => undefined);
     const unsubscribe = subscribeMentraEvents(() => {
       void reconcileGlassesCaptures();
     });
@@ -91,6 +94,7 @@ export default function RootLayout() {
         try {
           const connected = await ensureMentraConnection({ applyCaptureDefaults });
           if (!connected || disposed) return;
+          void syncSavedGlassesWifiCredentials().catch(() => undefined);
           await reconcileGlassesCaptures();
         } catch {
           // The settings connection state and sync status retain the
@@ -154,7 +158,16 @@ function RootLayoutNav({ loaded }: { loaded: boolean }) {
     if (isLoading) {
       return;
     }
-    void syncBackgroundLocationTracking(Boolean(token));
+    const syncLocation = () => {
+      void syncBackgroundLocationTracking(Boolean(token)).catch((error) => {
+        console.warn('Background location tracking could not start', error);
+      });
+    };
+    syncLocation();
+    const subscription = AppState.addEventListener('change', (state) => {
+      if (state === 'active') syncLocation();
+    });
+    return () => subscription.remove();
   }, [isLoading, token]);
 
   const handleNotificationResponse = useCallback(
@@ -329,6 +342,10 @@ function RootLayoutNav({ loaded }: { loaded: boolean }) {
           options={{
             headerShown: false,
           }}
+        />
+        <Stack.Screen
+          name="settings/glasses-capture/firmware/index"
+          options={{ headerShown: false }}
         />
         <Stack.Screen
           name="settings/storage/index"

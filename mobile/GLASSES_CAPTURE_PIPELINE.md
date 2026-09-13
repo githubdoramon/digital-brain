@@ -7,6 +7,12 @@ the next press stops it and the glasses enforce a 15-minute maximum.
 
 ## Lifecycle
 
+Recording playback completion uses the app-patched native
+`glasses_audio_playback_finished` event through the existing internal SDK adapter.
+The published public facade rejects this event; using it during recordings
+initialization crashes the app on opening. The native event remains responsible
+for completion delivery and the coordinator removes its listener on cleanup.
+
 `@mentra/bluetooth-sdk` emits capture/gallery signals. The app reconciles
 immediately after those signals and via an Android best-effort background task
 with a 15-minute minimum interval. It first probes the glasses' current local
@@ -60,9 +66,9 @@ file without its local queue record.
 Settings → Smart glasses → Automatic scene capture is an opt-in local
 pipeline. Its toggle and one positive whole-minute interval persist in app
 storage and are restored after process or device restart. On Android,
-enabling it starts a connected-device foreground service with a persistent
-system notification. A native foreground-service clock emits the configured
-cadence to the live JavaScript runtime, while the JavaScript timer remains a
+enabling it acquires capture ownership in the shared Digital Brain foreground
+service and its one ongoing notification. A native clock supplies minute
+opportunities to the persisted scheduler, while the JavaScript timer remains a
 coalesced fallback. The app also registers an Android background task as a
 restart/catch-up path. Android WorkManager enforces a 15-minute minimum and may
 defer it further after the process is killed, so sub-15-minute recovery cannot
@@ -177,7 +183,7 @@ behavior.
 The app reuses its one Mentra SDK session and turns on the glasses microphone
 only while a recording is active. Mentra's 16 kHz mono PCM reaches a native
 AAC encoder before the React Native bridge, which writes a user-visible `.m4a`
-to `Digital Brain/Recordings`. A connected-device foreground service keeps the
+to `Digital Brain/Recordings`. A recording claim on the shared app service keeps the
 native encoder alive while the app is backgrounded or the phone is locked. The
 recording does not survive a force-stop or terminated process, and v1 has no
 upload, transcription, backend processing, or retention cap.
@@ -206,16 +212,21 @@ streaming detector while its glasses PCM session is continuous. Mentra delivers
 bounded queue and resets detector history after reconnects, errors, or a real
 audio-source handoff.
 
-The existing connected-device foreground service is the shared glasses-runtime
-lease for wake listening and automatic capture. On Android 14+, it starts from
-background/headless work with only non-while-in-use service types; the
-microphone type is promoted only after the host app is visibly resumed. This
-avoids Android rejecting a background service restart simply because
-`RECORD_AUDIO` is granted. It keeps the process eligible while the app is
-backgrounded or locked, but it is not a promise to survive a force-stop or
-restart before the app launches again. Location remains a separate Android
-runtime: it preserves quiet stationary capture and uses its own location
-foreground-service mode only while moving.
+The app-owned foreground service shares one notification across location,
+Mentra connection, automatic capture, wake listening, recording and call alerts.
+Each feature has independent ownership; location remains active when glasses
+are disconnected. Native location capture uses balanced accuracy and a
+ten-minute interval, a 50m movement filter, and up to twenty minutes of batching.
+It commits samples before a separate uploader drains them. Recent location
+provenance may be unavailable while a batch is pending; do not increase the
+existing provenance age tolerance to disguise stale locations.
+This service never acquires the phone microphone: glasses PCM arrives through
+Bluetooth and uses the connected-device service type. It never promotes a
+microphone type merely because `RECORD_AUDIO` is granted. Location promotion
+still checks permissions and app eligibility, with explicit rejection diagnostics.
+Persistent requests survive ordinary process recreation; recordings and calls
+are never replayed. Force-stop and OEM termination still require device testing
+and may require reopening the app. See [BACKGROUND_RUNTIME.md](BACKGROUND_RUNTIME.md).
 
 Glasses audio recording and video recording own the microphone. The wake
 runtime releases its PCM subscription before either starts, resets its model
@@ -334,10 +345,10 @@ Incoming phone calls are intentionally independent of the app allow-list.
 After the user separately grants `READ_PHONE_STATE`, the notification listener
 observes only `RINGING`, `OFFHOOK`, and `IDLE`: ringing starts a distinct
 repeating two-note glasses ring and either later state stops it. The app never
-reads, retains, or presents a caller number. A temporary media-playback
-foreground service keeps the repeating ring alive while the call is incoming;
-it has a silent, low-importance Android system notification and stops promptly
-when the call state changes.
+reads, retains, or presents a caller number. A temporary media-playback claim on the shared app service keeps the repeating
+ring alive while the call is incoming. It updates the one Digital Brain
+notification and releases only the call claim when the call state changes,
+the phone becomes active, or the audio route disappears.
 The notification listener starts that repeat loop before requesting the
 foreground service, so an Android/OEM refusal to promote background media
 playback does not degrade the alert to a single tone. `CATEGORY_CALL`
@@ -407,3 +418,42 @@ Physical-device validation checklist (static builds do not prove these paths):
    auth; kill/background the app; and hold the backend past 70 seconds. Confirm
    red blink, listener recovery, no new command id, no late playback, and no
    leaked audio/auth data in exported diagnostics.
+
+### Recording responsiveness and library ownership
+
+The recording coordinator owns shared `idle`, `starting`, `recording`, and
+`stopping` phases across screen mounts. Repeated actions join the same native
+operation. Storage selection, native status, and the saved library load
+independently; an unresolved storage preference is not a missing folder. The
+screen keeps its shared Button text visible during transitions, shows background
+saving separately, and offers a retry after storage/status initialization errors.
+
+Android recorder, status, recovery, and playback bridge calls run on
+`Dispatchers.IO`, outside Expo's shared native function queue. Normal encoder
+draining polls available output without waiting 10 ms on every PCM chunk;
+end-of-stream draining still waits for final AAC output before closing M4A.
+Start pauses/resets wake detection while preserving an already-enabled glasses
+PCM stream, avoiding an unnecessary mic off/on cycle. Stop still waits for
+native encoder/container closure, but does not await mic shutdown, file
+inspection, index persistence, or wake-listener startup. A new recording waits
+for any previous mic-off request, and generation checks stop old callbacks from
+removing the new recording's microphone ownership.
+
+`mentraCapture/recordingLibrary.ts` owns the cached durable index and serializes
+all read-modify-write operations. Opening the screen reads that index without
+stat-ing every SAF document; playback checks the requested file and reports
+missing/provider-inaccessible files without deleting index entries. Save
+completion publishes a library revision independently of capture state.
+Completion results are deduplicated, and delayed save/hydration callbacks cannot
+reset a newer capture. Playback completion clears its indicator, starting capture
+stops playback, and deleting an unrelated file leaves playback alone. Rename has
+keyboard avoidance, submit/cancel controls, and a separate library-action lock.
+
+`audio_recording_latency` diagnostics include preparation, file/mic handoff,
+native start/stop, and indexing durations. Run `npm run test:glasses-recordings`
+for deferred-operation and rendered-screen regressions. A rebuilt Android app
+is required for the native queue/playback changes. Hardware validation must
+measure tap-to-record and tap-to-stop with wake listening active, repeat short
+and long recordings, start again while saving, and check locked/background,
+Bluetooth-loss, playback, and actual provider behavior; host tests do not prove
+those timings or physical microphone behavior.

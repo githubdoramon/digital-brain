@@ -31,14 +31,18 @@ import {
   clearRetainedWakeCommandAudio,
   clearWakeCommandDebugLog,
   ensureMentraConnection,
+  recoverMentraConnection,
   forgetPairedGlasses,
   getMentraConnectionStatus,
   getDefaultGlassesDevice,
   getCaptureSyncStatus,
   isMentraSdkAvailable,
+  isAutoWifiSyncEnabled,
   pairGlasses,
   reconcileGlassesCaptures,
   retryFailedGlassesCaptures,
+  removeGlassesWifiCredential,
+  syncSavedGlassesWifiCredentials,
   scanForGlasses,
   subscribeCaptureSync,
   clearImageEnhancementLog,
@@ -46,10 +50,14 @@ import {
   getImageEnhancementLogInfo,
   getImageEnhancementStatus,
   initializeImageEnhancement,
+  listGlassesWifiCredentials,
   readImageEnhancementLog,
+  setAutoWifiSyncEnabledForGlasses,
   setImageEnhancementEnabled,
   setImageEnhancementIntervalMinutes,
+  upsertGlassesWifiCredential,
   subscribeImageEnhancementStatus,
+  type GlassesWifiCredential,
   type MentraDevice,
   type MentraConnectionStatus,
 } from '@/mentraCapture';
@@ -332,10 +340,10 @@ export default function GlassesCaptureScreen() {
     showSuccess('Capture reconciliation finished.');
   };
 
-  const connect = async () => {
+  const connect = async (repair = false) => {
     setConnecting(true);
     try {
-      const connected = await ensureMentraConnection();
+      const connected = await (repair ? recoverMentraConnection() : ensureMentraConnection());
       if (!connected) throw new Error('No Mentra Live is paired. Search for glasses to pair one.');
       await refreshConnection();
       await reconcileGlassesCaptures();
@@ -426,6 +434,21 @@ export default function GlassesCaptureScreen() {
               <Text style={styles.recordingsShortcutTitle}>Glasses alerts</Text>
               <Text style={styles.recordingsShortcutText}>
                 Hear selected app notifications and incoming calls.
+              </Text>
+            </View>
+            <Ionicons name="chevron-forward" size={20} color={theme.colors.mutedInk} />
+          </Pressable>
+          <Pressable
+            style={styles.recordingsShortcut}
+            onPress={() => router.push('/settings/glasses-capture/firmware' as never)}
+          >
+            <View style={styles.recordingsShortcutIcon}>
+              <Ionicons name="cloud-download-outline" size={21} color={theme.colors.teal} />
+            </View>
+            <View style={styles.recordingsShortcutCopy}>
+              <Text style={styles.recordingsShortcutTitle}>Firmware</Text>
+              <Text style={styles.recordingsShortcutText}>
+                Check and install compatible glasses updates.
               </Text>
             </View>
             <Ionicons name="chevron-forward" size={20} color={theme.colors.mutedInk} />
@@ -722,6 +745,17 @@ export default function GlassesCaptureScreen() {
                 <Text style={styles.value}>720p at 30 fps with audio · up to 15 minutes</Text>
               </View>
             </View>
+            <Button
+              label="Repair glasses connection"
+              onPress={() => void connect(true)}
+              disabled={connecting || !defaultDevice}
+              loading={connecting}
+              variant="secondary"
+              style={styles.button}
+            />
+            <Text style={styles.helperText}>
+              Reconnect a stalled glasses session while keeping your saved pairing.
+            </Text>
             <Button
               label="Apply glasses settings"
               onPress={() =>

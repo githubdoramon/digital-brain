@@ -15,6 +15,7 @@ import {
   getKnownGlassesIp,
   getKnownHotspot,
   releaseGlassesNetwork,
+  syncSavedGlassesWifiCredentials,
 } from './sdk';
 import {
   copyToDigitalBrainStorage,
@@ -32,6 +33,7 @@ import {
   saveCaptureQueue,
 } from './storage';
 import type { CaptureQueueEntry, CaptureSyncStatus, RemoteCapture } from './types';
+import { isGlassesMaintenanceActive, loadGlassesMaintenance } from './maintenance';
 import { resolveCaptureLocation } from './location';
 import DigitalBrainStorageNative from '@/modules/digital-brain-storage/src';
 
@@ -71,6 +73,10 @@ function withTimeout<T>(operation: Promise<T>, timeoutMs: number, message: strin
       },
     );
   });
+}
+
+async function sleep(milliseconds: number): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
 
 function publish(next: Partial<CaptureSyncStatus>): void {
@@ -213,31 +219,113 @@ async function probeGalleryHealth(url: string): Promise<Response> {
   }
 }
 
+async function tryGalleryHealth(baseUrl: string, attempts = 3, delayMs = 650): Promise<boolean> {
+  let lastError = '';
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    try {
+      const response = await probeGalleryHealth(`${baseUrl}/api/health`);
+      if (response.ok) return true;
+      lastError = `HTTP ${response.status}`;
+    } catch (error) {
+      lastError = error instanceof Error ? error.message : String(error);
+    }
+    if (attempt < attempts - 1) {
+      await sleep(delayMs * (attempt + 1));
+    }
+  }
+  debugCaptureStage('glasses_capture_health_failed', 'Glasses camera server health check failed.', {
+    baseUrl,
+    attempts,
+    lastError,
+  });
+  return false;
+}
+
 async function connectGalleryServer(): Promise<{
   baseUrl: string;
   path: 'current_wifi' | 'glasses_hotspot';
   closeHotspot: boolean;
 }> {
-  const candidates = [getKnownGlassesIp(), getKnownHotspot()?.localIp].filter(Boolean) as string[];
-  for (const ip of candidates) {
-    const baseUrl = `http://${ip}:8089`;
-    try {
-      const response = await probeGalleryHealth(`${baseUrl}/api/health`);
-      if (response.ok)
-        return {
-          baseUrl,
-          path: ip === getKnownGlassesIp() ? 'current_wifi' : 'glasses_hotspot',
-          closeHotspot: false,
-        };
-    } catch {
-      // Try the next transport.
+  const notes: string[] = [];
+  const tryCandidates = async (
+    candidates: string[],
+    path: 'current_wifi' | 'glasses_hotspot',
+    attempts = 3,
+    delayMs = 500,
+  ) => {
+    for (const ip of candidates) {
+      const baseUrl = `http://${ip}:8089`;
+      const healthy = await tryGalleryHealth(baseUrl, attempts, delayMs);
+      if (healthy) {
+        debugCaptureStage(
+          'glasses_capture_server_available',
+          'Recovered glasses gallery endpoint.',
+          {
+            path,
+            baseUrl,
+            attempts,
+          },
+        );
+        return { baseUrl, path, closeHotspot: false };
+      }
     }
+    return null;
+  };
+
+  const waitForNetworkEvent = () => new Promise((resolve) => setTimeout(resolve, 600));
+
+  const wifiCandidates = [getKnownGlassesIp()].filter(Boolean) as string[];
+  const directMatch = await tryCandidates(wifiCandidates, 'current_wifi');
+  if (directMatch) return directMatch;
+
+  const wifiSyncResult = await syncSavedGlassesWifiCredentials();
+  if (wifiSyncResult.status === 'success' || wifiSyncResult.status === 'failed') {
+    await waitForNetworkEvent();
+    const refreshedCandidates = [getKnownGlassesIp()].filter(Boolean) as string[];
+    const retried = await tryCandidates(refreshedCandidates, 'current_wifi');
+    if (retried) {
+      debugCaptureStage(
+        'glasses_capture_server_found_after_wifi_sync',
+        'Recovered gallery access by syncing Wi-Fi credentials.',
+        {
+          status: wifiSyncResult.status,
+        },
+      );
+      return retried;
+    }
+    debugCaptureStage(
+      'glasses_capture_wifi_sync_did_not_restore_server',
+      'Syncing Wi-Fi did not restore local camera server access.',
+      {
+        status: wifiSyncResult.status,
+        reason: wifiSyncResult.status === 'failed' ? wifiSyncResult.reason : undefined,
+      },
+    );
   }
+  if (wifiSyncResult.status === 'noop') {
+    notes.push(`wifi-sync-noop:${wifiSyncResult.reason}`);
+  } else if (wifiSyncResult.status === 'disabled') {
+    notes.push('wifi-sync-disabled');
+  } else if (wifiSyncResult.status === 'failed') {
+    notes.push(`wifi-sync-failed:${wifiSyncResult.reason}`);
+  }
+
+  const priorHotspotIp = getKnownHotspot()?.localIp;
+  const hotspotMatch = await tryCandidates(
+    priorHotspotIp ? [priorHotspotIp] : [],
+    'glasses_hotspot',
+    2,
+    600,
+  );
+  if (hotspotMatch) return { ...hotspotMatch, closeHotspot: false };
+
   const hotspot = await enableGlassesHotspot();
-  hotspotOpenedBySync = hotspot.openedByUs;
   const baseUrl = `http://${hotspot.localIp}:8089`;
-  const response = await probeGalleryHealth(`${baseUrl}/api/health`);
-  if (!response.ok) throw new Error(`Glasses camera server unavailable (${response.status})`);
+  const healthy = await tryGalleryHealth(baseUrl, 5, 900);
+  if (!healthy) {
+    const extras = notes.length > 0 ? ` (${notes.slice(0, 3).join('; ')})` : '';
+    throw new Error(`Glasses camera server unavailable after hotspot start${extras}`);
+  }
   return { baseUrl, path: 'glasses_hotspot', closeHotspot: hotspot.openedByUs };
 }
 
@@ -454,15 +542,18 @@ async function uploadCaptureInChunks(
       { capture_id: entry.captureId, uploaded_bytes: offset + length, size_bytes: sizeBytes },
     );
   }
-  const response = (await apiFetch(`/mobile/glasses/captures/upload-sessions/${encodeURIComponent(sessionId)}/complete`, {
-    method: 'POST',
-    token,
-    onAuthExpired: async () => {
-      const refreshed = await refreshToken();
-      if (refreshed) token = refreshed;
-      return refreshed;
+  const response = (await apiFetch(
+    `/mobile/glasses/captures/upload-sessions/${encodeURIComponent(sessionId)}/complete`,
+    {
+      method: 'POST',
+      token,
+      onAuthExpired: async () => {
+        const refreshed = await refreshToken();
+        if (refreshed) token = refreshed;
+        return refreshed;
+      },
     },
-  })) as any;
+  )) as any;
   return String(response?.capture?.immich_asset_id ?? '');
 }
 
@@ -481,9 +572,13 @@ async function drainLocalCaptureUploads(): Promise<void> {
       !['uploaded', 'missing'].includes(entry.state) &&
       (!entry.nextRetryAt || Date.parse(entry.nextRetryAt) <= Date.now()),
   );
-  debugCaptureStage('glasses_capture_local_upload_drain_started', 'Draining retained local captures.', {
-    eligible_count: eligible.length,
-  });
+  debugCaptureStage(
+    'glasses_capture_local_upload_drain_started',
+    'Draining retained local captures.',
+    {
+      eligible_count: eligible.length,
+    },
+  );
   for (const initial of eligible) {
     let entry = (await loadCaptureQueue()).find(
       (item) => item.captureId === initial.captureId && item.fileName === initial.fileName,
@@ -499,10 +594,14 @@ async function drainLocalCaptureUploads(): Promise<void> {
           item.captureId === entry!.captureId && item.fileName === entry!.fileName ? entry! : item,
         ),
       );
-      debugCaptureStage('glasses_capture_backend_upload_started', 'Uploading retained local capture.', {
-        capture_id: entry.captureId,
-        kind: entry.kind,
-      });
+      debugCaptureStage(
+        'glasses_capture_backend_upload_started',
+        'Uploading retained local capture.',
+        {
+          capture_id: entry.captureId,
+          kind: entry.kind,
+        },
+      );
       const assetId = await uploadCapture(entry);
       if (!assetId) throw new Error('Backend did not confirm an Immich asset');
       await deleteLocalCapture(localUri);
@@ -511,10 +610,14 @@ async function drainLocalCaptureUploads(): Promise<void> {
           (item) => item.captureId !== entry!.captureId || item.fileName !== entry!.fileName,
         ),
       );
-      debugCaptureStage('glasses_capture_backend_upload_confirmed', 'Backend confirmed retained local capture.', {
-        capture_id: entry.captureId,
-        immich_asset_id: assetId,
-      });
+      debugCaptureStage(
+        'glasses_capture_backend_upload_confirmed',
+        'Backend confirmed retained local capture.',
+        {
+          capture_id: entry.captureId,
+          immich_asset_id: assetId,
+        },
+      );
     } catch (error) {
       const message = safeCaptureErrorMessage(error);
       const attempts = entry.attempts + 1;
@@ -525,17 +628,23 @@ async function drainLocalCaptureUploads(): Promise<void> {
                 ...entry!,
                 state: message.includes('manually removed') ? 'missing' : 'failed',
                 attempts,
-                nextRetryAt: new Date(Date.now() + 15_000 * 2 ** Math.min(attempts, 8)).toISOString(),
+                nextRetryAt: new Date(
+                  Date.now() + 15_000 * 2 ** Math.min(attempts, 8),
+                ).toISOString(),
                 lastError: message.slice(0, 240),
                 updatedAt: new Date().toISOString(),
               }
             : item,
         ),
       );
-      debugCaptureStage('glasses_capture_local_upload_failed', 'Retained local capture upload failed.', {
-        capture_id: entry.captureId,
-        error: message,
-      });
+      debugCaptureStage(
+        'glasses_capture_local_upload_failed',
+        'Retained local capture upload failed.',
+        {
+          capture_id: entry.captureId,
+          error: message,
+        },
+      );
     }
   }
 }
@@ -554,11 +663,17 @@ async function runSync(): Promise<void> {
   }
   const imported = await importVisibleCaptureQueueEntries();
   if (imported) {
-    debugCaptureStage('glasses_capture_visible_queue_imported', 'Imported retained Documents media into the upload queue.', {
-      imported_count: imported,
-    });
+    debugCaptureStage(
+      'glasses_capture_visible_queue_imported',
+      'Imported retained Documents media into the upload queue.',
+      {
+        imported_count: imported,
+      },
+    );
   }
   await drainLocalCaptureUploads();
+  await loadGlassesMaintenance();
+  if (isGlassesMaintenanceActive()) return;
   // A capture signal can arrive while the glasses camera is still busy. Reconnect/readiness is
   // safe here, but replaying gallery/photo/video settings during that camera transaction can
   // race the firmware and make a physical-button capture appear to do nothing. Defaults are
@@ -581,6 +696,7 @@ async function runSync(): Promise<void> {
       GLASSES_CONNECTION_TIMEOUT_MS,
       'Glasses gallery connection timed out; continuing with retained local captures.',
     );
+    hotspotOpenedBySync = connection.path === 'glasses_hotspot' && connection.closeHotspot;
     publish({ networkPath: connection.path });
     debugCaptureStage(
       'glasses_capture_network_ready',
@@ -625,16 +741,12 @@ async function runSync(): Promise<void> {
     );
   }
   let queue = await loadCaptureQueue();
-  debugCaptureStage(
-    'glasses_capture_queue_loaded',
-    'Loaded the durable glasses capture queue.',
-    {
-      total: queue.length,
-      failed: queue.filter((entry) => entry.state === 'failed').length,
-      upload_ready: queue.filter((entry) => entry.uploadReady === true).length,
-      local_ready: queue.filter((entry) => Boolean(entry.localUri)).length,
-    },
-  );
+  debugCaptureStage('glasses_capture_queue_loaded', 'Loaded the durable glasses capture queue.', {
+    total: queue.length,
+    failed: queue.filter((entry) => entry.state === 'failed').length,
+    upload_ready: queue.filter((entry) => entry.uploadReady === true).length,
+    local_ready: queue.filter((entry) => Boolean(entry.localUri)).length,
+  });
   const now = new Date().toISOString();
   for (const remote of discovered) {
     if (
@@ -892,7 +1004,7 @@ export async function retryFailedGlassesCaptures(): Promise<void> {
     queue.map((entry) =>
       entry.state === 'failed'
         ? { ...entry, state: 'discovered', nextRetryAt: null, lastError: null }
-      : entry,
+        : entry,
     ),
   );
   debugCaptureStage(

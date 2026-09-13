@@ -52,6 +52,7 @@ import {
   DigitalBrainStorageFolder,
 } from '@/storage/digitalBrainStorage';
 import { theme } from '@/theme';
+import { BackgroundLocationControl } from './components/BackgroundLocationControl';
 
 function formatBuildTimestamp(value: string | null | undefined): string {
   if (!value) {
@@ -435,6 +436,7 @@ export default function SettingsScreen() {
           },
         ]}
       >
+        {Platform.OS === 'android' && <BackgroundLocationControl />}
         <Card style={[styles.card, styles.navCard]}>
           <Pressable
             style={styles.navRow}
@@ -580,6 +582,13 @@ export default function SettingsScreen() {
 
         <Card style={[styles.card, styles.versionCard]}>
           <Text style={styles.versionLabel}>Background location sync</Text>
+          {backgroundStatus?.sharedRuntime && (
+            <Text style={styles.versionValue}>
+              Shared runtime: {backgroundStatus.sharedRuntime.active ? 'active' : 'inactive'}
+              {'\n'}Activities: {backgroundStatus.sharedRuntime.owners.join(', ') || 'none'}
+              {'\n'}Last runtime error: {backgroundStatus.sharedRuntime.lastError ?? 'none'}
+            </Text>
+          )}
           <Text style={styles.versionValue}>
             Location mode: {backgroundStatus?.locationMode ?? 'unknown'}
           </Text>

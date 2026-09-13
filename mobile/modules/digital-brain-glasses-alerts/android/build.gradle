@@ -9,7 +9,14 @@ version = '0.1.0'
 android {
   namespace "expo.modules.digitalbrainglassesalerts"
   defaultConfig {
+    consumerProguardFiles "consumer-rules.pro"
     versionCode 1
     versionName "0.1.0"
   }
+}
+
+dependencies {
+  implementation 'com.facebook.react:react-android'
+  implementation 'androidx.core:core-ktx:1.16.0'
+  implementation 'com.google.android.gms:play-services-location:21.0.1'
 }

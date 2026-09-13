@@ -356,9 +356,11 @@ def test_same_place_event_blocks_without_llm(monkeypatch):
 
 def test_llm_can_disambiguate_unrelated_timed_overlap(monkeypatch):
     captured_prompts: list[str] = []
+    captured_timeouts: list[int] = []
 
-    def fake_call(prompt: str, **_kwargs):
+    def fake_call(prompt: str, **kwargs):
         captured_prompts.append(prompt)
+        captured_timeouts.append(kwargs["timeout"])
         return {
             "blocks_proposal": False,
             "confidence": "high",
@@ -384,6 +386,7 @@ def test_llm_can_disambiguate_unrelated_timed_overlap(monkeypatch):
         "reason": "Broad regional context does not describe the venue stay.",
     }
     assert captured_prompts
+    assert captured_timeouts == [180]
 
 
 def test_full_day_events_do_not_block_location_gaps():

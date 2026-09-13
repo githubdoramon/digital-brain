@@ -37,13 +37,15 @@ server phase timings, outcome, and total time immediately before returning.
 
 **Mobile background task convention**: Expo background task definitions must be imported from `mobile/index.js` before `expo-router/entry`, so headless/background launches register the tasks even when React navigation has not mounted.
 
-**Mobile background location convention**: Android background location uses two separate workers: a capture worker and an upload/drain worker. Keep the location, geofence, and drain task definitions imported from `mobile/index.js`; quiet mode should avoid a foreground-service notification while stationary, geofence/current-place movement should switch to reliable foreground-service capture while moving, and a stationary window should switch back to quiet mode. Android location-task callbacks must only validate/dedupe/update capture mode and enqueue durable samples; they must not call the backend or read auth state. The scheduled drain worker is the only background path that reads auth state and uploads queued samples to the backend, using bounded sequential batches. Preserve mode/geofence/queue/drain/debug logging so exported logs can distinguish capture, enqueue, drain, auth, backend, and OS throttling failures.
+**Mobile background location convention**: Android location capture is owned by the app's single `DigitalBrainRuntimeService`, independently of glasses connectivity. Use native Fused Location callbacks with balanced accuracy, a ten-minute requested/minimum interval, a 50m movement filter, and up to twenty minutes of delivery batching. Persist each sample and its capture timezone atomically before waking JavaScript; callbacks never read auth or call the backend. Transfer samples into the durable JS queue before acknowledging the native copy. A separate bounded uploader runs under the foreground runtime, with the scheduled drain worker as fallback. New native batches trigger handoff promptly; periodic JS work is limited to five minutes for a desired glasses connection or fifteen minutes for location alone. Minute capture opportunities must not launch the location/connection worker each minute. Location has an independent persisted Settings toggle; sign-out releases its runtime ownership. Keep legacy location/geofence task definitions registered at import for upgrades, but unregister their Android capture registrations and ignore late callbacks after migration. iOS retains Expo location capture. Keep capture, handoff, runtime/permission, queue, auth and drain diagnostics. The location API accepts `android_foreground_location` as sample provenance. Location diagnostic files rotate at 2MiB with one previous file; exports read at most a 256KiB recent tail using Base64 byte ranges, never the entire historical file. See `mobile/BACKGROUND_RUNTIME.md`.
 
 **Mobile image understanding convention**: On-device image understanding is owned by the serialized coordinator in `mobile/image-understanding/`. Keep Fast Vision and Balanced VLM behind `ImageUnderstandingEngine`, use the shared `moment_observation.v1` schema, never keep two pipelines loaded simultaneously, and release native resources after every run and failure. The automatic smart-glasses flow runs one fused pipeline: Fast Vision supplies detector/count/OCR evidence, unloads, then Balanced VLM owns the first-person description of the scene, people, actions, setting, and likely event. The prompt must treat the glasses wearer as the active participant even when behind the camera, without counting them as a visible person or inventing unsupported personal details. Detector evidence supports rather than replaces the visual model's interpretation; exact OCR is appended deterministically instead of being regenerated. A successful automatic run queues only the canonical observation, capture time/timezone, source type, and nullable location provenance to the idempotent Moments API; never upload source photos, URIs, EXIF, model diagnostics, auth state, or account identifiers. Keep source images locally while the testing retention policy is active. Models remain optional downloads with explicit delete controls under Settings → Smart glasses → Scene analysis models; Fast Vision detector and scene-classifier files and Balanced VLM artifacts are app-private, while Fast Vision's optional ML Kit modules are managed by Google Play services. See `mobile/GLASSES_CAPTURE_PIPELINE.md`.
 
 **Automatic glasses capture scheduling**: `mobile/mentraCapture/imageEnhancement.ts` supports multiple persisted schedules backed by one serialized capture worker. Coalesce missed ticks to one pending job per schedule, persist jobs before native execution, retry failures with bounded backoff, and keep `requestPhoto(transferMethod='auto')` so direct Wi-Fi delivery falls back to the SDK's phone-relayed BLE path. Physical-button gallery/video reconciliation remains a separate local-server flow with hotspot fallback.
 
 ## Architecture Documentation
+
+**Mobile SDK event convention**: The public Mentra SDK rejects events outside its allowlist. Subscribe to the app-patched `glasses_audio_playback_finished` event through the existing internal SDK adapter; do not route it through the public facade during recordings initialization. Regression tests must retain the real public-event restrictions.
 
 Detailed architecture docs live in `backend/orchestrator/docs/architecture/`:
 
@@ -600,6 +602,28 @@ perform one orderly disconnect, brief release delay, and reconnect. Android
 system Bluetooth/audio pairing remains OS-owned and is not evidence of a
 competing Mentra app.
 
+The Android SDK patch tracks missed ASG heartbeat replies only after this
+session has demonstrated pong support. Three unanswered probes plus a
+90-second silence window request one app-owned disconnect/reconnect; automatic
+recovery is capped at two attempts per 15 minutes. Suppress this watchdog
+during OTA and re-arm only after a fresh pong. A changed ASG process session
+under a retained BLE link must be logged separately from a physical reconnect.
+Pairing and forgetting must hold the same connection owner through completion.
+The explicit Repair glasses connection action retains pairing and never sends
+a glasses reboot or factory-reset command.
+
+Settings → Smart glasses → Firmware uses the SDK's compatible Mentra manifest,
+version check, `ota_start`, and `ota_status` protocol. Installation requires an
+explicit in-app confirmation, glasses Wi-Fi, at least 50% battery, and idle
+capture/recording/connection workers. Persist maintenance ownership before
+dispatch; pause wake commands and capture drains until authoritative terminal
+status. Reattach to status after app restarts and never automatically replay
+an ambiguous install request. An acknowledgement or intermediate step is not
+update completion. See `mobile/GLASSES_RELIABILITY.md` for validation limits.
+Keep a terminal firmware status visible through the final reboot; perform
+version verification only on a subsequent explicit check, so expected transport
+loss cannot turn confirmed completion into a displayed update failure.
+
 The automatic image enhancement pipeline is separate from the
 physical-button/Immich queue. Keep its persisted scheduler serialized and
 coalesced, with the Android
@@ -637,20 +661,18 @@ Wake-word acknowledgement is Android-only and starts automatically
 after a ready Mentra Live reconnect. Initialize its long-lived coordinator from
 `mobile/index.js` before Expo Router; keep one packaged on-device ONNX detector
 per continuous 16 kHz mono PCM stream, with bounded sequential ingress and a
-reset on reconnect/discontinuity. The connected-device foreground service is
-the shared glasses runtime lease for wake listening and automatic capture, not
-a replacement for the location workers or location foreground-service mode.
-The Mentra service must not infer the Android `microphone` foreground-service
-type from the mere presence of `RECORD_AUDIO`: Android 14+ can recreate it from
-headless/background work, where that while-in-use type is rejected. Start with
-safe connected-device/media-playback types, then promote microphone only from
-the visibly resumed app, with a safe-type fallback around type promotion.
+reset on reconnect/discontinuity. The app-owned `DigitalBrainRuntimeService` is the sole foreground notification owner for location, the Mentra connection, automatic capture, wake listening, glasses audio recording and call alerts. Each feature owns a separate claim; releasing one must not stop another. Keep location handoff/upload failures isolated from glasses recovery and recheck current ownership after asynchronous work before reconnecting. Persist only location, desired glasses connection and capture ownership, and restore transient recording/call/wake state from their real coordinators after restart. Enable the `location` type only for requested, permitted location work; glasses use `connectedDevice` and audio uses `mediaPlayback`. This service consumes glasses-delivered PCM and never acquires the phone microphone, so it does not declare or promote the while-in-use `microphone` type or use `dataSync` as an always-on fallback. Preserve permission checks and rejection diagnostics around foreground location startup. Keep SDK integration in the versioned patch and retain the fixed host adapter through R8 consumer rules.
 Manual audio recording and any glasses video recording have exclusive mic
 ownership: pause/reset the wake listener first and resume only after completion.
 For manual audio stop, shut down native capture before disabling the mic,
 release the UI after native capture stops, and keep SAF indexing and wake-word
 reactivation off the user-facing busy path; coalesce duplicate native
-completion events by output URI.
+completion events by output URI. Recording phases and capture generation belong
+to the shared coordinator; delayed saves/status reads must not reset a newer
+capture or resume its wake listener. Load storage selection independently of
+the recording library and distinguish unknown from missing. List the cached
+recording index without a full SAF scan, serialize index mutations, and keep
+native recorder/recovery/playback calls off Expo's shared native function queue.
 Wake-word diagnostics must expose service/readiness, mic ownership, PCM
 backlog, inference, detection, LED dispatch handoff, and LED acknowledgement
 failures. The latency-sensitive wake blink uses the non-blocking native SDK
@@ -710,6 +732,11 @@ grant and phone-state permission must be separately explained in the UI.
 Phone-use suppression applies only to automatic app/call alerts: an explicit
 settings test must still play through the verified Mentra audio route while the
 phone is unlocked.
+Notification PCM uses a louder two-note chime; incoming calls use one looping
+1.6-second waveform (1.2 seconds of ringing, 0.4 seconds of silence). Answer,
+decline, phone-use suppression, or route loss must stop the active track, not
+only its next scheduled tone. Settings previews use the same PCM. Start muted
+and unmute only on the verified glasses route; do not change system volume.
 Do not let a selected dialer app's `CATEGORY_CALL` notification generate the
 ordinary one-shot app chime: only the telephony state owns a call alert. Start
 the repeat loop from the notification-listener service before attempting its

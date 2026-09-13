@@ -112,8 +112,8 @@ function withGlassesCaptureCleartext(config: ExpoConfig): ExpoConfig {
 
 /**
  * Glasses alerts use Android's notification-access boundary and a temporary
- * media-playback foreground service for an incoming-call ring. Image enhancement also uses
- * a connected-device foreground service while automatic capture is enabled.
+ * shared app foreground runtime for glasses and location. The runtime service
+ * declarations live in the local native module manifest.
  * Keep the declarations here because Expo prebuild regenerates AndroidManifest.xml.
  */
 function withGlassesAlertsAndroidManifest(config: ExpoConfig): ExpoConfig {
@@ -129,12 +129,18 @@ function withGlassesAlertsAndroidManifest(config: ExpoConfig): ExpoConfig {
     addPermission('android.permission.READ_PHONE_STATE');
     addPermission('android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK');
     addPermission('android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE');
-    addPermission('android.permission.FOREGROUND_SERVICE_DATA_SYNC');
+    addPermission('android.permission.FOREGROUND_SERVICE_LOCATION');
     addPermission('android.permission.FOREGROUND_SERVICE_MICROPHONE');
 
     const application = manifest.application?.[0];
     if (!application) return mod;
-    const services = application.service ?? [];
+    const retiredServices = new Set([
+      'expo.modules.digitalbrainglassesalerts.GlassesAlertPlaybackService',
+      'expo.modules.digitalbrainglassesalerts.GlassesImageEnhancementService',
+    ]);
+    const services = (application.service ?? []).filter(
+      (service) => !retiredServices.has(service.$?.['android:name'] ?? ''),
+    );
     const addService = (name: string, attributes: Record<string, string>, action?: string) => {
       if (services.some((service) => service.$?.['android:name'] === name)) return;
       services.push({
@@ -151,14 +157,6 @@ function withGlassesAlertsAndroidManifest(config: ExpoConfig): ExpoConfig {
       },
       'android.service.notification.NotificationListenerService',
     );
-    addService('expo.modules.digitalbrainglassesalerts.GlassesAlertPlaybackService', {
-      'android:exported': 'false',
-      'android:foregroundServiceType': 'mediaPlayback',
-    });
-    addService('expo.modules.digitalbrainglassesalerts.GlassesImageEnhancementService', {
-      'android:exported': 'false',
-      'android:foregroundServiceType': 'connectedDevice',
-    });
     application.service = services;
 
     const queries = manifest.queries?.[0] ?? {};

@@ -5,6 +5,7 @@ import android.media.AudioAttributes
 import android.media.AudioFocusRequest
 import android.media.AudioFormat
 import android.media.AudioManager
+import android.media.AudioRouting
 import android.media.AudioTrack
 import android.media.MediaPlayer
 import android.net.Uri
@@ -13,8 +14,6 @@ import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
-import kotlin.math.PI
-import kotlin.math.sin
 
 /**
  * Produces short, app-owned PCM tones. Notification content never reaches this
@@ -22,16 +21,30 @@ import kotlin.math.sin
  * by package name.
  */
 internal object GlassesAlertPlayback {
-  private const val SAMPLE_RATE = 48_000
   private const val NOTIFICATION_COOLDOWN_MS = 2_000L
-  private const val CALL_CYCLE_MS = 2_400L
 
   private val handler = Handler(Looper.getMainLooper())
   private var lastNotificationAlertAt = 0L
   private var callAlertActive = false
   private var audioFocusRequest: AudioFocusRequest? = null
   private var audioFocusManager: AudioManager? = null
-  private var activeContext: Context? = null
+  private var speechFocusRequest: AudioFocusRequest? = null
+  private var speechFocusManager: AudioManager? = null
+  private val routeListeners = mutableMapOf<AudioTrack, AudioRouting.OnRoutingChangedListener>()
+  private var callContext: Context? = null
+  private val callGate = object : Runnable {
+    override fun run() {
+      synchronized(this@GlassesAlertPlayback) {
+        val context = callContext ?: return
+        if (!GlassesAlertSettings.config(context).enabled || GlassesAlertSettings.isPhoneActivelyInUse(context)) {
+          stopCallAlert()
+        } else if (callAlertActive) handler.postDelayed(this, 300L)
+      }
+    }
+  }
+  private var callTrack: AudioTrack? = null
+  private var notificationTrack: AudioTrack? = null
+  private var previewTrack: AudioTrack? = null
   private var speechPlayer: MediaPlayer? = null
   private var speechCommandId: String? = null
   private var speechStartedAt = 0L
@@ -41,15 +54,7 @@ internal object GlassesAlertPlayback {
 
   private const val SPEECH_TAG = "DigitalBrainSpeech"
 
-  private val callCycle = object : Runnable {
-    override fun run() {
-      if (!callAlertActive) return
-      playTone(740, 180, activeContext)
-      handler.postDelayed({ if (callAlertActive) playTone(980, 180, activeContext) }, 330)
-      handler.postDelayed(this, CALL_CYCLE_MS)
-    }
-  }
-
+  @Synchronized
   fun playNotificationAlert(context: Context): Boolean {
     val now = SystemClock.elapsedRealtime()
     if (
@@ -57,58 +62,90 @@ internal object GlassesAlertPlayback {
       callAlertActive ||
       now - lastNotificationAlertAt < NOTIFICATION_COOLDOWN_MS
     ) return false
-    if (GlassesAlertSettings.findGlassesAudioDevice(context) == null) return false
+    if (!playNotificationPreview(context)) return false
     lastNotificationAlertAt = now
-    requestTransientFocus(context)
-    playTone(1040, 75, context)
-    handler.postDelayed({ playTone(1560, 95, context) }, 145)
-    handler.postDelayed({ if (!callAlertActive) releaseAudioFocus() }, 420)
     return true
   }
 
+  @Synchronized
   fun startCallAlert(context: Context): Boolean {
-    if (
-      GlassesAlertSettings.isPhoneActivelyInUse(context) ||
-      callAlertActive ||
-      GlassesAlertSettings.findGlassesAudioDevice(context) == null
-    ) return false
-    callAlertActive = true
-    activeContext = context.applicationContext
+    if (GlassesAlertSettings.isPhoneActivelyInUse(context) || callAlertActive) return false
+    releaseTrack(notificationTrack)
+    notificationTrack = null
+    releaseTrack(previewTrack)
+    previewTrack = null
     requestTransientFocus(context)
-    callCycle.run()
+    val track = playTone(context, GlassesAlertTone.call(), loop = true) {
+      stopCallAlert()
+    }
+    if (track == null) {
+      releaseAudioFocus()
+      return false
+    }
+    callTrack = track
+    callAlertActive = true
+    callContext = context.applicationContext
+    handler.postDelayed(callGate, 300L)
     return true
   }
 
+  @Synchronized
   fun stopCallAlert() {
     callAlertActive = false
-    handler.removeCallbacks(callCycle)
-    activeContext = null
+    callContext?.let { DigitalBrainRuntime.setFeature(it, RuntimeFeature.CALL.key, false) }
+    callContext = null
+    handler.removeCallbacks(callGate)
+    releaseTrack(callTrack)
+    callTrack = null
     releaseAudioFocus()
   }
 
+  @Synchronized
   fun isCallAlertActive(): Boolean = callAlertActive
 
+  @Synchronized
   fun playCallPreview(context: Context): Boolean {
-    if (GlassesAlertSettings.findGlassesAudioDevice(context) == null) return false
+    if (callAlertActive) return false
+    releaseTrack(previewTrack)
     requestTransientFocus(context)
-    playTone(740, 180, context)
-    handler.postDelayed({ playTone(980, 180, context) }, 330)
-    handler.postDelayed(::releaseAudioFocus, 750)
+    val track = playTone(context, GlassesAlertTone.call(), loop = true) ?: run {
+      releaseAudioFocus()
+      return false
+    }
+    previewTrack = track
+    // Three complete cycles let the user hear the real ringing cadence.
+    handler.postDelayed({
+      synchronized(this@GlassesAlertPlayback) {
+        if (previewTrack === track) {
+          releaseTrack(track)
+          previewTrack = null
+          if (!callAlertActive && speechPlayer == null && notificationTrack == null) releaseAudioFocus()
+        }
+      }
+    }, GlassesAlertTone.CALL_CYCLE_MS * 3L)
     return true
   }
 
-  /**
-   * An explicit settings test is intentionally not subject to the normal
-   * phone-use suppression. The user is looking at the phone precisely because
-   * they asked to verify the route; production notification alerts retain the
-   * privacy-preserving unlocked-phone gate above.
-   */
+  /** Explicit settings tests bypass the automatic unlocked-phone suppression. */
+  @Synchronized
   fun playNotificationPreview(context: Context): Boolean {
-    if (GlassesAlertSettings.findGlassesAudioDevice(context) == null) return false
+    if (callAlertActive) return false
+    releaseTrack(notificationTrack)
     requestTransientFocus(context)
-    playTone(1040, 75, context)
-    handler.postDelayed({ playTone(1560, 95, context) }, 145)
-    handler.postDelayed({ if (!callAlertActive) releaseAudioFocus() }, 420)
+    val track = playTone(context, GlassesAlertTone.notification()) ?: run {
+      releaseAudioFocus()
+      return false
+    }
+    notificationTrack = track
+    handler.postDelayed({
+      synchronized(this@GlassesAlertPlayback) {
+        if (notificationTrack === track) {
+          releaseTrack(track)
+          notificationTrack = null
+          if (!callAlertActive && speechPlayer == null && previewTrack == null) releaseAudioFocus()
+        }
+      }
+    }, GlassesAlertTone.NOTIFICATION_MS + 180L)
     return true
   }
 
@@ -236,7 +273,7 @@ internal object GlassesAlertPlayback {
 
   private fun requestSpeechFocus(context: Context) {
     val manager = context.getSystemService(AudioManager::class.java) ?: return
-    audioFocusManager = manager
+    speechFocusManager = manager
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
       val request = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT)
         .setAudioAttributes(
@@ -246,7 +283,7 @@ internal object GlassesAlertPlayback {
             .build(),
         )
         .build()
-      audioFocusRequest = request
+      speechFocusRequest = request
       manager.requestAudioFocus(request)
     } else {
       @Suppress("DEPRECATION")
@@ -255,51 +292,101 @@ internal object GlassesAlertPlayback {
   }
 
   private fun releaseSpeechFocus() {
-    releaseAudioFocus()
+    val manager = speechFocusManager ?: return
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+      speechFocusRequest?.let(manager::abandonAudioFocusRequest)
+    } else {
+      @Suppress("DEPRECATION")
+      manager.abandonAudioFocus(null)
+    }
+    speechFocusRequest = null
+    speechFocusManager = null
   }
 
-  private fun playTone(frequencyHz: Int, durationMs: Int, suppliedContext: Context? = null) {
-    val context = suppliedContext ?: return
-    val device = GlassesAlertSettings.findGlassesAudioDevice(context) ?: return
-    val sampleCount = SAMPLE_RATE * durationMs / 1_000
-    val pcm = ByteArray(sampleCount * 2)
-    for (index in 0 until sampleCount) {
-      val envelope = when {
-        index < SAMPLE_RATE / 250 -> index.toDouble() / (SAMPLE_RATE / 250)
-        index > sampleCount - SAMPLE_RATE / 200 -> (sampleCount - index).toDouble() / (SAMPLE_RATE / 200)
-        else -> 1.0
-      }.coerceIn(0.0, 1.0)
-      val value = (sin(2.0 * PI * frequencyHz * index / SAMPLE_RATE) * envelope * Short.MAX_VALUE * 0.22)
-        .toInt()
-        .toShort()
-      pcm[index * 2] = (value.toInt() and 0xff).toByte()
-      pcm[index * 2 + 1] = ((value.toInt() shr 8) and 0xff).toByte()
+  private fun releaseTrack(track: AudioTrack?) {
+    if (track == null) return
+    routeListeners.remove(track)?.let(track::removeOnRoutingChangedListener)
+    try {
+      track.pause()
+      track.flush()
+    } catch (_: IllegalStateException) {
+      // A route-loss callback may race terminal cleanup.
     }
+    track.release()
+  }
 
-    val track = AudioTrack.Builder()
-      .setAudioAttributes(
-        AudioAttributes.Builder()
-          .setUsage(AudioAttributes.USAGE_MEDIA)
-          .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
-          .build(),
-      )
-      .setAudioFormat(
-        AudioFormat.Builder()
-          .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
-          .setSampleRate(SAMPLE_RATE)
-          .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
-          .build(),
-      )
-      .setBufferSizeInBytes(pcm.size)
-      .setTransferMode(AudioTrack.MODE_STATIC)
-      .build()
-    track.preferredDevice = device
-    track.write(pcm, 0, pcm.size, AudioTrack.WRITE_BLOCKING)
-    track.play()
-    handler.postDelayed({ track.release() }, durationMs.toLong() + 180L)
+  private fun playTone(
+    context: Context,
+    pcm: ByteArray,
+    loop: Boolean = false,
+    onRouteLost: () -> Unit = {},
+  ): AudioTrack? {
+    val device = GlassesAlertSettings.findGlassesAudioDevice(context) ?: return null
+    var track: AudioTrack? = null
+    try {
+      val created = AudioTrack.Builder()
+        .setAudioAttributes(
+          AudioAttributes.Builder()
+            .setUsage(AudioAttributes.USAGE_MEDIA)
+            .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+            .build(),
+        )
+        .setAudioFormat(
+          AudioFormat.Builder()
+            .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
+            .setSampleRate(GlassesAlertTone.SAMPLE_RATE)
+            .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
+            .build(),
+        )
+        .setBufferSizeInBytes(pcm.size)
+        .setTransferMode(AudioTrack.MODE_STATIC)
+        .build()
+      track = created
+      if (!created.setPreferredDevice(device)) {
+        releaseTrack(created)
+        return null
+      }
+      if (created.write(pcm, 0, pcm.size, AudioTrack.WRITE_BLOCKING) != pcm.size) {
+        releaseTrack(created)
+        return null
+      }
+      if (loop && created.setLoopPoints(0, pcm.size / 2, -1) != AudioTrack.SUCCESS) {
+        releaseTrack(created)
+        return null
+      }
+      // Begin muted: a preferred device is not a routing guarantee. Unmute
+      // only after Android reports that the actual route is these glasses.
+      created.setVolume(0.0f)
+      var routeVerified = false
+      val routingListener = AudioRouting.OnRoutingChangedListener { routed ->
+        synchronized(this@GlassesAlertPlayback) {
+          if (!routeListeners.containsKey(created)) return@OnRoutingChangedListener
+          if (routed.routedDevice?.id == device.id) {
+            routeVerified = true
+            created.setVolume(1.0f)
+          } else if (routeVerified || routed.routedDevice != null) {
+            try { created.pause() } catch (_: IllegalStateException) { }
+            onRouteLost()
+          }
+        }
+      }
+      routeListeners[created] = routingListener
+      created.addOnRoutingChangedListener(routingListener, handler)
+      created.play()
+      if (created.routedDevice?.id == device.id) {
+        routeVerified = true
+        created.setVolume(1.0f)
+      }
+      return created
+    } catch (error: Exception) {
+      releaseTrack(track)
+      Log.w("GlassesAlerts", "Could not play alert on the glasses audio route", error)
+      return null
+    }
   }
 
   private fun requestTransientFocus(context: Context) {
+    releaseAudioFocus()
     val manager = context.getSystemService(AudioManager::class.java) ?: return
     audioFocusManager = manager
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {

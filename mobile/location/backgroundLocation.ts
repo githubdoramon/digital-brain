@@ -20,6 +20,9 @@ import {
 import { reportLocationDebugEvent } from '@/location/debugState';
 import { API_BASE_URL } from '@/api/client';
 import { getLocationRuntimeState } from '@/location/runtimeState';
+import { hasSharedLocationRuntime } from '@/location/foregroundLocation';
+import RuntimeNative, { type AppRuntimeStatus } from '@/modules/digital-brain-glasses-alerts/src';
+import { isLocationTrackingEnabled } from '@/location/trackingPreference';
 
 const BACKGROUND_TRACKING_STATE_KEY = 'digitalbrain.backgroundLocationTrackingState';
 const BACKGROUND_DISTANCE_INTERVAL_METERS = 5;
@@ -428,7 +431,7 @@ async function applyAndroidLocationTaskMode(
   mode: AndroidCaptureMode,
   reason: string,
 ): Promise<void> {
-  if (Platform.OS !== 'android') {
+  if (Platform.OS !== 'android' || hasSharedLocationRuntime()) {
     return;
   }
   const desiredOptions = buildBackgroundLocationTaskOptions(mode);
@@ -476,7 +479,7 @@ async function transitionAndroidTrackingMode(
     capturedAtMs: number;
   },
 ): Promise<void> {
-  if (Platform.OS !== 'android') {
+  if (Platform.OS !== 'android' || hasSharedLocationRuntime()) {
     return;
   }
 
@@ -940,6 +943,7 @@ if (!TaskManager.isTaskDefined(BACKGROUND_LOCATION_GEOFENCE_TASK)) {
   TaskManager.defineTask(
     BACKGROUND_LOCATION_GEOFENCE_TASK,
     async ({ data, error, executionInfo }) => {
+      if (hasSharedLocationRuntime()) return;
       const eventType = (data as { eventType?: number } | undefined)?.eventType;
       const region = (data as { region?: Location.LocationRegion } | undefined)?.region;
       if (error) {
@@ -975,6 +979,7 @@ if (!TaskManager.isTaskDefined(BACKGROUND_LOCATION_GEOFENCE_TASK)) {
 
 if (!TaskManager.isTaskDefined(BACKGROUND_LOCATION_TASK)) {
   TaskManager.defineTask(BACKGROUND_LOCATION_TASK, async ({ data, error, executionInfo }) => {
+    if (hasSharedLocationRuntime()) return;
     const [taskRegistration, executionDiagnostics] = await Promise.all([
       getTaskRegistrationSnapshot().catch(() => ({
         locationTaskRegistered: false,
@@ -1130,6 +1135,7 @@ if (!TaskManager.isTaskDefined(BACKGROUND_LOCATION_TASK)) {
 }
 
 export type BackgroundLocationDebugStatus = {
+  sharedRuntime?: AppRuntimeStatus | null;
   locationMode: string;
   androidCaptureMode: AndroidCaptureMode | null;
   configuredDistanceIntervalMeters: number;
@@ -1155,11 +1161,13 @@ export type BackgroundLocationDebugStatus = {
 };
 
 export async function getBackgroundLocationDebugStatus(): Promise<BackgroundLocationDebugStatus> {
-  await reconcileAndroidReliableMode('status_reconcile').catch((error) => {
-    reportLocationDebugEvent('background_tracking_reconcile_error', {
-      error,
+  const sharedRuntime = hasSharedLocationRuntime();
+  if (!sharedRuntime)
+    await reconcileAndroidReliableMode('status_reconcile').catch((error) => {
+      reportLocationDebugEvent('background_tracking_reconcile_error', {
+        error,
+      });
     });
-  });
   const [
     foregroundPermission,
     backgroundPermission,
@@ -1178,7 +1186,9 @@ export async function getBackgroundLocationDebugStatus(): Promise<BackgroundLoca
   ] = await Promise.all([
     Location.getForegroundPermissionsAsync(),
     Location.getBackgroundPermissionsAsync(),
-    Location.hasStartedLocationUpdatesAsync(BACKGROUND_LOCATION_TASK),
+    sharedRuntime
+      ? RuntimeNative!.getAppRuntimeStatus().then((status) => status.locationActive)
+      : Location.hasStartedLocationUpdatesAsync(BACKGROUND_LOCATION_TASK),
     TaskManager.isTaskRegisteredAsync(BACKGROUND_LOCATION_DRAIN_TASK),
     getBackgroundLocationDrainWorkerStatus(),
     getQueuedBackgroundLocationSummary(),
@@ -1262,8 +1272,10 @@ export async function getBackgroundLocationDebugStatus(): Promise<BackgroundLoca
   }
 
   return {
-    locationMode: getLocationMode(trackingState.mode),
-    androidCaptureMode: Platform.OS === 'android' ? trackingState.mode : null,
+    sharedRuntime: sharedRuntime ? await RuntimeNative!.getAppRuntimeStatus() : null,
+    locationMode: sharedRuntime ? 'shared_foreground_runtime' : getLocationMode(trackingState.mode),
+    androidCaptureMode:
+      Platform.OS === 'android' ? (sharedRuntime ? 'reliable' : trackingState.mode) : null,
     configuredDistanceIntervalMeters: BACKGROUND_DISTANCE_INTERVAL_METERS,
     configuredTimeIntervalMs: BACKGROUND_TIME_INTERVAL_MS,
     foregroundPermission: foregroundPermission.status,
@@ -1288,7 +1300,59 @@ export async function getBackgroundLocationDebugStatus(): Promise<BackgroundLoca
   };
 }
 
+let trackingSyncGeneration = 0;
+
 export async function syncBackgroundLocationTracking(enabled: boolean): Promise<void> {
+  const generation = ++trackingSyncGeneration;
+  enabled = enabled && (await isLocationTrackingEnabled());
+  if (generation !== trackingSyncGeneration) return;
+  if (hasSharedLocationRuntime()) {
+    // Retire both legacy Android capture registrations, including an in-flight
+    // movement callback's old foreground notification. iOS keeps Expo capture.
+    if (await Location.hasStartedLocationUpdatesAsync(BACKGROUND_LOCATION_TASK)) {
+      await Location.stopLocationUpdatesAsync(BACKGROUND_LOCATION_TASK);
+    }
+    await stopAndroidGeofence('shared_runtime_migration');
+    if (generation !== trackingSyncGeneration) return;
+    if (!enabled) {
+      await RuntimeNative!.setRuntimeLocationEnabled(false);
+      await unregisterBackgroundLocationDrainTask();
+      return;
+    }
+    const foreground = await Location.getForegroundPermissionsAsync();
+    const foregroundStatus =
+      foreground.status === 'granted'
+        ? foreground.status
+        : (await Location.requestForegroundPermissionsAsync()).status;
+    if (generation !== trackingSyncGeneration) return;
+    if (foregroundStatus !== 'granted') {
+      await RuntimeNative!.setRuntimeLocationEnabled(false);
+      reportLocationDebugEvent('background_tracking_blocked', {
+        message: 'Location permission not granted',
+      });
+      return;
+    }
+    const background = await Location.getBackgroundPermissionsAsync();
+    const backgroundStatus =
+      background.status === 'granted'
+        ? background.status
+        : (await Location.requestBackgroundPermissionsAsync()).status;
+    if (generation !== trackingSyncGeneration) return;
+    if (backgroundStatus !== 'granted') {
+      await RuntimeNative!.setRuntimeLocationEnabled(false);
+      reportLocationDebugEvent('background_tracking_blocked', {
+        message: 'Background location permission not granted',
+      });
+      return;
+    }
+    await ensureBackgroundLocationDrainTaskRegistered();
+    if (generation !== trackingSyncGeneration) return;
+    await RuntimeNative!.setRuntimeLocationEnabled(true);
+    reportLocationDebugEvent('shared_foreground_location_requested', {
+      payload: { accuracy: 'balanced', interval_ms: BACKGROUND_TIME_INTERVAL_MS },
+    });
+    return;
+  }
   const taskRegistration = await getTaskRegistrationSnapshot().catch(() => ({
     locationTaskRegistered: false,
     drainTaskRegistered: false,

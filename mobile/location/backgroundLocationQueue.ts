@@ -46,7 +46,7 @@ export type QueuedBackgroundLocationEntry = {
   lastAttemptAt?: string;
 };
 
-export type DrainTrigger = 'background_task_worker' | 'manual';
+export type DrainTrigger = 'background_task_worker' | 'manual' | 'foreground_service';
 
 export type HistoricalLocationSample = {
   lat: number;
@@ -224,7 +224,10 @@ export async function enqueueBackgroundLocationEntry(
   });
 }
 
-async function drainQueuedBackgroundLocationsInner(trigger: DrainTrigger): Promise<{
+async function drainQueuedBackgroundLocationsInner(
+  trigger: DrainTrigger,
+  deadline: number,
+): Promise<{
   initialQueueSize: number;
   drainedCount: number;
   remainingQueueSize: number;
@@ -271,6 +274,9 @@ async function drainQueuedBackgroundLocationsInner(trigger: DrainTrigger): Promi
     .sort((first, second) => first.capturedAtMs - second.capturedAtMs)
     .slice(0, MAX_BACKGROUND_LOCATION_UPLOADS_PER_DRAIN);
   for (const entry of drainBatch) {
+    // Leave enough time for one bounded request; native runtime work never waits
+    // through an unbounded backlog and resumes on the next service opportunity.
+    if (Date.now() + BACKGROUND_LOCATION_UPLOAD_TIMEOUT_MS > deadline) break;
     const currentRuntimeState = getLocationRuntimeState();
     reportLocationDebugEvent('background_sync_attempt', {
       payload: {
@@ -466,13 +472,14 @@ export async function drainQueuedBackgroundLocations(trigger: DrainTrigger): Pro
     return drainInFlight;
   }
 
+  const deadline = Date.now() + 45_000;
   drainInFlight = (async () => {
-    let lastResult = await drainQueuedBackgroundLocationsInner(trigger);
-    while (drainRerunRequested) {
+    let lastResult = await drainQueuedBackgroundLocationsInner(trigger, deadline);
+    while (drainRerunRequested && Date.now() + BACKGROUND_LOCATION_UPLOAD_TIMEOUT_MS <= deadline) {
       drainRerunRequested = false;
       const rerunTrigger = pendingDrainTrigger ?? trigger;
       pendingDrainTrigger = null;
-      lastResult = await drainQueuedBackgroundLocationsInner(rerunTrigger);
+      lastResult = await drainQueuedBackgroundLocationsInner(rerunTrigger, deadline);
     }
     return lastResult;
   })();
@@ -481,6 +488,8 @@ export async function drainQueuedBackgroundLocations(trigger: DrainTrigger): Pro
     return await drainInFlight;
   } finally {
     drainInFlight = null;
+    drainRerunRequested = false;
+    pendingDrainTrigger = null;
   }
 }
 

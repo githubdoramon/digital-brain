@@ -21,6 +21,7 @@ import {
 } from '@/storage/digitalBrainStorage';
 
 import { appendMentraDebugLog } from './debug';
+import { isGlassesMaintenanceActive, loadGlassesMaintenance } from './maintenance';
 import { drainQueuedMoments, enqueueImageMoment } from './moments';
 import {
   ensureMentraConnection,
@@ -1030,7 +1031,9 @@ async function processEnhancementJob(job: ImageEnhancementProcessingJob): Promis
         event: 'moment_delivery_completed',
         source: job.source,
         capturedAt: job.capturedAt,
-        reason: delivery.deferredReason ?? `accepted:${delivery.acceptedCount};rejected:${delivery.rejectedCount};pending:${delivery.pendingCount}`,
+        reason:
+          delivery.deferredReason ??
+          `accepted:${delivery.acceptedCount};rejected:${delivery.rejectedCount};pending:${delivery.pendingCount}`,
         error:
           delivery.rejectedDetail ??
           (delivery.attemptedRequest ? undefined : 'No authenticated request was sent'),
@@ -1065,7 +1068,10 @@ async function drainEnhancementQueue(): Promise<void> {
         (job) => !job.nextAttemptAt || Date.parse(job.nextAttemptAt) <= now,
       );
       if (nextIndex < 0) break;
-      const job = { ...enhancementQueue[nextIndex], attempts: enhancementQueue[nextIndex].attempts + 1 };
+      const job = {
+        ...enhancementQueue[nextIndex],
+        attempts: enhancementQueue[nextIndex].attempts + 1,
+      };
       enhancementQueue[nextIndex] = job;
       await persistEnhancementQueue();
       updateQueueStatus();
@@ -1076,7 +1082,9 @@ async function drainEnhancementQueue(): Promise<void> {
       } else if (job.attempts < MAX_QUEUE_ATTEMPTS && currentIndex >= 0) {
         enhancementQueue[currentIndex] = {
           ...job,
-          nextAttemptAt: new Date(Date.now() + Math.min(15 * 60_000, 30_000 * 2 ** job.attempts)).toISOString(),
+          nextAttemptAt: new Date(
+            Date.now() + Math.min(15 * 60_000, 30_000 * 2 ** job.attempts),
+          ).toISOString(),
         };
       } else if (currentIndex >= 0) {
         // Keep the retained image, but stop retrying a persistently bad input.
@@ -1153,10 +1161,13 @@ async function enqueueDueJobs(source: ImageEnhancementCaptureJob['source']): Pro
 }
 
 async function drainCaptureQueue(): Promise<void> {
+  await loadGlassesMaintenance();
+  if (isGlassesMaintenanceActive()) return;
   if (queueDrain) return queueDrain;
   queueDrain = (async () => {
     await loadCaptureQueue();
     while (config.enabled && captureQueue.length > 0) {
+      if (isGlassesMaintenanceActive()) break;
       const now = Date.now();
       const readyIndex = captureQueue.findIndex(
         (job) => !job.nextAttemptAt || Date.parse(job.nextAttemptAt) <= now,

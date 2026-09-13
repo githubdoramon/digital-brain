@@ -1,16 +1,15 @@
 diff --git a/node_modules/@mentra/bluetooth-sdk/android/src/main/AndroidManifest.xml b/node_modules/@mentra/bluetooth-sdk/android/src/main/AndroidManifest.xml
-index 3f05cf8..cc16448 100644
 --- a/node_modules/@mentra/bluetooth-sdk/android/src/main/AndroidManifest.xml
 +++ b/node_modules/@mentra/bluetooth-sdk/android/src/main/AndroidManifest.xml
-@@ -38,5 +38,6 @@
- 
+@@ -37,6 +37,5 @@
+   <uses-permission android:name="android.permission.VIBRATE"/>
+
    <application>
-     <service android:name="com.mentra.bluetoothsdk.services.ForegroundService" android:exported="false" android:foregroundServiceType="dataSync|connectedDevice|location|mediaPlayback|microphone"/>
-+    <service android:name="com.mentra.bluetoothsdk.GlassesAudioRecordingService" android:exported="false" android:foregroundServiceType="connectedDevice"/>
+-    <service android:name="com.mentra.bluetoothsdk.services.ForegroundService" android:exported="false" android:foregroundServiceType="dataSync|connectedDevice|location|mediaPlayback|microphone"/>
    </application>
  </manifest>
 diff --git a/node_modules/@mentra/bluetooth-sdk/android/src/main/java/com/mentra/bluetoothsdk/BluetoothSdkModule.kt b/node_modules/@mentra/bluetooth-sdk/android/src/main/java/com/mentra/bluetoothsdk/BluetoothSdkModule.kt
-index 921962e..fe4a0d0 100644
+index 921962e7..7d4eb39e 100644
 --- a/node_modules/@mentra/bluetooth-sdk/android/src/main/java/com/mentra/bluetoothsdk/BluetoothSdkModule.kt
 +++ b/node_modules/@mentra/bluetooth-sdk/android/src/main/java/com/mentra/bluetoothsdk/BluetoothSdkModule.kt
 @@ -133,6 +133,9 @@ private inline fun <
@@ -25,7 +24,7 @@ index 921962e..fe4a0d0 100644
                  override fun onGlassesChanged(glasses: GlassesRuntimeState) {
 @@ -279,6 +282,10 @@ class BluetoothSdkModule : Module() {
                  }
- 
+
                  override fun onMicPcm(event: MicPcmEvent) {
 +                    GlassesM4aRecorder.offer(recordingContext(), event)?.let {
 +                        sdk?.setMicState(enabled = false, useGlassesMic = true, sendTranscript = false, sendLc3Data = false)
@@ -33,10 +32,10 @@ index 921962e..fe4a0d0 100644
 +                    }
                      sendEvent("mic_pcm", event.toMap())
                  }
- 
+
 @@ -299,6 +306,11 @@ class BluetoothSdkModule : Module() {
                  }
- 
+
                  override fun onRawEvent(eventName: String, values: Map<String, Any>) {
 +                    if (eventName == "audio_disconnected") {
 +                        GlassesM4aRecorder.finish(recordingContext(), "bluetooth_disconnected")?.let {
@@ -46,48 +45,72 @@ index 921962e..fe4a0d0 100644
                      sendEvent(eventName, values)
                  }
          }
-@@ -358,6 +370,7 @@ class BluetoothSdkModule : Module() {
+@@ -358,6 +370,8 @@ class BluetoothSdkModule : Module() {
              "audio_pairing_needed",
              "audio_connected",
              "audio_disconnected",
 +            "glasses_audio_recording_finished",
++            "glasses_audio_playback_finished",
              "save_setting",
              "phone_notification",
              "phone_notification_dismissed",
-@@ -787,6 +800,32 @@ class BluetoothSdkModule : Module() {
+@@ -369,6 +383,8 @@ class BluetoothSdkModule : Module() {
+             "keep_alive_ack",
+             "mtk_update_complete",
+             "glasses_session_changed",
++            "glasses_link_unhealthy",
++            "glasses_control_ready",
+             "ota_progress",
+             "ota_start_ack",
+             "ota_status",
+@@ -787,6 +803,43 @@ class BluetoothSdkModule : Module() {
              )
          }
- 
-+        SdkAsyncFunction("startGlassesM4aRecording") { outputUri: String ->
-+            GlassesM4aRecorder.start(recordingContext(), outputUri)
+
++        // File providers, codec shutdown and MediaPlayer.prepare can block.
++        // Never run them on Expo's shared AsyncFunctionQueue: it also serves
++        // unrelated storage/model work and can stall microphone controls.
++        AsyncFunction("startGlassesM4aRecording") Coroutine { outputUri: String ->
++            withContext(Dispatchers.IO) { GlassesM4aRecorder.start(recordingContext(), outputUri) }
 +        }
 +
-+        SdkAsyncFunction("stopGlassesM4aRecording") { reason: String ->
-+            GlassesM4aRecorder.finish(recordingContext(), reason)
-+                ?: mapOf("completed" to false, "reason" to "not_recording")
++        AsyncFunction("stopGlassesM4aRecording") Coroutine { reason: String ->
++            withContext(Dispatchers.IO) {
++                GlassesM4aRecorder.finish(recordingContext(), reason)
++                    ?: mapOf("completed" to false, "reason" to "not_recording")
++            }
 +        }
 +
-+        SdkAsyncFunction<Map<String, Any?>>("recoverGlassesM4aRecording") {
-+            GlassesM4aRecorder.recoverInterrupted(recordingContext())
-+                ?: mapOf("recovered" to false, "outputUri" to null)
++        AsyncFunction("recoverGlassesM4aRecording") Coroutine { ->
++            withContext(Dispatchers.IO) {
++                GlassesM4aRecorder.recoverInterrupted(recordingContext())
++                    ?: mapOf("recovered" to false, "outputUri" to null)
++            }
 +        }
 +
-+        SdkAsyncFunction<Map<String, Any?>>("getGlassesM4aRecordingStatus") {
-+            GlassesM4aRecorder.status()
++        AsyncFunction("getGlassesM4aRecordingStatus") Coroutine { ->
++            withContext(Dispatchers.IO) { GlassesM4aRecorder.status() }
 +        }
 +
-+        SdkAsyncFunction("playGlassesM4aRecording") { outputUri: String ->
-+            GlassesM4aPlayback.play(recordingContext(), outputUri)
++        AsyncFunction("playGlassesM4aRecording") Coroutine { outputUri: String ->
++            withContext(Dispatchers.IO) {
++                GlassesM4aPlayback.play(recordingContext(), outputUri) {
++                    sendEvent("glasses_audio_playback_finished", mapOf("outputUri" to outputUri))
++                }
++            }
 +        }
 +
-+        SdkAsyncFunction<Map<String, Any>>("stopGlassesM4aPlayback") {
-+            GlassesM4aPlayback.stop()
++        AsyncFunction("stopGlassesM4aPlayback") Coroutine { ->
++            withContext(Dispatchers.IO) { GlassesM4aPlayback.stop() }
 +        }
 +
          // Runs on Dispatchers.IO, not the shared Expo AsyncFunctionQueue: restart()
          // does a synchronous JNI model reload that would otherwise block every other
          // native call in the app until it completes.
-@@ -847,1 +873,23 @@ class BluetoothSdkModule : Module() {
+@@ -844,6 +897,28 @@ class BluetoothSdkModule : Module() {
+
+         // MARK: - RGB LED Control
+
 +        SdkFunction("dispatchRgbLedControl") { params: Map<String, Any?> ->
 +            val requestId = params["requestId"] as? String
 +                    ?: throw IllegalArgumentException("requestId is required")
@@ -111,21 +134,17 @@ index 921962e..fe4a0d0 100644
 +        }
 +
          SdkCoroutineFunction("rgbLedControl") {
+                 requestId: String,
+                 packageName: String?,
 diff --git a/node_modules/@mentra/bluetooth-sdk/android/src/main/java/com/mentra/bluetoothsdk/GlassesM4aRecorder.kt b/node_modules/@mentra/bluetooth-sdk/android/src/main/java/com/mentra/bluetoothsdk/GlassesM4aRecorder.kt
 new file mode 100644
-index 0000000..f2316df
 --- /dev/null
 +++ b/node_modules/@mentra/bluetooth-sdk/android/src/main/java/com/mentra/bluetoothsdk/GlassesM4aRecorder.kt
-@@ -0,0 +1,291 @@
+@@ -0,0 +1,271 @@
 +package com.mentra.bluetoothsdk
 +
-+import android.app.Notification
-+import android.app.NotificationChannel
-+import android.app.NotificationManager
-+import android.app.Service
++import com.mentra.bluetoothsdk.services.ForegroundService
 +import android.content.Context
-+import android.content.Intent
-+import android.content.pm.ServiceInfo
 +import android.media.MediaCodec
 +import android.media.MediaCodecInfo
 +import android.media.MediaExtractor
@@ -134,52 +153,15 @@ index 0000000..f2316df
 +import android.media.MediaPlayer
 +import android.net.Uri
 +import android.os.Build
-+import android.os.IBinder
 +import android.os.ParcelFileDescriptor
 +import android.os.StatFs
-+import androidx.core.content.ContextCompat
 +
-+private const val RECORDING_CHANNEL_ID = "mentra_glasses_recording"
-+private const val RECORDING_NOTIFICATION_ID = 4017
 +private const val RECORDING_PREFS = "mentra_glasses_audio_recording"
 +private const val RECORDING_URI_KEY = "active_output_uri"
 +private const val SAMPLE_RATE = 16_000
 +private const val CHANNEL_COUNT = 1
 +private const val PCM_BYTES_PER_SAMPLE = 2
 +private const val MINIMUM_AVAILABLE_BYTES = 20L * 1024L * 1024L
-+
-+class GlassesAudioRecordingService : Service() {
-+  override fun onBind(intent: Intent?): IBinder? = null
-+
-+  override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-+    val manager = getSystemService(NotificationManager::class.java)
-+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-+      manager.createNotificationChannel(
-+        NotificationChannel(
-+          RECORDING_CHANNEL_ID,
-+          "Glasses recording",
-+          NotificationManager.IMPORTANCE_LOW,
-+        ).apply { description = "Shows while Digital Brain records audio from Mentra Live." },
-+      )
-+    }
-+    val notification = Notification.Builder(this, RECORDING_CHANNEL_ID)
-+      .setSmallIcon(android.R.drawable.ic_btn_speak_now)
-+      .setContentTitle("Digital Brain is recording")
-+      .setContentText("Recording audio from Mentra Live glasses")
-+      .setOngoing(true)
-+      .build()
-+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-+      startForeground(
-+        RECORDING_NOTIFICATION_ID,
-+        notification,
-+        ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE,
-+      )
-+    } else {
-+      startForeground(RECORDING_NOTIFICATION_ID, notification)
-+    }
-+    return START_NOT_STICKY
-+  }
-+}
 +
 +/**
 + * Receives Mentra's already-decoded 16-bit glasses PCM before it crosses the
@@ -205,11 +187,11 @@ index 0000000..f2316df
 +    context.getSharedPreferences(RECORDING_PREFS, Context.MODE_PRIVATE)
 +
 +  private fun startService(context: Context) {
-+    ContextCompat.startForegroundService(context, Intent(context, GlassesAudioRecordingService::class.java))
++    ForegroundService.setFeature(context, "recording", true)
 +  }
 +
 +  private fun stopService(context: Context) {
-+    context.stopService(Intent(context, GlassesAudioRecordingService::class.java))
++    ForegroundService.setFeature(context, "recording", false)
 +  }
 +
 +  private fun hasEnoughFreeSpace(context: Context): Boolean =
@@ -283,7 +265,7 @@ index 0000000..f2316df
 +    val info = MediaCodec.BufferInfo()
 +    var idlePasses = 0
 +    while (idlePasses < if (endOfStream) 60 else 1) {
-+      when (val outputIndex = recording.codec.dequeueOutputBuffer(info, 10_000)) {
++      when (val outputIndex = recording.codec.dequeueOutputBuffer(info, if (endOfStream) 10_000 else 0)) {
 +        MediaCodec.INFO_TRY_AGAIN_LATER -> {
 +          idlePasses += 1
 +          if (!endOfStream) return
@@ -388,15 +370,37 @@ index 0000000..f2316df
 +  private var player: MediaPlayer? = null
 +
 +  @Synchronized
-+  fun play(context: Context, uriString: String): Map<String, Any> {
++  fun play(context: Context, uriString: String, onFinished: () -> Unit): Map<String, Any> {
 +    stop()
 +    val next = MediaPlayer()
-+    next.setDataSource(context, Uri.parse(uriString))
-+    next.setOnCompletionListener { stop() }
-+    next.prepare()
-+    next.start()
-+    player = next
-+    return mapOf("playing" to true, "durationMs" to next.duration)
++    try {
++      next.setDataSource(context, Uri.parse(uriString))
++      next.setOnCompletionListener { completed ->
++        synchronized(this) {
++          if (player === completed) {
++            stop()
++            onFinished()
++          }
++        }
++      }
++      next.setOnErrorListener { failed, _, _ ->
++        synchronized(this) {
++          if (player === failed) {
++            stop()
++            onFinished()
++          }
++        }
++        true
++      }
++      next.prepare()
++      player = next
++      next.start()
++      return mapOf("playing" to true, "durationMs" to next.duration)
++    } catch (error: Throwable) {
++      if (player === next) player = null
++      runCatching { next.release() }
++      throw error
++    }
 +  }
 +
 +  @Synchronized
@@ -408,101 +412,13 @@ index 0000000..f2316df
 +    return mapOf("playing" to false)
 +  }
 +}
-diff --git a/node_modules/@mentra/bluetooth-sdk/src/BluetoothSdk.types.ts b/node_modules/@mentra/bluetooth-sdk/src/BluetoothSdk.types.ts
-index d3b6641..b7b9a52 100644
---- a/node_modules/@mentra/bluetooth-sdk/src/BluetoothSdk.types.ts
-+++ b/node_modules/@mentra/bluetooth-sdk/src/BluetoothSdk.types.ts
-@@ -662,6 +662,14 @@ export type AudioDisconnectedEvent = {
-   type: "audio_disconnected"
- }
- 
-+export type GlassesAudioRecordingFinishedEvent = {
-+  completed: boolean
-+  outputUri?: string
-+  startedAt?: number
-+  durationMs?: number
-+  reason?: string
-+}
-+
- export type SaveSettingEvent = {
-   type: "save_setting"
-   key: string
-@@ -898,6 +906,7 @@ export type BluetoothSdkModuleEvents = {
-   audio_pairing_needed: (event: AudioPairingNeededEvent) => void
-   audio_connected: (event: AudioConnectedEvent) => void
-   audio_disconnected: (event: AudioDisconnectedEvent) => void
-+  glasses_audio_recording_finished: (event: GlassesAudioRecordingFinishedEvent) => void
-   save_setting: (event: SaveSettingEvent) => void
-   ws_text: (event: WsTextEvent) => void
-   ws_bin: (event: WsBinEvent) => void
-@@ -1002,6 +1011,7 @@ export type BluetoothSdkEventMap = {
-   audio_pairing_needed: AudioPairingNeededEvent
-   audio_connected: AudioConnectedEvent
-   audio_disconnected: AudioDisconnectedEvent
-+  glasses_audio_recording_finished: GlassesAudioRecordingFinishedEvent
-   mic_pcm: MicPcmEvent
-   mic_lc3: MicLc3Event
-   stream_status: StreamStatusEvent
-@@ -1117,6 +1127,12 @@ export interface BluetoothSdkPublicModule {
-   setMicState(enabled: boolean, useGlassesMic?: boolean, sendTranscript?: boolean, sendLc3Data?: boolean): Promise<void>
-   setPreferredMic(preferredMic: MicPreference): Promise<void>
-   setOwnAppAudioPlaying(playing: boolean): Promise<void>
-+  startGlassesM4aRecording(outputUri: string): Promise<GlassesAudioRecordingFinishedEvent>
-+  stopGlassesM4aRecording(reason: string): Promise<GlassesAudioRecordingFinishedEvent>
-+  recoverGlassesM4aRecording(): Promise<{recovered: boolean; outputUri: string | null}>
-+  getGlassesM4aRecordingStatus(): Promise<{recording: boolean; outputUri: string | null; startedAt: number | null}>
-+  playGlassesM4aRecording(outputUri: string): Promise<{playing: boolean; durationMs?: number}>
-+  stopGlassesM4aPlayback(): Promise<{playing: boolean}>
-   getGlassesMediaVolume(): Promise<GlassesMediaVolumeGetResult>
-   setGlassesMediaVolume(level: number): Promise<GlassesMediaVolumeSetResult>
- 
-diff --git a/node_modules/@mentra/bluetooth-sdk/src/_private/BluetoothSdkModule.ts b/node_modules/@mentra/bluetooth-sdk/src/_private/BluetoothSdkModule.ts
-index dd40ee5..da349dd 100644
---- a/node_modules/@mentra/bluetooth-sdk/src/_private/BluetoothSdkModule.ts
-+++ b/node_modules/@mentra/bluetooth-sdk/src/_private/BluetoothSdkModule.ts
-@@ -190,6 +190,12 @@ declare class BluetoothSdkNativeModule extends NativeModule<BluetoothSdkModuleEv
-   setMicState(enabled: boolean, useGlassesMic?: boolean, sendTranscript?: boolean, sendLc3Data?: boolean): Promise<void>
-   setPreferredMic(preferredMic: MicPreference): Promise<void>
-   restartTranscriber(): Promise<void>
-+  startGlassesM4aRecording(outputUri: string): Promise<{completed: boolean; outputUri?: string; startedAt?: number; durationMs?: number; reason?: string}>
-+  stopGlassesM4aRecording(reason: string): Promise<{completed: boolean; outputUri?: string; startedAt?: number; durationMs?: number; reason?: string}>
-+  recoverGlassesM4aRecording(): Promise<{recovered: boolean; outputUri: string | null}>
-+  getGlassesM4aRecordingStatus(): Promise<{recording: boolean; outputUri: string | null; startedAt: number | null}>
-+  playGlassesM4aRecording(outputUri: string): Promise<{playing: boolean; durationMs?: number}>
-+  stopGlassesM4aPlayback(): Promise<{playing: boolean}>
- 
-   // Audio Playback Monitoring
-   // Notify native side when our app starts/stops playing audio
-diff --git a/node_modules/@mentra/bluetooth-sdk/src/index.ts b/node_modules/@mentra/bluetooth-sdk/src/index.ts
-index f7e8ecd..53da4e3 100644
---- a/node_modules/@mentra/bluetooth-sdk/src/index.ts
-+++ b/node_modules/@mentra/bluetooth-sdk/src/index.ts
-@@ -39,6 +39,7 @@ const PUBLIC_EVENT_NAMES = new Set<BluetoothSdkEventName>([
-   "audio_pairing_needed",
-   "audio_connected",
-   "audio_disconnected",
-+  "glasses_audio_recording_finished",
-   "mic_pcm",
-   "mic_lc3",
-   "stream_status",
-@@ -130,6 +131,12 @@ export const BluetoothSdk: BluetoothSdkPublicModule = Object.freeze({
-   setMicState: bindPublicMethod("setMicState"),
-   setPreferredMic: bindPublicMethod("setPreferredMic"),
-   setOwnAppAudioPlaying: bindPublicMethod("setOwnAppAudioPlaying"),
-+  startGlassesM4aRecording: bindPublicMethod("startGlassesM4aRecording"),
-+  stopGlassesM4aRecording: bindPublicMethod("stopGlassesM4aRecording"),
-+  recoverGlassesM4aRecording: bindPublicMethod("recoverGlassesM4aRecording"),
-+  getGlassesM4aRecordingStatus: bindPublicMethod("getGlassesM4aRecordingStatus"),
-+  playGlassesM4aRecording: bindPublicMethod("playGlassesM4aRecording"),
-+  stopGlassesM4aPlayback: bindPublicMethod("stopGlassesM4aPlayback"),
-   getGlassesMediaVolume: bindPublicMethod("getGlassesMediaVolume"),
-   setGlassesMediaVolume: bindPublicMethod("setGlassesMediaVolume"),
-   rgbLedControl: bindPublicMethod("rgbLedControl"),
 diff --git a/node_modules/@mentra/bluetooth-sdk/android/src/main/java/com/mentra/bluetoothsdk/MentraBluetoothSdk.kt b/node_modules/@mentra/bluetooth-sdk/android/src/main/java/com/mentra/bluetoothsdk/MentraBluetoothSdk.kt
-index 91402ee..f2d9f49 100644
 --- a/node_modules/@mentra/bluetooth-sdk/android/src/main/java/com/mentra/bluetoothsdk/MentraBluetoothSdk.kt
 +++ b/node_modules/@mentra/bluetooth-sdk/android/src/main/java/com/mentra/bluetoothsdk/MentraBluetoothSdk.kt
-@@ -994,1 +994,18 @@ class MentraBluetoothSdk(
+@@ -994,6 +994,23 @@
+         }
+     }
+
 +    /**
 +     * Dispatches LED feedback without waiting for the glasses' optional response.
 +     *
@@ -521,64 +437,619 @@ index 91402ee..f2d9f49 100644
 +        )
 +    }
      suspend fun stopStream(): StreamStatusEvent {
+         val pending = PendingResponse<StreamStatusEvent>("stop stream")
+         val targetStreamId = synchronized(streamKeepAliveLock) {
 diff --git a/node_modules/@mentra/bluetooth-sdk/android/src/main/java/com/mentra/bluetoothsdk/services/Foreground.kt b/node_modules/@mentra/bluetooth-sdk/android/src/main/java/com/mentra/bluetoothsdk/services/Foreground.kt
 --- a/node_modules/@mentra/bluetooth-sdk/android/src/main/java/com/mentra/bluetoothsdk/services/Foreground.kt
 +++ b/node_modules/@mentra/bluetooth-sdk/android/src/main/java/com/mentra/bluetoothsdk/services/Foreground.kt
-@@ -23,6 +23,7 @@
+@@ -1,241 +1,20 @@
+ package com.mentra.bluetoothsdk.services
+
+-import android.app.NotificationChannel
+-import android.app.NotificationManager
+-import android.app.Service
+-import android.content.Intent
+-import android.content.pm.PackageManager
+-import android.content.pm.ServiceInfo
+-import android.location.LocationManager
+-import android.os.Build
+-import android.os.IBinder
+-import androidx.core.app.NotificationCompat
+-import androidx.core.content.ContextCompat
++import android.content.Context
+ import com.mentra.bluetoothsdk.Bridge
+-import com.mentra.bluetoothsdk.debug.BleTraceLogger
+
+-class ForegroundService : Service() {
+-    companion object {
+-        const val CHANNEL_ID = "MentraServiceChannel"
+-        const val NOTIFICATION_ID = 1001
+-        const val ACTION_REFRESH_TYPES =
+-                "com.mentra.bluetoothsdk.services.action.REFRESH_FOREGROUND_SERVICE_TYPES"
++/** Fixed host adapter: Digital Brain owns notification, service types and feature lifetime. */
++object ForegroundService {
++    private val runtime by lazy {
++        Class.forName("expo.modules.digitalbrainglassesalerts.DigitalBrainRuntime")
+     }
+-
+-    private var locationTypeRequested = false
+-
+-    override fun onCreate() {
+-        super.onCreate()
+-        Bridge.log("ForegroundService: onCreate() called")
+-        BleTraceLogger.logLifecycle(this, "ForegroundService", "service_create")
+-        startForegroundWithAutoDetectedType()
++    fun setFeature(context: Context, feature: String, enabled: Boolean) {
++        runtime.getMethod("setFeature", Context::class.java, String::class.java, Boolean::class.javaPrimitiveType)
++            .invoke(null, context, feature, enabled)
+     }
+-
+-    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+-        Bridge.log("ForegroundService: onStartCommand() called")
+-        BleTraceLogger.logLifecycle(
+-                this,
+-                "ForegroundService",
+-                "service_start_command",
+-                mapOf("action" to intent?.action, "flags" to flags, "startId" to startId)
+-        )
+-        if (intent?.action == ACTION_REFRESH_TYPES) {
+-            // This action is only sent while the host Activity is foregrounded. Android 14+
+-            // rejects adding a while-in-use location type from the background.
+-            locationTypeRequested = true
+-        }
+-        // Re-check permissions in case they changed
+-        startForegroundWithAutoDetectedType()
+-        return START_STICKY
++    fun refresh(context: Context) {
++        runtime.getMethod("refresh", Context::class.java, Boolean::class.javaPrimitiveType)
++            .invoke(null, context, true)
++        Bridge.log("MAN: Shared Digital Brain runtime refreshed")
+     }
+-
+-    private fun startForegroundWithAutoDetectedType() {
+-        val serviceType = detectServiceType()
+-
+-        createNotificationChannel()
+-
+-        val notification =
+-                NotificationCompat.Builder(this, CHANNEL_ID)
+-                        .setContentTitle("Mentra Connected")
+-                        .setContentText(getNotificationText(serviceType))
+-                        .setSmallIcon(android.R.drawable.ic_dialog_info)
+-                        .setPriority(NotificationCompat.PRIORITY_LOW)
+-                        .setOngoing(true)
+-                        .build()
+-
+-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+-            Bridge.log(
+-                    "ForegroundService: Starting with auto-detected type: ${getServiceTypeName(serviceType)}"
+-            )
+-            startForeground(NOTIFICATION_ID, notification, serviceType)
+-        } else {
+-            Bridge.log("ForegroundService: Starting foreground (pre-Q, no service types)")
+-            startForeground(NOTIFICATION_ID, notification)
+-        }
+-    }
+-
+-    private fun detectServiceType(): Int {
+-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
+-            return 0 // No service types before Android Q
+-        }
+-
+-        var serviceType = 0
+-
+-        // Audio prompts can be initiated by glasses while the host Activity is
+-        // backgrounded. mediaPlayback has no runtime prerequisite, so keep it
+-        // active on the existing Mentra service for the entire connected
+-        // session rather than trying to launch a second service after a wake
+-        // phrase arrives.
+-        serviceType = serviceType or ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK
+-        Bridge.log("ForegroundService: Added mediaPlayback (supports background audio)")
+-
+-        // Check Bluetooth permissions
+-        val hasBluetoothPermission =
+-                when {
+-                    Build.VERSION.SDK_INT >= Build.VERSION_CODES.S -> {
+-                        ContextCompat.checkSelfPermission(
+-                                this,
+-                                android.Manifest.permission.BLUETOOTH_CONNECT
+-                        ) == PackageManager.PERMISSION_GRANTED
+-                    }
+-                    else -> {
+-                        ContextCompat.checkSelfPermission(
+-                                this,
+-                                android.Manifest.permission.BLUETOOTH
+-                        ) == PackageManager.PERMISSION_GRANTED
+-                    }
+-                }
+-
+-        // Check CHANGE_NETWORK_STATE permission - this is a "normal" permission that is
+-        // auto-granted at install time, but we check it defensively in case this changes.
+-        // This permission can satisfy the connectedDevice FGS requirement without needing
+-        // BLUETOOTH_CONNECT, which is a "dangerous" permission that users can deny.
+-        val hasNetworkStatePermission =
+-                ContextCompat.checkSelfPermission(
+-                        this,
+-                        android.Manifest.permission.CHANGE_NETWORK_STATE
+-                ) == PackageManager.PERMISSION_GRANTED
+-
+-        // Use connectedDevice if we have EITHER Bluetooth OR network state permission.
+-        // This avoids falling back to dataSync (which has a 6-hour timeout on Android 14+)
+-        // when users deny Bluetooth permissions.
+-        if (hasBluetoothPermission || hasNetworkStatePermission) {
+-            serviceType = serviceType or ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE
+-            if (hasBluetoothPermission) {
+-                Bridge.log("ForegroundService: Added connectedDevice (has Bluetooth permission)")
+-            } else {
+-                Bridge.log("ForegroundService: Added connectedDevice (has CHANGE_NETWORK_STATE permission)")
+-            }
+-        } else {
+-            Bridge.log("ForegroundService: No Bluetooth or network state permission for connectedDevice")
+-        }
+-
+-        // Check microphone permission
+-        val hasMicPermission =
+-                ContextCompat.checkSelfPermission(this, android.Manifest.permission.RECORD_AUDIO) ==
+-                        PackageManager.PERMISSION_GRANTED
+-
+-        if (hasMicPermission) {
+-            serviceType = serviceType or ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
+-            Bridge.log("ForegroundService: Added microphone (has RECORD_AUDIO permission)")
+-        } else {
+-            Bridge.log("ForegroundService: No microphone permission")
+-        }
+-
+-        val hasLocationPermission =
+-                ContextCompat.checkSelfPermission(
+-                        this,
+-                        android.Manifest.permission.ACCESS_FINE_LOCATION
+-                ) == PackageManager.PERMISSION_GRANTED ||
+-                        ContextCompat.checkSelfPermission(
+-                                this,
+-                                android.Manifest.permission.ACCESS_COARSE_LOCATION
+-                        ) == PackageManager.PERMISSION_GRANTED
+-        val locationManager = getSystemService(LocationManager::class.java)
+-        val isLocationEnabled = locationManager?.isLocationEnabled == true
+-
+-        if (locationTypeRequested && hasLocationPermission && isLocationEnabled) {
+-            serviceType = serviceType or ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION
+-            Bridge.log("ForegroundService: Added location (has foreground location permission)")
+-        } else {
+-            Bridge.log(
+-                    "ForegroundService: No location type " +
+-                            "(requested=$locationTypeRequested, permission=$hasLocationPermission, enabled=$isLocationEnabled)"
+-            )
+-        }
+-
+-        // Only use dataSync as absolute last resort fallback if no other types were added.
+-        // WARNING: dataSync has a 6-hour timeout on Android 14+ which will crash the app.
+-        // This should rarely happen since CHANGE_NETWORK_STATE is a normal permission.
+-        if (serviceType == 0) {
+-            serviceType = ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
+-            Bridge.log("ForegroundService: WARNING - Using dataSync as fallback (6-hour timeout on Android 14+)")
+-        }
+-
+-        return serviceType
+-    }
+-
+-    private fun getNotificationText(serviceType: Int): String {
+-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return "Service active"
+-
+-        val hasConnectedDevice =
+-                (serviceType and ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE) != 0
+-        val hasMicrophone = (serviceType and ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE) != 0
+-        val hasLocation = (serviceType and ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION) != 0
+-        val hasMediaPlayback =
+-                (serviceType and ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK) != 0
+-
+-        return when {
+-            hasConnectedDevice && hasMicrophone && hasLocation ->
+-                    "Glasses, microphone & location active"
+-            hasConnectedDevice && hasLocation -> "Smart glasses & location active"
+-            hasMicrophone && hasLocation -> "Microphone & location active"
+-            hasLocation -> "Location active"
+-            hasConnectedDevice && hasMicrophone -> "Glasses & microphone active"
+-            hasConnectedDevice -> "Smart glasses connected"
+-            hasMicrophone -> "Microphone active"
+-            hasMediaPlayback -> "Audio playback active"
+-            else -> "Syncing data"
+-        }
+-    }
+-
+-    private fun getServiceTypeName(serviceType: Int): String {
+-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return "legacy"
+-
+-        val types = mutableListOf<String>()
+-        if (serviceType and ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC != 0)
+-                types.add("dataSync")
+-        if (serviceType and ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE != 0)
+-                types.add("connectedDevice")
+-        if (serviceType and ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE != 0)
+-                types.add("microphone")
+-        if (serviceType and ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION != 0)
+-                types.add("location")
+-        if (serviceType and ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK != 0)
+-                types.add("mediaPlayback")
+-
+-        return types.joinToString("|")
+-    }
+-
+-    private fun createNotificationChannel() {
+-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+-            val channel =
+-                    NotificationChannel(
+-                                    CHANNEL_ID,
+-                                    "Mentra Service",
+-                                    NotificationManager.IMPORTANCE_LOW
+-                            )
+-                            .apply { description = "Maintains connection to smart glasses" }
+-
+-            val notificationManager = getSystemService(NotificationManager::class.java)
+-            notificationManager.createNotificationChannel(channel)
+-        }
+-    }
+-
+-    override fun onDestroy() {
+-        BleTraceLogger.logLifecycle(this, "ForegroundService", "service_destroy")
+-        super.onDestroy()
+-    }
+-
+-    override fun onBind(intent: Intent?): IBinder? = null
+ }
+diff --git a/node_modules/@mentra/bluetooth-sdk/android/src/main/java/com/mentra/bluetoothsdk/sgcs/ControlPlaneWatchdog.kt b/node_modules/@mentra/bluetooth-sdk/android/src/main/java/com/mentra/bluetoothsdk/sgcs/ControlPlaneWatchdog.kt
+new file mode 100644
+--- /dev/null
++++ b/node_modules/@mentra/bluetooth-sdk/android/src/main/java/com/mentra/bluetoothsdk/sgcs/ControlPlaneWatchdog.kt
+@@ -0,0 +1,38 @@
++package com.mentra.bluetoothsdk.sgcs
++
++/** Monotonic, bounded ASG liveness tracking; BES heartbeats/audio do not prove ASG health. */
++internal class ControlPlaneWatchdog(private val timeoutMs: Long = 90_000L) {
++    private var lastReplyMs = 0L
++    private var probes = 0
++    private var reported = false
++    private var armed = false
++
++    @Synchronized fun reset(nowMs: Long) {
++        lastReplyMs = nowMs
++        probes = 0
++        reported = false
++        armed = false
++    }
++
++    @Synchronized fun pong(nowMs: Long) {
++        lastReplyMs = nowMs
++        probes = 0
++        // Require a demonstrated pong on this session; legacy firmware must
++        // never enter a reconnect loop just because it cannot answer ping.
++        armed = true
++    }
++
++    @Synchronized fun probe(nowMs: Long, suppressed: Boolean): Boolean {
++        if (suppressed) {
++            reset(nowMs)
++            return false
++        }
++        if (!armed || reported) return false
++        if (probes >= 3 && nowMs - lastReplyMs >= timeoutMs) {
++            reported = true
++            return true
++        }
++        probes++
++        return false
++    }
++}
+diff --git a/node_modules/@mentra/bluetooth-sdk/android/src/main/java/com/mentra/bluetoothsdk/sgcs/MentraLive.kt b/node_modules/@mentra/bluetooth-sdk/android/src/main/java/com/mentra/bluetoothsdk/sgcs/MentraLive.kt
+--- a/node_modules/@mentra/bluetooth-sdk/android/src/main/java/com/mentra/bluetoothsdk/sgcs/MentraLive.kt
++++ b/node_modules/@mentra/bluetooth-sdk/android/src/main/java/com/mentra/bluetoothsdk/sgcs/MentraLive.kt
+@@ -585,6 +585,8 @@
+     private var heartbeatHandler = Handler(Looper.getMainLooper())
+     private var heartbeatRunnable: Runnable? = null
+     private var heartbeatCounter = 0
++    private val controlPlaneWatchdog = ControlPlaneWatchdog()
++    @Volatile private var otaWatchdogSuppressedUntil = 0L
+     private var glassesReady = false
+
+     // RSSI tracking
+@@ -3257,9 +3259,10 @@
+                 val percent = json.optInt("percent", batteryLevel)
+                 updateBatteryStatus(percent, isCharging)
+             }
+-            "pong" ->
+-                    // Process heartbeat pong response
+-                    Bridge.log("LIVE: Received pong response - connection healthy")
++            "pong" -> {
++                controlPlaneWatchdog.pong(SystemClock.elapsedRealtime())
++                Bridge.log("LIVE: Received pong response - connection healthy")
++            }
+             "imu_response",
+             "imu_stream_response",
+             "imu_gesture_response",
+@@ -3419,6 +3422,8 @@
+                 val osStepPercent = json.optInt("sp", json.optInt("step_percent", 0))
+                 val osOverallPercent = json.optInt("op", json.optInt("overall_percent", 0))
+                 val osStatus = json.optString("status", "idle")
++                otaWatchdogSuppressedUntil = if (osStatus in setOf("in_progress", "step_complete"))
++                    SystemClock.elapsedRealtime() + 600_000L else 0L
+                 val osErrorMessage: String? =
+                         json.optString("err", json.optString("error_message", null))
+
+@@ -3658,6 +3663,13 @@
+                 resetWireNegotiationState()
+                 parsePeerWireCaps(json)
+                 maybeSendWireHandshake()
++                val incomingSessionId = json.optString("sid", "")
++                val previousSessionId = glassesSessionId
++                if (readinessCompletedThisBleSession && incomingSessionId.isNotEmpty() && incomingSessionId != previousSessionId) {
++                    Bridge.sendTypedMessage("glasses_session_changed", hashMapOf<String, Any>(
++                        "previous_sid" to (previousSessionId ?: ""), "sid" to incomingSessionId,
++                    ))
++                }
+                 // Record the session id BEFORE marking ready: an unsolicited glasses_ready
+                 // already runs this full remote-reset flow, so recording (not re-triggering)
+                 // is correct here; version_info detection covers the restart case.
+@@ -3738,6 +3750,10 @@
+                 }
+
+                 // startDebugVideoCommandLoop();
++
++                Bridge.sendTypedMessage("glasses_control_ready", hashMapOf<String, Any>(
++                    "hasSessionId" to json.optString("sid", "").isNotEmpty(),
++                ))
+
+                 // Start the heartbeat mechanism now that glasses are ready
+                 try {
+@@ -5025,6 +5041,8 @@
+     fun sendOtaStart(otaVersionUrl: String? = null) {
+         try {
+             val json = JSONObject()
++            otaWatchdogSuppressedUntil = SystemClock.elapsedRealtime() + 600_000L
++            controlPlaneWatchdog.reset(SystemClock.elapsedRealtime())
+             json.put("type", "ota_start")
+             if (otaVersionUrl != null) {
+                 json.put("ota_version_url", otaVersionUrl)
+@@ -5092,7 +5110,18 @@
+             Bridge.log("LIVE: Skipping heartbeat - glasses not ready or not connected")
+             return
+         }
+-        if (besOtaHeartbeatGuard.shouldSuppress(SystemClock.elapsedRealtime())) {
++        val now = SystemClock.elapsedRealtime()
++        val besOwnsUart = besOtaHeartbeatGuard.shouldSuppress(now)
++        if (controlPlaneWatchdog.probe(now, besOwnsUart || now < otaWatchdogSuppressedUntil)) {
++            Bridge.log("LIVE: ASG control plane stopped answering heartbeat probes; requesting one app-owned recovery")
++            Bridge.sendTypedMessage("glasses_link_unhealthy", hashMapOf<String, Any>(
++                "reason" to "heartbeat_timeout", "timeoutMs" to 90_000,
++            ))
++            // The app's single connection owner performs recovery. Never
++            // reboot the glasses or start a competing native reconnect loop.
++            return
++        }
++        if (besOwnsUart) {
+             Bridge.log("LIVE: Skipping heartbeat while BES OTA owns the UART")
+             return
+         }
+@@ -5126,6 +5155,7 @@
+     private fun startHeartbeat() {
+         // Bridge.log("LIVE: 💓 Starting heartbeat mechanism");
+         heartbeatCounter = 0
++        controlPlaneWatchdog.reset(SystemClock.elapsedRealtime())
+         heartbeatHandler.removeCallbacks(heartbeatRunnable!!) // Remove any existing callbacks
+         heartbeatHandler.postDelayed(heartbeatRunnable!!, HEARTBEAT_INTERVAL_MS.toLong())
+
+diff --git a/node_modules/@mentra/bluetooth-sdk/src/BluetoothSdk.types.ts b/node_modules/@mentra/bluetooth-sdk/src/BluetoothSdk.types.ts
+--- a/node_modules/@mentra/bluetooth-sdk/src/BluetoothSdk.types.ts
++++ b/node_modules/@mentra/bluetooth-sdk/src/BluetoothSdk.types.ts
+@@ -660,6 +660,14 @@
+
+ export type AudioDisconnectedEvent = {
+   type: "audio_disconnected"
++}
++
++export type GlassesAudioRecordingFinishedEvent = {
++  completed: boolean
++  outputUri?: string
++  startedAt?: number
++  durationMs?: number
++  reason?: string
+ }
+
+ export type SaveSettingEvent = {
+@@ -898,6 +906,7 @@
+   audio_pairing_needed: (event: AudioPairingNeededEvent) => void
+   audio_connected: (event: AudioConnectedEvent) => void
+   audio_disconnected: (event: AudioDisconnectedEvent) => void
++  glasses_audio_recording_finished: (event: GlassesAudioRecordingFinishedEvent) => void
+   save_setting: (event: SaveSettingEvent) => void
+   ws_text: (event: WsTextEvent) => void
+   ws_bin: (event: WsBinEvent) => void
+@@ -1002,6 +1011,7 @@
+   audio_pairing_needed: AudioPairingNeededEvent
+   audio_connected: AudioConnectedEvent
+   audio_disconnected: AudioDisconnectedEvent
++  glasses_audio_recording_finished: GlassesAudioRecordingFinishedEvent
+   mic_pcm: MicPcmEvent
+   mic_lc3: MicLc3Event
+   stream_status: StreamStatusEvent
+@@ -1117,6 +1127,12 @@
+   setMicState(enabled: boolean, useGlassesMic?: boolean, sendTranscript?: boolean, sendLc3Data?: boolean): Promise<void>
+   setPreferredMic(preferredMic: MicPreference): Promise<void>
+   setOwnAppAudioPlaying(playing: boolean): Promise<void>
++  startGlassesM4aRecording(outputUri: string): Promise<GlassesAudioRecordingFinishedEvent>
++  stopGlassesM4aRecording(reason: string): Promise<GlassesAudioRecordingFinishedEvent>
++  recoverGlassesM4aRecording(): Promise<{recovered: boolean; outputUri: string | null}>
++  getGlassesM4aRecordingStatus(): Promise<{recording: boolean; outputUri: string | null; startedAt: number | null}>
++  playGlassesM4aRecording(outputUri: string): Promise<{playing: boolean; durationMs?: number}>
++  stopGlassesM4aPlayback(): Promise<{playing: boolean}>
+   getGlassesMediaVolume(): Promise<GlassesMediaVolumeGetResult>
+   setGlassesMediaVolume(level: number): Promise<GlassesMediaVolumeSetResult>
+
+diff --git a/node_modules/@mentra/bluetooth-sdk/src/_private/BluetoothSdkModule.ts b/node_modules/@mentra/bluetooth-sdk/src/_private/BluetoothSdkModule.ts
+--- a/node_modules/@mentra/bluetooth-sdk/src/_private/BluetoothSdkModule.ts
++++ b/node_modules/@mentra/bluetooth-sdk/src/_private/BluetoothSdkModule.ts
+@@ -190,6 +190,12 @@
+   setMicState(enabled: boolean, useGlassesMic?: boolean, sendTranscript?: boolean, sendLc3Data?: boolean): Promise<void>
+   setPreferredMic(preferredMic: MicPreference): Promise<void>
+   restartTranscriber(): Promise<void>
++  startGlassesM4aRecording(outputUri: string): Promise<{completed: boolean; outputUri?: string; startedAt?: number; durationMs?: number; reason?: string}>
++  stopGlassesM4aRecording(reason: string): Promise<{completed: boolean; outputUri?: string; startedAt?: number; durationMs?: number; reason?: string}>
++  recoverGlassesM4aRecording(): Promise<{recovered: boolean; outputUri: string | null}>
++  getGlassesM4aRecordingStatus(): Promise<{recording: boolean; outputUri: string | null; startedAt: number | null}>
++  playGlassesM4aRecording(outputUri: string): Promise<{playing: boolean; durationMs?: number}>
++  stopGlassesM4aPlayback(): Promise<{playing: boolean}>
+
+   // Audio Playback Monitoring
+   // Notify native side when our app starts/stops playing audio
+diff --git a/node_modules/@mentra/bluetooth-sdk/src/index.ts b/node_modules/@mentra/bluetooth-sdk/src/index.ts
+--- a/node_modules/@mentra/bluetooth-sdk/src/index.ts
++++ b/node_modules/@mentra/bluetooth-sdk/src/index.ts
+@@ -39,6 +39,7 @@
+   "audio_pairing_needed",
+   "audio_connected",
+   "audio_disconnected",
++  "glasses_audio_recording_finished",
+   "mic_pcm",
+   "mic_lc3",
+   "stream_status",
+@@ -130,6 +131,12 @@
+   setMicState: bindPublicMethod("setMicState"),
+   setPreferredMic: bindPublicMethod("setPreferredMic"),
+   setOwnAppAudioPlaying: bindPublicMethod("setOwnAppAudioPlaying"),
++  startGlassesM4aRecording: bindPublicMethod("startGlassesM4aRecording"),
++  stopGlassesM4aRecording: bindPublicMethod("stopGlassesM4aRecording"),
++  recoverGlassesM4aRecording: bindPublicMethod("recoverGlassesM4aRecording"),
++  getGlassesM4aRecordingStatus: bindPublicMethod("getGlassesM4aRecordingStatus"),
++  playGlassesM4aRecording: bindPublicMethod("playGlassesM4aRecording"),
++  stopGlassesM4aPlayback: bindPublicMethod("stopGlassesM4aPlayback"),
+   getGlassesMediaVolume: bindPublicMethod("getGlassesMediaVolume"),
+   setGlassesMediaVolume: bindPublicMethod("setGlassesMediaVolume"),
+   rgbLedControl: bindPublicMethod("rgbLedControl"),
+diff --git a/node_modules/@mentra/bluetooth-sdk/android/src/main/java/com/mentra/bluetoothsdk/DeviceManager.kt b/node_modules/@mentra/bluetooth-sdk/android/src/main/java/com/mentra/bluetoothsdk/DeviceManager.kt
+--- a/node_modules/@mentra/bluetooth-sdk/android/src/main/java/com/mentra/bluetoothsdk/DeviceManager.kt
++++ b/node_modules/@mentra/bluetooth-sdk/android/src/main/java/com/mentra/bluetoothsdk/DeviceManager.kt
+@@ -564,79 +564,24 @@
      }
 
-     private var locationTypeRequested = false
-+    private var microphoneTypeRequested = false
+     private fun startForegroundService() {
+-        val context = Bridge.getContext()
+-
++        if (defaultWearable.isEmpty() && pendingWearable.isEmpty() && sgc == null) return
+         try {
+-            Bridge.log("MAN: Starting foreground service")
+-            val serviceIntent = Intent(context, ForegroundService::class.java)
+-
+-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+-                context.startForegroundService(serviceIntent)
+-            } else {
+-                context.startService(serviceIntent)
+-            }
+-
++            ForegroundService.setFeature(Bridge.getContext(), "glasses", true)
+             serviceStarted = true
+-            Bridge.log("MAN: Foreground service started")
+         } catch (e: Exception) {
+-            Bridge.log("MAN: Failed to start service: ${e.message}")
+-        }
+-    }
+-
+-    /**
+-     * Re-evaluate the active foreground-service types while the host Activity is visible.
+-     *
+-     * Location is a while-in-use permission, so Android 14+ only allows the service to add
+-     * the location type from the foreground. Sending a command to the existing service
+-     * updates its type mask without tearing down the glasses connection.
+-     */
++            Bridge.log("MAN: Shared foreground runtime start failed: ${e.message}")
++        }
++    }
++
+     fun refreshForegroundServiceTypes() {
+-        val context = Bridge.getContext()
+-
+         try {
+-            Bridge.log("MAN: Refreshing foreground service types")
+-            val serviceIntent =
+-                Intent(context, ForegroundService::class.java).apply {
+-                    action = ForegroundService.ACTION_REFRESH_TYPES
+-                }
+-
+-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+-                context.startForegroundService(serviceIntent)
+-            } else {
+-                context.startService(serviceIntent)
+-            }
+-
+-            serviceStarted = true
+-            Bridge.log("MAN: Foreground service types refreshed")
++            ForegroundService.refresh(Bridge.getContext())
+         } catch (e: Exception) {
+-            Bridge.log("MAN: Failed to refresh foreground service types: ${e.message}")
+-        }
+-    }
+-
+-    private fun restartForegroundService() {
+-        val context = Bridge.getContext()
+-
+-        try {
+-            // Stop the service
+-            val stopIntent = Intent(context, ForegroundService::class.java)
+-            context.stopService(stopIntent)
+-
+-            // Small delay
+-            Thread.sleep(100)
+-
+-            // Start it again with new permissions
+-            val startIntent = Intent(context, ForegroundService::class.java)
+-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+-                context.startForegroundService(startIntent)
+-            } else {
+-                context.startService(startIntent)
+-            }
+-
+-            Bridge.log("MAN: Service restarted with updated permissions")
+-        } catch (e: Exception) {
+-            Bridge.log("MAN: Failed to restart service: ${e.message}")
+-        }
+-    }
++            Bridge.log("MAN: Shared foreground runtime refresh failed: ${e.message}")
++        }
++    }
++
++    private fun restartForegroundService() = refreshForegroundServiceTypes()
 
-     override fun onCreate() {
-         super.onCreate()
-@@ -41,8 +42,9 @@
-         )
-         if (intent?.action == ACTION_REFRESH_TYPES) {
-             // This action is only sent while the host Activity is foregrounded. Android 14+
--            // rejects adding a while-in-use location type from the background.
-+            // rejects adding while-in-use location or microphone types from the background.
-             locationTypeRequested = true
-+            microphoneTypeRequested = true
+     private fun initializeViewStates() {
+         viewStates.clear()
+@@ -1962,6 +1907,7 @@
          }
-         // Re-check permissions in case they changed
-         startForegroundWithAutoDetectedType()
-@@ -67,7 +69,23 @@
-             Bridge.log(
-                     "ForegroundService: Starting with auto-detected type: ${getServiceTypeName(serviceType)}"
-             )
--            startForeground(NOTIFICATION_ID, notification, serviceType)
-+            try {
-+                startForeground(NOTIFICATION_ID, notification, serviceType)
-+            } catch (e: SecurityException) {
-+                // A service can be recreated by a headless/background launch. Android 14+
-+                // refuses while-in-use FGS types in that state even when their manifest and
-+                // runtime permissions are present. Keep the connection service alive with
-+                // non-while-in-use types and let the next foreground refresh add them safely.
-+                val safeServiceType =
-+                        serviceType and
-+                                (ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE or
-+                                        ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK or
-+                                        ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
-+                Bridge.log(
-+                        "ForegroundService: Type promotion rejected (${e.message}); retrying with safe type: ${getServiceTypeName(safeServiceType)}"
-+                )
-+                startForeground(NOTIFICATION_ID, notification, safeServiceType)
-+            }
-         } else {
-             Bridge.log("ForegroundService: Starting foreground (pre-Q, no service types)")
-             startForeground(NOTIFICATION_ID, notification)
-@@ -135,9 +153,11 @@
-                 ContextCompat.checkSelfPermission(this, android.Manifest.permission.RECORD_AUDIO) ==
-                         PackageManager.PERMISSION_GRANTED
+         initSGC(defaultWearable)
+         searching = true
++        startForegroundService()
+         sgc?.connectById(reconnectTarget)
+         connectDefaultController()
+     }
+@@ -2019,6 +1965,7 @@
+         deviceName = name
 
--        if (hasMicPermission) {
-+        if (hasMicPermission && microphoneTypeRequested) {
-             serviceType = serviceType or ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
--            Bridge.log("ForegroundService: Added microphone (has RECORD_AUDIO permission)")
-+            Bridge.log("ForegroundService: Added microphone (foreground refresh requested)")
-+        } else if (hasMicPermission) {
-+            Bridge.log("ForegroundService: Microphone permission present but type not requested")
-         } else {
-             Bridge.log("ForegroundService: No microphone permission")
+         initSGC(pendingWearable)
++        startForegroundService()
+         sgc?.connectById(deviceName)
+     }
+
+@@ -2027,7 +1974,8 @@
+         if (DeviceTypes.ALL.contains(deviceModel)) {
+             pendingWearable = deviceModel
+             initSGC(pendingWearable)
+-            sgc?.connectById(deviceName)
++            startForegroundService()
++        sgc?.connectById(deviceName)
+             return
          }
+         if (ControllerTypes.ALL.contains(deviceModel)) {
+@@ -2047,6 +1995,8 @@
+     }
+
+     fun disconnect() {
++        runCatching { ForegroundService.setFeature(Bridge.getContext(), "glasses", false) }
++        serviceStarted = false
+         sgc?.clearDisplay()
+         sgc?.disconnect()
+         sgc = null // Clear the SGC reference after disconnect

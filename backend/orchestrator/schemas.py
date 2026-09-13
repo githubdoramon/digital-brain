@@ -632,6 +632,7 @@ class ClientLocationIn(BaseModel):
             "unknown",
             "mobile_geolocation",
             "expo_location",
+            "android_foreground_location",
         ]
         | None
     ) = None

@@ -5,6 +5,7 @@ import * as FileSystem from 'expo-file-system/legacy';
 import { PermissionsAndroid, Platform } from 'react-native';
 
 import { appendMentraDebugLog, appendWakeCommandDebugLog } from './debug';
+import { assertGlassesNotUpdating, isGlassesMaintenanceActive } from './maintenance';
 import { setExpectedGlassesAlertAudioDevice } from '@/glassesAlerts/runtime';
 
 type Subscription = { remove: () => void };
@@ -54,6 +55,9 @@ type BluetoothSdk = {
   forget: () => Promise<void>;
   setGalleryModeEnabled: (enabled: boolean) => Promise<unknown>;
   requestPhoto: (params: PhotoRequestParams) => Promise<PhotoSuccessResponseEvent>;
+  requestWifiScan: () => Promise<unknown[]>;
+  sendWifiCredentials: (ssid: string, password: string) => Promise<unknown>;
+  forgetWifiNetwork: (ssid: string) => Promise<unknown>;
   setPhotoCaptureDefaults: (settings: Record<string, unknown>) => Promise<unknown>;
   setVideoRecordingDefaults: (settings: {
     width: number;
@@ -160,6 +164,8 @@ function loadDirectRgbLedDispatcher(): BluetoothSdk['dispatchRgbLedControl'] {
 }
 
 const DEFAULT_DEVICE_STORAGE_KEY = 'digitalbrain.mentra.default.device.v1';
+const GLASSES_WIFI_STORAGE_KEY = 'digitalbrain.mentra.glasses.wifi.credentials.v1';
+const GLASSES_WIFI_AUTO_SYNC_ENABLED_KEY = 'digitalbrain.mentra.glasses.wifi.auto_sync_enabled.v1';
 
 type LocalNetworkModule = {
   addListener?: (event: string, listener: (event: any) => void) => Subscription;
@@ -187,6 +193,7 @@ let sdk: BluetoothSdk | null | undefined;
 let internalSdk: InternalBluetoothSdk | null | undefined;
 let immediateRgbLedDispatcher: BluetoothSdk['dispatchRgbLedControl'];
 let wifiIp: string | null = null;
+let wifiSsid: string | null = null;
 let hotspot: { localIp: string; ssid: string; password: string } | null = null;
 let localNetwork: LocalNetworkModule | null = null;
 let localNetworkListenerInitialized = false;
@@ -196,7 +203,25 @@ let diagnosticsListenersInitialized = false;
 let lastNativeLogAt = 0;
 let activeMentraConnection: Promise<boolean> | null = null;
 let activeMentraConnectionAppliesCaptureDefaults = false;
+let pendingConnectionRecovery: 'heartbeat_timeout' | 'manual_recovery' | null = null;
+const automaticRecoveryAttempts: number[] = [];
 const automaticPhotoRequestIds = new Set<string>();
+
+export type GlassesWifiCredential = {
+  ssid: string;
+  password: string;
+  createdAtMs: number;
+  updatedAtMs: number;
+  lastAttemptAtMs?: number;
+  lastResult?: 'success' | 'failure';
+};
+
+type WifiCredentialsSyncResult = {
+  state?: string;
+  error?: string;
+  success?: boolean;
+  connected?: boolean;
+};
 
 function debugSdk(event: string, payload?: unknown): void {
   void appendMentraDebugLog(event, payload).catch(() => undefined);
@@ -235,6 +260,8 @@ const DIAGNOSTIC_SDK_EVENTS = [
   'audio_disconnected',
   'rgb_led_control_response',
   'version_info',
+  'ota_start_ack',
+  'ota_status',
 ] as const;
 
 function initializeDiagnosticsListeners(native: BluetoothSdk): void {
@@ -245,7 +272,12 @@ function initializeDiagnosticsListeners(native: BluetoothSdk): void {
       native.addListener(eventName, (payload) => {
         if (eventName === 'log') {
           const now = Date.now();
-          if (now - lastNativeLogAt < 100) return;
+          const message = typeof payload?.message === 'string' ? payload.message : '';
+          const lifecycle =
+            /heartbeat|pong|GATT write failed|ACK timeout|glasses_ready|session changed|SOC.*off/i.test(
+              message,
+            );
+          if (!lifecycle && now - lastNativeLogAt < 100) return;
           lastNativeLogAt = now;
         }
         // Keep the event type visible in diagnostics. The payload redactor intentionally
@@ -258,10 +290,43 @@ function initializeDiagnosticsListeners(native: BluetoothSdk): void {
     }
   });
   debugSdk('sdk_loaded', { diagnosticEvents: DIAGNOSTIC_SDK_EVENTS });
+  const internal = loadInternalSdk();
+  // These lifecycle signals live on the SDK's internal facade, alongside status.
+  const listenInternal = (event: string, listener: (payload: any) => void) => {
+    try {
+      internal?.addListener(event, listener);
+    } catch (error) {
+      debugSdk('sdk_listener_error', { sdkEvent: event, error: String(error) });
+    }
+  };
+  listenInternal('glasses_session_changed', () => {
+    debugSdk('glasses_process_restarted', { bluetooth_link_retained: true });
+  });
+  listenInternal('glasses_control_ready', (payload) => {
+    debugSdk('glasses_control_ready', payload);
+  });
+  listenInternal('glasses_link_unhealthy', (payload) => {
+    debugSdk('glasses_link_unhealthy', payload);
+    if (isGlassesMaintenanceActive()) return;
+    const now = Date.now();
+    while (automaticRecoveryAttempts.length && now - automaticRecoveryAttempts[0] > 15 * 60_000) {
+      automaticRecoveryAttempts.shift();
+    }
+    if (automaticRecoveryAttempts.length >= 2) {
+      debugSdk('connection_recovery_rate_limited', { attempts: automaticRecoveryAttempts.length });
+      return;
+    }
+    automaticRecoveryAttempts.push(now);
+    pendingConnectionRecovery = 'heartbeat_timeout';
+    void ensureMentraConnection().catch((error) => {
+      debugSdk('connection_recovery_failed', { error: String(error) });
+    });
+  });
 }
 
 function updateWifiState(event: any): void {
   wifiIp = event?.state === 'connected' && typeof event.localIp === 'string' ? event.localIp : null;
+  wifiSsid = event?.state === 'connected' && typeof event.ssid === 'string' ? event.ssid : null;
 }
 
 function updateHotspotState(event: any): void {
@@ -341,7 +406,7 @@ function loadInternalSdk(): InternalBluetoothSdk | null {
   if (internalSdk !== undefined) return internalSdk;
   try {
     // The internal facade exposes status snapshots/listeners that are intentionally not part of
-    // the public command surface. It is used only to wait for a selected device to finish booting.
+    // the public command surface, plus app-patched native events such as playback completion.
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     const module = require('@mentra/bluetooth-sdk/internal');
     internalSdk = (module.default ?? module) as InternalBluetoothSdk;
@@ -366,6 +431,7 @@ function isGlassesAudioRecorderUnavailable(error: unknown): boolean {
 export async function startGlassesM4aRecording(
   outputUri: string,
 ): Promise<GlassesM4aRecordingResult> {
+  await assertGlassesNotUpdating();
   const native = loadSdk();
   if (!native)
     throw new Error(
@@ -425,6 +491,7 @@ export async function stopGlassesM4aPlayback(): Promise<void> {
 }
 
 export async function setMentraMicState(enabled: boolean): Promise<void> {
+  if (enabled) await assertGlassesNotUpdating();
   const native = loadSdk();
   if (!native)
     throw new Error(
@@ -577,6 +644,16 @@ export function subscribeGlassesM4aRecordingFinished(
   return () => subscription.remove();
 }
 
+export function subscribeGlassesM4aPlaybackFinished(listener: (uri: string) => void): () => void {
+  // This app-patched event is not in the published facade's public event allowlist.
+  const native = loadInternalSdk();
+  if (!native) return () => undefined;
+  const subscription = native.addListener('glasses_audio_playback_finished', (event) => {
+    if (event && typeof event.outputUri === 'string') listener(event.outputUri);
+  });
+  return () => subscription.remove();
+}
+
 /**
  * The Bluetooth SDK deliberately does not request Android runtime permissions for callers.
  * Without these permissions Android's BLE scanner can fail silently inside the native SDK and
@@ -692,6 +769,79 @@ async function persistDefaultDevice(device: MentraDevice | null): Promise<void> 
   await AsyncStorage.setItem(DEFAULT_DEVICE_STORAGE_KEY, JSON.stringify(device));
 }
 
+async function loadWifiCredentials(): Promise<Record<string, GlassesWifiCredential>> {
+  try {
+    const raw = await AsyncStorage.getItem(GLASSES_WIFI_STORAGE_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw) as Record<string, GlassesWifiCredential>;
+    if (!parsed || typeof parsed !== 'object') return {};
+
+    const normalized: Record<string, GlassesWifiCredential> = {};
+    for (const [ssid, value] of Object.entries(parsed)) {
+      if (
+        typeof value?.ssid !== 'string' ||
+        typeof value?.password !== 'string' ||
+        value.ssid.trim().length === 0
+      ) {
+        continue;
+      }
+      normalized[ssid.trim()] = {
+        ssid: ssid.trim(),
+        password: value.password,
+        createdAtMs:
+          typeof value.createdAtMs === 'number' && Number.isFinite(value.createdAtMs)
+            ? value.createdAtMs
+            : Date.now(),
+        updatedAtMs:
+          typeof value.updatedAtMs === 'number' && Number.isFinite(value.updatedAtMs)
+            ? value.updatedAtMs
+            : Date.now(),
+        lastAttemptAtMs:
+          typeof value.lastAttemptAtMs === 'number' && Number.isFinite(value.lastAttemptAtMs)
+            ? value.lastAttemptAtMs
+            : undefined,
+        lastResult:
+          value.lastResult === 'failure'
+            ? 'failure'
+            : value.lastResult === 'success'
+              ? 'success'
+              : undefined,
+      };
+    }
+    return normalized;
+  } catch {
+    return {};
+  }
+}
+
+async function saveWifiCredentials(
+  credentials: Record<string, GlassesWifiCredential>,
+): Promise<void> {
+  const cleaned: Record<string, GlassesWifiCredential> = {};
+  for (const [ssid, value] of Object.entries(credentials)) {
+    if (typeof value?.ssid !== 'string' || value.ssid.trim().length === 0) continue;
+    cleaned[ssid.trim()] = {
+      ssid: value.ssid.trim(),
+      password: value.password,
+      createdAtMs: value.createdAtMs,
+      updatedAtMs: value.updatedAtMs,
+      ...(value.lastAttemptAtMs ? { lastAttemptAtMs: value.lastAttemptAtMs } : {}),
+      ...(value.lastResult ? { lastResult: value.lastResult } : {}),
+    };
+  }
+  await AsyncStorage.setItem(GLASSES_WIFI_STORAGE_KEY, JSON.stringify(cleaned));
+}
+
+async function getAutoWifiSyncEnabled(): Promise<boolean> {
+  const raw = await AsyncStorage.getItem(GLASSES_WIFI_AUTO_SYNC_ENABLED_KEY);
+  if (raw === null) return true;
+  return raw === '1';
+}
+
+async function setAutoWifiSyncEnabled(enabled: boolean): Promise<void> {
+  await AsyncStorage.setItem(GLASSES_WIFI_AUTO_SYNC_ENABLED_KEY, enabled ? '1' : '0');
+}
+
 export async function scanForGlasses(
   onResults?: (devices: MentraDevice[]) => void,
 ): Promise<MentraDevice[]> {
@@ -768,7 +918,7 @@ function isBootingConnection(
 async function resetAndReconnectMentra(
   native: BluetoothSdk,
   device: MentraDevice,
-  reason: 'stalled_boot' | 'wrong_controller',
+  reason: 'stalled_boot' | 'wrong_controller' | 'heartbeat_timeout' | 'manual_recovery',
 ): Promise<void> {
   debugSdk('connection_reset_starting', { reason });
   // Do not issue connect-with-cancel immediately after disconnect. The SDK's
@@ -783,6 +933,7 @@ async function resetAndReconnectMentra(
 }
 
 export async function pairGlasses(device: MentraDevice): Promise<void> {
+  await assertGlassesNotUpdating();
   debugSdk('pair_starting', { model: device.model });
   await ensureMentraBluetoothPermissions();
   const native = loadSdk();
@@ -794,33 +945,55 @@ export async function pairGlasses(device: MentraDevice): Promise<void> {
   if (device.model !== 'Mentra Live') {
     throw new Error(`Unsupported glasses model: ${device.model}. Select a Mentra Live device.`);
   }
-  try {
-    // A user-selected pair operation deliberately replaces the active target,
-    // but it still waits for a foreground/sync ensure to finish first. That
-    // makes Digital Brain the single owner of controller changes in this
-    // process instead of letting a pair and an automatic reconnect collide.
-    await activeMentraConnection?.catch(() => undefined);
-    await native.disconnect().catch(() => undefined);
-    await wait(1_000);
-    await native.connect(device, { saveAsDefault: true, cancelExistingConnectionAttempt: false });
-    await persistDefaultDevice(device);
-    await setExpectedGlassesAlertAudioDevice(device.name?.trim() || null).catch(() => undefined);
-    await waitForGlassesReady();
-    await configureCaptureDefaults();
-    debugSdk('pair_finished', { model: device.model });
-  } catch (error) {
-    debugSdk('pair_failed', { model: device.model, error: String(error) });
-    throw error;
-  }
+  await ownMentraConnection(async () => {
+    try {
+      await native.disconnect().catch(() => undefined);
+      await wait(1_000);
+      await native.connect(device, { saveAsDefault: true, cancelExistingConnectionAttempt: false });
+      await persistDefaultDevice(device);
+      await setExpectedGlassesAlertAudioDevice(device.name?.trim() || null).catch(() => undefined);
+      await waitForGlassesReady();
+      await configureCaptureDefaults();
+      debugSdk('pair_finished', { model: device.model });
+      return true;
+    } catch (error) {
+      debugSdk('pair_failed', { model: device.model, error: String(error) });
+      throw error;
+    }
+  });
+}
+
+/** Reserve ownership for the entire mutation, including Android's GATT release delay. */
+async function ownMentraConnection(
+  action: () => Promise<boolean>,
+  firmwareStatusOnly = false,
+): Promise<boolean> {
+  while (activeMentraConnection) await activeMentraConnection.catch(() => undefined);
+  if (!firmwareStatusOnly) await assertGlassesNotUpdating();
+  // Another caller can acquire the owner while the maintenance read yields.
+  if (activeMentraConnection) return ownMentraConnection(action, firmwareStatusOnly);
+  activeMentraConnectionAppliesCaptureDefaults = true;
+  activeMentraConnection = Promise.resolve()
+    .then(action)
+    .finally(() => {
+      activeMentraConnection = null;
+      activeMentraConnectionAppliesCaptureDefaults = false;
+    });
+  return activeMentraConnection;
 }
 
 export async function forgetPairedGlasses(): Promise<void> {
-  const native = loadSdk();
-  await persistDefaultDevice(null);
-  if (!native) return;
-  await native.clearDefaultDevice();
-  await native.forget().catch(() => undefined);
-  await setExpectedGlassesAlertAudioDevice(null).catch(() => undefined);
+  await ownMentraConnection(async () => {
+    const native = loadSdk();
+    pendingConnectionRecovery = null;
+    await persistDefaultDevice(null);
+    if (native) {
+      await native.clearDefaultDevice();
+      await native.forget().catch(() => undefined);
+    }
+    await setExpectedGlassesAlertAudioDevice(null).catch(() => undefined);
+    return false;
+  });
 }
 
 export function subscribeMentraEvents(onCaptureSignal: (kind: CaptureKind) => void): () => void {
@@ -889,6 +1062,182 @@ export function getKnownGlassesIp(): string | null {
   return wifiIp;
 }
 
+export function getKnownGlassesWifiSsid(): string | null {
+  return wifiSsid;
+}
+
+export async function isAutoWifiSyncEnabled(): Promise<boolean> {
+  return getAutoWifiSyncEnabled();
+}
+
+export async function setAutoWifiSyncEnabledForGlasses(enabled: boolean): Promise<void> {
+  await setAutoWifiSyncEnabled(enabled);
+}
+
+export async function listGlassesWifiCredentials(): Promise<GlassesWifiCredential[]> {
+  const credentials = await loadWifiCredentials();
+  return Object.values(credentials).sort((a, b) => b.updatedAtMs - a.updatedAtMs);
+}
+
+export async function upsertGlassesWifiCredential(ssid: string, password: string): Promise<void> {
+  const trimmedSsid = ssid.trim();
+  if (!trimmedSsid) {
+    throw new Error('Wi-Fi SSID is required.');
+  }
+  const credentials = await loadWifiCredentials();
+  const now = Date.now();
+  const previous = credentials[trimmedSsid];
+  credentials[trimmedSsid] = {
+    ssid: trimmedSsid,
+    password,
+    createdAtMs: previous?.createdAtMs ?? now,
+    updatedAtMs: now,
+  };
+  await saveWifiCredentials(credentials);
+  debugSdk('glasses_wifi_credentials_updated', {
+    ssid: trimmedSsid,
+    action: previous ? 'upserted' : 'saved',
+  });
+}
+
+export async function removeGlassesWifiCredential(ssid: string): Promise<void> {
+  const trimmedSsid = ssid.trim();
+  const credentials = await loadWifiCredentials();
+  delete credentials[trimmedSsid];
+  await saveWifiCredentials(credentials);
+  void debugSdk('glasses_wifi_credentials_removed', { ssid: trimmedSsid });
+}
+
+type SyncResult =
+  | { status: 'disabled' }
+  | { status: 'noop'; reason: string }
+  | { status: 'success'; ssid: string }
+  | { status: 'failed'; reason: string; ssid: string };
+
+export async function syncSavedGlassesWifiCredentials(options?: {
+  targetSsid?: string;
+  scanNetworks?: boolean;
+}): Promise<SyncResult> {
+  await assertGlassesNotUpdating();
+  const enabled = await getAutoWifiSyncEnabled();
+  if (!enabled) return { status: 'disabled' };
+
+  const native = loadSdk();
+  if (!native?.sendWifiCredentials || !native?.requestWifiScan) {
+    return { status: 'noop', reason: 'Wifi sync not supported by SDK in this build.' };
+  }
+
+  const credentials = await loadWifiCredentials();
+  const trimmedTarget = options?.targetSsid?.trim();
+  const candidates = Object.values(credentials);
+  if (candidates.length === 0) {
+    return { status: 'noop', reason: 'No Wi-Fi credentials saved.' };
+  }
+
+  const tryTargets: string[] = [];
+  if (trimmedTarget) {
+    if (credentials[trimmedTarget]) {
+      tryTargets.push(trimmedTarget);
+    } else {
+      return { status: 'noop', reason: `No saved credentials for ${trimmedTarget}.` };
+    }
+  } else if (wifiSsid && credentials[wifiSsid]) {
+    tryTargets.push(wifiSsid);
+  } else if (options?.scanNetworks !== false) {
+    try {
+      const found = await native.requestWifiScan();
+      if (Array.isArray(found)) {
+        const scanOrder = found
+          .map((network: any) => (typeof network?.ssid === 'string' ? network.ssid.trim() : ''))
+          .filter(Boolean);
+        const matching = [...new Set(scanOrder.filter((ssid) => ssid in credentials))];
+        if (matching.length > 0) {
+          tryTargets.push(...matching);
+        }
+      }
+    } catch (error) {
+      debugSdk('glasses_wifi_scan_failed', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+    if (tryTargets.length === 0 && wifiSsid && credentials[wifiSsid]) {
+      tryTargets.push(wifiSsid);
+    }
+
+    if (tryTargets.length === 0) {
+      const ordered = Object.values(credentials).sort((a, b) => b.updatedAtMs - a.updatedAtMs);
+      tryTargets.push(...ordered.map((entry) => entry.ssid));
+    }
+  }
+
+  const uniqueTargets = Array.from(new Set(tryTargets));
+  if (uniqueTargets.length === 0) {
+    return { status: 'noop', reason: 'No matching credential found for current Wi-Fi network.' };
+  }
+
+  for (const ssid of uniqueTargets) {
+    const credential = credentials[ssid];
+    if (!credential) continue;
+    const attemptAt = Date.now();
+    const nextCredentials = await loadWifiCredentials();
+    nextCredentials[ssid] = {
+      ...nextCredentials[ssid],
+      lastAttemptAtMs: attemptAt,
+      lastResult: undefined,
+    };
+    await saveWifiCredentials(nextCredentials);
+    try {
+      const result = (await native.sendWifiCredentials(
+        ssid,
+        credential.password,
+      )) as WifiCredentialsSyncResult;
+      const state = typeof result?.state === 'string' ? result.state.toLowerCase() : null;
+      const connected =
+        state === 'connected' ||
+        state === 'success' ||
+        result?.connected === true ||
+        result?.success === true;
+      const now = Date.now();
+      const updated = await loadWifiCredentials();
+      updated[ssid] = {
+        ...updated[ssid],
+        lastAttemptAtMs: now,
+        lastResult: connected ? 'success' : 'failure',
+      };
+      await saveWifiCredentials(updated);
+      if (connected) {
+        debugSdk('glasses_wifi_credentials_synced', { ssid, success: true });
+        return { status: 'success', ssid };
+      }
+      debugSdk('glasses_wifi_credentials_synced', {
+        ssid,
+        success: false,
+        reason: result?.error || 'glasses_not_connected',
+      });
+      continue;
+    } catch (error) {
+      const updated = await loadWifiCredentials();
+      updated[ssid] = {
+        ...updated[ssid],
+        lastAttemptAtMs: attemptAt,
+        lastResult: 'failure',
+      };
+      await saveWifiCredentials(updated);
+      debugSdk('glasses_wifi_credentials_synced', {
+        ssid,
+        success: false,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  return {
+    status: 'failed',
+    ssid: uniqueTargets[uniqueTargets.length - 1],
+    reason: 'No candidate SSID was accepted by glasses.',
+  };
+}
+
 export function getKnownHotspot(): { localIp: string; ssid: string; password: string } | null {
   return hotspot;
 }
@@ -914,6 +1263,7 @@ function isAutomaticPhotoEvent(event: any): boolean {
 export async function requestGlassesPhoto(
   params: PhotoRequestParams,
 ): Promise<PhotoSuccessResponseEvent> {
+  await assertGlassesNotUpdating();
   const native = loadSdk();
   if (!native?.requestPhoto) {
     throw new Error(
@@ -924,6 +1274,7 @@ export async function requestGlassesPhoto(
 }
 
 export async function configureCaptureDefaults(): Promise<void> {
+  await assertGlassesNotUpdating();
   const native = loadSdk();
   if (!native) return;
   const commands: [string, () => Promise<unknown>][] = [
@@ -988,7 +1339,11 @@ async function ensureMentraConnectionOnce(
   // with `unsupported_device`. Reconnect the persisted Mentra Live target once
   // so the native SGC is rebuilt before applying camera settings.
   const wrongNativeController = Boolean(nativeModel && nativeModel !== 'Mentra Live');
-  if (!alreadyReady || wrongNativeController) {
+  const recoveryReason = pendingConnectionRecovery;
+  pendingConnectionRecovery = null;
+  if (recoveryReason) {
+    await resetAndReconnectMentra(native, defaultDevice, recoveryReason);
+  } else if (!alreadyReady || wrongNativeController) {
     debugSdk('connection_reconnecting', { alreadyReady, wrongNativeController });
     // A normal Android resume can observe the SDK while it is still bonding or
     // finishing its control-plane boot. Let that single attempt settle before
@@ -1050,11 +1405,16 @@ async function ensureMentraConnectionOnce(
 export async function ensureMentraConnection(
   options: { applyCaptureDefaults?: boolean } = {},
 ): Promise<boolean> {
+  await assertGlassesNotUpdating();
   const applyCaptureDefaults = options.applyCaptureDefaults !== false;
   if (activeMentraConnection) {
     debugSdk('connection_joined_existing_attempt', { applyCaptureDefaults });
     const joined = activeMentraConnection;
-    if (!applyCaptureDefaults || activeMentraConnectionAppliesCaptureDefaults) return joined;
+    if (
+      !pendingConnectionRecovery &&
+      (!applyCaptureDefaults || activeMentraConnectionAppliesCaptureDefaults)
+    )
+      return joined;
     // A sync can start first with defaults disabled because a camera operation
     // is in flight. If the foreground owner then needs defaults, run one
     // follow-up after the shared connection completes instead of interrupting
@@ -1074,7 +1434,15 @@ export async function ensureMentraConnection(
   return activeMentraConnection;
 }
 
+/** An explicit repair releases a stale GATT session without forgetting pairing or rebooting. */
+export async function recoverMentraConnection(): Promise<boolean> {
+  await assertGlassesNotUpdating();
+  pendingConnectionRecovery = 'manual_recovery';
+  return ensureMentraConnection();
+}
+
 export async function enableGlassesHotspot(): Promise<{ localIp: string; openedByUs: boolean }> {
+  await assertGlassesNotUpdating();
   const native = loadSdk();
   if (!native) throw new Error('Mentra Bluetooth SDK is not available in this build.');
   if (hotspot?.localIp) {
@@ -1101,6 +1469,7 @@ export async function enableGlassesHotspot(): Promise<{ localIp: string; openedB
 }
 
 export async function disableGlassesHotspot(): Promise<void> {
+  await assertGlassesNotUpdating();
   const native = loadSdk();
   if (scopedNetworkActive && localNetwork?.disconnect) {
     await localNetwork.disconnect().catch(() => undefined);
@@ -1163,4 +1532,74 @@ export async function downloadGlassesFile(url: string, destinationUri: string): 
     throw new Error(`Glasses download failed (${result.statusCode})`);
   }
   return result.bytesWritten;
+}
+
+export type GlassesFirmwareDevice = {
+  connected: boolean;
+  batteryLevel: number;
+  wifiConnected: boolean;
+  appVersion: string;
+  mtkVersion: string;
+  besVersion: string;
+};
+
+export type GlassesOtaStatus = {
+  session_id?: string;
+  status: 'idle' | 'in_progress' | 'step_complete' | 'complete' | 'failed';
+  overall_percent: number;
+  step_type?: string;
+  phase?: string;
+  error_message?: string;
+};
+
+type FirmwareNative = {
+  requestVersionInfo: () => Promise<unknown>;
+  checkForOtaUpdate: () => Promise<boolean>;
+  startOtaUpdate: () => Promise<unknown>;
+  sendOtaQueryStatus: () => Promise<GlassesOtaStatus>;
+  queryGalleryStatus: () => Promise<{ cameraBusy?: boolean }>;
+};
+
+export function getGlassesFirmwareTransport() {
+  const native = loadSdk() as (BluetoothSdk & FirmwareNative) | null;
+  const internal = loadInternalSdk() as (InternalBluetoothSdk & FirmwareNative) | null;
+  if (!native?.checkForOtaUpdate || !native.startOtaUpdate || !internal?.sendOtaQueryStatus) {
+    throw new Error('Firmware updates are unavailable in this build. Rebuild the Android app.');
+  }
+  return {
+    check: () => native.checkForOtaUpdate(),
+    start: () => native.startOtaUpdate(),
+    query: () => internal.sendOtaQueryStatus(),
+    refreshVersions: () => native.requestVersionInfo(),
+    cameraBusy: async () => (await native.queryGalleryStatus()).cameraBusy === true,
+    connectionBusy: () => activeMentraConnection !== null,
+    reconnect: () =>
+      ownMentraConnection(async () => {
+        // After a phone-process restart there is no native controller to reconnect
+        // itself. OTA may reacquire an idle saved link, but must never cancel boot,
+        // replay capture settings, or use the ordinary stalled-boot reset path.
+        const status = await internal.getGlassesStatus?.();
+        if (isBootingConnection(status)) return false;
+        if (!(await getDefaultGlassesDevice())) return false;
+        pendingConnectionRecovery = null;
+        await native.connectDefault({ cancelExistingConnectionAttempt: false });
+        return true;
+      }, true),
+    subscribe: (listener: (status: GlassesOtaStatus) => void) => {
+      const subscription = native.addListener('ota_status', listener);
+      return () => subscription.remove();
+    },
+    getDevice: async (): Promise<GlassesFirmwareDevice> => {
+      const status = (await internal.getGlassesStatus?.()) as Record<string, any> | undefined;
+      return {
+        connected:
+          status?.connection?.state === 'connected' && status.connection.fullyBooted === true,
+        batteryLevel: Number.isFinite(status?.batteryLevel) ? status!.batteryLevel : -1,
+        wifiConnected: status?.wifi?.state === 'connected',
+        appVersion: status?.appVersion || status?.buildNumber || '',
+        mtkVersion: status?.mtkFirmwareVersion || '',
+        besVersion: status?.besFirmwareVersion || '',
+      };
+    },
+  };
 }

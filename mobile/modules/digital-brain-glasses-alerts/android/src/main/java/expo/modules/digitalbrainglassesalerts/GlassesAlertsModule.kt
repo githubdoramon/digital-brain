@@ -144,7 +144,7 @@ class GlassesAlertsModule : Module() {
     }
 
     AsyncFunction("getImageEnhancementForegroundServiceStatus") {
-      GlassesImageEnhancementService.status()
+      GlassesImageEnhancementService.status(context())
     }
 
     AsyncFunction("startGlassesWakeRuntime") {
@@ -156,7 +156,7 @@ class GlassesAlertsModule : Module() {
     }
 
     AsyncFunction("getGlassesRuntimeForegroundServiceStatus") {
-      GlassesImageEnhancementService.runtimeStatus()
+      GlassesImageEnhancementService.runtimeStatus(context())
     }
 
     AsyncFunction("playSpeechAudio") { commandId: String, fileUri: String ->
@@ -176,6 +176,20 @@ class GlassesAlertsModule : Module() {
     AsyncFunction("stopSpeechAudio") { commandId: String? ->
       mapOf("stopped" to GlassesAlertPlayback.stopSpeechAudio(commandId))
     }
+
+    AsyncFunction("setRuntimeLocationEnabled") { enabled: Boolean ->
+      DigitalBrainRuntime.setFeature(context(), RuntimeFeature.LOCATION.key, enabled)
+    }
+    AsyncFunction("getAppRuntimeStatus") { DigitalBrainRuntime.status(context()) }
+    AsyncFunction("readRuntimeLocations") { RuntimeLocationStore.samples(context()) }
+    AsyncFunction("acknowledgeRuntimeLocations") { ids: List<String> ->
+      RuntimeLocationStore.acknowledge(context(), ids.toSet())
+    }
+    OnActivityEntersForeground {
+      DigitalBrainRuntime.activityVisible = true
+      runCatching { DigitalBrainRuntime.refresh(context()) }
+    }
+    OnActivityEntersBackground { DigitalBrainRuntime.activityVisible = false }
 
     OnDestroy {
       GlassesAlertPlayback.stopSpeechAudio(null)

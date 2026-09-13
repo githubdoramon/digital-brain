@@ -2,7 +2,16 @@ import Ionicons from '@expo/vector-icons/Ionicons';
 import { useFocusEffect } from '@react-navigation/native';
 import { useRouter } from 'expo-router';
 import React from 'react';
-import { Alert, Platform, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import {
+  Alert,
+  KeyboardAvoidingView,
+  Platform,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  View,
+} from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { AppPressable as Pressable } from '@/components/AppPressable';
@@ -12,6 +21,7 @@ import { useAppNotice } from '@/hooks/useAppNotice';
 import {
   deleteGlassesAudioRecording,
   getGlassesAudioRecordingState,
+  GlassesAudioRecordingPhase,
   hydrateGlassesAudioRecording,
   listGlassesAudioRecordings,
   playOrStopGlassesAudioRecording,
@@ -41,34 +51,61 @@ export default function GlassesRecordingsScreen() {
   const { showError, showSuccess } = useAppNotice();
   const [recordings, setRecordings] = React.useState<GlassesAudioRecording[]>([]);
   const [state, setState] = React.useState(getGlassesAudioRecordingState());
-  const [busy, setBusy] = React.useState(false);
+  const [libraryLoading, setLibraryLoading] = React.useState(true);
+  const [recorderReady, setRecorderReady] = React.useState(false);
+  const [loadError, setLoadError] = React.useState<string | null>(null);
+  const loadGeneration = React.useRef(0);
+  const [itemBusy, setItemBusy] = React.useState<string | null>(null);
+  const itemOperation = React.useRef(false);
   const [renameId, setRenameId] = React.useState<string | null>(null);
   const [renameValue, setRenameValue] = React.useState('');
   const [, setClock] = React.useState(Date.now());
-  const [hasStorage, setHasStorage] = React.useState(false);
+  const [hasStorage, setHasStorage] = React.useState<boolean | null>(null);
 
-  const refreshLibrary = React.useCallback(async () => {
-    const [nextRecordings, baseUri] = await Promise.all([
-      listGlassesAudioRecordings(),
-      getDigitalBrainStorageBaseUri(),
-    ]);
-    setRecordings(nextRecordings);
-    setHasStorage(Boolean(baseUri));
-  }, []);
-
-  const refresh = React.useCallback(async () => {
-    await refreshLibrary();
-    await hydrateGlassesAudioRecording();
-    await refreshLibrary();
-  }, [refreshLibrary]);
-
-  useFocusEffect(
-    React.useCallback(() => {
-      void refresh().catch((error) => {
-        showError(error instanceof Error ? error.message : 'Could not load recordings.');
+  const loadSetup = React.useCallback(() => {
+    const generation = ++loadGeneration.current;
+    setLoadError(null);
+    void getDigitalBrainStorageBaseUri()
+      .then((uri) => {
+        if (generation === loadGeneration.current) setHasStorage(Boolean(uri));
+      })
+      .catch((error) => {
+        if (generation === loadGeneration.current)
+          setLoadError(error instanceof Error ? error.message : 'Could not load storage settings.');
       });
-    }, [refresh, showError]),
-  );
+    void hydrateGlassesAudioRecording()
+      .then(() => {
+        if (generation === loadGeneration.current) setRecorderReady(true);
+      })
+      .catch((error) => {
+        if (generation === loadGeneration.current)
+          setLoadError(
+            error instanceof Error ? error.message : 'Could not check recording status.',
+          );
+      });
+    return () => {
+      loadGeneration.current += 1;
+    };
+  }, []);
+  useFocusEffect(loadSetup);
+
+  React.useEffect(() => {
+    let active = true;
+    void listGlassesAudioRecordings()
+      .then((items) => {
+        if (active) setRecordings(items);
+      })
+      .catch((error) => {
+        if (active)
+          showError(error instanceof Error ? error.message : 'Could not load recordings.');
+      })
+      .finally(() => {
+        if (active) setLibraryLoading(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, [state.libraryVersion, showError]);
 
   React.useEffect(() => subscribeGlassesAudioRecording(setState), []);
   React.useEffect(() => {
@@ -78,37 +115,34 @@ export default function GlassesRecordingsScreen() {
   }, [state.recording]);
 
   const start = async () => {
-    setBusy(true);
     try {
       await startGlassesAudioRecording();
     } catch (error) {
       showError(error instanceof Error ? error.message : 'Could not start recording.');
-    } finally {
-      setBusy(false);
     }
   };
 
   const stop = async () => {
-    setBusy(true);
     try {
-      const result = await stopGlassesAudioRecording();
-      void result.saved
-        .then((saved) => {
-          if (!saved) {
-            showError('The recording could not be saved.');
-            return;
-          }
-          return refreshLibrary().then(() =>
-            showSuccess('Recording saved to your Digital Brain folder.'),
-          );
-        })
-        .catch((error) =>
-          showError(error instanceof Error ? error.message : 'Could not save recording.'),
-        );
+      await stopGlassesAudioRecording();
     } catch (error) {
       showError(error instanceof Error ? error.message : 'Could not stop recording.');
+    }
+  };
+
+  // Library actions have their own lock; saving or renaming an earlier file
+  // never disables the microphone control.
+  const runItemAction = async (id: string, action: () => Promise<unknown>) => {
+    if (itemOperation.current) return;
+    itemOperation.current = true;
+    setItemBusy(id);
+    try {
+      await action();
+    } catch (error) {
+      showError(error instanceof Error ? error.message : 'Could not update recording.');
     } finally {
-      setBusy(false);
+      itemOperation.current = false;
+      setItemBusy(null);
     }
   };
 
@@ -119,34 +153,42 @@ export default function GlassesRecordingsScreen() {
         text: 'Delete',
         style: 'destructive',
         onPress: () => {
-          void deleteGlassesAudioRecording(recording)
-            .then(refresh)
-            .catch((error) =>
-              showError(error instanceof Error ? error.message : 'Could not delete recording.'),
-            );
+          void runItemAction(recording.id, () => deleteGlassesAudioRecording(recording));
         },
       },
     ]);
   };
 
-  const saveRename = async (recording: GlassesAudioRecording) => {
-    try {
-      const updated = await renameGlassesAudioRecording(recording, renameValue);
-      setRecordings((current) =>
-        current.map((item) => (item.id === recording.id ? updated : item)),
-      );
+  const saveRename = (recording: GlassesAudioRecording) =>
+    runItemAction(recording.id, async () => {
+      await renameGlassesAudioRecording(recording, renameValue);
       setRenameId(null);
       showSuccess('Recording renamed.');
-    } catch (error) {
-      showError(error instanceof Error ? error.message : 'Could not rename recording.');
-    }
-  };
+    });
+
+  const transitioning =
+    state.phase === GlassesAudioRecordingPhase.Starting ||
+    state.phase === GlassesAudioRecordingPhase.Stopping;
+  const buttonLabel =
+    state.phase === GlassesAudioRecordingPhase.Starting
+      ? 'Starting recording…'
+      : state.phase === GlassesAudioRecordingPhase.Stopping
+        ? 'Stopping recording…'
+        : state.recording
+          ? 'Stop recording'
+          : 'Start recording';
 
   const elapsed = state.recording && state.startedAt ? Date.now() - state.startedAt : 0;
 
   return (
-    <View style={styles.screen}>
+    <KeyboardAvoidingView
+      style={styles.screen}
+      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+    >
       <ScrollView
+        automaticallyAdjustKeyboardInsets
+        keyboardShouldPersistTaps="handled"
+        keyboardDismissMode="on-drag"
         contentContainerStyle={[
           styles.content,
           { paddingTop: insets.top + 12, paddingBottom: insets.bottom + 28 },
@@ -171,7 +213,7 @@ export default function GlassesRecordingsScreen() {
         {Platform.OS !== 'android' ? (
           <Text style={styles.warning}>Recording is currently Android-only.</Text>
         ) : null}
-        {!hasStorage ? (
+        {hasStorage === false ? (
           <Card style={styles.noticeCard}>
             <Text style={styles.noticeTitle}>Choose storage first</Text>
             <Text style={styles.value}>
@@ -184,11 +226,33 @@ export default function GlassesRecordingsScreen() {
             />
           </Card>
         ) : null}
+        {loadError ? (
+          <Card style={styles.noticeCard}>
+            <Text style={styles.warning}>{loadError}</Text>
+            <Button
+              label="Retry"
+              variant="secondary"
+              onPress={() => {
+                loadSetup();
+              }}
+            />
+          </Card>
+        ) : null}
         <Card style={styles.recordCard}>
           <View style={styles.recordStatus}>
             <View style={[styles.recordDot, state.recording && styles.recordDotActive]} />
             <Text style={styles.recordStatusText}>
-              {state.recording ? `Recording · ${formatDuration(elapsed)}` : 'Ready to record'}
+              {transitioning
+                ? buttonLabel
+                : state.recording
+                  ? `Recording · ${formatDuration(elapsed)}`
+                  : !recorderReady
+                    ? 'Checking recorder…'
+                    : hasStorage === null
+                      ? 'Loading storage settings…'
+                      : hasStorage
+                        ? 'Ready to record'
+                        : 'Storage location needed'}
             </Text>
           </View>
           <Text style={styles.value}>
@@ -197,17 +261,33 @@ export default function GlassesRecordingsScreen() {
               : 'Only the app controls recording. Your glasses photo and video buttons keep their existing behavior.'}
           </Text>
           <Button
-            label={state.recording ? 'Stop recording' : 'Start recording'}
+            label={buttonLabel}
             variant={state.recording ? 'danger' : 'primary'}
             onPress={() => void (state.recording ? stop() : start())}
-            loading={busy}
-            disabled={Platform.OS !== 'android' || (!state.recording && !hasStorage)}
+            disabled={
+              Platform.OS !== 'android' ||
+              transitioning ||
+              (!state.recording && (!hasStorage || !recorderReady))
+            }
           />
         </Card>
+        {state.savingCount > 0 ? (
+          <Text style={styles.value} accessibilityLiveRegion="polite">
+            Saving {state.savingCount === 1 ? 'recording' : `${state.savingCount} recordings`}… You
+            can start another recording.
+          </Text>
+        ) : null}
+        {state.lastError ? (
+          <Text style={styles.warning} accessibilityLiveRegion="polite">
+            {state.lastError}
+          </Text>
+        ) : null}
         <Text style={styles.sectionTitle}>Saved recordings</Text>
         {recordings.length === 0 ? (
           <Card style={styles.card}>
-            <Text style={styles.value}>No recordings yet.</Text>
+            <Text style={styles.value}>
+              {libraryLoading ? 'Loading recordings…' : 'No recordings yet.'}
+            </Text>
           </Card>
         ) : (
           recordings.map((recording) => (
@@ -232,43 +312,58 @@ export default function GlassesRecordingsScreen() {
                     value={renameValue}
                     onChangeText={setRenameValue}
                     autoFocus
+                    editable={!itemBusy}
+                    returnKeyType="done"
+                    onSubmitEditing={() => void saveRename(recording)}
                     style={styles.renameInput}
                     placeholder="Recording name"
                   />
                   <Button
-                    label="Save"
+                    label={itemBusy === recording.id ? 'Saving…' : 'Save'}
+                    disabled={Boolean(itemBusy) || !renameValue.trim()}
                     variant="secondary"
                     onPress={() => void saveRename(recording)}
+                  />
+                  <Button
+                    label="Cancel"
+                    variant="clear"
+                    disabled={Boolean(itemBusy)}
+                    onPress={() => setRenameId(null)}
                   />
                 </View>
               ) : null}
               <View style={styles.actions}>
                 <Button
                   label={state.isPlayingUri === recording.uri ? 'Stop' : 'Play'}
+                  disabled={Boolean(itemBusy) || state.phase !== GlassesAudioRecordingPhase.Idle}
                   variant="secondary"
                   onPress={() =>
-                    void playOrStopGlassesAudioRecording(recording).catch((error) =>
-                      showError(
-                        error instanceof Error ? error.message : 'Could not play recording.',
-                      ),
+                    void runItemAction(recording.id, () =>
+                      playOrStopGlassesAudioRecording(recording),
                     )
                   }
                 />
                 <Button
                   label="Rename"
+                  disabled={Boolean(itemBusy)}
                   variant="secondary"
                   onPress={() => {
                     setRenameId(recording.id);
                     setRenameValue(recording.name.replace(/\.m4a$/i, ''));
                   }}
                 />
-                <Button label="Delete" variant="danger" onPress={() => remove(recording)} />
+                <Button
+                  label="Delete"
+                  variant="danger"
+                  disabled={Boolean(itemBusy)}
+                  onPress={() => remove(recording)}
+                />
               </View>
             </Card>
           ))
         )}
       </ScrollView>
-    </View>
+    </KeyboardAvoidingView>
   );
 }
 
@@ -313,7 +408,7 @@ const styles = StyleSheet.create({
   recordingCopy: { flex: 1, gap: 2 },
   recordingName: { color: theme.colors.ink, fontWeight: '600', fontSize: 16 },
   meta: { color: theme.colors.mutedInk, fontSize: 12, lineHeight: 18 },
-  actions: { flexDirection: 'row', gap: 8 },
+  actions: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
   renameRow: { gap: 8 },
   renameInput: {
     borderColor: theme.colors.line,

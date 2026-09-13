@@ -1,6 +1,21 @@
 from datetime import datetime, timedelta, timezone
 
 import user_locations
+from schemas import UserLocationUpdateIn
+
+
+def test_android_foreground_location_source_is_accepted():
+    sample = UserLocationUpdateIn.model_validate(
+        {
+            "lat": 12.0,
+            "lon": 34.0,
+            "source": "android_foreground_location",
+            "captured_at": "2026-09-13T10:00:00Z",
+            "timezone": "UTC",
+        }
+    )
+    assert sample.source == "android_foreground_location"
+    assert sample.captured_at.isoformat() == "2026-09-13T10:00:00+00:00"
 
 
 class _FakeCursor:

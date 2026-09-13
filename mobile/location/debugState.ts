@@ -1,5 +1,6 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as FileSystem from 'expo-file-system/legacy';
+import { Buffer } from 'buffer';
 
 export type LocationDebugEvent = {
   at: string;
@@ -28,12 +29,29 @@ type Listener = (snapshot: LocationDebugSnapshot) => void;
 const LOCATION_DEBUG_SNAPSHOT_KEY = 'digitalbrain.locationDebugSnapshot';
 const MAX_LOCATION_DEBUG_FAILURES = 100;
 const MAX_LOCATION_DEBUG_LOG_EVENTS = 500;
+const MAX_LOG_FILE_BYTES = 2 * 1024 * 1024;
+const MAX_EXPORT_READ_BYTES = 256 * 1024;
 const LOCATION_DEBUG_LOG_FILE_NAME = 'digital-brain-location-debug-log.jsonl';
 const LOCATION_DEBUG_LOG_URI = `${FileSystem.documentDirectory ?? FileSystem.cacheDirectory}${LOCATION_DEBUG_LOG_FILE_NAME}`;
 
 let snapshot: LocationDebugSnapshot = {};
 const listeners = new Set<Listener>();
 let fileWriteChain: Promise<void> = Promise.resolve();
+
+function boundedEvent(event: LocationDebugEvent): LocationDebugEvent {
+  const raw = JSON.stringify(event);
+  if (Buffer.byteLength(raw, 'utf8') <= 16 * 1024) return event;
+  return {
+    ...event,
+    message: event.message?.slice(0, 1024),
+    error: event.error?.slice(0, 2048),
+    payload: {
+      truncated: true,
+      originalBytes: Buffer.byteLength(raw, 'utf8'),
+      preview: JSON.stringify(event.payload ?? {}).slice(0, 4096),
+    },
+  };
+}
 
 function notify(): void {
   for (const listener of listeners) {
@@ -68,6 +86,9 @@ export function isBackgroundRelevantLocationEvent(event: LocationDebugEvent): bo
     event.eventName.startsWith('background_buffered_') ||
     event.eventName.startsWith('background_auth_refresh_') ||
     event.eventName.startsWith('android_background_') ||
+    event.eventName.startsWith('foreground_runtime_') ||
+    event.eventName.startsWith('foreground_location_') ||
+    event.eventName.startsWith('shared_foreground_location_') ||
     event.eventName === 'background_location_invalid' ||
     isBackgroundRelevantPayload(event.payload)
   );
@@ -285,6 +306,12 @@ function persistLocationDebugEventToFile(event: LocationDebugEvent): void {
     .catch(() => undefined)
     .then(async () => {
       await ensureLocationDebugLogDirectory();
+      const info = await FileSystem.getInfoAsync(LOCATION_DEBUG_LOG_URI);
+      if (info.exists && (info.size ?? 0) >= MAX_LOG_FILE_BYTES) {
+        const previousUri = `${LOCATION_DEBUG_LOG_URI}.previous`;
+        await FileSystem.deleteAsync(previousUri, { idempotent: true });
+        await FileSystem.moveAsync({ from: LOCATION_DEBUG_LOG_URI, to: previousUri });
+      }
       await FileSystem.writeAsStringAsync(LOCATION_DEBUG_LOG_URI, `${JSON.stringify(event)}\n`, {
         encoding: FileSystem.EncodingType.UTF8,
         append: true,
@@ -315,9 +342,16 @@ export async function readLocationDebugLogText(options?: {
     return buildLocationDebugLogText(snapshot, options);
   }
 
-  const raw = await FileSystem.readAsStringAsync(LOCATION_DEBUG_LOG_URI, {
-    encoding: FileSystem.EncodingType.UTF8,
+  // Legacy FileSystem only honors byte ranges for Base64. Never load the full
+  // historical file: older builds can leave hundreds of megabytes of JSONL.
+  const position = Math.max(0, (info.size ?? 0) - MAX_EXPORT_READ_BYTES);
+  const encoded = await FileSystem.readAsStringAsync(LOCATION_DEBUG_LOG_URI, {
+    encoding: FileSystem.EncodingType.Base64,
+    position,
+    length: MAX_EXPORT_READ_BYTES,
   });
+  const tail = Buffer.from(encoded, 'base64').toString('utf8');
+  const raw = position > 0 ? tail.slice(tail.indexOf('\n') + 1) : tail;
   const events = raw
     .split('\n')
     .map((line) => line.trim())
@@ -329,7 +363,8 @@ export async function readLocationDebugLogText(options?: {
         return null;
       }
     })
-    .filter((event): event is LocationDebugEvent => Boolean(event));
+    .filter((event): event is LocationDebugEvent => Boolean(event))
+    .map(boundedEvent);
   const eventKeys = new Set(events.map((event) => `${event.at}:${event.eventName}`));
   const mergedEvents = [
     ...events,
@@ -347,9 +382,13 @@ export async function readLocationDebugLogText(options?: {
     : mergedEvents;
   const syntheticSnapshot: LocationDebugSnapshot = {
     ...snapshot,
-    eventLog: filteredEvents,
+    eventLog: filteredEvents.slice(-MAX_LOCATION_DEBUG_LOG_EVENTS),
   };
-  return buildLocationDebugLogText(syntheticSnapshot, options);
+  const notice =
+    position > 0
+      ? `Export includes the most recent ${MAX_EXPORT_READ_BYTES} bytes; older file history was omitted to keep memory bounded.\n\n`
+      : '';
+  return notice + buildLocationDebugLogText(syntheticSnapshot, options);
 }
 
 export async function hydrateLocationDebugSnapshot(): Promise<LocationDebugSnapshot> {
@@ -363,8 +402,12 @@ export async function hydrateLocationDebugSnapshot(): Promise<LocationDebugSnaps
     snapshot = {
       ...snapshot,
       ...parsed,
-      recentFailures: Array.isArray(parsed.recentFailures) ? parsed.recentFailures : [],
-      eventLog: Array.isArray(parsed.eventLog) ? parsed.eventLog : [],
+      recentFailures: Array.isArray(parsed.recentFailures)
+        ? parsed.recentFailures.slice(0, MAX_LOCATION_DEBUG_FAILURES).map(boundedEvent)
+        : [],
+      eventLog: Array.isArray(parsed.eventLog)
+        ? parsed.eventLog.slice(0, MAX_LOCATION_DEBUG_LOG_EVENTS).map(boundedEvent)
+        : [],
     };
     notify();
   } catch (error) {
@@ -414,14 +457,14 @@ export function reportLocationDebugEvent(
         ? String(details.error)
         : undefined;
   const successCountSinceLastFailure = snapshot.successCountSinceLastFailure ?? 0;
-  const nextEvent: LocationDebugEvent = {
+  const nextEvent: LocationDebugEvent = boundedEvent({
     at: eventAt,
     eventName,
     message: details?.message,
     error: normalizedError,
     payload: details?.payload,
     successCountSincePreviousFailure: successCountSinceLastFailure,
-  };
+  });
 
   console.info('[location-debug]', eventName, {
     message: details?.message,
@@ -433,8 +476,8 @@ export function reportLocationDebugEvent(
     lastEventAt: eventAt,
     lastEventName: eventName,
     lastMessage: details?.message,
-    lastPayload: details?.payload,
-    lastError: normalizedError,
+    lastPayload: nextEvent.payload,
+    lastError: nextEvent.error,
     eventLog: [nextEvent, ...(snapshot.eventLog ?? [])].slice(0, MAX_LOCATION_DEBUG_LOG_EVENTS),
   };
 

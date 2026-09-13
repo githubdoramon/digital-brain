@@ -32,7 +32,12 @@ const model = require('@/assets/wake-word/hey-brain-embedding.json') as Embeddin
 const MAX_PENDING_PCM_CHUNKS = 24;
 const EVALUATION_LOG_INTERVAL_MS = 5_000;
 
-type PauseReason = 'audio_recording' | 'video_recording' | 'glasses_command' | 'connection_lost';
+type PauseReason =
+  | 'audio_recording'
+  | 'video_recording'
+  | 'glasses_command'
+  | 'connection_lost'
+  | 'firmware_update';
 let initialized = false;
 let detector: EmbeddingWakeWordDetector | null = null;
 let pcmUnsubscribe: (() => void) | null = null;
@@ -310,7 +315,7 @@ async function deactivateListener(reason: string, disableMic: boolean): Promise<
 
 async function reconcile(reason: string): Promise<void> {
   if (!shouldListen()) {
-    await deactivateListener(reason, pauseReasons.get('video_recording') !== true);
+    await deactivateListener(reason, ![...pauseReasons.values()].some(Boolean));
     if (pauseReasons.size > 0)
       await GlassesAlertsNative?.stopGlassesWakeRuntime().catch(() => undefined);
     return;
@@ -319,15 +324,19 @@ async function reconcile(reason: string): Promise<void> {
 }
 
 export async function pauseWakeWordListening(
-  reason: 'audio_recording' | 'video_recording' | 'glasses_command',
+  reason: 'audio_recording' | 'video_recording' | 'glasses_command' | 'firmware_update',
+  options: { keepMicrophoneEnabled?: boolean } = {},
 ): Promise<void> {
-  pauseReasons.set(reason, reason === 'audio_recording');
-  await deactivateListener(reason, reason === 'audio_recording' || reason === 'glasses_command');
+  const ownsMicrophone =
+    reason === 'video_recording' ||
+    (reason === 'audio_recording' && options.keepMicrophoneEnabled === true);
+  pauseReasons.set(reason, ownsMicrophone);
+  await deactivateListener(reason, !ownsMicrophone);
   await GlassesAlertsNative?.stopGlassesWakeRuntime().catch(() => undefined);
 }
 
 export async function resumeWakeWordListening(
-  owner: 'audio_recording' | 'video_recording' | 'glasses_command',
+  owner: 'audio_recording' | 'video_recording' | 'glasses_command' | 'firmware_update',
   reason: string,
 ): Promise<void> {
   pauseReasons.delete(owner);

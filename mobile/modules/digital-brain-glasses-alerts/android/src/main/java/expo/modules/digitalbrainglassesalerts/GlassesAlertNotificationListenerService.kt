@@ -1,13 +1,11 @@
 package expo.modules.digitalbrainglassesalerts
 
 import android.app.Notification
-import android.content.Intent
 import android.util.Log
 import android.service.notification.NotificationListenerService
 import android.service.notification.StatusBarNotification
 import android.telephony.PhoneStateListener
 import android.telephony.TelephonyManager
-import androidx.core.content.ContextCompat
 
 /**
  * Android's notification-access service is the only cross-app notification
@@ -84,11 +82,9 @@ class GlassesAlertNotificationListenerService : NotificationListenerService() {
       Log.d(TAG, "Incoming call alert was suppressed or has no glasses audio route.")
       return
     }
-    val intent = Intent(this, GlassesAlertPlaybackService::class.java)
-      .setAction(GlassesAlertPlaybackService.ACTION_START_CALL_ALERT)
     try {
-      ContextCompat.startForegroundService(this, intent)
-    } catch (error: IllegalStateException) {
+      DigitalBrainRuntime.setFeature(this, RuntimeFeature.CALL.key, true)
+    } catch (error: RuntimeException) {
       // The notification-listener service already owns the active repeating
       // loop. Some Android/OEM policies reject a background FGS transition;
       // keep that loop running rather than degrading to a one-shot preview.
@@ -97,8 +93,6 @@ class GlassesAlertNotificationListenerService : NotificationListenerService() {
   }
 
   private fun stopCallAlert() {
-    stopService(Intent(this, GlassesAlertPlaybackService::class.java)
-      .setAction(GlassesAlertPlaybackService.ACTION_STOP_CALL_ALERT))
     GlassesAlertPlayback.stopCallAlert()
   }
 }
