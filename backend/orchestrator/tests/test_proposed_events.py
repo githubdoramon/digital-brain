@@ -587,6 +587,26 @@ def test_serialized_proposal_includes_duration_label():
     assert result["suggested_summary"] == ""
 
 
+def test_serialized_proposal_tolerates_missing_ranked_place_candidates():
+    result = proposed_events._serialize_proposal(
+        {
+            "proposal_id": "proposal:place-candidates",
+            "evidence": {
+                "place_intelligence": {
+                    "candidates": [
+                        {"provider_place_id": "google:example-cafe", "title": "Example Cafe"},
+                    ]
+                },
+                "llm_enrichment": {"ranked_place_candidate_ids": None},
+            },
+        }
+    )
+
+    assert result["place_candidates"] == [
+        {"provider_place_id": "google:example-cafe", "title": "Example Cafe"}
+    ]
+
+
 def test_llm_enrichment_appends_known_place_description(monkeypatch):
     appended: dict[str, str] = {}
 

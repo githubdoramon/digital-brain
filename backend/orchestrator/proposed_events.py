@@ -2323,8 +2323,10 @@ def _serialize_proposal(row: dict[str, Any]) -> dict[str, Any]:
             ranked_ids = (
                 llm_enrichment.get("ranked_place_candidate_ids")
                 if isinstance(llm_enrichment, dict)
-                else []
+                else None
             )
+            if not isinstance(ranked_ids, list):
+                ranked_ids = []
             by_id = {
                 str(item.get("provider_place_id") or "").strip(): item
                 for item in candidates
