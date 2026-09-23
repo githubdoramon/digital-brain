@@ -50,6 +50,8 @@ export interface DetectionEvent {
   preRollStartAudioTimeMs: number;
   preRollEndAudioTimeMs: number;
   preRollPcm16: Int16Array;
+  /** Unprocessed tail of the current SDK callback, after the wake decision. */
+  postDetectionPcm16?: Int16Array;
   confuserScore?: number;
   confuserMargin?: number;
 }

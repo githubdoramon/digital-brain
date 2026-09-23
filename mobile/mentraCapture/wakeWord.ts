@@ -22,15 +22,14 @@ import {
 } from '@/mentraCapture/commandTranscription';
 import { dispatchGlassesCommand } from '@/mentraCapture/glassesCommandAgent';
 import {
-  EmbeddingWakeWordDetector,
   OpenWakeWordOnnxBackend,
+  V8TwoStageWakeWordDetector,
   type EmbeddingWakeWordModel,
   type OnnxRuntimeLike,
 } from '@/wakeWord';
 
-const model = require('@/assets/wake-word/hey-brain-embedding.json') as EmbeddingWakeWordModel;
-const MAX_PENDING_PCM_CHUNKS = 24;
-const EVALUATION_LOG_INTERVAL_MS = 5_000;
+const model = require('@/assets/wake-word/hey-brain-v8.json') as EmbeddingWakeWordModel;
+const MAX_PENDING_PCM_SAMPLES = 8 * 16_000;
 
 type PauseReason =
   | 'audio_recording'
@@ -39,21 +38,75 @@ type PauseReason =
   | 'connection_lost'
   | 'firmware_update';
 let initialized = false;
-let detector: EmbeddingWakeWordDetector | null = null;
+let detector: V8TwoStageWakeWordDetector | null = null;
 let pcmUnsubscribe: (() => void) | null = null;
 let connectionUnsubscribe: (() => void) | null = null;
 let videoUnsubscribe: (() => void) | null = null;
 let pendingPcm: Int16Array[] = [];
+let pendingPcmSamples = 0;
 let processingPcm = false;
+let detectorGeneration = 0;
 let listenerActive = false;
 let listenerActivation: Promise<void> | null = null;
 let pauseReasons = new Map<PauseReason, boolean>();
-let detectorInitialization: Promise<EmbeddingWakeWordDetector> | null = null;
-let lastEvaluationLogAt = 0;
+let detectorInitialization: Promise<V8TwoStageWakeWordDetector> | null = null;
+let wakeDebugTimer: ReturnType<typeof setInterval> | null = null;
+let lastWakeError: string | null = null;
+let lastWakeStep = 'not_initialized';
+let pcmCallbacksTotal = 0;
+let pcmSamplesTotal = 0;
+let pcmSamplesSinceSnapshot = 0;
+let pcmSquaredAmplitudeSinceSnapshot = 0;
+let pcmPeakSinceSnapshot = 0;
+let lastPcmAt: number | null = null;
+let firstPcmForListener = false;
 
 function debug(event: string, payload?: Record<string, unknown>): void {
   void appendMentraDebugLog(event, payload).catch(() => undefined);
   void appendWakeCommandDebugLog(event, payload).catch(() => undefined);
+}
+
+function wakeErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+/** A manual snapshot also proves the diagnostic writer is still working after clear. */
+export async function recordWakeDebugSnapshot(source = 'manual'): Promise<Record<string, unknown>> {
+  const intervalSamples = pcmSamplesSinceSnapshot;
+  const intervalSquaredAmplitude = pcmSquaredAmplitudeSinceSnapshot;
+  const intervalPeak = pcmPeakSinceSnapshot;
+  pcmSamplesSinceSnapshot = 0;
+  pcmSquaredAmplitudeSinceSnapshot = 0;
+  pcmPeakSinceSnapshot = 0;
+
+  const [connection, nativeStats] = await Promise.all([
+    getMentraConnectionStatus().catch((error) => ({ error: wakeErrorMessage(error) })),
+    GlassesAlertsNative?.getV8WakeSpotterStats().catch((error) => ({ error: wakeErrorMessage(error) })) ??
+      Promise.resolve(null),
+  ]);
+  const snapshot: Record<string, unknown> = {
+    source,
+    initialized,
+    listener_active: listenerActive,
+    activation_pending: listenerActivation !== null,
+    last_step: lastWakeStep,
+    last_error: lastWakeError,
+    pause_reasons: [...pauseReasons.keys()],
+    connection,
+    pcm_callbacks_total: pcmCallbacksTotal,
+    pcm_samples_total: pcmSamplesTotal,
+    pcm_samples_since_snapshot: intervalSamples,
+    pcm_peak_since_snapshot: intervalPeak / 32768,
+    pcm_rms_since_snapshot: intervalSamples
+      ? Math.sqrt(intervalSquaredAmplitude / intervalSamples) / 32768
+      : 0,
+    last_pcm_at: lastPcmAt,
+    pending_pcm_samples: pendingPcmSamples,
+    processing_pcm: processingPcm,
+    native_spotter: nativeStats,
+  };
+  await appendMentraDebugLog('wake_debug_snapshot', snapshot);
+  return snapshot;
 }
 
 function handleGlassesCommandTranscriptionFailure(event: {
@@ -93,11 +146,13 @@ async function loadOnnxAsset(moduleId: number): Promise<string> {
   return asset.localUri;
 }
 
-async function getDetector(): Promise<EmbeddingWakeWordDetector> {
+async function getDetector(): Promise<V8TwoStageWakeWordDetector> {
   if (detector) return detector;
   if (!detectorInitialization) {
     detectorInitialization = (async () => {
       const startedAt = Date.now();
+      lastWakeStep = 'loading_onnx_assets';
+      debug('wake_detector_initializing', { step: lastWakeStep });
       const [melPath, embeddingPath] = await Promise.all([
         // Metro exposes packaged ONNX assets as numeric module IDs.
         // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -111,32 +166,39 @@ async function getDetector(): Promise<EmbeddingWakeWordDetector> {
         embeddingPath,
         model.audioConfig.streamHopSamples,
       );
-      detector = new EmbeddingWakeWordDetector(model, backend, (evaluation) => {
-        const now = Date.now();
-        if (!evaluation.passed && now - lastEvaluationLogAt < EVALUATION_LOG_INTERVAL_MS) return;
-        lastEvaluationLogAt = now;
-        debug('wake_evaluation', {
+      lastWakeStep = 'initializing_native_spotter';
+      debug('wake_detector_initializing', { step: lastWakeStep });
+      if (!GlassesAlertsNative) throw new Error('V8 native wake spotter is unavailable');
+      await GlassesAlertsNative.initializeV8WakeSpotter();
+      detector = new V8TwoStageWakeWordDetector(model, GlassesAlertsNative, backend, (evaluation) => {
+        debug('wake_v8_candidate', {
+          keyword: evaluation.keyword,
           score: evaluation.score,
           threshold: evaluation.threshold,
           passed: evaluation.passed,
-          consecutive_hits: evaluation.consecutiveHits,
           audio_time_ms: evaluation.audioTimeMs,
         });
       });
-      debug('wake_detector_ready', { initialization_ms: Date.now() - startedAt });
+      debug('wake_detector_ready', { version: 'v8-two-stage', initialization_ms: Date.now() - startedAt });
+      lastWakeStep = 'detector_ready';
+      lastWakeError = null;
       return detector;
     })().catch((error) => {
       detectorInitialization = null;
+      lastWakeError = wakeErrorMessage(error);
+      debug('wake_detector_init_failed', { step: lastWakeStep, error: lastWakeError });
       throw error;
     });
   }
   return detectorInitialization;
 }
 
-function resetDetector(reason: string): void {
-  detector?.reset();
+function resetDetector(reason: string): Promise<void> {
+  detectorGeneration += 1;
   pendingPcm = [];
+  pendingPcmSamples = 0;
   debug('wake_detector_reset', { reason });
+  return detector?.reset() ?? Promise.resolve();
 }
 
 async function processPendingPcm(): Promise<void> {
@@ -146,9 +208,12 @@ async function processPendingPcm(): Promise<void> {
     while (listenerActive && pendingPcm.length > 0) {
       const chunk = pendingPcm.shift();
       if (!chunk) continue;
+      pendingPcmSamples -= chunk.length;
       const activeDetector = await getDetector();
+      const generation = detectorGeneration;
       const startedAt = Date.now();
       const events = await activeDetector.acceptPcm16(chunk);
+      if (generation !== detectorGeneration) continue;
       const elapsedMs = Date.now() - startedAt;
       if (elapsedMs > 80 || pendingPcm.length > 4) {
         debug('wake_inference_backlog', {
@@ -178,7 +243,12 @@ async function processPendingPcm(): Promise<void> {
         // wake phrase and can include the beginning of a fast command. Keep it
         // verbatim, alongside any PCM that arrived while inference completed,
         // so Whisper and the retained WAV receive the complete utterance.
-        const commandInitialChunks = [event.preRollPcm16, ...pendingPcm.splice(0)];
+        const commandInitialChunks = [
+          event.preRollPcm16,
+          ...(event.postDetectionPcm16?.length ? [event.postDetectionPcm16] : []),
+          ...pendingPcm.splice(0),
+        ];
+        pendingPcmSamples = 0;
         const initialAudioDurationMs = Math.round(
           (commandInitialChunks.reduce((total, chunk) => total + chunk.length, 0) / 16_000) * 1_000,
         );
@@ -189,7 +259,13 @@ async function processPendingPcm(): Promise<void> {
           wake_pre_roll_start_audio_time_ms: event.preRollStartAudioTimeMs,
           wake_pre_roll_end_audio_time_ms: event.preRollEndAudioTimeMs,
         });
-        resetDetector('command_session_started');
+        // Queue the native reset but create the command session immediately;
+        // glasses PCM can arrive while the reset promise is still settling.
+        void resetDetector('command_session_started').catch((error) =>
+          debug('wake_detector_reset_failed', {
+            error: error instanceof Error ? error.message : String(error),
+          }),
+        );
         startGlassesCommandTranscription(
           wakeDetectedAt,
           () => undefined,
@@ -211,10 +287,11 @@ async function processPendingPcm(): Promise<void> {
       }
     }
   } catch (error) {
+    lastWakeError = wakeErrorMessage(error);
     debug('wake_inference_failed', {
-      error: error instanceof Error ? error.message : String(error),
+      error: lastWakeError,
     });
-    resetDetector('inference_failed');
+    await resetDetector('inference_failed').catch(() => undefined);
   } finally {
     processingPcm = false;
     if (listenerActive && pendingPcm.length > 0) void processPendingPcm();
@@ -231,6 +308,18 @@ function copyPcmBytes(pcm: ArrayBuffer | ArrayBufferView): ArrayBufferLike {
 function acceptPcm(pcm: ArrayBuffer | ArrayBufferView): void {
   if (!listenerActive) return;
   const samples = new Int16Array(copyPcmBytes(pcm));
+  pcmCallbacksTotal += 1;
+  pcmSamplesTotal += samples.length;
+  pcmSamplesSinceSnapshot += samples.length;
+  lastPcmAt = Date.now();
+  for (const sample of samples) {
+    pcmSquaredAmplitudeSinceSnapshot += sample * sample;
+    pcmPeakSinceSnapshot = Math.max(pcmPeakSinceSnapshot, Math.abs(sample));
+  }
+  if (firstPcmForListener) {
+    firstPcmForListener = false;
+    debug('wake_pcm_first_valid', { samples: samples.length, pcm_peak: pcmPeakSinceSnapshot / 32768 });
+  }
   if (isGlassesCommandSessionActive()) {
     acceptGlassesCommandPcm(
       samples,
@@ -248,15 +337,17 @@ function acceptPcm(pcm: ArrayBuffer | ArrayBufferView): void {
     return;
   }
   observeGlassesAmbientPcm(samples);
-  if (pendingPcm.length >= MAX_PENDING_PCM_CHUNKS) {
+  if (pendingPcmSamples + samples.length > MAX_PENDING_PCM_SAMPLES) {
     debug('wake_pcm_backlog_dropped', {
       pending_chunks: pendingPcm.length,
+      pending_samples: pendingPcmSamples,
       samples: samples.length,
     });
-    resetDetector('pcm_backlog');
+    void resetDetector('pcm_backlog').catch(() => undefined);
     return;
   }
   pendingPcm.push(samples);
+  pendingPcmSamples += samples.length;
   void processPendingPcm();
 }
 
@@ -267,15 +358,20 @@ async function activateListener(): Promise<void> {
     const status = await getMentraConnectionStatus();
     if (!status.connected) {
       pauseReasons.set('connection_lost', false);
+      lastWakeStep = 'waiting_for_glasses';
       debug('wake_waiting_for_glasses', { state: status.state, fully_booted: status.fullyBooted });
       return;
     }
     pauseReasons.delete('connection_lost');
     if (!shouldListen()) return;
+    lastWakeStep = 'starting_wake_foreground_runtime';
+    debug('wake_listener_activating', { step: lastWakeStep });
     await GlassesAlertsNative?.startGlassesWakeRuntime();
     try {
       await getDetector();
       if (!shouldListen()) return;
+      lastWakeStep = 'enabling_glasses_mic';
+      debug('wake_listener_activating', { step: lastWakeStep });
       const unsubscribe = subscribeMentraMicPcm((event) => acceptPcm(event.pcm));
       pcmUnsubscribe = unsubscribe;
       if (!shouldListen()) {
@@ -286,6 +382,9 @@ async function activateListener(): Promise<void> {
       await setMentraMicState(true);
       if (!shouldListen() || pcmUnsubscribe !== unsubscribe) return;
       listenerActive = true;
+      firstPcmForListener = true;
+      lastWakeStep = 'listening';
+      lastWakeError = null;
       debug('wake_listener_started', { model: model.name });
       void warmGlassesCommandTranscription().catch(() => undefined);
     } catch (error) {
@@ -305,10 +404,15 @@ async function activateListener(): Promise<void> {
 async function deactivateListener(reason: string, disableMic: boolean): Promise<void> {
   cancelGlassesCommandTranscription(reason);
   if (!listenerActive && !pcmUnsubscribe) return;
+  lastWakeStep = `stopped:${reason}`;
   listenerActive = false;
   pcmUnsubscribe?.();
   pcmUnsubscribe = null;
-  resetDetector(reason);
+  await resetDetector(reason).catch((error) =>
+    debug('wake_detector_reset_failed', {
+      error: error instanceof Error ? error.message : String(error),
+    }),
+  );
   if (disableMic) await setMentraMicState(false).catch(() => undefined);
   debug('wake_listener_stopped', { reason, mic_disabled: disableMic });
 }
@@ -346,37 +450,59 @@ export async function resumeWakeWordListening(
 export async function initializeWakeWordRuntime(): Promise<void> {
   if (initialized || Platform.OS !== 'android') return;
   initialized = true;
+  lastWakeStep = 'runtime_initialized';
   debug('wake_runtime_initialized', { model: model.name, automatic: true });
+  wakeDebugTimer = setInterval(() => {
+    void recordWakeDebugSnapshot('heartbeat').catch((error) => {
+      lastWakeError = wakeErrorMessage(error);
+    });
+  }, 10_000);
   connectionUnsubscribe = subscribeMentraConnectionState((status) => {
     if (status.connected) {
       pauseReasons.delete('connection_lost');
-      void reconcile('glasses_ready');
+      void reconcile('glasses_ready').catch((error) => {
+        lastWakeError = wakeErrorMessage(error);
+        debug('wake_reconcile_failed', { reason: 'glasses_ready', step: lastWakeStep, error: lastWakeError });
+      });
       return;
     }
     pauseReasons.set('connection_lost', false);
-    void deactivateListener('glasses_not_ready', true);
+    void deactivateListener('glasses_not_ready', true).catch((error) => {
+      lastWakeError = wakeErrorMessage(error);
+      debug('wake_reconcile_failed', { reason: 'glasses_not_ready', error: lastWakeError });
+    });
   });
   videoUnsubscribe = subscribeMentraVideoRecordingStatus((event) => {
     if (event.status === 'recording_started' || event.data?.recording === true) {
-      void pauseWakeWordListening('video_recording');
+      void pauseWakeWordListening('video_recording').catch((error) => {
+        lastWakeError = wakeErrorMessage(error);
+        debug('wake_reconcile_failed', { reason: 'video_recording_started', error: lastWakeError });
+      });
     }
     if (event.status === 'recording_stopped' || event.status === 'not_recording') {
-      void resumeWakeWordListening('video_recording', 'video_recording_stopped');
+      void resumeWakeWordListening('video_recording', 'video_recording_stopped').catch((error) => {
+        lastWakeError = wakeErrorMessage(error);
+        debug('wake_reconcile_failed', { reason: 'video_recording_stopped', error: lastWakeError });
+      });
     }
   });
-  await reconcile('startup').catch((error) =>
-    debug('wake_runtime_start_failed', {
-      error: error instanceof Error ? error.message : String(error),
-    }),
-  );
+  await reconcile('startup').catch((error) => {
+    lastWakeError = wakeErrorMessage(error);
+    debug('wake_runtime_start_failed', { step: lastWakeStep, error: lastWakeError });
+  });
 }
 
 export async function disposeWakeWordRuntime(): Promise<void> {
   initialized = false;
+  if (wakeDebugTimer) clearInterval(wakeDebugTimer);
+  wakeDebugTimer = null;
   connectionUnsubscribe?.();
   connectionUnsubscribe = null;
   videoUnsubscribe?.();
   videoUnsubscribe = null;
   await deactivateListener('runtime_disposed', true);
+  await GlassesAlertsNative?.releaseV8WakeSpotter().catch(() => undefined);
+  detector = null;
+  detectorInitialization = null;
   await GlassesAlertsNative?.stopGlassesWakeRuntime().catch(() => undefined);
 }

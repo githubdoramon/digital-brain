@@ -160,6 +160,8 @@ async function work() {
   const events = [];
   const diagnostics = [];
   let healthFails = false;
+  let diagnosticsFail = false;
+  const completedTokens = [];
   let locationEnabled = true;
   let glassesEnabled = false;
   let bluetoothGranted = false;
@@ -181,6 +183,11 @@ async function work() {
     '@/mentraCapture/sdk': { ensureMentraConnection: async () => events.push('connect') },
     '@/mentraCapture/maintenance': { assertGlassesNotUpdating: async () => {} },
     '@/modules/digital-brain-glasses-alerts/src': {
+      completeRuntimeWork: async (token) => completedTokens.push(token),
+      getRuntimeEnergyDiagnostics: async () => {
+        if (healthFails) throw Error('energy unavailable');
+        return { processCpuMs: 100, batteryChargeMicroAh: 500_000 };
+      },
       getImageEnhancementDeviceHealth: async () => {
         if (healthFails) throw Error('health unavailable');
         return { batteryPercent: 72, charging: false, thermalStatus: 0 };
@@ -202,15 +209,20 @@ async function work() {
       },
     },
     '@/location/debugState': {
-      reportLocationDebugEvent: (name, detail) => diagnostics.push({ name, detail }),
+      reportLocationDebugEvent: (name, detail) => {
+        if (diagnosticsFail) throw Error('diagnostic write failed');
+        diagnostics.push({ name, detail });
+      },
     },
   });
-  await mod.runForegroundRuntimeWork({ reason: 'location_batch' });
+  await mod.runForegroundRuntimeWork({ reason: 'location_batch', workToken: 'worker-1' });
+  assert.deepEqual(completedTokens, ['worker-1']);
   assert.deepEqual(events, ['DigitalBrainRuntimeWork', 'persist', 'upload']);
   const finished = diagnostics.find((event) => event.name === 'foreground_runtime_work_finished');
   assert.equal(finished.detail.payload.reason, 'location_batch');
   assert.equal(finished.detail.payload.deviceHealth.batteryPercent, 72);
   assert.ok(finished.detail.payload.durationMs >= 0);
+  assert.ok(diagnostics.some((event) => event.name === 'foreground_runtime_energy_sample'));
   healthFails = true;
   locationEnabled = false;
   glassesEnabled = true;
@@ -221,7 +233,12 @@ async function work() {
   bluetoothGranted = true;
   transferFails = true;
   events.length = 0;
-  await mod.runForegroundRuntimeWork();
+  await mod.runForegroundRuntimeWork({ workToken: 'worker-2' });
+  assert.deepEqual(
+    completedTokens,
+    ['worker-1', 'worker-2'],
+    'Native completion survives location and energy diagnostic failure',
+  );
   assert.deepEqual(
     events,
     ['persist', 'connect'],
@@ -249,6 +266,16 @@ async function work() {
   events.length = 0;
   await mod.runForegroundRuntimeWork();
   assert.deepEqual(events, ['persist'], 'Recheck ownership after asynchronous permission checks');
+  diagnosticsFail = true;
+  await assert.rejects(
+    mod.runForegroundRuntimeWork({ workToken: 'worker-3' }),
+    /diagnostic write failed/,
+  );
+  assert.equal(
+    completedTokens.at(-1),
+    'worker-3',
+    'Diagnostic logging errors cannot skip native acknowledgement',
+  );
 }
 async function permissionRace() {
   const owners = [],

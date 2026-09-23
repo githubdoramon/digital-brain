@@ -141,3 +141,10 @@ local test artifact; it was not installed or distributed. Installation over an
 existing app must use the matching signing identity without deleting app data.
 Physical button/restart reproduction, speaker loudness/call behavior, and a real
 firmware installation remain unverified because ADB reports no attached device.
+
+Automatic recovery now shares a process-local 5–30 minute failure cooldown across
+runtime, resume and capture callers. Native control-ready and explicit user retry
+clear it. A still-connecting session is no longer reset on every periodic call
+while its cooldown is active. Native runtime work is acknowledged by per-instance
+token after JS completion; inspect finish reason and service duration alongside
+energy samples to verify prompt shutdown on the device.

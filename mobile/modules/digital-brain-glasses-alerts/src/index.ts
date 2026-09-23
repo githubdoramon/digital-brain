@@ -77,6 +77,8 @@ type DigitalBrainGlassesAlertsEvents = {
 declare class DigitalBrainGlassesAlertsNativeModule extends NativeModule<DigitalBrainGlassesAlertsEvents> {
   setRuntimeLocationEnabled(enabled: boolean): Promise<void>;
   getAppRuntimeStatus(): Promise<AppRuntimeStatus>;
+  getRuntimeEnergyDiagnostics(): Promise<Record<string, unknown>>;
+  completeRuntimeWork(workToken: string): Promise<void>;
   readRuntimeLocations(): Promise<RuntimeLocationSample[]>;
   acknowledgeRuntimeLocations(ids: string[]): Promise<void>;
   getStatus(): Promise<GlassesAlertStatus>;
@@ -97,6 +99,19 @@ declare class DigitalBrainGlassesAlertsNativeModule extends NativeModule<Digital
   startGlassesWakeRuntime(): Promise<void>;
   stopGlassesWakeRuntime(): Promise<void>;
   getGlassesRuntimeForegroundServiceStatus(): Promise<GlassesRuntimeForegroundServiceStatus>;
+  initializeV8WakeSpotter(): Promise<void>;
+  acceptV8WakePcm16(pcmBase64: string): Promise<{ keyword: 'hey_brain' | 'okay_brain'; sampleIndex: number }[]>;
+  getV8WakeSpotterStats(): Promise<{
+    streamSamples: number;
+    acceptedSamplesTotal: number;
+    decodeCallsTotal: number;
+    keywordResultsTotal: number;
+    targetResultsTotal: number;
+    rejectResultsTotal: number;
+    lastKeywordResult: string;
+  } | null>;
+  resetV8WakeSpotter(): Promise<void>;
+  releaseV8WakeSpotter(): Promise<void>;
   playSpeechAudio(
     commandId: string,
     fileUri: string,

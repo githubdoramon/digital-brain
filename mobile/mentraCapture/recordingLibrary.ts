@@ -14,9 +14,9 @@ let cached: GlassesAudioRecording[] | null = null;
 let loading: Promise<GlassesAudioRecording[]> | null = null;
 let writes: Promise<void> = Promise.resolve();
 
-// Listing uses the durable index. Stat-ing every SAF document on each screen
-// focus queues provider work ahead of microphone controls and scales with the
-// entire library. Validate the specific file when the user opens it instead.
+// The durable index carries recorder metadata; folder reconciliation uses the
+// native provider listing to reflect files added or removed outside the app.
+// Individual files are still validated only when the user opens them.
 export async function readRecordingLibrary(): Promise<GlassesAudioRecording[]> {
   if (cached) return cached;
   if (!loading) {

@@ -46,26 +46,47 @@ async function performForegroundRuntimeWork(): Promise<void> {
   }
 }
 
-export async function runForegroundRuntimeWork(input?: { reason?: string }): Promise<void> {
+export async function runForegroundRuntimeWork(input?: {
+  reason?: string;
+  workToken?: string;
+}): Promise<void> {
   const startedAt = Date.now();
   try {
     await performForegroundRuntimeWork();
   } finally {
-    let deviceHealth = null;
     try {
-      if (typeof RuntimeNative?.getImageEnhancementDeviceHealth === 'function') {
-        deviceHealth = await RuntimeNative.getImageEnhancementDeviceHealth();
+      let deviceHealth = null;
+      try {
+        if (typeof RuntimeNative?.getImageEnhancementDeviceHealth === 'function') {
+          deviceHealth = await RuntimeNative.getImageEnhancementDeviceHealth();
+        }
+      } catch {
+        // Health sampling is diagnostic and must never fail the runtime task.
       }
-    } catch {
-      // Health sampling is diagnostic and must never fail the runtime task.
+      try {
+        const energy = await RuntimeNative?.getRuntimeEnergyDiagnostics?.();
+        reportLocationDebugEvent('foreground_runtime_energy_sample', { payload: energy });
+      } catch (error) {
+        // Unsupported counters/older native builds cannot prevent worker completion.
+        reportLocationDebugEvent('foreground_runtime_energy_error', { error });
+      }
+      reportLocationDebugEvent('foreground_runtime_work_finished', {
+        payload: {
+          reason: input?.reason ?? 'unknown',
+          durationMs: Date.now() - startedAt,
+          deviceHealth,
+        },
+      });
+    } finally {
+      if (input?.workToken) {
+        try {
+          await RuntimeNative?.completeRuntimeWork?.(input.workToken);
+        } catch (error) {
+          // The bounded native timeout remains the safety net on bridge failure.
+          reportLocationDebugEvent('foreground_runtime_completion_error', { error });
+        }
+      }
     }
-    reportLocationDebugEvent('foreground_runtime_work_finished', {
-      payload: {
-        reason: input?.reason ?? 'unknown',
-        durationMs: Date.now() - startedAt,
-        deviceHealth,
-      },
-    });
   }
 }
 

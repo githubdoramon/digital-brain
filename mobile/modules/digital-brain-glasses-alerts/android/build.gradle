@@ -19,4 +19,5 @@ dependencies {
   implementation 'com.facebook.react:react-android'
   implementation 'androidx.core:core-ktx:1.16.0'
   implementation 'com.google.android.gms:play-services-location:21.0.1'
+  implementation 'com.k2fsa.sherpa.onnx:sherpa-onnx:1.13.2@aar'
 }

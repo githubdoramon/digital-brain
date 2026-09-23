@@ -1,5 +1,10 @@
 import type { ConfigContext, ExpoConfig } from '@expo/config';
-import { withAndroidManifest, withAppBuildGradle, withMainApplication } from 'expo/config-plugins';
+import {
+  withAndroidManifest,
+  withAppBuildGradle,
+  withMainApplication,
+  withProjectBuildGradle,
+} from 'expo/config-plugins';
 import { existsSync } from 'fs';
 import { isAbsolute, join, resolve } from 'path';
 
@@ -88,6 +93,41 @@ function withSystemDebugKeystore(config: ExpoConfig) {
         'storeFile file("${System.getProperty(\'user.home\')}/.android/debug.keystore")',
       );
     }
+    return mod;
+  });
+}
+
+/**
+ * The Sherpa 1.13.2 JNI library requires OrtGetApiBase@VERS_1.24.3.
+ * onnxruntime-react-native's Android Gradle file asks for latest.integration,
+ * so an EAS clean build can silently package a newer incompatible .so even
+ * though the duplicate-library pickFirst rule lets the APK build succeed.
+ */
+function withSherpaCompatibleOnnxRuntime(config: ExpoConfig): ExpoConfig {
+  return withProjectBuildGradle(config, (mod) => {
+    const marker = '// Digital Brain: pin the ONNX Runtime native ABI for Sherpa 1.13.2.';
+    if (mod.modResults.contents.includes(marker)) return mod;
+    const insertionPoint = 'apply plugin: "expo-root-project"';
+    if (!mod.modResults.contents.includes(insertionPoint)) {
+      throw new Error('Unable to pin Android ONNX Runtime in root build.gradle');
+    }
+    mod.modResults.contents = mod.modResults.contents.replace(
+      insertionPoint,
+      `${marker}
+subprojects {
+  configurations.configureEach {
+    resolutionStrategy.eachDependency { details ->
+      if (details.requested.group == 'com.microsoft.onnxruntime' &&
+          details.requested.name.startsWith('onnxruntime-android')) {
+        details.useVersion '1.24.3'
+        details.because('Sherpa 1.13.2 requires ONNX Runtime symbol version 1.24.3')
+      }
+    }
+  }
+}
+
+${insertionPoint}`,
+    );
     return mod;
   });
 }
@@ -287,16 +327,28 @@ export default ({ config }: ConfigContext): ExpoConfig => {
   const pluginsWithBuildProperties = withPlugin(pluginsWithAudioStudio, 'expo-build-properties', {
     android: {
       minSdkVersion: 28,
+      // Sherpa and onnxruntime-react-native both bundle libonnxruntime.so.
+      // Keep this in Expo config: EAS regenerates android/ and does not read
+      // the local checkout's gradle.properties packaging rules.
+      packagingOptions: {
+        pickFirst: [
+          '**/libc++_shared.so',
+          '**/libonnxruntime.so',
+          '**/libonnxruntime4j_jni.so',
+        ],
+      },
     },
   });
 
-  return withOnnxRuntimePackage(
-    withGlassesAlertsAndroidManifest(
-      withGlassesCaptureCleartext(
-        withSystemDebugKeystore({
-          ...merged,
-          plugins: withPlugin(pluginsWithBuildProperties, 'expo-background-task'),
-        }),
+  return withSherpaCompatibleOnnxRuntime(
+    withOnnxRuntimePackage(
+      withGlassesAlertsAndroidManifest(
+        withGlassesCaptureCleartext(
+          withSystemDebugKeystore({
+            ...merged,
+            plugins: withPlugin(pluginsWithBuildProperties, 'expo-background-task'),
+          }),
+        ),
       ),
     ),
   );

@@ -40,6 +40,7 @@ import DigitalBrainStorageNative from '@/modules/digital-brain-storage/src';
 type SyncListener = (status: CaptureSyncStatus) => void;
 let status: CaptureSyncStatus = {
   running: false,
+  phase: 'idle',
   lastRunAt: null,
   lastError: null,
   pendingCount: 0,
@@ -58,6 +59,8 @@ let hotspotOpenedBySync = false;
 // the old monolithic-upload failure mode.
 const DEFAULT_UPLOAD_CHUNK_BYTES = 8 * 1024 * 1024;
 const GLASSES_CONNECTION_TIMEOUT_MS = 30_000;
+const CAPTURE_BACKEND_REQUEST_TIMEOUT_MS = 120_000;
+const MAX_GALLERY_PAGES = 100;
 
 function withTimeout<T>(operation: Promise<T>, timeoutMs: number, message: string): Promise<T> {
   return new Promise<T>((resolve, reject) => {
@@ -73,6 +76,24 @@ function withTimeout<T>(operation: Promise<T>, timeoutMs: number, message: strin
       },
     );
   });
+}
+
+async function apiFetchWithCaptureTimeout<T>(
+  path: string,
+  options: NonNullable<Parameters<typeof apiFetch>[1]>,
+): Promise<T> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), CAPTURE_BACKEND_REQUEST_TIMEOUT_MS);
+  try {
+    return (await apiFetch(path, { ...options, signal: controller.signal })) as T;
+  } catch (error) {
+    if (controller.signal.aborted) {
+      throw new Error('Capture backend request timed out after 120 seconds');
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 async function sleep(milliseconds: number): Promise<void> {
@@ -174,9 +195,13 @@ async function discoverAllCaptures(baseUrl: string): Promise<RemoteCapture[]> {
   if (!first.ok) {
     const captures: RemoteCapture[] = [];
     let offset = 0;
+    let pageCount = 0;
     while (true) {
+      if (pageCount >= MAX_GALLERY_PAGES)
+        throw new Error('Glasses gallery exceeded the 100-page safety limit');
       const legacy = await fetchGlassesUrl(`${baseUrl}/api/gallery?limit=100&offset=${offset}`);
       if (!legacy.ok) throw new Error(`Glasses gallery unavailable (${legacy.status})`);
+      pageCount += 1;
       const payload = await legacy.json();
       captures.push(...normalizeRemoteCaptures(payload, baseUrl));
       const data = payload?.data ?? payload;
@@ -191,6 +216,7 @@ async function discoverAllCaptures(baseUrl: string): Promise<RemoteCapture[]> {
   const captures: RemoteCapture[] = [];
   let response = first;
   let cursor: string | null = null;
+  let pageCount = 1;
   const seenCursors = new Set<string>();
   do {
     const payload = await response.json();
@@ -198,7 +224,10 @@ async function discoverAllCaptures(baseUrl: string): Promise<RemoteCapture[]> {
     const data = payload?.data ?? payload;
     const next = typeof data?.next_cursor === 'string' ? data.next_cursor : null;
     if (!data?.has_more || !next || seenCursors.has(next)) break;
+    if (pageCount >= MAX_GALLERY_PAGES)
+      throw new Error('Glasses gallery exceeded the 100-page safety limit');
     seenCursors.add(next);
+    pageCount += 1;
     cursor = next;
     const nextCursor = next;
     response = await fetchGlassesUrl(
@@ -335,7 +364,12 @@ async function downloadToPhone(remote: RemoteCapture): Promise<string> {
   await FileSystem.deleteAsync(temporary, { idempotent: true });
   // Use the SDK's streaming bridge for hotspot transfers. Reading the response into a Buffer
   // would expand a long video to base64 in JS memory and can crash an Android device.
-  await downloadGlassesFile(remote.downloadUrl, temporary);
+  try {
+    await downloadGlassesFile(remote.downloadUrl, temporary);
+  } catch (error) {
+    await FileSystem.deleteAsync(temporary, { idempotent: true }).catch(() => undefined);
+    throw error;
+  }
   const downloaded = await getLocalCaptureInfo(temporary);
   if (!downloaded.exists || downloaded.size <= 0) throw new Error('Downloaded media is empty');
   if (remote.sizeBytes != null && downloaded.size !== remote.sizeBytes) {
@@ -404,15 +438,21 @@ async function acknowledgeCapture(baseUrl: string, entry: CaptureQueueEntry): Pr
   const results = result?.results ?? result?.data?.results;
   if (Array.isArray(results)) {
     const target = results.find((item: any) => item?.file === entry.fileName);
-    if (!target || (!target.success && !target.already_trashed)) {
+    if (target && !target.success && !target.already_trashed) {
       throw new Error('Glasses did not delete capture');
     }
-  } else {
-    const deleted = result?.deleted ?? result?.data?.deleted;
-    if (Array.isArray(deleted) && !deleted.includes(entry.fileName)) {
-      throw new Error('Glasses did not delete capture');
-    }
+    if (target) return;
   }
+
+  const data = result?.data ?? result;
+  const deleted = data?.deleted;
+  if (Array.isArray(deleted)) {
+    if (!deleted.includes(entry.fileName)) throw new Error('Glasses did not delete capture');
+    return;
+  }
+  if (typeof deleted === 'number' && deleted > 0) return;
+  if (data?.success === true || data?.already_trashed === true) return;
+  throw new Error('Glasses did not confirm capture deletion');
 }
 
 async function uploadCapture(entry: CaptureQueueEntry): Promise<string> {
@@ -481,23 +521,29 @@ async function uploadCaptureInChunks(
   }
   const nativeStorage = DigitalBrainStorageNative;
   let token = initialToken;
-  const session = (await apiFetch('/mobile/glasses/captures/upload-sessions', {
-    method: 'POST',
-    body: JSON.stringify({
-      capture_id: entry.captureId,
-      filename: mediaLeafName(entry.fileName),
-      mime_type: entry.mimeType,
-      captured_at: entry.capturedAt,
-      location: location ?? {},
-      size_bytes: sizeBytes,
-    }),
-    token,
-    onAuthExpired: async () => {
-      const refreshed = await refreshToken();
-      if (refreshed) token = refreshed;
-      return refreshed;
+  const session = await apiFetchWithCaptureTimeout<{
+    session_id?: string;
+    chunk_size_bytes?: number;
+  }>(
+    '/mobile/glasses/captures/upload-sessions',
+    {
+      method: 'POST',
+      body: JSON.stringify({
+        capture_id: entry.captureId,
+        filename: mediaLeafName(entry.fileName),
+        mime_type: entry.mimeType,
+        captured_at: entry.capturedAt,
+        location: location ?? {},
+        size_bytes: sizeBytes,
+      }),
+      token,
+      onAuthExpired: async () => {
+        const refreshed = await refreshToken();
+        if (refreshed) token = refreshed;
+        return refreshed;
+      },
     },
-  })) as { session_id?: string; chunk_size_bytes?: number };
+  );
   const sessionId = String(session.session_id ?? '');
   if (!sessionId) throw new Error('Backend did not create an upload session');
   const chunkSize = Math.min(
@@ -542,7 +588,7 @@ async function uploadCaptureInChunks(
       { capture_id: entry.captureId, uploaded_bytes: offset + length, size_bytes: sizeBytes },
     );
   }
-  const response = (await apiFetch(
+  const response = await apiFetchWithCaptureTimeout<any>(
     `/mobile/glasses/captures/upload-sessions/${encodeURIComponent(sessionId)}/complete`,
     {
       method: 'POST',
@@ -553,7 +599,7 @@ async function uploadCaptureInChunks(
         return refreshed;
       },
     },
-  )) as any;
+  );
   return String(response?.capture?.immich_asset_id ?? '');
 }
 
@@ -563,7 +609,7 @@ async function uploadCaptureInChunks(
  * the glasses hotspot: a local, acknowledged file must never wait for those
  * transports before it can reach the backend.
  */
-async function drainLocalCaptureUploads(): Promise<void> {
+async function drainLocalCaptureUploads(onUploaded?: () => void): Promise<void> {
   const initialQueue = await loadCaptureQueue();
   const eligible = initialQueue.filter(
     (entry) =>
@@ -584,6 +630,7 @@ async function drainLocalCaptureUploads(): Promise<void> {
       (item) => item.captureId === initial.captureId && item.fileName === initial.fileName,
     );
     if (!entry?.localUri || entry.uploadReady !== true) continue;
+    publish({ currentCaptureId: entry.captureId, phase: 'uploading_saved_captures' });
     const localUri = entry.localUri;
     try {
       const local = await getLocalCaptureInfo(localUri);
@@ -604,12 +651,29 @@ async function drainLocalCaptureUploads(): Promise<void> {
       );
       const assetId = await uploadCapture(entry);
       if (!assetId) throw new Error('Backend did not confirm an Immich asset');
-      await deleteLocalCapture(localUri);
+      entry = {
+        ...entry,
+        state: 'uploaded' as const,
+        immichAssetId: assetId,
+        updatedAt: new Date().toISOString(),
+        lastError: null,
+      };
+      // Keep a durable deduplication record before deleting the media. The
+      // glasses may continue listing acknowledged captures in recoverable trash.
       await saveCaptureQueue(
-        (await loadCaptureQueue()).filter(
-          (item) => item.captureId !== entry!.captureId || item.fileName !== entry!.fileName,
+        (await loadCaptureQueue()).map((item) =>
+          item.captureId === entry!.captureId && item.fileName === entry!.fileName ? entry! : item,
         ),
       );
+      await deleteLocalCapture(localUri);
+      await saveCaptureQueue(
+        (await loadCaptureQueue()).map((item) =>
+          item.captureId === entry!.captureId && item.fileName === entry!.fileName
+            ? { ...entry!, localUri: null, nextRetryAt: null }
+            : item,
+        ),
+      );
+      onUploaded?.();
       debugCaptureStage(
         'glasses_capture_backend_upload_confirmed',
         'Backend confirmed retained local capture.',
@@ -620,6 +684,26 @@ async function drainLocalCaptureUploads(): Promise<void> {
       );
     } catch (error) {
       const message = safeCaptureErrorMessage(error);
+      if (entry.state === 'uploaded') {
+        await saveCaptureQueue(
+          (await loadCaptureQueue()).map((item) =>
+            item.captureId === entry!.captureId && item.fileName === entry!.fileName
+              ? {
+                  ...entry!,
+                  nextRetryAt: new Date(Date.now() + 60_000).toISOString(),
+                  lastError: `Local cleanup pending: ${message}`.slice(0, 240),
+                  updatedAt: new Date().toISOString(),
+                }
+              : item,
+          ),
+        );
+        debugCaptureStage(
+          'glasses_capture_phone_cleanup_pending',
+          'Immich upload succeeded; phone media cleanup will retry without re-uploading.',
+          { capture_id: entry.captureId },
+        );
+        continue;
+      }
       const attempts = entry.attempts + 1;
       await saveCaptureQueue(
         (await loadCaptureQueue()).map((item) =>
@@ -651,6 +735,8 @@ async function drainLocalCaptureUploads(): Promise<void> {
 
 async function runSync(): Promise<void> {
   debugCaptureStage('glasses_capture_sync_starting', 'Starting glasses capture reconciliation.');
+  let uploadedThisRun = 0;
+  publish({ phase: 'preparing_local_queue', currentCaptureId: null, uploadedCount: 0 });
   if (Platform.OS !== 'android')
     throw new Error('Glasses capture sync is Android-only in this release');
   const migration = await movePendingCapturesToSharedFolder();
@@ -671,7 +757,11 @@ async function runSync(): Promise<void> {
       },
     );
   }
-  await drainLocalCaptureUploads();
+  publish({ phase: 'uploading_saved_captures' });
+  await drainLocalCaptureUploads(() => {
+    uploadedThisRun += 1;
+    publish({ uploadedCount: uploadedThisRun });
+  });
   await loadGlassesMaintenance();
   if (isGlassesMaintenanceActive()) return;
   // A capture signal can arrive while the glasses camera is still busy. Reconnect/readiness is
@@ -680,6 +770,7 @@ async function runSync(): Promise<void> {
   // applied on pairing, app startup, and the explicit settings action instead.
   let connection: Awaited<ReturnType<typeof connectGalleryServer>> | null = null;
   let connectionError: string | null = null;
+  publish({ phase: 'connecting' });
   try {
     const connected = await withTimeout(
       ensureMentraConnection({ applyCaptureDefaults: false }),
@@ -719,14 +810,17 @@ async function runSync(): Promise<void> {
     );
   }
   let discovered: RemoteCapture[] = [];
+  let discoveryError: string | null = null;
   if (connection) {
+    publish({ phase: 'discovering' });
     try {
       discovered = await discoverAllCaptures(connection.baseUrl);
     } catch (error) {
+      discoveryError = safeCaptureErrorMessage(error);
       debugCaptureStage(
         'glasses_capture_discovery_unavailable',
         'Glasses gallery discovery failed; continuing with the durable local queue.',
-        { error: safeCaptureErrorMessage(error) },
+        { error: discoveryError },
       );
     }
   }
@@ -748,6 +842,21 @@ async function runSync(): Promise<void> {
     local_ready: queue.filter((entry) => Boolean(entry.localUri)).length,
   });
   const now = new Date().toISOString();
+  const uploadedRediscoveries = discovered.filter((remote) =>
+    queue.some(
+      (entry) =>
+        entry.state === 'uploaded' &&
+        entry.captureId === remote.captureId &&
+        entry.fileName === remote.fileName,
+    ),
+  ).length;
+  if (uploadedRediscoveries > 0) {
+    debugCaptureStage(
+      'glasses_capture_uploaded_tombstones_applied',
+      'Skipped captures already confirmed in Immich.',
+      { skipped_count: uploadedRediscoveries },
+    );
+  }
   for (const remote of discovered) {
     if (
       !queue.some(
@@ -768,7 +877,13 @@ async function runSync(): Promise<void> {
       });
     }
   }
+  // Keep uploaded IDs as tombstones even after a clean manifest omits them.
+  // Some glasses builds can re-expose old media after reconnect or trash
+  // reconciliation; the durable queue is also our import deduplication ledger.
   await saveCaptureQueue(queue);
+  publish({
+    pendingCount: queue.filter((entry) => !['uploaded', 'missing'].includes(entry.state)).length,
+  });
   for (const initial of queue
     .slice()
     .sort((a, b) => a.discoveredAt.localeCompare(b.discoveredAt))) {
@@ -785,10 +900,20 @@ async function runSync(): Promise<void> {
       // interrupted while deleting the local copy. Finish that cleanup without
       // re-uploading the media.
       if (entry.state === 'uploaded' && entry.localUri) {
+        publish({ phase: 'cleaning_up' });
         await deleteLocalCapture(entry.localUri);
+        const tombstone = {
+          ...entry,
+          localUri: null,
+          nextRetryAt: null,
+          lastError: null,
+          updatedAt: new Date().toISOString(),
+        };
         await saveCaptureQueue(
-          (await loadCaptureQueue()).filter(
-            (item) => item.captureId !== entry!.captureId || item.fileName !== entry!.fileName,
+          (await loadCaptureQueue()).map((item) =>
+            item.captureId === entry!.captureId && item.fileName === entry!.fileName
+              ? tombstone
+              : item,
           ),
         );
         continue;
@@ -796,6 +921,7 @@ async function runSync(): Promise<void> {
       if (!entry.localUri && !connection) continue;
       if (!connection && entry.uploadReady !== true) continue;
       if (!entry.localUri) {
+        publish({ phase: 'downloading' });
         debugCaptureStage('glasses_capture_transfer_started', 'Downloading capture from glasses.', {
           capture_id: entry.captureId,
           kind: entry.kind,
@@ -827,6 +953,7 @@ async function runSync(): Promise<void> {
       }
       if (!entry.uploadReady) {
         if (!connection) continue;
+        publish({ phase: 'acknowledging' });
         await acknowledgeCapture(connection.baseUrl, entry);
         debugCaptureStage(
           'glasses_capture_glasses_acknowledged',
@@ -848,6 +975,7 @@ async function runSync(): Promise<void> {
         );
       }
       entry = { ...entry, state: 'uploading', updatedAt: new Date().toISOString() };
+      publish({ phase: 'uploading' });
       await saveCaptureQueue(
         (await loadCaptureQueue()).map((item) =>
           item.captureId === entry!.captureId && item.fileName === entry!.fileName ? entry! : item,
@@ -877,6 +1005,8 @@ async function runSync(): Promise<void> {
           item.captureId === entry!.captureId && item.fileName === entry!.fileName ? entry! : item,
         ),
       );
+      uploadedThisRun += 1;
+      publish({ uploadedCount: uploadedThisRun, phase: 'cleaning_up' });
       if (entry.localUri) await deleteLocalCapture(entry.localUri);
       debugCaptureStage(
         'glasses_capture_phone_cleanup',
@@ -884,8 +1014,16 @@ async function runSync(): Promise<void> {
         { capture_id: entry.captureId, immich_asset_id: assetId },
       );
       await saveCaptureQueue(
-        (await loadCaptureQueue()).filter(
-          (item) => item.captureId !== entry!.captureId || item.fileName !== entry!.fileName,
+        (await loadCaptureQueue()).map((item) =>
+          item.captureId === entry!.captureId && item.fileName === entry!.fileName
+            ? {
+                ...entry!,
+                localUri: null,
+                nextRetryAt: null,
+                lastError: null,
+                updatedAt: new Date().toISOString(),
+              }
+            : item,
         ),
       );
     } catch (error) {
@@ -939,7 +1077,7 @@ async function runSync(): Promise<void> {
   const remaining = await loadCaptureQueue();
   const latestError =
     [...remaining].reverse().find((item) => item.state === 'failed' && item.lastError)?.lastError ??
-    null;
+    discoveryError;
   publish({
     pendingCount: remaining.filter((item) => !['uploaded', 'missing'].includes(item.state)).length,
     failedCount: remaining.filter((item) => item.state === 'failed').length,
@@ -954,11 +1092,22 @@ async function runSync(): Promise<void> {
 export function reconcileGlassesCaptures(): Promise<void> {
   if (activeSync) return activeSync;
   debugCaptureStage('glasses_capture_sync_requested', 'Capture reconciliation requested.');
-  publish({ running: true, lastError: null });
+  publish({
+    running: true,
+    phase: 'preparing_local_queue',
+    currentCaptureId: null,
+    uploadedCount: 0,
+    lastError: null,
+  });
   activeSync = runSync()
     .then(() => {
       debugCaptureStage('glasses_capture_sync_finished', 'Capture reconciliation finished.');
-      publish({ running: false, lastRunAt: new Date().toISOString() });
+      publish({
+        running: false,
+        phase: 'idle',
+        currentCaptureId: null,
+        lastRunAt: new Date().toISOString(),
+      });
     })
     .catch((error) => {
       const message = safeCaptureErrorMessage(error);
@@ -976,19 +1125,27 @@ export function reconcileGlassesCaptures(): Promise<void> {
       });
       publish({
         running: false,
+        phase: 'idle',
+        currentCaptureId: null,
         lastRunAt: new Date().toISOString(),
         lastError: message,
         networkPath: 'unavailable',
       });
     })
     .finally(async () => {
-      if (hotspotOpenedBySync) {
+      try {
+        const release = hotspotOpenedBySync ? disableGlassesHotspot() : releaseGlassesNetwork();
         hotspotOpenedBySync = false;
-        await disableGlassesHotspot();
-      } else {
-        await releaseGlassesNetwork();
+        await withTimeout(release, 5_000, 'Glasses network cleanup timed out').catch((error) => {
+          debugCaptureStage(
+            'glasses_capture_network_cleanup_timeout',
+            'Glasses network cleanup did not finish promptly.',
+            { error: safeCaptureErrorMessage(error) },
+          );
+        });
+      } finally {
+        activeSync = null;
       }
-      activeSync = null;
     });
   return activeSync;
 }

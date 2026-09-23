@@ -1,8 +1,9 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
-import { useFocusEffect } from '@react-navigation/native';
+import { useFocusEffect, useIsFocused } from '@react-navigation/native';
 import { useRouter } from 'expo-router';
 import React from 'react';
 import {
+  AppState,
   Alert,
   KeyboardAvoidingView,
   Platform,
@@ -25,6 +26,7 @@ import {
   hydrateGlassesAudioRecording,
   listGlassesAudioRecordings,
   playOrStopGlassesAudioRecording,
+  reconcileGlassesAudioRecordingLibrary,
   renameGlassesAudioRecording,
   startGlassesAudioRecording,
   stopGlassesAudioRecording,
@@ -47,6 +49,7 @@ function formatSize(bytes: number): string {
 
 export default function GlassesRecordingsScreen() {
   const router = useRouter();
+  const isFocused = useIsFocused();
   const insets = useSafeAreaInsets();
   const { showError, showSuccess } = useAppNotice();
   const [recordings, setRecordings] = React.useState<GlassesAudioRecording[]>([]);
@@ -74,13 +77,15 @@ export default function GlassesRecordingsScreen() {
           setLoadError(error instanceof Error ? error.message : 'Could not load storage settings.');
       });
     void hydrateGlassesAudioRecording()
-      .then(() => {
+      .then(async () => {
         if (generation === loadGeneration.current) setRecorderReady(true);
+        const items = await reconcileGlassesAudioRecordingLibrary();
+        if (generation === loadGeneration.current) setRecordings(items);
       })
       .catch((error) => {
         if (generation === loadGeneration.current)
           setLoadError(
-            error instanceof Error ? error.message : 'Could not check recording status.',
+            error instanceof Error ? error.message : 'Could not sync recordings.',
           );
       });
     return () => {
@@ -88,6 +93,21 @@ export default function GlassesRecordingsScreen() {
     };
   }, []);
   useFocusEffect(loadSetup);
+
+  React.useEffect(() => {
+    if (!isFocused) return;
+    const subscription = AppState.addEventListener('change', (nextState) => {
+      if (nextState !== 'active') return;
+      void reconcileGlassesAudioRecordingLibrary()
+        .then(setRecordings)
+        .catch((error) =>
+          setLoadError(
+            error instanceof Error ? error.message : 'Could not sync the recordings folder.',
+          ),
+        );
+    });
+    return () => subscription.remove();
+  }, [isFocused]);
 
   React.useEffect(() => {
     let active = true;
@@ -302,7 +322,11 @@ export default function GlassesRecordingsScreen() {
                   </Text>
                   <Text style={styles.meta}>
                     {new Date(recording.startedAt).toLocaleString()} ·{' '}
-                    {formatDuration(recording.durationMs)} · {formatSize(recording.sizeBytes)}
+                    {recording.durationMs > 0
+                      ? formatDuration(recording.durationMs)
+                      : 'Duration unknown'}
+                    {' · '}
+                    {formatSize(recording.sizeBytes)}
                   </Text>
                 </View>
               </View>

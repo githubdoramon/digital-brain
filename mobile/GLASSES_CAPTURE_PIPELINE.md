@@ -34,7 +34,8 @@ Each capture is processed sequentially:
    size when supplied.
 4. Acknowledge it with `/api/v3/ack` when protocol v3 is available, otherwise
    use the legacy `/api/delete-files` endpoint. Mentra retains acknowledged
-   captures in recoverable trash for its supported seven-day window.
+   captures in recoverable trash for its supported seven-day window; this is a
+   gallery acknowledgement, not permanent physical erasure from the glasses.
 5. Media opens an authenticated upload session and sends sequential bounded
    1 MiB ranges to
    `/mobile/glasses/captures/upload-sessions`; the backend validates and
@@ -45,6 +46,13 @@ Each capture is processed sequentially:
    creates the exact `Ramon eyes capture` album, and commits the
    capture ID/checksum record.
 6. Delete the phone copy only after that backend confirmation.
+
+After Immich confirmation, the durable queue retains the capture ID and
+filename as an uploaded tombstone even after deleting the phone media. If a
+camera-server manifest exposes the same acknowledged capture again, sync skips
+it instead of downloading and uploading another copy. Tombstones are retained
+even when a later manifest omits the capture, since older camera-server builds
+can re-expose previously acknowledged files after reconnect.
 
 Before upload, the app resolves the nearest phone location sample within a
 10-minute tolerance. It first checks the local location drain queue (which may
@@ -60,6 +68,11 @@ being hidden behind a successful reconciliation pass.
 On startup and every sync, retained media in `Glasses Capture Queue` is also
 imported back into that upload queue when a prior app-data loss left a visible
 file without its local queue record.
+The sync card reports connection, gallery discovery, download, acknowledgement,
+upload, and cleanup phases. Gallery discovery stops with a visible error after
+100 manifest pages, camera-server requests have finite timeouts, and Connect
+returns as soon as the Bluetooth connection settles instead of waiting for the
+full media reconciliation.
 
 ## Automatic image enhancement pipeline
 
@@ -106,10 +119,11 @@ The append-only private JSONL file is mirrored on a coalesced timer rather than
 being fully rewritten and followed by a full photo-folder scan for every log
 entry. The explicit **Save image enhancement log** action and general Mentra
 diagnostics both write to `Exports`. Neither action bypasses the user-selected
-Digital Brain base folder. Startup and explicit storage sync reconcile any
-retained private files and migrate the previous experimental storage layout.
-They are retained for manual
-inspection. Every photo runs through
+Digital Brain base folder. Startup and explicit storage sync reconcile the
+diagnostic log and migrate the previous experimental storage layout. Retained
+private JPGs are backfilled into the shared folder only while Automatic scene
+capture is enabled; switching it off does not delete previously shared or
+app-private photos. They are retained for manual inspection. Every photo runs through
 the serialized Fast Vision → Balanced VLM coordinator, which unloads native
 resources after each stage and failure. Balanced inference uses a short-lived
 canonical JPEG transcoded through Android's bitmap decoder. This preserves the
@@ -205,12 +219,15 @@ cannot create duplicate library entries or race the user-stop save.
 
 Android builds automatically enable the local personalized wake-word detector
 after a saved Mentra Live connection becomes both connected and fully booted.
-The runtime is initialized from `mobile/index.js` before Expo Router, packages
-the two ONNX feature models plus the personalized classifier, and maintains one
-streaming detector while its glasses PCM session is continuous. Mentra delivers
-16 kHz, mono, signed PCM16; the runtime serializes those chunks through a
-bounded queue and resets detector history after reconnects, errors, or a real
-audio-source handoff.
+The runtime is initialized from `mobile/index.js` before Expo Router. V8 runs a
+small native Sherpa keyword spotter continuously and invokes the packaged
+openWakeWord ONNX embedding models plus personalized classifier only when
+Sherpa proposes “hey brain” or “okay brain”. The verifier uses the preceding
+four seconds of untouched PCM and a frozen threshold; a rejected proposal does
+not acknowledge or start a command. Mentra delivers 16 kHz, mono, signed
+PCM16; the runtime serializes those chunks through a bounded queue and resets
+both stages after reconnects, errors, or a real audio-source handoff. See
+[WAKE_WORD_V8.md](WAKE_WORD_V8.md) for assets, tests, and device-test limits.
 
 The app-owned foreground service shares one notification across location,
 Mentra connection, automatic capture, wake listening, recording and call alerts.
@@ -440,10 +457,11 @@ for any previous mic-off request, and generation checks stop old callbacks from
 removing the new recording's microphone ownership.
 
 `mentraCapture/recordingLibrary.ts` owns the cached durable index and serializes
-all read-modify-write operations. Opening the screen reads that index without
-stat-ing every SAF document; playback checks the requested file and reports
-missing/provider-inaccessible files without deleting index entries. Save
-completion publishes a library revision independently of capture state.
+all read-modify-write operations. On screen focus and app resume, the recordings
+coordinator reconciles the native listing of the shared `Recordings` folder:
+externally deleted files are removed from the index and new M4A files are added.
+Playback still checks the requested file and reports missing/provider-inaccessible
+files. Save completion publishes a library revision independently of capture state.
 Completion results are deduplicated, and delayed save/hydration callbacks cannot
 reset a newer capture. Playback completion clears its indicator, starting capture
 stops playback, and deleting an unrelated file leaves playback alone. Rename has

@@ -158,3 +158,34 @@ cap oversized individual event payloads with an explicit truncated preview.
 This also recovers existing oversized logs without reading them into memory.
 The location API schema accepts `android_foreground_location`; deploy the backend
 schema change so native foreground samples no longer fail HTTP 422 validation.
+
+## Recovery and energy evidence
+
+All automatic connection callers share a process-local cooldown after failure:
+5, 10, 20, then 30 minutes (capped). Capture/resume calls cannot bypass it.
+Native control-ready clears the cooldown; explicit Connect/Apply settings, repair
+and pairing can retry immediately. Process recreation starts a fresh cooldown.
+
+Each headless worker receives a unique token. Its JS finally path acknowledges
+that token through the app's native module, stops only the matching worker service even if RN's normal JS completion route
+fails. RN owns task bookkeeping, which completes normally or expires at its
+existing timeout; the worker never finishes unrelated headless tasks.
+Tokens from an old worker cannot stop a newer worker. The existing two-minute
+native timeout remains a safety net; it does not cancel already-running JS.
+Worker end logs distinguish acknowledgement, teardown near the timeout window
+(an inferred timeout), or RN/external teardown.
+
+`foreground_runtime_energy_sample` records process CPU time/deltas, device
+awake and deep-sleep deltas, battery charge/current/average current/energy
+where supported, charge delta, voltage and temperature, screen/idle/power-saving
+state, and completed worker service lifetime. Unsupported properties are null.
+Samples use existing work opportunities without adding polling or wake locks.
+CPU counters cover this process; battery and awake counters cover the device.
+Service lifetime is not a measured app energy total. Charging intervals cannot
+be interpreted as discharge. No privileged BATTERY_STATS permission is requested.
+
+For Android's system energy attribution, collect a bug report after an unplugged
+screen-off reproduction via Developer options → Take bug report or `adb bugreport`.
+The report includes system battery/wake-lock evidence beyond ordinary app access.
+Keep it local when inspecting it; it contains device-wide diagnostic information.
+These completion/energy APIs require a new native Android build.

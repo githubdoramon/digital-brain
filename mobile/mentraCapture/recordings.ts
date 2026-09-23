@@ -4,6 +4,7 @@ import { Platform } from 'react-native';
 import DigitalBrainStorageNative from '@/modules/digital-brain-storage/src';
 import {
   DigitalBrainStorageFolder,
+  getDigitalBrainStorageBaseUri,
   getDigitalBrainStorageFolder,
   safeStorageFileName,
 } from '@/storage/digitalBrainStorage';
@@ -354,6 +355,55 @@ async function stopRecording(generation: number): Promise<GlassesAudioRecordingS
 }
 
 export function listGlassesAudioRecordings(): Promise<GlassesAudioRecording[]> {
+  return readRecordingLibrary();
+}
+
+function recordingDateFromFileName(name: string): string | null {
+  const match = name.match(/(\d{4}-\d{2}-\d{2}T\d{2})-(\d{2})-(\d{2})-(\d{3})Z/i);
+  if (!match) return null;
+  const timestamp = `${match[1]}:${match[2]}:${match[3]}.${match[4]}Z`;
+  return Number.isFinite(Date.parse(timestamp)) ? new Date(timestamp).toISOString() : null;
+}
+
+/** Reconcile the recordings index with the selected shared folder. */
+export async function reconcileGlassesAudioRecordingLibrary(): Promise<GlassesAudioRecording[]> {
+  if (recovery) await recovery.catch(() => undefined);
+  if (state.phase !== GlassesAudioRecordingPhase.Idle || state.savingCount > 0) {
+    return readRecordingLibrary();
+  }
+  const baseUri = await getDigitalBrainStorageBaseUri();
+  if (!baseUri) return readRecordingLibrary();
+  if (!DigitalBrainStorageNative) throw new Error('Recording folder sync needs an Android rebuild.');
+
+  const files = (await DigitalBrainStorageNative.listSubdirectory(
+    baseUri,
+    DigitalBrainStorageFolder.Recordings,
+  )).filter(
+    (file) =>
+      file.name.toLowerCase().endsWith('.m4a') || file.mimeType.toLowerCase().startsWith('audio/'),
+  );
+  let changed = false;
+  await updateRecordingLibrary((current) => {
+    const byUri = new Map(current.map((recording) => [recording.uri, recording]));
+    const byName = new Map(current.map((recording) => [recording.name, recording]));
+    const next = files
+      .map((file) => {
+        const existing = byUri.get(file.uri) ?? byName.get(file.name);
+        return {
+          id: existing?.id ?? `mentra-audio:${file.uri}`,
+          uri: file.uri,
+          name: file.name,
+          startedAt:
+            existing?.startedAt ?? recordingDateFromFileName(file.name) ?? new Date().toISOString(),
+          durationMs: existing?.durationMs ?? 0,
+          sizeBytes: file.bytes,
+        };
+      })
+      .sort((a, b) => b.startedAt.localeCompare(a.startedAt));
+    changed = JSON.stringify(current) !== JSON.stringify(next);
+    return changed ? next : current;
+  });
+  if (changed) publish({ libraryVersion: state.libraryVersion + 1 });
   return readRecordingLibrary();
 }
 

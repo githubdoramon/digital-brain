@@ -6,6 +6,7 @@ import { PermissionsAndroid, Platform } from 'react-native';
 
 import { appendMentraDebugLog, appendWakeCommandDebugLog } from './debug';
 import { assertGlassesNotUpdating, isGlassesMaintenanceActive } from './maintenance';
+import { ConnectionBackoff } from './connectionBackoff';
 import { setExpectedGlassesAlertAudioDevice } from '@/glassesAlerts/runtime';
 
 type Subscription = { remove: () => void };
@@ -205,6 +206,7 @@ let activeMentraConnection: Promise<boolean> | null = null;
 let activeMentraConnectionAppliesCaptureDefaults = false;
 let pendingConnectionRecovery: 'heartbeat_timeout' | 'manual_recovery' | null = null;
 const automaticRecoveryAttempts: number[] = [];
+const connectionBackoff = new ConnectionBackoff();
 const automaticPhotoRequestIds = new Set<string>();
 
 export type GlassesWifiCredential = {
@@ -303,6 +305,7 @@ function initializeDiagnosticsListeners(native: BluetoothSdk): void {
     debugSdk('glasses_process_restarted', { bluetooth_link_retained: true });
   });
   listenInternal('glasses_control_ready', (payload) => {
+    connectionBackoff.reset();
     debugSdk('glasses_control_ready', payload);
   });
   listenInternal('glasses_link_unhealthy', (payload) => {
@@ -934,6 +937,7 @@ async function resetAndReconnectMentra(
 
 export async function pairGlasses(device: MentraDevice): Promise<void> {
   await assertGlassesNotUpdating();
+  connectionBackoff.reset();
   debugSdk('pair_starting', { model: device.model });
   await ensureMentraBluetoothPermissions();
   const native = loadSdk();
@@ -1403,7 +1407,7 @@ async function ensureMentraConnectionOnce(
  * they must join one operation rather than repeatedly cancel each other.
  */
 export async function ensureMentraConnection(
-  options: { applyCaptureDefaults?: boolean } = {},
+  options: { applyCaptureDefaults?: boolean; manualRetry?: boolean } = {},
 ): Promise<boolean> {
   await assertGlassesNotUpdating();
   const applyCaptureDefaults = options.applyCaptureDefaults !== false;
@@ -1425,8 +1429,25 @@ export async function ensureMentraConnection(
     });
   }
 
+  if (options.manualRetry) connectionBackoff.reset();
+  if (pendingConnectionRecovery !== 'manual_recovery') {
+    const retryInMs = connectionBackoff.remaining();
+    if (retryInMs > 0) {
+      debugSdk('connection_recovery_backoff', { retryInMs });
+      return false;
+    }
+  }
   activeMentraConnectionAppliesCaptureDefaults = applyCaptureDefaults;
-  const operation = ensureMentraConnectionOnce({ applyCaptureDefaults });
+  const operation = ensureMentraConnectionOnce({ applyCaptureDefaults }).then(
+    (connected) => {
+      if (connected) connectionBackoff.reset();
+      return connected;
+    },
+    (error) => {
+      debugSdk('connection_recovery_cooldown', { retryInMs: connectionBackoff.failed() });
+      throw error;
+    },
+  );
   activeMentraConnection = operation.finally(() => {
     activeMentraConnection = null;
     activeMentraConnectionAppliesCaptureDefaults = false;
@@ -1437,6 +1458,7 @@ export async function ensureMentraConnection(
 /** An explicit repair releases a stale GATT session without forgetting pairing or rebooting. */
 export async function recoverMentraConnection(): Promise<boolean> {
   await assertGlassesNotUpdating();
+  connectionBackoff.reset();
   pendingConnectionRecovery = 'manual_recovery';
   return ensureMentraConnection();
 }
@@ -1488,7 +1510,25 @@ export async function releaseGlassesNetwork(): Promise<void> {
 }
 
 export async function fetchGlassesUrl(url: string, init?: RequestInit): Promise<Response> {
-  if (!scopedNetworkActive || !localNetwork?.request) return fetch(url, init);
+  if (!scopedNetworkActive || !localNetwork?.request) {
+    if (typeof AbortController === 'undefined') return fetch(url, init);
+    const controller = new AbortController();
+    const callerSignal = init?.signal;
+    const abortFromCaller = () => controller.abort();
+    if (callerSignal?.aborted) controller.abort();
+    else callerSignal?.addEventListener('abort', abortFromCaller, { once: true });
+    const timeout = setTimeout(() => controller.abort(), 30_000);
+    try {
+      return await fetch(url, { ...init, signal: controller.signal });
+    } catch (error) {
+      if (controller.signal.aborted && !callerSignal?.aborted)
+        throw new Error('Glasses camera request timed out');
+      throw error;
+    } finally {
+      clearTimeout(timeout);
+      callerSignal?.removeEventListener('abort', abortFromCaller);
+    }
+  }
   const requestId = `capture_${Date.now()}_${Math.random().toString(36).slice(2)}`;
   const headers: Record<string, string> = {};
   new Headers(init?.headers).forEach((value, key) => {
@@ -1515,7 +1555,22 @@ export async function fetchGlassesUrl(url: string, init?: RequestInit): Promise<
  */
 export async function downloadGlassesFile(url: string, destinationUri: string): Promise<number> {
   if (!scopedNetworkActive || !localNetwork?.download) {
-    const result = await FileSystem.downloadAsync(url, destinationUri);
+    const download = FileSystem.createDownloadResumable(url, destinationUri, {});
+    let timeout: ReturnType<typeof setTimeout> | null = null;
+    const result = await Promise.race([
+      download.downloadAsync(),
+      new Promise<never>((_, reject) => {
+        timeout = setTimeout(() => {
+          void download
+            .pauseAsync()
+            .catch(() => undefined)
+            .finally(() => reject(new Error('Glasses capture download timed out after 120 seconds')));
+        }, 120_000);
+      }),
+    ]).finally(() => {
+      if (timeout) clearTimeout(timeout);
+    });
+    if (!result?.uri) throw new Error('Glasses capture download did not complete');
     if (result.status < 200 || result.status >= 300) {
       throw new Error(`Glasses download failed (${result.status})`);
     }

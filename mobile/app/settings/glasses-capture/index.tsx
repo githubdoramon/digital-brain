@@ -37,12 +37,9 @@ import {
   getDefaultGlassesDevice,
   getCaptureSyncStatus,
   isMentraSdkAvailable,
-  isAutoWifiSyncEnabled,
   pairGlasses,
   reconcileGlassesCaptures,
   retryFailedGlassesCaptures,
-  removeGlassesWifiCredential,
-  syncSavedGlassesWifiCredentials,
   scanForGlasses,
   subscribeCaptureSync,
   clearImageEnhancementLog,
@@ -50,17 +47,14 @@ import {
   getImageEnhancementLogInfo,
   getImageEnhancementStatus,
   initializeImageEnhancement,
-  listGlassesWifiCredentials,
   readImageEnhancementLog,
-  setAutoWifiSyncEnabledForGlasses,
   setImageEnhancementEnabled,
   setImageEnhancementIntervalMinutes,
-  upsertGlassesWifiCredential,
   subscribeImageEnhancementStatus,
-  type GlassesWifiCredential,
   type MentraDevice,
   type MentraConnectionStatus,
 } from '@/mentraCapture';
+import { recordWakeDebugSnapshot } from '@/mentraCapture/wakeWord';
 import { theme } from '@/theme';
 import {
   copyToDigitalBrainStorage,
@@ -80,7 +74,6 @@ export default function GlassesCaptureScreen() {
   const insets = useSafeAreaInsets();
   const { showSuccess, showError } = useAppNotice();
   const [status, setStatus] = React.useState(getCaptureSyncStatus());
-  const [running, setRunning] = React.useState(false);
   const [defaultDevice, setDefaultDevice] = React.useState<MentraDevice | null>(null);
   const [connection, setConnection] = React.useState<MentraConnectionStatus>({
     hasSavedDevice: false,
@@ -96,6 +89,7 @@ export default function GlassesCaptureScreen() {
     exists: false,
     sizeBytes: 0,
   });
+  const [wakeDebugSummary, setWakeDebugSummary] = React.useState<string | null>(null);
   const [wakeCommandDebugInfo, setWakeCommandDebugInfo] = React.useState({
     exists: false,
     sizeBytes: 0,
@@ -172,6 +166,30 @@ export default function GlassesCaptureScreen() {
       setMentraDebugInfo(await getMentraDebugLogInfo());
     } catch (error) {
       showError(error instanceof Error ? error.message : 'Failed to export Mentra diagnostics.');
+    }
+  };
+
+  const captureWakeDebugSnapshot = async () => {
+    try {
+      const snapshot = await recordWakeDebugSnapshot();
+      const native = snapshot.native_spotter as {
+        acceptedSamplesTotal?: number;
+        decodeCallsTotal?: number;
+        targetResultsTotal?: number;
+        rejectResultsTotal?: number;
+      } | null;
+      setWakeDebugSummary(
+        `Listening: ${snapshot.listener_active ? 'yes' : 'no'} · ` +
+          `PCM callbacks: ${snapshot.pcm_callbacks_total} · ` +
+          `PCM peak: ${Number(snapshot.pcm_peak_since_snapshot).toFixed(3)} · ` +
+          `Native samples: ${native?.acceptedSamplesTotal ?? 'not initialized'} · ` +
+          `Decodes: ${native?.decodeCallsTotal ?? '—'} · ` +
+          `Wake/reject results: ${native?.targetResultsTotal ?? '—'}/${native?.rejectResultsTotal ?? '—'}`,
+      );
+      setMentraDebugInfo(await getMentraDebugLogInfo());
+      showSuccess('Wake debug snapshot saved to Mentra diagnostics.');
+    } catch (error) {
+      showError(error instanceof Error ? error.message : 'Could not record wake debug snapshot.');
     }
   };
 
@@ -329,9 +347,7 @@ export default function GlassesCaptureScreen() {
   };
 
   const sync = async () => {
-    setRunning(true);
     await reconcileGlassesCaptures();
-    setRunning(false);
     const completed = getCaptureSyncStatus();
     if (completed.lastError) {
       showError(completed.lastError);
@@ -343,13 +359,17 @@ export default function GlassesCaptureScreen() {
   const connect = async (repair = false) => {
     setConnecting(true);
     try {
-      const connected = await (repair ? recoverMentraConnection() : ensureMentraConnection());
+      const connected = await (repair
+        ? recoverMentraConnection()
+        : ensureMentraConnection({ manualRetry: true }));
       if (!connected) throw new Error('No Mentra Live is paired. Search for glasses to pair one.');
       await refreshConnection();
-      await reconcileGlassesCaptures();
-      const completed = getCaptureSyncStatus();
-      if (completed.lastError) throw new Error(completed.lastError);
-      showSuccess('Mentra Live connected and captures checked.');
+      // Connection UI must settle independently from a potentially large or
+      // slow gallery sync. The sync status card reports any later failures.
+      void reconcileGlassesCaptures().catch((error) =>
+        showError(error instanceof Error ? error.message : 'Capture sync did not finish.'),
+      );
+      showSuccess('Mentra Live connected.');
     } catch (error) {
       await refreshConnection();
       showError(error instanceof Error ? error.message : 'Could not connect to Mentra Live.');
@@ -359,13 +379,30 @@ export default function GlassesCaptureScreen() {
   };
 
   const retry = async () => {
-    setRunning(true);
-    await retryFailedGlassesCaptures();
-    setRunning(false);
+    try {
+      await retryFailedGlassesCaptures();
+      const completed = getCaptureSyncStatus();
+      if (completed.lastError) showError(completed.lastError);
+    } catch (error) {
+      showError(error instanceof Error ? error.message : 'Could not retry failed captures.');
+    }
   };
 
+  const running = status.running;
+  const syncPhaseLabel: Record<typeof status.phase, string> = {
+    idle: 'Sync is idle',
+    preparing_local_queue: 'Preparing saved captures…',
+    uploading_saved_captures: 'Uploading saved captures…',
+    connecting: 'Connecting to the glasses…',
+    discovering: 'Checking the glasses gallery…',
+    downloading: 'Downloading a capture…',
+    acknowledging: 'Moving capture to glasses trash…',
+    uploading: 'Uploading a capture…',
+    cleaning_up: 'Finishing capture cleanup…',
+  };
+  const syncProgress = status.uploadedCount ? ` · ${status.uploadedCount} uploaded` : '';
   const syncSummary = running
-    ? 'Syncing captures now'
+    ? `${syncPhaseLabel[status.phase]}${syncProgress}`
     : status.lastError
       ? 'Needs attention'
       : status.pendingCount > 0
@@ -620,7 +657,7 @@ export default function GlassesCaptureScreen() {
                     : 'Search for glasses'
               }
               onPress={() => void (defaultDevice ? connect() : scan())}
-              disabled={scanning || connecting || running || Platform.OS !== 'android'}
+              disabled={scanning || connecting || Platform.OS !== 'android'}
               style={styles.button}
             />
             {defaultDevice ? (
@@ -698,7 +735,11 @@ export default function GlassesCaptureScreen() {
               </Text>
               <Text style={styles.detailText}>
                 Last checked:{' '}
-                {status.lastRunAt ? new Date(status.lastRunAt).toLocaleString() : 'never'}
+                {running
+                  ? 'in progress'
+                  : status.lastRunAt
+                    ? new Date(status.lastRunAt).toLocaleString()
+                    : 'never'}
               </Text>
             </View>
             {status.lastError ? (
@@ -764,7 +805,7 @@ export default function GlassesCaptureScreen() {
                     if (!(await getDefaultGlassesDevice())) {
                       throw new Error('Pair a Mentra Live before applying capture settings.');
                     }
-                    const connected = await ensureMentraConnection();
+                    const connected = await ensureMentraConnection({ manualRetry: true });
                     if (!connected)
                       throw new Error('Pair a Mentra Live before applying capture settings.');
                     showSuccess('Capture settings applied.');
@@ -794,6 +835,17 @@ export default function GlassesCaptureScreen() {
               Log:{' '}
               {mentraDebugInfo.exists ? `${mentraDebugInfo.sizeBytes} bytes` : 'not created yet'}
             </Text>
+            <Text style={styles.helperText}>
+              Wake debug snapshots show listener state, PCM activity, native decode counts and
+              keyword results. They do not save audio.
+            </Text>
+            <Button
+              label="Record wake debug snapshot"
+              onPress={() => void captureWakeDebugSnapshot()}
+              variant="secondary"
+              style={styles.button}
+            />
+            {wakeDebugSummary && <Text style={styles.detailText}>{wakeDebugSummary}</Text>}
             <Button
               label="Download diagnostics"
               onPress={() => void exportMentraDiagnostics()}

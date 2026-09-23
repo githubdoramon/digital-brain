@@ -52,6 +52,16 @@ export type CaptureLocation = {
 
 export type CaptureSyncStatus = {
   running: boolean;
+  phase:
+    | 'idle'
+    | 'preparing_local_queue'
+    | 'uploading_saved_captures'
+    | 'connecting'
+    | 'discovering'
+    | 'downloading'
+    | 'acknowledging'
+    | 'uploading'
+    | 'cleaning_up';
   lastRunAt: string | null;
   lastError: string | null;
   pendingCount: number;

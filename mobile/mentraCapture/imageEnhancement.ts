@@ -1528,6 +1528,7 @@ export async function clearImageEnhancementLog(): Promise<void> {
 
 /** Retry durable storage for retained pipeline inputs and diagnostics. */
 export async function syncImageEnhancementStorage(): Promise<void> {
+  await loadConfig();
   await ensurePrivateStorage();
   if (sharedStorageSyncTimer) {
     clearTimeout(sharedStorageSyncTimer);
@@ -1538,7 +1539,9 @@ export async function syncImageEnhancementStorage(): Promise<void> {
     .then(async () => {
       lastPhotoSyncAt = 0;
       await mirrorLogToSharedStorage();
-      await syncPrivatePhotosToSharedStorage();
+      // A disabled pipeline must not make retained historical photos appear
+      // as a fresh batch in the shared Image Pipeline folder at app startup.
+      if (config.enabled) await syncPrivatePhotosToSharedStorage();
     });
   storageSyncChain = sync;
   await sync;

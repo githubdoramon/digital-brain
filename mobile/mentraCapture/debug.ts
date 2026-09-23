@@ -223,15 +223,20 @@ export async function clearWakeCommandDebugLog(): Promise<void> {
   void AsyncStorage.setItem(ACTIVE_WAKE_COMMAND_LOG_URI_STORAGE_KEY, nextUri).catch(
     () => undefined,
   );
-  await FileSystem.writeAsStringAsync(
-    nextUri,
-    `${JSON.stringify({
-      timestamp: clearedAt,
-      event: 'wake_command_diagnostics_cleared',
-      payload: { cleared_at: clearedAt },
-    })}\n`,
-    { encoding: FileSystem.EncodingType.UTF8 },
+  // Serialize the marker with appends for the new generation so a concurrent
+  // first event cannot be overwritten by the clear write.
+  wakeCommandWriteChain = wakeCommandWriteChain.catch(() => undefined).then(() =>
+    FileSystem.writeAsStringAsync(
+      nextUri,
+      `${JSON.stringify({
+        timestamp: clearedAt,
+        event: 'wake_command_diagnostics_cleared',
+        payload: { cleared_at: clearedAt },
+      })}\n`,
+      { encoding: FileSystem.EncodingType.UTF8 },
+    ),
   );
+  await wakeCommandWriteChain;
 }
 
 export async function clearMentraDebugLog(): Promise<void> {
@@ -247,9 +252,12 @@ export async function clearMentraDebugLog(): Promise<void> {
   activeLogUriLoaded = true;
   void AsyncStorage.setItem(ACTIVE_LOG_URI_STORAGE_KEY, nextUri).catch(() => undefined);
   void clearWakeCommandDebugLog().catch(() => undefined);
-  await FileSystem.writeAsStringAsync(
-    nextUri,
-    buildLogLine('mentra_diagnostics_cleared', { cleared_at: clearedAt }),
-    { encoding: FileSystem.EncodingType.UTF8 },
+  writeChain = writeChain.catch(() => undefined).then(() =>
+    FileSystem.writeAsStringAsync(
+      nextUri,
+      buildLogLine('mentra_diagnostics_cleared', { cleared_at: clearedAt }),
+      { encoding: FileSystem.EncodingType.UTF8 },
+    ),
   );
+  await writeChain;
 }

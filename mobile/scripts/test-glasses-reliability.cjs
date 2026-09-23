@@ -27,6 +27,7 @@ function load(file, mocks, globals = {}) {
       setInterval: () => 1,
       require(name) {
         if (name in mocks) return mocks[name];
+        if (name === './connectionBackoff') return load('mentraCapture/connectionBackoff.ts', {});
         throw new Error(`Unexpected import ${name}`);
       },
       ...globals,
@@ -337,6 +338,36 @@ async function connectionContracts() {
   console.log(
     'PASS connection: pair/foreground/capture serialization, explicit repair and bounded automatic recovery',
   );
+  let failedConnections = 0;
+  native.getGlassesStatus = async () => ({
+    connection: { state: 'disconnected' },
+    deviceModel: 'Mentra Live',
+  });
+  native.connectDefault = async () => {
+    failedConnections++;
+    throw Error('test radio unavailable');
+  };
+  await assert.rejects(sdk.ensureMentraConnection(), /test radio unavailable/);
+  assert.equal(await sdk.ensureMentraConnection({ applyCaptureDefaults: false }), false);
+  assert.equal(await sdk.ensureMentraConnection(), false);
+  assert.equal(
+    failedConnections,
+    1,
+    'Foreground, capture and runtime share the failed attempt cooldown',
+  );
+  await assert.rejects(sdk.ensureMentraConnection({ manualRetry: true }), /test radio unavailable/);
+  assert.equal(failedConnections, 2, 'Explicit Connect bypasses automatic cooldown');
+  native.getGlassesStatus = async () => ({
+    connection: { state: 'connected', fullyBooted: true },
+    deviceModel: 'Mentra Live',
+  });
+  events.get('glasses_control_ready')({});
+  assert.equal(
+    await sdk.ensureMentraConnection({ applyCaptureDefaults: false }),
+    true,
+    'Native readiness clears cooldown without waiting for its timer',
+  );
+  console.log('PASS recovery: shared cooldown, explicit retry and native readiness reset');
 }
 
 function playbackSubscriptionContracts() {
@@ -400,6 +431,16 @@ function playbackSubscriptionContracts() {
 }
 
 (async () => {
+  const { ConnectionBackoff } = load('mentraCapture/connectionBackoff.ts', {});
+  const backoff = new ConnectionBackoff();
+  for (const delay of [300_000, 600_000, 1_200_000, 1_800_000, 1_800_000]) {
+    assert.equal(backoff.failed(0), delay);
+    assert.equal(backoff.remaining(delay - 1), 1);
+    assert.equal(backoff.remaining(delay), 0);
+  }
+  backoff.reset();
+  assert.equal(backoff.remaining(0), 0);
+  assert.equal(backoff.failed(0), 300_000);
   playbackSubscriptionContracts();
   await firmwareContracts();
   await connectionContracts();

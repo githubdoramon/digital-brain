@@ -14,6 +14,7 @@ import expo.modules.kotlin.modules.ModuleDefinition
 import java.lang.ref.WeakReference
 
 class GlassesAlertsModule : Module() {
+  private var wakeSpotter: V8KeywordSpotter? = null
   companion object {
     private var activeModule: WeakReference<GlassesAlertsModule>? = null
 
@@ -159,6 +160,34 @@ class GlassesAlertsModule : Module() {
       GlassesImageEnhancementService.runtimeStatus(context())
     }
 
+    AsyncFunction("initializeV8WakeSpotter") {
+      synchronized(this@GlassesAlertsModule) {
+        if (wakeSpotter == null) wakeSpotter = V8KeywordSpotter(context())
+      }
+    }
+
+    AsyncFunction("acceptV8WakePcm16") { pcmBase64: String ->
+      synchronized(this@GlassesAlertsModule) {
+        (wakeSpotter ?: throw IllegalStateException("V8 wake spotter is not initialized"))
+          .acceptPcm16Base64(pcmBase64)
+      }
+    }
+
+    AsyncFunction("getV8WakeSpotterStats") {
+      synchronized(this@GlassesAlertsModule) { wakeSpotter?.stats() }
+    }
+
+    AsyncFunction("resetV8WakeSpotter") {
+      synchronized(this@GlassesAlertsModule) { wakeSpotter?.reset() }
+    }
+
+    AsyncFunction("releaseV8WakeSpotter") {
+      synchronized(this@GlassesAlertsModule) {
+        wakeSpotter?.release()
+        wakeSpotter = null
+      }
+    }
+
     AsyncFunction("playSpeechAudio") { commandId: String, fileUri: String ->
       GlassesAlertPlayback.playSpeechAudio(context(), commandId, fileUri) { status, durationMs, error ->
         sendEvent(
@@ -181,6 +210,8 @@ class GlassesAlertsModule : Module() {
       DigitalBrainRuntime.setFeature(context(), RuntimeFeature.LOCATION.key, enabled)
     }
     AsyncFunction("getAppRuntimeStatus") { DigitalBrainRuntime.status(context()) }
+    AsyncFunction("getRuntimeEnergyDiagnostics") { RuntimeEnergyDiagnostics.sample(context()) }
+    AsyncFunction("completeRuntimeWork") { token: String -> RuntimeWorkService.complete(token) }
     AsyncFunction("readRuntimeLocations") { RuntimeLocationStore.samples(context()) }
     AsyncFunction("acknowledgeRuntimeLocations") { ids: List<String> ->
       RuntimeLocationStore.acknowledge(context(), ids.toSet())
@@ -193,6 +224,10 @@ class GlassesAlertsModule : Module() {
 
     OnDestroy {
       GlassesAlertPlayback.stopSpeechAudio(null)
+      synchronized(this@GlassesAlertsModule) {
+        wakeSpotter?.release()
+        wakeSpotter = null
+      }
       if (activeModule?.get() === this@GlassesAlertsModule) activeModule = null
     }
   }

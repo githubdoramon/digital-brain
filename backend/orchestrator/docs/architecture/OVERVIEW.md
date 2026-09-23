@@ -202,3 +202,11 @@ sequenceDiagram
 The mobile proposed-event review screen exposes editable title, summary, local start/end, participants, and linked place fields before acceptance. A user-entered place name is sent explicitly with acceptance: the backend reuses a near-exact existing place or creates a new internal place and links it to the accepted event. Generated summaries must add meaningful event content; when location evidence only establishes that the user stayed somewhere for a known duration, `suggested_summary` remains blank and the duration stays in proposal metadata/reason.
 
 - Mobile location diagnostics rotate at 2MiB with one previous file. Export reads a bounded 256KiB recent JSONL tail using Base64 byte ranges, skips incomplete boundary records, and includes bounded in-memory events. Oversized individual events retain a marked preview. Existing oversized logs can be exported without loading the full file.
+
+- Android runtime workers use per-instance native completion acknowledgements
+  to stop headless worker services promptly without a second notification. All automatic
+  glasses connection callers share a process-local 5–30 minute failure cooldown,
+  cleared by native readiness or explicit retry. Runtime energy logs sample OS
+  battery and awake counters plus this process's CPU at existing work opportunities;
+  device-wide battery counters are not app-attributed energy. See
+  `mobile/BACKGROUND_RUNTIME.md` for protocol and system bug-report collection.
