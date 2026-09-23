@@ -132,27 +132,43 @@ def test_audio_is_ephemeral_and_expiring():
     assert get_audio(ref["audio_id"]) is None
 
 
-def test_audio_route_requires_owner_and_deletes_after_successful_response():
+@pytest.mark.asyncio
+async def test_audio_route_requires_owner_and_deletes_after_successful_response(monkeypatch):
+    from starlette.requests import Request
+
     from routes.glasses import create_glasses_router
 
     clear_audio()
     ref = put_audio(b"RIFF", user_email="a@example.invalid")
     route = next(item for item in create_glasses_router().routes if item.path.endswith("{audio_id}"))
-    response = route.endpoint(ref["audio_id"], {"email": "a@example.invalid"})
+    async def authenticated_user(_authorization):
+        return {"email": "a@example.invalid"}
+
+    monkeypatch.setattr("routes.glasses.get_current_user", authenticated_user)
+    request = Request({"type": "http", "headers": []})
+    response = await route.endpoint(ref["audio_id"], request, "Bearer test-token")
     assert response.body == b"RIFF"
     assert get_audio(ref["audio_id"], user_email="a@example.invalid") == b"RIFF"
-    asyncio.run(response.background())
+    await response.background()
     assert get_audio(ref["audio_id"], user_email="a@example.invalid") is None
 
 
-def test_audio_route_denies_wrong_owner():
+@pytest.mark.asyncio
+async def test_audio_route_denies_wrong_owner(monkeypatch):
+    from starlette.requests import Request
+
     from routes.glasses import create_glasses_router
 
     clear_audio()
     ref = put_audio(b"RIFF", user_email="a@example.invalid")
     route = next(item for item in create_glasses_router().routes if item.path.endswith("{audio_id}"))
+    async def authenticated_user(_authorization):
+        return {"email": "b@example.invalid"}
+
+    monkeypatch.setattr("routes.glasses.get_current_user", authenticated_user)
+    request = Request({"type": "http", "headers": []})
     with pytest.raises(HTTPException) as caught:
-        route.endpoint(ref["audio_id"], {"email": "b@example.invalid"})
+        await route.endpoint(ref["audio_id"], request, "Bearer test-token")
     assert caught.value.status_code == 404
 
 

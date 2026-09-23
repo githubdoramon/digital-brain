@@ -3,6 +3,7 @@ const API_BASE_URL = process.env.EXPO_PUBLIC_BACKEND_URL ?? 'http://localhost:80
 type FetchOptions = RequestInit & {
   token?: string | null;
   onAuthExpired?: () => Promise<string | null>;
+  onTiming?: (phase: string, elapsedMs: number) => void;
   retryOnAuthExpired?: boolean;
 };
 
@@ -48,7 +49,8 @@ export async function getAuthRequestContext(): Promise<{
 }
 
 export async function apiFetch(path: string, options: FetchOptions = {}) {
-  const { token, headers, onAuthExpired, retryOnAuthExpired = true, ...rest } = options;
+  const apiFetchStartedAt = Date.now();
+  const { token, headers, onAuthExpired, onTiming, retryOnAuthExpired = true, ...rest } = options;
   const isFormDataBody = typeof FormData !== 'undefined' && rest.body instanceof FormData;
   const resolvedToken =
     token === undefined && authTokenProvider ? await authTokenProvider() : token;
@@ -58,6 +60,8 @@ export async function apiFetch(path: string, options: FetchOptions = {}) {
   const requestUrl = `${API_BASE_URL}${path}`;
   const requestMethod = rest.method ?? 'GET';
   let response: Response;
+  onTiming?.('auth_resolution', Date.now() - apiFetchStartedAt);
+  const fetchStartedAt = Date.now();
 
   try {
     response = await fetch(requestUrl, {
@@ -69,6 +73,7 @@ export async function apiFetch(path: string, options: FetchOptions = {}) {
       },
     });
   } catch (error) {
+    onTiming?.('fetch_failed', Date.now() - fetchStartedAt);
     const fetchError = error as ApiFetchError;
     fetchError.requestUrl = requestUrl;
     fetchError.requestMethod = requestMethod;
@@ -85,11 +90,14 @@ export async function apiFetch(path: string, options: FetchOptions = {}) {
     });
     throw fetchError;
   }
+  onTiming?.('response_headers', Date.now() - fetchStartedAt);
 
   const contentType = response.headers.get('content-type') ?? '';
 
   if (!response.ok) {
+    const errorBodyStartedAt = Date.now();
     const message = await response.text();
+    onTiming?.('error_body_read', Date.now() - errorBodyStartedAt);
     const isExpired = response.status === 401;
     if (isExpired && resolvedOnAuthExpired && retryOnAuthExpired) {
       console.warn('[apiFetch] auth expired, attempting refresh', {
@@ -155,7 +163,9 @@ export async function apiFetch(path: string, options: FetchOptions = {}) {
   }
 
   if (!contentType.includes('application/json')) {
+    const textBodyStartedAt = Date.now();
     const text = await response.text();
+    onTiming?.('unexpected_body_read', Date.now() - textBodyStartedAt);
     const error = new Error(
       `Expected JSON response but got ${contentType || 'unknown content type'}: ${text.slice(0, 200)}`
     ) as ApiFetchError;
@@ -168,7 +178,9 @@ export async function apiFetch(path: string, options: FetchOptions = {}) {
     throw error;
   }
 
+  const jsonBodyStartedAt = Date.now();
   const data = await response.json();
+  onTiming?.('json_body_read_and_parse', Date.now() - jsonBodyStartedAt);
   if (response.status !== 204) {
     console.info('[apiFetch] success', {
       path,

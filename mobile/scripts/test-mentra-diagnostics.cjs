@@ -18,12 +18,12 @@ const fileSystem = {
     if (!files.has(uri)) throw new Error('not found');
     return files.get(uri);
   },
-  async writeAsStringAsync(uri, contents) {
+  async writeAsStringAsync(uri, contents, options = {}) {
     if (contents.includes('"mentra_diagnostics_cleared"')) {
       markStarted();
       await markerGate;
     }
-    files.set(uri, contents);
+    files.set(uri, options.append ? `${files.get(uri) ?? ''}${contents}` : contents);
   },
   async getInfoAsync(uri) {
     return files.has(uri) ? { exists: true, size: files.get(uri).length } : { exists: false };

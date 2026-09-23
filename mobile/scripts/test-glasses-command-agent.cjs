@@ -80,6 +80,12 @@ Module._extensions['.ts'] = (module, filename) => module._compile(transpile(file
 Module._load = function patchedLoad(request, parent, isMain) {
   const mocks = {
     'expo-file-system/legacy': { __esModule: true, ...fileSystem },
+    'react-native': {
+      AppState: {
+        currentState: 'active',
+        addEventListener: () => ({ remove: () => undefined }),
+      },
+    },
     '@/api/client': api,
     '@/chat/localTranscription': {
       LOCAL_WHISPER_MODEL_FILE_NAME: 'ggml-base.en.bin',

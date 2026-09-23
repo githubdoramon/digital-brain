@@ -15,7 +15,12 @@ from psycopg.types.json import Json
 
 from db import get_conn
 from glasses_audio import put_audio
-from glasses_tts import TTSUnavailableError, synthesize_kokoro
+from glasses_tts import (
+    TTSUnavailableError,
+    synthesize_kokoro,
+    synthesize_kokoro_with_timings,
+)
+from observability.log_stream import bind_log_correlation_id, reset_log_correlation_id
 from observability.logger import get_runtime_logger
 from voice_response import (
     ResponseModality,
@@ -43,6 +48,27 @@ def _timed_phase(name: str) -> Iterator[None]:
         yield
     finally:
         _record_timing(name, (time.perf_counter() - started_at) * 1_000)
+
+
+def _record_tts_timings(timings: dict[str, float]) -> None:
+    for name, value in timings.items():
+        _record_timing(f"tts_{name}", value)
+
+
+async def _synthesize_voice_answer(text: str, timeout: float | None = None) -> bytes:
+    timings: dict[str, float] = {}
+    try:
+        synthesis = asyncio.to_thread(
+            synthesize_kokoro_with_timings,
+            text,
+            timings,
+            synthesize_kokoro,
+        )
+        if timeout is not None:
+            return await asyncio.wait_for(synthesis, timeout=timeout)
+        return await synthesis
+    finally:
+        _record_tts_timings(timings)
 
 
 def _client_timing_payload(payload: Any) -> dict[str, Any] | None:
@@ -310,15 +336,16 @@ def _error_response(command_id: str, exc: GlassesCommandError) -> dict[str, Any]
 async def process_command(payload: Any, user: dict[str, Any]) -> dict[str, Any]:
     """Process one command and emit a complete correlated latency record."""
     started_at = time.perf_counter()
+    command_id = str(getattr(payload, "command_id", "unknown"))
     timings: dict[str, float] = {}
     token = _command_timing.set(timings)
+    correlation_token = bind_log_correlation_id(command_id)
     response: dict[str, Any] | None = None
     try:
         response = await _process_command(payload, user)
         return response
     finally:
         timings["total_ms"] = round((time.perf_counter() - started_at) * 1_000, 1)
-        command_id = str(getattr(payload, "command_id", "unknown"))
         logger.info(
             "[glasses] command latency command_id=%s outcome=%s client_timings=%s "
             "backend_timings=%s",
@@ -328,6 +355,7 @@ async def process_command(payload: Any, user: dict[str, Any]) -> dict[str, Any]:
             _safe_log_payload(timings),
         )
         _command_timing.reset(token)
+        reset_log_correlation_id(correlation_token)
 
 
 async def _process_command(payload: Any, user: dict[str, Any]) -> dict[str, Any]:
@@ -543,9 +571,7 @@ async def _process_command(payload: Any, user: dict[str, Any]) -> dict[str, Any]
                         if remaining <= 0:
                             raise asyncio.TimeoutError
                         with _timed_phase("tts_synthesis_ms"):
-                            wav_bytes = await asyncio.wait_for(
-                                asyncio.to_thread(synthesize_kokoro, answer), timeout=remaining
-                            )
+                            wav_bytes = await _synthesize_voice_answer(answer, timeout=remaining)
                         if (
                             non_shortcut_deadline is not None
                             and asyncio.get_running_loop().time() >= non_shortcut_deadline
@@ -650,7 +676,7 @@ async def _process_command(payload: Any, user: dict[str, Any]) -> dict[str, Any]
                         audio_meta = None
                         try:
                             with _timed_phase("tts_synthesis_ms"):
-                                wav_bytes = await asyncio.to_thread(synthesize_kokoro, answer)
+                                wav_bytes = await _synthesize_voice_answer(answer)
                             if (
                                 non_shortcut_deadline is not None
                                 and asyncio.get_running_loop().time() >= non_shortcut_deadline

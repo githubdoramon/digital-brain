@@ -26,6 +26,9 @@ replay a gate toggle; input command WAV capture remains mobile-owned. Mobile
 transcription durations are accepted as optional `client_timings`; the backend
 emits one final correlated `[glasses] command latency` record with those values,
 server phase timings, outcome, and total time immediately before returning.
+Each backend worker warms Kokoro with a short synthetic inference during
+application startup and retains its process-local model instance for the
+worker's lifetime; warmup failures are logged without blocking startup.
 
 **Mobile routing convention**: For dynamic mobile routes, prefer folder-based segments with `index.tsx` (for example `mobile/app/contacts/[contactId]/index.tsx`) so nested subroutes can be added without migrating route structure later.
 

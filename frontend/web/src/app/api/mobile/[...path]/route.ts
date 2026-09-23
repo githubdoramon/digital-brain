@@ -28,6 +28,25 @@ export async function handler(
 
   const { path = [] } = await context.params;
   const targetPath = path.join("/");
+  const commandId = request.headers.get("x-glasses-command-id");
+  const traceGlassesRequest = Boolean(commandId) && targetPath.startsWith("glasses/");
+  const tracePath =
+    targetPath === "glasses/commands"
+      ? "/glasses/commands"
+      : targetPath.startsWith("glasses/audio/")
+        ? "/glasses/audio/[audio_id]"
+        : `/${targetPath}`;
+  const handlerStartedAt = Date.now();
+  const trace = (event: string, fields: Record<string, unknown> = {}) => {
+    if (!traceGlassesRequest) return;
+    console.info(`[mobile-proxy] ${event}`, {
+      command_id: commandId,
+      method: request.method,
+      path: tracePath,
+      ...fields,
+    });
+  };
+  trace("request_received");
   const url = new URL(`${ORCHESTRATOR_BASE}/mobile/${targetPath}`);
 
   request.nextUrl.searchParams.forEach((value, key) => {
@@ -37,10 +56,18 @@ export async function handler(
   const headers = new Headers(request.headers);
   headers.delete("host");
 
+  const authStartedAt = Date.now();
   const authHeader = await buildAuthorizationHeader(request);
+  const authResolutionMs = Date.now() - authStartedAt;
   if (authHeader) {
     headers.set("authorization", authHeader);
   } else {
+    trace("request_rejected", {
+      status: 401,
+      auth_resolution_ms: authResolutionMs,
+      handler_ms: Date.now() - handlerStartedAt,
+      reason: "missing_authorization",
+    });
     console.warn("[mobile proxy] missing authorization header", {
       path: `/${targetPath}`,
       method: request.method,
@@ -63,8 +90,16 @@ export async function handler(
     duplex: "half",
   };
 
+  const upstreamStartedAt = Date.now();
   try {
     const backendResponse = await fetch(url, init);
+    const upstreamMs = Date.now() - upstreamStartedAt;
+    trace("upstream_headers_received", {
+      status: backendResponse.status,
+      auth_resolution_ms: authResolutionMs,
+      upstream_ms: upstreamMs,
+      handler_to_headers_ms: Date.now() - handlerStartedAt,
+    });
     if (backendResponse.status === 401) {
       console.warn("[mobile proxy] backend returned 401", {
         path: `/${targetPath}`,
@@ -81,6 +116,12 @@ export async function handler(
       headers: responseHeaders,
     });
   } catch (error) {
+    trace("upstream_failed", {
+      auth_resolution_ms: authResolutionMs,
+      upstream_ms: Date.now() - upstreamStartedAt,
+      handler_to_failure_ms: Date.now() - handlerStartedAt,
+      error_name: error instanceof Error ? error.name : "unknown",
+    });
     console.error("Orchestrator mobile proxy error", error);
     return new Response(
       JSON.stringify({

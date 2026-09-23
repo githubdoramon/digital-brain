@@ -5,6 +5,7 @@ import logging
 import sys
 import threading
 from collections import deque
+from contextvars import ContextVar, Token
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -15,6 +16,28 @@ DECISION_LEVEL = 25
 INTENTIONAL_DEBUG_LEVEL = 15
 LOG_BUFFER_MAX_ENTRIES = 3000
 ORCHESTRATOR_ROOT = Path(__file__).resolve().parents[1]
+_log_correlation_id: ContextVar[str | None] = ContextVar("log_correlation_id", default=None)
+
+
+def bind_log_correlation_id(correlation_id: str) -> Token[str | None]:
+    return _log_correlation_id.set(correlation_id)
+
+
+def reset_log_correlation_id(token: Token[str | None]) -> None:
+    _log_correlation_id.reset(token)
+
+
+def _record_with_correlation(record: logging.LogRecord) -> logging.LogRecord:
+    correlation_id = _log_correlation_id.get()
+    if not correlation_id:
+        return record
+    message = record.getMessage()
+    if f"command_id={correlation_id}" in message:
+        return record
+    correlated = logging.makeLogRecord(record.__dict__.copy())
+    correlated.msg = f"{message} [command_id={correlation_id}]"
+    correlated.args = ()
+    return correlated
 
 
 @dataclass
@@ -269,6 +292,7 @@ class LogBufferHandler(logging.Handler):
                 and not self._is_orchestrator_record(record)
             ):
                 return
+            record = _record_with_correlation(record)
             message = self.format(record)
             level = self._map_level(record.levelno)
             context = {
@@ -276,6 +300,9 @@ class LogBufferHandler(logging.Handler):
                 "module": record.module,
                 "line": record.lineno,
             }
+            correlation_id = _log_correlation_id.get()
+            if correlation_id:
+                context["command_id"] = correlation_id
             record_log(level, message, context=context)
         except Exception:
             pass
@@ -305,7 +332,7 @@ class ConsoleLogHandler(logging.StreamHandler):
     def emit(self, record: logging.LogRecord) -> None:
         if not self._should_emit(record):
             return
-        super().emit(record)
+        super().emit(_record_with_correlation(record))
 
 
 def configure_logging(level: str | None = None) -> None:

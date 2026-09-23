@@ -60,6 +60,12 @@ let pcmSquaredAmplitudeSinceSnapshot = 0;
 let pcmPeakSinceSnapshot = 0;
 let lastPcmAt: number | null = null;
 let firstPcmForListener = false;
+let wakeInferenceCountSinceSnapshot = 0;
+let wakeInferenceSlowCountSinceSnapshot = 0;
+let wakeInferenceBacklogCountSinceSnapshot = 0;
+let wakeInferenceTotalMsSinceSnapshot = 0;
+let wakeInferenceMaxMsSinceSnapshot = 0;
+let wakeInferenceMaxPendingChunksSinceSnapshot = 0;
 
 function debug(event: string, payload?: Record<string, unknown>): void {
   void appendMentraDebugLog(event, payload).catch(() => undefined);
@@ -75,9 +81,21 @@ export async function recordWakeDebugSnapshot(source = 'manual'): Promise<Record
   const intervalSamples = pcmSamplesSinceSnapshot;
   const intervalSquaredAmplitude = pcmSquaredAmplitudeSinceSnapshot;
   const intervalPeak = pcmPeakSinceSnapshot;
+  const inferenceCount = wakeInferenceCountSinceSnapshot;
+  const inferenceSlowCount = wakeInferenceSlowCountSinceSnapshot;
+  const inferenceBacklogCount = wakeInferenceBacklogCountSinceSnapshot;
+  const inferenceTotalMs = wakeInferenceTotalMsSinceSnapshot;
+  const inferenceMaxMs = wakeInferenceMaxMsSinceSnapshot;
+  const inferenceMaxPendingChunks = wakeInferenceMaxPendingChunksSinceSnapshot;
   pcmSamplesSinceSnapshot = 0;
   pcmSquaredAmplitudeSinceSnapshot = 0;
   pcmPeakSinceSnapshot = 0;
+  wakeInferenceCountSinceSnapshot = 0;
+  wakeInferenceSlowCountSinceSnapshot = 0;
+  wakeInferenceBacklogCountSinceSnapshot = 0;
+  wakeInferenceTotalMsSinceSnapshot = 0;
+  wakeInferenceMaxMsSinceSnapshot = 0;
+  wakeInferenceMaxPendingChunksSinceSnapshot = 0;
 
   const [connection, nativeStats] = await Promise.all([
     getMentraConnectionStatus().catch((error) => ({ error: wakeErrorMessage(error) })),
@@ -103,6 +121,12 @@ export async function recordWakeDebugSnapshot(source = 'manual'): Promise<Record
     last_pcm_at: lastPcmAt,
     pending_pcm_samples: pendingPcmSamples,
     processing_pcm: processingPcm,
+    wake_inference_count: inferenceCount,
+    wake_inference_slow_count_over_80ms: inferenceSlowCount,
+    wake_inference_backlog_count_over_4_chunks: inferenceBacklogCount,
+    wake_inference_average_ms: inferenceCount ? inferenceTotalMs / inferenceCount : 0,
+    wake_inference_max_ms: inferenceMaxMs,
+    wake_inference_max_pending_chunks: inferenceMaxPendingChunks,
     native_spotter: nativeStats,
   };
   await appendMentraDebugLog('wake_debug_snapshot', snapshot);
@@ -215,13 +239,15 @@ async function processPendingPcm(): Promise<void> {
       const events = await activeDetector.acceptPcm16(chunk);
       if (generation !== detectorGeneration) continue;
       const elapsedMs = Date.now() - startedAt;
-      if (elapsedMs > 80 || pendingPcm.length > 4) {
-        debug('wake_inference_backlog', {
-          inference_ms: elapsedMs,
-          pending_chunks: pendingPcm.length,
-          samples: chunk.length,
-        });
-      }
+      wakeInferenceCountSinceSnapshot += 1;
+      wakeInferenceTotalMsSinceSnapshot += elapsedMs;
+      wakeInferenceMaxMsSinceSnapshot = Math.max(wakeInferenceMaxMsSinceSnapshot, elapsedMs);
+      if (elapsedMs > 80) wakeInferenceSlowCountSinceSnapshot += 1;
+      if (pendingPcm.length > 4) wakeInferenceBacklogCountSinceSnapshot += 1;
+      wakeInferenceMaxPendingChunksSinceSnapshot = Math.max(
+        wakeInferenceMaxPendingChunksSinceSnapshot,
+        pendingPcm.length,
+      );
       for (const event of events) {
         const wakeDetectedAt = Date.now();
         debug('wake_detected', {

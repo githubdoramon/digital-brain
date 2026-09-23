@@ -1,4 +1,5 @@
 import * as FileSystem from 'expo-file-system/legacy';
+import { AppState } from 'react-native';
 
 import { API_BASE_URL, apiFetch, getAuthRequestContext } from '@/api/client';
 import GlassesAlertsNative from '@/modules/digital-brain-glasses-alerts/src';
@@ -61,6 +62,12 @@ type ActiveCommand = {
 
 let activeCommand: ActiveCommand | null = null;
 
+function monotonicNowMs(): number {
+  return typeof performance !== 'undefined' && typeof performance.now === 'function'
+    ? performance.now()
+    : Date.now();
+}
+
 function debug(event: string, payload?: Record<string, unknown>): void {
   void appendMentraDebugLog(event, payload).catch(() => undefined);
   void appendWakeCommandDebugLog(event, payload).catch(() => undefined);
@@ -89,7 +96,7 @@ function setState(command: ActiveCommand, state: GlassesCommandAgentState): void
   debug('glasses_command_agent_state', {
     command_id: command.commandId,
     state,
-    elapsed_ms: Date.now() - command.startedAt,
+    elapsed_ms: Math.round(monotonicNowMs() - command.startedAt),
   });
 }
 
@@ -176,32 +183,67 @@ async function downloadSpeechAudio(
 ): Promise<string> {
   const endpoint = resolveAudioRoute(response);
   if (!endpoint) throw new Error('The agent response did not include an audio route.');
-  const { token } = await getAuthRequestContext();
-  if (!token) throw new Error('Authentication is unavailable for glasses audio.');
-  const destination = temporaryAudioUri(command.commandId);
-  await FileSystem.deleteAsync(destination, { idempotent: true }).catch(() => undefined);
+  const downloadStartedAt = monotonicNowMs();
   debug('glasses_command_audio_download_started', { command_id: command.commandId });
-  const downloadStartedAt = Date.now();
-  const result = await FileSystem.downloadAsync(endpoint, destination, {
-    headers: { Authorization: `Bearer ${token}` },
-  });
-  if (!isCommandLive(command)) {
+  let authContextMs = 0;
+  let destinationPrepareMs = 0;
+  let fileDownloadMs = 0;
+  let fileValidationMs = 0;
+  let destination: string | null = null;
+  try {
+    let stageStartedAt = monotonicNowMs();
+    const { token } = await getAuthRequestContext();
+    authContextMs = monotonicNowMs() - stageStartedAt;
+    if (!token) throw new Error('Authentication is unavailable for glasses audio.');
+    stageStartedAt = monotonicNowMs();
+    destination = temporaryAudioUri(command.commandId);
     await FileSystem.deleteAsync(destination, { idempotent: true }).catch(() => undefined);
-    throw new Error('Glasses command timed out before audio was ready.');
+    destinationPrepareMs = monotonicNowMs() - stageStartedAt;
+    stageStartedAt = monotonicNowMs();
+    const result = await FileSystem.downloadAsync(endpoint, destination, {
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'X-Glasses-Command-Id': command.commandId,
+      },
+    });
+    fileDownloadMs = monotonicNowMs() - stageStartedAt;
+    if (!isCommandLive(command)) {
+      await FileSystem.deleteAsync(destination, { idempotent: true }).catch(() => undefined);
+      throw new Error('Glasses command timed out before audio was ready.');
+    }
+    stageStartedAt = monotonicNowMs();
+    const info = await FileSystem.getInfoAsync(result.uri);
+    const size = 'size' in info && typeof info.size === 'number' ? info.size : 0;
+    fileValidationMs = monotonicNowMs() - stageStartedAt;
+    if (result.status < 200 || result.status >= 300 || !info.exists || size <= 0) {
+      await FileSystem.deleteAsync(destination, { idempotent: true }).catch(() => undefined);
+      throw new Error(`Glasses audio download failed with status ${result.status}.`);
+    }
+    debug('glasses_command_audio_download_ready', {
+      command_id: command.commandId,
+      auth_context_ms: Math.round(authContextMs),
+      destination_prepare_ms: Math.round(destinationPrepareMs),
+      file_download_ms: Math.round(fileDownloadMs),
+      file_validation_ms: Math.round(fileValidationMs),
+      elapsed_ms: Math.round(monotonicNowMs() - command.startedAt),
+      size_bytes: size,
+    });
+    return destination;
+  } catch (error) {
+    debug('glasses_command_audio_download_failed', {
+      command_id: command.commandId,
+      auth_context_ms: Math.round(authContextMs),
+      destination_prepare_ms: Math.round(destinationPrepareMs),
+      file_download_ms: Math.round(fileDownloadMs),
+      file_validation_ms: Math.round(fileValidationMs),
+      elapsed_ms: Math.round(monotonicNowMs() - downloadStartedAt),
+      error_name: error instanceof Error ? error.name : 'unknown',
+    });
+    if (destination) {
+      await FileSystem.deleteAsync(destination, { idempotent: true }).catch(() => undefined);
+    }
+    throw error;
   }
-  const info = await FileSystem.getInfoAsync(result.uri);
-  const size = 'size' in info && typeof info.size === 'number' ? info.size : 0;
-  if (result.status < 200 || result.status >= 300 || !info.exists || size <= 0) {
-    await FileSystem.deleteAsync(destination, { idempotent: true }).catch(() => undefined);
-    throw new Error(`Glasses audio download failed with status ${result.status}.`);
-  }
-  debug('glasses_command_audio_download_ready', {
-    command_id: command.commandId,
-    download_ms: Date.now() - downloadStartedAt,
-    elapsed_ms: Date.now() - command.startedAt,
-    size_bytes: size,
-  });
-  return destination;
 }
 
 async function playSpeechAudio(command: ActiveCommand, fileUri: string): Promise<void> {
@@ -209,16 +251,21 @@ async function playSpeechAudio(command: ActiveCommand, fileUri: string): Promise
   if (!native) throw new Error('Glasses speech playback is unavailable in this build.');
   setState(command, 'playing_audio');
   if (!isCommandLive(command)) return;
+  const ledStartedAt = monotonicNowMs();
   await blinkMentraOrangeLed();
+  debug('glasses_command_audio_playback_ready', {
+    command_id: command.commandId,
+    orange_led_ms: Math.round(monotonicNowMs() - ledStartedAt),
+  });
   if (!isCommandLive(command)) return;
-  const playbackStartedAt = Date.now();
+  const playbackRequestedAt = monotonicNowMs();
   await new Promise<void>((resolve, reject) => {
     const subscription = native.addListener('onSpeechPlaybackFinished', (event) => {
       if (event.commandId !== command.commandId) return;
       subscription.remove();
       debug('glasses_command_audio_playback_finished', {
         command_id: command.commandId,
-        playback_ms: Date.now() - playbackStartedAt,
+        playback_ms: Math.round(monotonicNowMs() - playbackRequestedAt),
         native_duration_ms: event.durationMs,
         status: event.status,
       });
@@ -231,7 +278,12 @@ async function playSpeechAudio(command: ActiveCommand, fileUri: string): Promise
         if (!result.started) {
           subscription.remove();
           reject(new Error('The Mentra glasses audio route is unavailable.'));
+          return;
         }
+        debug('glasses_command_audio_playback_started', {
+          command_id: command.commandId,
+          native_start_ms: Math.round(monotonicNowMs() - playbackRequestedAt),
+        });
       })
       .catch((error) => {
         subscription.remove();
@@ -245,17 +297,36 @@ async function executeCommand(
   transcript: GlassesCommandTranscribed,
 ): Promise<GlassesCommandResponse> {
   setState(command, 'executing');
+  const preparationStartedAt = monotonicNowMs();
+  let stageStartedAt = monotonicNowMs();
   const clientContext = getClientContext();
+  const clientContextMs = monotonicNowMs() - stageStartedAt;
+  stageStartedAt = monotonicNowMs();
   const sessionModule = await import('@/chat/session');
   const session = await sessionModule.loadChatSession().catch(() => null);
+  const sessionLoadMs = monotonicNowMs() - stageStartedAt;
   const context = {
     commandId: transcript.commandId,
     transcript: transcript.transcript,
     timezone: clientContext.timezone,
     location: clientContext.location,
   };
+  stageStartedAt = monotonicNowMs();
   const localResult = await interceptDeviceCommand(context);
-  if (localResult) return responseOutcome(localResult);
+  const localCommandCheckMs = monotonicNowMs() - stageStartedAt;
+  if (localResult) {
+    const response = responseOutcome(localResult);
+    debug('glasses_command_local_command_matched', {
+      command_id: transcript.commandId,
+      outcome: response.outcome,
+      check_ms: Math.round(localCommandCheckMs),
+    });
+    return response;
+  }
+  debug('glasses_command_local_command_passthrough', {
+    command_id: transcript.commandId,
+    check_ms: Math.round(localCommandCheckMs),
+  });
 
   const body = {
     command_id: transcript.commandId,
@@ -267,21 +338,46 @@ async function executeCommand(
     command_id: transcript.commandId,
     has_thread: Boolean(session?.threadId),
     has_location: Boolean(clientContext.location),
+    client_context_ms: Math.round(clientContextMs),
+    session_load_ms: Math.round(sessionLoadMs),
+    local_command_check_ms: Math.round(localCommandCheckMs),
+    preparation_ms: Math.round(monotonicNowMs() - preparationStartedAt),
+    app_state: AppState.currentState,
   });
-  const transportStartedAt = Date.now();
-  const response = await apiFetch('/mobile/glasses/commands', {
-    method: 'POST',
-    body: JSON.stringify({ ...body, client_timings: transcript.clientTimings }),
-  });
-  debug('glasses_command_transport_completed', {
-    command_id: transcript.commandId,
-    request_ms: Date.now() - transportStartedAt,
-    outcome:
-      response && typeof response === 'object'
-        ? (response as Record<string, unknown>).outcome
-        : null,
-  });
-  return responseOutcome(response);
+  const transportStartedAt = monotonicNowMs();
+  try {
+    const response = await apiFetch('/mobile/glasses/commands', {
+      method: 'POST',
+      headers: { 'X-Glasses-Command-Id': transcript.commandId },
+      body: JSON.stringify({ ...body, client_timings: transcript.clientTimings }),
+      onTiming: (phase, elapsedMs) => {
+        debug('glasses_command_transport_phase', {
+          command_id: transcript.commandId,
+          phase,
+          duration_ms: elapsedMs,
+        });
+      },
+    });
+    debug('glasses_command_transport_completed', {
+      command_id: transcript.commandId,
+      request_ms: Math.round(monotonicNowMs() - transportStartedAt),
+      elapsed_ms: Math.round(monotonicNowMs() - command.startedAt),
+      outcome:
+        response && typeof response === 'object'
+          ? (response as Record<string, unknown>).outcome
+          : null,
+    });
+    return responseOutcome(response);
+  } catch (error) {
+    debug('glasses_command_transport_failed', {
+      command_id: transcript.commandId,
+      request_ms: Math.round(monotonicNowMs() - transportStartedAt),
+      elapsed_ms: Math.round(monotonicNowMs() - command.startedAt),
+      error_name: error instanceof Error ? error.name : 'unknown',
+      status: error && typeof error === 'object' && 'status' in error ? error.status : undefined,
+    });
+    throw error;
+  }
 }
 
 async function runCommandLifecycle(
@@ -290,12 +386,23 @@ async function runCommandLifecycle(
   hooks: GlassesCommandAgentHooks,
   onAudioFile: (uri: string) => void,
 ): Promise<GlassesCommandResponse> {
+  const pauseStartedAt = monotonicNowMs();
   await hooks.pauseListening();
+  debug('glasses_command_listener_paused', {
+    command_id: command.commandId,
+    pause_ms: Math.round(monotonicNowMs() - pauseStartedAt),
+  });
   if (!isCommandLive(command)) throw new Error('Glasses command deadline reached.');
   const response = await executeCommand(command, transcript);
   if (!isCommandLive(command)) throw new Error('Glasses command completed after its deadline.');
   if (response.outcome === 'error') throw new Error(responseError(response));
+  const sessionPersistStartedAt = monotonicNowMs();
   await persistResponseSession(response);
+  debug('glasses_command_response_session_persisted', {
+    command_id: command.commandId,
+    persist_ms: Math.round(monotonicNowMs() - sessionPersistStartedAt),
+    has_thread: Boolean(response.thread_id ?? response.session_id),
+  });
   if (response.outcome === 'agent_response') {
     setState(command, 'downloading_audio');
     const audioFile = await downloadSpeechAudio(command, response);
@@ -323,17 +430,51 @@ export async function dispatchGlassesCommand(
   }
   const command: ActiveCommand = {
     commandId: transcript.commandId,
-    startedAt: Date.now(),
+    startedAt: monotonicNowMs(),
     state: 'dispatching',
   };
   activeCommand = command;
+  debug('glasses_command_lifecycle_started', {
+    command_id: command.commandId,
+    app_state: AppState.currentState,
+    client_timings: transcript.clientTimings,
+  });
+  let previousAppState = AppState.currentState;
+  const appStateSubscription = AppState.addEventListener('change', (nextAppState) => {
+    if (activeCommand !== command) return;
+    debug('glasses_command_app_state_changed', {
+      command_id: command.commandId,
+      previous_state: previousAppState,
+      app_state: nextAppState,
+      elapsed_ms: Math.round(monotonicNowMs() - command.startedAt),
+    });
+    previousAppState = nextAppState;
+  });
   let temporaryAudio: string | null = null;
   let deadlineTimer: ReturnType<typeof setTimeout> | null = null;
   let timedOut = false;
+  const expectedDeadlineAt = Date.now() + GLASSES_COMMAND_HARD_DEADLINE_MS;
+  let deadlineLateByMs: number | null = null;
+  debug('glasses_command_deadline_scheduled', {
+    command_id: command.commandId,
+    deadline_ms: GLASSES_COMMAND_HARD_DEADLINE_MS,
+    expected_deadline_at: new Date(expectedDeadlineAt).toISOString(),
+    app_state: AppState.currentState,
+  });
   try {
     const deadline = new Promise<never>((_, reject) => {
       deadlineTimer = setTimeout(() => {
         timedOut = true;
+        const firedAt = Date.now();
+        deadlineLateByMs = Math.max(0, firedAt - expectedDeadlineAt);
+        debug('glasses_command_deadline_fired', {
+          command_id: command.commandId,
+          expected_deadline_at: new Date(expectedDeadlineAt).toISOString(),
+          fired_at: new Date(firedAt).toISOString(),
+          timer_late_by_ms: deadlineLateByMs,
+          elapsed_ms: Math.round(monotonicNowMs() - command.startedAt),
+          app_state: AppState.currentState,
+        });
         reject(new Error('Glasses command exceeded the 70-second deadline.'));
       }, GLASSES_COMMAND_HARD_DEADLINE_MS);
     });
@@ -348,7 +489,7 @@ export async function dispatchGlassesCommand(
     debug('glasses_command_completed', {
       command_id: command.commandId,
       outcome: response.outcome,
-      elapsed_ms: Date.now() - command.startedAt,
+      elapsed_ms: Math.round(monotonicNowMs() - command.startedAt),
     });
   } catch (error) {
     if (timedOut) {
@@ -356,32 +497,44 @@ export async function dispatchGlassesCommand(
       activeCommand = null;
       debug('glasses_command_timed_out', {
         command_id: command.commandId,
-        elapsed_ms: Date.now() - command.startedAt,
+        elapsed_ms: Math.round(monotonicNowMs() - command.startedAt),
+        timer_late_by_ms: deadlineLateByMs,
+        app_state: AppState.currentState,
       });
       await GlassesAlertsNative?.stopSpeechAudio(command.commandId).catch(() => undefined);
     } else {
       setState(command, 'error');
       debug('glasses_command_failed', {
         command_id: command.commandId,
-        elapsed_ms: Date.now() - command.startedAt,
+        elapsed_ms: Math.round(monotonicNowMs() - command.startedAt),
         error: errorMessage(error),
       });
     }
     await blinkMentraRedLed().catch(() => undefined);
   } finally {
     if (deadlineTimer) clearTimeout(deadlineTimer);
+    appStateSubscription.remove();
     if (temporaryAudio) {
       await FileSystem.deleteAsync(temporaryAudio, { idempotent: true }).catch(() => undefined);
       debug('glasses_command_audio_cleaned', { command_id: command.commandId });
     }
     if (activeCommand === command) activeCommand = null;
-    await hooks.resumeListening().catch((error) => {
-      debug('glasses_command_listener_resume_failed', {
-        command_id: command.commandId,
-        error: errorMessage(error),
+    const resumeStartedAt = monotonicNowMs();
+    await hooks
+      .resumeListening()
+      .then(() => {
+        debug('glasses_command_listener_resumed', {
+          command_id: command.commandId,
+          resume_ms: Math.round(monotonicNowMs() - resumeStartedAt),
+        });
+      })
+      .catch((error) => {
+        debug('glasses_command_listener_resume_failed', {
+          command_id: command.commandId,
+          error: errorMessage(error),
+        });
+        void blinkMentraRedLed().catch(() => undefined);
       });
-      void blinkMentraRedLed().catch(() => undefined);
-    });
   }
 }
 

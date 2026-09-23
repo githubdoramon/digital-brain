@@ -282,6 +282,8 @@ async function wakeHandoffContract() {
     '@/modules/digital-brain-glasses-alerts/src': {
       startGlassesWakeRuntime: async () => {},
       stopGlassesWakeRuntime: async () => {},
+      initializeV8WakeSpotter: async () => {},
+      releaseV8WakeSpotter: async () => {},
     },
     '@/mentraCapture/sdk': {
       getMentraConnectionStatus: async () => ({ connected: true }),
@@ -305,15 +307,12 @@ async function wakeHandoffContract() {
     },
     '@/mentraCapture/glassesCommandAgent': {},
     '@/wakeWord': {
-      EmbeddingWakeWordDetector: class {
+      V8TwoStageWakeWordDetector: class {
         reset() {}
       },
       OpenWakeWordOnnxBackend: { create: async () => ({}) },
     },
-    '@/assets/wake-word/hey-brain-embedding.json': {
-      name: 'Test model',
-      audioConfig: { streamHopSamples: 1280 },
-    },
+    '@/assets/wake-word/hey-brain-v8.json': { audioConfig: { streamHopSamples: 1280 } },
     '@/assets/wake-word/melspectrogram.onnx': 1,
     '@/assets/wake-word/embedding_model.onnx': 2,
     'onnxruntime-react-native': {},
@@ -354,9 +353,13 @@ async function screenContract() {
     react: React,
     'react/jsx-runtime': require('react/jsx-runtime'),
     '@expo/vector-icons/Ionicons': 'Icon',
-    '@react-navigation/native': { useFocusEffect: (effect) => React.useEffect(effect, [effect]) },
+    '@react-navigation/native': {
+      useFocusEffect: (effect) => React.useEffect(effect, [effect]),
+      useIsFocused: () => true,
+    },
     'expo-router': { useRouter: () => router },
     'react-native': {
+      AppState: { addEventListener: () => ({ remove: () => undefined }) },
       Alert: {},
       KeyboardAvoidingView: 'KeyboardAvoidingView',
       Platform: { OS: 'android' },

@@ -120,9 +120,14 @@ sequenceDiagram
   conversations, documents, or memory. The orchestrator image bundles the
   checksum-verified Kokoro v1.0 INT8 model and voices for CPU-only inference;
   runtime paths and voice selection remain configurable through environment
-  variables. Mobile may include optional transcription timing fields; the
-  backend emits those alongside server phase timings in one correlated
-  `[glasses] command latency` record immediately before returning the response.
+  variables. Each backend worker warms Kokoro with one short inference during
+  startup and retains the process-local engine for its lifetime; warmup failure
+  does not prevent startup. Mobile may include optional transcription timing fields; the
+  backend emits those alongside route/auth, agent, TTS subphase, and audio-store
+  timings in one correlated `[glasses] command latency` record immediately
+  before returning the response. The web proxy records auth resolution and
+  upstream response timing under that same command ID; see `GLASSES_TTS.md` for
+  the Kokoro timing fields.
   Mobile also owns bounded Bluetooth control-plane recovery, sustained local
   call alerts, and user-initiated glasses firmware updates. Firmware maintenance
   persists on the phone and pauses capture/wake commands while the glasses run

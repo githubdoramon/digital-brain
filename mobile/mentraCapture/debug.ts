@@ -10,6 +10,7 @@ const ACTIVE_LOG_URI_STORAGE_KEY = 'digital_brain_mentra_debug_active_log_uri.v1
 const ACTIVE_WAKE_COMMAND_LOG_URI_STORAGE_KEY =
   'digital_brain_wake_command_debug_active_log_uri.v1';
 const MAX_LOG_BYTES = 1_000_000;
+const LOG_TRIM_HEADROOM_BYTES = 64_000;
 const MAX_STRING_LENGTH = 600;
 
 let writeChain: Promise<void> = Promise.resolve();
@@ -22,9 +23,69 @@ let activeWakeCommandLogUri = DEFAULT_WAKE_COMMAND_LOG_URI;
 let activeWakeCommandLogUriLoaded = false;
 let activeWakeCommandLogUriLoad: Promise<void> | null = null;
 let activeWakeCommandLogGeneration = 0;
+const logFileSizes = new Map<string, number>();
 
 const REDACTED_KEY =
   /(?:uri|url|path|file|body|bytes|token|password|auth|ssid|capture|asset|requestid|address|deviceid|devicename|name|id)/i;
+
+function isTraceIdentifierKey(key: string): boolean {
+  const normalized = key.replace(/[^a-z]/gi, '').toLowerCase();
+  return ['commandid', 'requestid', 'correlationid', 'traceid'].includes(normalized);
+}
+
+function utf8ByteLength(value: string): number {
+  let length = 0;
+  for (const character of value) {
+    const codePoint = character.codePointAt(0) ?? 0;
+    length += codePoint <= 0x7f ? 1 : codePoint <= 0x7ff ? 2 : codePoint <= 0xffff ? 3 : 4;
+  }
+  return length;
+}
+
+async function getLogFileSize(uri: string): Promise<number> {
+  const cached = logFileSizes.get(uri);
+  if (cached !== undefined) return cached;
+  const info = await FileSystem.getInfoAsync(uri).catch(() => null);
+  const size = info?.exists && 'size' in info ? (info.size ?? 0) : 0;
+  logFileSizes.set(uri, size);
+  return size;
+}
+
+function rememberLogFileSize(uri: string, size: number): void {
+  logFileSizes.delete(uri);
+  logFileSizes.set(uri, size);
+  while (logFileSizes.size > 8) {
+    const oldestUri = logFileSizes.keys().next().value;
+    if (typeof oldestUri !== 'string') break;
+    logFileSizes.delete(oldestUri);
+  }
+}
+
+async function appendBoundedLine(uri: string, line: string): Promise<void> {
+  const currentSize = await getLogFileSize(uri);
+  await FileSystem.writeAsStringAsync(uri, line, {
+    encoding: FileSystem.EncodingType.UTF8,
+    append: true,
+  });
+  let nextSize = currentSize + utf8ByteLength(line);
+  if (nextSize > MAX_LOG_BYTES + LOG_TRIM_HEADROOM_BYTES) {
+    const existing = await FileSystem.readAsStringAsync(uri).catch(() => '');
+    let retained = existing;
+    while (retained && utf8ByteLength(retained) > MAX_LOG_BYTES) {
+      const nextLine = retained.indexOf('\n');
+      if (nextLine < 0) {
+        retained = '';
+        break;
+      }
+      retained = retained.slice(nextLine + 1);
+    }
+    await FileSystem.writeAsStringAsync(uri, retained, {
+      encoding: FileSystem.EncodingType.UTF8,
+    });
+    nextSize = utf8ByteLength(retained);
+  }
+  rememberLogFileSize(uri, nextSize);
+}
 
 function redactString(value: string): string {
   return value
@@ -42,7 +103,7 @@ function redact(value: unknown, depth = 0): unknown {
     Object.entries(value as Record<string, unknown>)
       .slice(0, 40)
       .forEach(([key, item]) => {
-        if (REDACTED_KEY.test(key)) {
+        if (!isTraceIdentifierKey(key) && REDACTED_KEY.test(key)) {
           result[key] = '[redacted]';
         } else {
           result[key] = redact(item, depth + 1);
@@ -139,15 +200,7 @@ export async function appendMentraDebugLog(
   if (generationAtAppendStart !== activeLogGeneration) return;
   writeChain = writeChain
     .catch(() => undefined)
-    .then(async () => {
-      const existing = await FileSystem.readAsStringAsync(targetUri).catch(() => '');
-      const next = `${existing}${line}`;
-      await FileSystem.writeAsStringAsync(
-        targetUri,
-        next.length > MAX_LOG_BYTES ? next.slice(-MAX_LOG_BYTES) : next,
-        { encoding: FileSystem.EncodingType.UTF8 },
-      );
-    });
+    .then(() => appendBoundedLine(targetUri, line));
   await writeChain;
 }
 
@@ -170,15 +223,7 @@ export async function appendWakeCommandDebugLog(
   if (generationAtAppendStart !== activeWakeCommandLogGeneration) return;
   wakeCommandWriteChain = wakeCommandWriteChain
     .catch(() => undefined)
-    .then(async () => {
-      const existing = await FileSystem.readAsStringAsync(targetUri).catch(() => '');
-      const next = `${existing}${line}`;
-      await FileSystem.writeAsStringAsync(
-        targetUri,
-        next.length > MAX_LOG_BYTES ? next.slice(-MAX_LOG_BYTES) : next,
-        { encoding: FileSystem.EncodingType.UTF8 },
-      );
-    });
+    .then(() => appendBoundedLine(targetUri, line));
   await wakeCommandWriteChain;
 }
 
@@ -225,17 +270,17 @@ export async function clearWakeCommandDebugLog(): Promise<void> {
   );
   // Serialize the marker with appends for the new generation so a concurrent
   // first event cannot be overwritten by the clear write.
-  wakeCommandWriteChain = wakeCommandWriteChain.catch(() => undefined).then(() =>
-    FileSystem.writeAsStringAsync(
-      nextUri,
-      `${JSON.stringify({
-        timestamp: clearedAt,
-        event: 'wake_command_diagnostics_cleared',
-        payload: { cleared_at: clearedAt },
-      })}\n`,
-      { encoding: FileSystem.EncodingType.UTF8 },
-    ),
-  );
+  const marker = `${JSON.stringify({
+    timestamp: clearedAt,
+    event: 'wake_command_diagnostics_cleared',
+    payload: { cleared_at: clearedAt },
+  })}\n`;
+  wakeCommandWriteChain = wakeCommandWriteChain.catch(() => undefined).then(async () => {
+    await FileSystem.writeAsStringAsync(nextUri, marker, {
+      encoding: FileSystem.EncodingType.UTF8,
+    });
+    rememberLogFileSize(nextUri, utf8ByteLength(marker));
+  });
   await wakeCommandWriteChain;
 }
 
@@ -252,12 +297,12 @@ export async function clearMentraDebugLog(): Promise<void> {
   activeLogUriLoaded = true;
   void AsyncStorage.setItem(ACTIVE_LOG_URI_STORAGE_KEY, nextUri).catch(() => undefined);
   void clearWakeCommandDebugLog().catch(() => undefined);
-  writeChain = writeChain.catch(() => undefined).then(() =>
-    FileSystem.writeAsStringAsync(
-      nextUri,
-      buildLogLine('mentra_diagnostics_cleared', { cleared_at: clearedAt }),
-      { encoding: FileSystem.EncodingType.UTF8 },
-    ),
-  );
+  const marker = buildLogLine('mentra_diagnostics_cleared', { cleared_at: clearedAt });
+  writeChain = writeChain.catch(() => undefined).then(async () => {
+    await FileSystem.writeAsStringAsync(nextUri, marker, {
+      encoding: FileSystem.EncodingType.UTF8,
+    });
+    rememberLogFileSize(nextUri, utf8ByteLength(marker));
+  });
   await writeChain;
 }

@@ -18,6 +18,7 @@ import meeting_transcript_jobs
 import proposed_event_jobs
 from db import get_conn
 from db_migrations import run_pending_migrations
+from glasses_tts import warm_kokoro
 from llm_helpers import warm_configured_chat_models
 from observability.log_stream import configure_logging, install_stdout_logger
 from observability.logger import get_runtime_logger
@@ -136,6 +137,18 @@ async def lifespan(_app: FastAPI):
         logger.info("Warmed configured chat models: %s", ", ".join(warmed_models) or "none")
     except Exception:
         logger.exception("Chat-model warmup failed; continuing startup")
+
+    try:
+        kokoro_warmup = warm_kokoro()
+        logger.info("[glasses] Kokoro startup warmup: %s", kokoro_warmup)
+    except Exception as exc:
+        # Speech is optional; don't block the orchestrator if warmup itself
+        # encounters an unexpected error. Exception text can include paths.
+        logger.error(
+            "[glasses] Kokoro startup warmup failed unexpectedly; continuing startup "
+            "failure_type=%s",
+            type(exc).__name__,
+        )
 
     meeting_transcript_jobs.start_worker()
     event_tag_jobs.start_worker()

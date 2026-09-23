@@ -415,6 +415,16 @@ The temporary file is deleted on every terminal path. Orange means a completed
 shortcut or audio ready immediately before playback; blue remains wake detected;
 red blinks for backend, routing, download, TTS, playback, or lifecycle errors.
 
+Latency diagnostics carry the same full `command_id` from transcription
+through the mobile transport, `X-Glasses-Command-Id` proxy header, and backend
+route response. The mobile export records command preparation, app foreground
+state changes, scheduled versus actual deadline firing, audio download stages,
+and playback start/finish. These added timing events contain no transcript text.
+Mobile transport diagnostics separate auth resolution, response headers, and JSON
+body read/parse. Wake inference performance is summarized in each ten-second
+diagnostic snapshot so logging does not rewrite the full file for every
+microphone chunk.
+
 The Android `DigitalBrainGlassesAlerts` module owns file-based speech playback,
 audio focus, explicit preferred-device routing, completion/error events, and
 player cleanup. Audio bytes never cross the React Native bridge. Existing
