@@ -3,9 +3,38 @@ const API_BASE_URL = process.env.EXPO_PUBLIC_BACKEND_URL ?? 'http://localhost:80
 type FetchOptions = RequestInit & {
   token?: string | null;
   onAuthExpired?: () => Promise<string | null>;
-  onTiming?: (phase: string, elapsedMs: number) => void;
+  onTiming?: (phase: string, elapsedMs: number, metadata?: Record<string, unknown>) => void;
   retryOnAuthExpired?: boolean;
 };
+
+const GLASSES_TIMING_HEADERS: Record<string, string> = {
+  'x-digital-brain-proxy-request-received-at-ms': 'proxy_request_received_at_ms',
+  'x-digital-brain-proxy-session-resolution-ms': 'proxy_session_resolution_ms',
+  'x-digital-brain-proxy-upstream-headers-ms': 'proxy_upstream_headers_ms',
+  'x-digital-brain-proxy-handler-to-headers-ms': 'proxy_handler_to_headers_ms',
+  'x-digital-brain-proxy-headers-ready-at-ms': 'proxy_headers_ready_at_ms',
+  'x-glasses-backend-route-ms': 'backend_route_ms',
+  'x-glasses-backend-completed-at-ms': 'backend_completed_at_ms',
+  'server-timing': 'server_timing',
+  date: 'response_date',
+};
+
+export function getGlassesResponseTimingMetadata(
+  headers: Headers | Record<string, string> | undefined,
+): Record<string, unknown> {
+  if (!headers) return {};
+  const metadata: Record<string, unknown> = {};
+  for (const [headerName, fieldName] of Object.entries(GLASSES_TIMING_HEADERS)) {
+    const value =
+      typeof (headers as Headers).get === 'function'
+        ? (headers as Headers).get(headerName)
+        : Object.entries(headers as Record<string, string>).find(
+            ([key]) => key.toLowerCase() === headerName,
+          )?.[1];
+    if (value !== null && value !== undefined && value !== '') metadata[fieldName] = value;
+  }
+  return metadata;
+}
 
 type ApiFetchError = Error & {
   status?: number;
@@ -21,7 +50,9 @@ type ApiFetchError = Error & {
 
 let authTokenProvider: (() => string | null | Promise<string | null>) | null = null;
 let authRefreshHandler: (() => Promise<string | null>) | null = null;
-let authDiagnosticsProvider: (() => Record<string, unknown> | Promise<Record<string, unknown>>) | null = null;
+let authDiagnosticsProvider:
+  | (() => Record<string, unknown> | Promise<Record<string, unknown>>)
+  | null = null;
 
 export function setAuthTokenProvider(
   provider: (() => string | null | Promise<string | null>) | null,
@@ -60,8 +91,11 @@ export async function apiFetch(path: string, options: FetchOptions = {}) {
   const requestUrl = `${API_BASE_URL}${path}`;
   const requestMethod = rest.method ?? 'GET';
   let response: Response;
-  onTiming?.('auth_resolution', Date.now() - apiFetchStartedAt);
   const fetchStartedAt = Date.now();
+  onTiming?.('auth_resolution', fetchStartedAt - apiFetchStartedAt, {
+    client_request_started_at_ms: apiFetchStartedAt,
+    client_fetch_started_at_ms: fetchStartedAt,
+  });
 
   try {
     response = await fetch(requestUrl, {
@@ -90,7 +124,12 @@ export async function apiFetch(path: string, options: FetchOptions = {}) {
     });
     throw fetchError;
   }
-  onTiming?.('response_headers', Date.now() - fetchStartedAt);
+  onTiming?.('response_headers', Date.now() - fetchStartedAt, {
+    client_response_headers_at_ms: Date.now(),
+    response_status: response.status,
+    response_content_type: response.headers.get('content-type') ?? '',
+    ...getGlassesResponseTimingMetadata(response.headers),
+  });
 
   const contentType = response.headers.get('content-type') ?? '';
 
@@ -167,7 +206,7 @@ export async function apiFetch(path: string, options: FetchOptions = {}) {
     const text = await response.text();
     onTiming?.('unexpected_body_read', Date.now() - textBodyStartedAt);
     const error = new Error(
-      `Expected JSON response but got ${contentType || 'unknown content type'}: ${text.slice(0, 200)}`
+      `Expected JSON response but got ${contentType || 'unknown content type'}: ${text.slice(0, 200)}`,
     ) as ApiFetchError;
     error.contentType = contentType;
     error.bodyPreview = text.slice(0, 200);

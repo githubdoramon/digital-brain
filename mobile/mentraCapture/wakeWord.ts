@@ -15,6 +15,7 @@ import { appendMentraDebugLog, appendWakeCommandDebugLog } from '@/mentraCapture
 import {
   acceptGlassesCommandPcm,
   cancelGlassesCommandTranscription,
+  createGlassesCommandId,
   isGlassesCommandSessionActive,
   observeGlassesAmbientPcm,
   startGlassesCommandTranscription,
@@ -99,8 +100,9 @@ export async function recordWakeDebugSnapshot(source = 'manual'): Promise<Record
 
   const [connection, nativeStats] = await Promise.all([
     getMentraConnectionStatus().catch((error) => ({ error: wakeErrorMessage(error) })),
-    GlassesAlertsNative?.getV8WakeSpotterStats().catch((error) => ({ error: wakeErrorMessage(error) })) ??
-      Promise.resolve(null),
+    GlassesAlertsNative?.getV8WakeSpotterStats().catch((error) => ({
+      error: wakeErrorMessage(error),
+    })) ?? Promise.resolve(null),
   ]);
   const snapshot: Record<string, unknown> = {
     source,
@@ -194,16 +196,24 @@ async function getDetector(): Promise<V8TwoStageWakeWordDetector> {
       debug('wake_detector_initializing', { step: lastWakeStep });
       if (!GlassesAlertsNative) throw new Error('V8 native wake spotter is unavailable');
       await GlassesAlertsNative.initializeV8WakeSpotter();
-      detector = new V8TwoStageWakeWordDetector(model, GlassesAlertsNative, backend, (evaluation) => {
-        debug('wake_v8_candidate', {
-          keyword: evaluation.keyword,
-          score: evaluation.score,
-          threshold: evaluation.threshold,
-          passed: evaluation.passed,
-          audio_time_ms: evaluation.audioTimeMs,
-        });
+      detector = new V8TwoStageWakeWordDetector(
+        model,
+        GlassesAlertsNative,
+        backend,
+        (evaluation) => {
+          debug('wake_v8_candidate', {
+            keyword: evaluation.keyword,
+            score: evaluation.score,
+            threshold: evaluation.threshold,
+            passed: evaluation.passed,
+            audio_time_ms: evaluation.audioTimeMs,
+          });
+        },
+      );
+      debug('wake_detector_ready', {
+        version: 'v8-two-stage',
+        initialization_ms: Date.now() - startedAt,
       });
-      debug('wake_detector_ready', { version: 'v8-two-stage', initialization_ms: Date.now() - startedAt });
       lastWakeStep = 'detector_ready';
       lastWakeError = null;
       return detector;
@@ -249,8 +259,11 @@ async function processPendingPcm(): Promise<void> {
         pendingPcm.length,
       );
       for (const event of events) {
+        const commandId = createGlassesCommandId();
         const wakeDetectedAt = Date.now();
         debug('wake_detected', {
+          command_id: commandId,
+          detected_at_ms: wakeDetectedAt,
           score: event.score,
           threshold: event.threshold,
           audio_time_ms: event.audioTimeMs,
@@ -262,6 +275,7 @@ async function processPendingPcm(): Promise<void> {
         // session so nothing on the JavaScript side adds avoidable LED delay.
         void blinkMentraBlueLed().catch((error) =>
           debug('wake_led_failed', {
+            command_id: commandId,
             error: error instanceof Error ? error.message : String(error),
           }),
         );
@@ -279,6 +293,7 @@ async function processPendingPcm(): Promise<void> {
           (commandInitialChunks.reduce((total, chunk) => total + chunk.length, 0) / 16_000) * 1_000,
         );
         debug('wake_command_audio_buffered', {
+          command_id: commandId,
           pre_roll_samples: event.preRollPcm16.length,
           initial_audio_duration_ms: initialAudioDurationMs,
           wake_decision_audio_time_ms: event.audioTimeMs,
@@ -289,6 +304,7 @@ async function processPendingPcm(): Promise<void> {
         // glasses PCM can arrive while the reset promise is still settling.
         void resetDetector('command_session_started').catch((error) =>
           debug('wake_detector_reset_failed', {
+            command_id: commandId,
             error: error instanceof Error ? error.message : String(error),
           }),
         );
@@ -309,6 +325,7 @@ async function processPendingPcm(): Promise<void> {
             });
           },
           handleGlassesCommandTranscriptionFailure,
+          commandId,
         );
       }
     }
@@ -344,7 +361,10 @@ function acceptPcm(pcm: ArrayBuffer | ArrayBufferView): void {
   }
   if (firstPcmForListener) {
     firstPcmForListener = false;
-    debug('wake_pcm_first_valid', { samples: samples.length, pcm_peak: pcmPeakSinceSnapshot / 32768 });
+    debug('wake_pcm_first_valid', {
+      samples: samples.length,
+      pcm_peak: pcmPeakSinceSnapshot / 32768,
+    });
   }
   if (isGlassesCommandSessionActive()) {
     acceptGlassesCommandPcm(
@@ -488,7 +508,11 @@ export async function initializeWakeWordRuntime(): Promise<void> {
       pauseReasons.delete('connection_lost');
       void reconcile('glasses_ready').catch((error) => {
         lastWakeError = wakeErrorMessage(error);
-        debug('wake_reconcile_failed', { reason: 'glasses_ready', step: lastWakeStep, error: lastWakeError });
+        debug('wake_reconcile_failed', {
+          reason: 'glasses_ready',
+          step: lastWakeStep,
+          error: lastWakeError,
+        });
       });
       return;
     }

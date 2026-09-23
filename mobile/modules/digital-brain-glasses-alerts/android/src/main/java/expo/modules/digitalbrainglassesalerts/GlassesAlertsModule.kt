@@ -31,7 +31,7 @@ class GlassesAlertsModule : Module() {
 
   override fun definition() = ModuleDefinition {
     Name("DigitalBrainGlassesAlerts")
-    Events("onImageEnhancementForegroundTick", "onSpeechPlaybackFinished")
+    Events("onImageEnhancementForegroundTick", "onSpeechPlaybackStarted", "onSpeechPlaybackFinished")
 
     OnCreate {
       activeModule = WeakReference(this@GlassesAlertsModule)
@@ -189,17 +189,53 @@ class GlassesAlertsModule : Module() {
     }
 
     AsyncFunction("playSpeechAudio") { commandId: String, fileUri: String ->
-      GlassesAlertPlayback.playSpeechAudio(context(), commandId, fileUri) { status, durationMs, error ->
-        sendEvent(
-          "onSpeechPlaybackFinished",
-          mapOf(
-            "commandId" to commandId,
-            "status" to status,
-            "durationMs" to durationMs,
-            "error" to error,
-          ),
-        )
-      }
+      GlassesAlertPlayback.playSpeechAudio(
+        context(),
+        commandId,
+        fileUri,
+        onStarted = { telemetry ->
+          sendEvent(
+            "onSpeechPlaybackStarted",
+            mapOf(
+              "commandId" to commandId,
+              "expectedDeviceId" to telemetry.expectedDeviceId,
+              "expectedDeviceName" to telemetry.expectedDeviceName,
+              "expectedDeviceType" to telemetry.expectedDeviceType,
+              "routedDeviceId" to telemetry.routedDeviceId,
+              "routedDeviceName" to telemetry.routedDeviceName,
+              "routedDeviceType" to telemetry.routedDeviceType,
+              "routeVerified" to telemetry.routeVerified,
+              "audioFocusResult" to telemetry.audioFocusResult,
+              "audioFocusGranted" to telemetry.audioFocusGranted,
+              "runtimeForegroundTypes" to telemetry.runtimeForegroundTypes,
+              "activityVisible" to telemetry.activityVisible,
+            ),
+          )
+        },
+        onFinished = { result ->
+          val telemetry = result.telemetry
+          sendEvent(
+            "onSpeechPlaybackFinished",
+            mapOf(
+              "commandId" to commandId,
+              "status" to result.status,
+              "durationMs" to result.durationMs,
+              "error" to result.error,
+              "expectedDeviceId" to telemetry.expectedDeviceId,
+              "expectedDeviceName" to telemetry.expectedDeviceName,
+              "expectedDeviceType" to telemetry.expectedDeviceType,
+              "routedDeviceId" to telemetry.routedDeviceId,
+              "routedDeviceName" to telemetry.routedDeviceName,
+              "routedDeviceType" to telemetry.routedDeviceType,
+              "routeVerified" to telemetry.routeVerified,
+              "audioFocusResult" to telemetry.audioFocusResult,
+              "audioFocusGranted" to telemetry.audioFocusGranted,
+              "runtimeForegroundTypes" to telemetry.runtimeForegroundTypes,
+              "activityVisible" to telemetry.activityVisible,
+            ),
+          )
+        },
+      )
     }
 
     AsyncFunction("stopSpeechAudio") { commandId: String? ->

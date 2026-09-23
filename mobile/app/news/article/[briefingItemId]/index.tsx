@@ -29,6 +29,8 @@ function normalizeUrl(url: string): string {
 
 function loadWebViewComponent() {
   try {
+    // WebView is optional, so require it only when this screen needs it.
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
     return require('react-native-webview').WebView as React.ComponentType<Record<string, unknown>>;
   } catch {
     return null;

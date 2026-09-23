@@ -66,11 +66,36 @@ export type RuntimeLocationSample = {
 
 type DigitalBrainGlassesAlertsEvents = {
   onImageEnhancementForegroundTick(event: { timestampMs: number }): void;
+  onSpeechPlaybackStarted(event: {
+    commandId: string;
+    expectedDeviceId?: number;
+    expectedDeviceName?: string;
+    expectedDeviceType?: number;
+    routedDeviceId?: number;
+    routedDeviceName?: string;
+    routedDeviceType?: number;
+    routeVerified: boolean;
+    audioFocusResult?: number;
+    audioFocusGranted?: boolean;
+    runtimeForegroundTypes: number;
+    activityVisible: boolean;
+  }): void;
   onSpeechPlaybackFinished(event: {
     commandId: string;
     status: 'completed' | 'error' | 'stopped';
     durationMs?: number;
     error?: string;
+    expectedDeviceId?: number;
+    expectedDeviceName?: string;
+    expectedDeviceType?: number;
+    routedDeviceId?: number;
+    routedDeviceName?: string;
+    routedDeviceType?: number;
+    routeVerified: boolean;
+    audioFocusResult?: number;
+    audioFocusGranted?: boolean;
+    runtimeForegroundTypes: number;
+    activityVisible: boolean;
   }): void;
 };
 
@@ -115,7 +140,14 @@ declare class DigitalBrainGlassesAlertsNativeModule extends NativeModule<Digital
   playSpeechAudio(
     commandId: string,
     fileUri: string,
-  ): Promise<{ started: boolean; durationMs?: number }>;
+  ): Promise<{
+    started: boolean;
+    reason?: string;
+    expectedDeviceId?: number;
+    expectedDeviceName?: string;
+    expectedDeviceType?: number;
+    availableOutputs?: { id: number; name: string; type: number }[];
+  }>;
   stopSpeechAudio(commandId?: string): Promise<{ stopped: boolean }>;
 }
 

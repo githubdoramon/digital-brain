@@ -126,8 +126,11 @@ sequenceDiagram
   backend emits those alongside route/auth, agent, TTS subphase, and audio-store
   timings in one correlated `[glasses] command latency` record immediately
   before returning the response. The web proxy records auth resolution and
-  upstream response timing under that same command ID; see `GLASSES_TTS.md` for
-  the Kokoro timing fields.
+  upstream response timing under that same command ID and returns proxy/backend
+  phase headers to the phone; proxy body completion is logged separately.
+  Confirmed wake detection assigns the same command ID used by transcription,
+  command transport, audio download, and playback. See `GLASSES_TTS.md` for the
+  full correlated timing fields, including Kokoro's inference sub-stages.
   Mobile also owns bounded Bluetooth control-plane recovery, sustained local
   call alerts, and user-initiated glasses firmware updates. Firmware maintenance
   persists on the phone and pauses capture/wake commands while the glasses run

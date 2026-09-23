@@ -120,7 +120,7 @@ function debug(event: string, payload?: Record<string, unknown>): void {
   void appendWakeCommandDebugLog(event, payload).catch(() => undefined);
 }
 
-function createCommandId(): string {
+export function createGlassesCommandId(): string {
   const crypto = (globalThis as { crypto?: { randomUUID?: () => string } }).crypto;
   if (crypto?.randomUUID) return crypto.randomUUID();
   return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/gu, (character) => {
@@ -803,13 +803,14 @@ export function startGlassesCommandTranscription(
   wakeTiming: WakeCommandTiming,
   onTranscribed?: (event: GlassesCommandTranscribed) => void,
   onTranscriptionFailed?: (event: GlassesCommandTranscriptionFailed) => void,
+  commandId?: string,
 ): void {
   if (state !== 'idle') {
-    debug('glasses_command_start_ignored', { state });
+    debug('glasses_command_start_ignored', { command_id: commandId, state });
     return;
   }
   const session: CommandSession = {
-    id: createCommandId(),
+    id: commandId ?? createGlassesCommandId(),
     wakeDetectedAt,
     listeningStartedAt: null,
     speechStartedAt: null,

@@ -415,20 +415,35 @@ The temporary file is deleted on every terminal path. Orange means a completed
 shortcut or audio ready immediately before playback; blue remains wake detected;
 red blinks for backend, routing, download, TTS, playback, or lifecycle errors.
 
-Latency diagnostics carry the same full `command_id` from transcription
-through the mobile transport, `X-Glasses-Command-Id` proxy header, and backend
-route response. The mobile export records command preparation, app foreground
-state changes, scheduled versus actual deadline firing, audio download stages,
-and playback start/finish. These added timing events contain no transcript text.
-Mobile transport diagnostics separate auth resolution, response headers, and JSON
-body read/parse. Wake inference performance is summarized in each ten-second
-diagnostic snapshot so logging does not rewrite the full file for every
-microphone chunk.
+Latency diagnostics carry the same full `command_id` from confirmed wake
+detection through transcription, mobile transport, `X-Glasses-Command-Id`
+proxy/backend records, audio download, and playback. The ID is created at wake
+detection, so even the wake event and the later local transcription can be
+joined. The mobile export records command preparation, app foreground state
+changes, scheduled versus actual deadline firing, audio download stages, and
+playback start/finish. These added timing events contain no transcript text.
+Mobile transport diagnostics separate auth resolution, response headers, and
+JSON body read/parse. Command and audio responses carry allow-listed proxy and
+backend timing headers into the app export; the web proxy also logs when the
+downstream response body finishes, fails, or is cancelled. This makes the phone,
+proxy, backend handler, and audio transfer measurable under one command ID.
+Epoch timestamps are useful for correlation, while durations are authoritative
+when host clocks are not synchronized. Wake inference performance is summarized
+in each ten-second diagnostic snapshot so logging does not rewrite the full file
+for every microphone chunk.
 
 The Android `DigitalBrainGlassesAlerts` module owns file-based speech playback,
 audio focus, explicit preferred-device routing, completion/error events, and
-player cleanup. Audio bytes never cross the React Native bridge. Existing
-retained wake-command WAVs and their debug logging are unchanged.
+player cleanup. A preferred device is only a routing request: speech starts
+muted and becomes audible only after Android reports that the actual route is
+the expected glasses device. Failure to obtain audio focus or confirm that
+route ends playback as an error instead of reporting a silent success. Started
+and finished diagnostics include command ID, expected and actual output device,
+route verification, audio-focus result, foreground-service type mask, and app
+visibility. If no expected glasses output matches, diagnostics include the
+saved device name and currently available Bluetooth outputs. Audio bytes never
+cross the React Native bridge. Existing retained wake-command WAVs and their
+debug logging are unchanged.
 
 Physical-device validation checklist (static builds do not prove these paths):
 
@@ -438,9 +453,11 @@ Physical-device validation checklist (static builds do not prove these paths):
 2. Exercise a normal agent question, a `control_completed` gate, a
    `shortcut_completed` including spoken `slash new`, and an `error`. Confirm exact
    orange/red semantics, silence for shortcuts, and no duplicate execution.
-3. Confirm agent audio downloads only with the authenticated route, plays fully
-   through Mentra, ducks existing audio appropriately, resumes wake listening
-   only after completion, and deletes the private temp file.
+3. Confirm agent audio downloads only with the authenticated route, logs a
+   matching Android routed device before unmuting, plays fully through Mentra,
+   resumes wake listening only after completion, and deletes the private temp
+   file. Confirm route or focus failures are reported with the command ID and
+   do not play through the handset.
 4. Disconnect glasses during backend execution, download, and playback; deny
    auth; kill/background the app; and hold the backend past 70 seconds. Confirm
    red blink, listener recovery, no new command id, no late playback, and no

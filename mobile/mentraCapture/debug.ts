@@ -33,6 +33,21 @@ function isTraceIdentifierKey(key: string): boolean {
   return ['commandid', 'requestid', 'correlationid', 'traceid'].includes(normalized);
 }
 
+function isPlaybackRouteKey(key: string, insideAvailableOutputs: boolean): boolean {
+  const normalized = key.replace(/[^a-z]/gi, '').toLowerCase();
+  return (
+    [
+      'expecteddeviceid',
+      'expecteddevicename',
+      'expecteddevicetype',
+      'routeddeviceid',
+      'routeddevicename',
+      'routeddevicetype',
+    ].includes(normalized) ||
+    (insideAvailableOutputs && ['id', 'name', 'type'].includes(normalized))
+  );
+}
+
 function utf8ByteLength(value: string): number {
   let length = 0;
   for (const character of value) {
@@ -93,20 +108,27 @@ function redactString(value: string): string {
     .slice(0, MAX_STRING_LENGTH);
 }
 
-function redact(value: unknown, depth = 0): unknown {
+function redact(value: unknown, depth = 0, insideAvailableOutputs = false): unknown {
   if (value == null || typeof value === 'number' || typeof value === 'boolean') return value;
   if (typeof value === 'string') return redactString(value);
   if (depth >= 4) return '[truncated]';
-  if (Array.isArray(value)) return value.slice(0, 24).map((item) => redact(item, depth + 1));
+  if (Array.isArray(value))
+    return value.slice(0, 24).map((item) => redact(item, depth + 1, insideAvailableOutputs));
   if (typeof value === 'object') {
     const result: Record<string, unknown> = {};
     Object.entries(value as Record<string, unknown>)
       .slice(0, 40)
       .forEach(([key, item]) => {
-        if (!isTraceIdentifierKey(key) && REDACTED_KEY.test(key)) {
+        const isSafePlaybackField = isPlaybackRouteKey(key, insideAvailableOutputs);
+        if (!isTraceIdentifierKey(key) && !isSafePlaybackField && REDACTED_KEY.test(key)) {
           result[key] = '[redacted]';
         } else {
-          result[key] = redact(item, depth + 1);
+          result[key] = redact(
+            item,
+            depth + 1,
+            insideAvailableOutputs ||
+              key.replace(/[^a-z]/gi, '').toLowerCase() === 'availableaudiooutputs',
+          );
         }
       });
     return result;
@@ -198,9 +220,7 @@ export async function appendMentraDebugLog(
   const generationAtAppendStart = activeLogGeneration;
   const targetUri = await getActiveLogUri();
   if (generationAtAppendStart !== activeLogGeneration) return;
-  writeChain = writeChain
-    .catch(() => undefined)
-    .then(() => appendBoundedLine(targetUri, line));
+  writeChain = writeChain.catch(() => undefined).then(() => appendBoundedLine(targetUri, line));
   await writeChain;
 }
 
@@ -275,12 +295,14 @@ export async function clearWakeCommandDebugLog(): Promise<void> {
     event: 'wake_command_diagnostics_cleared',
     payload: { cleared_at: clearedAt },
   })}\n`;
-  wakeCommandWriteChain = wakeCommandWriteChain.catch(() => undefined).then(async () => {
-    await FileSystem.writeAsStringAsync(nextUri, marker, {
-      encoding: FileSystem.EncodingType.UTF8,
+  wakeCommandWriteChain = wakeCommandWriteChain
+    .catch(() => undefined)
+    .then(async () => {
+      await FileSystem.writeAsStringAsync(nextUri, marker, {
+        encoding: FileSystem.EncodingType.UTF8,
+      });
+      rememberLogFileSize(nextUri, utf8ByteLength(marker));
     });
-    rememberLogFileSize(nextUri, utf8ByteLength(marker));
-  });
   await wakeCommandWriteChain;
 }
 
@@ -298,11 +320,13 @@ export async function clearMentraDebugLog(): Promise<void> {
   void AsyncStorage.setItem(ACTIVE_LOG_URI_STORAGE_KEY, nextUri).catch(() => undefined);
   void clearWakeCommandDebugLog().catch(() => undefined);
   const marker = buildLogLine('mentra_diagnostics_cleared', { cleared_at: clearedAt });
-  writeChain = writeChain.catch(() => undefined).then(async () => {
-    await FileSystem.writeAsStringAsync(nextUri, marker, {
-      encoding: FileSystem.EncodingType.UTF8,
+  writeChain = writeChain
+    .catch(() => undefined)
+    .then(async () => {
+      await FileSystem.writeAsStringAsync(nextUri, marker, {
+        encoding: FileSystem.EncodingType.UTF8,
+      });
+      rememberLogFileSize(nextUri, utf8ByteLength(marker));
     });
-    rememberLogFileSize(nextUri, utf8ByteLength(marker));
-  });
   await writeChain;
 }

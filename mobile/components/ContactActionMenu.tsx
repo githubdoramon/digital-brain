@@ -24,7 +24,7 @@ export function ContactActionMenu({ emails, phones }: ContactActionMenuProps) {
   const whatsapp = phone ? normalizePhone(phone) : null;
 
   const actions = useMemo<ContactAction[]>(() => {
-      const rawActions: Array<ContactAction | null> = [
+      const rawActions: (ContactAction | null)[] = [
         phone
           ? {
               label: 'Call',

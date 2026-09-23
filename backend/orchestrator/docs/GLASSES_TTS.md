@@ -40,27 +40,43 @@ periodic keepalive synthesis is needed. Warmup is best-effort: missing optional
 configuration or a warmup failure is logged and does not prevent backend
 startup. Each worker loads and warms its own model instance.
 
-The per-command `[glasses] command latency` record includes the aggregate
-`tts_synthesis_ms` plus `tts_import_ms`, `tts_engine_lock_wait_ms`,
-`tts_engine_load_ms`, `tts_semaphore_wait_ms`, `tts_engine_create_ms`,
-`tts_wav_encode_ms`, and `tts_call_total_ms`. It also records whether the
-engine was cold, backend process ID, text character/word counts (never text),
-generated audio duration and WAV size, and whether the selected ONNX providers
-include an accelerator. The startup log `[glasses] Kokoro startup warmup`
-records the same per-stage timings for its synthetic inference. A successful
-warmup should make the first user request in that worker report
-`cold_start=0`; compare startup `engine_load_ms` and `engine_create_ms` to
-separate model initialization from inference setup. A process restart repeats
-the warmup.
+The per-command `[glasses] command latency` record includes aggregate
+`tts_synthesis_ms` plus import, engine lock/load, semaphore wait, engine create,
+WAV encode, and total-call timings. Instrumentation inside the pinned
+`kokoro-onnx` 0.4.9 engine further records `phonemize_ms`, `tokenize_ms`,
+`onnx_inference_ms` and its call count, `trim_audio_ms` and its call count, and
+the remaining `engine_create_other_ms` (batch splitting, voice/style setup,
+array assembly, and library overhead). It also records the worker PID, CPU
+count, process CPU-affinity count, cgroup CPU quota when available, text
+character/word counts (never text), generated audio duration and WAV size, and
+whether the selected ONNX providers include an accelerator. Timings are
+measured around the dependency's existing calls; the wrappers do not alter
+audio output. Recheck this instrumentation when upgrading `kokoro-onnx`.
 
-The same record carries the request's complete `command_id`. The mobile
-`X-Glasses-Command-Id` header is preserved by the web proxy and appears in
-`[mobile-proxy]` request/upstream records and the backend route/auth records.
+The startup log `[glasses] Kokoro startup warmup` records the same stages for
+its synthetic inference. A successful warmup should make a user request report
+`cold_start=0`; compare startup `engine_load_ms` and `engine_create_ms` to
+separate model initialization from inference. A process restart repeats the
+warmup.
+
+The same record carries the request's complete `command_id`, assigned at the
+confirmed wake and retained through transcription, mobile transport, audio
+download, and playback. The mobile `X-Glasses-Command-Id` header is preserved by
+the web proxy and appears in `[mobile-proxy]` request/upstream/body-completion
+records and backend route/auth records. Command and audio responses return
+backend route duration/completion time and proxy receive, session-resolution,
+upstream-header, and response-ready timings as headers; the app copies these
+allow-listed fields into its exported debug JSONL. The proxy separately logs
+downstream body completion or cancellation, including byte count and elapsed
+time. Compare mobile fetch/download duration with proxy timing and backend
+route duration to locate time before the proxy, between proxy/backend, in the
+backend handler, or while returning the body. Epoch timestamps help align
+services but duration fields are the reliable comparison if host clocks differ.
 Backend logs emitted while a command is executing, including the existing LLM
-and tool lifecycle logs, also carry that ID. These diagnostics measure
-authentication, agent execution, TTS, audio storage, mobile download, and
-playback as separate stages. The mobile debug export keeps these trace IDs
-intact while continuing to redact credentials, paths, and audio data.
+and tool lifecycle logs, also carry that ID. The mobile export retains complete
+command IDs, proxy/backend response timings, audio download phases, and native
+playback route/focus diagnostics while continuing to redact credentials, paths,
+and audio data.
 
 Artifact provenance is the upstream `model-files-v1.0` release. The
 `kokoro-onnx` package is MIT-licensed and the Kokoro model is Apache-2.0. If a

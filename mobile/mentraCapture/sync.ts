@@ -206,9 +206,9 @@ async function discoverAllCaptures(baseUrl: string): Promise<RemoteCapture[]> {
       captures.push(...normalizeRemoteCaptures(payload, baseUrl));
       const data = payload?.data ?? payload;
       if (!data?.has_more) break;
-      const pageCount = Array.isArray(data?.photos) ? data.photos.length : 0;
-      if (pageCount === 0) break;
-      offset += pageCount;
+      const pageSize = Array.isArray(data?.photos) ? data.photos.length : 0;
+      if (pageSize === 0) break;
+      offset += pageSize;
     }
     return captures;
   }

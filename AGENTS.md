@@ -26,9 +26,21 @@ replay a gate toggle; input command WAV capture remains mobile-owned. Mobile
 transcription durations are accepted as optional `client_timings`; the backend
 emits one final correlated `[glasses] command latency` record with those values,
 server phase timings, outcome, and total time immediately before returning.
+On Android, speech playback must report the unredacted command ID, audio-focus
+result, expected and actual routed device, foreground-service types, and app
+visibility. Keep speech muted until the actual output route is confirmed as the
+expected glasses device, and never report completion if focus or route
+verification failed. Assign the command ID at confirmed wake detection and keep
+it through transcription, mobile transport, proxy/backend requests, audio
+download, and playback. Mobile exports must include allow-listed proxy and
+backend response timing headers; the proxy logs downstream body completion,
+failure, or cancellation under that same ID.
 Each backend worker warms Kokoro with a short synthetic inference during
 application startup and retains its process-local model instance for the
-worker's lifetime; warmup failures are logged without blocking startup.
+worker's lifetime; warmup failures are logged without blocking startup. Keep
+per-command and startup timings for phonemization, tokenization, ONNX inference,
+audio trimming, remaining engine work, WAV encoding, and available CPU quota;
+review these before changing model, threading, or concurrency settings.
 
 **Mobile routing convention**: For dynamic mobile routes, prefer folder-based segments with `index.tsx` (for example `mobile/app/contacts/[contactId]/index.tsx`) so nested subroutes can be added without migrating route structure later.
 

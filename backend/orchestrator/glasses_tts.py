@@ -8,6 +8,7 @@ import threading
 import time
 import wave
 from contextvars import ContextVar, Token
+from pathlib import Path
 from typing import Any
 
 
@@ -23,6 +24,98 @@ _synthesis_limit = 1
 _active_timings: ContextVar[dict[str, float] | None] = ContextVar(
     "glasses_tts_timings", default=None
 )
+
+
+def _record_accumulated_timing(name: str, started_at: float, *, count: bool = False) -> None:
+    timings = _active_timings.get()
+    if timings is None:
+        return
+    elapsed_ms = max(0.0, time.perf_counter() - started_at) * 1_000
+    timings[name] = round(timings.get(name, 0.0) + elapsed_ms, 1)
+    if count:
+        count_name = f"{name.removesuffix('_ms')}_count"
+        timings[count_name] = timings.get(count_name, 0.0) + 1.0
+
+
+class _TimedInferenceSession:
+    """Delegate the ORT session while recording calls made by kokoro-onnx."""
+
+    def __init__(self, session: Any):
+        self._session = session
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._session, name)
+
+    def run(self, *args: Any, **kwargs: Any) -> Any:
+        started_at = time.perf_counter()
+        try:
+            return self._session.run(*args, **kwargs)
+        finally:
+            _record_accumulated_timing("onnx_inference_ms", started_at, count=True)
+
+
+def _install_engine_timing_hooks(engine: Any) -> None:
+    """Instrument the pinned kokoro-onnx call sites without changing its output."""
+    session = getattr(engine, "sess", None)
+    if session is not None and not isinstance(session, _TimedInferenceSession):
+        engine.sess = _TimedInferenceSession(session)
+
+    tokenizer = getattr(engine, "tokenizer", None)
+    if tokenizer is not None and not getattr(tokenizer, "_digital_brain_timing_hooks", False):
+        for method_name, timing_name in (
+            ("phonemize", "phonemize_ms"),
+            ("tokenize", "tokenize_ms"),
+        ):
+            original = getattr(tokenizer, method_name)
+
+            def timed_method(*args: Any, _original: Any = original, _name: str = timing_name, **kwargs: Any) -> Any:
+                started_at = time.perf_counter()
+                try:
+                    return _original(*args, **kwargs)
+                finally:
+                    _record_accumulated_timing(_name, started_at, count=True)
+
+            setattr(tokenizer, method_name, timed_method)
+        tokenizer._digital_brain_timing_hooks = True
+
+    # kokoro-onnx 0.4.9 resolves this module global once per audio batch.
+    # Measure its silence trimming separately from ONNX inference.
+    create_globals = getattr(engine.create, "__globals__", {})
+    original_trim = create_globals.get("trim_audio")
+    if callable(original_trim) and not getattr(original_trim, "_digital_brain_timed", False):
+        def timed_trim(*args: Any, **kwargs: Any) -> Any:
+            started_at = time.perf_counter()
+            try:
+                return original_trim(*args, **kwargs)
+            finally:
+                _record_accumulated_timing("trim_audio_ms", started_at, count=True)
+
+        timed_trim._digital_brain_timed = True
+        create_globals["trim_audio"] = timed_trim
+
+
+def _cpu_capacity_timings() -> dict[str, float]:
+    """Expose the process CPU ceiling that can dominate CPU-only inference."""
+    values: dict[str, float] = {}
+    values["cpu_count"] = float(os.cpu_count() or 0)
+    try:
+        values["cpu_affinity_count"] = float(len(os.sched_getaffinity(0)))
+    except (AttributeError, OSError):
+        values["cpu_affinity_count"] = -1.0
+
+    try:
+        quota, period = Path("/sys/fs/cgroup/cpu.max").read_text().split()[:2]
+        if quota != "max":
+            values["cgroup_cpu_quota_cores"] = round(float(quota) / float(period), 2)
+    except (OSError, ValueError, ZeroDivisionError):
+        try:
+            quota = float(Path("/sys/fs/cgroup/cpu/cpu.cfs_quota_us").read_text())
+            period = float(Path("/sys/fs/cgroup/cpu/cpu.cfs_period_us").read_text())
+            if quota > 0 and period > 0:
+                values["cgroup_cpu_quota_cores"] = round(quota / period, 2)
+        except (OSError, ValueError, ZeroDivisionError):
+            pass
+    return values
 
 
 def _record_timing(name: str, started_at: float) -> None:
@@ -113,6 +206,7 @@ def synthesize_kokoro(text: str) -> bytes:
         timings["text_character_count"] = float(len(text))
         timings["text_word_count"] = float(len(text.split()))
         timings["process_id"] = float(os.getpid())
+        timings.update(_cpu_capacity_timings())
     model_path = _config("KOKORO_MODEL_PATH", "")
     voices_path = _config("KOKORO_VOICES_PATH", "")
     voice = _config("KOKORO_VOICE", "af_heart")
@@ -173,6 +267,7 @@ def synthesize_kokoro(text: str) -> bytes:
                 timings["execution_provider_accelerated"] = float(
                     any(provider != "CPUExecutionProvider" for provider in providers)
                 )
+            _install_engine_timing_hooks(engine)
         semaphore = _synthesis_semaphore()
         semaphore_wait_started_at = time.perf_counter()
         semaphore.acquire()
@@ -186,6 +281,20 @@ def synthesize_kokoro(text: str) -> bytes:
                 samples, sample_rate = engine.create(text, voice=voice, speed=1.0, lang=lang)
             finally:
                 _record_timing("engine_create_ms", inference_started_at)
+                if timings is not None:
+                    instrumented_ms = sum(
+                        timings.get(name, 0.0)
+                        for name in (
+                            "phonemize_ms",
+                            "tokenize_ms",
+                            "onnx_inference_ms",
+                            "trim_audio_ms",
+                        )
+                    )
+                    timings["engine_create_other_ms"] = round(
+                        max(0.0, timings.get("engine_create_ms", 0.0) - instrumented_ms),
+                        1,
+                    )
             sample_count = len(samples)
             if timings is not None:
                 timings["sample_count"] = float(sample_count)

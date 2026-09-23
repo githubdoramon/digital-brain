@@ -6,6 +6,25 @@ import { ProxyFetchInit } from "@/types/proxy";
 const ORCHESTRATOR_BASE = process.env.BACKEND_API_BASE ?? "http://localhost:8000";
 
 const ALLOWED_METHODS = ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"];
+const PROXY_TIMING_HEADER_PREFIX = "x-digital-brain-proxy-";
+
+function proxyTimingHeaders(fields: {
+  receivedAtMs: number;
+  sessionResolutionMs: number;
+  upstreamHeadersMs?: number;
+  handlerToHeadersMs: number;
+  headersReadyAtMs: number;
+}): Record<string, string> {
+  return {
+    [`${PROXY_TIMING_HEADER_PREFIX}request-received-at-ms`]: String(fields.receivedAtMs),
+    [`${PROXY_TIMING_HEADER_PREFIX}session-resolution-ms`]: String(fields.sessionResolutionMs),
+    ...(fields.upstreamHeadersMs === undefined
+      ? {}
+      : { [`${PROXY_TIMING_HEADER_PREFIX}upstream-headers-ms`]: String(fields.upstreamHeadersMs) }),
+    [`${PROXY_TIMING_HEADER_PREFIX}handler-to-headers-ms`]: String(fields.handlerToHeadersMs),
+    [`${PROXY_TIMING_HEADER_PREFIX}headers-ready-at-ms`]: String(fields.headersReadyAtMs),
+  };
+}
 
 async function buildAuthorizationHeader(request: NextRequest): Promise<string | undefined> {
   const existing = request.headers.get("authorization");
@@ -22,6 +41,8 @@ export async function handler(
   request: NextRequest,
   context: { params: Promise<{ path?: string[] }> }
 ) {
+  const handlerStartedAt = Date.now();
+  const proxyRequestReceivedAtMs = handlerStartedAt;
   if (!ALLOWED_METHODS.includes(request.method)) {
     return new Response("Method Not Allowed", { status: 405 });
   }
@@ -36,7 +57,6 @@ export async function handler(
       : targetPath.startsWith("glasses/audio/")
         ? "/glasses/audio/[audio_id]"
         : `/${targetPath}`;
-  const handlerStartedAt = Date.now();
   const trace = (event: string, fields: Record<string, unknown> = {}) => {
     if (!traceGlassesRequest) return;
     console.info(`[mobile-proxy] ${event}`, {
@@ -72,13 +92,22 @@ export async function handler(
       path: `/${targetPath}`,
       method: request.method,
     });
+    const headersReadyAtMs = Date.now();
     return new Response(
       JSON.stringify({
         detail: "Missing authorization header",
       }),
       {
         status: 401,
-        headers: { "content-type": "application/json" },
+        headers: {
+          "content-type": "application/json",
+          ...proxyTimingHeaders({
+            receivedAtMs: proxyRequestReceivedAtMs,
+            sessionResolutionMs: authResolutionMs,
+            handlerToHeadersMs: headersReadyAtMs - handlerStartedAt,
+            headersReadyAtMs,
+          }),
+        },
       }
     );
   }
@@ -109,13 +138,82 @@ export async function handler(
     const responseHeaders = new Headers(backendResponse.headers);
     responseHeaders.delete("content-encoding");
     responseHeaders.delete("transfer-encoding");
+    responseHeaders.delete("content-length");
+    const headersReadyAtMs = Date.now();
+    for (const [name, value] of Object.entries(
+      proxyTimingHeaders({
+        receivedAtMs: proxyRequestReceivedAtMs,
+        sessionResolutionMs: authResolutionMs,
+        upstreamHeadersMs: upstreamMs,
+        handlerToHeadersMs: headersReadyAtMs - handlerStartedAt,
+        headersReadyAtMs,
+      })
+    )) {
+      responseHeaders.set(name, value);
+    }
 
-    return new Response(backendResponse.body, {
+    const responseBody = backendResponse.body;
+    if (!responseBody) {
+      trace("downstream_body_completed", {
+        status: backendResponse.status,
+        body_bytes: 0,
+        body_ms: 0,
+        handler_ms: Date.now() - handlerStartedAt,
+      });
+      return new Response(null, {
+        status: backendResponse.status,
+        statusText: backendResponse.statusText,
+        headers: responseHeaders,
+      });
+    }
+
+    const reader = responseBody.getReader();
+    const bodyStartedAt = Date.now();
+    let bodyBytes = 0;
+    const tracedBody = new ReadableStream<Uint8Array>({
+      async pull(controller) {
+        try {
+          const { done, value } = await reader.read();
+          if (done) {
+            controller.close();
+            trace("downstream_body_completed", {
+              status: backendResponse.status,
+              body_bytes: bodyBytes,
+              body_ms: Date.now() - bodyStartedAt,
+              handler_ms: Date.now() - handlerStartedAt,
+            });
+            return;
+          }
+          bodyBytes += value.byteLength;
+          controller.enqueue(value);
+        } catch (error) {
+          trace("downstream_body_failed", {
+            status: backendResponse.status,
+            body_bytes: bodyBytes,
+            body_ms: Date.now() - bodyStartedAt,
+            error_name: error instanceof Error ? error.name : "unknown",
+          });
+          controller.error(error);
+        }
+      },
+      async cancel(reason) {
+        trace("downstream_body_cancelled", {
+          status: backendResponse.status,
+          body_bytes: bodyBytes,
+          body_ms: Date.now() - bodyStartedAt,
+          reason: reason instanceof Error ? reason.name : "cancelled",
+        });
+        await reader.cancel(reason);
+      },
+    });
+
+    return new Response(tracedBody, {
       status: backendResponse.status,
       statusText: backendResponse.statusText,
       headers: responseHeaders,
     });
   } catch (error) {
+    const headersReadyAtMs = Date.now();
     trace("upstream_failed", {
       auth_resolution_ms: authResolutionMs,
       upstream_ms: Date.now() - upstreamStartedAt,
@@ -129,7 +227,15 @@ export async function handler(
       }),
       {
         status: 502,
-        headers: { "content-type": "application/json" },
+        headers: {
+          "content-type": "application/json",
+          ...proxyTimingHeaders({
+            receivedAtMs: proxyRequestReceivedAtMs,
+            sessionResolutionMs: authResolutionMs,
+            handlerToHeadersMs: headersReadyAtMs - handlerStartedAt,
+            headersReadyAtMs,
+          }),
+        },
       }
     );
   }

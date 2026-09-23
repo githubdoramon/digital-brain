@@ -1,7 +1,12 @@
 import * as FileSystem from 'expo-file-system/legacy';
 import { AppState } from 'react-native';
 
-import { API_BASE_URL, apiFetch, getAuthRequestContext } from '@/api/client';
+import {
+  API_BASE_URL,
+  apiFetch,
+  getAuthRequestContext,
+  getGlassesResponseTimingMetadata,
+} from '@/api/client';
 import GlassesAlertsNative from '@/modules/digital-brain-glasses-alerts/src';
 import { getClientContext } from '@/location/clientContext';
 
@@ -184,11 +189,17 @@ async function downloadSpeechAudio(
   const endpoint = resolveAudioRoute(response);
   if (!endpoint) throw new Error('The agent response did not include an audio route.');
   const downloadStartedAt = monotonicNowMs();
-  debug('glasses_command_audio_download_started', { command_id: command.commandId });
+  debug('glasses_command_audio_download_started', {
+    command_id: command.commandId,
+    client_download_started_at_ms: Date.now(),
+  });
   let authContextMs = 0;
   let destinationPrepareMs = 0;
   let fileDownloadMs = 0;
   let fileValidationMs = 0;
+  let responseStatus: number | null = null;
+  let responseContentType = '';
+  let responseTimingMetadata: Record<string, unknown> = {};
   let destination: string | null = null;
   try {
     let stageStartedAt = monotonicNowMs();
@@ -206,6 +217,9 @@ async function downloadSpeechAudio(
         'X-Glasses-Command-Id': command.commandId,
       },
     });
+    responseStatus = result.status;
+    responseContentType = result.headers?.['content-type'] ?? '';
+    responseTimingMetadata = getGlassesResponseTimingMetadata(result.headers);
     fileDownloadMs = monotonicNowMs() - stageStartedAt;
     if (!isCommandLive(command)) {
       await FileSystem.deleteAsync(destination, { idempotent: true }).catch(() => undefined);
@@ -227,6 +241,9 @@ async function downloadSpeechAudio(
       file_validation_ms: Math.round(fileValidationMs),
       elapsed_ms: Math.round(monotonicNowMs() - command.startedAt),
       size_bytes: size,
+      response_status: responseStatus,
+      response_content_type: responseContentType,
+      ...responseTimingMetadata,
     });
     return destination;
   } catch (error) {
@@ -237,6 +254,9 @@ async function downloadSpeechAudio(
       file_download_ms: Math.round(fileDownloadMs),
       file_validation_ms: Math.round(fileValidationMs),
       elapsed_ms: Math.round(monotonicNowMs() - downloadStartedAt),
+      response_status: responseStatus,
+      response_content_type: responseContentType,
+      ...responseTimingMetadata,
       error_name: error instanceof Error ? error.name : 'unknown',
     });
     if (destination) {
@@ -260,14 +280,45 @@ async function playSpeechAudio(command: ActiveCommand, fileUri: string): Promise
   if (!isCommandLive(command)) return;
   const playbackRequestedAt = monotonicNowMs();
   await new Promise<void>((resolve, reject) => {
-    const subscription = native.addListener('onSpeechPlaybackFinished', (event) => {
+    const startedSubscription = native.addListener('onSpeechPlaybackStarted', (event) => {
       if (event.commandId !== command.commandId) return;
-      subscription.remove();
+      debug('glasses_command_audio_playback_started', {
+        command_id: command.commandId,
+        native_route_verified_ms: Math.round(monotonicNowMs() - playbackRequestedAt),
+        expected_device_id: event.expectedDeviceId,
+        expected_device_name: event.expectedDeviceName,
+        expected_device_type: event.expectedDeviceType,
+        routed_device_id: event.routedDeviceId,
+        routed_device_name: event.routedDeviceName,
+        routed_device_type: event.routedDeviceType,
+        route_verified: event.routeVerified,
+        audio_focus_result: event.audioFocusResult,
+        audio_focus_granted: event.audioFocusGranted,
+        runtime_foreground_types: event.runtimeForegroundTypes,
+        app_visible: event.activityVisible,
+      });
+    });
+    const finishedSubscription = native.addListener('onSpeechPlaybackFinished', (event) => {
+      if (event.commandId !== command.commandId) return;
+      startedSubscription.remove();
+      finishedSubscription.remove();
       debug('glasses_command_audio_playback_finished', {
         command_id: command.commandId,
         playback_ms: Math.round(monotonicNowMs() - playbackRequestedAt),
         native_duration_ms: event.durationMs,
         status: event.status,
+        error: event.error,
+        expected_device_id: event.expectedDeviceId,
+        expected_device_name: event.expectedDeviceName,
+        expected_device_type: event.expectedDeviceType,
+        routed_device_id: event.routedDeviceId,
+        routed_device_name: event.routedDeviceName,
+        routed_device_type: event.routedDeviceType,
+        route_verified: event.routeVerified,
+        audio_focus_result: event.audioFocusResult,
+        audio_focus_granted: event.audioFocusGranted,
+        runtime_foreground_types: event.runtimeForegroundTypes,
+        app_visible: event.activityVisible,
       });
       if (event.status === 'completed') resolve();
       else reject(new Error(event.error || 'Glasses speech playback failed.'));
@@ -276,17 +327,30 @@ async function playSpeechAudio(command: ActiveCommand, fileUri: string): Promise
       .playSpeechAudio(command.commandId, fileUri)
       .then((result) => {
         if (!result.started) {
-          subscription.remove();
-          reject(new Error('The Mentra glasses audio route is unavailable.'));
+          startedSubscription.remove();
+          finishedSubscription.remove();
+          debug('glasses_command_audio_playback_rejected', {
+            command_id: command.commandId,
+            reason: result.reason,
+            expected_device_id: result.expectedDeviceId,
+            expected_device_name: result.expectedDeviceName,
+            expected_device_type: result.expectedDeviceType,
+            available_audio_outputs: result.availableOutputs,
+          });
+          reject(new Error(result.reason || 'The Mentra glasses audio route is unavailable.'));
           return;
         }
-        debug('glasses_command_audio_playback_started', {
+        debug('glasses_command_audio_playback_request_accepted', {
           command_id: command.commandId,
-          native_start_ms: Math.round(monotonicNowMs() - playbackRequestedAt),
+          native_accept_ms: Math.round(monotonicNowMs() - playbackRequestedAt),
+          expected_device_id: result.expectedDeviceId,
+          expected_device_name: result.expectedDeviceName,
+          expected_device_type: result.expectedDeviceType,
         });
       })
       .catch((error) => {
-        subscription.remove();
+        startedSubscription.remove();
+        finishedSubscription.remove();
         reject(error);
       });
   });
@@ -336,6 +400,7 @@ async function executeCommand(
   };
   debug('glasses_command_transport_started', {
     command_id: transcript.commandId,
+    client_transport_started_at_ms: Date.now(),
     has_thread: Boolean(session?.threadId),
     has_location: Boolean(clientContext.location),
     client_context_ms: Math.round(clientContextMs),
@@ -350,11 +415,12 @@ async function executeCommand(
       method: 'POST',
       headers: { 'X-Glasses-Command-Id': transcript.commandId },
       body: JSON.stringify({ ...body, client_timings: transcript.clientTimings }),
-      onTiming: (phase, elapsedMs) => {
+      onTiming: (phase, elapsedMs, metadata) => {
         debug('glasses_command_transport_phase', {
           command_id: transcript.commandId,
           phase,
           duration_ms: elapsedMs,
+          ...metadata,
         });
       },
     });
