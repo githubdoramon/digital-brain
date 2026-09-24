@@ -244,7 +244,7 @@ def synthesize_speech(
         )
         outcome = "success"
         return audio_bytes
-    except TTSUnavailableError:
+    except TTSUnavailableError as exc:
         failure_type = type(exc).__name__
         raise
     except Exception as exc:
