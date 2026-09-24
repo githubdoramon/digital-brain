@@ -29,8 +29,11 @@ server phase timings, outcome, and total time immediately before returning.
 On Android, speech playback must report the unredacted command ID, audio-focus
 result, expected and actual routed device, foreground-service types, and app
 visibility. Keep speech muted until the actual output route is confirmed as the
-expected glasses device, and never report completion if focus or route
-verification failed. Assign the command ID at confirmed wake detection and keep
+expected glasses device. Android may expose the same glasses through different
+Bluetooth profile outputs with different device IDs; accept a matching exact
+Bluetooth product name across supported Bluetooth output types, not an
+unrelated route. Never report completion if focus or route verification failed.
+Assign the command ID at confirmed wake detection and keep
 it through transcription, mobile transport, proxy/backend requests, audio
 download, and playback. Mobile exports must include allow-listed proxy and
 backend response timing headers; the proxy logs downstream body completion,

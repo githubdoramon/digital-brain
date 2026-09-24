@@ -436,8 +436,12 @@ The Android `DigitalBrainGlassesAlerts` module owns file-based speech playback,
 audio focus, explicit preferred-device routing, completion/error events, and
 player cleanup. A preferred device is only a routing request: speech starts
 muted and becomes audible only after Android reports that the actual route is
-the expected glasses device. Failure to obtain audio focus or confirm that
-route ends playback as an error instead of reporting a silent success. Started
+the expected glasses device. Android may report separate output IDs for the
+same glasses across Bluetooth profiles, so verification accepts an exact
+Bluetooth product-name match across supported Bluetooth output types. It does
+not accept a route with a different name or a non-Bluetooth route. Failure to
+obtain audio focus or confirm that route ends playback as an error instead of
+reporting a silent success. Started
 and finished diagnostics include command ID, expected and actual output device,
 route verification, audio-focus result, foreground-service type mask, and app
 visibility. If no expected glasses output matches, diagnostics include the

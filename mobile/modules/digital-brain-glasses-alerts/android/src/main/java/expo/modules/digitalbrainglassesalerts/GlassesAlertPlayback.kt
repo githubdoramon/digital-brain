@@ -467,8 +467,8 @@ internal object GlassesAlertPlayback {
     onFinished: (SpeechPlaybackResult) -> Unit,
   ) {
     if (speechPlayer !== player || speechCommandId != commandId || speechRouteVerified) return
-    val routed = currentRoutedDevice(player)
-    if (routed?.id != expectedDevice.id) return
+    val routed = currentRoutedDevice(player) ?: return
+    if (!GlassesAlertSettings.isSameGlassesAudioOutput(expectedDevice, routed)) return
     rememberSpeechRoutedDevice(routed)
     speechRouteVerified = true
     speechRouteTimeout?.let(handler::removeCallbacks)
@@ -507,7 +507,7 @@ internal object GlassesAlertPlayback {
     if (speechPlayer !== player || speechCommandId != commandId) return
     val routed = currentRoutedDevice(player)
     if (routed != null) rememberSpeechRoutedDevice(routed)
-    if (routed?.id == expectedDevice.id) {
+    if (GlassesAlertSettings.isSameGlassesAudioOutput(expectedDevice, routed)) {
       verifySpeechRoute(player, expectedDevice, commandId, onStarted, onProgress, onFinished)
     } else if (speechRouteVerified) {
       // A later Bluetooth route change must not leak speech to the handset.

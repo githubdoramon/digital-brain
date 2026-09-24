@@ -98,6 +98,16 @@ internal object GlassesAlertSettings {
     }
   }
 
+  /** Android may expose one glasses device as multiple Bluetooth profile outputs. */
+  fun isSameGlassesAudioOutput(expected: AudioDeviceInfo, routed: AudioDeviceInfo?): Boolean {
+    if (routed == null) return false
+    if (routed.id == expected.id) return true
+    if (!isBluetoothAudioOutput(expected) || !isBluetoothAudioOutput(routed)) return false
+    val expectedName = expected.productName?.toString()?.trim()?.lowercase().orEmpty()
+    val routedName = routed.productName?.toString()?.trim()?.lowercase().orEmpty()
+    return expectedName.isNotEmpty() && expectedName == routedName
+  }
+
   private fun isBluetoothAudioOutput(device: AudioDeviceInfo): Boolean = when (device.type) {
     AudioDeviceInfo.TYPE_BLUETOOTH_A2DP,
     AudioDeviceInfo.TYPE_BLUETOOTH_SCO,
