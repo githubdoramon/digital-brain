@@ -66,25 +66,21 @@ export type RuntimeLocationSample = {
 
 type DigitalBrainGlassesAlertsEvents = {
   onImageEnhancementForegroundTick(event: { timestampMs: number }): void;
-  onSpeechPlaybackStarted(event: {
+  onSpeechPlaybackStarted(event: SpeechPlaybackTelemetry & {
     commandId: string;
-    expectedDeviceId?: number;
-    expectedDeviceName?: string;
-    expectedDeviceType?: number;
-    routedDeviceId?: number;
-    routedDeviceName?: string;
-    routedDeviceType?: number;
-    routeVerified: boolean;
-    audioFocusResult?: number;
-    audioFocusGranted?: boolean;
-    runtimeForegroundTypes: number;
-    activityVisible: boolean;
   }): void;
-  onSpeechPlaybackFinished(event: {
+  onSpeechPlaybackProgress(event: SpeechPlaybackTelemetry & {
+    commandId: string;
+  }): void;
+  onSpeechPlaybackFinished(event: SpeechPlaybackTelemetry & {
     commandId: string;
     status: 'completed' | 'error' | 'stopped';
     durationMs?: number;
     error?: string;
+  }): void;
+};
+
+type SpeechPlaybackTelemetry = {
     expectedDeviceId?: number;
     expectedDeviceName?: string;
     expectedDeviceType?: number;
@@ -96,7 +92,14 @@ type DigitalBrainGlassesAlertsEvents = {
     audioFocusGranted?: boolean;
     runtimeForegroundTypes: number;
     activityVisible: boolean;
-  }): void;
+    outputStreamVolume?: number;
+    outputStreamVolumeMax?: number;
+    outputStreamMuted?: boolean;
+    playerDurationMs?: number;
+    playerPositionMs?: number;
+    playerIsPlaying?: boolean;
+    playerAudioSessionId?: number;
+    playerGain: number;
 };
 
 declare class DigitalBrainGlassesAlertsNativeModule extends NativeModule<DigitalBrainGlassesAlertsEvents> {

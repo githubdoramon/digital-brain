@@ -131,6 +131,10 @@ sequenceDiagram
   Confirmed wake detection assigns the same command ID used by transcription,
   command transport, audio download, and playback. See `GLASSES_TTS.md` for the
   full correlated timing fields, including Kokoro's inference sub-stages.
+  Kokoro records active/available ONNX providers, artifact sizes, runtime
+  versions, generated-signal levels, and synthesis real-time factor. Android
+  records the selected Whisper backend and MediaPlayer progress/output state;
+  see `mobile/GLASSES_RELIABILITY.md` for the mobile diagnostic contract.
   Mobile also owns bounded Bluetooth control-plane recovery, sustained local
   call alerts, and user-initiated glasses firmware updates. Firmware maintenance
   persists on the phone and pauses capture/wake commands while the glasses run

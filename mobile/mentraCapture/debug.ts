@@ -43,6 +43,7 @@ function isPlaybackRouteKey(key: string, insideAvailableOutputs: boolean): boole
       'routeddeviceid',
       'routeddevicename',
       'routeddevicetype',
+      'playeraudiosessionid',
     ].includes(normalized) ||
     (insideAvailableOutputs && ['id', 'name', 'type'].includes(normalized))
   );

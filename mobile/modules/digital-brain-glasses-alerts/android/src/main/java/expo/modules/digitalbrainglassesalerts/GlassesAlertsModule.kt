@@ -31,7 +31,12 @@ class GlassesAlertsModule : Module() {
 
   override fun definition() = ModuleDefinition {
     Name("DigitalBrainGlassesAlerts")
-    Events("onImageEnhancementForegroundTick", "onSpeechPlaybackStarted", "onSpeechPlaybackFinished")
+    Events(
+      "onImageEnhancementForegroundTick",
+      "onSpeechPlaybackStarted",
+      "onSpeechPlaybackProgress",
+      "onSpeechPlaybackFinished",
+    )
 
     OnCreate {
       activeModule = WeakReference(this@GlassesAlertsModule)
@@ -209,6 +214,41 @@ class GlassesAlertsModule : Module() {
               "audioFocusGranted" to telemetry.audioFocusGranted,
               "runtimeForegroundTypes" to telemetry.runtimeForegroundTypes,
               "activityVisible" to telemetry.activityVisible,
+              "outputStreamVolume" to telemetry.outputStreamVolume,
+              "outputStreamVolumeMax" to telemetry.outputStreamVolumeMax,
+              "outputStreamMuted" to telemetry.outputStreamMuted,
+              "playerDurationMs" to telemetry.playerDurationMs,
+              "playerPositionMs" to telemetry.playerPositionMs,
+              "playerIsPlaying" to telemetry.playerIsPlaying,
+              "playerAudioSessionId" to telemetry.playerAudioSessionId,
+              "playerGain" to telemetry.playerGain,
+            ),
+          )
+        },
+        onProgress = { telemetry ->
+          sendEvent(
+            "onSpeechPlaybackProgress",
+            mapOf(
+              "commandId" to commandId,
+              "expectedDeviceId" to telemetry.expectedDeviceId,
+              "expectedDeviceName" to telemetry.expectedDeviceName,
+              "expectedDeviceType" to telemetry.expectedDeviceType,
+              "routedDeviceId" to telemetry.routedDeviceId,
+              "routedDeviceName" to telemetry.routedDeviceName,
+              "routedDeviceType" to telemetry.routedDeviceType,
+              "routeVerified" to telemetry.routeVerified,
+              "audioFocusResult" to telemetry.audioFocusResult,
+              "audioFocusGranted" to telemetry.audioFocusGranted,
+              "runtimeForegroundTypes" to telemetry.runtimeForegroundTypes,
+              "activityVisible" to telemetry.activityVisible,
+              "outputStreamVolume" to telemetry.outputStreamVolume,
+              "outputStreamVolumeMax" to telemetry.outputStreamVolumeMax,
+              "outputStreamMuted" to telemetry.outputStreamMuted,
+              "playerDurationMs" to telemetry.playerDurationMs,
+              "playerPositionMs" to telemetry.playerPositionMs,
+              "playerIsPlaying" to telemetry.playerIsPlaying,
+              "playerAudioSessionId" to telemetry.playerAudioSessionId,
+              "playerGain" to telemetry.playerGain,
             ),
           )
         },
@@ -232,6 +272,14 @@ class GlassesAlertsModule : Module() {
               "audioFocusGranted" to telemetry.audioFocusGranted,
               "runtimeForegroundTypes" to telemetry.runtimeForegroundTypes,
               "activityVisible" to telemetry.activityVisible,
+              "outputStreamVolume" to telemetry.outputStreamVolume,
+              "outputStreamVolumeMax" to telemetry.outputStreamVolumeMax,
+              "outputStreamMuted" to telemetry.outputStreamMuted,
+              "playerDurationMs" to telemetry.playerDurationMs,
+              "playerPositionMs" to telemetry.playerPositionMs,
+              "playerIsPlaying" to telemetry.playerIsPlaying,
+              "playerAudioSessionId" to telemetry.playerAudioSessionId,
+              "playerGain" to telemetry.playerGain,
             ),
           )
         },

@@ -12,6 +12,18 @@ export type LocalTranscriptionStatus = {
   progress?: number;
 };
 
+export type WhisperInitializationDiagnostic = {
+  stage: 'model_file_ready' | 'native_context_ready';
+  duration_ms: number;
+  model_is_cached?: boolean;
+  model_size_mb?: number | null;
+  model_modified_at_ms?: number | null;
+  model_source_revision: 'main';
+  requested_use_gpu: true;
+  gpu_active?: boolean;
+  gpu_unavailable_reason?: string | null;
+};
+
 export type LocalTranscriptionSuccess = {
   text: string;
   rawText: string;
@@ -62,7 +74,7 @@ function normalizeWhisperFilePath(fileUri: string) {
 async function ensureModelFile(onStatus?: (status: LocalTranscriptionStatus) => void) {
   const info = await FileSystem.getInfoAsync(MODEL_FILE_URI);
   if (info.exists && !info.isDirectory) {
-    return MODEL_FILE_URI;
+    return { uri: MODEL_FILE_URI, cached: true };
   }
 
   await FileSystem.makeDirectoryAsync(MODEL_DIRECTORY, { intermediates: true });
@@ -90,7 +102,7 @@ async function ensureModelFile(onStatus?: (status: LocalTranscriptionStatus) => 
       throw new Error('The Whisper model download did not complete.');
     }
 
-    return result.uri;
+    return { uri: result.uri, cached: false };
   } catch (error) {
     throw new LocalTranscriptionError(
       'download_failed',
@@ -99,7 +111,10 @@ async function ensureModelFile(onStatus?: (status: LocalTranscriptionStatus) => 
   }
 }
 
-async function getWhisperContext(onStatus?: (status: LocalTranscriptionStatus) => void) {
+async function getWhisperContext(
+  onStatus?: (status: LocalTranscriptionStatus) => void,
+  onDiagnostic?: (diagnostic: WhisperInitializationDiagnostic) => void,
+) {
   if (Platform.OS === 'web') {
     throw new LocalTranscriptionError(
       'unsupported_platform',
@@ -109,9 +124,29 @@ async function getWhisperContext(onStatus?: (status: LocalTranscriptionStatus) =
 
   if (!whisperContextPromise) {
     whisperContextPromise = (async () => {
-      const modelFileUri = await ensureModelFile(onStatus);
+      const modelStartedAt = Date.now();
+      const modelFile = await ensureModelFile(onStatus);
+      const modelFileUri = modelFile.uri;
+      const modelInfo = await FileSystem.getInfoAsync(modelFileUri);
+      onDiagnostic?.({
+        stage: 'model_file_ready',
+        duration_ms: Date.now() - modelStartedAt,
+        model_is_cached: modelFile.cached,
+        model_size_mb:
+          modelInfo.exists && 'size' in modelInfo && typeof modelInfo.size === 'number'
+            ? Math.round((modelInfo.size / (1024 * 1024)) * 10) / 10
+            : null,
+        model_modified_at_ms:
+          modelInfo.exists && 'modificationTime' in modelInfo &&
+          typeof modelInfo.modificationTime === 'number'
+            ? Math.round(modelInfo.modificationTime * 1_000)
+            : null,
+        model_source_revision: 'main',
+        requested_use_gpu: true,
+      });
       onStatus?.({ stage: 'loading_model' });
-      return initWhisper({
+      const nativeInitStartedAt = Date.now();
+      const context = await initWhisper({
         filePath: modelFileUri,
         // Ask the native binding for acceleration on every native platform.
         // The current Android whisper.rn binary reports CPU-only; keeping the
@@ -119,6 +154,20 @@ async function getWhisperContext(onStatus?: (status: LocalTranscriptionStatus) =
         // without changing the command pipeline.
         useGpu: true,
       });
+      const nativeContext = context as WhisperContext & {
+        gpu?: unknown;
+        reasonNoGPU?: unknown;
+      };
+      onDiagnostic?.({
+        stage: 'native_context_ready',
+        duration_ms: Date.now() - nativeInitStartedAt,
+        model_source_revision: 'main',
+        requested_use_gpu: true,
+        gpu_active: nativeContext.gpu === true,
+        gpu_unavailable_reason:
+          typeof nativeContext.reasonNoGPU === 'string' ? nativeContext.reasonNoGPU : null,
+      });
+      return context;
     })().catch((error) => {
       whisperContextPromise = null;
       throw error;
@@ -128,8 +177,10 @@ async function getWhisperContext(onStatus?: (status: LocalTranscriptionStatus) =
   return whisperContextPromise;
 }
 
-export async function warmEnglishWhisperContext(): Promise<WhisperContext> {
-  return getWhisperContext();
+export async function warmEnglishWhisperContext(
+  onDiagnostic?: (diagnostic: WhisperInitializationDiagnostic) => void,
+): Promise<WhisperContext> {
+  return getWhisperContext(undefined, onDiagnostic);
 }
 
 /**

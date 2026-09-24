@@ -29,7 +29,7 @@ from voice_response import (
 
 logger = get_runtime_logger(__name__)
 
-_command_timing: ContextVar[dict[str, float] | None] = ContextVar(
+_command_timing: ContextVar[dict[str, Any] | None] = ContextVar(
     "glasses_command_timing", default=None
 )
 _background_gate_tasks: set[asyncio.Task[None]] = set()
@@ -50,13 +50,18 @@ def _timed_phase(name: str) -> Iterator[None]:
         _record_timing(name, (time.perf_counter() - started_at) * 1_000)
 
 
-def _record_tts_timings(timings: dict[str, float]) -> None:
+def _record_tts_timings(timings: dict[str, Any]) -> None:
     for name, value in timings.items():
-        _record_timing(f"tts_{name}", value)
+        if isinstance(value, float):
+            _record_timing(f"tts_{name}", value)
+        else:
+            command_timings = _command_timing.get()
+            if command_timings is not None:
+                command_timings[f"tts_{name}"] = value
 
 
 async def _synthesize_voice_answer(text: str, timeout: float | None = None) -> bytes:
-    timings: dict[str, float] = {}
+    timings: dict[str, Any] = {}
     try:
         synthesis = asyncio.to_thread(
             synthesize_kokoro_with_timings,
@@ -337,7 +342,7 @@ async def process_command(payload: Any, user: dict[str, Any]) -> dict[str, Any]:
     """Process one command and emit a complete correlated latency record."""
     started_at = time.perf_counter()
     command_id = str(getattr(payload, "command_id", "unknown"))
-    timings: dict[str, float] = {}
+    timings: dict[str, Any] = {}
     token = _command_timing.set(timings)
     correlation_token = bind_log_correlation_id(command_id)
     response: dict[str, Any] | None = None
@@ -352,7 +357,7 @@ async def process_command(payload: Any, user: dict[str, Any]) -> dict[str, Any]:
             command_id,
             response.get("outcome") if response else "exception",
             _safe_log_payload(_client_timing_payload(payload) or {}),
-            _safe_log_payload(timings),
+            _safe_log_payload(timings, limit=6_000),
         )
         _command_timing.reset(token)
         reset_log_correlation_id(correlation_token)

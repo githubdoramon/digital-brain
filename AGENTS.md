@@ -40,7 +40,12 @@ application startup and retains its process-local model instance for the
 worker's lifetime; warmup failures are logged without blocking startup. Keep
 per-command and startup timings for phonemization, tokenization, ONNX inference,
 audio trimming, remaining engine work, WAV encoding, and available CPU quota;
-review these before changing model, threading, or concurrency settings.
+also record runtime/package versions, active and available execution providers,
+thread overrides, model artifact sizes, generated-signal peak/RMS/near-silence,
+and synthesis real-time factor. Review these before changing model, threading,
+or concurrency settings. Android speech logs include per-second player position,
+duration, play state, session, gain, MUSIC volume/mute, route and focus; a player
+completion event is not proof of audible output.
 
 **Mobile routing convention**: For dynamic mobile routes, prefer folder-based segments with `index.tsx` (for example `mobile/app/contacts/[contactId]/index.tsx`) so nested subroutes can be added without migrating route structure later.
 
@@ -732,7 +737,10 @@ model-label-derived fuzzy wake anchor from the final command transcript while
 retaining raw and normalized transcript fields and removal method for debugging.
 Use `ggml-base.en.bin`; request acceleration from the native binding and log
 the actual selected backend, but do not claim GPU use on Android while the
-installed `whisper.rn` binary reports CPU-only support.
+installed `whisper.rn` binary reports CPU-only support. Include the mutable
+source revision indicator, local model size/modified time, separate file and
+native-context initialization durations, `maxThreads`, transcription duration,
+and audio-duration real-time factor in command diagnostics.
 Do not parse or execute a command in this POC. The SDK has no yellow LED value; use orange for the
 listening-finished acknowledgement and log the effective color.
 

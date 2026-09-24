@@ -37,6 +37,14 @@ internal object GlassesAlertPlayback {
     val audioFocusGranted: Boolean?,
     val runtimeForegroundTypes: Int,
     val activityVisible: Boolean,
+    val outputStreamVolume: Int?,
+    val outputStreamVolumeMax: Int?,
+    val outputStreamMuted: Boolean?,
+    val playerDurationMs: Int?,
+    val playerPositionMs: Int?,
+    val playerIsPlaying: Boolean?,
+    val playerAudioSessionId: Int?,
+    val playerGain: Float,
   )
 
   data class SpeechPlaybackResult(
@@ -81,6 +89,8 @@ internal object GlassesAlertPlayback {
   private var speechAudioFocusResult: Int? = null
   private var speechRouteListener: AudioRouting.OnRoutingChangedListener? = null
   private var speechRouteTimeout: Runnable? = null
+  private var speechProgressRunnable: Runnable? = null
+  private var speechPlayerGain = 0.0f
   private var speechFinishedCallback: ((SpeechPlaybackResult) -> Unit)? = null
   private val cancelledSpeechCommands = LinkedHashSet<String>()
   private const val MAX_CANCELLED_SPEECH_COMMANDS = 32
@@ -194,6 +204,7 @@ internal object GlassesAlertPlayback {
     commandId: String,
     fileUri: String,
     onStarted: (SpeechPlaybackTelemetry) -> Unit,
+    onProgress: (SpeechPlaybackTelemetry) -> Unit,
     onFinished: (SpeechPlaybackResult) -> Unit,
   ): Map<String, Any> {
     stopSpeechAudio(null)
@@ -263,7 +274,7 @@ internal object GlassesAlertPlayback {
             val listener = AudioRouting.OnRoutingChangedListener { _ ->
               synchronized(this@GlassesAlertPlayback) {
                 if (speechPlayer !== prepared || speechCommandId != commandId) return@OnRoutingChangedListener
-                handleSpeechRouteChange(prepared, device, commandId, onStarted, onFinished)
+                handleSpeechRouteChange(prepared, device, commandId, onStarted, onProgress, onFinished)
               }
             }
             speechRouteListener = listener
@@ -281,7 +292,7 @@ internal object GlassesAlertPlayback {
               )
               return@synchronized
             }
-            handleSpeechRouteChange(prepared, device, commandId, onStarted, onFinished)
+            handleSpeechRouteChange(prepared, device, commandId, onStarted, onProgress, onFinished)
             if (!speechRouteVerified) {
               val timeout = Runnable {
                 synchronized(this@GlassesAlertPlayback) {
@@ -347,6 +358,7 @@ internal object GlassesAlertPlayback {
       speechRoutedDeviceType = null
       speechRouteVerified = false
       speechAudioFocusResult = null
+      speechPlayerGain = 0.0f
       speechFinishedCallback = onFinished
       player.prepareAsync()
     } catch (error: Exception) {
@@ -407,6 +419,11 @@ internal object GlassesAlertPlayback {
   ) {
     synchronized(this) {
       if (speechPlayer !== player || speechCommandId != commandId) return
+      val telemetry = speechPlaybackTelemetry(player)
+      Log.i(
+        SPEECH_TAG,
+        "playback_terminal command_id=$commandId status=$status duration_ms=${durationMs ?: "unknown"} player_duration_ms=${telemetry.playerDurationMs ?: "unknown"} player_position_ms=${telemetry.playerPositionMs ?: "unknown"} player_is_playing=${telemetry.playerIsPlaying ?: "unknown"} player_audio_session_id=${telemetry.playerAudioSessionId ?: "unknown"} player_gain=${telemetry.playerGain} output_stream_volume=${telemetry.outputStreamVolume ?: "unknown"} output_stream_volume_max=${telemetry.outputStreamVolumeMax ?: "unknown"} output_stream_muted=${telemetry.outputStreamMuted ?: "unknown"} route_verified=${telemetry.routeVerified} audio_focus_result=${telemetry.audioFocusResult ?: "unknown"} routed_device_id=${telemetry.routedDeviceId ?: "unknown"} routed_device_type=${telemetry.routedDeviceType ?: "unknown"} runtime_foreground_types=${telemetry.runtimeForegroundTypes} activity_visible=${telemetry.activityVisible} error=${error ?: "none"}",
+      )
       val result = speechPlaybackResult(player, status, durationMs, error)
       clearSpeechPlaybackState(player)
       try {
@@ -446,6 +463,7 @@ internal object GlassesAlertPlayback {
     expectedDevice: AudioDeviceInfo,
     commandId: String,
     onStarted: (SpeechPlaybackTelemetry) -> Unit,
+    onProgress: (SpeechPlaybackTelemetry) -> Unit,
     onFinished: (SpeechPlaybackResult) -> Unit,
   ) {
     if (speechPlayer !== player || speechCommandId != commandId || speechRouteVerified) return
@@ -457,6 +475,7 @@ internal object GlassesAlertPlayback {
     speechRouteTimeout = null
     try {
       player.setVolume(1.0f, 1.0f)
+      speechPlayerGain = 1.0f
     } catch (error: Exception) {
       finishSpeechPlayback(
         player,
@@ -471,9 +490,10 @@ internal object GlassesAlertPlayback {
     val telemetry = speechPlaybackTelemetry(player)
     Log.i(
       SPEECH_TAG,
-      "route_verified command_id=$commandId expected_device_id=${telemetry.expectedDeviceId} expected_device_name=${telemetry.expectedDeviceName} expected_device_type=${telemetry.expectedDeviceType} routed_device_id=${telemetry.routedDeviceId} routed_device_name=${telemetry.routedDeviceName} routed_device_type=${telemetry.routedDeviceType} audio_focus_result=${telemetry.audioFocusResult} runtime_foreground_types=${telemetry.runtimeForegroundTypes} activity_visible=${telemetry.activityVisible}",
+      "route_verified command_id=$commandId expected_device_id=${telemetry.expectedDeviceId} expected_device_name=${telemetry.expectedDeviceName} expected_device_type=${telemetry.expectedDeviceType} routed_device_id=${telemetry.routedDeviceId} routed_device_name=${telemetry.routedDeviceName} routed_device_type=${telemetry.routedDeviceType} audio_focus_result=${telemetry.audioFocusResult} output_stream_volume=${telemetry.outputStreamVolume ?: "unknown"} output_stream_volume_max=${telemetry.outputStreamVolumeMax ?: "unknown"} output_stream_muted=${telemetry.outputStreamMuted ?: "unknown"} player_duration_ms=${telemetry.playerDurationMs ?: "unknown"} player_position_ms=${telemetry.playerPositionMs ?: "unknown"} player_is_playing=${telemetry.playerIsPlaying ?: "unknown"} player_audio_session_id=${telemetry.playerAudioSessionId ?: "unknown"} player_gain=${telemetry.playerGain} runtime_foreground_types=${telemetry.runtimeForegroundTypes} activity_visible=${telemetry.activityVisible}",
     )
     onStarted(telemetry)
+    scheduleSpeechProgress(player, commandId, onProgress)
   }
 
   private fun handleSpeechRouteChange(
@@ -481,17 +501,19 @@ internal object GlassesAlertPlayback {
     expectedDevice: AudioDeviceInfo,
     commandId: String,
     onStarted: (SpeechPlaybackTelemetry) -> Unit,
+    onProgress: (SpeechPlaybackTelemetry) -> Unit,
     onFinished: (SpeechPlaybackResult) -> Unit,
   ) {
     if (speechPlayer !== player || speechCommandId != commandId) return
     val routed = currentRoutedDevice(player)
     if (routed != null) rememberSpeechRoutedDevice(routed)
     if (routed?.id == expectedDevice.id) {
-      verifySpeechRoute(player, expectedDevice, commandId, onStarted, onFinished)
+      verifySpeechRoute(player, expectedDevice, commandId, onStarted, onProgress, onFinished)
     } else if (speechRouteVerified) {
       // A later Bluetooth route change must not leak speech to the handset.
       speechRouteVerified = false
       runCatching { player.setVolume(0.0f, 0.0f) }
+      speechPlayerGain = 0.0f
       Log.w(
         SPEECH_TAG,
         "route_lost command_id=$commandId expected_device_id=${expectedDevice.id} expected_device_name=${expectedDevice.productName} expected_device_type=${expectedDevice.type} routed_device_id=${routed?.id ?: "none"} routed_device_name=${routed?.productName ?: "none"} routed_device_type=${routed?.type ?: "none"}",
@@ -512,6 +534,7 @@ internal object GlassesAlertPlayback {
 
   private fun speechPlaybackTelemetry(player: MediaPlayer?): SpeechPlaybackTelemetry {
     val routed = player?.let(::currentRoutedDevice)
+    val manager = speechFocusManager
     return SpeechPlaybackTelemetry(
       expectedDeviceId = speechExpectedDeviceId,
       expectedDeviceName = speechExpectedDeviceName,
@@ -524,7 +547,33 @@ internal object GlassesAlertPlayback {
       audioFocusGranted = speechAudioFocusResult?.let { it == AudioManager.AUDIOFOCUS_REQUEST_GRANTED },
       runtimeForegroundTypes = DigitalBrainRuntime.service?.foregroundTypes ?: 0,
       activityVisible = DigitalBrainRuntime.activityVisible,
+      outputStreamVolume = runCatching { manager?.getStreamVolume(AudioManager.STREAM_MUSIC) }.getOrNull(),
+      outputStreamVolumeMax = runCatching { manager?.getStreamMaxVolume(AudioManager.STREAM_MUSIC) }.getOrNull(),
+      outputStreamMuted = runCatching { manager?.isStreamMute(AudioManager.STREAM_MUSIC) }.getOrNull(),
+      playerDurationMs = runCatching { player?.duration }.getOrNull(),
+      playerPositionMs = runCatching { player?.currentPosition }.getOrNull(),
+      playerIsPlaying = runCatching { player?.isPlaying }.getOrNull(),
+      playerAudioSessionId = runCatching { player?.audioSessionId }.getOrNull(),
+      playerGain = speechPlayerGain,
     )
+  }
+
+  private fun scheduleSpeechProgress(
+    player: MediaPlayer,
+    commandId: String,
+    onProgress: (SpeechPlaybackTelemetry) -> Unit,
+  ) {
+    val progress = object : Runnable {
+      override fun run() {
+        synchronized(this@GlassesAlertPlayback) {
+          if (speechPlayer !== player || speechCommandId != commandId) return
+          onProgress(speechPlaybackTelemetry(player))
+          handler.postDelayed(this, 1_000L)
+        }
+      }
+    }
+    speechProgressRunnable = progress
+    handler.postDelayed(progress, 1_000L)
   }
 
   private fun rememberSpeechRoutedDevice(device: AudioDeviceInfo) {
@@ -567,6 +616,8 @@ internal object GlassesAlertPlayback {
   private fun clearSpeechPlaybackState(player: MediaPlayer) {
     speechRouteTimeout?.let(handler::removeCallbacks)
     speechRouteTimeout = null
+    speechProgressRunnable?.let(handler::removeCallbacks)
+    speechProgressRunnable = null
     speechRouteListener?.let(player::removeOnRoutingChangedListener)
     speechRouteListener = null
     speechPlayer = null
@@ -580,6 +631,7 @@ internal object GlassesAlertPlayback {
     speechRoutedDeviceType = null
     speechRouteVerified = false
     speechAudioFocusResult = null
+    speechPlayerGain = 0.0f
     speechFinishedCallback = null
   }
 

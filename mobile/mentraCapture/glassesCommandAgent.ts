@@ -280,27 +280,68 @@ async function playSpeechAudio(command: ActiveCommand, fileUri: string): Promise
   if (!isCommandLive(command)) return;
   const playbackRequestedAt = monotonicNowMs();
   await new Promise<void>((resolve, reject) => {
+    const logPlaybackTelemetry = (event: {
+      expectedDeviceId?: number;
+      expectedDeviceName?: string;
+      expectedDeviceType?: number;
+      routedDeviceId?: number;
+      routedDeviceName?: string;
+      routedDeviceType?: number;
+      routeVerified: boolean;
+      audioFocusResult?: number;
+      audioFocusGranted?: boolean;
+      runtimeForegroundTypes: number;
+      activityVisible: boolean;
+      outputStreamVolume?: number;
+      outputStreamVolumeMax?: number;
+      outputStreamMuted?: boolean;
+      playerDurationMs?: number;
+      playerPositionMs?: number;
+      playerIsPlaying?: boolean;
+      playerAudioSessionId?: number;
+      playerGain: number;
+    }) => ({
+      expected_device_id: event.expectedDeviceId,
+      expected_device_name: event.expectedDeviceName,
+      expected_device_type: event.expectedDeviceType,
+      routed_device_id: event.routedDeviceId,
+      routed_device_name: event.routedDeviceName,
+      routed_device_type: event.routedDeviceType,
+      route_verified: event.routeVerified,
+      audio_focus_result: event.audioFocusResult,
+      audio_focus_granted: event.audioFocusGranted,
+      runtime_foreground_types: event.runtimeForegroundTypes,
+      app_visible: event.activityVisible,
+      output_stream_volume: event.outputStreamVolume,
+      output_stream_volume_max: event.outputStreamVolumeMax,
+      output_stream_muted: event.outputStreamMuted,
+      player_duration_ms: event.playerDurationMs,
+      player_position_ms: event.playerPositionMs,
+      player_is_playing: event.playerIsPlaying,
+      player_audio_session_id: event.playerAudioSessionId,
+      player_gain: event.playerGain,
+      playback_backend: 'Android MediaPlayer / USAGE_MEDIA / CONTENT_TYPE_SPEECH',
+    });
     const startedSubscription = native.addListener('onSpeechPlaybackStarted', (event) => {
       if (event.commandId !== command.commandId) return;
       debug('glasses_command_audio_playback_started', {
         command_id: command.commandId,
         native_route_verified_ms: Math.round(monotonicNowMs() - playbackRequestedAt),
-        expected_device_id: event.expectedDeviceId,
-        expected_device_name: event.expectedDeviceName,
-        expected_device_type: event.expectedDeviceType,
-        routed_device_id: event.routedDeviceId,
-        routed_device_name: event.routedDeviceName,
-        routed_device_type: event.routedDeviceType,
-        route_verified: event.routeVerified,
-        audio_focus_result: event.audioFocusResult,
-        audio_focus_granted: event.audioFocusGranted,
-        runtime_foreground_types: event.runtimeForegroundTypes,
-        app_visible: event.activityVisible,
+        ...logPlaybackTelemetry(event),
+      });
+    });
+    const progressSubscription = native.addListener('onSpeechPlaybackProgress', (event) => {
+      if (event.commandId !== command.commandId) return;
+      debug('glasses_command_audio_playback_progress', {
+        command_id: command.commandId,
+        elapsed_ms: Math.round(monotonicNowMs() - playbackRequestedAt),
+        ...logPlaybackTelemetry(event),
       });
     });
     const finishedSubscription = native.addListener('onSpeechPlaybackFinished', (event) => {
       if (event.commandId !== command.commandId) return;
       startedSubscription.remove();
+      progressSubscription.remove();
       finishedSubscription.remove();
       debug('glasses_command_audio_playback_finished', {
         command_id: command.commandId,
@@ -308,17 +349,7 @@ async function playSpeechAudio(command: ActiveCommand, fileUri: string): Promise
         native_duration_ms: event.durationMs,
         status: event.status,
         error: event.error,
-        expected_device_id: event.expectedDeviceId,
-        expected_device_name: event.expectedDeviceName,
-        expected_device_type: event.expectedDeviceType,
-        routed_device_id: event.routedDeviceId,
-        routed_device_name: event.routedDeviceName,
-        routed_device_type: event.routedDeviceType,
-        route_verified: event.routeVerified,
-        audio_focus_result: event.audioFocusResult,
-        audio_focus_granted: event.audioFocusGranted,
-        runtime_foreground_types: event.runtimeForegroundTypes,
-        app_visible: event.activityVisible,
+        ...logPlaybackTelemetry(event),
       });
       if (event.status === 'completed') resolve();
       else reject(new Error(event.error || 'Glasses speech playback failed.'));
@@ -328,6 +359,7 @@ async function playSpeechAudio(command: ActiveCommand, fileUri: string): Promise
       .then((result) => {
         if (!result.started) {
           startedSubscription.remove();
+          progressSubscription.remove();
           finishedSubscription.remove();
           debug('glasses_command_audio_playback_rejected', {
             command_id: command.commandId,
@@ -350,6 +382,7 @@ async function playSpeechAudio(command: ActiveCommand, fileUri: string): Promise
       })
       .catch((error) => {
         startedSubscription.remove();
+        progressSubscription.remove();
         finishedSubscription.remove();
         reject(error);
       });

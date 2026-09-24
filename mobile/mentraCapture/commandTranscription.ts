@@ -5,6 +5,7 @@ import {
   warmEnglishWhisperContext,
 } from '@/chat/localTranscription';
 import { normalizeTranscriptText } from '@/chat/voiceState';
+import { Platform } from 'react-native';
 
 import { appendMentraDebugLog, appendWakeCommandDebugLog } from './debug';
 import { retainWakeCommandAudio } from './wakeCommandDebug';
@@ -396,6 +397,8 @@ function errorDetails(error: unknown): Record<string, unknown> {
 function whisperAcceleration(context: unknown): {
   accelerator: 'gpu' | 'cpu';
   gpu_active: boolean;
+  gpu_requested: boolean;
+  native_backend: string;
   gpu_unavailable_reason: string | null;
 } {
   // whisper.rn exposes these fields from its native context at runtime, while
@@ -405,6 +408,12 @@ function whisperAcceleration(context: unknown): {
   return {
     accelerator: gpuActive ? 'gpu' : 'cpu',
     gpu_active: gpuActive,
+    gpu_requested: true,
+    native_backend: gpuActive
+      ? 'native_gpu'
+      : Platform.OS === 'android'
+        ? 'whisper.rn Android ggml CPU backend'
+        : 'native_cpu',
     gpu_unavailable_reason:
       !gpuActive && typeof nativeContext.reasonNoGPU === 'string'
         ? nativeContext.reasonNoGPU
@@ -455,7 +464,9 @@ export function isGlassesCommandSessionActive(): boolean {
 export async function warmGlassesCommandTranscription(): Promise<void> {
   if (!commandModelWarmup) {
     const startedAt = Date.now();
-    commandModelWarmup = warmEnglishWhisperContext()
+    commandModelWarmup = warmEnglishWhisperContext((diagnostic) => {
+      debug('glasses_command_whisper_initialization_stage', diagnostic);
+    })
       .then((context) => {
         debug('glasses_command_model_ready', {
           model: LOCAL_WHISPER_MODEL_FILE_NAME,
@@ -568,7 +579,12 @@ function endListening(
   const transcriptionStartedAt = Date.now();
   void (async () => {
     try {
-      let context = await warmEnglishWhisperContext();
+      let context = await warmEnglishWhisperContext((diagnostic) => {
+        debug('glasses_command_whisper_initialization_stage', {
+          command_id: session.id,
+          ...diagnostic,
+        });
+      });
       const initialModelReadyAt = Date.now();
       let transcriptionAttempt = 1;
       let retryRecoveryMs: number | null = null;
@@ -580,6 +596,7 @@ function endListening(
           model: LOCAL_WHISPER_MODEL_FILE_NAME,
           ...whisperContextIdentity(context),
           ...whisperAcceleration(context),
+          max_threads: 4,
         });
         return context.transcribeData(filteredPcm, {
           language: 'en',
@@ -652,11 +669,16 @@ function endListening(
         language: result.language,
         model: LOCAL_WHISPER_MODEL_FILE_NAME,
         ...whisperAcceleration(context),
+        max_threads: 4,
         segment_count: result.segments.length,
         aborted: result.isAborted,
         audio_duration_ms: audioDurationMs,
         model_wait_ms: modelReadyAt - transcriptionStartedAt,
         transcription_ms: transcriptionMs,
+        transcription_real_time_factor:
+          audioDurationMs > 0
+            ? Math.round((transcriptionMs / audioDurationMs) * 1_000) / 1_000
+            : null,
         transcription_attempt_count: transcriptionAttempt,
         whisper_context_recovery_ms: retryRecoveryMs,
         transcription_total_ms: transcriptionFinishedAt - initialModelReadyAt,

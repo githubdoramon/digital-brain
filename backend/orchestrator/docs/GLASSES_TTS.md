@@ -53,6 +53,14 @@ whether the selected ONNX providers include an accelerator. Timings are
 measured around the dependency's existing calls; the wrappers do not alter
 audio output. Recheck this instrumentation when upgrading `kokoro-onnx`.
 
+The record also includes the installed `kokoro-onnx` and `onnxruntime` versions,
+artifact basenames and byte sizes (never configured paths), providers active in
+the session and available in the runtime, common thread-count environment
+overrides, and synthesis real-time factor. The encoded samples are summarized
+as peak, RMS, and near-silence fraction with the analysis duration. These
+signal values let mobile playback evidence be compared against what Kokoro
+actually generated; they do not record or upload speech samples or answer text.
+
 The startup log `[glasses] Kokoro startup warmup` records the same stages for
 its synthetic inference. A successful warmup should make a user request report
 `cold_start=0`; compare startup `engine_load_ms` and `engine_create_ms` to
@@ -77,6 +85,22 @@ and tool lifecycle logs, also carry that ID. The mobile export retains complete
 command IDs, proxy/backend response timings, audio download phases, and native
 playback route/focus diagnostics while continuing to redact credentials, paths,
 and audio data.
+
+Android speech events also record the selected native Whisper backend, whether
+GPU was requested and actually activated, the native reason when acceleration
+is unavailable, model cache/size/modified-time metadata, model-file and native
+context initialization durations, and the configured transcription thread
+count. The Hugging Face URL currently resolves the mutable `main` revision, so
+these fields identify the cached artifact's size and local modification time,
+not a content hash or immutable upstream commit.
+
+For TTS playback, Android records one-second MediaPlayer playhead samples plus
+duration, `isPlaying`, audio-session ID, player gain, MUSIC stream volume/mute,
+focus, route, service types, and app visibility. A completed MediaPlayer event
+means the player reached its completion callback; it is not acoustic
+confirmation. The native log records the same terminal snapshot for Logcat.
+Notification tones use AudioTrack, so an audible notification alone does not
+prove the distinct MediaPlayer speech path is audible.
 
 Artifact provenance is the upstream `model-files-v1.0` release. The
 `kokoro-onnx` package is MIT-licensed and the Kokoro model is Apache-2.0. If a

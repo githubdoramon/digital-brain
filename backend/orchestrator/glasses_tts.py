@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import importlib.metadata
 import io
 import os
 import threading
 import time
 import wave
 from contextvars import ContextVar, Token
+from functools import cache
 from pathlib import Path
 from typing import Any
 
@@ -21,7 +23,7 @@ _engine_key: tuple[str, str] | None = None
 _engine_lock = threading.Lock()
 _synthesis_slots = threading.BoundedSemaphore(1)
 _synthesis_limit = 1
-_active_timings: ContextVar[dict[str, float] | None] = ContextVar(
+_active_timings: ContextVar[dict[str, Any] | None] = ContextVar(
     "glasses_tts_timings", default=None
 )
 
@@ -118,6 +120,27 @@ def _cpu_capacity_timings() -> dict[str, float]:
     return values
 
 
+def _artifact_diagnostics(path: str, prefix: str) -> dict[str, Any]:
+    """Report artifact identity without logging deployment-specific paths."""
+    artifact = Path(path)
+    result: dict[str, Any] = {f"{prefix}_artifact_name": artifact.name}
+    try:
+        result[f"{prefix}_artifact_size_bytes"] = artifact.stat().st_size
+    except OSError:
+        result[f"{prefix}_artifact_size_bytes"] = None
+    return result
+
+
+@cache
+def _package_version(distribution: str) -> str:
+    try:
+        return importlib.metadata.version(distribution)
+    except importlib.metadata.PackageNotFoundError:
+        return "not_installed"
+    except Exception:
+        return "unavailable"
+
+
 def _record_timing(name: str, started_at: float) -> None:
     timings = _active_timings.get()
     if timings is not None:
@@ -126,18 +149,18 @@ def _record_timing(name: str, started_at: float) -> None:
 
 def synthesize_kokoro_with_timings(
     text: str,
-    timings: dict[str, float],
+    timings: dict[str, Any],
     synthesizer: Any | None = None,
 ) -> bytes:
     """Run the public synthesizer while collecting its per-stage timings."""
-    token: Token[dict[str, float] | None] = _active_timings.set(timings)
+    token: Token[dict[str, Any] | None] = _active_timings.set(timings)
     try:
         return (synthesizer or synthesize_kokoro)(text)
     finally:
         _active_timings.reset(token)
 
 
-def warm_kokoro() -> dict[str, float | str]:
+def warm_kokoro() -> dict[str, Any]:
     """Load Kokoro and run one tiny inference during application startup.
 
     The process-local engine remains referenced by ``_engine`` after this call,
@@ -149,7 +172,7 @@ def warm_kokoro() -> dict[str, float | str]:
         return {"outcome": "skipped_not_configured"}
 
     started_at = time.perf_counter()
-    timings: dict[str, float] = {}
+    timings: dict[str, Any] = {}
     try:
         # Generate and discard a minimal utterance to exercise model load and
         # inference initialization. No user text or audio is persisted.
@@ -202,15 +225,24 @@ def synthesize_kokoro(text: str) -> bytes:
     """
     total_started_at = time.perf_counter()
     timings = _active_timings.get()
+    model_path = _config("KOKORO_MODEL_PATH", "")
+    voices_path = _config("KOKORO_VOICES_PATH", "")
+    voice = _config("KOKORO_VOICE", "af_heart")
+    lang = _config("KOKORO_LANG_CODE", "en-us")
     if timings is not None:
         timings["text_character_count"] = float(len(text))
         timings["text_word_count"] = float(len(text.split()))
         timings["process_id"] = float(os.getpid())
         timings.update(_cpu_capacity_timings())
-    model_path = _config("KOKORO_MODEL_PATH", "")
-    voices_path = _config("KOKORO_VOICES_PATH", "")
-    voice = _config("KOKORO_VOICE", "af_heart")
-    lang = _config("KOKORO_LANG_CODE", "en-us")
+        timings.update(_artifact_diagnostics(model_path, "model"))
+        timings.update(_artifact_diagnostics(voices_path, "voices"))
+        timings["kokoro_onnx_version"] = _package_version("kokoro-onnx")
+        timings["onnxruntime_package_version"] = _package_version("onnxruntime")
+        timings["kokoro_voice"] = voice
+        timings["kokoro_language"] = lang
+        timings["kokoro_max_concurrency"] = os.getenv("KOKORO_MAX_CONCURRENCY", "1")
+        for variable in ("OMP_NUM_THREADS", "ORT_NUM_THREADS", "OPENBLAS_NUM_THREADS"):
+            timings[f"{variable.lower()}_env"] = os.getenv(variable, "library_default")
     if not model_path or not voices_path:
         _record_timing("call_total_ms", total_started_at)
         raise TTSUnavailableError(
@@ -264,9 +296,18 @@ def synthesize_kokoro(text: str) -> bytes:
                 except Exception:
                     providers = []
                 timings["execution_provider_count"] = float(len(providers))
+                timings["execution_providers"] = ",".join(providers) or "unavailable"
                 timings["execution_provider_accelerated"] = float(
                     any(provider != "CPUExecutionProvider" for provider in providers)
                 )
+                try:
+                    import onnxruntime as ort
+
+                    timings["onnxruntime_available_providers"] = ",".join(
+                        ort.get_available_providers()
+                    )
+                except Exception:
+                    timings["onnxruntime_available_providers"] = "unavailable"
             _install_engine_timing_hooks(engine)
         semaphore = _synthesis_semaphore()
         semaphore_wait_started_at = time.perf_counter()
@@ -300,9 +341,14 @@ def synthesize_kokoro(text: str) -> bytes:
                 timings["sample_count"] = float(sample_count)
                 timings["sample_rate_hz"] = float(sample_rate)
                 timings["audio_duration_ms"] = round(sample_count / int(sample_rate) * 1_000, 1)
+                if timings["audio_duration_ms"] > 0:
+                    timings["tts_real_time_factor"] = round(
+                        timings.get("engine_create_ms", 0.0) / timings["audio_duration_ms"],
+                        3,
+                    )
             encode_started_at = time.perf_counter()
             try:
-                wav_bytes = _mono_wav(samples, int(sample_rate))
+                wav_bytes = _mono_wav(samples, int(sample_rate), timings=timings)
             finally:
                 _record_timing("wav_encode_ms", encode_started_at)
             if timings is not None:
@@ -319,7 +365,12 @@ def synthesize_kokoro(text: str) -> bytes:
             )
 
 
-def _mono_wav(samples: Any, sample_rate: int) -> bytes:
+def _mono_wav(
+    samples: Any,
+    sample_rate: int,
+    *,
+    timings: dict[str, Any] | None = None,
+) -> bytes:
     """Encode floating-point or integer samples as 16-bit mono WAV."""
     try:
         import numpy as np
@@ -334,6 +385,21 @@ def _mono_wav(samples: Any, sample_rate: int) -> bytes:
         if values.ndim != 1 or not np.isfinite(values).all():
             raise TTSUnavailableError("Kokoro returned invalid audio samples")
         clipped = np.clip(values, -1.0, 1.0)
+        if timings is not None:
+            analysis_started_at = time.perf_counter()
+            absolute = np.abs(clipped)
+            timings["audio_peak"] = float(np.max(absolute)) if absolute.size else 0.0
+            timings["audio_rms"] = (
+                float(np.sqrt(np.mean(np.square(clipped)))) if clipped.size else 0.0
+            )
+            timings["audio_near_silence_fraction"] = (
+                float(np.count_nonzero(absolute < 0.0001) / absolute.size)
+                if absolute.size
+                else 1.0
+            )
+            timings["audio_signal_analysis_ms"] = round(
+                max(0.0, time.perf_counter() - analysis_started_at) * 1_000, 1
+            )
         pcm = (clipped * 32767.0).astype("<i2", copy=False).tobytes()
     else:
         try:
@@ -341,14 +407,31 @@ def _mono_wav(samples: Any, sample_rate: int) -> bytes:
         except TypeError as exc:
             raise TTSUnavailableError("Kokoro returned invalid audio samples") from exc
         pcm_buffer = bytearray()
+        peak = 0.0
+        square_sum = 0.0
+        near_silence_count = 0
+        analysis_started_at = time.perf_counter()
         for sample in values:
             try:
                 value = float(sample)
             except (TypeError, ValueError) as exc:
                 raise TTSUnavailableError("Kokoro returned non-numeric audio samples") from exc
             value = max(-1.0, min(1.0, value))
+            peak = max(peak, abs(value))
+            square_sum += value * value
+            near_silence_count += int(abs(value) < 0.0001)
             pcm_buffer.extend(int(value * 32767).to_bytes(2, "little", signed=True))
         pcm = bytes(pcm_buffer)
+        if timings is not None:
+            sample_count = len(values)
+            timings["audio_peak"] = peak
+            timings["audio_rms"] = (square_sum / sample_count) ** 0.5 if sample_count else 0.0
+            timings["audio_near_silence_fraction"] = (
+                near_silence_count / sample_count if sample_count else 1.0
+            )
+            timings["audio_signal_analysis_ms"] = round(
+                max(0.0, time.perf_counter() - analysis_started_at) * 1_000, 1
+            )
     output = io.BytesIO()
     with wave.open(output, "wb") as wav:
         wav.setnchannels(1)

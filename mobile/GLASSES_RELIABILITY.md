@@ -57,6 +57,32 @@ The phone's media-volume setting is unchanged, so perceived loudness still
 depends on the Bluetooth volume and glasses speakers. Notification source
 package filtering, cooldown, and local privacy boundaries remain in force.
 
+Glasses-command playback uses Android `MediaPlayer` with `USAGE_MEDIA` and
+`CONTENT_TYPE_SPEECH`; notification tones use `AudioTrack`. Keep those paths
+distinct in diagnosis. Playback start/progress/terminal events carry the
+command ID, verified route and focus, MUSIC stream level/mute state, player
+gain, audio session, playhead/duration, `isPlaying`, service foreground types,
+and app visibility. Native Android logs carry route and terminal snapshots;
+the exported mobile trace samples player state once per second. A MediaPlayer
+completion callback proves the player reached its end, not that sound was
+acoustically audible.
+
+## Whisper runtime diagnostics
+
+The glasses command path uses the English `ggml-base.en.bin` artifact from the
+Hugging Face `whisper.cpp` repository. Its current URL uses mutable `main`;
+mobile logs therefore include the model file size and local modification time,
+but do not claim an immutable upstream revision or content hash. Initialization
+logs separate model-file availability from native context initialization.
+Android's installed `whisper.rn` native build explicitly returns
+`gpu=false`/`Currently not supported`, and its CMake source selects
+`WSP_GGML_USE_CPU` without a GPU backend. The JavaScript `useGpu: true` option
+is only a request and does not enable Android acceleration in this build.
+Command traces record the native backend/reason, requested acceleration,
+`maxThreads`, actual transcription duration, audio duration, and real-time
+factor. Do not change threads or model size before comparing those values on
+the target device.
+
 ## Firmware updates
 
 Settings → Smart glasses → Firmware uses the installed SDK's
