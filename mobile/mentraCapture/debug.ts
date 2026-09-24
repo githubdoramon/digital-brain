@@ -33,6 +33,14 @@ function isTraceIdentifierKey(key: string): boolean {
   return ['commandid', 'requestid', 'correlationid', 'traceid'].includes(normalized);
 }
 
+function isSafeNumericTimingOrSizeField(key: string, value: unknown): boolean {
+  return (
+    typeof value === 'number' &&
+    Number.isFinite(value) &&
+    /(?:_ms|_bytes)$/i.test(key)
+  );
+}
+
 function isPlaybackRouteKey(key: string, insideAvailableOutputs: boolean): boolean {
   const normalized = key.replace(/[^a-z]/gi, '').toLowerCase();
   return (
@@ -121,7 +129,13 @@ function redact(value: unknown, depth = 0, insideAvailableOutputs = false): unkn
       .slice(0, 40)
       .forEach(([key, item]) => {
         const isSafePlaybackField = isPlaybackRouteKey(key, insideAvailableOutputs);
-        if (!isTraceIdentifierKey(key) && !isSafePlaybackField && REDACTED_KEY.test(key)) {
+        const isSafeNumericDiagnostic = isSafeNumericTimingOrSizeField(key, item);
+        if (
+          !isTraceIdentifierKey(key) &&
+          !isSafePlaybackField &&
+          !isSafeNumericDiagnostic &&
+          REDACTED_KEY.test(key)
+        ) {
           result[key] = '[redacted]';
         } else {
           result[key] = redact(
