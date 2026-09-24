@@ -107,7 +107,11 @@ def shortcut_for_transcript(transcript: str) -> str | None:
     return {
         "slash new": "new",
         "front gate": "front_gate",
+        "house gate": "front_gate",
+        "open house": "front_gate",
         "car gate": "car_gate",
+        "open car gate": "car_gate",
+        "garage gate": "car_gate",
     }.get(normalize_transcript(transcript))
 
 

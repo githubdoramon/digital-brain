@@ -61,6 +61,34 @@ as peak, RMS, and near-silence fraction with the analysis duration. These
 signal values let mobile playback evidence be compared against what Kokoro
 actually generated; they do not record or upload speech samples or answer text.
 
+## Controlled CPU benchmark
+
+Use `scripts/benchmark_kokoro.py` for offline thread-count comparisons. It
+creates an independent CPU inference session with the requested ONNX intra-op
+thread count, warms it, and reports per-run and median inference, phonemization,
+trimming, total synthesis, audio duration, and real-time factor. It prints text
+lengths but never prints or saves the benchmark text. The default benchmark
+fixture is synthetic and contains no user data. It attempts to lower process
+priority to reduce interference with live service work.
+
+Run it from the orchestrator checkout or pipe it into an existing container so
+the benchmark uses the deployed image's model, libraries, CPU affinity, and
+cgroup limits without adding an HTTP endpoint or changing a serving worker:
+
+```sh
+docker exec -i -w /app mem-orchestrator python - --threads 0 --iterations 3 \
+  < backend/orchestrator/scripts/benchmark_kokoro.py
+```
+
+Repeat with `--threads 1`, `--threads 2`, `--threads 4`, and `--threads 8`.
+Run at a quiet time: even at lower process priority, the benchmark consumes CPU
+and memory in the same container as the live service. Compare medians from the
+same host and model artifact; `--threads 0` is ONNX Runtime's automatic default.
+Use `--model-path` and `--voices-path` to compare candidate artifacts already
+present on the host. This benchmark measures warm full-utterance synthesis; it
+does not measure mobile download, Bluetooth playback, or streaming time to first
+audio.
+
 The startup log `[glasses] Kokoro startup warmup` records the same stages for
 its synthetic inference. A successful warmup should make a user request report
 `cold_start=0`; compare startup `engine_load_ms` and `engine_create_ms` to
