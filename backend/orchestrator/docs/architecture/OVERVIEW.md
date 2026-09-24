@@ -114,34 +114,36 @@ sequenceDiagram
   and cancelled/ambiguous work remains processing so a toggle cannot be
   replayed. Agent voice mode is injected into every selected conversational
   profile and validates/repairs the answer before existing conversation
-  persistence, then sends that exact canonical text to complete CPU-only
-  Kokoro synthesis. Audio is an authenticated, process-local mono WAV
-  reference with TTL and post-download deletion; it is never persisted to
-  conversations, documents, or memory. The orchestrator image bundles the
-  checksum-verified Kokoro v1.0 INT8 model and voices for CPU-only inference;
-  runtime paths and voice selection remain configurable through environment
-  variables. Each backend worker warms Kokoro with one short inference during
-  startup and retains the process-local engine for its lifetime; warmup failure
-  does not prevent startup. Mobile may include optional transcription timing fields; the
-  backend emits those alongside route/auth, agent, TTS subphase, and audio-store
-  timings in one correlated `[glasses] command latency` record immediately
-  before returning the response. The web proxy records auth resolution and
+  persistence, then sends that exact canonical text to the independently
+  configured OpenAI-compatible Qwen TTS `/v1/audio/speech` endpoint. Its base
+  URL and bearer token use `TTS_BASE_URL` and `TTS_API_KEY`,
+  independent of LLM settings. The backend validates returned PCM WAV
+  bytes and places them in an authenticated, process-local audio reference
+  with TTL and post-download deletion; audio is never persisted to
+  conversations, documents, or memory. Kokoro models and ONNX dependencies are
+  not bundled. Startup reports safe TTS configuration status without contacting
+  the provider or blocking startup. Mobile may include optional transcription
+  timing fields; the backend emits those alongside route/auth, agent, TTS
+  request/header/body/WAV-validation phases, and audio-store timings in one
+  correlated `[glasses] command latency` record immediately before returning
+  the response. The web proxy records auth resolution and
   upstream response timing under that same command ID and returns proxy/backend
   phase headers to the phone; proxy body completion is logged separately.
   Confirmed wake detection assigns the same command ID used by transcription,
   command transport, audio download, and playback. See `GLASSES_TTS.md` for the
-  full correlated timing fields, including Kokoro's inference sub-stages.
-  Kokoro records active/available ONNX providers, artifact sizes, runtime
-  versions, generated-signal levels, and synthesis real-time factor. Android
-  records the selected Whisper backend and MediaPlayer progress/output state;
-  see `mobile/GLASSES_RELIABILITY.md` for the mobile diagnostic contract.
+  full correlated timing fields, including remote TTS response phases. The
+  provider request forwards the command ID and records only timing, response
+  metadata, and safe failure details; it does not log speech text, endpoint, or
+  credentials. Android records the selected Whisper backend and MediaPlayer
+  progress/output state; see `mobile/GLASSES_RELIABILITY.md` for the mobile
+  diagnostic contract.
   Mobile also owns bounded Bluetooth control-plane recovery, sustained local
   call alerts, and user-initiated glasses firmware updates. Firmware maintenance
   persists on the phone and pauses capture/wake commands while the glasses run
   Mentra's OTA protocol; firmware bytes do not pass through the backend.
   See `mobile/GLASSES_RELIABILITY.md` in the repository root for the lifecycle,
   installation prerequisites, and hardware validation checklist.
-  variables. Artifact provenance and build/runtime settings are documented in
+  Provider settings and runtime diagnostics are documented in
   `backend/orchestrator/docs/GLASSES_TTS.md`.
 
 - Android mobile background work uses one app-owned foreground service and one

@@ -20,9 +20,12 @@ environment-overridable for deployment-specific HA inventories. Gate commands
 are acknowledged once the MCP call task is dispatched; later Home Assistant
 success/failure is logged asynchronously. Voice responses use the
 request-level modality across all conversational profiles, persist the same
-sanitized answer sent to CPU-only Kokoro, and expose only short-lived
-authenticated mono WAV references. Ambiguous cancellation/timeouts must never
-replay a gate toggle; input command WAV capture remains mobile-owned. Mobile
+sanitized answer sent to the OpenAI-compatible Qwen TTS endpoint, and expose
+only short-lived authenticated PCM WAV references. Configure its endpoint
+and bearer token separately with `TTS_BASE_URL` and `TTS_API_KEY`; never fall
+back to LLM endpoint credentials. Ambiguous
+cancellation/timeouts must never replay a gate toggle; input command WAV
+capture remains mobile-owned. Mobile
 transcription durations are accepted as optional `client_timings`; the backend
 emits one final correlated `[glasses] command latency` record with those values,
 server phase timings, outcome, and total time immediately before returning.
@@ -38,17 +41,16 @@ it through transcription, mobile transport, proxy/backend requests, audio
 download, and playback. Mobile exports must include allow-listed proxy and
 backend response timing headers; the proxy logs downstream body completion,
 failure, or cancellation under that same ID.
-Each backend worker warms Kokoro with a short synthetic inference during
-application startup and retains its process-local model instance for the
-worker's lifetime; warmup failures are logged without blocking startup. Keep
-per-command and startup timings for phonemization, tokenization, ONNX inference,
-audio trimming, remaining engine work, WAV encoding, and available CPU quota;
-also record runtime/package versions, active and available execution providers,
-thread overrides, model artifact sizes, generated-signal peak/RMS/near-silence,
-and synthesis real-time factor. Review these before changing model, threading,
-or concurrency settings. Android speech logs include per-second player position,
-duration, play state, session, gain, MUSIC volume/mute, route and focus; a player
-completion event is not proof of audible output.
+Each backend worker reports safe TTS configuration during application startup
+without contacting or warming the remote service. Reuse a pooled HTTP client
+and close it at shutdown. Keep per-command TTS provider, model, voice, HTTP
+status, total request/header/body durations, WAV validation, response byte
+count, sample rate, frame count, generated audio duration, outcome, and safe
+failure class. Forward the command ID to the TTS service. Never log answer text,
+audio, endpoint URL, or authorization data. Do not retry speech requests or
+fall back to LLM credentials. Android speech logs include per-second player
+position, duration, play state, session, gain, MUSIC volume/mute, route and
+focus; a player completion event is not proof of audible output.
 
 **Mobile routing convention**: For dynamic mobile routes, prefer folder-based segments with `index.tsx` (for example `mobile/app/contacts/[contactId]/index.tsx`) so nested subroutes can be added without migrating route structure later.
 

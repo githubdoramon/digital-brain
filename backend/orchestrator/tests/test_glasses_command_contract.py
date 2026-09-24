@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import asyncio
-import sys
-from types import ModuleType, SimpleNamespace
+import io
+import wave
+from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
@@ -370,35 +371,59 @@ async def test_gate_dispatch_does_not_wait_for_ha_result(monkeypatch):
     await asyncio.sleep(0)
 
 
-def test_kokoro_engine_is_cached_and_cpu_provider_requested(monkeypatch, tmp_path):
+def test_qwen_tts_uses_openai_compatible_request_and_returns_wav(monkeypatch):
     import glasses_tts
 
-    instances = []
-    create_calls = []
+    audio_buffer = io.BytesIO()
+    with wave.open(audio_buffer, "wb") as output:
+        output.setnchannels(1)
+        output.setsampwidth(2)
+        output.setframerate(16_000)
+        output.writeframes(b"\x00\x00" * 160)
 
-    class FakeKokoro:
-        def __init__(self, *args, **kwargs):
-            instances.append((args, kwargs))
+    captured = {}
 
-        def create(self, *_args, **kwargs):
-            create_calls.append(kwargs)
-            return [0.0, 0.1], 16000
+    class FakeResponse:
+        status_code = 200
 
-    module = ModuleType("kokoro_onnx")
-    module.Kokoro = FakeKokoro
-    monkeypatch.setitem(sys.modules, "kokoro_onnx", module)
-    model = tmp_path / "model.onnx"
-    voices = tmp_path / "voices.bin"
-    monkeypatch.setenv("KOKORO_MODEL_PATH", str(model))
-    monkeypatch.setenv("KOKORO_VOICES_PATH", str(voices))
-    glasses_tts._engine = None
-    glasses_tts._engine_key = None
-    glasses_tts.synthesize_kokoro("one")
-    glasses_tts.synthesize_kokoro("two")
-    assert len(instances) == 1
-    assert instances[0][1]["providers"] == ["CPUExecutionProvider"]
-    assert create_calls[0]["voice"] == "af_heart"
-    assert create_calls[0]["lang"] == "en-us"
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def iter_bytes(self):
+            yield audio_buffer.getvalue()
+
+    class FakeClient:
+        def stream(self, method, url, **kwargs):
+            captured.update(method=method, url=url, **kwargs)
+            return FakeResponse()
+
+    monkeypatch.setenv("TTS_BASE_URL", "https://tts.example.invalid/v1")
+    monkeypatch.setenv("TTS_API_KEY", "test-token")
+    monkeypatch.setenv("TTS_MODEL", "qwen3-tts")
+    monkeypatch.setenv("TTS_VOICE", "aiden")
+    monkeypatch.setattr(glasses_tts, "_get_http_client", lambda: FakeClient())
+
+    timings = {}
+    result = glasses_tts.synthesize_speech_with_timings(
+        "Short sample.", timings, "command-123", 5.0
+    )
+
+    assert result == audio_buffer.getvalue()
+    assert captured["method"] == "POST"
+    assert captured["url"] == "https://tts.example.invalid/v1/audio/speech"
+    assert captured["headers"]["Authorization"] == "Bearer test-token"
+    assert captured["headers"]["X-Glasses-Command-Id"] == "command-123"
+    assert captured["json"] == {
+        "model": "qwen3-tts",
+        "voice": "aiden",
+        "input": "Short sample.",
+        "response_format": "wav",
+    }
+    assert timings["provider"] == "openai_compatible_qwen_tts"
+    assert timings["audio_duration_ms"] == 10.0
 
 
 @pytest.mark.asyncio
@@ -520,7 +545,11 @@ async def test_agent_is_server_forced_voice_and_tts_uses_canonical_answer(monkey
         llm_kwargs.update(kwargs)
         return {"answer": "A repaired answer.", "search_results": [], "events_results": []}
 
-    monkeypatch.setattr(glasses_commands, "synthesize_kokoro", lambda text: tts_inputs.append(text) or b"wav")
+    monkeypatch.setattr(
+        glasses_commands,
+        "synthesize_speech_with_timings",
+        lambda text, *_args, **_kwargs: tts_inputs.append(text) or b"wav",
+    )
     monkeypatch.setattr("llm.answer_question", fake_answer)
 
     payload = SimpleNamespace(

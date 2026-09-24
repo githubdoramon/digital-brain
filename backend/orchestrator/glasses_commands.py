@@ -17,8 +17,7 @@ from db import get_conn
 from glasses_audio import put_audio
 from glasses_tts import (
     TTSUnavailableError,
-    synthesize_kokoro,
-    synthesize_kokoro_with_timings,
+    synthesize_speech_with_timings,
 )
 from observability.log_stream import bind_log_correlation_id, reset_log_correlation_id
 from observability.logger import get_runtime_logger
@@ -60,14 +59,19 @@ def _record_tts_timings(timings: dict[str, Any]) -> None:
                 command_timings[f"tts_{name}"] = value
 
 
-async def _synthesize_voice_answer(text: str, timeout: float | None = None) -> bytes:
+async def _synthesize_voice_answer(
+    text: str,
+    timeout: float | None = None,
+    command_id: str | None = None,
+) -> bytes:
     timings: dict[str, Any] = {}
     try:
         synthesis = asyncio.to_thread(
-            synthesize_kokoro_with_timings,
+            synthesize_speech_with_timings,
             text,
             timings,
-            synthesize_kokoro,
+            command_id,
+            timeout,
         )
         if timeout is not None:
             return await asyncio.wait_for(synthesis, timeout=timeout)
@@ -580,7 +584,9 @@ async def _process_command(payload: Any, user: dict[str, Any]) -> dict[str, Any]
                         if remaining <= 0:
                             raise asyncio.TimeoutError
                         with _timed_phase("tts_synthesis_ms"):
-                            wav_bytes = await _synthesize_voice_answer(answer, timeout=remaining)
+                            wav_bytes = await _synthesize_voice_answer(
+                                answer, timeout=remaining, command_id=command_id
+                            )
                         if (
                             non_shortcut_deadline is not None
                             and asyncio.get_running_loop().time() >= non_shortcut_deadline
@@ -684,8 +690,17 @@ async def _process_command(payload: Any, user: dict[str, Any]) -> dict[str, Any]
                         # saved canonical answer.
                         audio_meta = None
                         try:
+                            remaining = (
+                                non_shortcut_deadline - asyncio.get_running_loop().time()
+                                if non_shortcut_deadline is not None
+                                else None
+                            )
+                            if remaining is not None and remaining <= 0:
+                                raise asyncio.TimeoutError
                             with _timed_phase("tts_synthesis_ms"):
-                                wav_bytes = await _synthesize_voice_answer(answer)
+                                wav_bytes = await _synthesize_voice_answer(
+                                    answer, timeout=remaining, command_id=command_id
+                                )
                             if (
                                 non_shortcut_deadline is not None
                                 and asyncio.get_running_loop().time() >= non_shortcut_deadline
