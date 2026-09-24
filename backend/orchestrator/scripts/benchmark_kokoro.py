@@ -21,7 +21,6 @@ import time
 from pathlib import Path
 from typing import Any
 
-
 DEFAULT_TEXT = (
     "The team reviewed today's schedule, confirmed the next steps, and agreed "
     "to share a brief update tomorrow. This short answer keeps the key details "
