@@ -14,6 +14,7 @@ This is the key component that decides:
 
 import json
 import os
+import re
 import sys
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -26,6 +27,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspa
 from agent.enums import ToolStatus
 from agent.router import TOOL_GROUPS
 from observability import trace
+from search_normalization import normalize_search_text
 from tools.action_enums import LookupContactAction
 from ui_dsl.clarification import extract_need_user_input
 
@@ -176,6 +178,25 @@ class PostExecutionValidator:
                 coverage=GoalCoverage.FAILED,
                 reason=f"Non-zero exit code: {result['returncode']}",
                 extracted_facts=[f"Command failed: {result.get('stderr', 'unknown error')}"],
+            )
+
+        if tool_name == "fetch_web_page":
+            documents = result.get("documents")
+            page_text = "\n".join(
+                str(document.get("content") or "").strip()
+                for document in documents
+                if isinstance(document, dict) and str(document.get("content") or "").strip()
+            ) if isinstance(documents, list) else ""
+            if not page_text:
+                return PostExecutionResult(
+                    coverage=GoalCoverage.NEEDS_MORE_TOOLS,
+                    reason="Page fetch returned no readable content",
+                    suggested_next_tools=self._suggest_alternative_tools(tool_name),
+                )
+            return PostExecutionResult(
+                coverage=GoalCoverage.SATISFIED,
+                reason="Readable page content fetched; synthesize an answer from the evidence",
+                extracted_facts=self._extract_facts_from_result(tool_name, result),
             )
 
         # Check for empty results from search/query tools
@@ -829,6 +850,7 @@ class GoalCompletionValidator:
         known_facts: list[str],
         final_content: str,
         intent: str | None = None,
+        pre_resolved_contacts: list[dict[str, Any]] | None = None,
     ) -> tuple[bool, str, list[str]]:
         """
         Check if the user's goal was actually achieved.
@@ -873,7 +895,14 @@ class GoalCompletionValidator:
 
         # For query goals, check if we have a substantive answer
         if is_query_goal:
-            return self._check_query_goal_achieved(goal, tool_calls, known_facts, final_content)
+            return self._check_query_goal_achieved(
+                goal,
+                tool_calls,
+                known_facts,
+                final_content,
+                intent=intent,
+                pre_resolved_contacts=pre_resolved_contacts,
+            )
 
         # Default: check for any successful tool execution or substantive content
         successful_calls = [tc for tc in tool_calls if tc.success]
@@ -1010,10 +1039,19 @@ class GoalCompletionValidator:
         tool_calls: list,
         known_facts: list[str],
         final_content: str,
+        *,
+        intent: str | None = None,
+        pre_resolved_contacts: list[dict[str, Any]] | None = None,
     ) -> tuple[bool, str, list[str]]:
         """Check if a query goal was achieved (e.g., search for memories)."""
         # For queries, we need actual results
         if not tool_calls:
+            if intent == "contact_lookup" and self._answer_uses_high_confidence_contact_identity(
+                goal,
+                final_content,
+                pre_resolved_contacts or [],
+            ):
+                return (True, "Answer grounded in pre-resolved contact identity", [])
             return (False, "No tool calls made for query", ["Search for relevant information"])
 
         successful_query_calls = [
@@ -1027,6 +1065,7 @@ class GoalCompletionValidator:
                 "web_search",
                 "lookup_contact",
                 "resolve_contacts",
+                "fetch_web_page",
             )
             and tc.success
         ]
@@ -1139,6 +1178,46 @@ class GoalCompletionValidator:
             "Query did not return useful results",
             ["Try alternative search terms or tools"],
         )
+
+    @staticmethod
+    def _answer_uses_high_confidence_contact_identity(
+        goal: str,
+        final_content: str,
+        pre_resolved_contacts: list[dict[str, Any]],
+    ) -> bool:
+        """Allow only simple identity/name answers grounded in a strong contact match."""
+        normalized_goal = normalize_search_text(goal)
+        asks_identity = "name" in normalized_goal or bool(
+            re.search(r"\bwho\s+(?:is|are|was|were)\b", normalized_goal)
+        )
+        asks_other_detail = bool(
+            re.search(
+                r"\b(phone|number|email|address|birthday|company|job|work|profession|relationship|details?)\b",
+                normalized_goal,
+            )
+        )
+        if not asks_identity or asks_other_detail:
+            return False
+
+        normalized_answer = f" {normalize_search_text(final_content)} "
+        for contact in pre_resolved_contacts:
+            if not isinstance(contact, dict):
+                continue
+            confidence = contact.get("confidence")
+            if isinstance(confidence, (int, float)):
+                is_high_confidence = confidence >= 0.85
+            else:
+                is_high_confidence = str(confidence or "").strip().lower() in {
+                    "high",
+                    "very_high",
+                    "exact",
+                }
+            if not is_high_confidence:
+                continue
+            display_name = normalize_search_text(str(contact.get("display_name") or ""))
+            if display_name and f" {display_name} " in normalized_answer:
+                return True
+        return False
 
     def _has_results(self, result: dict) -> bool:
         """Check if a tool result contains actual data."""

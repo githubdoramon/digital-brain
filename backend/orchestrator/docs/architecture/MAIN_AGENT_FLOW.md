@@ -124,6 +124,8 @@ sequenceDiagram
 
 The LLM router prompt instructs the model to set `pre_resolve_contacts=true` only when the query references a specific person by name, pronoun, or relationship term. Discovery/ranking queries (e.g. "who did I meet most this week?") get `pre_resolve_contacts=false` so the agent can use `get_events(by_time_span)` to retrieve raw interaction data and rank counterparts itself. Rule-based routes use the intent-level default from `INTENT_PRE_RESOLVE_CONTACTS`.
 
+For a straightforward contact name/identity question, the goal validator may accept the final answer without a retrieval tool call when it contains the display name of a high-confidence controller-pre-resolved contact. This shortcut does not cover phone, email, address, or other contact details; those still require retrieval.
+
 ### Contact resolution latency policy
 
 - Pre-resolution and agent `resolve_contacts` tool calls run the resolver in `minimal` mode.
@@ -131,6 +133,12 @@ The LLM router prompt instructs the model to set `pre_resolve_contacts=true` onl
 - The resolver now attempts a deterministic short-circuit before LLM extraction for straightforward cases like exact names, `my <relationship>` phrases, and deterministic group selectors.
 - Explicit user statements that a named person is a new contact or absent from the database are treated as hard signals before fuzzy matching, so weak single-candidate matches cannot replace the new contact.
 - Contact-resolution prompt context is tiered: hard user rules are loaded first, while soft user facts are deferred to ambiguity/disambiguation prompts.
+
+## Background Work After Chat Responses
+
+- The router emits `should_generate_facts` for LLM-classified messages. High-confidence rule-based routes set it to `false`; LLM routes set it to `true` only for durable first-person facts and `false` for questions, requests, third-party statements, and transient details.
+- Fact extraction runs through the existing background callback only when the route has not explicitly declined it. A `true` signal bypasses the short-message heuristic; an absent signal retains the legacy heuristic as a fallback.
+- New-thread title generation runs as a FastAPI background task after exchange persistence. Other async entry points use a detached worker thread. The generated title is written only while the database title is still a default, preserving user renames.
 
 ## Clarification Behavior
 

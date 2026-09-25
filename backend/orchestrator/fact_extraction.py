@@ -99,6 +99,7 @@ def maybe_extract_facts(
     user_message: str,
     assistant_message: str,
     thread_id: str | None = None,
+    should_generate_facts: bool | None = None,
 ) -> None:
     """
     Entry point for background fact extraction.
@@ -106,8 +107,16 @@ def maybe_extract_facts(
     Includes a lightweight heuristic gate to skip trivial exchanges.
     Runs synchronously (called inside BackgroundTasks which handles threading).
     """
-    # Gate: skip very short or trivial messages
-    if not user_message or len(user_message.strip()) < MIN_USER_MESSAGE_LENGTH:
+    if should_generate_facts is False:
+        logger.debug("[fact_extraction] skipped by router decision")
+        return
+
+    # Gate: skip very short or trivial messages unless routing explicitly
+    # identified the message as a durable user fact.
+    if (
+        should_generate_facts is not True
+        and (not user_message or len(user_message.strip()) < MIN_USER_MESSAGE_LENGTH)
+    ):
         logger.debug("[fact_extraction] skipping short message len=%d", len(user_message or ""))
         return
 

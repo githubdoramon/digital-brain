@@ -66,6 +66,8 @@ export type RuntimeLocationSample = {
 
 type DigitalBrainGlassesAlertsEvents = {
   onImageEnhancementForegroundTick(event: { timestampMs: number }): void;
+  onV8WakeCandidate(event: { keyword: 'hey_brain' | 'okay_brain'; sampleIndex: number }): void;
+  onV8WakeError(event: { message: string }): void;
   onSpeechPlaybackStarted(event: SpeechPlaybackTelemetry & {
     commandId: string;
   }): void;
@@ -128,7 +130,8 @@ declare class DigitalBrainGlassesAlertsNativeModule extends NativeModule<Digital
   stopGlassesWakeRuntime(): Promise<void>;
   getGlassesRuntimeForegroundServiceStatus(): Promise<GlassesRuntimeForegroundServiceStatus>;
   initializeV8WakeSpotter(): Promise<void>;
-  acceptV8WakePcm16(pcmBase64: string): Promise<{ keyword: 'hey_brain' | 'okay_brain'; sampleIndex: number }[]>;
+  startV8WakeInput(): Promise<void>;
+  stopV8WakeInput(): Promise<void>;
   getV8WakeSpotterStats(): Promise<{
     streamSamples: number;
     acceptedSamplesTotal: number;
@@ -137,6 +140,20 @@ declare class DigitalBrainGlassesAlertsNativeModule extends NativeModule<Digital
     targetResultsTotal: number;
     rejectResultsTotal: number;
     lastKeywordResult: string;
+    nativeInputActive: boolean;
+    nativeInputFailed: boolean;
+    pcmCallbacksTotal: number;
+    pcmBytesTotal: number;
+    queuedChunks: number;
+    maxQueuedChunks: number;
+    queueOverflows: number;
+    candidateEventsTotal: number;
+    queueDelayMsTotal: number;
+    queueDelayMsMax: number;
+    feedCallsTotal: number;
+    feedTimeMsTotal: number;
+    feedTimeMsMax: number;
+    slowFeedCount: number;
   } | null>;
   resetV8WakeSpotter(): Promise<void>;
   releaseV8WakeSpotter(): Promise<void>;

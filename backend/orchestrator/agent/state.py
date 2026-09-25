@@ -126,6 +126,7 @@ class AgentState:
 
     # Timestamps
     started_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    should_generate_facts: Optional[bool] = None
 
     @property
     def tool_calls_count(self) -> int:
@@ -725,6 +726,7 @@ class AgentState:
             "route_source": self.route_source,
             "route_confidence": self.route_confidence,
             "route_confidence_tier": self.route_confidence_tier,
+            "should_generate_facts": self.should_generate_facts,
             "conversational_profile": self.conversational_profile,
             "tool_visibility_mode": self.tool_visibility_mode,
             "tool_visibility_escalated": self.tool_visibility_escalated,
@@ -760,6 +762,7 @@ class AgentState:
             "route_source": self.route_source,
             "route_confidence": self.route_confidence,
             "route_confidence_tier": self.route_confidence_tier,
+            "should_generate_facts": self.should_generate_facts,
             "conversational_profile": self.conversational_profile,
             "tool_visibility_mode": self.tool_visibility_mode,
             "tool_visibility_escalated": self.tool_visibility_escalated,

@@ -1,18 +1,14 @@
-import { Buffer } from 'buffer';
-
 import type { SpeechEmbeddingBackend } from './OpenWakeWordOnnxBackend';
 import type { DetectionEvent, EmbeddingWakeWordModel } from './types';
 
 const SAMPLE_RATE = 16_000;
-const NATIVE_FRAME = 320;
-const HISTORY_SAMPLES = 4 * SAMPLE_RATE + 1_280;
+const HISTORY_SAMPLES = 8 * SAMPLE_RATE;
 const VERIFIER_THRESHOLD = 0.7614435404638955;
 
 export type V8Keyword = 'hey_brain' | 'okay_brain';
 export type V8Candidate = { keyword: V8Keyword; sampleIndex: number };
 
 export interface V8NativeSpotter {
-  acceptV8WakePcm16(pcmBase64: string): Promise<V8Candidate[]>;
   resetV8WakeSpotter(): Promise<void>;
 }
 
@@ -24,11 +20,11 @@ export type V8CandidateEvaluation = {
   passed: boolean;
 };
 
-/** Sherpa runs continuously; openWakeWord embeddings run only for a candidate. */
+/** Native Sherpa runs continuously; JS retains PCM only for candidate verification. */
 export class V8TwoStageWakeWordDetector {
   private readonly pcmRing = new Int16Array(HISTORY_SAMPLES);
   private processedSamples = 0;
-  private acceptanceQueue: Promise<void> = Promise.resolve();
+  private verificationQueue: Promise<void> = Promise.resolve();
 
   constructor(
     readonly model: EmbeddingWakeWordModel,
@@ -56,66 +52,60 @@ export class V8TwoStageWakeWordDetector {
     }
   }
 
-  acceptPcm16(chunk: Int16Array): Promise<DetectionEvent[]> {
-    const owned = chunk.slice();
-    const result = this.acceptanceQueue.then(() => this.acceptSerial(owned));
-    this.acceptanceQueue = result.then(
-      () => undefined,
-      () => undefined,
-    );
+  get streamSamples(): number {
+    return this.processedSamples;
+  }
+
+  acceptPcm16(chunk: Int16Array): void {
+    this.appendPcm(chunk);
+  }
+
+  acceptCandidate(candidate: V8Candidate): Promise<DetectionEvent | null> {
+    const result = this.verificationQueue.then(() => this.verifyCandidate(candidate));
+    this.verificationQueue = result.then(() => undefined, () => undefined);
     return result;
   }
 
   reset(): Promise<void> {
-    const result = this.acceptanceQueue.then(async () => {
+    const result = this.verificationQueue.then(async () => {
       await this.spotter.resetV8WakeSpotter();
       this.verifierBackend.reset();
       this.processedSamples = 0;
       this.pcmRing.fill(0);
     });
-    this.acceptanceQueue = result.then(
+    this.verificationQueue = result.then(
       () => undefined,
       () => undefined,
     );
     return result;
   }
 
-  private async acceptSerial(chunk: Int16Array): Promise<DetectionEvent[]> {
-    for (let offset = 0; offset < chunk.length; offset += NATIVE_FRAME) {
-      const frame = chunk.subarray(offset, Math.min(chunk.length, offset + NATIVE_FRAME));
-      this.appendPcm(frame);
-      const encoded = Buffer.from(frame.buffer, frame.byteOffset, frame.byteLength).toString('base64');
-      const candidates = await this.spotter.acceptV8WakePcm16(encoded);
-      for (const candidate of candidates) {
-        if (candidate.sampleIndex !== this.processedSamples) {
-          throw new Error('V8 native spotter/audio history position mismatch');
-        }
-        const score = await this.scoreCandidate(candidate.sampleIndex);
-        const passed = score !== null && score >= VERIFIER_THRESHOLD;
-        this.onCandidate?.({
-          keyword: candidate.keyword,
-          audioTimeMs: (candidate.sampleIndex * 1_000) / SAMPLE_RATE,
-          score,
-          threshold: VERIFIER_THRESHOLD,
-          passed,
-        });
-        if (!passed || score === null) continue;
-        const preRollSamples = Math.round((this.model.detectorConfig.preRollMs * SAMPLE_RATE) / 1_000);
-        const preRollStart = Math.max(0, this.processedSamples - preRollSamples);
-        const event: DetectionEvent = {
-          modelName: candidate.keyword.replace('_', '-'),
-          score,
-          threshold: VERIFIER_THRESHOLD,
-          audioTimeMs: (candidate.sampleIndex * 1_000) / SAMPLE_RATE,
-          preRollStartAudioTimeMs: (preRollStart * 1_000) / SAMPLE_RATE,
-          preRollEndAudioTimeMs: (this.processedSamples * 1_000) / SAMPLE_RATE,
-          preRollPcm16: this.history(preRollStart, this.processedSamples),
-          postDetectionPcm16: chunk.slice(offset + frame.length),
-        };
-        return [event];
-      }
+  private async verifyCandidate(candidate: V8Candidate): Promise<DetectionEvent | null> {
+    if (candidate.sampleIndex > this.processedSamples || candidate.sampleIndex < 0) {
+      throw new Error('V8 candidate is outside JS audio history');
     }
-    return [];
+    const score = await this.scoreCandidate(candidate.sampleIndex);
+    const passed = score !== null && score >= VERIFIER_THRESHOLD;
+    this.onCandidate?.({
+      keyword: candidate.keyword,
+      audioTimeMs: (candidate.sampleIndex * 1_000) / SAMPLE_RATE,
+      score,
+      threshold: VERIFIER_THRESHOLD,
+      passed,
+    });
+    if (!passed || score === null) return null;
+    const preRollSamples = Math.round((this.model.detectorConfig.preRollMs * SAMPLE_RATE) / 1_000);
+    const preRollStart = Math.max(0, candidate.sampleIndex - preRollSamples);
+    return {
+      modelName: candidate.keyword.replace('_', '-'),
+      score,
+      threshold: VERIFIER_THRESHOLD,
+      audioTimeMs: (candidate.sampleIndex * 1_000) / SAMPLE_RATE,
+      preRollStartAudioTimeMs: (preRollStart * 1_000) / SAMPLE_RATE,
+      preRollEndAudioTimeMs: (candidate.sampleIndex * 1_000) / SAMPLE_RATE,
+      preRollPcm16: this.history(preRollStart, candidate.sampleIndex),
+      postDetectionPcm16: this.history(candidate.sampleIndex, this.processedSamples),
+    };
   }
 
   private appendPcm(chunk: Int16Array): void {

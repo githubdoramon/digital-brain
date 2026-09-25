@@ -283,6 +283,9 @@ async function wakeHandoffContract() {
       startGlassesWakeRuntime: async () => {},
       stopGlassesWakeRuntime: async () => {},
       initializeV8WakeSpotter: async () => {},
+      startV8WakeInput: async () => {},
+      stopV8WakeInput: async () => {},
+      addListener: () => ({ remove() {} }),
       releaseV8WakeSpotter: async () => {},
     },
     '@/mentraCapture/sdk': {

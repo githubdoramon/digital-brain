@@ -57,13 +57,8 @@ async function main() {
   pcm.set(readWav(target.path), 4 * 16000);
 
   const candidateSample = Math.round(expected.candidates[0].time * 16000);
-  let received = 0;
   const spotter = {
-    async acceptV8WakePcm16(encoded) {
-      received += Buffer.from(encoded, 'base64').length / 2;
-      return received === candidateSample ? [{ keyword: 'hey_brain', sampleIndex: received }] : [];
-    },
-    async resetV8WakeSpotter() { received = 0; },
+    async resetV8WakeSpotter() {},
   };
   const backbone = await OpenWakeWordOnnxBackend.create(
     ort,
@@ -74,10 +69,8 @@ async function main() {
   const model = JSON.parse(fs.readFileSync(path.join(mobileRoot, 'assets', 'wake-word', 'hey-brain-v8.json')));
   const observed = [];
   const detector = new V8TwoStageWakeWordDetector(model, spotter, backbone, (row) => observed.push(row));
-  for (let offset = 0; offset < pcm.length; offset += 320) {
-    const events = await detector.acceptPcm16(pcm.subarray(offset, offset + 320));
-    if (events.length) break;
-  }
+  detector.acceptPcm16(pcm.subarray(0, candidateSample));
+  await detector.acceptCandidate({ keyword: 'hey_brain', sampleIndex: candidateSample });
   assert.equal(observed.length, 1);
   assert(Math.abs(observed[0].score - expected.candidates[0].score) < 1e-4,
     `App score ${observed[0].score} differs from lab ${expected.candidates[0].score}`);

@@ -14,6 +14,27 @@ STRING_ARRAY_SCHEMA: dict[str, Any] = {
     "items": {"type": "string"},
 }
 
+INTENT_ROUTER_RESPONSE_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "intent": {"type": "string"},
+        "confidence": {"type": "number"},
+        "constraints": STRING_ARRAY_SCHEMA,
+        "pre_resolve_contacts": {"type": "boolean"},
+        "should_generate_facts": {"type": "boolean"},
+        "reasoning": {"type": "string"},
+    },
+    "required": [
+        "intent",
+        "confidence",
+        "constraints",
+        "pre_resolve_contacts",
+        "should_generate_facts",
+        "reasoning",
+    ],
+    "additionalProperties": False,
+}
+
 NEED_USER_INPUT_SCHEMA: dict[str, Any] = {
     "type": ["object", "null"],
     "additionalProperties": True,

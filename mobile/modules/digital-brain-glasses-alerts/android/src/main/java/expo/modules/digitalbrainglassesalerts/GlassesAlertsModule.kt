@@ -8,13 +8,30 @@ import android.os.BatteryManager
 import android.os.Build
 import android.os.Debug
 import android.os.PowerManager
+import android.os.SystemClock
+import com.mentra.bluetoothsdk.Bridge
 import android.service.notification.NotificationListenerService
 import expo.modules.kotlin.modules.Module
 import expo.modules.kotlin.modules.ModuleDefinition
 import java.lang.ref.WeakReference
+import java.util.concurrent.ArrayBlockingQueue
+import java.util.concurrent.ThreadPoolExecutor
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.RejectedExecutionException
 
 class GlassesAlertsModule : Module() {
   private var wakeSpotter: V8KeywordSpotter? = null
+  private val wakeSpotterLock = Any()
+  private val wakeExecutor = ThreadPoolExecutor(1, 1, 0L, TimeUnit.MILLISECONDS, ArrayBlockingQueue(64))
+  private var wakeSinkId: String? = null
+  private var wakeIngestFailed = false
+  private var wakePcmCallbacks = 0L
+  private var wakePcmBytes = 0L
+  private var wakeMaxQueuedChunks = 0
+  private var wakeQueueOverflows = 0L
+  private var wakeCandidateEvents = 0L
+  private var wakeQueueDelayMsTotal = 0.0
+  private var wakeQueueDelayMsMax = 0.0
   companion object {
     private var activeModule: WeakReference<GlassesAlertsModule>? = null
 
@@ -36,6 +53,8 @@ class GlassesAlertsModule : Module() {
       "onSpeechPlaybackStarted",
       "onSpeechPlaybackProgress",
       "onSpeechPlaybackFinished",
+      "onV8WakeCandidate",
+      "onV8WakeError",
     )
 
     OnCreate {
@@ -166,28 +185,45 @@ class GlassesAlertsModule : Module() {
     }
 
     AsyncFunction("initializeV8WakeSpotter") {
-      synchronized(this@GlassesAlertsModule) {
+      synchronized(wakeSpotterLock) {
         if (wakeSpotter == null) wakeSpotter = V8KeywordSpotter(context())
       }
     }
 
-    AsyncFunction("acceptV8WakePcm16") { pcmBase64: String ->
-      synchronized(this@GlassesAlertsModule) {
-        (wakeSpotter ?: throw IllegalStateException("V8 wake spotter is not initialized"))
-          .acceptPcm16Base64(pcmBase64)
-      }
+    AsyncFunction("startV8WakeInput") {
+      startNativeWakeInput()
+    }
+
+    AsyncFunction("stopV8WakeInput") {
+      stopNativeWakeInput()
     }
 
     AsyncFunction("getV8WakeSpotterStats") {
-      synchronized(this@GlassesAlertsModule) { wakeSpotter?.stats() }
+      val spotterStats = synchronized(wakeSpotterLock) { wakeSpotter?.stats() }
+      synchronized(this@GlassesAlertsModule) {
+        spotterStats?.plus(mapOf(
+          "nativeInputActive" to (wakeSinkId != null),
+          "nativeInputFailed" to wakeIngestFailed,
+          "pcmCallbacksTotal" to wakePcmCallbacks.toDouble(),
+          "pcmBytesTotal" to wakePcmBytes.toDouble(),
+          "queuedChunks" to wakeExecutor.queue.size,
+          "maxQueuedChunks" to wakeMaxQueuedChunks,
+          "queueOverflows" to wakeQueueOverflows.toDouble(),
+          "candidateEventsTotal" to wakeCandidateEvents.toDouble(),
+          "queueDelayMsTotal" to wakeQueueDelayMsTotal,
+          "queueDelayMsMax" to wakeQueueDelayMsMax,
+        ))
+      }
     }
 
     AsyncFunction("resetV8WakeSpotter") {
-      synchronized(this@GlassesAlertsModule) { wakeSpotter?.reset() }
+      wakeExecutor.submit { synchronized(wakeSpotterLock) { wakeSpotter?.reset() } }.get()
     }
 
     AsyncFunction("releaseV8WakeSpotter") {
-      synchronized(this@GlassesAlertsModule) {
+      stopNativeWakeInput()
+      wakeExecutor.submit { synchronized(wakeSpotterLock) { wakeSpotter?.reset() } }.get()
+      synchronized(wakeSpotterLock) {
         wakeSpotter?.release()
         wakeSpotter = null
       }
@@ -308,11 +344,73 @@ class GlassesAlertsModule : Module() {
 
     OnDestroy {
       GlassesAlertPlayback.stopSpeechAudio(null)
-      synchronized(this@GlassesAlertsModule) {
+      stopNativeWakeInput()
+      wakeExecutor.shutdownNow()
+      synchronized(wakeSpotterLock) {
         wakeSpotter?.release()
         wakeSpotter = null
       }
       if (activeModule?.get() === this@GlassesAlertsModule) activeModule = null
+    }
+  }
+
+  private fun startNativeWakeInput() {
+    synchronized(this) {
+      if (wakeSinkId != null) return
+      check(synchronized(wakeSpotterLock) { wakeSpotter != null }) { "V8 wake spotter is not initialized" }
+      wakeIngestFailed = false
+      wakeSinkId = Bridge.addEventSink { type, body ->
+        if (type != "mic_pcm") return@addEventSink
+        val bytes = body["pcm"] as? ByteArray ?: return@addEventSink
+        if (body["sampleRate"] != 16_000 || body["bitsPerSample"] != 16 ||
+          body["channels"] != 1 || body["encoding"] != "pcm_s16le") return@addEventSink
+        synchronized(this) {
+          if (wakeIngestFailed || wakeSinkId == null) return@addEventSink
+          wakePcmCallbacks += 1
+          wakePcmBytes += bytes.size
+          val ownedBytes = bytes.copyOf()
+          val queuedAt = SystemClock.elapsedRealtimeNanos()
+          try {
+            wakeExecutor.execute {
+              try {
+                val delayMs = (SystemClock.elapsedRealtimeNanos() - queuedAt) / 1_000_000.0
+                synchronized(this@GlassesAlertsModule) {
+                  wakeQueueDelayMsTotal += delayMs
+                  wakeQueueDelayMsMax = maxOf(wakeQueueDelayMsMax, delayMs)
+                }
+                val events = synchronized(wakeSpotterLock) {
+                  wakeSpotter?.acceptPcm16Bytes(ownedBytes) ?: emptyList()
+                }
+                for (event in events) {
+                  synchronized(this@GlassesAlertsModule) { wakeCandidateEvents += 1 }
+                  sendEvent("onV8WakeCandidate", event)
+                }
+              } catch (error: Exception) {
+                failNativeWakeInput(error.message ?: error.javaClass.simpleName)
+              }
+            }
+            wakeMaxQueuedChunks = maxOf(wakeMaxQueuedChunks, wakeExecutor.queue.size)
+          } catch (_: RejectedExecutionException) {
+            wakeQueueOverflows += 1
+            failNativeWakeInput("Native wake PCM queue overflow")
+          }
+        }
+      }
+    }
+  }
+
+  private fun failNativeWakeInput(message: String) {
+    synchronized(this) {
+      if (wakeIngestFailed) return
+      wakeIngestFailed = true
+      sendEvent("onV8WakeError", mapOf("message" to message))
+    }
+  }
+
+  private fun stopNativeWakeInput() {
+    synchronized(this) {
+      wakeSinkId?.let(Bridge::removeEventSink)
+      wakeSinkId = null
     }
   }
 }

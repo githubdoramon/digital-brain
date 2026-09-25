@@ -540,6 +540,45 @@ def update_thread_title(thread_id: str, user_email: str, title: str) -> dict[str
     return dict(row)
 
 
+def update_default_thread_title(
+    thread_id: str,
+    user_email: str,
+    title: str,
+) -> dict[str, Any] | None:
+    """Set an asynchronously generated title only while the thread is untitled."""
+    normalized = _normalize_title_candidate(title)
+    if not normalized:
+        return None
+
+    with get_conn() as conn, conn.cursor(row_factory=dict_row) as cur:
+        cur.execute(
+            """
+            UPDATE conversation_threads
+            SET title = %s, updated_at = NOW()
+            WHERE id = %s AND user_email = %s
+              AND (
+                title IS NULL
+                OR title LIKE %s
+                OR title LIKE %s
+              )
+            RETURNING id, user_email, title, created_at, updated_at
+            """,
+            (
+                normalized,
+                thread_id,
+                user_email,
+                f"{_DEFAULT_TITLE_PREFIX}%",
+                f"{_LEGACY_MAIN_SESSION_TITLE_PREFIX}%",
+            ),
+        )
+        row = cur.fetchone()
+        if not row:
+            conn.rollback()
+            return None
+        conn.commit()
+    return dict(row)
+
+
 # ---------------------------------------------------------------------------
 # Main Session (Quick Chat mode)
 # ---------------------------------------------------------------------------

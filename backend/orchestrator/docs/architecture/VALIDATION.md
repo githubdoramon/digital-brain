@@ -61,6 +61,7 @@ Checks:
 Clarification-aware behavior:
 
 - contact ambiguity and `need_user_input` envelopes are treated as `NEED_USER_INPUT`, not generic retries.
+- `fetch_web_page` uses deterministic coverage: readable content is marked `SATISFIED` without a separate validator LLM call; empty content remains recoverable. After a satisfied fetch, the controller makes the next model turn synthesis-only so it answers from the page instead of fetching another one.
 - Validator prompts should see high-fidelity inspected evidence whenever possible. When a result is too large, use field-aware budget compaction rather than blind string truncation, and preserve the currently inspected entity's key text before dropping broad candidate context.
 - Goal completion checks must stay query-aligned. For evolving status questions, prefer the newest relevant event candidate over a higher-scoring but unrelated document result.
 - Forced follow-up actions should include the exact candidate id and required tool arguments when available, so the model repairs/continues from controller-selected evidence instead of reconstructing ids from truncated context.

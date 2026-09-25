@@ -25,12 +25,12 @@ import { dispatchGlassesCommand } from '@/mentraCapture/glassesCommandAgent';
 import {
   OpenWakeWordOnnxBackend,
   V8TwoStageWakeWordDetector,
+  type V8Candidate,
   type EmbeddingWakeWordModel,
   type OnnxRuntimeLike,
 } from '@/wakeWord';
 
 const model = require('@/assets/wake-word/hey-brain-v8.json') as EmbeddingWakeWordModel;
-const MAX_PENDING_PCM_SAMPLES = 8 * 16_000;
 
 type PauseReason =
   | 'audio_recording'
@@ -41,11 +41,12 @@ type PauseReason =
 let initialized = false;
 let detector: V8TwoStageWakeWordDetector | null = null;
 let pcmUnsubscribe: (() => void) | null = null;
+let candidateUnsubscribe: (() => void) | null = null;
+let nativeWakeErrorUnsubscribe: (() => void) | null = null;
 let connectionUnsubscribe: (() => void) | null = null;
 let videoUnsubscribe: (() => void) | null = null;
-let pendingPcm: Int16Array[] = [];
-let pendingPcmSamples = 0;
-let processingPcm = false;
+let pendingCandidates: V8Candidate[] = [];
+let processingCandidate = false;
 let detectorGeneration = 0;
 let listenerActive = false;
 let listenerActivation: Promise<void> | null = null;
@@ -121,8 +122,8 @@ export async function recordWakeDebugSnapshot(source = 'manual'): Promise<Record
       ? Math.sqrt(intervalSquaredAmplitude / intervalSamples) / 32768
       : 0,
     last_pcm_at: lastPcmAt,
-    pending_pcm_samples: pendingPcmSamples,
-    processing_pcm: processingPcm,
+    pending_wake_candidates: pendingCandidates.length,
+    processing_wake_candidate: processingCandidate,
     wake_inference_count: inferenceCount,
     wake_inference_slow_count_over_80ms: inferenceSlowCount,
     wake_inference_backlog_count_over_4_chunks: inferenceBacklogCount,
@@ -229,36 +230,42 @@ async function getDetector(): Promise<V8TwoStageWakeWordDetector> {
 
 function resetDetector(reason: string): Promise<void> {
   detectorGeneration += 1;
-  pendingPcm = [];
-  pendingPcmSamples = 0;
+  pendingCandidates = [];
   debug('wake_detector_reset', { reason });
   return detector?.reset() ?? Promise.resolve();
 }
 
-async function processPendingPcm(): Promise<void> {
-  if (processingPcm) return;
-  processingPcm = true;
+async function processPendingCandidates(): Promise<void> {
+  if (processingCandidate) return;
+  processingCandidate = true;
   try {
-    while (listenerActive && pendingPcm.length > 0) {
-      const chunk = pendingPcm.shift();
-      if (!chunk) continue;
-      pendingPcmSamples -= chunk.length;
+    while (listenerActive && pendingCandidates.length > 0) {
       const activeDetector = await getDetector();
+      const candidate = pendingCandidates[0];
+      if (!candidate || !listenerActive) break;
+      if (candidate.sampleIndex > activeDetector.streamSamples) break;
+      pendingCandidates.shift();
       const generation = detectorGeneration;
       const startedAt = Date.now();
-      const events = await activeDetector.acceptPcm16(chunk);
+      const event = await activeDetector.acceptCandidate(candidate);
       if (generation !== detectorGeneration) continue;
       const elapsedMs = Date.now() - startedAt;
       wakeInferenceCountSinceSnapshot += 1;
       wakeInferenceTotalMsSinceSnapshot += elapsedMs;
       wakeInferenceMaxMsSinceSnapshot = Math.max(wakeInferenceMaxMsSinceSnapshot, elapsedMs);
       if (elapsedMs > 80) wakeInferenceSlowCountSinceSnapshot += 1;
-      if (pendingPcm.length > 4) wakeInferenceBacklogCountSinceSnapshot += 1;
+      if (pendingCandidates.length > 4) wakeInferenceBacklogCountSinceSnapshot += 1;
       wakeInferenceMaxPendingChunksSinceSnapshot = Math.max(
         wakeInferenceMaxPendingChunksSinceSnapshot,
-        pendingPcm.length,
+        pendingCandidates.length,
       );
-      for (const event of events) {
+      debug('wake_verifier_timing', {
+        keyword: candidate.keyword,
+        duration_ms: elapsedMs,
+        queued_candidates: pendingCandidates.length,
+        passed: event !== null,
+      });
+      if (event) {
         const commandId = createGlassesCommandId();
         const wakeDetectedAt = Date.now();
         debug('wake_detected', {
@@ -286,9 +293,7 @@ async function processPendingPcm(): Promise<void> {
         const commandInitialChunks = [
           event.preRollPcm16,
           ...(event.postDetectionPcm16?.length ? [event.postDetectionPcm16] : []),
-          ...pendingPcm.splice(0),
         ];
-        pendingPcmSamples = 0;
         const initialAudioDurationMs = Math.round(
           (commandInitialChunks.reduce((total, chunk) => total + chunk.length, 0) / 16_000) * 1_000,
         );
@@ -302,7 +307,10 @@ async function processPendingPcm(): Promise<void> {
         });
         // Queue the native reset but create the command session immediately;
         // glasses PCM can arrive while the reset promise is still settling.
-        void resetDetector('command_session_started').catch((error) =>
+        void (async () => {
+          await GlassesAlertsNative?.stopV8WakeInput();
+          await resetDetector('command_session_started');
+        })().catch((error) =>
           debug('wake_detector_reset_failed', {
             command_id: commandId,
             error: error instanceof Error ? error.message : String(error),
@@ -334,11 +342,22 @@ async function processPendingPcm(): Promise<void> {
     debug('wake_inference_failed', {
       error: lastWakeError,
     });
-    await resetDetector('inference_failed').catch(() => undefined);
+    await deactivateListener('inference_failed', true).catch(() => undefined);
   } finally {
-    processingPcm = false;
-    if (listenerActive && pendingPcm.length > 0) void processPendingPcm();
+    processingCandidate = false;
+    if (listenerActive && pendingCandidates.length > 0 &&
+      pendingCandidates[0].sampleIndex <= (detector?.streamSamples ?? 0)) {
+      void processPendingCandidates();
+    }
   }
+}
+
+function acceptNativeCandidate(candidate: V8Candidate): void {
+  if (!listenerActive || isGlassesCommandSessionActive() ||
+    !Number.isSafeInteger(candidate.sampleIndex) || candidate.sampleIndex < 0 ||
+    (candidate.keyword !== 'hey_brain' && candidate.keyword !== 'okay_brain')) return;
+  pendingCandidates.push(candidate);
+  void processPendingCandidates();
 }
 
 function copyPcmBytes(pcm: ArrayBuffer | ArrayBufferView): ArrayBufferLike {
@@ -383,18 +402,8 @@ function acceptPcm(pcm: ArrayBuffer | ArrayBufferView): void {
     return;
   }
   observeGlassesAmbientPcm(samples);
-  if (pendingPcmSamples + samples.length > MAX_PENDING_PCM_SAMPLES) {
-    debug('wake_pcm_backlog_dropped', {
-      pending_chunks: pendingPcm.length,
-      pending_samples: pendingPcmSamples,
-      samples: samples.length,
-    });
-    void resetDetector('pcm_backlog').catch(() => undefined);
-    return;
-  }
-  pendingPcm.push(samples);
-  pendingPcmSamples += samples.length;
-  void processPendingPcm();
+  detector?.acceptPcm16(samples);
+  if (pendingCandidates.length > 0) void processPendingCandidates();
 }
 
 async function activateListener(): Promise<void> {
@@ -420,22 +429,42 @@ async function activateListener(): Promise<void> {
       debug('wake_listener_activating', { step: lastWakeStep });
       const unsubscribe = subscribeMentraMicPcm((event) => acceptPcm(event.pcm));
       pcmUnsubscribe = unsubscribe;
+      const native = GlassesAlertsNative!;
+      const candidateSubscription = native.addListener('onV8WakeCandidate', acceptNativeCandidate);
+      candidateUnsubscribe = () => candidateSubscription.remove();
+      const errorSubscription = native.addListener('onV8WakeError', (event) => {
+        lastWakeError = event.message;
+        debug('wake_native_input_failed', { error: event.message });
+        void deactivateListener('native_input_failed', true);
+      });
+      nativeWakeErrorUnsubscribe = () => errorSubscription.remove();
       if (!shouldListen()) {
         unsubscribe();
         pcmUnsubscribe = null;
+        candidateUnsubscribe();
+        candidateUnsubscribe = null;
+        nativeWakeErrorUnsubscribe();
+        nativeWakeErrorUnsubscribe = null;
         return;
       }
+      await native.startV8WakeInput();
+      listenerActive = true;
       await setMentraMicState(true);
       if (!shouldListen() || pcmUnsubscribe !== unsubscribe) return;
-      listenerActive = true;
       firstPcmForListener = true;
       lastWakeStep = 'listening';
       lastWakeError = null;
       debug('wake_listener_started', { model: model.name });
       void warmGlassesCommandTranscription().catch(() => undefined);
     } catch (error) {
+      listenerActive = false;
       pcmUnsubscribe?.();
       pcmUnsubscribe = null;
+      candidateUnsubscribe?.();
+      candidateUnsubscribe = null;
+      nativeWakeErrorUnsubscribe?.();
+      nativeWakeErrorUnsubscribe = null;
+      await GlassesAlertsNative?.stopV8WakeInput().catch(() => undefined);
       await GlassesAlertsNative?.stopGlassesWakeRuntime().catch(() => undefined);
       throw error;
     }
@@ -454,6 +483,11 @@ async function deactivateListener(reason: string, disableMic: boolean): Promise<
   listenerActive = false;
   pcmUnsubscribe?.();
   pcmUnsubscribe = null;
+  candidateUnsubscribe?.();
+  candidateUnsubscribe = null;
+  nativeWakeErrorUnsubscribe?.();
+  nativeWakeErrorUnsubscribe = null;
+  await GlassesAlertsNative?.stopV8WakeInput().catch(() => undefined);
   await resetDetector(reason).catch((error) =>
     debug('wake_detector_reset_failed', {
       error: error instanceof Error ? error.message : String(error),

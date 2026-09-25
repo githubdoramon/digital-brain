@@ -456,6 +456,11 @@ class ToolExecutionCoordinator:
                     result.setdefault("_validation", {})
                     result["_validation"]["status"] = "need_user_input"
                     result["_validation"]["reason"] = clarification_prompt
+            elif post_result.coverage == GoalCoverage.SATISFIED:
+                result["_validation"] = {
+                    "status": "satisfied",
+                    "reason": post_result.reason,
+                }
 
         if success:
             evidence = self.get_completion_evidence(tool_name, args, result)

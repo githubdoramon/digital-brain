@@ -31,17 +31,9 @@ function fixture(outputBias) {
       outputBias,
     },
   };
-  let nativeSamples = 0;
   let resetCount = 0;
   const spotter = {
-    async acceptV8WakePcm16(encoded) {
-      const bytes = Buffer.from(encoded, 'base64');
-      assert.equal(bytes.length % 2, 0);
-      nativeSamples += bytes.length / 2;
-      return nativeSamples === 32000 ? [{ keyword: 'okay_brain', sampleIndex: nativeSamples }] : [];
-    },
     async resetV8WakeSpotter() {
-      nativeSamples = 0;
       resetCount += 1;
     },
   };
@@ -65,24 +57,26 @@ async function main() {
     accepted.model, accepted.spotter, accepted.backend, (event) => evaluations.push(event),
   );
   const input = Int16Array.from({ length: 40000 }, (_, index) => index % 1000);
-  const events = await detector.acceptPcm16(input);
-  assert.equal(events.length, 1);
-  assert.equal(events[0].modelName, 'okay-brain');
-  assert.equal(events[0].audioTimeMs, 2000);
-  assert.equal(events[0].preRollStartAudioTimeMs, 200);
-  assert.equal(events[0].preRollEndAudioTimeMs, 2000);
-  assert.deepEqual(events[0].preRollPcm16, input.slice(3200, 32000));
-  assert.deepEqual(events[0].postDetectionPcm16, input.slice(32000));
+  detector.acceptPcm16(input);
+  const event = await detector.acceptCandidate({ keyword: 'okay_brain', sampleIndex: 32000 });
+  assert.equal(event.modelName, 'okay-brain');
+  assert.equal(event.audioTimeMs, 2000);
+  assert.equal(event.preRollStartAudioTimeMs, 200);
+  assert.equal(event.preRollEndAudioTimeMs, 2000);
+  assert.deepEqual(event.preRollPcm16, input.slice(3200, 32000));
+  assert.deepEqual(event.postDetectionPcm16, input.slice(32000));
   assert.deepEqual(accepted.backend.observedPcm, input.slice(0, 32000));
   assert.equal(accepted.backend.resetCount, 1);
   assert.equal(evaluations[0].passed, true);
   await detector.reset();
   assert.equal(accepted.getResetCount(), 1);
-  assert.equal((await detector.acceptPcm16(input)).length, 1);
+  detector.acceptPcm16(input);
+  assert((await detector.acceptCandidate({ keyword: 'okay_brain', sampleIndex: 32000 })) !== null);
 
   const rejected = fixture(-2);
   const rejectedDetector = new V8TwoStageWakeWordDetector(rejected.model, rejected.spotter, rejected.backend);
-  assert.deepEqual(await rejectedDetector.acceptPcm16(input), []);
+  rejectedDetector.acceptPcm16(input);
+  assert.equal(await rejectedDetector.acceptCandidate({ keyword: 'okay_brain', sampleIndex: 32000 }), null);
   assert.equal(rejected.backend.observedPcm.length, 32000);
 
   console.log('PASS: v8 candidate alignment, on-demand score, pre-roll/tail, reject, reset');

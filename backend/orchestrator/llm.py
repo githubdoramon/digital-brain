@@ -6,6 +6,7 @@ Main entry point for LLM interactions using the bounded agent controller.
 
 from __future__ import annotations
 
+import asyncio
 import os
 from collections.abc import AsyncGenerator
 from typing import Any
@@ -27,6 +28,7 @@ logger.info("[llm] Bounded agent architecture ENABLED")
 
 
 _main_controller = None
+_thread_title_tasks: set[asyncio.Task[None]] = set()
 
 
 def _extract_recent_resolved_place(metadata: dict[str, Any] | None) -> dict[str, Any] | None:
@@ -123,6 +125,7 @@ async def answer_question(
     ui_submission: dict[str, Any] | None = None,
     response_modality: str | None = None,
     on_exchange_persisted: Any | None = None,
+    on_thread_title_needed: Any | None = None,
 ) -> dict[str, Any]:
     """
     Answer a question using the LLM with tool calling.
@@ -204,26 +207,29 @@ async def answer_question(
                 assistant_metadata=assistant_metadata,
             )
 
-            # Generate title for new threads
+            # Generate titles off the response path for new threads.
             if persist_result.get(
                 "message_count_before", 0
             ) == 0 and conversations.is_default_title(persist_result.get("previous_title")):
-                generated_title = _generate_thread_title(question)
-                if generated_title:
-                    updated = conversations.update_thread_title(
-                        session_id, user_email, generated_title
-                    )
-                    if updated:
-                        result["thread_title"] = updated.get("title")
+                _schedule_thread_title_generation(
+                    question=question,
+                    session_id=session_id,
+                    user_email=user_email,
+                    callback=on_thread_title_needed,
+                )
 
             # Trigger background fact extraction
             if on_exchange_persisted:
-                on_exchange_persisted(
-                    user_email=user_email,
-                    user_message=question,
-                    assistant_message=result["answer"],
-                    thread_id=session_id,
-                )
+                route_metadata = result.get("_meta") if isinstance(result.get("_meta"), dict) else {}
+                should_generate_facts = route_metadata.get("should_generate_facts")
+                if should_generate_facts is not False:
+                    on_exchange_persisted(
+                        user_email=user_email,
+                        user_message=question,
+                        assistant_message=result["answer"],
+                        thread_id=session_id,
+                        should_generate_facts=should_generate_facts,
+                    )
         except Exception as exc:
             logger.warning("[session] Failed to persist exchange: %s", exc, exc_info=exc)
 
@@ -240,6 +246,7 @@ async def answer_question_stream(
     ui_submission: dict[str, Any] | None = None,
     response_modality: str | None = None,
     on_exchange_persisted: Any | None = None,
+    on_thread_title_needed: Any | None = None,
 ) -> AsyncGenerator[dict[str, Any], None]:
     """
     Stream LLM responses with tool calling support.
@@ -333,30 +340,33 @@ async def answer_question_stream(
                 assistant_metadata=assistant_metadata,
             )
 
-            # Generate title for new threads
+            # Generate titles off the response path for new threads.
             if persist_result.get(
                 "message_count_before", 0
             ) == 0 and conversations.is_default_title(persist_result.get("previous_title")):
-                generated_title = _generate_thread_title(question)
-                if generated_title:
-                    updated = conversations.update_thread_title(
-                        session_id, user_email, generated_title
-                    )
-                    if updated:
-                        # Yield title update event
-                        yield {
-                            "type": "title_update",
-                            "title": updated.get("title"),
-                        }
+                _schedule_thread_title_generation(
+                    question=question,
+                    session_id=session_id,
+                    user_email=user_email,
+                    callback=on_thread_title_needed,
+                )
 
             # Trigger background fact extraction
             if on_exchange_persisted:
-                on_exchange_persisted(
-                    user_email=user_email,
-                    user_message=question,
-                    assistant_message=final_bundle["answer"],
-                    thread_id=session_id,
+                route_metadata = (
+                    final_bundle.get("_meta")
+                    if isinstance(final_bundle.get("_meta"), dict)
+                    else {}
                 )
+                should_generate_facts = route_metadata.get("should_generate_facts")
+                if should_generate_facts is not False:
+                    on_exchange_persisted(
+                        user_email=user_email,
+                        user_message=question,
+                        assistant_message=final_bundle["answer"],
+                        thread_id=session_id,
+                        should_generate_facts=should_generate_facts,
+                    )
         except Exception as exc:
             logger.warning("[session] Failed to persist exchange: %s", exc, exc_info=exc)
 
@@ -391,3 +401,43 @@ def _generate_thread_title(question: str) -> str | None:
             return None
         logger.warning("[agent] Failed to generate thread title: %s", exc, exc_info=exc)
         return None
+
+
+def generate_and_update_thread_title(
+    *,
+    question: str,
+    session_id: str,
+    user_email: str,
+) -> None:
+    """Generate and persist a new thread title in a background worker."""
+    try:
+        generated_title = _generate_thread_title(question)
+        if generated_title:
+            conversations.update_default_thread_title(session_id, user_email, generated_title)
+    except Exception as exc:
+        logger.warning("[session] Failed to persist generated thread title: %s", exc, exc_info=exc)
+
+
+def _schedule_thread_title_generation(
+    *,
+    question: str,
+    session_id: str,
+    user_email: str,
+    callback: Any | None,
+) -> None:
+    if callback:
+        callback(question=question, session_id=session_id, user_email=user_email)
+        return
+
+    # Non-chat callers (for example glasses commands) do not have FastAPI's
+    # BackgroundTasks dependency, so keep title generation non-blocking there too.
+    task = asyncio.create_task(
+        asyncio.to_thread(
+            generate_and_update_thread_title,
+            question=question,
+            session_id=session_id,
+            user_email=user_email,
+        )
+    )
+    _thread_title_tasks.add(task)
+    task.add_done_callback(_thread_title_tasks.discard)

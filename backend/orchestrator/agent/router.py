@@ -63,6 +63,7 @@ class IntentClassification:
     pre_resolve_contacts: Optional[bool] = None
     reasoning: Optional[str] = None
     route_source: RouteSource = RouteSource.UNKNOWN
+    should_generate_facts: Optional[bool] = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -71,6 +72,7 @@ class IntentClassification:
             "allowed_tool_groups": self.allowed_tool_groups,
             "constraints": self.constraints,
             "pre_resolve_contacts": self.pre_resolve_contacts,
+            "should_generate_facts": self.should_generate_facts,
             "reasoning": self.reasoning,
             "route_source": self.route_source.value,
         }
@@ -190,6 +192,10 @@ class IntentRouter:
         # 2) otherwise LLM handles open-ended language
         rule_result = self._rule_based_classify(question)
         if rule_result and rule_result.confidence >= self.rule_high_confidence_threshold:
+            # High-confidence deterministic routes are requests/commands, not
+            # durable user assertions. Let the LLM router opt in for less
+            # obvious personal statements.
+            rule_result.should_generate_facts = False
             duration_ms = (perf_counter() - start_time) * 1000
             trace.trace_router_rule_match(
                 rule_result.intent.value,
@@ -445,7 +451,8 @@ class IntentRouter:
     ) -> IntentClassification:
         """Use LLM to classify the intent."""
         sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-        from llm_helpers import call_llm
+        from llm_helpers import build_json_schema_response_format, call_llm
+        from llm_json_schemas import INTENT_ROUTER_RESPONSE_SCHEMA
         from observability.logger import get_runtime_logger
 
         router_logger = get_runtime_logger(__name__)
@@ -464,6 +471,10 @@ class IntentRouter:
                 prompt,
                 timeout=self.llm_timeout,
                 model=resolved_model,
+                response_format=build_json_schema_response_format(
+                    name="intent_router_response",
+                    schema=INTENT_ROUTER_RESPONSE_SCHEMA,
+                ),
                 **self.llm_request_options,
             )
             parsed = self._parse_llm_response(content)
@@ -520,14 +531,11 @@ Also decide whether pre-resolving contacts is beneficial when creating a answer 
   - Web/home/system/conversational requests
   The agent can resolve contacts later during tool execution if needed.
 
-Respond with JSON only:
-{{
-  "intent": "one of the intent types above",
-  "confidence": 0.0 to 1.0,
-  "constraints": ["read_only"] or [],
-  "pre_resolve_contacts": true or false,
-  "reasoning": "brief explanation"
-}}"""
+Also decide whether the user's current message contains a durable personal fact worth saving:
+- Set `should_generate_facts` to true only for a first-person assertion, preference, goal, habit, trait, opinion, or constraint stated by the user (for example, "I prefer morning meetings" or "I live in Lisbon").
+- Set it to false for questions, requests, instructions, third-party information, assistant-generated content, and transient details that belong in events, todos, contacts, places, or documents.
+
+Respond using the required structured response. Keep reasoning brief."""
 
     def _parse_llm_response(self, response: str) -> IntentClassification:
         """Parse LLM response into IntentClassification."""
@@ -553,12 +561,24 @@ Respond with JSON only:
             else:
                 pre_resolve_contacts = bool(raw_pre_resolve)
 
+            raw_should_generate_facts = data.get("should_generate_facts")
+            if isinstance(raw_should_generate_facts, bool):
+                should_generate_facts = raw_should_generate_facts
+            elif isinstance(raw_should_generate_facts, str):
+                normalized = raw_should_generate_facts.strip().lower()
+                should_generate_facts = normalized in {"1", "true", "yes"} if normalized in {
+                    "0", "1", "false", "true", "no", "yes"
+                } else None
+            else:
+                should_generate_facts = None
+
             return IntentClassification(
                 intent=intent,
                 confidence=float(data.get("confidence", 0.7)),
                 allowed_tool_groups=INTENT_TOOL_MAP.get(intent, list(TOOL_GROUPS.keys())),
                 constraints=data.get("constraints", []),
                 pre_resolve_contacts=pre_resolve_contacts,
+                should_generate_facts=should_generate_facts,
                 reasoning=data.get("reasoning"),
                 route_source=RouteSource.LLM,
             )
@@ -590,6 +610,7 @@ Respond with JSON only:
                 allowed_tool_groups=INTENT_TOOL_MAP[IntentType.MEMORY_SEARCH],
                 constraints=classification.constraints,
                 pre_resolve_contacts=True,
+                should_generate_facts=classification.should_generate_facts,
                 reasoning=(
                     "Graph-aware routing override: the request looks like a personal-document "
                     "lookup in the memory graph, so use memory search with contact pre-resolution."

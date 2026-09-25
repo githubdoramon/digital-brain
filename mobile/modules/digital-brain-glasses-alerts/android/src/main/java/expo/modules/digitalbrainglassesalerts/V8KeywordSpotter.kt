@@ -1,7 +1,7 @@
 package expo.modules.digitalbrainglassesalerts
 
 import android.content.Context
-import android.util.Base64
+import android.os.SystemClock
 import com.k2fsa.sherpa.onnx.FeatureConfig
 import com.k2fsa.sherpa.onnx.KeywordSpotter
 import com.k2fsa.sherpa.onnx.KeywordSpotterConfig
@@ -21,6 +21,12 @@ internal class V8KeywordSpotter(context: Context) {
   private var targetResultsTotal = 0L
   private var rejectResultsTotal = 0L
   private var lastKeywordResult = ""
+  private val frameBytes = ByteArray(640)
+  private var frameByteCount = 0
+  private var feedCallsTotal = 0L
+  private var feedTimeMsTotal = 0.0
+  private var feedTimeMsMax = 0.0
+  private var slowFeedCount = 0L
 
   init {
     val prefix = "wake-word-v8/"
@@ -47,38 +53,52 @@ internal class V8KeywordSpotter(context: Context) {
   }
 
   @Synchronized
-  fun acceptPcm16Base64(encoded: String): List<Map<String, Any>> {
-    val bytes = Base64.decode(encoded, Base64.NO_WRAP)
+  fun acceptPcm16Bytes(bytes: ByteArray): List<Map<String, Any>> {
     require(bytes.size % 2 == 0 && bytes.size <= 64 * 1024) { "Invalid wake PCM chunk" }
-    val pcm = FloatArray(bytes.size / 2) { index ->
-      val low = bytes[index * 2].toInt() and 0xff
-      val high = bytes[index * 2 + 1].toInt()
-      ((high shl 8) or low).toShort().toFloat() / 32768f
-    }
-    samples += pcm.size
-    acceptedSamplesTotal += pcm.size
-    stream.acceptWaveform(pcm, 16_000)
+    val started = SystemClock.elapsedRealtimeNanos()
+    feedCallsTotal += 1
     val events = mutableListOf<Map<String, Any>>()
-    while (spotter.isReady(stream)) {
-      spotter.decode(stream)
-      decodeCallsTotal += 1
-      val keyword = spotter.getResult(stream).keyword
-      if (keyword.isNotEmpty()) {
-        keywordResultsTotal += 1
-        lastKeywordResult = keyword
-        if (keyword == "hey_brain" || keyword == "okay_brain") {
-          targetResultsTotal += 1
-        } else {
-          rejectResultsTotal += 1
+    var offset = 0
+    while (offset < bytes.size) {
+      val count = minOf(frameBytes.size - frameByteCount, bytes.size - offset)
+      bytes.copyInto(frameBytes, frameByteCount, offset, offset + count)
+      frameByteCount += count
+      offset += count
+      if (frameByteCount == frameBytes.size) {
+        val pcm = FloatArray(320) { index ->
+          val low = frameBytes[index * 2].toInt() and 0xff
+          val high = frameBytes[index * 2 + 1].toInt()
+          ((high shl 8) or low).toShort().toFloat() / 32768f
         }
-        if ((keyword == "hey_brain" || keyword == "okay_brain") && samples >= nextAllowedSample) {
-          events.add(mapOf("keyword" to keyword, "sampleIndex" to samples.toDouble()))
-          nextAllowedSample = samples + 40_000L // Frozen v8 2.5-second candidate cooldown.
+        frameByteCount = 0
+        samples += pcm.size
+        acceptedSamplesTotal += pcm.size
+        stream.acceptWaveform(pcm, 16_000)
+        while (spotter.isReady(stream)) {
+          spotter.decode(stream)
+          decodeCallsTotal += 1
+          val keyword = spotter.getResult(stream).keyword
+          if (keyword.isNotEmpty()) {
+            keywordResultsTotal += 1
+            lastKeywordResult = keyword
+            if (keyword == "hey_brain" || keyword == "okay_brain") {
+              targetResultsTotal += 1
+            } else {
+              rejectResultsTotal += 1
+            }
+            if ((keyword == "hey_brain" || keyword == "okay_brain") && samples >= nextAllowedSample) {
+              events.add(mapOf("keyword" to keyword, "sampleIndex" to samples.toDouble()))
+              nextAllowedSample = samples + 40_000L
+            }
+            spotter.reset(stream)
+          }
         }
-        // Sherpa requires a stream reset after any keyword, including reject labels.
-        spotter.reset(stream)
       }
     }
+    val elapsedMs = (SystemClock.elapsedRealtimeNanos() - started) / 1_000_000.0
+    feedTimeMsTotal += elapsedMs
+    feedTimeMsMax = maxOf(feedTimeMsMax, elapsedMs)
+    if (elapsedMs > bytes.size / 32.0) slowFeedCount += 1
     return events
   }
 
@@ -91,6 +111,11 @@ internal class V8KeywordSpotter(context: Context) {
     "targetResultsTotal" to targetResultsTotal.toDouble(),
     "rejectResultsTotal" to rejectResultsTotal.toDouble(),
     "lastKeywordResult" to lastKeywordResult,
+    "feedCallsTotal" to feedCallsTotal.toDouble(),
+    "feedTimeMsTotal" to feedTimeMsTotal,
+    "feedTimeMsMax" to feedTimeMsMax,
+    "slowFeedCount" to slowFeedCount.toDouble(),
+    "partialFrameBytes" to frameByteCount,
   )
 
   @Synchronized
@@ -98,6 +123,7 @@ internal class V8KeywordSpotter(context: Context) {
     spotter.reset(stream)
     samples = 0L
     nextAllowedSample = 0L
+    frameByteCount = 0
   }
 
   @Synchronized

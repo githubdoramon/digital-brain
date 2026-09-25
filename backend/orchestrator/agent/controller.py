@@ -613,6 +613,8 @@ class AgentController:
                             reason="Restricted tools produced repeated failures or empty results",
                         )
                     self._update_plan_progress(state)
+                    if self._require_synthesis_after_satisfied_page_fetch(state, messages):
+                        tools = []
                     continue
 
                 # Handle empty content
@@ -966,6 +968,8 @@ class AgentController:
                         }
 
                     self._update_plan_progress(state)
+                    if self._require_synthesis_after_satisfied_page_fetch(state, messages):
+                        tools = []
 
                     continue
 
@@ -1162,6 +1166,31 @@ class AgentController:
         state.route_source = classification.route_source.value
         state.route_confidence = classification.confidence
         state.route_confidence_tier = self._confidence_tier(classification.confidence).value
+        state.should_generate_facts = classification.should_generate_facts
+
+    def _require_synthesis_after_satisfied_page_fetch(
+        self,
+        state: AgentState,
+        messages: list[dict[str, Any]],
+    ) -> bool:
+        """Disable further tools after a usable page fetch and request synthesis."""
+        last_call = state.last_tool_call
+        if not last_call or last_call.tool_name != "fetch_web_page" or not last_call.success:
+            return False
+        validation = last_call.result.get("_validation")
+        if not isinstance(validation, dict) or validation.get("status") != "satisfied":
+            return False
+
+        messages.append(
+            {
+                "role": "user",
+                "content": (
+                    "The controller marked the fetched page content as sufficient evidence. "
+                    "Answer the user's question from the available evidence now. Do not call more tools."
+                ),
+            }
+        )
+        return True
 
     def _resolve_tool_visibility(
         self,
@@ -2027,6 +2056,7 @@ class AgentController:
             known_facts=state.known_facts,
             final_content=final_content,
             intent=state.intent,
+            pre_resolved_contacts=state.resolution.get("active_contact_scope") or [],
         )
 
         # Trace the goal check
@@ -2188,6 +2218,7 @@ class AgentController:
                 "route_source": state.route_source,
                 "route_confidence": state.route_confidence,
                 "route_confidence_tier": state.route_confidence_tier,
+                "should_generate_facts": state.should_generate_facts,
                 "tool_visibility_mode": state.tool_visibility_mode,
                 "tool_visibility_escalated": state.tool_visibility_escalated,
                 "tool_visibility_escalations_count": state.tool_visibility_escalations_count,

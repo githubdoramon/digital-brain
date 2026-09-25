@@ -323,6 +323,9 @@ def create_chat_router() -> APIRouter:
 
             background_tasks.add_task(maybe_extract_facts, **kwargs)
 
+        def _schedule_thread_title(**kwargs):
+            background_tasks.add_task(llm.generate_and_update_thread_title, **kwargs)
+
         try:
             bundle = await llm.answer_question(
                 ctx.question,
@@ -337,6 +340,7 @@ def create_chat_router() -> APIRouter:
                 if payload.ui_submission
                 else None,
                 on_exchange_persisted=_schedule_fact_extraction,
+                on_thread_title_needed=_schedule_thread_title,
             )
         except LLMUnavailableError as exc:
             _raise_http_for_llm_unavailable(exc)
@@ -647,6 +651,9 @@ def create_chat_router() -> APIRouter:
 
             background_tasks.add_task(maybe_extract_facts, **kwargs)
 
+        def _schedule_thread_title(**kwargs):
+            background_tasks.add_task(llm.generate_and_update_thread_title, **kwargs)
+
         async def event_generator():
             heartbeat_seconds = 5.0
             disconnect_event = asyncio.Event()
@@ -666,6 +673,7 @@ def create_chat_router() -> APIRouter:
                         if payload.ui_submission
                         else None,
                         on_exchange_persisted=_schedule_fact_extraction,
+                        on_thread_title_needed=_schedule_thread_title,
                     ):
                         if event.get("type") == "done":
                             from commands.storage import get_pending_event
@@ -807,6 +815,7 @@ def create_chat_router() -> APIRouter:
         return StreamingResponse(
             event_generator(),
             media_type="text/event-stream",
+            background=background_tasks,
             headers={
                 "Cache-Control": "no-cache",
                 "Connection": "keep-alive",

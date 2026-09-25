@@ -13,6 +13,7 @@ from llm_helpers import LLM_TIMEOUT, build_json_schema_response_format
 from llm_json_schemas import (
     CONTACT_UPDATE_RESPONSE_SCHEMA,
     EVENT_EXTRACTION_RESPONSE_SCHEMA,
+    INTENT_ROUTER_RESPONSE_SCHEMA,
     TAG_SUGGESTION_RESPONSE_SCHEMA,
 )
 from observability.logger import get_runtime_logger
@@ -22,18 +23,7 @@ from tags_manager import _suggest_tags
 logger = get_runtime_logger(__name__)
 EVAL_LLM_TIMEOUT = int(os.getenv("EVAL_LLM_TIMEOUT", str(LLM_TIMEOUT)))
 
-ROUTER_RESPONSE_SCHEMA = {
-    "type": "object",
-    "properties": {
-        "intent": {"type": "string"},
-        "confidence": {"type": "number"},
-        "constraints": {"type": "array", "items": {"type": "string"}},
-        "pre_resolve_contacts": {"type": "boolean"},
-        "reasoning": {"type": "string"},
-    },
-    "required": ["intent", "confidence", "constraints", "pre_resolve_contacts", "reasoning"],
-    "additionalProperties": False,
-}
+ROUTER_RESPONSE_SCHEMA = INTENT_ROUTER_RESPONSE_SCHEMA
 
 CONTACT_RESOLUTION_RESPONSE_SCHEMA = {
     "type": "object",
@@ -181,6 +171,7 @@ def _summarize_router_output(output: dict[str, Any]) -> dict[str, Any]:
     return {
         "intent": output.get("intent"),
         "pre_resolve_contacts": bool(output.get("pre_resolve_contacts")),
+        "should_generate_facts": bool(output.get("should_generate_facts")),
         "confidence": output.get("confidence"),
         "route_source": output.get("route_source"),
     }
